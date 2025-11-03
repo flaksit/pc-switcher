@@ -30,6 +30,59 @@
 
 ## Implementation Phases
 
+### Phase 0: Initial Sync Strategy (Hybrid Approach)
+**Prepare for first sync to avoid conflicts**
+
+1. **Pre-flight checks (on both machines)**:
+   ```bash
+   # Identify what will conflict
+   rsync -avnc --delete p17:/home/<user>/ /home/<user>/ > ~/sync-preview.txt
+   # Review preview - look for important files
+   grep -E '\.(bashrc|gitconfig|ssh)' ~/sync-preview.txt
+   ```
+
+2. **Backup critical XPS configs**:
+   ```bash
+   mkdir ~/pre-sync-backup
+   cp ~/.bashrc ~/.gitconfig ~/.ssh/config ~/pre-sync-backup/
+   cp -r ~/.config/Code/User ~/pre-sync-backup/vscode-settings/
+   # Add other critical configs as identified
+   ```
+
+3. **Review `.stignore` patterns** before first sync (see Phase 1 for full list)
+   - Add machine-specific files that should NOT sync:
+     ```
+     .ssh/id_*        # SSH keys
+     .config/tailscale
+     ```
+
+4. **Configure Syncthing carefully**:
+   - Install on both machines (see Phase 1)
+   - On P17: Configure folder as "Send & Receive"
+   - On XPS: Configure folder as "Receive Only" initially
+     - In Web UI: Folder → Edit → Advanced → Folder Type: "Receive Only"
+   - Enable "Ignore Delete" during initial sync (both machines)
+
+5. **Let P17 content populate XPS** and wait for sync completion
+
+6. **Review conflicts on XPS**:
+   ```bash
+   # Count conflicts
+   find ~ -name "*.sync-conflict-*" -type f | wc -l
+
+   # Review important ones
+   find ~ -name ".bashrc.sync-conflict-*"
+   diff ~/.bashrc ~/.bashrc.sync-conflict-*
+
+   # Merge desired content from conflict files
+   # Delete conflicts you don't need
+   ```
+
+7. **Switch XPS to bidirectional**:
+   - Change folder type from "Receive Only" to "Send & Receive"
+   - Disable "Ignore Delete" on both machines
+   - Remaining conflict files will sync to P17 as backups
+
 ### Phase 1: Syncthing Setup
 **Install and configure on both machines**
 
@@ -38,7 +91,7 @@
 3. Configure via Web UI (http://localhost:8384):
    - Add other machine as device
    - Create shared folders:
-     - `/home/<user>` (excluding patterns below)
+     - `/home/<user>` (with folder type per Phase 0)
      - `~/system-state/` (new folder to create)
 
 4. Create `.stignore` for `/home`:
