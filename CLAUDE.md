@@ -161,10 +161,12 @@ Uses btrfs send/receive for incremental block-level transfer of VM subvolume sna
 ### Pre-travel (on P17):
 ```bash
 ~/scripts/prepare-for-travel.sh
-# 1. capture-state.sh → export current state
-# 2. Wait for Syncthing "Up to Date"
-# 3. diff-state.sh → review changes
-# 4. apply-state.sh → apply to XPS (already synced via Syncthing)
+# 1. On both machines: create pre-sync snapshot
+# 2. capture-state.sh → export current state
+# 3. Wait for Syncthing "Up to Date"
+# 4. diff-state.sh → review changes
+# 5. apply-state.sh → apply to XPS (already synced via Syncthing)
+# 6. Review Syncthing logs for deleted files/folders (deletions sync silently)
 # Optional: ./system-state/docker/export-docker.sh, VM sync
 ```
 
@@ -210,8 +212,10 @@ git clone git@github.com:username/repo.git
 
 ## Maintenance
 
-- **Before each sync**: Run `./scripts/create-sync-snapshot.sh` for rollback safety, then `capture-state.sh` to export current state
+- **Before each sync**: Run `./scripts/create-sync-snapshot.sh` on source for rollback safety, then `capture-state.sh` to export current state
+- **Before applying state**: On target machine, run `./scripts/create-sync-snapshot.sh` (rollback insurance for silent deletions)
 - **Review diffs**: Always run `diff-state.sh` before `apply-state.sh`
+- **After applying state**: Check Syncthing logs for deleted files/folders (deletions sync without prompts; logs provide audit trail)
 - **Monitor Syncthing**: Check logs for conflicts, errors, or stalled transfers
 - **Periodic review**: Update `/etc/.stignore` and `.stignore` as needs evolve
 - **Git history**: Full audit trail in `~/system-state/.git` enables rollback

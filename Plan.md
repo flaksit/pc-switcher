@@ -352,6 +352,9 @@ echo "Snapshots created for $TIMESTAMP"
 #!/bin/bash
 echo "=== Pre-Travel Sync ==="
 ./scripts/create-sync-snapshot.sh
+# On target (XPS): take pre-sync snapshot before state is applied
+echo "Creating pre-sync snapshot on target (XPS)..."
+# (Run: ssh xps ~/scripts/create-sync-snapshot.sh)
 cd ~/system-state
 ./scripts/capture-state.sh
 echo "Waiting for Syncthing sync..."
@@ -360,6 +363,7 @@ read -p "Syncthing complete? Press enter when ready..."
 read -p "Apply changes? [y/n] " -n 1 -r
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     ./scripts/apply-state.sh
+    echo "Review Syncthing log for deleted files/folders"
 fi
 echo "Ready for travel!"
 ```
@@ -434,7 +438,9 @@ echo "Ready for travel!"
 ## Maintenance Notes
 - Run `capture-state.sh` before leaving either machine
 - Verify Syncthing "Up to Date" before proceeding
+- On target machine: Create pre-sync snapshot before running `apply-state.sh` (rollback insurance for silent deletions)
 - Review `diff-state.sh` output before applying
+- After applying state: Check Syncthing logs for deleted files/folders (deletions sync without prompts; logs show what was removed)
 - Git history in `~/system-state/` provides rollback capability
 - Periodically review `.track-rules` and `.stignore` patterns
 - Monitor Syncthing logs for conflicts or errors

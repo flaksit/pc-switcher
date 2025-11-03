@@ -43,7 +43,11 @@ Two Ubuntu 24.04 laptops need synchronization:
 - `/etc` directory (with selective `.stignore` rules managed by `diff-state.sh`)
 - `~/system-state/` git repository
 
-**Workflow**: Power on XPS → wait for Syncthing "Up to Date" → apply system state → travel
+**Deletion handling**: Syncthing syncs deletions silently (no prompts or approval needed). Files deleted on source are deleted on target. Review Syncthing logs after applying state to see what was removed.
+
+**Snapshot strategy**: Take pre-sync snapshots on both source and target machines before running anything else. Use the snapshots as base for further actions (rollback insurance for unexpected deletions).
+
+**Workflow**: Power on XPS → wait for Syncthing "Up to Date" → create target snapshot → apply system state → review deletion logs → travel
 
 ### Cache Strategy: Selective Sync (Option A)
 **Include** (high value, low churn):
