@@ -36,10 +36,62 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Sync Safety Requirements
+
+⚠️ **CRITICAL**: The target machine (the one receiving synced files) **must have the user fully logged out** before Syncthing syncs files and before running `apply-state.sh`.
+
+**Why logout is essential**:
+
+When a user is logged in with running applications, the following corruption risks exist:
+
+1. **Database Corruption** (Critical)
+   - Firefox, Chrome, VS Code, and many system services use SQLite databases
+   - These apps hold file handles open while they're running
+   - If Syncthing modifies a database file while the app has it open, the database can corrupt
+   - Corrupted databases lead to app crashes, lost settings, or loss of bookmarks/history
+
+2. **Application Crashes & Data Loss** (High)
+   - Config files changing during runtime can cause crashes
+   - Applications cache file contents in memory; they may overwrite synced changes when they exit
+   - Example: Syncthing syncs updated `.bashrc`, but shell doesn't re-read it; user modifications in memory overwrite the sync on exit
+   - Example: GNOME settings daemon crashes if dconf files change underneath it
+
+3. **Container/Service Data Loss** (High)
+   - Docker containers writing to volumes while sync happens
+   - k3s pods writing to PersistentVolumes while sync happens
+   - Systemd services writing to config files during sync
+
+4. **Race Conditions** (Medium)
+   - Syncthing writes conflicting with app writes can create partial/invalid files
+   - Files in an inconsistent state between Syncthing and app reads
+
+**Safe Workflow**:
+1. **Before sync begins**: Log out of the target machine (no user sessions, no running applications)
+2. **During sync**: Syncthing safely syncs files to filesystem
+3. **After sync completes**: User logs back in
+4. **Then run state scripts**: `apply-state.sh` makes package/service changes with no competing applications
+
+**How to log out** (on XPS):
+```bash
+# Option 1: From GNOME Desktop
+# Use system menu → Log Out
+
+# Option 2: From terminal (if SSH'd in)
+sudo systemctl isolate multi-user.target  # Drops to console login (no X session)
+
+# Option 3: Check if anyone is logged in
+who    # Shows active user sessions
+
+# To fully verify logout from remote
+ssh xps "who | grep -v root"  # Should return nothing (or only root)
+```
+
 ## Implementation Phases
 
 ### Phase 0: Initial Sync Strategy (Hybrid Approach)
 **Prepare for first sync to avoid conflicts**
+
+⚠️ **CRITICAL SAFETY REQUIREMENT**: Before any sync, the target machine (XPS) **must be fully logged out**. Active user sessions with running applications can lead to database corruption, application crashes, and data loss when Syncthing modifies files. See "Sync Safety" section below for details.
 
 1. **Pre-flight checks (on both machines)**:
    ```bash
@@ -351,10 +403,19 @@ echo "Snapshots created for $TIMESTAMP"
 ```bash
 #!/bin/bash
 echo "=== Pre-Travel Sync ==="
+
+# SAFETY CHECK: Verify target machine is logged out
+echo "Checking if XPS is logged out..."
+if ssh xps "who | grep -q '.'"; then
+    echo "❌ ERROR: User is still logged into XPS!"
+    echo "Please log out of XPS completely before syncing."
+    echo "Running the following on XPS will log out:"
+    echo "  sudo systemctl isolate multi-user.target"
+    exit 1
+fi
+echo "✓ XPS is logged out (safe to proceed)"
+
 ./scripts/create-sync-snapshot.sh
-# On target (XPS): take pre-sync snapshot before state is applied
-echo "Creating pre-sync snapshot on target (XPS)..."
-# (Run: ssh xps ~/scripts/create-sync-snapshot.sh)
 cd ~/system-state
 ./scripts/capture-state.sh
 echo "Waiting for Syncthing sync..."
@@ -362,8 +423,16 @@ read -p "Syncthing complete? Press enter when ready..."
 ./scripts/diff-state.sh
 read -p "Apply changes? [y/n] " -n 1 -r
 if [[ $REPLY =~ ^[Yy]$ ]]; then
+    # Verify XPS still logged out before final sync
+    if ssh xps "who | grep -q '.'"; then
+        echo "❌ ERROR: User logged into XPS during sync!"
+        echo "Please log out before applying state."
+        exit 1
+    fi
     ./scripts/apply-state.sh
     echo "Review Syncthing log for deleted files/folders"
+    echo ""
+    echo "Now log into XPS to complete the sync workflow"
 fi
 echo "Ready for travel!"
 ```

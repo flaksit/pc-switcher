@@ -156,24 +156,42 @@ Uses btrfs send/receive for incremental block-level transfer of VM subvolume sna
     └── extensions-list.txt
 ```
 
+## Sync Safety Requirements
+
+⚠️ **CRITICAL**: The target machine (receiving state changes) **must be logged out** before Syncthing syncs files and before running `apply-state.sh`. Running applications, browsers, and IDEs hold file locks and in-memory state that can be corrupted if files change underneath them.
+
+**Why this matters**:
+- **Database corruption**: Firefox, Chrome, VS Code, and other apps use SQLite databases that can corrupt if modified while the app holds an open file handle
+- **Application crashes**: Config files changing during runtime can cause crashes; apps may overwrite synced changes with stale in-memory state
+- **Container data loss**: Docker volumes syncing while containers run; k3s PVC data syncing while pods are active
+- **Race conditions**: Syncthing writes may conflict with app writes, leading to partial/invalid files
+- **Silent data loss**: Apps may cache old versions of files, ignoring on-disk updates
+
+**Safe approach**:
+1. Before initiating sync from source (P17): Target machine (XPS) must be fully logged out (no user session)
+2. Scripts should verify target is not logged in before proceeding
+3. Once sync completes, target user can log back in
+4. Then run `apply-state.sh` on target (package/service changes, with no competing applications)
+
 ## Workflow
 
 ### Pre-travel (on P17):
 ```bash
 ~/scripts/prepare-for-travel.sh
-# 1. On both machines: create pre-sync snapshot
-# 2. capture-state.sh → export current state
-# 3. Wait for Syncthing "Up to Date"
-# 4. diff-state.sh → review changes
-# 5. apply-state.sh → apply to XPS (already synced via Syncthing)
-# 6. Review Syncthing logs for deleted files/folders (deletions sync silently)
+# 1. Ensure XPS is logged out
+# 2. On both machines: create pre-sync snapshot
+# 3. capture-state.sh → export current state
+# 4. Wait for Syncthing "Up to Date"
+# 5. diff-state.sh → review changes
+# 6. apply-state.sh → apply to XPS (already synced via Syncthing)
+# 7. Review Syncthing logs for deleted files/folders (deletions sync silently)
 # Optional: ./system-state/docker/export-docker.sh, VM sync
 ```
 
 ### Post-travel (on XPS):
 ```bash
 ~/scripts/post-travel-sync.sh
-# Similar flow in reverse
+# Similar flow in reverse (log out of P17 before sync)
 ```
 
 ## Initial Setup (Phase 0)
