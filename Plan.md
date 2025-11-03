@@ -101,13 +101,10 @@ ssh xps "who | grep -v root"  # Should return nothing (or only root)
    grep -E '\.(bashrc|gitconfig|ssh)' ~/sync-preview.txt
    ```
 
-2. **Backup critical XPS configs**:
-   ```bash
-   mkdir ~/pre-sync-backup
-   cp ~/.bashrc ~/.gitconfig ~/.ssh/config ~/pre-sync-backup/
-   cp -r ~/.config/Code/User ~/pre-sync-backup/vscode-settings/
-   # Add other critical configs as identified
-   ```
+2. **btrfs pre-sync snapshot of XPS** (covers all critical configs):
+   - See Phase 7: `./scripts/create-sync-snapshot.sh` creates snapshots of `/home`, `/etc`, and VMs
+   - This handles rollback for all critical configs (`.bashrc`, `.gitconfig`, `.ssh/`, VS Code settings, etc.)
+   - No separate manual backup needed
 
 3. **Review `.stignore` patterns** before first sync (see Phase 1 for full list)
    - Add machine-specific files that should NOT sync:
