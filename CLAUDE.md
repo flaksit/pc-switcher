@@ -1,0 +1,214 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+**pc-switcher** is a two-laptop synchronization system for Ubuntu 24.04 machines (P17 and XPS 13). It implements a uni-directional, manual-trigger workflow to keep both machines in sync:
+- **Primary machine (P17)**: Heavy laptop, stays at home, primary work machine
+- **Secondary machine (XPS 13)**: Light laptop for travel (offline capable)
+- **Sync trigger**: Manual, initiated before travel and after returning home
+- **Transport**: Syncthing over local LAN (1Gb ethernet), no internet sync required
+
+## Architecture
+
+The system consists of four synchronized layers:
+
+### 1. **File Sync Layer (Syncthing)**
+- Bidirectional synchronization of `/home/<user>` directory
+- Selective cache inclusion (dev tool caches synced, browser/IDE caches excluded)
+- Conflict resolution via `.sync-conflict-*` files
+- `.stignore` rules prevent syncing SSH keys, machine-specific configs (Tailscale), VMs, and containers
+
+### 2. **System State Layer (Git-tracked repo in ~/system-state/)**
+- **etckeeper**: Version control for `/etc` (per-machine, not synced directly)
+- **Custom scripts**: `capture-state.sh`, `diff-state.sh`, `apply-state.sh` manage packages, services, users, and tracked `/etc` files
+- **Interactive tracking rules**: `.track-rules` file allows persistent decisions on which `/etc` files to sync
+- **Git history**: Enables rollback and audit trail of all state changes
+
+### 3. **Container Workflows (Special case handling)**
+- **Docker**: Export/import via `docker save/load` and volume tarball backup (see `docker-export.sh`, `docker-import.sh`)
+  - **Critical**: `/var/lib/docker/` must NEVER be copied directly (overlay2 filesystem corruption, binary database issues)
+  - Only manual export/import or Compose configs (already synced via `/home`)
+- **k3s**: Manifests only via `~/projects/k3s-manifests/`, PersistentVolumes use hostPath to `~/k3s-volumes/`
+  - **Critical**: `/var/lib/rancher/k3s/` must NEVER be copied (machine-specific certificates, cluster identity)
+
+### 4. **Special Handlers**
+- **VM**: QCOW2 snapshot-based sync using overlay files (sync only overlay, not 50GB base)
+- **VS Code**: Settings Sync (cloud-based, automatic) + backup script for extension list recovery
+
+## Key Design Decisions
+
+### Why Syncthing?
+- Handles offline changes with automatic conflict resolution
+- Efficient block-level sync (resume capability)
+- Manual workflow compatible (user controls when to sync)
+- Bidirectional support for flexible workflows
+
+### Cache Strategy
+**Include**: `.cache/pip/`, `.cache/uv/`, `.cache/pypoetry/`, `.npm/`, `.cargo/registry/`, `.cargo/git/`, `.m2/repository/`, `.gradle/caches/`
+- High value: dev tool caches save GBs when syncing over cellular
+- Low churn: stable references to dependencies
+
+**Exclude**: Browser caches (Firefox, Chrome), system caches (thumbnails, GPU shaders), IDE caches (VS Code)
+- Low value or corrupts on sync (hardware-specific)
+- Excessive churn
+
+**Result**: Reduces sync from 20GB to ~12GB, 500k to ~350k files
+
+### Why Not Direct `/var/lib/docker/` or `/var/lib/rancher/k3s/` Copy?
+- **Docker**: Overlay2 symlink structure, binary databases, and runtime state don't survive copying
+- **k3s**: Machine-specific certs/IPs, cluster identity, CNI state; conflicts would break both machines
+- **Correct approach**: Export/import workflows for Docker, manifest-only sync for k3s
+
+## Development and Testing
+
+### Running Scripts
+
+**Capture current machine state**:
+```bash
+cd ~/system-state && ./scripts/capture-state.sh
+```
+Exports: package lists (apt, snap, flatpak), enabled services, tracked `/etc` files (per `.track-rules`), users/groups manifests
+
+**Review differences before syncing**:
+```bash
+cd ~/system-state && ./scripts/diff-state.sh
+```
+Interactive mode: shows new/changed packages, services, and `/etc` files. Prompts user to track new files with persistent decisions saved to `.track-rules`
+
+**Apply state on target machine**:
+```bash
+cd ~/system-state && ./scripts/apply-state.sh
+```
+Installs missing packages, enables/disables services, updates tracked `/etc` files (with prompts), updates user/groups
+
+### Docker Workflow
+
+**Export images and volumes** (on source machine):
+```bash
+cd ~/system-state/docker && ./export-docker.sh
+```
+
+**Import on target machine**:
+```bash
+cd ~/system-state/docker && ./import-docker.sh
+```
+
+### k3s Workflow
+
+**Manifests** (already synced via Syncthing):
+```bash
+kubectl apply -f ~/projects/k3s-manifests/
+```
+
+**PersistentVolume data** (optional backup/restore):
+```bash
+kubectl exec <pod> -- tar czf - /data > ~/system-state/k3s/volumes/<pvc>.tar.gz
+```
+
+### VM Snapshot Sync
+
+**Shutdown VM before sync**:
+```bash
+virsh shutdown <vm-name>
+cd ~/system-state/vm && ./sync-vm-to-xps.sh  # or sync-vm-to-p17.sh
+```
+Only syncs QCOW2 overlay file (~1-5GB), not base image (50GB)
+
+## Repository Structure
+
+```
+~/system-state/
+├── packages/              # Package list exports
+│   ├── apt-selections.txt
+│   ├── apt-manual.txt
+│   ├── snap-list.txt
+│   ├── flatpak-list.txt
+│   ├── ppa-list.txt
+│   └── ppas/             # Actual PPA files
+├── services/              # Service state
+│   ├── system-enabled.txt
+│   └── user-enabled.txt
+├── users/                 # User/group info
+├── etc-tracked/           # Selected /etc files to sync
+├── etc-manifest.txt       # SHA256 checksums of all /etc files
+├── .track-rules           # Persistent tracking decisions
+├── scripts/               # Core state management
+│   ├── capture-state.sh
+│   ├── diff-state.sh
+│   └── apply-state.sh
+├── docker/                # Docker export/import
+│   ├── export-docker.sh
+│   ├── import-docker.sh
+│   ├── images-list.json
+│   └── volumes/           # Tarball backups
+├── k3s/                   # k3s utilities
+│   └── volumes/           # PVC backup tarballs
+├── vm/                    # VM snapshot sync
+│   ├── sync-vm-to-p17.sh
+│   └── sync-vm-to-xps.sh
+└── vscode/                # VS Code backup
+    ├── capture-vscode.sh
+    └── extensions-list.txt
+```
+
+## Workflow
+
+### Pre-travel (on P17):
+```bash
+~/scripts/prepare-for-travel.sh
+# 1. capture-state.sh → export current state
+# 2. Wait for Syncthing "Up to Date"
+# 3. diff-state.sh → review changes
+# 4. apply-state.sh → apply to XPS (already synced via Syncthing)
+# Optional: ./system-state/docker/export-docker.sh, VM sync
+```
+
+### Post-travel (on XPS):
+```bash
+~/scripts/post-travel-sync.sh
+# Similar flow in reverse
+```
+
+## Initial Setup (Phase 0)
+
+Before first Syncthing sync:
+1. **Backup critical XPS configs** to `~/pre-sync-backup/` (`.bashrc`, `.gitconfig`, `.ssh/config`, VS Code settings)
+2. **Review `.stignore`** patterns to exclude machine-specific files (SSH keys, Tailscale, VMs, containers)
+3. **Configure Syncthing**:
+   - On P17: "Send & Receive" folder type
+   - On XPS: "Receive Only" during initial sync (prevents conflicts)
+   - Enable "Ignore Delete" on both during initial population
+4. **Let P17 content populate XPS**, wait for sync completion
+5. **Review conflicts**: `find ~ -name "*.sync-conflict-*"`, merge desired content
+6. **Switch XPS to "Send & Receive"**, disable "Ignore Delete" on both
+
+## Important Exclusions
+
+- **SSH keys** (`.ssh/id_*`): Machine-specific credentials
+- **Tailscale** (`.config/tailscale`): Each machine has distinct network identity
+- **VM storage** (`.local/share/libvirt`): Synced separately via QCOW2 snapshots
+- **Container storage** (`.local/share/containers`): Use Docker export/import
+- **Browser caches**: Too much churn, minimal benefit
+- **IDE caches**: Can corrupt during sync
+
+## Git Workflow
+
+Use non-fast-forward, non-squash merges when integrating branches:
+```bash
+git merge --no-ff --no-squash <branch>
+```
+
+Always use SSH for cloning:
+```bash
+git clone git@github.com:username/repo.git
+```
+
+## Maintenance
+
+- **Before each sync**: Run `capture-state.sh` to export current state
+- **Review diffs**: Always run `diff-state.sh` before `apply-state.sh`
+- **Monitor Syncthing**: Check logs for conflicts, errors, or stalled transfers
+- **Periodic review**: Update `.track-rules` and `.stignore` as needs evolve
+- **Git history**: Full audit trail in `~/system-state/.git` enables rollback
