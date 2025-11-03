@@ -133,7 +133,8 @@
 *.tmp
 *.temp
 
-# Tailscale (machine-specific)
+# Machine-specific files (do not sync)
+.ssh/id_*
 .config/tailscale
 
 # Exclude VM and container storage
