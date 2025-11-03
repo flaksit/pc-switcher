@@ -7,21 +7,29 @@
 │ Syncthing Layer (Automatic File Sync)                       │
 ├─────────────────────────────────────────────────────────────┤
 │ • /home/user (with selective .cache)                        │
+│ • /etc (with .stignore for selective tracking)              │
 │ • ~/system-state/ (git repo)                                │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│ btrfs Snapshot Layer (Rollback Safety)                      │
+├─────────────────────────────────────────────────────────────┤
+│ • Pre-sync snapshots of /home, /etc, VM subvolumes          │
+│ • Local rollback capability per machine                     │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ System State Management (Manual Trigger)                    │
 ├─────────────────────────────────────────────────────────────┤
-│ • capture-state.sh → Export packages, services, /etc        │
-│ • diff-state.sh → Interactive review with tracking rules    │
+│ • capture-state.sh → Export packages, services              │
+│ • diff-state.sh → Interactive review, manage /etc/.stignore │
 │ • apply-state.sh → Install packages, update configs         │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ Special Handlers (Separate Workflows)                       │
 ├─────────────────────────────────────────────────────────────┤
-│ • VM: QCOW2 snapshot sync                                   │
+│ • VM: btrfs send/receive (block-level incremental sync)     │
 │ • Docker: Volume backup/restore                             │
 │ • k3s: Manifest apply + PV sync via hostPath                │
 │ • VS Code: Settings Sync (automatic) + script backup        │
@@ -92,7 +100,9 @@
    - Add other machine as device
    - Create shared folders:
      - `/home/<user>` (with folder type per Phase 0)
+     - `/etc` (synced for selective files via `.stignore`)
      - `~/system-state/` (new folder to create)
+   - Exclude from Syncthing: VM subvolume at `/var/lib/libvirt/images` (synced separately via btrfs send/receive)
 
 4. Create `.stignore` for `/home`:
 ```
@@ -135,6 +145,7 @@
 
 # Machine-specific files (do not sync)
 .ssh/id_*
+.ssh/authorized_keys
 .config/tailscale
 
 # Exclude VM and container storage
@@ -142,37 +153,54 @@
 .local/share/containers
 ```
 
-5. Verify sync completes successfully
+5. Create `.stignore` for `/etc`:
+```
+# Exclude everything by default
+*
+
+# Machine-specific (never sync)
+machine-id
+hostname
+adjtime
+fstab
+
+# etckeeper (local version control, not synced)
+.git
+.gitignore
+
+# Tracked system config (always sync)
+!hosts
+!environment
+!default/grub
+!apt/sources.list.d/**
+```
+
+6. Verify sync completes successfully
 
 ### Phase 2: System State Repository
 **Create git-tracked state management**
 
 1. Initialize on primary machine (e.g., P17):
 ```bash
-mkdir -p ~/system-state/{packages,etc-tracked,services,users,scripts,vscode,docker,k3s}
+mkdir -p ~/system-state/{packages,services,users,scripts,vscode,docker,k3s,vm}
 cd ~/system-state
 git init
 ```
 
-2. Install etckeeper on both machines:
+2. Install etckeeper on both machines (local version control, NOT synced):
 ```bash
 sudo apt install etckeeper
 sudo etckeeper init
 ```
-
-3. Create `.track-rules` template:
-```
-# Format: include|exclude|always|never <path>
-# Examples:
-# always /etc/fstab
-# never /etc/hostname
-```
+   - etckeeper commits to `/etc/.git` locally on each machine
+   - Excluded from Syncthing via `/etc/.stignore`
+   - Provides per-machine version history and rollback capability
 
 ### Phase 3: Core Scripts
 **Implement in `~/system-state/scripts/`**
 
 #### `capture-state.sh`
-**Purpose**: Export current machine state
+**Purpose**: Export current machine state (packages and services only)
 
 **Tasks**:
 - Package lists:
@@ -186,26 +214,23 @@ sudo etckeeper init
   - `systemctl list-unit-files --state=enabled > services/system-enabled.txt`
   - `systemctl --user list-unit-files --state=enabled > services/user-enabled.txt`
 - Users: Copy `/etc/{passwd,group,shadow}` to `users/`
-- `/etc` tracking:
-  - Generate manifest: `find /etc -type f -exec sha256sum {} \; > etc-manifest.txt`
-  - Copy tracked files (per `.track-rules`) to `etc-tracked/`
 - Git commit with timestamp and hostname
 
 #### `diff-state.sh`
-**Purpose**: Show differences and interactively manage tracking
+**Purpose**: Show differences and manage `/etc/.stignore` tracking rules
 
 **Tasks**:
 - Compare package lists (additions/removals)
 - Compare service states
-- Compare `/etc` manifests:
-  - Files in tracking rules: show diffs
-  - Files NOT in tracking rules but changed: prompt "track? [y/n/always/never/diff]"
-  - Update `.track-rules` based on responses
+- Check both source and target `/etc`:
+  - Files already in `/etc/.stignore`: show diffs
+  - Files NOT in `/etc/.stignore`: prompt "track? [always/never]"
+  - Append decisions directly to `/etc/.stignore`
 - Generate summary report
 - No changes applied (read-only)
 
 #### `apply-state.sh`
-**Purpose**: Apply changes to target machine
+**Purpose**: Apply changes to target machine (packages and services only)
 
 **Tasks**:
 - Install missing packages:
@@ -214,11 +239,8 @@ sudo etckeeper init
   - Add PPAs and install packages
 - Optional: Remove extra packages (prompt user)
 - Enable/disable services as needed
-- For each tracked `/etc` file:
-  - Show diff
-  - Prompt: "apply? [y/n/diff/skip-all]"
-  - Apply if approved
 - Update users/groups (with safety checks)
+- Note: `/etc` files sync automatically via Syncthing (based on `/etc/.stignore`)
 - Git commit applied state
 
 ### Phase 4: Container Workflows
@@ -246,27 +268,41 @@ sudo etckeeper init
 kubectl exec <pod> -- tar czf - /data > k3s/volumes/<pvc>.tar.gz
 ```
 
-### Phase 5: VM Snapshot Sync
+### Phase 5: VM Snapshot Sync (btrfs send/receive)
 
-**Setup QCOW2 snapshots**:
-1. Convert existing VM to QCOW2 if needed
-2. Create snapshot: `qemu-img create -f qcow2 -b base.qcow2 -F qcow2 overlay.qcow2`
-3. Configure VM to use overlay file
+**One-time setup**:
+1. Create btrfs subvolume for VM images:
+```bash
+sudo btrfs subvolume create /var/lib/libvirt/images
+```
 
-**Scripts in `~/system-state/vm/`**:
+**Before each sync**:
+1. Shutdown VM (critical!)
+2. Create read-only snapshot:
+```bash
+sudo btrfs subvolume snapshot -r /var/lib/libvirt/images \
+  /var/lib/libvirt/snapshots/images-$(date +%Y-%m-%d)
+```
+
+**Sync scripts in `~/system-state/vm/`**:
 
 `sync-vm-to-xps.sh`:
 ```bash
-# Shutdown VM first (critical!)
-virsh shutdown <vm-name>
-# Wait for shutdown
-# Sync overlay file only
-rsync -avP --inplace /var/lib/libvirt/images/overlay.qcow2 xps:/var/lib/libvirt/images/
+# Send incremental snapshot to XPS
+sudo btrfs send -p /var/lib/libvirt/snapshots/images-PREVIOUS-DATE \
+  /var/lib/libvirt/snapshots/images-CURRENT-DATE | \
+  ssh xps sudo btrfs receive /var/lib/libvirt/snapshots/
 ```
 
 `sync-vm-to-p17.sh`: Same in reverse
 
-**First-time**: Sync base image once (50GB), then only overlay (~1-5GB)
+**On target machine**:
+- Create writable snapshot from latest received snapshot for actual VM use
+
+**Benefits**:
+- Incremental block-level transfer (only changed blocks sent)
+- No performance overhead
+- Near-instant snapshots (read-only)
 
 ### Phase 6: VS Code Integration
 
@@ -293,14 +329,32 @@ cat extensions-list.txt | xargs -L 1 code --install-extension
 
 ### Phase 7: User Workflow Scripts
 
+**Create `~/scripts/create-sync-snapshot.sh`**:
+```bash
+#!/bin/bash
+TIMESTAMP=$(date +%Y-%m-%d)
+
+# Snapshot /home
+sudo btrfs subvolume snapshot /home /snapshots/home-$TIMESTAMP
+
+# Snapshot /etc
+sudo btrfs subvolume snapshot /etc /snapshots/etc-$TIMESTAMP
+
+# Snapshot VMs
+sudo btrfs subvolume snapshot -r /var/lib/libvirt/images \
+  /var/lib/libvirt/snapshots/images-$TIMESTAMP
+
+echo "Snapshots created for $TIMESTAMP"
+```
+
 **Create `~/scripts/prepare-for-travel.sh`**:
 ```bash
 #!/bin/bash
 echo "=== Pre-Travel Sync ==="
+./scripts/create-sync-snapshot.sh
 cd ~/system-state
 ./scripts/capture-state.sh
 echo "Waiting for Syncthing sync..."
-# Could add: syncthing cli check or just manual verification
 read -p "Syncthing complete? Press enter when ready..."
 ./scripts/diff-state.sh
 read -p "Apply changes? [y/n] " -n 1 -r

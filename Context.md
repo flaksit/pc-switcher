@@ -31,12 +31,17 @@ Two Ubuntu 24.04 laptops need synchronization:
 ### File Synchronization: Syncthing
 **Chosen approach**: Syncthing for all file-based sync (bidirectional capability, manual workflow)
 
-**Rationale**: 
+**Rationale**:
 - Handles offline changes elegantly with conflict resolution
 - Automatic when both machines on LAN, but waitable (user controls when to proceed)
 - Efficient block-level sync
 - Built-in conflict handling (creates `.sync-conflict` files)
 - Resumes interrupted transfers
+
+**Syncthing syncs**:
+- `/home` directory (with selective `.stignore` rules)
+- `/etc` directory (with selective `.stignore` rules managed by `diff-state.sh`)
+- `~/system-state/` git repository
 
 **Workflow**: Power on XPS → wait for Syncthing "Up to Date" → apply system state → travel
 
@@ -55,20 +60,19 @@ Two Ubuntu 24.04 laptops need synchronization:
 **Rationale**: Dev tool caches save GBs over cellular (high ROI), browser caches not worth sync overhead. Reduces sync from 20GB to ~12GB and 500k to ~350k files.
 
 ### System State Management: Custom Scripts + etckeeper
-**Approach**: Git-tracked state repository synced via Syncthing
+**Approach**: Git-tracked state repository synced via Syncthing, `/etc` synced via Syncthing with selective rules
 
 **Components**:
-1. **etckeeper**: Version control for `/etc` (auto-commits on package operations)
-2. **Custom scripts**: Capture/diff/apply system state with interactive decisions
-3. **Git repository**: `~/system-state/` containing manifests, tracked configs, scripts
+1. **etckeeper**: Version control for `/etc` locally on each machine (NOT synced, excluded in `/etc/.stignore`)
+2. **Custom scripts**: `capture-state.sh`, `diff-state.sh`, `apply-state.sh` manage packages and services
+3. **Git repository**: `~/system-state/` containing manifests, scripts
+4. **Syncthing**: Syncs selected `/etc` files via `/etc/.stignore` (managed by `diff-state.sh`)
 
-**Key insight on `/etc` sync**: 
-- Use etckeeper locally on each machine (not synced)
-- Export selected `/etc` files to `~/system-state/etc-tracked/`
-- Create manifest of ALL `/etc` files with checksums for change detection
-- Interactive prompts for new/changed files with persistent tracking rules (`.track-rules`)
-
-**User preference**: Start minimal for `/etc` tracking, expand as needed with interactive decisions saved
+**Key insight on `/etc` sync**:
+- Use etckeeper locally on each machine for per-machine version history (NOT synced)
+- `/etc/.stignore` is single source of truth for which files sync between machines
+- `diff-state.sh` checks both source and target `/etc`, prompts user for files without tracking rules
+- User decisions appended directly to `/etc/.stignore`
 
 ### Docker: Export/Import, NOT Direct Copy
 **Critical**: `/var/lib/docker/` must NOT be copied directly
@@ -99,17 +103,22 @@ Two Ubuntu 24.04 laptops need synchronization:
 - PersistentVolumes: Use `hostPath` pointing to `~/k3s-volumes/` (synced by Syncthing)
 - Alternative: Backup/restore PVC data with kubectl exec + tar
 
-### VM Handling: QCOW2 Snapshots
-**Approach**: Separate manual sync using QCOW2 layered images
+### VM Handling: btrfs Subvolumes + send/receive
+**Approach**: Native filesystem-level sync using btrfs snapshots and incremental transfer
 
 **Strategy**:
-- Base image: Created once per machine (~50GB)
-- Overlay/snapshot files: Only changes (typically 1-5GB)
-- Sync only overlay files regularly, full base image rarely
+- Store VM images in btrfs subvolume (e.g., `/var/lib/libvirt/images` as subvolume)
+- Before sync: Create read-only `btrfs subvolume snapshot` of VM subvolume (instant, copy-on-write)
+- Sync via `btrfs send/receive` piped through SSH (sends only changed blocks between snapshots)
+- No performance overhead vs raw disk (runs on btrfs with copy-on-write)
 
-**Performance**: 5-10% overhead vs raw disk (negligible for desktop Windows VM)
+**Benefits**:
+- Near-instant snapshots (no VM shutdown delay)
+- Incremental block-level sync (faster than rsync of overlay files)
+- No performance penalty
+- Snapshot history on each machine for rollback
 
-**Rationale**: Avoids copying 50GB repeatedly, reduces SSD wear, minimal performance impact
+**Rationale**: Eliminates QCOW2 complexity layer, uses native filesystem capabilities, improves performance
 
 ### VS Code: Built-in Settings Sync + Script Backup (Option A)
 **Primary method**: VS Code Settings Sync (cloud-based, Microsoft/GitHub account)

@@ -15,15 +15,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The system consists of four synchronized layers:
 
 ### 1. **File Sync Layer (Syncthing)**
-- Bidirectional synchronization of `/home/<user>` directory
+- Bidirectional synchronization of `/home/<user>`, `/etc`, and `~/system-state/`
 - Selective cache inclusion (dev tool caches synced, browser/IDE caches excluded)
+- Selective `/etc` sync via `/etc/.stignore` (machine-specific files excluded)
 - Conflict resolution via `.sync-conflict-*` files
 - `.stignore` rules prevent syncing SSH keys, machine-specific configs (Tailscale), VMs, and containers
 
 ### 2. **System State Layer (Git-tracked repo in ~/system-state/)**
-- **etckeeper**: Version control for `/etc` (per-machine, not synced directly)
-- **Custom scripts**: `capture-state.sh`, `diff-state.sh`, `apply-state.sh` manage packages, services, users, and tracked `/etc` files
-- **Interactive tracking rules**: `.track-rules` file allows persistent decisions on which `/etc` files to sync
+- **etckeeper**: Version control for `/etc` locally on each machine (NOT synced, excluded via `/etc/.stignore`)
+- **Custom scripts**: `capture-state.sh`, `diff-state.sh`, `apply-state.sh` manage packages, services, and users
+- **Syncthing integration**: `/etc` files sync via `/etc/.stignore` (no separate tracking file needed)
 - **Git history**: Enables rollback and audit trail of all state changes
 
 ### 3. **Container Workflows (Special case handling)**
@@ -34,7 +35,7 @@ The system consists of four synchronized layers:
   - **Critical**: `/var/lib/rancher/k3s/` must NEVER be copied (machine-specific certificates, cluster identity)
 
 ### 4. **Special Handlers**
-- **VM**: QCOW2 snapshot-based sync using overlay files (sync only overlay, not 50GB base)
+- **VM**: btrfs subvolume snapshots + send/receive (block-level incremental sync, no performance overhead)
 - **VS Code**: Settings Sync (cloud-based, automatic) + backup script for extension list recovery
 
 ## Key Design Decisions
@@ -69,19 +70,19 @@ The system consists of four synchronized layers:
 ```bash
 cd ~/system-state && ./scripts/capture-state.sh
 ```
-Exports: package lists (apt, snap, flatpak), enabled services, tracked `/etc` files (per `.track-rules`), users/groups manifests
+Exports: package lists (apt, snap, flatpak), enabled services, users/groups manifests
 
 **Review differences before syncing**:
 ```bash
 cd ~/system-state && ./scripts/diff-state.sh
 ```
-Interactive mode: shows new/changed packages, services, and `/etc` files. Prompts user to track new files with persistent decisions saved to `.track-rules`
+Interactive mode: shows new/changed packages and services. Checks `/etc` for files without tracking rules, prompts user to track new files with decisions saved to `/etc/.stignore`
 
 **Apply state on target machine**:
 ```bash
 cd ~/system-state && ./scripts/apply-state.sh
 ```
-Installs missing packages, enables/disables services, updates tracked `/etc` files (with prompts), updates user/groups
+Installs missing packages, enables/disables services, updates user/groups. Note: `/etc` files sync automatically via Syncthing
 
 ### Docker Workflow
 
@@ -109,12 +110,17 @@ kubectl exec <pod> -- tar czf - /data > ~/system-state/k3s/volumes/<pvc>.tar.gz
 
 ### VM Snapshot Sync
 
+**Create snapshot before sync**:
+```bash
+./scripts/create-sync-snapshot.sh
+```
+
 **Shutdown VM before sync**:
 ```bash
 virsh shutdown <vm-name>
 cd ~/system-state/vm && ./sync-vm-to-xps.sh  # or sync-vm-to-p17.sh
 ```
-Only syncs QCOW2 overlay file (~1-5GB), not base image (50GB)
+Uses btrfs send/receive for incremental block-level transfer of VM subvolume snapshots
 
 ## Repository Structure
 
@@ -131,9 +137,6 @@ Only syncs QCOW2 overlay file (~1-5GB), not base image (50GB)
 │   ├── system-enabled.txt
 │   └── user-enabled.txt
 ├── users/                 # User/group info
-├── etc-tracked/           # Selected /etc files to sync
-├── etc-manifest.txt       # SHA256 checksums of all /etc files
-├── .track-rules           # Persistent tracking decisions
 ├── scripts/               # Core state management
 │   ├── capture-state.sh
 │   ├── diff-state.sh
@@ -207,8 +210,9 @@ git clone git@github.com:username/repo.git
 
 ## Maintenance
 
-- **Before each sync**: Run `capture-state.sh` to export current state
+- **Before each sync**: Run `./scripts/create-sync-snapshot.sh` for rollback safety, then `capture-state.sh` to export current state
 - **Review diffs**: Always run `diff-state.sh` before `apply-state.sh`
 - **Monitor Syncthing**: Check logs for conflicts, errors, or stalled transfers
-- **Periodic review**: Update `.track-rules` and `.stignore` as needs evolve
+- **Periodic review**: Update `/etc/.stignore` and `.stignore` as needs evolve
 - **Git history**: Full audit trail in `~/system-state/.git` enables rollback
+- **etckeeper history**: Per-machine version history in `/etc/.git` enables rollback of `/etc` changes
