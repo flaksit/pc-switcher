@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-```
+```plain
 ┌─────────────────────────────────────────────────────────────┐
 │ Syncthing Layer (Automatic File Sync)                       │
 ├─────────────────────────────────────────────────────────────┤
@@ -89,7 +89,7 @@ ssh xps "who | grep -v root"  # Should return nothing (or only root)
 ## Implementation Phases
 
 ### Phase 0: Initial Sync Strategy (Hybrid Approach)
-**Prepare for first sync to avoid conflicts**
+Prepare for first sync to avoid conflicts:
 
 ⚠️ **CRITICAL SAFETY REQUIREMENT**: Before any sync, the target machine (XPS) **must be fully logged out**. Active user sessions with running applications can lead to database corruption, application crashes, and data loss when Syncthing modifies files. See "Sync Safety" section below for details.
 
@@ -108,10 +108,10 @@ ssh xps "who | grep -v root"  # Should return nothing (or only root)
 
 3. **Review `.stignore` patterns** before first sync (see Phase 1 for full list)
    - Add machine-specific files that should NOT sync:
-     ```
-     .ssh/id_*        # SSH keys
-     .config/tailscale
-     ```
+      ```gitignore
+      .ssh/id_*        # SSH keys
+      .config/tailscale
+      ```
 
 4. **Configure Syncthing carefully**:
    - Install on both machines (see Phase 1)
@@ -141,11 +141,11 @@ ssh xps "who | grep -v root"  # Should return nothing (or only root)
    - Remaining conflict files will sync to P17 as backups
 
 ### Phase 1: Syncthing Setup
-**Install and configure on both machines**
+Install and configure on both machines:
 
 1. Install: `sudo apt install syncthing`
 2. Enable user service: `systemctl --user enable --now syncthing`
-3. Configure via Web UI (http://localhost:8384):
+3. Configure via Web UI [http://localhost:8384](http://localhost:8384):
    - Add other machine as device
    - Create shared folders:
      - `/home/<user>` (with folder type per Phase 0)
@@ -154,99 +154,99 @@ ssh xps "who | grep -v root"  # Should return nothing (or only root)
    - Exclude from Syncthing: VM subvolume at `/var/lib/libvirt/images` (synced separately via btrfs send/receive)
 
 4. Create `.stignore` for `/home`:
-```
-# Exclude all caches by default
-.cache
+   ```gitignore
+   # Exclude all caches by default
+   .cache
 
-# Include valuable dev caches
-!.cache/pip
-!.cache/uv
-!.cache/pypoetry
-!.npm
-!.cargo/registry
-!.cargo/git
-!.m2/repository
-!.gradle/caches
+   # Include valuable dev caches
+   !.cache/pip
+   !.cache/uv
+   !.cache/pypoetry
+   !.npm
+   !.cargo/registry
+   !.cargo/git
+   !.m2/repository
+   !.gradle/caches
 
-# Exclude browser caches
-.mozilla/firefox/*/Cache*
-.mozilla/firefox/*/cache2
-.config/google-chrome/*/Cache*
-.config/chromium/*/Cache*
+   # Exclude browser caches
+   .mozilla/firefox/*/Cache*
+   .mozilla/firefox/*/cache2
+   .config/google-chrome/*/Cache*
+   .config/chromium/*/Cache*
 
-# Exclude system caches
-.local/share/Trash
-.thumbnails
-.cache/thumbnails
-.cache/mesa_shader_cache
-.cache/fontconfig
-.local/share/gvfs-metadata
+   # Exclude system caches
+   .local/share/Trash
+   .thumbnails
+   .cache/thumbnails
+   .cache/mesa_shader_cache
+   .cache/fontconfig
+   .local/share/gvfs-metadata
 
-# IDE caches
-.config/Code/Cache*
-.config/Code/CachedData
-.config/Code/GPUCache
-.config/Code/logs
+   # IDE caches
+   .config/Code/Cache*
+   .config/Code/CachedData
+   .config/Code/GPUCache
+   .config/Code/logs
 
-# Temp files
-*.tmp
-*.temp
+   # Temp files
+   *.tmp
+   *.temp
 
-# Machine-specific files (do not sync)
-.ssh/id_*
-.ssh/authorized_keys
-.config/tailscale
+   # Machine-specific files (do not sync)
+   .ssh/id_*
+   .ssh/authorized_keys
+   .config/tailscale
 
-# Exclude VM and container storage
-.local/share/libvirt
-.local/share/containers
-```
+   # Exclude VM and container storage
+   .local/share/libvirt
+   .local/share/containers
+   ```
 
 5. Create `.stignore` for `/etc`:
-```
-# Exclude everything by default
-*
+   ```gitignore
+   # Exclude everything by default
+   *
 
-# Machine-specific (never sync)
-machine-id
-hostname
-adjtime
-fstab
+   # Machine-specific (never sync)
+   machine-id
+   hostname
+   adjtime
+   fstab
 
-# etckeeper (local version control, not synced)
-.git
-.gitignore
+   # etckeeper (local version control, not synced)
+   .git
+   .gitignore
 
-# Tracked system config (always sync)
-!hosts
-!environment
-!default/grub
-!apt/sources.list.d/**
-```
+   # Tracked system config (always sync)
+   !hosts
+   !environment
+   !default/grub
+   !apt/sources.list.d/**
+   ```
 
 6. Verify sync completes successfully
 
 ### Phase 2: System State Repository
-**Create git-tracked state management**
+Create git-tracked state management
 
 1. Initialize on primary machine (e.g., P17):
-```bash
-mkdir -p ~/system-state/{packages,services,users,scripts,vscode,docker,k3s,vm}
-cd ~/system-state
-git init
-```
+   ```bash
+   mkdir -p ~/system-state/{packages,services,users,scripts,vscode,docker,k3s,vm}
+   cd ~/system-state
+   git init
+   ```
 
 2. Install etckeeper on both machines (local version control, NOT synced):
-```bash
-sudo apt install etckeeper
-sudo etckeeper init
-```
+   ```bash
+   sudo apt install etckeeper
+   sudo etckeeper init
+   ```
    - etckeeper commits to `/etc/.git` locally on each machine
    - Excluded from Syncthing via `/etc/.stignore`
    - Provides per-machine version history and rollback capability
 
 ### Phase 3: Core Scripts
-**Implement in `~/system-state/scripts/`**
+Implement in `~/system-state/scripts/`
 
 #### `capture-state.sh`
 **Purpose**: Export current machine state (packages and services only)

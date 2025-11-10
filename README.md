@@ -49,7 +49,7 @@ This project solves it with:
 
 This repository contains the complete implementation framework:
 
-```
+```plain
 pc-switcher/
 ├── README.md                          # This file
 ├── CLAUDE.md                          # Architecture guide for Claude Code

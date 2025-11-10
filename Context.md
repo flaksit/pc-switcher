@@ -134,7 +134,7 @@ Two Ubuntu 24.04 laptops need synchronization:
 
 **Backup method**: Script to export extension list to `~/system-state/vscode/`
 
-**Rationale**: 
+**Rationale**:
 - Settings Sync is automatic, handles extensions seamlessly
 - Syncthing syncs config files but NOT extensions (1-5GB, node_modules, platform-specific binaries)
 - Combining both gives automatic daily sync + disaster recovery capability

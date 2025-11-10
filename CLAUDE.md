@@ -124,7 +124,7 @@ Uses btrfs send/receive for incremental block-level transfer of VM subvolume sna
 
 ## Repository Structure
 
-```
+```plain
 ~/system-state/
 ├── packages/              # Package list exports
 │   ├── apt-selections.txt
@@ -175,7 +175,7 @@ Uses btrfs send/receive for incremental block-level transfer of VM subvolume sna
 
 ## Workflow
 
-### Pre-travel (on P17):
+### Pre-travel (on P17)
 ```bash
 ~/scripts/prepare-for-travel.sh
 # 1. Ensure XPS is logged out
@@ -188,7 +188,7 @@ Uses btrfs send/receive for incremental block-level transfer of VM subvolume sna
 # Optional: ./system-state/docker/export-docker.sh, VM sync
 ```
 
-### Post-travel (on XPS):
+### Post-travel (on XPS)
 ```bash
 ~/scripts/post-travel-sync.sh
 # Similar flow in reverse (log out of P17 before sync)
