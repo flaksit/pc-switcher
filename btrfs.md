@@ -59,7 +59,7 @@ The current architecture uses:
 **Recommended approach: Syncthing for `/etc` with `/etc/.stignore`**:
 
 **Implementation**:
-```
+```gitignore
 # /etc/.stignore - Syncthing ignore patterns for /etc
 
 # Exclude everything by default
@@ -189,25 +189,25 @@ sudo git -C /etc revert abc123
 
 **Why not btrfs send/receive for `/home`?**
 
-**Problem**: Can't selectively exclude files during `btrfs send/receive`
+Problem: Can't selectively exclude files during `btrfs send/receive`
 - Need to exclude: `.ssh/id_*`, `.config/tailscale`, `.cache/*` (except dev caches)
 - btrfs transfers entire subvolume atomically (all-or-nothing)
 - Would require post-receive filtering (messy, defeats atomic benefits)
 
-**Alternative considered: Nested subvolumes**
+Alternative considered: Nested subvolumes:
 - Make `.ssh/`, `.config/tailscale/` separate child subvolumes (excluded from send)
 - Problem: Requires restructuring `/home`, complex setup, fragile
 
 **Recommended: Keep Syncthing for `/home`**
 
-**Benefits of Syncthing for `/home`**:
+Benefits of Syncthing for `/home`:
 - **Selective sync built-in**: `.stignore` handles exclusions elegantly
 - **Bidirectional**: Handles offline changes on both machines
 - **Conflict resolution**: Creates `.sync-conflict-*` files automatically
 - **Incremental**: Only syncs changed files/blocks
 - **Simple**: No scripting required, GUI available
 
-**Performance consideration**:
+Performance consideration:
 - Initial sync is slow (must scan all files)
 - Incremental syncs are fast (only checks mtimes)
 - `btrfs send/receive` would be faster for initial sync of large directories with many files, but loses selective exclusion capability
@@ -263,7 +263,7 @@ sudo btrfs subvolume create ~/.local/share/AppWithManyFiles
 
 **Architecture Components:**
 
-```
+```plain
 ┌─────────────────────────────────────────────────────────────┐
 │ Syncthing Layer (Primary Sync Mechanism)                    │
 ├─────────────────────────────────────────────────────────────┤
@@ -348,7 +348,7 @@ sudo btrfs subvolume snapshot /var/lib/libvirt/snapshots/images-2025-11-03 \
 - Plan.md Phase 3: Update `diff-state.sh` to manage `.stignore` directly
 
 **New `/etc/.stignore` format**:
-```
+```gitignore
 # Exclude everything by default
 *
 
