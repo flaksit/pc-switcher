@@ -35,7 +35,7 @@ The system consists of four synchronized layers:
   - **Critical**: `/var/lib/rancher/k3s/` must NEVER be copied (machine-specific certificates, cluster identity)
 
 ### 4. **Special Handlers**
-- **VM**: QCOW2 backing files with rsync (base template + overlay, only overlay syncs, NOCOW btrfs subvolume for performance)
+- **VM**: QCOW2 backing files with rsync (base template + overlay, on sync only overlay has changes, NOCOW btrfs subvolume for performance)
 - **VS Code**: Settings Sync (cloud-based, automatic) + backup script for extension list recovery
 
 ## Key Design Decisions
