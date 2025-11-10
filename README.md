@@ -22,7 +22,7 @@ This project solves it with:
 - **Syncthing**: Efficient, bidirectional, conflict-aware file sync over LAN
 - **System state management**: Interactive scripts for packages, services, `/etc` configs
 - **Container-aware handling**: Docker and k3s workflows that respect their architecture
-- **VM snapshot sync**: Efficient overlay-based VM synchronization
+- **VM sync**: QCOW2 backing files with rsync (efficient overlay-based synchronization)
 
 ## What Gets Synced
 
@@ -37,7 +37,7 @@ This project solves it with:
 ### Manual Sync (Special Workflows)
 - **Docker**: Export/import via `docker save/load` (never copy `/var/lib/docker/` directly)
 - **k3s**: Manifests synced automatically, PersistentVolumes via hostPath to `~/k3s-volumes/`
-- **VMs**: QCOW2 snapshots with overlay-based sync (efficient, only syncs changes)
+- **VMs**: QCOW2 backing files with rsync (base template + overlay, only overlay syncs)
 - **VS Code**: Settings Sync (cloud-based) + backup script for extensions
 
 ### Never Synced (Machine-Specific)
@@ -64,15 +64,13 @@ pc-switcher/
     ├── packages/                      # Package lists (apt, snap, flatpak, PPAs)
     ├── services/                      # Systemd service states
     ├── users/                         # User and group information
-    ├── etc-tracked/                   # Selected /etc files
-    ├── .track-rules                   # Interactive tracking decisions
     ├── scripts/                       # Core state management
     │   ├── capture-state.sh           # Export current system state
-    │   ├── diff-state.sh              # Interactive diff and tracking updates
+    │   ├── diff-state.sh              # Interactive diff and /etc/.stignore management
     │   └── apply-state.sh             # Apply state changes to target machine
     ├── docker/                        # Docker export/import workflows
     ├── k3s/                           # k3s manifest and PVC utilities
-    ├── vm/                            # VM snapshot sync scripts
+    ├── vm/                            # VM rsync scripts (QCOW2 backing files)
     └── vscode/                        # VS Code extension backup
 ```
 
@@ -86,7 +84,7 @@ pc-switcher/
 3. **Phase 2**: System state repository initialization
 4. **Phase 3**: Core state management scripts (`capture`, `diff`, `apply`)
 5. **Phase 4**: Container workflows (Docker, k3s)
-6. **Phase 5**: VM snapshot sync
+6. **Phase 5**: VM sync (QCOW2 backing files with rsync)
 7. **Phase 6**: VS Code integration
 8. **Phase 7**: User-facing workflow scripts and testing
 

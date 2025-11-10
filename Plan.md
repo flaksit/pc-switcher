@@ -14,7 +14,7 @@
 ┌─────────────────────────────────────────────────────────────┐
 │ btrfs Snapshot Layer (Rollback Safety)                      │
 ├─────────────────────────────────────────────────────────────┤
-│ • Pre-sync snapshots of /home, /etc, VM subvolumes          │
+│ • Pre-sync snapshots of /home and /etc                      │
 │ • Local rollback capability per machine                     │
 └─────────────────────────────────────────────────────────────┘
                               ↓
@@ -29,7 +29,7 @@
 ┌─────────────────────────────────────────────────────────────┐
 │ Special Handlers (Separate Workflows)                       │
 ├─────────────────────────────────────────────────────────────┤
-│ • VM: btrfs send/receive (block-level incremental sync)     │
+│ • VM: QCOW2 backing files + rsync (overlay-based sync)      │
 │ • Docker: Volume backup/restore                             │
 │ • k3s: Manifest apply + PV sync via hostPath                │
 │ • VS Code: Settings Sync (automatic) + script backup        │
@@ -151,7 +151,7 @@ Install and configure on both machines:
      - `/home/<user>` (with folder type per Phase 0)
      - `/etc` (synced for selective files via `.stignore`)
      - `~/system-state/` (new folder to create)
-   - Exclude from Syncthing: VM subvolume at `/var/lib/libvirt/images` (synced separately via btrfs send/receive)
+   - Note: VM images at `/var/lib/libvirt/images` are NOT synced via Syncthing (synced separately via rsync with QCOW2 backing files)
 
 4. Create `.stignore` for `/home`:
    ```gitignore
@@ -317,41 +317,75 @@ Implement in `~/system-state/scripts/`
 kubectl exec <pod> -- tar czf - /data > k3s/volumes/<pvc>.tar.gz
 ```
 
-### Phase 5: VM Snapshot Sync (btrfs send/receive)
+### Phase 5: VM Sync (QCOW2 Backing Files + rsync)
 
 **One-time setup**:
-1. Create btrfs subvolume for VM images:
+1. Create NOCOW btrfs subvolume for VM images:
 ```bash
 sudo btrfs subvolume create /var/lib/libvirt/images
+sudo chattr +C /var/lib/libvirt/images  # Set NOCOW attribute
+```
+
+2. Create base Windows image:
+```bash
+cd /var/lib/libvirt/images
+qemu-img create -f qcow2 base-windows.qcow2 50G
+# Install Windows into base-windows.qcow2, configure fully
+```
+
+3. Create overlay for active use:
+```bash
+qemu-img create -f qcow2 -F qcow2 \
+    -b base-windows.qcow2 \
+    windows-overlay.qcow2
+```
+
+4. Update VM XML to use overlay:
+```bash
+virsh edit windows-vm
+# Change disk path to windows-overlay.qcow2
 ```
 
 **Before each sync**:
-1. Shutdown VM (critical!)
-2. Create read-only snapshot:
+1. Shutdown VM (critical!):
 ```bash
-sudo btrfs subvolume snapshot -r /var/lib/libvirt/images \
-  /var/lib/libvirt/snapshots/images-$(date +%Y-%m-%d)
+virsh shutdown windows-vm
+# Wait for shutdown to complete
+virsh list --all  # Verify "shut off" state
 ```
 
 **Sync scripts in `~/system-state/vm/`**:
 
 `sync-vm-to-xps.sh`:
 ```bash
-# Send incremental snapshot to XPS
-sudo btrfs send -p /var/lib/libvirt/snapshots/images-PREVIOUS-DATE \
-  /var/lib/libvirt/snapshots/images-CURRENT-DATE | \
-  ssh xps sudo btrfs receive /var/lib/libvirt/snapshots/
+#!/bin/bash
+# Sync VM images from P17 to XPS
+rsync -aAXHv --info=progress2 --sparse --inplace \
+    /var/lib/libvirt/images/ \
+    xps:/var/lib/libvirt/images/
 ```
 
-`sync-vm-to-p17.sh`: Same in reverse
+`sync-vm-to-p17.sh`:
+```bash
+#!/bin/bash
+# Sync VM images from XPS to P17
+rsync -aAXHv --info=progress2 --sparse --inplace \
+    /var/lib/libvirt/images/ \
+    p17:/var/lib/libvirt/images/
+```
 
-**On target machine**:
-- Create writable snapshot from latest received snapshot for actual VM use
+**How it works**:
+- Base image (`base-windows.qcow2`) is 50GB but rarely changes
+- Overlay (`windows-overlay.qcow2`) is 1-5GB and contains all active changes
+- rsync transfers entire directory but skips unchanged base automatically
+- Only overlay transfers on each sync (~2-3 minutes on 1Gb ethernet)
 
 **Benefits**:
-- Incremental block-level transfer (only changed blocks sent)
-- No performance overhead
-- Near-instant snapshots (read-only)
+- Simple rsync workflow (no complex scripts or snapshots)
+- Fast sync (only changed overlay transfers)
+- Good VM performance (NOCOW prevents fragmentation)
+- Standard approach (recommended by libvirt, Ubuntu, btrfs docs)
+- 6-16% QCOW2 overhead acceptable for light VM use
 
 ### Phase 6: VS Code Integration
 
@@ -389,11 +423,8 @@ sudo btrfs subvolume snapshot /home /snapshots/home-$TIMESTAMP
 # Snapshot /etc
 sudo btrfs subvolume snapshot /etc /snapshots/etc-$TIMESTAMP
 
-# Snapshot VMs
-sudo btrfs subvolume snapshot -r /var/lib/libvirt/images \
-  /var/lib/libvirt/snapshots/images-$TIMESTAMP
-
 echo "Snapshots created for $TIMESTAMP"
+echo "Rollback: sudo btrfs subvolume delete /home && sudo btrfs subvolume snapshot /snapshots/home-$TIMESTAMP /home"
 ```
 
 **Create `~/scripts/prepare-for-travel.sh`**:
@@ -465,7 +496,7 @@ echo "Ready for travel!"
 3. On XPS: Verify `.cache/pip/` contains cached packages
 4. Install same package, should use cache (no download)
 
-### Test 5: VM Snapshot Sync
+### Test 5: VM Sync
 1. Create/modify file in Windows VM on P17
 2. Shutdown VM, run `sync-vm-to-xps.sh`
 3. Start VM on XPS, verify file exists
@@ -508,5 +539,5 @@ echo "Ready for travel!"
 - Review `diff-state.sh` output before applying
 - After applying state: Check Syncthing logs for deleted files/folders (deletions sync without prompts; logs show what was removed)
 - Git history in `~/system-state/` provides rollback capability
-- Periodically review `.track-rules` and `.stignore` patterns
+- Periodically review `/etc/.stignore` and `/home/.stignore` patterns
 - Monitor Syncthing logs for conflicts or errors
