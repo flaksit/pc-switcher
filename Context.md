@@ -107,24 +107,26 @@ Two Ubuntu 24.04 laptops need synchronization:
 - PersistentVolumes: Use `hostPath` pointing to `~/k3s-volumes/` (synced by Syncthing)
 - Alternative: Backup/restore PVC data with kubectl exec + tar
 
-### VM Handling: btrfs Subvolumes + send/receive
-**Approach**: Native filesystem-level sync using btrfs snapshots and incremental transfer
+### VM Handling: QCOW2 with Backing Files
+**Approach**: QCOW2 backing files with rsync for simple, efficient sync
 
 **Strategy**:
-- Store VM images in btrfs subvolume (e.g., `/var/lib/libvirt/images` as subvolume)
-- Before sync: Create read-only `btrfs subvolume snapshot` of VM subvolume (instant, copy-on-write)
-- Sync via `btrfs send/receive` piped through SSH (sends only changed blocks between snapshots)
-- No performance overhead vs raw disk (runs on btrfs with copy-on-write)
+- Store VM images in **NOCOW btrfs subvolume** at `/var/lib/libvirt/images` (set via `chattr +C` or `btrfs property set <subvol> nodatacow true`)
+- Base template: `base-windows.qcow2` (50GB, rarely changes)
+- Active overlay: `windows-overlay.qcow2` (1-5GB, syncs on travel)
+- Rsync syncs entire `/var/lib/libvirt/images/` directory with `--sparse --inplace`
+- Base image skipped automatically by rsync (unchanged), only overlay transfers
 
 **Benefits**:
-- Near-instant snapshots (no VM shutdown delay)
-- Incremental block-level sync (faster than rsync of overlay files)
-- No performance penalty
-- Snapshot history on each machine for rollback
+- Simple rsync workflow (no complex scripts or btrfs send/receive)
+- Fast sync (~2-3 minutes for 1-5GB overlay on 1Gb ethernet)
+- Good VM performance (NOCOW prevents fragmentation issues)
+- Standard, well-supported approach (recommended by libvirt, Ubuntu, btrfs docs)
+- Backing file relationship keeps sync efficient
 
-**Rationale**: Eliminates QCOW2 complexity layer, uses native filesystem capabilities, improves performance
+**Rationale**: Balances simplicity with sync efficiency; 6-16% QCOW2 overhead acceptable for light VM use
 
-### VS Code: Built-in Settings Sync + Script Backup (Option A)
+### VS Code: Built-in Settings Sync + Script Backup
 **Primary method**: VS Code Settings Sync (cloud-based, Microsoft/GitHub account)
 
 **What it syncs**:

@@ -102,7 +102,7 @@ Prepare for first sync to avoid conflicts:
    ```
 
 2. **btrfs pre-sync snapshot of XPS** (covers all critical configs):
-   - See Phase 7: `./scripts/create-sync-snapshot.sh` creates snapshots of `/home`, `/etc`, and VMs
+   - See Phase 7: `./scripts/create-sync-snapshot.sh` creates snapshots of `/home` and `/etc`
    - This handles rollback for all critical configs (`.bashrc`, `.gitconfig`, `.ssh/`, VS Code settings, etc.)
    - No separate manual backup needed
 

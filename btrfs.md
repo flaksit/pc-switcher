@@ -14,8 +14,8 @@ The current architecture uses:
 - **Manual scripts** for package and service state management
 
 **Recommended changes after analysis:**
-- **Syncthing for everything except VMs**: Use Syncthing for `/home` AND `/etc` (with `.stignore` for selective sync)
-- **btrfs for VMs only**: Replace QCOW2 with btrfs subvolumes + `btrfs send/receive` for efficient VM sync
+- **Syncthing for everything including VMs**: Use Syncthing for `/home` AND `/etc` (with `.stignore` for selective sync)
+- **QCOW2 backing files for VMs**: Use NOCOW btrfs subvolume + QCOW2 with backing file pattern for simple, efficient VM sync
 - **btrfs snapshots for safety**: Pre-travel snapshots of `/home`, `/etc`, VMs for rollback capability
 - **etckeeper locally**: Keep etckeeper on each machine for local version history, don't sync git repos
 
@@ -23,7 +23,7 @@ The current architecture uses:
 
 ## Key Opportunities
 
-### 1. VM Storage: Eliminate QCOW2 Complexity
+### 1. VM Storage: Simplified QCOW2 with Backing Files
 
 **Current approach (Plan.md:102-112)**:
 - Base QCOW2 image (~50GB) created per machine
@@ -31,23 +31,25 @@ The current architecture uses:
 - Sync only overlay files, full base rarely
 - 5-10% performance overhead vs raw disk
 
-**btrfs alternative**:
-- Store VM images in a **btrfs subvolume** (e.g., `/var/lib/libvirt/images` as subvolume)
-- Before sync: `btrfs subvolume snapshot` of VM subvolume (instant, copy-on-write)
-- Sync via `btrfs send/receive` (sends only changed blocks between snapshots)
-- No performance overhead (raw disk image on btrfs with CoW)
-- Simpler tooling, no QCOW2 layer management
+**Simplified QCOW2 approach with backing files**:
+- Store VM images in **NOCOW btrfs subvolume** (prevents fragmentation, follows official guidance)
+- Use QCOW2 with backing file pattern:
+  - Base template: `base-windows.qcow2` (50GB, synced once)
+  - Active overlay: `windows-overlay.qcow2` (1-5GB, syncs on each travel)
+- Sync via `rsync --sparse --inplace` of entire `/var/lib/libvirt/images/` directory
+- Base image skipped automatically (unchanged), only overlay transfers
 
 **Benefits**:
-- Near-instant snapshots (no VM shutdown delay to create snapshot)
-- Native filesystem-level sync (no rsync of large files)
-- No performance penalty
-- Snapshot history on each machine (rollback capability)
+- Simple workflow (just rsync the images directory)
+- Fast sync (only 1-5GB overlay transfers, ~2-3 minutes)
+- Good VM performance (NOCOW prevents fragmentation issues)
+- Standard, well-documented approach
+- Flexible (can create QCOW2 internal snapshots if needed)
 
 **Trade-offs**:
-- Requires btrfs on both machines (already true)
-- `btrfs send/receive` over network requires piping through ssh
-- Less mature tooling than QCOW2
+- 6-16% QCOW2 performance overhead (acceptable for light VM use)
+- Backing file dependency (must keep base and overlay together)
+- Requires NOCOW on btrfs (recommended by libvirt, Ubuntu, btrfs docs)
 
 ### 2a. `/etc` Sync: Syncthing with `/etc/.stignore` (Recommended)
 
@@ -278,15 +280,14 @@ sudo btrfs subvolume create ~/.local/share/AppWithManyFiles
 ├─────────────────────────────────────────────────────────────┤
 │ • Pre-sync snapshot of /home (local rollback)               │
 │ • Pre-sync snapshot of /etc (local rollback)                │
-│ • Pre-sync snapshot of VM subvolumes                        │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│ btrfs send/receive Layer (VMs Only)                         │
+│ VM Sync Layer (QCOW2 Backing Files)                        │
 ├─────────────────────────────────────────────────────────────┤
-│ • /var/lib/libvirt/images as subvolume                      │
-│ • Efficient block-level transfer of VM disk images          │
-│ • Incremental send with parent snapshots                    │
+│ • /var/lib/libvirt/images as NOCOW subvolume                │
+│ • QCOW2 with backing file pattern (base + overlay)          │
+│ • Rsync with --sparse --inplace (only overlay transfers)    │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -302,43 +303,46 @@ sudo btrfs subvolume create ~/.local/share/AppWithManyFiles
 │ • capture-state.sh → package lists, service states          │
 │ • diff-state.sh → detect /etc changes, update .stignore     │
 │ • apply-state.sh → install packages, enable services        │
-│ • sync-vm-btrfs.sh → btrfs send/receive for VMs             │
+│ • sync-vm-rsync.sh → rsync VM images (base + overlay)       │
 │ • create-sync-snapshot.sh → safety snapshots                │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### High-Priority Changes to Context.md and Plan.md
 
-#### 1. **VM Storage: Replace QCOW2 with btrfs Snapshots**
+#### 1. **VM Storage: Simplified QCOW2 with Backing Files**
 
 **Changes needed**:
-- Context.md line 102-112: Update VM handling section
-- Plan.md Phase 5: Rewrite VM sync workflow
+- Context.md line 102-112: Update VM handling section (already done)
+- Plan.md Phase 5: Update VM sync workflow to use rsync
 
-**New implementation**:
+**Implementation**:
 ```bash
-# Setup (one-time)
-sudo btrfs subvolume create /var/lib/libvirt/images
+# Setup (one-time on P17)
+sudo chattr +C /var/lib/libvirt/images  # Set NOCOW
+qemu-img create -f qcow2 base-windows.qcow2 50G
+# Install Windows into base-windows.qcow2, configure fully
 
-# Before sync (on P17)
+# Create overlay for active use
+qemu-img create -f qcow2 -F qcow2 \
+    -b base-windows.qcow2 \
+    windows-overlay.qcow2
+
+# Update VM XML to use windows-overlay.qcow2
+virsh edit windows-vm
+
+# Weekly sync (before travel: P17 → XPS)
 virsh shutdown windows-vm
-sudo btrfs subvolume snapshot -r /var/lib/libvirt/images \
-  /var/lib/libvirt/snapshots/images-2025-11-03
-
-# Sync to XPS (incremental if parent exists)
-sudo btrfs send -p /var/lib/libvirt/snapshots/images-2025-11-02 \
-  /var/lib/libvirt/snapshots/images-2025-11-03 | \
-  ssh xps sudo btrfs receive /var/lib/libvirt/snapshots/
-
-# On XPS: Use latest snapshot
-sudo btrfs subvolume snapshot /var/lib/libvirt/snapshots/images-2025-11-03 \
-  /var/lib/libvirt/images
+rsync -aAXHv --info=progress2 --sparse --inplace \
+    /var/lib/libvirt/images/ \
+    xps:/var/lib/libvirt/images/
 ```
 
-**Benefits over QCOW2**:
-- No performance overhead (0% vs 5-10%)
-- Near-instant snapshots
-- Incremental block-level sync (faster than rsync of overlay files)
+**Benefits**:
+- Simple workflow (just rsync the images directory)
+- Fast sync (only 1-5GB overlay transfers, ~2-3 minutes)
+- Good VM performance (NOCOW prevents fragmentation)
+- Standard, well-documented approach
 
 #### 2. **`/etc` Sync: Syncthing with `/etc/.stignore`**
 
@@ -407,10 +411,6 @@ sudo btrfs subvolume snapshot /home /snapshots/home-$TIMESTAMP
 # Snapshot /etc
 sudo btrfs subvolume snapshot /etc /snapshots/etc-$TIMESTAMP
 
-# Snapshot VMs
-sudo btrfs subvolume snapshot -r /var/lib/libvirt/images \
-  /var/lib/libvirt/snapshots/images-$TIMESTAMP
-
 echo "Snapshots created for $TIMESTAMP"
 echo "Rollback: sudo btrfs subvolume delete /home && sudo btrfs subvolume snapshot /snapshots/home-$TIMESTAMP /home"
 ```
@@ -432,16 +432,16 @@ echo "Rollback: sudo btrfs subvolume delete /home && sudo btrfs subvolume snapsh
 
 ### What Changed from Original Plan
 
-| Component | Original Approach | New Approach with btrfs |
-|-----------|------------------|-------------------------|
-| `/home` sync | Syncthing | **Keep Syncthing** (selective sync requirement) |
-| `/etc` sync | Git repo with `etc-tracked/` and `.track-rules` | **Syncthing with `/etc/.stignore`** (simpler, no `.track-rules`) |
-| `/etc` versioning | Git repo in `~/system-state/` | **etckeeper locally** (per-machine, NOT synced) |
-| Package management | `capture-state.sh` exports manifests | **Keep existing** (works well, synced via `~/system-state/`) |
-| VM storage | QCOW2 snapshots (5-10% overhead) | **btrfs subvolumes + send/receive** (0% overhead) |
-| Rollback | Git history in `~/system-state/` | **btrfs snapshots** before sync |
-| Docker | Manual export/import | **Keep manual** (btrfs driver has issues) |
-| k3s PVCs | Syncthing for `~/k3s-volumes/` | **Keep Syncthing** (simple, works well) |
+| Component            | Original Approach                                 | New Approach with btrfs                                          |
+|----------------------|---------------------------------------------------|------------------------------------------------------------------|
+| `/home` sync         | Syncthing                                         | **Keep Syncthing** (selective sync requirement)                  |
+| `/etc` sync          | Git repo with `etc-tracked/` and `.track-rules`   | **Syncthing with `/etc/.stignore`** (simpler, no `.track-rules`) |
+| `/etc` versioning    | Git repo in `~/system-state/`                     | **etckeeper locally** (per-machine, NOT synced)                  |
+| Package management   | `capture-state.sh` exports manifests              | **Keep existing** (works well, synced via `~/system-state/`)     |
+| VM storage           | QCOW2 snapshots (6-16% overhead)                  | **QCOW2 base+overlay files with NOCOW** (fast rsync)             |
+| Rollback             | Git history in `~/system-state/`                  | **btrfs snapshots** before sync                                  |
+| Docker               | Manual export/import                              | **Keep manual** (btrfs driver has issues)                        |
+| k3s PVCs             | Syncthing for `~/k3s-volumes/`                    | **Keep Syncthing** (simple, works well)                          |
 
 ### Key Architectural Changes
 
@@ -450,9 +450,9 @@ echo "Rollback: sudo btrfs subvolume delete /home && sudo btrfs subvolume snapsh
    - `/etc` with `.stignore` for selective tracking (no more `etc-tracked/` directory or `.track-rules`)
    - `~/system-state/` git repo syncs naturally (contains package manifests, scripts)
 
-2. **btrfs only for VMs and snapshots**
-   - Replace QCOW2 with btrfs subvolumes for VM storage
-   - Use `btrfs send/receive` for efficient VM sync
+2. **QCOW2 with NOCOW for VMs, btrfs for snapshots**
+   - Use QCOW2 backing files on NOCOW btrfs subvolume for VM storage
+   - Use rsync for simple, efficient VM sync (only overlay transfers)
    - Pre-sync snapshots of `/home`, `/etc`, VMs for rollback safety
 
 3. **etckeeper stays local**
@@ -474,7 +474,7 @@ echo "Rollback: sudo btrfs subvolume delete /home && sudo btrfs subvolume snapsh
 #### Context.md
 - **Line 31-42 (File Synchronization)**: Add `/etc` as Syncthing-synced folder with `/etc/.stignore`
 - **Line 59-72 (System State Management)**: Update to reflect `/etc/.stignore` approach (no `.track-rules`), etckeeper local usage, separate package management
-- **Line 102-112 (VM Handling)**: Replace QCOW2 with btrfs subvolumes + send/receive
+- **Line 102-112 (VM Handling)**: Update to QCOW2 backing files with rsync (already done)
 
 #### Plan.md
 - **Architecture diagram (lines 6-28)**: Add btrfs snapshot layer, show Syncthing for both `/home` and `/etc`
@@ -484,19 +484,20 @@ echo "Rollback: sudo btrfs subvolume delete /home && sudo btrfs subvolume snapsh
   - Update `capture-state.sh`: only package lists/services (not `/etc` files)
   - Update `diff-state.sh`: manage `/etc/.stignore` directly, check files on both source and target
   - Update `apply-state.sh`: only packages/services (not `/etc` files)
-- **Phase 5 (VM Snapshot Sync)**: Complete rewrite to use btrfs subvolumes and send/receive
+- **Phase 5 (VM Snapshot Sync)**: Update to use QCOW2 backing files with rsync
 - **Phase 7 (User Workflow Scripts)**: Add `create-sync-snapshot.sh` step (not `create-travel-snapshot.sh`)
 
 ### Answered Questions (from original Open Questions)
 
 1. **Is `/home` already a btrfs subvolume?** → Yes (Ubuntu 24.04 default), enables snapshots
-2. **Acceptable complexity?** → Minimal. Only VMs use `btrfs send/receive`. Rest is Syncthing (simpler).
+2. **Acceptable complexity?** → Minimal. QCOW2 backing files with rsync is simple and standard.
 3. **Diverged snapshots?** → Non-issue. One machine used at a time (uni-directional workflow from source to target and then back from target to source).
 
-### Final Architecture: Syncthing + btrfs Hybrid
+### Final Architecture: Syncthing + QCOW2 Backing Files
 
 **Use Syncthing for**: `/home`, `/etc`, `~/system-state/` (selective sync, conflict resolution)
-**Use btrfs for**: VMs (efficient large-file sync), pre-travel snapshots (rollback safety)
+**Use rsync for**: VM images QCOW2 base and overlay files on NOCOW btrfs (simple, efficient sync)
+**Use btrfs snapshots for**: Pre-travel snapshots of `/home`, `/etc`, VMs (rollback safety)
 **Use etckeeper for**: Local `/etc` version history (per-machine, not synced)
 
-**Key insight**: Don't replace Syncthing with btrfs. Use btrfs to **enhance** Syncthing where it makes sense (VMs, snapshots).
+**Key insight**: Don't replace Syncthing with btrfs. Use btrfs to **enhance** Syncthing where it makes sense (snapshots).
