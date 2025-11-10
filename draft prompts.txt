@@ -1,0 +1,73 @@
+THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
+
+---
+
+
+Need to execute package removal as well. Need to be able to select packages that are only on a single host (e.g. nvidia drivers on P17, not on XPS).
+--> Keep a list of packages that are system-specific
+--> On sync, list newly installed packages (only the ones installed explicitly; not the dependencies) and prompt the user if they are system-specific (so should not be synced) or normal (should be synced). If the target system contains packages that are not in the received sync, ask the same: system-specific packages so should be kept and normal packages should be removed.
+We want to work only with "user selected packages" (apt install); not packages that only were installed because they were a dependency.
+
+
+
+Update the relevant sections of the relevant .md files with this. Don't change anything else. Respect the current level of detail of each file.
+
+
+
+Syncthing for /etc should NOT be running all the time in the background. Because package installs could install new or modify existing files in /etc with the package default values, and syncthing immediately overwriting target -> source, while we want syncthing overwriting source -> target, even if the file is newer on target.
+
+More general: for good observability and consistency, system state and Syncthing syncs should be taken from the snapshots and not from the "live" folders, so that we are sure we can rollback to a consistent state.
+
+Workflow should be
+1. take /etc snapshot on both source and target
+2. diff system state (this changes files in ~/system-state/)
+3. diff /etc of the snapshot (this changes /etc/.stignore)
+4. We need a new diff from /etc on source in case /etc/.stignore changed. We could remove the previous snapshot.
+5. apply system state (packages)
+6. syncthing /etc from the source snapshot
+
+7. take /home snapshot on both source and target (including ~/system-state)
+8. syncthing /home from the source snapshot
+
+1 > 2 > [ [ 2 > 3 > 4> [ 5 | 6 ] ] | [ 7 > 8 ] ]
+
+So 7>8 can run in parallel as from 2.
+5 and 6 can run in parallel as well.
+
+Or am I overanalysing/overengineering it?
+
+
+
+
+Before you asked following Question 1: "Are you using "Send Only" mode on the source, or "Receive Only" mode on the target?"
+
+Is it possible to have "Send Only" on the source and "Send&Receive" on the target? If so, how will both Scenarios turn out?
+
+Is it possible to have "Send&Receive" on the source and "Receive Only" on the target? If so, how will both Scenarios turn out?
+
+
+
+Syncthing for /etc should NOT be running all the time in the background. Reason:
+- Package installs could install new files or modify existing files in /etc with the package default values. In that case, syncthing would overwrite target -> source (because the target has the newer files), while we want syncthing overwriting source -> target, even if the file is newer on target.
+So Syncthing for /etc should only be started manually when we want to sync /etc from source to target, after taking snapshots on both sides, reviewing the diffs and selecting which /etc we want to sync (always) or not (never).
+Syncthing for /etc should run uni-directionally from source to target only. It should override local changes on target (leaving conflict files if any), even if the target mtime is more recent than the source mtime.
+
+Syncthing for /home could run all the time in the background, even bi-directionally. Though this should be an optional step. At least in the beginning, we want to have full control over the sync process, so we want it to be manual and uni-directional from source to target only, just as with /etc.
+
+For good observability and consistency, system state and Syncthing syncs should be taken from btrfs snapshots and not from the "live" folders, so that we are sure we can rollback to a consistent state.
+
+Workflow should be
+1. take /etc snapshot on both source and target
+2. diff system state (this changes files in ~/system-state/)
+3. diff /etc of the snapshot (this changes /etc/.stignore)
+4. We need a new diff from /etc on source in case /etc/.stignore changed. We could remove the previous snapshot.
+5. apply system state (packages)
+6. syncthing /etc from the source snapshot
+
+7. take /home snapshot on both source and target (including ~/system-state)
+8. syncthing /home from the source snapshot
+
+1 > 2 > [ [ 2 > 3 > 4> [ 5 | 6 ] ] | [ 7 > 8 ] ]
+
+So 7>8 can run in parallel as from 2.
+5 and 6 can run in parallel as well.
