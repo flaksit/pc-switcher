@@ -35,7 +35,7 @@ The system consists of four synchronized layers:
   - **Critical**: `/var/lib/rancher/k3s/` must NEVER be copied (machine-specific certificates, cluster identity)
 
 ### 4. **Special Handlers**
-- **VM**: btrfs subvolume snapshots + send/receive (block-level incremental sync, no performance overhead)
+- **VM**: QCOW2 backing files with rsync (base template + overlay, on sync only overlay has changes, NOCOW btrfs subvolume for performance)
 - **VS Code**: Settings Sync (cloud-based, automatic) + backup script for extension list recovery
 
 ## Key Design Decisions
@@ -108,19 +108,20 @@ kubectl apply -f ~/projects/k3s-manifests/
 kubectl exec <pod> -- tar czf - /data > ~/system-state/k3s/volumes/<pvc>.tar.gz
 ```
 
-### VM Snapshot Sync
-
-**Create snapshot before sync**:
-```bash
-./scripts/create-sync-snapshot.sh
-```
+### VM Sync
 
 **Shutdown VM before sync**:
 ```bash
 virsh shutdown <vm-name>
+# Wait for shutdown to complete
+virsh list --all  # Verify "shut off" state
+```
+
+**Sync VM images with rsync**:
+```bash
 cd ~/system-state/vm && ./sync-vm-to-xps.sh  # or sync-vm-to-p17.sh
 ```
-Uses btrfs send/receive for incremental block-level transfer of VM subvolume snapshots
+Uses rsync to transfer QCOW2 backing files (base template + overlay). Only the overlay file transfers on each sync (~1-5GB), base image is skipped automatically as it rarely changes
 
 ## Repository Structure
 
@@ -148,7 +149,7 @@ Uses btrfs send/receive for incremental block-level transfer of VM subvolume sna
 │   └── volumes/           # Tarball backups
 ├── k3s/                   # k3s utilities
 │   └── volumes/           # PVC backup tarballs
-├── vm/                    # VM snapshot sync
+├── vm/                    # VM rsync scripts (QCOW2 backing files)
 │   ├── sync-vm-to-p17.sh
 │   └── sync-vm-to-xps.sh
 └── vscode/                # VS Code backup
@@ -211,7 +212,7 @@ Before first Syncthing sync:
 
 - **SSH keys** (`.ssh/id_*`): Machine-specific credentials
 - **Tailscale** (`.config/tailscale`): Each machine has distinct network identity
-- **VM storage** (`.local/share/libvirt`): Synced separately via QCOW2 snapshots
+- **VM storage** (`.local/share/libvirt`): Synced separately via rsync (QCOW2 backing files at `/var/lib/libvirt/images`)
 - **Container storage** (`.local/share/containers`): Use Docker export/import
 - **Browser caches**: Too much churn, minimal benefit
 - **IDE caches**: Can corrupt during sync
