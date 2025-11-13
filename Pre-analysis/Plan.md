@@ -321,38 +321,38 @@ kubectl exec <pod> -- tar czf - /data > k3s/volumes/<pvc>.tar.gz
 
 **One-time setup**:
 1. Create NOCOW btrfs subvolume for VM images:
-```bash
-sudo btrfs subvolume create /var/lib/libvirt/images
-sudo chattr +C /var/lib/libvirt/images  # Set NOCOW attribute
-```
+   ```bash
+   sudo btrfs subvolume create /var/lib/libvirt/images
+   sudo chattr +C /var/lib/libvirt/images  # Set NOCOW attribute
+   ```
 
 2. Create base Windows image:
-```bash
-cd /var/lib/libvirt/images
-qemu-img create -f qcow2 base-windows.qcow2 50G
-# Install Windows into base-windows.qcow2, configure fully
-```
+   ```bash
+   cd /var/lib/libvirt/images
+   qemu-img create -f qcow2 base-windows.qcow2 50G
+   # Install Windows into base-windows.qcow2, configure fully
+   ```
 
 3. Create overlay for active use:
-```bash
-qemu-img create -f qcow2 -F qcow2 \
-    -b base-windows.qcow2 \
-    windows-overlay.qcow2
-```
+   ```bash
+   qemu-img create -f qcow2 -F qcow2 \
+      -b base-windows.qcow2 \
+      windows-overlay.qcow2
+   ```
 
 4. Update VM XML to use overlay:
-```bash
-virsh edit windows-vm
-# Change disk path to windows-overlay.qcow2
-```
+   ```bash
+   virsh edit windows-vm
+   # Change disk path to windows-overlay.qcow2
+   ```
 
 **Before each sync**:
 1. Shutdown VM (critical!):
-```bash
-virsh shutdown windows-vm
-# Wait for shutdown to complete
-virsh list --all  # Verify "shut off" state
-```
+   ```bash
+   virsh shutdown windows-vm
+   # Wait for shutdown to complete
+   virsh list --all  # Verify "shut off" state
+   ```
 
 **Sync scripts in `~/system-state/vm/`**:
 
