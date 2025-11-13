@@ -31,7 +31,13 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+- **Reliability Without Compromise**: Document data integrity guarantees, conflict detection, and rollback strategy for this feature.
+- **Frictionless Command UX**: Confirm end-to-end flow remains a single operator command with minimal manual intervention.
+- **Proven Tooling Only**: List new tools/dependencies with support horizon and security posture justification.
+- **Solid-State Stewardship**: Estimate additional SSD write load and explain mitigation for excessive write amplification.
+- **Throughput-Focused Syncing**: Capture expected sync duration impact and measurement plan for affected assets.
+- **Deliberate Simplicity**: Highlight architectural choices that keep the solution maintainable and reversible.
+- **Documentation As Runtime Contract**: Identify documentation artifacts to update and assign owners within this plan.
 
 ## Project Structure
 

@@ -12,11 +12,13 @@ description: "Task list template for feature implementation"
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
+**Principle Coverage**: Ensure task lists explicitly track Reliability Without Compromise, Frictionless Command UX, Proven Tooling Only, Solid-State Stewardship, Throughput-Focused Syncing, Deliberate Simplicity, and Documentation As Runtime Contract. Create dedicated tasks for validation, performance measurement, SSD write monitoring, and documentation updates where applicable.
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
 - **[Story]**: Which user story this task belongs to (e.g., US1, US2, US3)
-- Include exact file paths in descriptions
+- Include exact file paths in descriptions and tag the dominant principle in parentheses (e.g., `(Reliability Without Compromise)`)
 
 ## Path Conventions
 

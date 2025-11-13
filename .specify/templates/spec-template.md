@@ -28,6 +28,8 @@
 
 **Independent Test**: [Describe how this can be tested independently - e.g., "Can be fully tested by [specific action] and delivers [specific value]"]
 
+**Constitution Alignment**: [List relevant principles: Reliability Without Compromise, Frictionless Command UX, Proven Tooling Only, Solid-State Stewardship, Throughput-Focused Syncing, Deliberate Simplicity, Documentation As Runtime Contract]
+
 **Acceptance Scenarios**:
 
 1. **Given** [initial state], **When** [action], **Then** [expected outcome]
@@ -43,6 +45,8 @@
 
 **Independent Test**: [Describe how this can be tested independently]
 
+**Constitution Alignment**: [List relevant principles]
+
 **Acceptance Scenarios**:
 
 1. **Given** [initial state], **When** [action], **Then** [expected outcome]
@@ -56,6 +60,8 @@
 **Why this priority**: [Explain the value and why it has this priority level]
 
 **Independent Test**: [Describe how this can be tested independently]
+
+**Constitution Alignment**: [List relevant principles]
 
 **Acceptance Scenarios**:
 
@@ -82,18 +88,22 @@
   Fill them out with the right functional requirements.
 -->
 
+> Tag each requirement with the principle(s) it enforces using square brackets (e.g., **FR-001** `[Reliability Without Compromise]`).
+
 ### Functional Requirements
 
-- **FR-001**: System MUST [specific capability, e.g., "allow users to create accounts"]
-- **FR-002**: System MUST [specific capability, e.g., "validate email addresses"]  
-- **FR-003**: Users MUST be able to [key interaction, e.g., "reset their password"]
-- **FR-004**: System MUST [data requirement, e.g., "persist user preferences"]
-- **FR-005**: System MUST [behavior, e.g., "log all security events"]
+- **FR-001** `[Reliability Without Compromise]`: System MUST [specific capability, e.g., "guarantee atomic snapshot export"]
+- **FR-002** `[Frictionless Command UX]`: System MUST [specific capability, e.g., "guide operators through a single command workflow"]  
+- **FR-003** `[Proven Tooling Only]`: Users MUST be able to [key interaction, e.g., "select only supported tooling stacks"]
+- **FR-004** `[Solid-State Stewardship]`: System MUST [data requirement, e.g., "track and cap write amplification"]
+- **FR-005** `[Throughput-Focused Syncing]`: System MUST [behavior, e.g., "complete baseline sync within target duration"]
+- **FR-006** `[Deliberate Simplicity]`: System MUST [behavior, e.g., "keep orchestration layer minimal"]
+- **FR-007** `[Documentation As Runtime Contract]`: System MUST [behavior, e.g., "update documentation automatically"]
 
 *Example of marking unclear requirements:*
 
-- **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
-- **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
+- **FR-008** `[Reliability Without Compromise]`: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
+- **FR-009** `[Documentation As Runtime Contract]`: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
 
 ### Key Entities *(include if feature involves data)*
 
@@ -109,7 +119,9 @@
 
 ### Measurable Outcomes
 
-- **SC-001**: [Measurable metric, e.g., "Users can complete account creation in under 2 minutes"]
-- **SC-002**: [Measurable metric, e.g., "System handles 1000 concurrent users without degradation"]
-- **SC-003**: [User satisfaction metric, e.g., "90% of users successfully complete primary task on first attempt"]
-- **SC-004**: [Business metric, e.g., "Reduce support tickets related to [X] by 50%"]
+- **SC-001** `[Reliability Without Compromise]`: [Metric, e.g., "Zero checksum mismatches across 100 sync cycles"]
+- **SC-002** `[Frictionless Command UX]`: [Metric, e.g., "Operator completes sync with ≤1 manual prompt"]
+- **SC-003** `[Throughput-Focused Syncing]`: [Metric, e.g., "Baseline sync completes within N minutes for dataset size X"]
+- **SC-004** `[Solid-State Stewardship]`: [Metric, e.g., "Write amplification stays below Y% over baseline"]
+- **SC-005** `[Deliberate Simplicity]`: [Metric, e.g., "Implementation introduces ≤Z new components with documented owners"]
+- **SC-006** `[Documentation As Runtime Contract]`: [Metric, e.g., "All impacted docs updated and linked in change log"]
