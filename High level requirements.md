@@ -86,7 +86,7 @@ Conflicts must be reported, but resolution is manual.
 ## Project and development principles and attention points
 More or less in order of importance, but trade-offs are possible:
 
-1. Reliability: no data loss, conflict detection, consistent state after sync
+1. Reliability: no data loss, conflict detection, consistent state after sync, detailed logging, ability to audit and roll back changes
 2. Smooth UX with minimal manual intervention
 3. Use well-supported tools and best practices where possible
 4. Minimize disk wear (all disks are NVMe SSDs)
