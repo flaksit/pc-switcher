@@ -1,29 +1,37 @@
 # Context and Decisions
 
 ## System Overview
-Two Ubuntu 24.04 laptops need synchronization:
+Currently, two Ubuntu 24.04 laptops need synchronization:
 - **P17**: Heavy laptop, stays at home, primary work machine
 - **XPS 13**: Light laptop, for travel (once a week), used offline when on the road
 
 **Sync Pattern**: Uni-directional workflow (work on ONE machine at a time, sync between uses). Manual trigger, no real-time sync required. Both machines on same LAN (1Gb ethernet) during sync.
 
+The approach should be generic, so it supports any number of Ubuntu machines.
+
 ## Scope Requirements
 
-### What Must Sync
-1. **User data**: Entire `/home` directory
-2. **Installed packages**: apt, snap, flatpak, manual .debs, custom PPAs, install scripts
-3. **Application configurations**: All app settings including GNOME Desktop, cloud mounts, systemd services
-4. **System configurations**: Selected `/etc` files, startup services, users/groups
-5. **File metadata**: Owner, permissions, ACLs must be preserved
-6. **VMs**: KVM/virt-manager VMs (~50GB Windows VM, occasional use)
-7. **Containers**: Docker (dev containers, image building), k3s cluster with PVCs
+The machines are mainly used by a single user, with occasional multi-user scenarios (e.g., family members). The machines are used for development (coding, building, testing), general productivity and office work, and occasional multimedia consumption (play music, video).
 
-### Installation Patterns
+### What Must Sync
+We aim at almost full system-state replication rather than as simple sync of user data. The following must be kept in sync:
+
+1. **User data**: `/home/<user>` directory (excluding a few machine-specific items)
+2. **Installed packages**: apt, snap, flatpak, manual .debs, custom PPAs, packages installed through install scripts
+3. **Application configurations**: All app settings including GNOME Desktop, cloud mounts, systemd services
+4. **System configurations**: The machine independent `/etc` files and startup services, users/groups
+5. **File metadata**: Owner, permissions, ACLs, timestamps must be preserved
+6. **VMs**: KVM/virt-manager VMs (~50GB Windows VM, occasional use)
+7. **Containers**: Docker (dev containers, image building), local single-node k3s cluster with PVCs
+
+### Package Installation Patterns
 - Mix of system and user-space installations
 - User prefers user-space when possible (`~/.local`)
 - Custom PPAs in use
 - Manual .deb installations
 - Direct install scripts (primarily to `~/.local`)
+
+### Other Software Considerations
 - GNOME features: Dropbox (gvfs), Cloud Accounts for Google Drive (could switch to rclone if easier)
 
 ## Key Design Decisions
@@ -49,7 +57,7 @@ Two Ubuntu 24.04 laptops need synchronization:
 
 **Workflow**: Power on XPS → wait for Syncthing "Up to Date" → create target snapshot → apply system state → review deletion logs → travel
 
-### Cache Strategy: Selective Sync (Option A)
+### Strategy for Caches: Selective Sync
 **Include** (high value, low churn):
 - `.cache/pip/`, `.cache/uv/`, `.cache/pypoetry/` - Python dev tools
 - `.npm/`, `.cargo/registry/`, `.cargo/git/` - Node/Rust

@@ -1,18 +1,20 @@
 # PC-switcher
 
-A two-laptop synchronization system for seamless switching between Ubuntu machines with different roles.
+A synchronization system for seamless switching between Ubuntu user machines (laptops, workstations).
 
 ## Vision
 
-Keep two Ubuntu 24.04 pc's in sync with minimal friction:
+Keep Ubuntu 24.04 pc's in sync with minimal friction. We aim at almost full system-state replication rather than as simple sync of user data.
+
+The concrete use case involves two laptops:
 - **P17** (primary, stationary): Heavy laptop at home, primary work machine
 - **XPS 13** (secondary, mobile): Light laptop for travel, offline capable
 
-Enable a simple workflow: work on one machine, sync before switching, resume on the other—all without manual file management or real-time cloud syncing overhead.
+Enable a simple workflow: work on one machine, sync before switching, resume on the other — all without manual file management or real-time cloud syncing overhead.
 
 ## Why This Matters
 
-Maintaining two machines in sync is non-trivial. Naive approaches fail:
+Maintaining machines in sync is non-trivial. Naive approaches fail:
 - **Direct `/var/lib/docker/` copy**: Corrupts overlay2 filesystems and binary databases
 - **Real-time cloud sync**: Expensive, unreliable, poor for offline use
 - **Manual file management**: Tedious, error-prone
@@ -26,16 +28,14 @@ This project solves it with:
 
 ## What Gets Synced
 
-### Always Synced (via Syncthing)
 - **User home directory** (`/home/<user>`)
   - All documents, code, configs, application data
   - Selective caches: dev tool caches (`pip`, `cargo`, `npm`) synced; browser/IDE caches excluded
+  - Machine-specific items excluded (SSH keys, Tailscale config, ...)
 - **System state repository** (`~/system-state/`)
   - Package lists, service configurations, selected `/etc` files
   - Git-tracked for audit and rollback
-
-### Manual Sync (Special Workflows)
-- **Docker**: Export/import via `docker save/load` (never copy `/var/lib/docker/` directly)
+- **Docker**: Images, containers, volumes, cache. Export/import via `docker save/load` (never copy `/var/lib/docker/` directly)
 - **k3s**: Manifests synced automatically, PersistentVolumes via hostPath to `~/k3s-volumes/`
 - **VMs**: QCOW2 backing files with rsync (base template + overlay, only overlay syncs)
 - **VS Code**: Settings Sync (cloud-based) + backup script for extensions
