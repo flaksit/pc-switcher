@@ -1,7 +1,8 @@
 # Architecture Decisions Summary (Last updated: 2025-11-13)
 
 ## Active Decisions
-- ADR: Use Architecture Decision Records (ADR) (ADR-001)
+- ADR-001: Use Architecture Decision Records (ADR)
+- ADR-002: SSH as communication channel between source and target
 
 ## Superseded
 (None)
