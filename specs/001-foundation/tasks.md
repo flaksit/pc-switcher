@@ -45,13 +45,13 @@ Repository structure (single Python package):
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T009 Create src/pcswitcher/__init__.py with package version exposure (Deliberate Simplicity)
-- [ ] T010 Create src/pcswitcher/__main__.py for python -m pcswitcher entry point (Frictionless Command UX)
-- [ ] T011 Define LogLevel enum (DEBUG=10, FULL=15, INFO=20, WARNING=30, ERROR=40, CRITICAL=50) in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
-- [ ] T012 Define SyncError exception in src/pcswitcher/core/module.py (Reliability Without Compromise)
-- [ ] T013 Define RemoteExecutor interface class with run(), send_file_to_target(), get_hostname() methods in src/pcswitcher/core/module.py (Deliberate Simplicity)
-- [ ] T014 Create SessionState enum (INITIALIZING, VALIDATING, EXECUTING, CLEANUP, COMPLETED, ABORTED, FAILED) in src/pcswitcher/core/session.py (Reliability Without Compromise)
-- [ ] T015 Create ModuleResult enum (SUCCESS, SKIPPED, FAILED) in src/pcswitcher/core/session.py (Reliability Without Compromise)
+- [ ] T009 Create `src/pcswitcher/__init__.py` with package version exposure (Deliberate Simplicity)
+- [ ] T010 Create `src/pcswitcher/__main__.py` for python -m pcswitcher entry point (Frictionless Command UX)
+- [ ] T011 Define LogLevel enum (DEBUG=10, FULL=15, INFO=20, WARNING=30, ERROR=40, CRITICAL=50) in `src/pcswitcher/core/logging.py` (Documentation As Runtime Contract)
+- [ ] T012 Define SyncError exception in `src/pcswitcher/core/module.py` (Reliability Without Compromise)
+- [ ] T013 Define RemoteExecutor interface class with run(), send_file_to_target(), get_hostname() methods in `src/pcswitcher/core/module.py` (Deliberate Simplicity)
+- [ ] T014 Create SessionState enum (INITIALIZING, VALIDATING, EXECUTING, CLEANUP, COMPLETED, ABORTED, FAILED) in `src/pcswitcher/core/session.py` (Reliability Without Compromise)
+- [ ] T015 Create ModuleResult enum (SUCCESS, SKIPPED, FAILED) in `src/pcswitcher/core/session.py` (Reliability Without Compromise)
 
 **Checkpoint**: Foundation types and enums ready - user story implementation can now begin in parallel
 
@@ -71,7 +71,7 @@ Repository structure (single Python package):
 - [ ] T019 [US4] Implement get_logger(name) factory that binds context (module name, session ID, hostname) in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
 - [ ] T020 [US4] Create configure_logging(log_file_level, log_cli_level, log_file_path, session) function that sets up structlog with processors and handlers in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
 - [ ] T021 [US4] Add BoundLogger.full() custom method for FULL level logging in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
-- [ ] T022 [US4] Implement log file creation in ~/.local/share/pc-switcher/logs/sync-<timestamp>.log with directory creation in src/pcswitcher/core/logging.py (Solid-State Stewardship)
+- [ ] T022 [US4] Implement log file creation in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log` with directory creation in src/pcswitcher/core/logging.py (Solid-State Stewardship)
 
 **Checkpoint**: At this point, logging system should be fully functional with all six levels, dual output, and ERROR tracking
 
@@ -112,7 +112,7 @@ Repository structure (single Python package):
 
 - [ ] T031 [P] [US1] Create SyncModule ABC with abstract methods validate(), pre_sync(), sync(), post_sync(), abort(timeout), get_config_schema() in src/pcswitcher/core/module.py (Deliberate Simplicity)
 - [ ] T032 [P] [US1] Add abstract properties name: str and required: bool to SyncModule in src/pcswitcher/core/module.py (Deliberate Simplicity)
-- [ ] T033 [US1] Add __init__(config, remote) to SyncModule that stores config and remote executor in src/pcswitcher/core/module.py (Deliberate Simplicity)
+- [ ] T033 [US1] Add `__init__(config, remote)` to SyncModule that stores config and remote executor in src/pcswitcher/core/module.py (Deliberate Simplicity)
 - [ ] T034 [US1] Add emit_progress(percentage, item, eta) and log(level, message, **context) method signatures to SyncModule for orchestrator injection in src/pcswitcher/core/module.py (Documentation As Runtime Contract)
 - [ ] T035 [US1] Create RemoteExecutor implementation class that wraps TargetConnection in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
 - [ ] T036 [US1] Implement RemoteExecutor.run(command, sudo, timeout) that delegates to TargetConnection in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
@@ -139,7 +139,7 @@ Repository structure (single Python package):
 - [ ] T042 [P] [US8] Implement DummySuccessModule.abort(timeout) that logs and stops execution in src/pcswitcher/modules/dummy_success.py (Reliability Without Compromise)
 - [ ] T043 [P] [US8] Create DummyCriticalModule in src/pcswitcher/modules/dummy_critical.py that raises SyncError at 50% progress (Reliability Without Compromise)
 - [ ] T044 [P] [US8] Create DummyFailModule in src/pcswitcher/modules/dummy_fail.py that raises unhandled exception at 60% progress (Reliability Without Compromise)
-- [ ] T045 [US8] Implement get_config_schema() for all three dummy modules with duration_seconds parameter in respective module files (Documentation As Runtime Contract)
+- [ ] T045 [P] [US8] Implement get_config_schema() for all three dummy modules with duration_seconds parameter in respective module files (Documentation As Runtime Contract)
 
 **Checkpoint**: At this point, all three dummy modules should be fully functional for infrastructure testing
 
@@ -180,7 +180,7 @@ Repository structure (single Python package):
 - [ ] T053 [US2] Implement TargetConnection.disconnect() with graceful connection closure in src/pcswitcher/remote/connection.py (Reliability Without Compromise)
 - [ ] T054 [US2] Implement TargetConnection.run(command, sudo, timeout) using Fabric conn.run() with result handling in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
 - [ ] T055 [US2] Implement TargetConnection.check_version() that detects pc-switcher version on target via pip show pc-switcher in src/pcswitcher/remote/connection.py (Frictionless Command UX)
-- [ ] T056 [US2] Implement TargetConnection.install_version(version) that installs from GitHub Package Registry (ghcr.io) using uv tool install pc-switcher==<version> in src/pcswitcher/remote/installer.py (Frictionless Command UX)
+- [ ] T056 [US2] Implement TargetConnection.install_version(version) that installs from GitHub Package Registry (ghcr.io) using `uv tool install pc-switcher==<version>` in src/pcswitcher/remote/installer.py (Frictionless Command UX)
 - [ ] T057 [US2] Implement version comparison logic: abort if target > source, upgrade if target < source, skip if equal in src/pcswitcher/remote/installer.py (Reliability Without Compromise)
 - [ ] T058 [US2] Add error handling for installation failures with CRITICAL logging in src/pcswitcher/remote/installer.py (Reliability Without Compromise)
 - [ ] T059 [US2] Implement TargetConnection.send_file_to_target(local, remote) using Fabric conn.put() in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
@@ -233,7 +233,7 @@ Repository structure (single Python package):
 - [ ] T076 [SESSION] Implement state transition methods: set_state(new_state), is_terminal_state() in src/pcswitcher/core/session.py (Reliability Without Compromise)
 - [ ] T077 [SESSION] Create LockManager class with acquire_lock(), release_lock(), check_lock_exists() in src/pcswitcher/utils/lock.py (Reliability Without Compromise)
 - [ ] T078 [SESSION] Implement lock file format: JSON with pid, timestamp, session_id in $XDG_RUNTIME_DIR/pc-switcher/pc-switcher.lock in src/pcswitcher/utils/lock.py (Reliability Without Compromise)
-- [ ] T079 [SESSION] Implement stale lock detection using ps -p <PID> check in src/pcswitcher/utils/lock.py (Reliability Without Compromise)
+- [ ] T079 [SESSION] Implement stale lock detection using `ps -p <PID>` check in src/pcswitcher/utils/lock.py (Reliability Without Compromise)
 - [ ] T080 [SESSION] Add user confirmation prompt for stale lock removal in src/pcswitcher/utils/lock.py (Frictionless Command UX)
 - [ ] T081 [SESSION] Implement lock release in cleanup phase with error handling if delete fails in src/pcswitcher/utils/lock.py (Reliability Without Compromise)
 
@@ -251,7 +251,7 @@ Repository structure (single Python package):
 
 ### Implementation for Core Orchestration
 
-- [ ] T082 [ORCH] Create Orchestrator class with __init__(config, target_hostname) in src/pcswitcher/core/orchestrator.py (Deliberate Simplicity)
+- [ ] T082 [ORCH] Create Orchestrator class with `__init__(config, target_hostname)` in src/pcswitcher/core/orchestrator.py (Deliberate Simplicity)
 - [ ] T083 [ORCH] Implement _load_modules() that imports module classes by name and instantiates with config + RemoteExecutor in src/pcswitcher/core/orchestrator.py (Deliberate Simplicity)
 - [ ] T084 [ORCH] Implement _inject_module_methods(module) that sets module.log and module.emit_progress in src/pcswitcher/core/orchestrator.py (Deliberate Simplicity)
 - [ ] T085 [ORCH] Implement _validate_all_modules() that calls validate() on each module and collects errors in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
@@ -295,7 +295,7 @@ Repository structure (single Python package):
 
 ## Phase 13: User Story CLI Commands (Priority: P2)
 
-**Goal**: CLI commands using typer: pc-switcher sync <target>, pc-switcher logs --last, pc-switcher cleanup-snapshots --older-than, entry point integration
+**Goal**: CLI commands using typer: `pc-switcher sync <target>`, `pc-switcher logs --last`, `pc-switcher cleanup-snapshots --older-than`, entry point integration
 
 **Independent Test**: Run each command and verify expected behavior: sync starts orchestrator, logs displays last sync log, cleanup-snapshots deletes old snapshots
 
