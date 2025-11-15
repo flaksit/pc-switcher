@@ -11,7 +11,7 @@ This feature establishes the complete foundation infrastructure for PC-switcher,
 
 1. **Module Architecture**: Standardized contract for all sync features with lifecycle methods (validate, pre_sync, sync, post_sync, abort), config schemas, logging, progress reporting, and sequential execution (config-based order, no dependency resolution)
 2. **Self-Installation**: Automatic version-matching installation/upgrade of pc-switcher on target machines from GitHub Package Registry (ghcr.io)
-3. **Safety Infrastructure**: Btrfs snapshot creation (pre/post-sync) with rollback capability and disk space monitoring (configurable thresholds: float 0.0-1.0 or percentage string, defaults: min_free=0.05, reserve_minimum=0.02, check_interval=30s)
+3. **Safety Infrastructure**: Btrfs snapshot creation (pre/post-sync) with rollback capability and disk space monitoring (configurable thresholds: float 0.0-1.0 or percentage string, defaults: min_free=0.20, reserve_minimum=0.15, check_interval=30s)
 4. **Logging System**: Six-level logging (DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL) with file/CLI separation and exception-based abort (modules raise SyncError exception, orchestrator catches, logs as CRITICAL, calls abort(timeout))
 5. **Interrupt Handling**: Graceful Ctrl+C handling with module abort, target termination, and no orphaned processes
 6. **Configuration System**: YAML-based config with module enable/disable, schema validation, and defaults
@@ -60,7 +60,7 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - No orphaned processes after Ctrl+C (FR-027)
 - Module exceptions (SyncError) trigger immediate abort with abort(timeout) call on currently-running module only
 - Module lifecycle must follow strict ordering: validate → pre_sync → sync → post_sync → abort(timeout) (if error/interrupt)
-- Disk space thresholds configurable as float (0.0-1.0) or percentage string (e.g., "5%")
+- Disk space thresholds configurable as float (0.0-1.0) or percentage string (e.g., "20%")
 
 **Scale/Scope**:
 - ~10-15 core modules (btrfs-snapshots, user-data, packages, docker, vms, k3s, etc.)
@@ -75,37 +75,37 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 ### Reliability Without Compromise ✅
 
 **Data Integrity**:
-- Btrfs snapshots (read-only, COW) before any state modification (FR-002, FR-002)
-- Snapshot creation failure → CRITICAL abort before changes (FR-002)
-- Rollback capability to pre-sync snapshots (FR-002)
-- Subvolume existence verification before snapshot attempts (FR-002)
-- Disk space checks: pre-sync threshold and continuous monitoring (FR-002, FR-002)
+- Btrfs snapshots (read-only, COW) before any state modification (FR-008)
+- Snapshot creation failure → CRITICAL abort before changes (FR-012)
+- Rollback capability to pre-sync snapshots (FR-013)
+- Subvolume existence verification before snapshot attempts (FR-015)
+- Disk space checks: pre-sync threshold and continuous monitoring (FR-016, FR-017)
 
 **Conflict Detection**:
-- Lock mechanism prevents concurrent sync executions (FR-002)
-- Version mismatch detection (newer target → CRITICAL abort to prevent downgrade) (FR-002)
+- Lock mechanism prevents concurrent sync executions (FR-047)
+- Version mismatch detection (newer target → CRITICAL abort to prevent downgrade) (FR-006)
 - Validation phase (all modules) before any state changes (FR-002)
 
 **Transactional Safety**:
 - Module lifecycle enforces validate → execute → abort ordering (FR-002)
-- Exception-based error handling: modules raise SyncError, orchestrator catches exception, logs at CRITICAL, calls abort(timeout) on module (FR-019)
-- Orchestrator-managed cleanup via abort(timeout) on currently-running module (User Story 5, FR-002, FR-003)
+- Exception-based error handling: modules raise SyncError, orchestrator logs as CRITICAL and aborts (FR-019)
+- Orchestrator-managed cleanup via abort(timeout) on currently-running module (User Story 5, FR-003, FR-024)
 - ERROR log tracking during execution determines final state (COMPLETED vs FAILED)
 
 ### Frictionless Command UX ✅
 
-**Single Command**: `pc-switcher sync <target>` executes entire workflow (FR-002, SC-001)
+**Single Command**: `pc-switcher sync <target>` executes entire workflow (FR-046, SC-001)
 
 **Automation**:
-- Auto-installation/upgrade of target pc-switcher to match source version (FR-002, SC-004)
-- Module loading from config in sequential order (no dependency resolution, FR-002)
-- Default config generation on installation (FR-002)
+- Auto-installation/upgrade of target pc-switcher to match source version (FR-005, SC-004)
+- Module loading from config in sequential order (no dependency resolution, FR-004)
+- Default config generation on installation (FR-037)
 - No manual steps except initial setup and sync trigger
 
 **Progressive Feedback**:
-- Real-time progress reporting (module, percentage, current item) (FR-002, FR-002, User Story 9)
+- Real-time progress reporting (module, percentage, current item) (FR-043, FR-044, User Story 9)
 - Terminal UI with structured progress and log display (User Story 9)
-- Clear error messages with remediation guidance (FR-002, FR-002)
+- Clear error messages with remediation guidance (FR-007, FR-033)
 
 ### Proven Tooling Only ✅
 
@@ -132,8 +132,8 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - Snapshot metadata managed by btrfs (COW-optimized)
 
 **Monitoring**:
-- Disk space checks before and during sync (FR-002, FR-002)
-- Snapshot cleanup command to manage old snapshots (FR-002)
+- Disk space checks before and during sync (FR-016, FR-017)
+- Snapshot cleanup command to manage old snapshots (FR-014)
 - Configurable retention (keep N most recent, delete older than X days)
 
 **Estimated Write Load** (foundation only, no data sync):
@@ -151,9 +151,9 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - Foundation overhead per sync: <60 seconds total
 
 **Measurement Plan**:
-- Log timestamps (ISO8601) for all operations (FR-002)
+- Log timestamps (ISO8601) for all operations (FR-021)
 - Phase timing captured in logs (validate, pre_sync, sync, post_sync)
-- Progress percentage and ETA from modules (FR-002)
+- Progress percentage and ETA from modules (FR-043)
 
 **Parallelization**: Not applicable to foundation (sequential by design for safety); future modules can parallelize internally
 
@@ -172,7 +172,7 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - Python type hints + basedpyright for early error detection
 
 **Reversibility**:
-- Btrfs snapshots enable full rollback (FR-002)
+- Btrfs snapshots enable full rollback (FR-013)
 - Module cleanup methods ensure graceful degradation
 - No persistent state outside of config and logs
 
@@ -269,6 +269,9 @@ pc-switcher/
 │       │   ├── config.py          # Configuration loading, validation
 │       │   ├── logging.py         # Logging setup (structlog integration)
 │       │   └── signals.py         # SIGINT handling
+│       ├── installer/
+│       │   ├── __init__.py
+│       │   └── setup.py           # Local installation utilities (btrfs detection, default config generation)
 │       ├── remote/
 │       │   ├── __init__.py
 │       │   ├── connection.py      # SSH connection management (Fabric, ControlMaster)

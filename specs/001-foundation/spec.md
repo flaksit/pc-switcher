@@ -110,9 +110,9 @@ This delivers value by providing the foundation for all rollback and recovery op
 
 1. **Given** a sync is requested with configured subvolumes, **When** orchestrator begins pre-sync checks, **Then** it MUST verify that all configured subvolumes exist on both source and target; if any configured subvolume is missing on either side the system MUST log a CRITICAL error and abort sync before creating snapshots
 
-2. **Given** user initiates sync, **When** the snapshot module executes (after version check and subvolume existence checks, before any state-modifying modules), **Then** the system creates read-only btrfs snapshots on both source and target for all configured subvolumes (e.g., `/`, `/home`) with naming pattern `<subvol>-presync-<timestamp>-<session-id>`
+2. **Given** user initiates sync, **When** the snapshot module executes (after version check and subvolume existence checks, before any state-modifying modules), **Then** the system creates read-only btrfs snapshots on both source and target for all configured subvolumes (e.g., `@`, `@home`) with naming pattern `@<subvol>-presync-<timestamp>-<session-id>`
 
-3. **Given** all sync modules complete successfully, **When** the post-sync phase executes, **Then** the system creates read-only btrfs snapshots on both source and target with naming pattern `<subvol>-postsync-<timestamp>-<session-id>`
+3. **Given** all sync modules complete successfully, **When** the post-sync phase executes, **Then** the system creates read-only btrfs snapshots on both source and target with naming pattern `@<subvol>-postsync-<timestamp>-<session-id>`
 
 4. **Given** user configuration includes `sync_modules: { btrfs_snapshots: false }`, **When** configuration is loaded, **Then** the system displays a clear error message "Required module 'btrfs_snapshots' cannot be disabled" with config file location and exits before sync begins
 
@@ -400,9 +400,9 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-015** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort
 
-- **FR-016** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold MUST be configurable as either a float between 0.0 and 1.0 (e.g., 0.05 for 5%) or a percentage string (e.g., "5%"), with a default of 0.05 (5%)
+- **FR-016** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold MUST be configurable as either a float between 0.0 and 1.0 (e.g., 0.20 for 20%) or a percentage string (e.g., "20%"), with a default of 0.20 (20%)
 
-- **FR-017** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured reserved minimum (default: 0.02 or "2%")
+- **FR-017** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured reserved minimum (default: 0.15 or "15%")
 
 #### Logging System
 
@@ -448,7 +448,9 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-035** `[Frictionless Command UX]`: System MUST provide installation script that checks btrfs filesystem presence, installs/upgrades dependencies, installs pc-switcher package, and creates default configuration
 
-- **FR-036** `[Documentation As Runtime Contract]`: Setup script MUST create default config file with inline comments explaining each setting
+- **FR-036** `[Frictionless Command UX]`: Setup script MUST detect whether the host filesystem is btrfs and abort with a clear error if it is not
+
+- **FR-037** `[Documentation As Runtime Contract]`: Setup script MUST create default config file with inline comments explaining each setting
 
 #### Testing Infrastructure
 

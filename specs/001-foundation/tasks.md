@@ -209,10 +209,10 @@ Repository structure (single Python package):
 - [ ] T067 [US3] Add snapshot creation error handling: log CRITICAL and raise SyncError if snapshot fails in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
 - [ ] T068 [US3] Implement rollback_to_presync(session_id) that restores from pre-sync snapshots in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
 - [ ] T069 [US3] Implement cleanup_old_snapshots(older_than_days, keep_recent) using btrfs subvolume delete in src/pcswitcher/modules/btrfs_snapshots.py (Solid-State Stewardship)
-- [ ] T070 [US3] Create DiskMonitor utility class with check_free_space(path, min_free) that accepts float (0.0-1.0) or percentage string (e.g., "5%"), default 0.05, in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
-- [ ] T071 [US3] Implement DiskMonitor.monitor_continuously(interval, reserve_minimum, callback) with interval default 30s, reserve_minimum default 0.02 or "2%", for periodic checks during sync in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
-- [ ] T072 [US3] Add disk space check before snapshot creation: abort if below min_free threshold in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
-- [ ] T073 [US3] Integrate disk monitoring with orchestrator to abort if space drops below reserve_minimum during sync in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
+- [ ] T070 [US3] Create DiskMonitor utility class with check_free_space(path, min_free) that accepts float (0.0-1.0) or percentage string (e.g., "20%"), default 0.20, in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
+- [ ] T071 [US3] Implement DiskMonitor.monitor_continuously(interval, reserve_minimum, callback) with interval default 30s, reserve_minimum default 0.15 or "15%", for periodic checks during sync in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
+- [ ] T072 [US3] Add orchestration pre-flight disk check that runs before any modules execute, aborting if disk.min_free falls below threshold in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
+- [ ] T073 [US3] Wire continuous disk monitoring into orchestrator run loop so reserve_minimum breaches trigger CRITICAL abort and user messaging in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 
 **Checkpoint**: At this point, btrfs snapshot safety infrastructure should be fully functional with pre/post snapshots, rollback, and disk monitoring
 
@@ -317,20 +317,19 @@ Repository structure (single Python package):
 
 ## Phase 14: User Story 7 - Installation and Setup Infrastructure (Priority: P2)
 
-**Goal**: Installation script for deploying pc-switcher to new machines: dependency checking, package installation, default config creation, btrfs verification, subvolume structure guidance
+**Goal**: Installation script for deploying pc-switcher to new machines: dependency checking, package installation, default config creation, and btrfs verification
 
-**Independent Test**: Run setup script on fresh Ubuntu 24.04 machine, verify all dependencies installed, pc-switcher package installed, config directory created with default config, btrfs subvolume guidance provided
+**Independent Test**: Run setup script on fresh Ubuntu 24.04 machine, verify all dependencies installed, pc-switcher package installed, config directory created with default config, and btrfs detection aborts correctly on unsupported filesystems
 
 **Dependencies**: US6 (needs generate_default_config), US3 (needs btrfs checks)
 
 ### Implementation for User Story 7
 
-- [ ] T111 [P] [US7] Create setup script scripts/setup.sh that checks for btrfs filesystem using stat -f -c %T / (Frictionless Command UX)
+- [ ] T111 [P] [US7] Create setup script scripts/setup.sh that detects btrfs filesystem using stat -f -c %T / and aborts with clear error if not btrfs (Frictionless Command UX)
 - [ ] T112 [P] [US7] Add check for uv 0.9.9 installation in scripts/setup.sh, install if missing (Proven Tooling Only)
 - [ ] T113 [US7] Implement pc-switcher package installation from GitHub Package Registry using uv tool install pc-switcher in scripts/setup.sh (Frictionless Command UX)
-- [ ] T114 [US7] Create ~/.config/pc-switcher/ directory and generate default config.yaml with inline comments in scripts/setup.sh (Frictionless Command UX)
-- [ ] T115 [US7] Implement non-btrfs filesystem detection with CRITICAL error and exit in scripts/setup.sh (Reliability Without Compromise)
-- [ ] T116 [US7] Add success message "pc-switcher installed successfully" at end of setup in scripts/setup.sh (Frictionless Command UX)
+- [ ] T114 [US7] Create ~/.config/pc-switcher/ directory and generate default config.yaml with inline comments in scripts/setup.sh (Documentation As Runtime Contract)
+- [ ] T115 [US7] Add success message "pc-switcher installed successfully" at end of setup in scripts/setup.sh (Frictionless Command UX)
 
 **Checkpoint**: At this point, installation script should handle end-to-end setup on new machines
 
@@ -346,10 +345,10 @@ Repository structure (single Python package):
 
 ### Implementation for CI/CD
 
-- [ ] T118 [P] [CICD] Create .github/workflows/ci.yml with jobs: checkout, setup-uv (from .tool-versions), uv sync, ruff check, basedpyright, pytest, codespell (Proven Tooling Only)
-- [ ] T119 [P] [CICD] Create .github/workflows/release.yml triggered on release published with steps: checkout (fetch-depth: 0 for tags), setup-uv, uv build, authenticate to ghcr.io using GITHUB_TOKEN, uv publish --repository ghcr.io (Proven Tooling Only)
-- [ ] T120 [CICD] Configure release workflow with GITHUB_TOKEN permissions: contents read, packages write, and configure package registry URL (ghcr.io/owner/pc-switcher) in .github/workflows/release.yml (Proven Tooling Only)
-- [ ] T121 [CICD] Add workflow run verification: test CI on branch push, test release on test tag in .github/workflows/ (Reliability Without Compromise)
+- [ ] T116 [P] [CICD] Create .github/workflows/ci.yml with jobs: checkout, setup-uv (from .tool-versions), uv sync, ruff check, basedpyright, pytest, codespell (Proven Tooling Only)
+- [ ] T117 [P] [CICD] Create .github/workflows/release.yml triggered on release published with steps: checkout (fetch-depth: 0 for tags), setup-uv, uv build, authenticate to ghcr.io using GITHUB_TOKEN, uv publish --repository ghcr.io (Proven Tooling Only)
+- [ ] T118 [CICD] Configure release workflow with GITHUB_TOKEN permissions: contents read, packages write, and configure package registry URL (ghcr.io/owner/pc-switcher) in .github/workflows/release.yml (Proven Tooling Only)
+- [ ] T119 [CICD] Add workflow run verification: test CI on branch push, test release on test tag in .github/workflows/ (Reliability Without Compromise)
 
 **Checkpoint**: At this point, CI/CD should automatically test code and publish releases
 
@@ -359,15 +358,15 @@ Repository structure (single Python package):
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T122 [P] Update README.md with complete installation instructions, configuration guide, usage examples, troubleshooting section (Documentation As Runtime Contract)
-- [ ] T123 [P] Add inline code comments for complex logic in orchestrator, btrfs module, remote connection (Documentation As Runtime Contract)
-- [ ] T124 [P] Create CONTRIBUTING.md with development setup, testing guide, PR workflow (Documentation As Runtime Contract)
-- [ ] T125 [P] Add example config files in examples/ directory: minimal.yaml, full-featured.yaml (Frictionless Command UX)
-- [ ] T126 Review all error messages for clarity and actionability, ensure they guide user to resolution (Frictionless Command UX)
-- [ ] T127 Add startup performance measurement: log timing from CLI invocation to sync start (Throughput-Focused Syncing)
-- [ ] T128 Verify all file operations use minimal writes: structured logging buffer, snapshot COW verification (Solid-State Stewardship)
-- [ ] T129 Run complete sync flow validation per quickstart.md test scenarios (Reliability Without Compromise)
-- [ ] T130 Create ARCHITECTURE.md documenting module interface, orchestrator workflow, state transitions with diagrams (Documentation As Runtime Contract)
+- [ ] T120 [P] Update README.md with complete installation instructions, configuration guide, usage examples, troubleshooting section (Documentation As Runtime Contract)
+- [ ] T121 [P] Add inline code comments for complex logic in orchestrator, btrfs module, remote connection (Documentation As Runtime Contract)
+- [ ] T122 [P] Create CONTRIBUTING.md with development setup, testing guide, PR workflow (Documentation As Runtime Contract)
+- [ ] T123 [P] Add example config files in examples/ directory: minimal.yaml, full-featured.yaml (Frictionless Command UX)
+- [ ] T124 Review all error messages for clarity and actionability, ensure they guide user to resolution (Frictionless Command UX)
+- [ ] T125 Add startup performance measurement: log timing from CLI invocation to sync start (Throughput-Focused Syncing)
+- [ ] T126 Verify all file operations use minimal writes: structured logging buffer, snapshot COW verification (Solid-State Stewardship)
+- [ ] T127 Run complete sync flow validation per quickstart.md test scenarios (Reliability Without Compromise)
+- [ ] T128 Create ARCHITECTURE.md documenting module interface, orchestrator workflow, state transitions with diagrams (Documentation As Runtime Contract)
 
 ---
 
@@ -396,10 +395,10 @@ Repository structure (single Python package):
 ### Critical Path (Minimum for Working System)
 
 1. Phase 1 (Setup) → Phase 2 (Foundational)
-2. US4 (Logging) → US6 (Config) → US1 (Module Interface)
-3. US8 (Dummy Modules) + US5 (Interrupt) + US2 (Self-Install) + US3 (Btrfs)
-4. SESSION → ORCH (Core Orchestration)
-5. CLI → Working system!
+1. US4 (Logging) → US6 (Config) → US1 (Module Interface)
+1. US8 (Dummy Modules) + US5 (Interrupt) + US2 (Self-Install) + US3 (Btrfs)
+1. SESSION → ORCH (Core Orchestration)
+1. CLI → Working system!
 
 ### Parallel Opportunities
 
@@ -420,8 +419,8 @@ After those complete, ORCH can start (T082-T096), then:
 
 Finally in parallel:
 - US7 (Installation): T111-T117
-- CI/CD: T118-T121
-- Polish: T122-T130
+- CI/CD: T116-T119
+- Polish: T120-T128
 
 ---
 
@@ -455,15 +454,15 @@ Task T074-T081: "Session management and locking"
 **Target**: Minimal functional sync system for testing
 
 1. Complete Phase 1: Setup (T001-T008)
-2. Complete Phase 2: Foundational (T009-T015)
-3. Complete US4: Logging (T016-T022)
-4. Complete US6: Config (T023-T030)
-5. Complete US1: Module Interface (T031-T038)
-6. Complete US8: Dummy Modules (T039-T045)
-7. Complete SESSION: Session Management (T074-T081)
-8. Complete ORCH: Core Orchestration (T082-T096)
-9. Complete CLI: Basic Commands (T104-T110)
-10. **STOP and VALIDATE**: Test complete sync flow with dummy modules
+1. Complete Phase 2: Foundational (T009-T015)
+1. Complete US4: Logging (T016-T022)
+1. Complete US6: Config (T023-T030)
+1. Complete US1: Module Interface (T031-T038)
+1. Complete US8: Dummy Modules (T039-T045)
+1. Complete SESSION: Session Management (T074-T081)
+1. Complete ORCH: Core Orchestration (T082-T096)
+1. Complete CLI: Basic Commands (T104-T110)
+1. **STOP and VALIDATE**: Test complete sync flow with dummy modules
 
 **At this checkpoint**:
 - Can run `pc-switcher sync <target>`
@@ -479,10 +478,10 @@ Task T074-T081: "Session management and locking"
 
 Add safety infrastructure for real usage:
 
-11. Complete US2: Self-Installation (T051-T060)
-12. Complete US3: Btrfs Snapshots (T061-T073)
-13. Complete US5: Interrupt Handling (T046-T050)
-14. **STOP and VALIDATE**: Test complete sync with snapshots, test rollback, test interrupts
+1. Complete US2: Self-Installation (T051-T060)
+1. Complete US3: Btrfs Snapshots (T061-T073)
+1. Complete US5: Interrupt Handling (T046-T050)
+1. **STOP and VALIDATE**: Test complete sync with snapshots, test rollback, test interrupts
 
 **At this checkpoint**:
 - Full safety with snapshots
@@ -496,10 +495,10 @@ Add safety infrastructure for real usage:
 
 Add UX polish and deployment:
 
-15. Complete US9: Terminal UI (T097-T103)
-16. Complete US7: Installation (T111-T117)
-17. Complete CI/CD (T118-T121)
-18. Complete Polish (T122-T130)
+1. Complete US9: Terminal UI (T097-T103)
+1. Complete US7: Installation (T111-T117)
+1. Complete CI/CD (T116-T119)
+1. Complete Polish (T120-T128)
 
 **Timeline**: +1 week
 
@@ -509,16 +508,16 @@ Add UX polish and deployment:
 
 1. **Week 1-2**: Setup → Foundational → Logging → Config → Module Interface
    - Deliverable: Architecture complete, can write modules
-2. **Week 3**: Dummy Modules → Session → Orchestrator → CLI
+1. **Week 3**: Dummy Modules → Session → Orchestrator → CLI
    - Deliverable: Working sync system (dummy modules only)
    - Demo: Show sync flow, error handling, logging
-3. **Week 4**: Self-Install → Btrfs Snapshots → Interrupt Handling
+1. **Week 4**: Self-Install → Btrfs Snapshots → Interrupt Handling
    - Deliverable: Production-ready foundation
    - Demo: Show snapshot creation, rollback, graceful interrupts
-4. **Week 5**: Terminal UI → Installation → CI/CD
+1. **Week 5**: Terminal UI → Installation → CI/CD
    - Deliverable: Complete foundation infrastructure
    - Demo: Full UX with progress bars, easy installation
-5. **Week 6**: Polish and validation
+1. **Week 6**: Polish and validation
    - Deliverable: Release-ready v1.0.0
    - Enable: Feature module development can begin
 
@@ -526,7 +525,7 @@ Add UX polish and deployment:
 
 ## Summary
 
-- **Total tasks**: 129 (reduced from 130 after removing subvolume guidance task)
+- **Total tasks**: 128 (down from 129 after removing the btrfs subvolume guidance task)
 - **User stories**: 9 (US1-US9) + Session + Orchestrator + CLI + Installation + CI/CD
 - **Parallel opportunities**: After Foundational phase, US8/US5/US2/US3/SESSION can run in parallel (5-way parallelism)
 - **MVP scope**: T001-T030, T039-T045, T074-T096, T104-T110 (approximately 60 tasks, ~2-3 weeks)
