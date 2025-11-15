@@ -343,25 +343,27 @@ This document resolves all NEEDS CLARIFICATION items identified in the Technical
 
 **Snapshot Creation**:
 ```bash
-# Read-only snapshot
-sudo btrfs subvolume snapshot -r /home /@home-presync-20251115T120000Z-abc123
+# Read-only snapshot (source is mount point, destination uses flat name)
+# Config stores flat name "@home", which maps to mount point /home
+sudo btrfs subvolume snapshot -r /home /.snapshots/@home-presync-20251115T120000Z-abc123
 
-# Check if subvolume exists
-btrfs subvolume show /home &>/dev/null && echo "exists" || echo "missing"
+# Check if subvolume exists in top-level (use flat name)
+btrfs subvolume list / | grep -q '@home' && echo "exists" || echo "missing"
 ```
 
 **Snapshot Listing**:
 ```bash
-# List all snapshots
+# List all subvolumes (shows flat names like "ID 256 gen 123 top level 5 path @home")
 sudo btrfs subvolume list /
 
-# Filter by pattern
+# Filter by snapshot pattern
 sudo btrfs subvolume list / | grep 'presync'
 ```
 
 **Snapshot Deletion**:
 ```bash
-sudo btrfs subvolume delete /@home-presync-20251115T120000Z-abc123
+# Delete snapshot (path in snapshot directory)
+sudo btrfs subvolume delete /.snapshots/@home-presync-20251115T120000Z-abc123
 ```
 
 **Disk Space Check**:
@@ -374,11 +376,15 @@ sudo btrfs filesystem usage /
 ```
 
 **Implementation Approach**:
+- Config stores flat subvolume names (e.g., `"@"`, `"@home"`, `"@root"`) from `btrfs subvolume list /`
+- Map flat names to mount points at runtime (e.g., `"@home"` → `/home`)
+- Snapshot source uses mount point, destination uses flat name in path
 - Use `subprocess.run()` with `capture_output=True` for all btrfs commands
 - Parse output for errors (check returncode and stderr)
 - Use ISO8601 timestamps with timezone (UTC): `datetime.now(UTC).isoformat()`
 - Generate session ID: `uuid.uuid4().hex[:8]`
-- Naming pattern: `@{subvolume}-{presync|postsync}-{timestamp}-{session_id}`
+- Snapshot naming: `{snapshot_dir}/{flat_subvolume_name}-{presync|postsync}-{timestamp}-{session_id}`
+- Example: `/.snapshots/@home-presync-20251115T120000Z-abc12345`
 
 ### 8. Best Practices: YAML Configuration with PyYAML
 
@@ -412,7 +418,8 @@ def generate_default_config() -> str:
             'dummy_fail': False,
         },
         'btrfs_snapshots': {
-            'subvolumes': ['/', '/home', '/root'],
+            'subvolumes': ['@', '@home', '@root'],  # Flat names from "btrfs subvolume list /"
+            'snapshot_dir': '/.snapshots',
             'keep_recent': 3,
             'max_age_days': 7,
         },
