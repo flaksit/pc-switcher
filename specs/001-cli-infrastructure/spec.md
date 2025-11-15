@@ -3,7 +3,7 @@
 **Feature Branch**: `001-cli-infrastructure`
 **Created**: 2025-11-13
 **Status**: Draft
-**Input**: User description: "Basic CLI & Infrastructure - Command parser, config system, SSH connection, logging, terminal UI skeleton, architecture for modular features"
+**Input**: User description: "Basic CLI & Infrastructure - Command parser, config system, connection, logging, terminal UI skeleton, architecture for modular features"
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -41,7 +41,7 @@ This delivers value by establishing the pattern that all other features will fol
 
 ### User Story 2 - Single Command Sync Execution (Priority: P1)
 
-An operator initiates a full system sync from their current machine (source) to another machine (target) using a single terminal command. The system parses the command, validates the configuration, establishes an SSH connection to the target, and prepares the infrastructure for executing sync operations while providing clear terminal feedback throughout.
+An operator initiates a full system sync from their current machine (source) to another machine (target) using a single terminal command. The system parses the command, validates the configuration, establishes a connection to the target, and prepares the infrastructure for executing sync operations while providing clear terminal feedback throughout.
 
 **Why this priority**: This is the core user interaction for the entire PC-switcher system. Without this foundational workflow, no sync operations can occur. It directly enables the "single command to launch entire sync process" requirement from the high-level vision.
 
@@ -50,7 +50,7 @@ An operator initiates a full system sync from their current machine (source) to 
 **Independent Test**: Can be fully tested by running the main command and verifying that:
 1. The command is parsed correctly
 2. Configuration is loaded without errors
-3. SSH connection to target is established successfully
+3. Connection to target is established successfully
 4. Terminal displays connection status and readiness
 5. The system is ready to hand off to feature-specific sync modules
 
@@ -63,7 +63,7 @@ This delivers immediate value by proving the basic infrastructure works end-to-e
 
 **Acceptance Scenarios**:
 
-1. **Given** both machines are on the same LAN, **When** user runs `pc-switcher sync <target>` from the source machine (where `<target>` is a simple IP address, hostname or SSH config alias), **Then** the system parses the command, establishes SSH to target using standard SSH semantics, displays connection status, and executes all configured sync operations in sequence
+1. **Given** both machines are on the same LAN, **When** user runs `pc-switcher sync <target>` from the source machine (where `<target>` is a simple IP address, hostname or SSH config alias), **Then** the system parses the command, establishes connection to target, displays connection status, and executes all configured sync operations in sequence
 2. **Given** a sync operation is in progress, **When** user presses Ctrl+C, **Then** system gracefully stops current operation and reports status
 
 ---
@@ -188,16 +188,15 @@ A user wants to configure sync behavior (exclusions, log levels, module selectio
 
 ### Edge Cases
 
-- What happens when user specifies an invalid or non-existent SSH target?
-- What happens when target machine is unreachable or SSH connection fails during sync?
+- What happens when user specifies an invalid or non-existent target machine?
+- What happens when target machine is unreachable or connection fails during sync?
 - How does system handle corrupted or invalid configuration files?
 - What happens when user runs multiple sync commands concurrently?
   - System should detect concurrent execution via some locking mechanism on both source and target, display error message, and refuse to proceed to prevent data corruption
 - How does system handle log file rotation and disk space management?
-- How does system handle SSH key authentication failures or permission issues?
 - What happens when network connection drops mid-sync?
 - What happens when operator presses Ctrl+C during sync?
-  - System should catch the interrupt signal, display "Sync interrupted by operator", perform graceful cleanup (close SSH connections, flush logs), and exit with non-zero status code
+  - System should catch the interrupt signal, display "Sync interrupted by operator", perform graceful cleanup (close connections, flush logs), and exit with non-zero status code
 
 ## Requirements *(mandatory)*
 
@@ -208,8 +207,8 @@ A user wants to configure sync behavior (exclusions, log levels, module selectio
 - **FR-001** `[Frictionless Command UX]`: System MUST provide a single top-level command `pc-switcher sync` that accepts a target machine identifier and initiates the complete sync workflow without requiring additional commands or manual steps
 - **FR-002** `[Frictionless Command UX]`: System MUST parse command-line arguments including target specification (using standard SSH syntax: `hostname` or SSH config alias), sync options, and operation modes
 - **FR-003** `[Frictionless Command UX]`: System MUST load sync behavior configuration from a config file in user space for settings like exclusions, log levels, and module selection
-- **FR-004** `[Proven Tooling Only]`: System MUST establish SSH connections to target machines using standard SSH protocol, respecting user's `~/.ssh/config` and standard SSH authentication mechanisms
-- **FR-005** `[Reliability Without Compromise]`: System MUST verify SSH connection and target machine availability before beginning sync operations
+- **FR-004** `[Proven Tooling Only]`: System MUST establish connections to target machines respecting user's `~/.ssh/config`
+- **FR-005** `[Reliability Without Compromise]`: System MUST verify connection and target machine availability before beginning sync operations
 - **FR-006** `[Documentation As Runtime Contract]`: System MUST log all operations, errors, and state changes to persistent log files with timestamps
 - **FR-007** `[Reliability Without Compromise]`: System MUST support multiple log levels (debug, info, warning, error) and allow users to configure log verbosity
 - **FR-008** `[Frictionless Command UX]`: System MUST display real-time progress in terminal UI including current operation, progress indicators, and error messages
@@ -217,12 +216,12 @@ A user wants to configure sync behavior (exclusions, log levels, module selectio
 - **FR-010** `[Deliberate Simplicity]`: System MUST allow modules to register their sync operations, validation steps, and rollback handlers with the core orchestrator
 - **FR-011** `[Frictionless Command UX]`: System MUST handle common errors gracefully with clear error messages suggesting remediation steps
 - **FR-012** `[Reliability Without Compromise]`: System MUST validate configuration on startup and report configuration errors before attempting sync
-- **FR-013** `[Proven Tooling Only]`: System MUST use well-established configuration formats (YAML or TOML) for human-readable config files
+- **FR-013** `[Proven Tooling Only]`: System MUST use well-established configuration formats for human-readable config files
 - **FR-014** `[Documentation As Runtime Contract]`: System MUST provide command-line help text and usage examples for all commands
 
 ### Key Entities
 
-- **SSH Target**: Runtime representation of the target machine derived from command-line argument and SSH configuration (hostname, resolved user, connection details)
+- **Target**: Runtime representation of the target machine derived from command-line argument and SSH configuration (hostname, resolved user, connection details)
 - **Feature Module**: Represents a pluggable sync component that handles a specific aspect of system state (packages, docker, VMs) with its own sync logic, validation, and rollback capabilities
 - **Sync Operation**: Represents a discrete sync task performed by a module (e.g., sync packages, sync docker) including status, progress, and error information
 - **Log Entry**: Represents a logged event including timestamp, severity level, source module, message, and context data
@@ -232,12 +231,12 @@ A user wants to configure sync behavior (exclusions, log levels, module selectio
 ### Measurable Outcomes
 
 - **SC-001** `[Frictionless Command UX]`: User can execute complete sync workflow with a single command without additional manual intervention
-- **SC-002** `[Reliability Without Compromise]`: System establishes SSH connection to target machine within 5 seconds on local LAN
+- **SC-002** `[Reliability Without Compromise]`: System establishes connection to target machine within 5 seconds
 - **SC-003** `[Frictionless Command UX]`: Terminal UI updates progress display within 1 second of operation state changes
 - **SC-004** `[Reliability Without Compromise]`: System correctly validates configuration and reports all configuration errors before attempting sync in 100% of test cases
 - **SC-005** `[Documentation As Runtime Contract]`: System logs all operations with timestamps and sufficient detail to reconstruct what occurred during sync
 - **SC-006** `[Deliberate Simplicity]`: New sync features can be added as modules without modifying core orchestration code
-- **SC-007** `[Reliability Without Compromise]`: System handles SSH connection failures, network interruptions, and invalid configurations with clear error messages and graceful degradation
+- **SC-007** `[Reliability Without Compromise]`: System handles connection failures, network interruptions, and invalid configurations with clear error messages and graceful degradation
 - **SC-008** `[Frictionless Command UX]`: User can view sync status, logs, and configuration through CLI commands without accessing raw files
 
 ## Assumptions
@@ -245,11 +244,10 @@ A user wants to configure sync behavior (exclusions, log levels, module selectio
 - SSH key-based authentication is already configured between machines (not managed by this system)
 - Users configure target machine connection details (hostnames, ports, keys, etc.) in their standard `~/.ssh/config` file, not in pc-switcher configuration
 - Target machines are specified using standard SSH syntax (`hostname` or SSH config alias)
-- uv (for creating Python environments) is available on all machines (use Python 3.12+)
 - Standard terminal emulators support ANSI escape codes for terminal UI
-- Users have familiarity with command-line tools and SSH
-- Configuration files (for sync behavior only) will be stored in standard locations (`~/.config/pc-switcher/` or `/etc/pc-switcher/`)
-- Log files will be stored in standard locations (`~/.local/share/pc-switcher/logs/` or `/var/log/pc-switcher/`)
+- Users have familiarity with command-line tools
+- Configuration files (for sync behavior only) will be stored in standard location (`~/.config/pc-switcher/`)
+- Log files will be stored in standard location (`~/.local/share/pc-switcher/logs/`)
 - System will use sudo for operations requiring elevated privileges
 
 ## Out of Scope
