@@ -250,10 +250,11 @@ sync_modules:
 
 # Module-specific configuration
 btrfs_snapshots:
+  # These should be "flat" subvolume names, not full paths
   subvolumes:
-    - "/"
-    - "/home"
-    - "/root"
+    - "@"
+    - "@home"
+    - "@root"
 
 user_data:
   exclude_patterns:

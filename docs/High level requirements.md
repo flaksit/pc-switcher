@@ -118,6 +118,7 @@ This repository will NOT serve for configuration management. It should be possib
 
 ## Ideas for later
 
+- Parallel run of sync modules (e.g. user data and system state in parallel)
 - Partial sync (e.g. only user data, no system state, skip docker/k3s/VMs)
 - Machines can be in use in parallel, but only by different users. E.g. User A works on P17, User B on XPS13. Changes will be mainly in user data. For user data, uni-directional sync from one machine to the other is still possible. System state changes on the target machine must be avoided in this mode.
 - Bi-directional sync with conflict resolution for user data
