@@ -1,7 +1,7 @@
 # Configuration Schema for pc-switcher
 #
 # This document defines the structure and validation rules for ~/.config/pc-switcher/config.yaml
-# Requirements: FR-029, FR-030, FR-031, FR-032, FR-033, FR-034, FR-035
+# Requirements: FR-002, FR-002, FR-002, FR-002, FR-002, FR-002, FR-002
 # User Story: 6 (Configuration System)
 #
 # Each option below includes clear documentation for the default generated config file.
@@ -45,7 +45,7 @@ sync_modules:
     btrfs_snapshots:
       type: boolean
       default: true
-      immutable: true  # Required module, cannot be disabled (FR-012)
+      immutable: true  # Required module, cannot be disabled (FR-002)
       description: |
         Snapshot creation/rollback (REQUIRED - cannot disable).
         MUST be first in this list.
@@ -71,7 +71,7 @@ sync_modules:
         Test module: raises unhandled exception for testing.
         Demonstrates exception propagation and abort() calling.
 
-# Disk Space Monitoring (FR-017, FR-018)
+# Disk Space Monitoring (FR-002, FR-002)
 # =======================================
 
 disk:

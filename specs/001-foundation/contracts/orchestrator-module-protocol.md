@@ -2,7 +2,7 @@
 
 **Purpose**: Define the precise interaction contract between the orchestrator and sync modules.
 
-**Requirements**: FR-001 through FR-005, User Story 1
+**Requirements**: FR-001 through FR-002, User Story 1
 
 **Key Changes from Original Design**:
 - Modules defined in config (no auto-discovery)
@@ -262,7 +262,7 @@ self.log(LogLevel.WARNING, "Unexpected condition", details="...")
    ```
 4. Module exceptions are caught and logged by orchestrator as CRITICAL
 
-**Log Levels** (FR-019):
+**Log Levels** (FR-002):
 - DEBUG (10): Verbose diagnostics (command outputs, state dumps)
 - FULL (15): File-level operations (e.g., "Copying /home/user/file.txt")
 - INFO (20): High-level operations (e.g., "Module started", "Module completed")
@@ -313,9 +313,83 @@ self.log(LogLevel.WARNING, "Unexpected condition", details="...")
    - Rollback is a separate manual operation via snapshots
 5. Close SSH connection
 6. Release sync lock
-7. Determine final state:
+7. **Offer rollback if pre-sync snapshots exist** (see Rollback Offer Workflow below)
+8. Determine final state:
    - User interrupt (Ctrl+C) → ABORTED
    - Exception or ERROR logs → FAILED
+
+## Rollback Offer Workflow
+
+When a sync fails with a CRITICAL error and pre-sync snapshots exist, the orchestrator offers to roll back to the pre-sync state.
+
+**Requirements**: User Story 3, Scenario 6
+
+**When to Offer Rollback**:
+- A module raised an exception (logged as CRITICAL by orchestrator)
+- Pre-sync snapshots were successfully created before the failure
+- Cleanup phase has completed (module abort() called if needed, SSH closed, lock released)
+
+**Workflow**:
+
+1. **Check for Pre-Sync Snapshots**:
+   - Query btrfs for snapshots matching pattern `*-presync-<timestamp>-<session-id>`
+   - If no pre-sync snapshots found → skip rollback offer, proceed to final state
+
+2. **Display Rollback Prompt**:
+   ```text
+   CRITICAL ERROR: Sync failed during <module-name> module.
+   Pre-sync snapshots are available for rollback.
+
+   Available snapshots:
+   - @-presync-20251115T120000Z-abc12345 (root filesystem)
+   - @home-presync-20251115T120000Z-abc12345 (home directory)
+
+   Would you like to restore these snapshots to undo changes? [y/N]
+   ```
+
+3. **User Response**:
+   - **If user enters 'y' or 'yes'** (case-insensitive):
+     - Execute rollback procedure (see below)
+   - **If user enters 'N', 'no', or presses Enter** (default):
+     - Log INFO: "User declined rollback. Pre-sync snapshots retained at <paths>"
+     - Proceed to final state (FAILED)
+   - **If user presses Ctrl+C**:
+     - Log WARNING: "Rollback prompt interrupted. Pre-sync snapshots retained"
+     - Proceed to final state (FAILED)
+
+**Rollback Execution Procedure**:
+
+1. **Verify Snapshots Exist**:
+   - Re-check that all pre-sync snapshots still exist
+   - If any are missing → ERROR "Cannot proceed with rollback, some snapshots missing" and abort rollback
+
+2. **Perform Rollback**:
+   - For each subvolume with a pre-sync snapshot:
+     - Delete current subvolume: `btrfs subvolume delete /<subvolume>`
+     - Restore from snapshot: `btrfs subvolume snapshot <snapshot-path> /<subvolume>`
+     - Make writable (snapshots are read-only): handled by snapshot restoration
+   - Log each rollback operation at INFO level
+
+3. **Verify Rollback**:
+   - Check that all subvolumes were restored successfully
+   - If any restoration failed → CRITICAL "Partial rollback occurred, manual intervention required"
+
+4. **Cleanup**:
+   - Keep pre-sync snapshots (do not delete - user may need them)
+   - Delete any post-sync snapshots if they were created
+   - Log INFO: "Rollback completed. System restored to pre-sync state"
+
+5. **Final State**:
+   - Set session state to FAILED (rollback doesn't change the fact that sync failed)
+   - Log session summary including rollback status
+   - Exit with code 1
+
+**Important Notes**:
+- Rollback is ONLY offered after CRITICAL failures, not after user interrupt (Ctrl+C)
+- Rollback requires user confirmation - it is NEVER automatic
+- If user declines rollback, pre-sync snapshots are retained for manual recovery
+- Rollback operates on the source machine where the orchestrator runs
+- Target machine rollback is NOT automatic - user must manually restore target if needed
 
 **Module abort() Requirements**:
 - Must stop running processes/threads
@@ -344,7 +418,7 @@ def abort(self, timeout: float) -> None:
 
 ## Concurrency and Locking
 
-**Lock Mechanism** (FR-048):
+**Lock Mechanism** (FR-002):
 1. **Lock location**:
    - Primary: `$XDG_RUNTIME_DIR/pc-switcher/pc-switcher.lock`
    - Fallback: `/var/lock/pc-switcher.lock` (if XDG_RUNTIME_DIR not set)

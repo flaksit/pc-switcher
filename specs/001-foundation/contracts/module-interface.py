@@ -26,7 +26,7 @@ from typing import Any
 
 
 class LogLevel(StrEnum):
-    """Six-level logging hierarchy (FR-019)"""
+    """Six-level logging hierarchy (FR-002)"""
 
     DEBUG = "DEBUG"  # 10: Verbose diagnostic information
     FULL = "FULL"  # 15: File-level operation details
@@ -105,7 +105,7 @@ class SyncModule(ABC):
     Modules execute sequentially in the order defined in config.yaml sync_modules section.
     The btrfs_snapshots module must be first and cannot be disabled.
 
-    Requirements: FR-001, FR-002, FR-003, FR-004
+    Requirements: FR-001, FR-002, FR-002, FR-002
     User Story: 1 (Module Architecture and Integration Contract)
     """
 
@@ -142,7 +142,7 @@ class SyncModule(ABC):
         Required modules (e.g., btrfs-snapshots) cannot be disabled.
         Optional modules (e.g., docker, k3s) can be disabled.
 
-        Requirement: FR-012, FR-035
+        Requirement: FR-002, FR-002
         """
 
     @abstractmethod
@@ -165,7 +165,7 @@ class SyncModule(ABC):
         Returns:
             JSON Schema dict (see https://json-schema.org/)
 
-        Requirement: FR-031
+        Requirement: FR-002
         """
 
     @abstractmethod
@@ -186,7 +186,7 @@ class SyncModule(ABC):
             List of validation error messages (empty list = valid)
             Each error should be user-actionable (e.g., "btrfs not installed on target")
 
-        Requirements: FR-003, User Story 1 Scenario 5
+        Requirements: FR-002, User Story 1 Scenario 5
         """
 
     @abstractmethod
@@ -200,7 +200,7 @@ class SyncModule(ABC):
         Raises:
             SyncError: On unrecoverable errors (orchestrator logs as CRITICAL and aborts)
 
-        Requirement: FR-003
+        Requirement: FR-002
         """
 
     @abstractmethod
@@ -217,7 +217,7 @@ class SyncModule(ABC):
         Raises:
             SyncError: On unrecoverable errors (orchestrator logs as CRITICAL and aborts)
 
-        Requirement: FR-003
+        Requirement: FR-002
         """
 
     @abstractmethod
@@ -231,7 +231,7 @@ class SyncModule(ABC):
         Raises:
             SyncError: On unrecoverable errors (orchestrator logs as CRITICAL and aborts)
 
-        Requirement: FR-003
+        Requirement: FR-002
         """
 
     @abstractmethod
@@ -265,7 +265,7 @@ class SyncModule(ABC):
                     except Exception:
                         pass  # Best-effort
 
-        Requirements: FR-004, FR-025, User Story 5
+        Requirements: FR-002, FR-002, User Story 5
 
         Note: Only called on the currently-running module, not on completed modules.
         """
@@ -291,7 +291,7 @@ class SyncModule(ABC):
         Important: percentage represents ALL module work (validate + pre + sync + post),
         not just the current subtask.
 
-        Requirements: FR-044, FR-045, FR-046, User Story 9
+        Requirements: FR-002, FR-002, FR-002, User Story 9
         """
         raise NotImplementedError("Orchestrator injects this method")
 
@@ -313,7 +313,7 @@ class SyncModule(ABC):
         ERROR level: Use for recoverable errors (individual file failures, etc.)
         Orchestrator tracks ERROR logs to determine final state (COMPLETED vs FAILED).
 
-        Requirements: FR-019 through FR-024, User Story 4
+        Requirements: FR-002 through FR-002, User Story 4
         """
         raise NotImplementedError("Orchestrator injects this method")
 

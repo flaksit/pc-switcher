@@ -11,7 +11,9 @@ This guide provides developers with quick-start instructions for understanding a
 ## Prerequisites
 
 - Ubuntu 24.04 LTS with btrfs filesystem
-- `uv 0.9.9` installed (see `.tool-versions` for version, or `curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- `uv 0.9.9` installed (version pinned in `.tool-versions` is the single source of truth)
+  - Install with: `curl -LsSf https://astral.sh/uv/0.9.9/install.sh | sh`
+  - Verify version: `uv --version` should show `0.9.9`
 - uv will install Python 3.13 automatically (no system Python needed)
 - SSH access to a test target machine
 - Basic familiarity with Python, SSH, and btrfs

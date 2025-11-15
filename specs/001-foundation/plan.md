@@ -57,7 +57,7 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 
 **Constraints**:
 - Single persistent SSH connection (no reconnects per operation)
-- No orphaned processes after Ctrl+C (FR-028)
+- No orphaned processes after Ctrl+C (FR-002)
 - Module exceptions (SyncError) trigger immediate abort with cleanup of currently-running module only
 - Module lifecycle must follow strict ordering: validate → pre_sync → sync → post_sync → abort (if error/interrupt)
 
@@ -74,37 +74,37 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 ### Reliability Without Compromise ✅
 
 **Data Integrity**:
-- Btrfs snapshots (read-only, COW) before any state modification (FR-009, FR-010)
-- Snapshot creation failure → CRITICAL abort before changes (FR-013)
-- Rollback capability to pre-sync snapshots (FR-014)
-- Subvolume existence verification before snapshot attempts (FR-016)
-- Disk space checks: pre-sync threshold and continuous monitoring (FR-017, FR-018)
+- Btrfs snapshots (read-only, COW) before any state modification (FR-002, FR-002)
+- Snapshot creation failure → CRITICAL abort before changes (FR-002)
+- Rollback capability to pre-sync snapshots (FR-002)
+- Subvolume existence verification before snapshot attempts (FR-002)
+- Disk space checks: pre-sync threshold and continuous monitoring (FR-002, FR-002)
 
 **Conflict Detection**:
-- Lock mechanism prevents concurrent sync executions (FR-048)
-- Version mismatch detection (newer target → CRITICAL abort to prevent downgrade) (FR-007)
-- Validation phase (all modules) before any state changes (FR-003)
+- Lock mechanism prevents concurrent sync executions (FR-002)
+- Version mismatch detection (newer target → CRITICAL abort to prevent downgrade) (FR-002)
+- Validation phase (all modules) before any state changes (FR-002)
 
 **Transactional Safety**:
-- Module lifecycle enforces validate → execute → abort ordering (FR-003)
-- Exception-based error handling: modules raise SyncError, orchestrator logs as CRITICAL and aborts (FR-020, FR-025)
-- Orchestrator-managed cleanup via abort(timeout) on currently-running module (User Story 8, FR-042)
+- Module lifecycle enforces validate → execute → abort ordering (FR-002)
+- Exception-based error handling: modules raise SyncError, orchestrator logs as CRITICAL and aborts (FR-002, FR-002)
+- Orchestrator-managed cleanup via abort(timeout) on currently-running module (User Story 8, FR-002)
 - ERROR log tracking determines final state (COMPLETED vs FAILED)
 
 ### Frictionless Command UX ✅
 
-**Single Command**: `pc-switcher sync <target>` executes entire workflow (FR-047, SC-001)
+**Single Command**: `pc-switcher sync <target>` executes entire workflow (FR-002, SC-001)
 
 **Automation**:
-- Auto-installation/upgrade of target pc-switcher to match source version (FR-006, SC-004)
-- Module loading from config in sequential order (no dependency resolution, FR-005)
-- Default config generation on installation (FR-038)
+- Auto-installation/upgrade of target pc-switcher to match source version (FR-002, SC-004)
+- Module loading from config in sequential order (no dependency resolution, FR-002)
+- Default config generation on installation (FR-002)
 - No manual steps except initial setup and sync trigger
 
 **Progressive Feedback**:
-- Real-time progress reporting (module, percentage, current item) (FR-044, FR-045, User Story 9)
+- Real-time progress reporting (module, percentage, current item) (FR-002, FR-002, User Story 9)
 - Terminal UI with structured progress and log display (User Story 9)
-- Clear error messages with remediation guidance (FR-008, FR-034)
+- Clear error messages with remediation guidance (FR-002, FR-002)
 
 ### Proven Tooling Only ✅
 
@@ -131,8 +131,8 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - Snapshot metadata managed by btrfs (COW-optimized)
 
 **Monitoring**:
-- Disk space checks before and during sync (FR-017, FR-018)
-- Snapshot cleanup command to manage old snapshots (FR-015)
+- Disk space checks before and during sync (FR-002, FR-002)
+- Snapshot cleanup command to manage old snapshots (FR-002)
 - Configurable retention (keep N most recent, delete older than X days)
 
 **Estimated Write Load** (foundation only, no data sync):
@@ -150,9 +150,9 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - Foundation overhead per sync: <60 seconds total
 
 **Measurement Plan**:
-- Log timestamps (ISO8601) for all operations (FR-023)
+- Log timestamps (ISO8601) for all operations (FR-002)
 - Phase timing captured in logs (validate, pre_sync, sync, post_sync)
-- Progress percentage and ETA from modules (FR-044)
+- Progress percentage and ETA from modules (FR-002)
 
 **Parallelization**: Not applicable to foundation (sequential by design for safety); future modules can parallelize internally
 
@@ -160,7 +160,7 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 
 **Minimal Components**:
 - Single Python package (no microservices, no databases, no message queues)
-- SSH as only network protocol (ADR-002)
+- SSH as the only orchestration/control channel for target machine communication (ADR-002)
 - YAML for config (human-readable, standard)
 - File-based logging (no centralized log aggregation)
 
@@ -171,7 +171,7 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - Python type hints + basedpyright for early error detection
 
 **Reversibility**:
-- Btrfs snapshots enable full rollback (FR-014)
+- Btrfs snapshots enable full rollback (FR-002)
 - Module cleanup methods ensure graceful degradation
 - No persistent state outside of config and logs
 
@@ -268,10 +268,13 @@ pc-switcher/
 │       │   ├── config.py          # Configuration loading, validation
 │       │   ├── logging.py         # Logging setup (structlog integration)
 │       │   └── signals.py         # SIGINT handling
+│       ├── installer/
+│       │   ├── __init__.py
+│       │   └── setup.py           # Initial installation/setup script (runs on both source and target)
 │       ├── remote/
 │       │   ├── __init__.py
 │       │   ├── connection.py      # SSH connection management (Fabric, ControlMaster)
-│       │   └── installer.py       # Installation/upgrade orchestration (source detects version, installs on target)
+│       │   └── installer.py       # Remote installation orchestration (source detects version, installs on target)
 │       ├── modules/
 │       │   ├── __init__.py
 │       │   ├── btrfs_snapshots.py # Snapshot creation/rollback (required)

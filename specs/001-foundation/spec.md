@@ -47,9 +47,7 @@ This delivers immediate value by establishing the development pattern for all 6 
 
 6. **Given** a module is executing and raises an unhandled exception, **When** the exception propagates, **Then** the orchestrator catches it, logs it as CRITICAL, attempts to call the module's cleanup() method, and aborts the sync
 
-7. **Given** a module declares dependencies on other modules (e.g., "must run after btrfs-snapshot-pre"), **When** orchestrator plans execution order, **Then** it topologically sorts modules by dependencies and executes them in correct order
-
-8. **Given** user presses Ctrl+C during module execution, **When** signal is caught, **Then** orchestrator calls the currently-executing module's cleanup() method, logs interruption at WARNING level, and exits gracefully
+7. **Given** user presses Ctrl+C during module execution, **When** signal is caught, **Then** orchestrator calls the currently-executing module's cleanup() method, logs interruption at WARNING level, and exits gracefully
 
 ---
 
@@ -82,7 +80,7 @@ This delivers value by enabling zero-touch target setup and ensuring version con
 
 3. **Given** source and target both have version 0.4.0, **When** sync begins, **Then** orchestrator logs "Target pc-switcher version matches source (0.4.0), skipping installation" and proceeds immediately to next phase
 
-4. **Given** installation/upgrade fails on target (e.g., disk full, permissions issue), **When** the failure occurs, **Then** orchestrator logs CRITICAL error with diagnostic details, does not proceed with sync, and suggests remediation steps
+4. **Given** installation/upgrade fails on target (e.g., disk full, permissions issue), **When** the failure occurs, **Then** orchestrator logs CRITICAL error and does not proceed with sync
 
 ---
 
@@ -117,7 +115,7 @@ This delivers value by providing the foundation for all rollback and recovery op
 
 4. **Given** user configuration includes `sync_modules: { btrfs_snapshots: false }`, **When** configuration is loaded, **Then** the system displays a clear error message "Required module 'btrfs_snapshots' cannot be disabled" with config file location and exits before sync begins
 
-5. **Given** snapshot creation fails on target (e.g., insufficient space), **When** the failure occurs, **Then** the snapshot module logs CRITICAL error with details, and the orchestrator aborts sync before any state changes occur
+5. **Given** snapshot creation fails on target (e.g., insufficient space), **When** the failure occurs, **Then** the snapshot module logs CRITICAL error, and the orchestrator aborts sync before any state changes occur
 
 6. **Given** pre-sync snapshots exist and a sync module later fails with CRITICAL error, **When** the orchestrator detects the failure, **Then** it offers to rollback to the pre-sync snapshots (user confirmation required for rollback execution)
 
@@ -368,125 +366,124 @@ The terminal displays real-time sync progress including current module, operatio
 
 #### Module Architecture
 
-- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized module interface specifying methods: `validate()`, `pre_sync()`, `sync()`, `post_sync()`, `cleanup()`, `get_config_schema()`, and properties: `name`, `version`, `dependencies`
+- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized module interface specifying methods: `validate()`, `pre_sync()`, `sync()`, `post_sync()`, `cleanup()`, `get_config_schema()`, and property: `name`
 
-- **FR-002** `[Deliberate Simplicity]`: Each module MUST declare dependencies as list of module names it must run after; orchestrator MUST topologically sort modules by dependencies before execution
 
-- **FR-003** `[Reliability Without Compromise]`: System MUST call module lifecycle methods in order: `validate()` (all modules), `pre_sync()`, `sync()`, `post_sync()` for each module, then `cleanup()` on shutdown or errors
+- **FR-002** `[Reliability Without Compromise]`: System MUST call module lifecycle methods in order: `validate()` (all modules), `pre_sync()`, `sync()`, `post_sync()` for each module, then `cleanup()` on shutdown or errors
 
-- **FR-004** `[Reliability Without Compromise]`: System MUST call currently-executing module's `cleanup()` method when Ctrl+C is pressed, waiting for a configurable timeout, before exiting
+- **FR-003** `[Reliability Without Compromise]`: System MUST call currently-executing module's `cleanup()` method when Ctrl+C is pressed, waiting for a configurable timeout, before exiting
 
-- **FR-005** `[Deliberate Simplicity]`: Modules MUST be auto-discovered from the configuration file section `sync_modules` and instantiated by the orchestrator
+- **FR-004** `[Deliberate Simplicity]`: Modules MUST be loaded from the configuration file section `sync_modules` in the order they appear and instantiated by the orchestrator
 
 #### Self-Installation
 
-- **FR-006** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version
+- **FR-005** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version
 
-- **FR-007** `[Reliability Without Compromise]`: System MUST abort sync with CRITICAL log if the target machine's pc-switcher version is newer than the source version (preventing accidental downgrades)
+- **FR-006** `[Reliability Without Compromise]`: System MUST abort sync with CRITICAL log if the target machine's pc-switcher version is newer than the source version (preventing accidental downgrades)
 
-- **FR-008** `[Frictionless Command UX]`: If installation/upgrade fails, system MUST log CRITICAL error with diagnostic details and abort sync
+- **FR-007** `[Frictionless Command UX]`: If installation/upgrade fails, system MUST log CRITICAL error and abort sync
 
 #### Safety Infrastructure
 
-- **FR-009** `[Reliability Without Compromise]`: System MUST create read-only btrfs snapshots of configured subvolumes on both source and target before any module executes (after version check and pre-checks)
+- **FR-008** `[Reliability Without Compromise]`: System MUST create read-only btrfs snapshots of configured subvolumes on both source and target before any module executes (after version check and pre-checks)
 
-- **FR-010** `[Reliability Without Compromise]`: System MUST create post-sync snapshots after all modules complete successfully
+- **FR-009** `[Reliability Without Compromise]`: System MUST create post-sync snapshots after all modules complete successfully
 
-- **FR-011** `[Solid-State Stewardship]`: Snapshot naming MUST follow pattern `@<subvolume>-{presync|postsync}-<ISO8601-timestamp>-<session-id>` for clear identification and cleanup
+- **FR-010** `[Solid-State Stewardship]`: Snapshot naming MUST follow pattern `@<subvolume>-{presync|postsync}-<ISO8601-timestamp>-<session-id>` for clear identification and cleanup
 
-- **FR-012** `[Reliability Without Compromise]`: Snapshot module MUST be marked as required and system MUST ignore attempts to disable it via configuration
+- **FR-011** `[Reliability Without Compromise]`: Snapshot module MUST be marked as required and system MUST ignore attempts to disable it via configuration
 
-- **FR-013** `[Frictionless Command UX]`: If pre-sync snapshot creation fails, system MUST log CRITICAL error and abort before any state modifications occur
+- **FR-012** `[Frictionless Command UX]`: If pre-sync snapshot creation fails, system MUST log CRITICAL error and abort before any state modifications occur
 
-- **FR-014** `[Reliability Without Compromise]`: System MUST provide rollback capability to restore from pre-sync snapshots (requires user confirmation)
+- **FR-013** `[Reliability Without Compromise]`: System MUST provide rollback capability to restore from pre-sync snapshots (requires user confirmation)
 
-- **FR-015** `[Solid-State Stewardship]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs
+- **FR-014** `[Solid-State Stewardship]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs
 
-- **FR-016** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort
+- **FR-015** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort
 
-- **FR-017** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold MUST be configurable (absolute bytes or percentage)
+- **FR-016** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold MUST be configurable (absolute bytes or percentage)
 
-- **FR-018** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval during sync and abort with CRITICAL if available free space falls below the configured reserved minimum
+- **FR-017** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval during sync and abort with CRITICAL if available free space falls below the configured reserved minimum
 
 #### Logging System
 
-- **FR-019** `[Documentation As Runtime Contract]`: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL. DEBUG is the most verbose (includes everything); FULL is high-verbosity but explicitly excludes DEBUG messages.
+- **FR-018** `[Documentation As Runtime Contract]`: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL. DEBUG is the most verbose (includes everything); FULL is high-verbosity but explicitly excludes DEBUG messages.
 
-- **FR-020** `[Reliability Without Compromise]`: Any log event at CRITICAL level MUST trigger immediate sync abort after calling cleanup() on current module
+- **FR-019** `[Reliability Without Compromise]`: Any log event at CRITICAL level MUST trigger immediate sync abort after calling cleanup() on current module
 
-- **FR-021** `[Frictionless Command UX]`: System MUST support independent log level configuration for file output (`log_file_level`) and terminal display (`log_cli_level`)
+- **FR-020** `[Frictionless Command UX]`: System MUST support independent log level configuration for file output (`log_file_level`) and terminal display (`log_cli_level`)
 
-- **FR-022** `[Documentation As Runtime Contract]`: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
+- **FR-021** `[Documentation As Runtime Contract]`: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
 
-- **FR-023** `[Documentation As Runtime Contract]`: Log entries MUST include timestamp (ISO8601) in UTC, level, module name, and message in structured format
+- **FR-022** `[Documentation As Runtime Contract]`: Log entries MUST include timestamp (ISO8601) in UTC, level, module name, and message in structured format
 
-- **FR-024** `[Reliability Without Compromise]`: System MUST aggregate logs from both source-side orchestrator and target-side operations into unified log stream
+- **FR-023** `[Reliability Without Compromise]`: System MUST aggregate logs from both source-side orchestrator and target-side operations into unified log stream
 
 #### Interrupt Handling
 
-- **FR-025** `[Reliability Without Compromise]`: System MUST install SIGINT handler that calls cleanup() on current module, logs interruption at WARNING level, and exits with code 130
+- **FR-024** `[Reliability Without Compromise]`: System MUST install SIGINT handler that calls cleanup() on current module, logs interruption at WARNING level, and exits with code 130
 
-- **FR-026** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to 5 seconds for graceful shutdown
+- **FR-025** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to 5 seconds for graceful shutdown
 
-- **FR-027** `[Reliability Without Compromise]`: If second SIGINT is received during cleanup, system MUST immediately force-terminate without waiting
+- **FR-026** `[Reliability Without Compromise]`: If second SIGINT is received during cleanup, system MUST immediately force-terminate without waiting
 
-- **FR-028** `[Reliability Without Compromise]`: System MUST ensure no orphaned processes remain on source or target after interrupt
+- **FR-027** `[Reliability Without Compromise]`: System MUST ensure no orphaned processes remain on source or target after interrupt
 
 #### Configuration System
 
-- **FR-029** `[Frictionless Command UX]`: System MUST load configuration from `~/.config/pc-switcher/config.yaml` on startup
+- **FR-028** `[Frictionless Command UX]`: System MUST load configuration from `~/.config/pc-switcher/config.yaml` on startup
 
-- **FR-030** `[Deliberate Simplicity]`: Configuration MUST use YAML format with sections: global settings, `sync_modules` (enable/disable), and per-module settings
+- **FR-029** `[Deliberate Simplicity]`: Configuration MUST use YAML format with sections: global settings, `sync_modules` (enable/disable), and per-module settings
 
-- **FR-031** `[Reliability Without Compromise]`: System MUST validate configuration structure and module-specific settings against module-declared schemas before execution
+- **FR-030** `[Reliability Without Compromise]`: System MUST validate configuration structure and module-specific settings against module-declared schemas before execution
 
-- **FR-032** `[Frictionless Command UX]`: System MUST apply reasonable defaults for missing configuration values
+- **FR-031** `[Frictionless Command UX]`: System MUST apply reasonable defaults for missing configuration values
 
-- **FR-033** `[Frictionless Command UX]`: System MUST allow enabling/disabling optional modules via `sync_modules: { module_name: true/false }`
+- **FR-032** `[Frictionless Command UX]`: System MUST allow enabling/disabling optional modules via `sync_modules: { module_name: true/false }`
 
-- **FR-034** `[Reliability Without Compromise]`: If configuration file has syntax errors or invalid values, system MUST display clear error message with location and exit before sync
+- **FR-033** `[Reliability Without Compromise]`: If configuration file has syntax errors or invalid values, system MUST display clear error message with location and exit before sync
 
-- **FR-035** `[Reliability Without Compromise]`: If configuration file contains a disable attempt for a required module, system MUST display clear error message with location and exit before sync
+- **FR-034** `[Reliability Without Compromise]`: If configuration file contains a disable attempt for a required module, system MUST display clear error message with location and exit before sync
 
 #### Installation & Setup
 
-- **FR-036** `[Frictionless Command UX]`: System MUST provide installation script that checks and installs/upgrades dependencies, installs pc-switcher package, and creates default configuration
+- **FR-035** `[Frictionless Command UX]`: System MUST provide installation script that checks and installs/upgrades dependencies, installs pc-switcher package, and creates default configuration
 
-- **FR-037** `[Frictionless Command UX]`: Setup script MUST detect btrfs filesystem presence and provide guidance on recommended subvolume structure if not present
+- **FR-036** `[Frictionless Command UX]`: Setup script MUST detect btrfs filesystem presence and provide guidance on recommended subvolume structure if not present
 
-- **FR-038** `[Documentation As Runtime Contract]`: Setup script MUST create default config file with inline comments explaining each setting
+- **FR-037** `[Documentation As Runtime Contract]`: Setup script MUST create default config file with inline comments explaining each setting
 
 #### Testing Infrastructure
 
-- **FR-039** `[Deliberate Simplicity]`: System MUST include three dummy modules: `dummy-success`, `dummy-critical`, `dummy-fail`
+- **FR-038** `[Deliberate Simplicity]`: System MUST include three dummy modules: `dummy-success`, `dummy-critical`, `dummy-fail`
 
-- **FR-040** `[Deliberate Simplicity]`: `dummy-success` MUST simulate 20s operation on source (log every 2s, WARNING at 6s) and 20s on target (log every 2s, ERROR at 8s), emit progress updates, and complete successfully
+- **FR-039** `[Deliberate Simplicity]`: `dummy-success` MUST simulate 20s operation on source (log every 2s, WARNING at 6s) and 20s on target (log every 2s, ERROR at 8s), emit progress updates, and complete successfully
 
-- **FR-041** `[Reliability Without Compromise]`: `dummy-critical` MUST log CRITICAL error at 50% progress and continue execution to test that orchestrator aborts sync
+- **FR-040** `[Reliability Without Compromise]`: `dummy-critical` MUST log CRITICAL error at 50% progress and continue execution to test that orchestrator aborts sync
 
-- **FR-042** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at 60% progress to test orchestrator exception handling
+- **FR-041** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at 60% progress to test orchestrator exception handling
 
-- **FR-043** `[Reliability Without Compromise]`: All dummy modules MUST implement `cleanup()` that logs "Dummy module cleanup called" and stops execution
+- **FR-042** `[Reliability Without Compromise]`: All dummy modules MUST implement `cleanup()` that logs "Dummy module cleanup called" and stops execution
 
 #### Progress Reporting
 
-- **FR-044** `[Frictionless Command UX]`: Modules CAN emit progress updates including percentage (0-100), current item description, and estimated completion time
+- **FR-043** `[Frictionless Command UX]`: Modules CAN emit progress updates including percentage (0-100), current item description, and estimated completion time
 
-- **FR-045** `[Frictionless Command UX]`: Orchestrator MUST forward progress updates to terminal UI system for display
+- **FR-044** `[Frictionless Command UX]`: Orchestrator MUST forward progress updates to terminal UI system for display
 
-- **FR-046** `[Documentation As Runtime Contract]`: Progress updates MUST be written to log file at FULL log level
+- **FR-045** `[Documentation As Runtime Contract]`: Progress updates MUST be written to log file at FULL log level
 
 #### Core Orchestration
 
-- **FR-047** `[Frictionless Command UX]`: System MUST provide single command `pc-switcher sync <target>` that executes complete workflow
+- **FR-046** `[Frictionless Command UX]`: System MUST provide single command `pc-switcher sync <target>` that executes complete workflow
 
-- **FR-048** `[Reliability Without Compromise]`: System MUST implement locking mechanism to prevent concurrent sync executions
+- **FR-047** `[Reliability Without Compromise]`: System MUST implement locking mechanism to prevent concurrent sync executions
 
-- **FR-049** `[Documentation As Runtime Contract]`: System MUST log overall sync result (success/failure) and summary of module outcomes
+- **FR-048** `[Documentation As Runtime Contract]`: System MUST log overall sync result (success/failure) and summary of module outcomes
 
 ### Key Entities
 
-- **Module**: Represents a sync component implementing the module interface; has name, version, dependencies, config schema, and lifecycle methods
+- **Module**: Represents a sync component implementing the module interface; has name, config schema, and lifecycle methods
 - **SyncSession**: Represents a single sync operation including session ID, timestamp, source/target machines, enabled modules, and execution state
 - **Snapshot**: Represents a btrfs snapshot including subvolume name, timestamp, session ID, type (pre/post), and location (source/target)
 - **LogEntry**: Represents a logged event with timestamp, level, module name, message, and structured context data

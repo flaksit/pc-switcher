@@ -122,7 +122,7 @@ INITIALIZING → VALIDATING → EXECUTING ────────────�
 Represents a btrfs snapshot created during sync.
 
 **Fields**:
-- `subvolume: str` - Subvolume path being snapshotted (e.g., "/", "/home")
+- `subvolume: str` - Flat subvolume name from `btrfs subvolume list /` (e.g., "@", "@home", "@root")
 - `snapshot_path: str` - Full path to snapshot (e.g., "/.snapshots/@-presync-20251115T120000Z-abc123")
 - `timestamp: datetime` - Snapshot creation time (UTC, ISO8601)
 - `session_id: str` - Associated sync session ID
@@ -134,12 +134,20 @@ Represents a btrfs snapshot created during sync.
 - `SnapshotType`: `PRE_SYNC`, `POST_SYNC`
 
 **Validation Rules**:
-- `subvolume` must exist on the machine where snapshot is created
-- `snapshot_path` must follow naming pattern: `{snapshot_dir}/@{subvolume}-{presync|postsync}-{timestamp}-{session_id}`
+- `subvolume` must be a flat name (not a path) as shown in `btrfs subvolume list /` output
+- `subvolume` must exist in the top-level of the btrfs filesystem on the machine where snapshot is created
+- `snapshot_path` must follow naming pattern: `{snapshot_dir}/{subvolume}-{presync|postsync}-{timestamp}-{session_id}`
 - Default `snapshot_dir` is `/.snapshots` (configurable)
 - `timestamp` must be ISO8601 format with UTC timezone
 - `session_id` must be 8-char hex string
 - `hostname` must be actual hostname (not "source" or "target"), used for logging and tracking
+
+**Examples**:
+- Subvolume: `"@"` (root filesystem, mounted at `/`)
+- Subvolume: `"@home"` (home directory, mounted at `/home`)
+- Subvolume: `"@root"` (root user home, mounted at `/root`)
+- Snapshot path: `"/.snapshots/@-presync-20251115T120000Z-abc12345"`
+- Snapshot path: `"/.snapshots/@home-postsync-20251115T120500Z-abc12345"`
 
 **State Transitions**: None (immutable once created; deletion is external operation)
 
@@ -222,9 +230,10 @@ Represents parsed and validated configuration.
 - `log_cli_level: LogLevel` - Minimum level for terminal display
 - `sync_modules: dict[str, bool]` - Module enable/disable flags
 - `module_configs: dict[str, dict[str, Any]]` - Per-module configuration sections
-- `disk_min_free: int | float` - Minimum free disk space (bytes or percentage)
-- `disk_reserve_minimum: int | float` - Reserved space during sync
-- `disk_check_interval: int` - Seconds between disk space checks
+- `disk: dict` - Disk space monitoring configuration with keys:
+  - `min_free: int | float` - Minimum free disk space (bytes or percentage)
+  - `reserve_minimum: int | float` - Reserved space during sync
+  - `check_interval: int` - Seconds between disk space checks
 - `config_path: Path` - Path to loaded config file
 
 **Validation Rules**:
@@ -232,8 +241,10 @@ Represents parsed and validated configuration.
 - `sync_modules` keys must reference registered module names
 - Required modules (btrfs-snapshots) cannot be disabled (sync_modules value ignored)
 - Each entry in `module_configs` must validate against module's `get_config_schema()`
-- `disk_min_free`: if float, must be in (0.0, 1.0) for percentage; if int, must be positive bytes
-- `disk_check_interval` must be positive integer (seconds)
+- `disk.min_free`: if float, must be in (0.0, 1.0) for percentage; if int, must be positive bytes
+- `disk.reserve_minimum`: if float, must be in (0.0, 1.0) for percentage; if int, must be positive bytes
+- `disk.check_interval` must be positive integer (seconds)
+- Subvolume names in `btrfs_snapshots.subvolumes` must be flat names (e.g., "@", "@home") not paths
 
 **State Transitions**: None (immutable once loaded; reload requires new session)
 
@@ -272,6 +283,12 @@ Represents SSH connection to target machine.
 - `send_file_to_target()` currently does not set permissions/ownership (future feature)
 - Future enhancement: streaming stdout/stderr line-by-line with callback
 - Future enhancement: run remote Python tasks with progress/logging streaming
+
+**Design Decision: Synchronous Methods with Callbacks**:
+- Module lifecycle methods (`validate()`, `pre_sync()`, `sync()`, `post_sync()`, `abort()`) are **synchronous** (not `async`)
+- Progress and log reporting use **injected callback methods** (`emit_progress()`, `log()`)
+- Background operations within modules can use **threading** if needed (module responsibility)
+- **Rationale**: Synchronous methods with callbacks are simpler to implement and test than async/await patterns. This approach is sufficient for the current requirements and avoids the complexity of async context management, event loops, and async-compatible libraries. If continuous streaming becomes a requirement in the future, individual modules can use threading internally while maintaining the synchronous interface contract.
 
 **Validation Rules**:
 - `hostname` must be resolvable or valid SSH config alias
