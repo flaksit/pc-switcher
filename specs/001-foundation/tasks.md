@@ -66,7 +66,7 @@ Repository structure (single Python package):
 ### Implementation for User Story 4
 
 - [ ] T016 [US4] Add custom FULL log level (15) to Python logging module using logging.addLevelName(15, 'FULL') in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
-- [ ] T017 [US4] Configure structlog with dual output: file (JSON, ISO timestamps UTC) and terminal (rich Console renderer) in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
+- [ ] T017 [US4] Configure structlog with dual output: file (JSONRenderer with keys: timestamp, level, module, hostname, event, context) and terminal (ConsoleRenderer with human-readable format) in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
 - [ ] T018 [US4] Create custom structlog processor track_error_logs() that sets session.has_errors=True when level >= ERROR in src/pcswitcher/core/logging.py (Reliability Without Compromise)
 - [ ] T019 [US4] Implement get_logger(name) factory that binds context (module name, session ID, hostname) in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
 - [ ] T020 [US4] Create configure_logging(log_file_level, log_cli_level, log_file_path, session) function that sets up structlog with processors and handlers in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
@@ -92,7 +92,7 @@ Repository structure (single Python package):
 - [ ] T025 [US6] Implement validate_config_structure(config_dict) that checks required fields exist and types are correct in src/pcswitcher/core/config.py (Reliability Without Compromise)
 - [ ] T026 [US6] Implement validate_required_modules(sync_modules_dict) that verifies btrfs_snapshots is first and enabled in src/pcswitcher/core/config.py (Reliability Without Compromise)
 - [ ] T027 [US6] Implement apply_defaults(config_dict, schema) that fills missing values with defaults from config-schema.yaml in src/pcswitcher/core/config.py (Frictionless Command UX)
-- [ ] T028 [US6] Implement validate_module_config(module_name, module_config, schema) using jsonschema or manual validation in src/pcswitcher/core/config.py (Reliability Without Compromise)
+- [ ] T028 [US6] Implement validate_module_config(module_name, module_config, schema) using jsonschema library (JSON Schema draft-07) in src/pcswitcher/core/config.py (Reliability Without Compromise)
 - [ ] T029 [US6] Create generate_default_config() -> str that produces default YAML with inline comments from config-schema.yaml in src/pcswitcher/core/config.py (Frictionless Command UX)
 - [ ] T030 [US6] Implement get_enabled_modules(sync_modules_dict) -> list[str] that returns module names in config order in src/pcswitcher/core/config.py (Deliberate Simplicity)
 
@@ -180,7 +180,7 @@ Repository structure (single Python package):
 - [ ] T053 [US2] Implement TargetConnection.disconnect() with graceful connection closure in src/pcswitcher/remote/connection.py (Reliability Without Compromise)
 - [ ] T054 [US2] Implement TargetConnection.run(command, sudo, timeout) using Fabric conn.run() with result handling in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
 - [ ] T055 [US2] Implement TargetConnection.check_version() that detects pc-switcher version on target via pip show pc-switcher in src/pcswitcher/remote/connection.py (Frictionless Command UX)
-- [ ] T056 [US2] Implement TargetConnection.install_version(version, installer_path) using uv tool install in src/pcswitcher/remote/installer.py (Frictionless Command UX)
+- [ ] T056 [US2] Implement TargetConnection.install_version(version) that installs from GitHub Package Registry (ghcr.io) using uv tool install pc-switcher==<version> in src/pcswitcher/remote/installer.py (Frictionless Command UX)
 - [ ] T057 [US2] Implement version comparison logic: abort if target > source, upgrade if target < source, skip if equal in src/pcswitcher/remote/installer.py (Reliability Without Compromise)
 - [ ] T058 [US2] Add error handling for installation failures with CRITICAL logging in src/pcswitcher/remote/installer.py (Reliability Without Compromise)
 - [ ] T059 [US2] Implement TargetConnection.send_file_to_target(local, remote) using Fabric conn.put() in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
@@ -209,8 +209,8 @@ Repository structure (single Python package):
 - [ ] T067 [US3] Add snapshot creation error handling: log CRITICAL and raise SyncError if snapshot fails in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
 - [ ] T068 [US3] Implement rollback_to_presync(session_id) that restores from pre-sync snapshots in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
 - [ ] T069 [US3] Implement cleanup_old_snapshots(older_than_days, keep_recent) using btrfs subvolume delete in src/pcswitcher/modules/btrfs_snapshots.py (Solid-State Stewardship)
-- [ ] T070 [US3] Create DiskMonitor utility class with check_free_space(path, min_free) in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
-- [ ] T071 [US3] Implement DiskMonitor.monitor_continuously(interval, reserve_minimum, callback) for periodic checks during sync in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
+- [ ] T070 [US3] Create DiskMonitor utility class with check_free_space(path, min_free) that accepts float (0.0-1.0) or percentage string (e.g., "5%"), default 0.05, in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
+- [ ] T071 [US3] Implement DiskMonitor.monitor_continuously(interval, reserve_minimum, callback) with interval default 30s, reserve_minimum default 0.02 or "2%", for periodic checks during sync in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
 - [ ] T072 [US3] Add disk space check before snapshot creation: abort if below min_free threshold in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
 - [ ] T073 [US3] Integrate disk monitoring with orchestrator to abort if space drops below reserve_minimum during sync in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
 
@@ -256,15 +256,15 @@ Repository structure (single Python package):
 - [ ] T084 [ORCH] Implement _inject_module_methods(module) that sets module.log and module.emit_progress in src/pcswitcher/core/orchestrator.py (Deliberate Simplicity)
 - [ ] T085 [ORCH] Implement _validate_all_modules() that calls validate() on each module and collects errors in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T086 [ORCH] Implement _execute_module_lifecycle(module) that calls pre_sync() → sync() → post_sync() with exception handling in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
-- [ ] T087 [ORCH] Implement exception catching: log as CRITICAL, set session.abort_requested=True, enter CLEANUP phase in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
+- [ ] T087 [ORCH] Implement exception catching: catch SyncError specifically, log error message at CRITICAL level, call abort(timeout) on current module, set session.abort_requested=True, enter CLEANUP phase; catch other exceptions, wrap as SyncError in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T088 [ORCH] Implement _cleanup_phase() that calls current_module.abort(timeout=5.0) if module is running in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T089 [ORCH] Implement _determine_final_state() logic: Ctrl+C → ABORTED, exception/ERROR logs → FAILED, success → COMPLETED in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T090 [ORCH] Implement rollback offer workflow after CRITICAL failure if pre-sync snapshots exist in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T091 [ORCH] Add user confirmation prompt for rollback: "Would you like to restore snapshots? [y/N]" in src/pcswitcher/core/orchestrator.py (Frictionless Command UX)
 - [ ] T092 [ORCH] Implement execute_rollback() that calls BtrfsSnapshotsModule.rollback_to_presync() on user confirmation in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
-- [ ] T093 [ORCH] Implement log_session_summary() that reports final state, module results, duration in src/pcswitcher/core/orchestrator.py (Documentation As Runtime Contract)
+- [ ] T093 [ORCH] Implement log_session_summary() that reports final state (COMPLETED/ABORTED/FAILED), per-module results (SUCCESS/SKIPPED/FAILED), total duration, error count, and lists any modules that failed in src/pcswitcher/core/orchestrator.py (Documentation As Runtime Contract)
 - [ ] T094 [ORCH] Implement run() method that orchestrates: INITIALIZING → VALIDATING → EXECUTING → CLEANUP → terminal state in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
-- [ ] T095 [ORCH] Add btrfs verification during INITIALIZING: check / is btrfs and configured subvolumes exist in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
+- [ ] T095 [ORCH] Add btrfs filesystem verification during INITIALIZING: check / is btrfs (this is a fast sanity check before module validation; detailed subvolume checks are done by BtrfsSnapshotsModule.validate()) in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T096 [ORCH] Implement progress forwarding: receive from module, log at FULL, forward to terminal UI in src/pcswitcher/core/orchestrator.py (Frictionless Command UX)
 
 **Checkpoint**: At this point, core orchestrator should execute complete sync workflow end-to-end
@@ -325,13 +325,12 @@ Repository structure (single Python package):
 
 ### Implementation for User Story 7
 
-- [ ] T111 [P] [US7] Create setup script installer/setup.sh that checks for btrfs filesystem using stat -f -c %T / (Frictionless Command UX)
-- [ ] T112 [P] [US7] Add check for uv 0.9.9 installation in installer/setup.sh, install if missing (Proven Tooling Only)
-- [ ] T113 [US7] Implement pc-switcher package installation using uv tool install in installer/setup.sh (Frictionless Command UX)
-- [ ] T114 [US7] Create ~/.config/pc-switcher/ directory and generate default config.yaml using generate_default_config() in installer/setup.sh (Frictionless Command UX)
-- [ ] T115 [US7] Add btrfs subvolume structure detection (btrfs subvolume list /) and guidance display if subvolumes missing in installer/setup.sh (Frictionless Command UX)
-- [ ] T116 [US7] Implement non-btrfs filesystem detection with CRITICAL error and exit in installer/setup.sh (Reliability Without Compromise)
-- [ ] T117 [US7] Add success message "pc-switcher installed successfully" at end of setup in installer/setup.sh (Frictionless Command UX)
+- [ ] T111 [P] [US7] Create setup script scripts/setup.sh that checks for btrfs filesystem using stat -f -c %T / (Frictionless Command UX)
+- [ ] T112 [P] [US7] Add check for uv 0.9.9 installation in scripts/setup.sh, install if missing (Proven Tooling Only)
+- [ ] T113 [US7] Implement pc-switcher package installation from GitHub Package Registry using uv tool install pc-switcher in scripts/setup.sh (Frictionless Command UX)
+- [ ] T114 [US7] Create ~/.config/pc-switcher/ directory and generate default config.yaml with inline comments in scripts/setup.sh (Frictionless Command UX)
+- [ ] T115 [US7] Implement non-btrfs filesystem detection with CRITICAL error and exit in scripts/setup.sh (Reliability Without Compromise)
+- [ ] T116 [US7] Add success message "pc-switcher installed successfully" at end of setup in scripts/setup.sh (Frictionless Command UX)
 
 **Checkpoint**: At this point, installation script should handle end-to-end setup on new machines
 
@@ -348,8 +347,8 @@ Repository structure (single Python package):
 ### Implementation for CI/CD
 
 - [ ] T118 [P] [CICD] Create .github/workflows/ci.yml with jobs: checkout, setup-uv (from .tool-versions), uv sync, ruff check, basedpyright, pytest, codespell (Proven Tooling Only)
-- [ ] T119 [P] [CICD] Create .github/workflows/release.yml triggered on release published with steps: checkout (fetch-depth: 0 for tags), setup-uv, uv build, uv publish to ghcr.io (Proven Tooling Only)
-- [ ] T120 [CICD] Configure release workflow with GITHUB_TOKEN permissions: contents read, packages write in .github/workflows/release.yml (Proven Tooling Only)
+- [ ] T119 [P] [CICD] Create .github/workflows/release.yml triggered on release published with steps: checkout (fetch-depth: 0 for tags), setup-uv, uv build, authenticate to ghcr.io using GITHUB_TOKEN, uv publish --repository ghcr.io (Proven Tooling Only)
+- [ ] T120 [CICD] Configure release workflow with GITHUB_TOKEN permissions: contents read, packages write, and configure package registry URL (ghcr.io/owner/pc-switcher) in .github/workflows/release.yml (Proven Tooling Only)
 - [ ] T121 [CICD] Add workflow run verification: test CI on branch push, test release on test tag in .github/workflows/ (Reliability Without Compromise)
 
 **Checkpoint**: At this point, CI/CD should automatically test code and publish releases
@@ -527,12 +526,12 @@ Add UX polish and deployment:
 
 ## Summary
 
-- **Total tasks**: 130
+- **Total tasks**: 129 (reduced from 130 after removing subvolume guidance task)
 - **User stories**: 9 (US1-US9) + Session + Orchestrator + CLI + Installation + CI/CD
 - **Parallel opportunities**: After Foundational phase, US8/US5/US2/US3/SESSION can run in parallel (5-way parallelism)
 - **MVP scope**: T001-T030, T039-T045, T074-T096, T104-T110 (approximately 60 tasks, ~2-3 weeks)
 - **Critical path**: Setup → Foundational → US4 → US6 → US1 → ORCH → CLI
 - **Independent test criteria**: Each user story phase includes clear test criteria for verification
-- **Format validation**: All 130 tasks follow strict format: `- [ ] [ID] [P?] [Story] Description with file path`
+- **Format validation**: All 129 tasks follow strict format: `- [ ] [ID] [P?] [Story] Description with file path`
 
 **Suggested MVP**: Complete through US8 + SESSION + ORCH + CLI (checkpoints at T045, T081, T096, T110) for working system with dummy modules, then add US2/US3/US5 for production safety.

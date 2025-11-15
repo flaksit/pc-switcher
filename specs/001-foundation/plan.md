@@ -9,10 +9,10 @@
 
 This feature establishes the complete foundation infrastructure for PC-switcher, a synchronization system for seamless switching between Linux desktop machines. The foundation includes:
 
-1. **Module Architecture**: Standardized contract for all sync features with lifecycle methods, config schemas, logging, progress reporting, and sequential execution (config-based order, no dependency resolution)
-2. **Self-Installation**: Automatic version-matching installation/upgrade of pc-switcher on target machines
-3. **Safety Infrastructure**: Btrfs snapshot creation (pre/post-sync) with rollback capability and disk space monitoring
-4. **Logging System**: Six-level logging (DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL) with file/CLI separation and exception-based abort (modules raise SyncError, orchestrator logs as CRITICAL)
+1. **Module Architecture**: Standardized contract for all sync features with lifecycle methods (validate, pre_sync, sync, post_sync, abort), config schemas, logging, progress reporting, and sequential execution (config-based order, no dependency resolution)
+2. **Self-Installation**: Automatic version-matching installation/upgrade of pc-switcher on target machines from GitHub Package Registry (ghcr.io)
+3. **Safety Infrastructure**: Btrfs snapshot creation (pre/post-sync) with rollback capability and disk space monitoring (configurable thresholds: float 0.0-1.0 or percentage string, defaults: min_free=0.05, reserve_minimum=0.02, check_interval=30s)
+4. **Logging System**: Six-level logging (DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL) with file/CLI separation and exception-based abort (modules raise SyncError exception, orchestrator catches, logs as CRITICAL, calls abort(timeout))
 5. **Interrupt Handling**: Graceful Ctrl+C handling with module abort, target termination, and no orphaned processes
 6. **Configuration System**: YAML-based config with module enable/disable, schema validation, and defaults
 7. **Installation & Setup**: Deployment tooling with dependency checking and btrfs verification
@@ -57,9 +57,10 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 
 **Constraints**:
 - Single persistent SSH connection (no reconnects per operation)
-- No orphaned processes after Ctrl+C (FR-002)
-- Module exceptions (SyncError) trigger immediate abort with cleanup of currently-running module only
-- Module lifecycle must follow strict ordering: validate → pre_sync → sync → post_sync → abort (if error/interrupt)
+- No orphaned processes after Ctrl+C (FR-027)
+- Module exceptions (SyncError) trigger immediate abort with abort(timeout) call on currently-running module only
+- Module lifecycle must follow strict ordering: validate → pre_sync → sync → post_sync → abort(timeout) (if error/interrupt)
+- Disk space thresholds configurable as float (0.0-1.0) or percentage string (e.g., "5%")
 
 **Scale/Scope**:
 - ~10-15 core modules (btrfs-snapshots, user-data, packages, docker, vms, k3s, etc.)
@@ -87,9 +88,9 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 
 **Transactional Safety**:
 - Module lifecycle enforces validate → execute → abort ordering (FR-002)
-- Exception-based error handling: modules raise SyncError, orchestrator logs as CRITICAL and aborts (FR-002, FR-002)
-- Orchestrator-managed cleanup via abort(timeout) on currently-running module (User Story 8, FR-002)
-- ERROR log tracking determines final state (COMPLETED vs FAILED)
+- Exception-based error handling: modules raise SyncError, orchestrator catches exception, logs at CRITICAL, calls abort(timeout) on module (FR-019)
+- Orchestrator-managed cleanup via abort(timeout) on currently-running module (User Story 5, FR-002, FR-003)
+- ERROR log tracking during execution determines final state (COMPLETED vs FAILED)
 
 ### Frictionless Command UX ✅
 
@@ -259,18 +260,15 @@ pc-switcher/
 │       ├── cli/
 │       │   ├── __init__.py
 │       │   ├── main.py      # CLI entry point (sync, logs, cleanup-snapshots, etc.)
-│       │   └── ui.py        # Terminal UI (rich/textual integration)
+│       │   └── ui.py        # Terminal UI (rich integration)
 │       ├── core/
 │       │   ├── __init__.py
 │       │   ├── orchestrator.py    # Main sync orchestration, module lifecycle
-│       │   ├── module.py          # Module interface (ABC), base class
+│       │   ├── module.py          # Module interface (ABC), base class, SyncError exception
 │       │   ├── session.py         # SyncSession state management
 │       │   ├── config.py          # Configuration loading, validation
 │       │   ├── logging.py         # Logging setup (structlog integration)
 │       │   └── signals.py         # SIGINT handling
-│       ├── installer/
-│       │   ├── __init__.py
-│       │   └── setup.py           # Initial installation/setup script (runs on both source and target)
 │       ├── remote/
 │       │   ├── __init__.py
 │       │   ├── connection.py      # SSH connection management (Fabric, ControlMaster)
@@ -285,9 +283,10 @@ pc-switcher/
 │           ├── __init__.py
 │           ├── disk.py            # Disk space monitoring
 │           └── lock.py            # Sync lock mechanism
-├── scripts/                       # Bundled with package, deployed to target
+├── scripts/
+│   ├── setup.sh                   # Initial installation script
 │   └── target/
-│       └── remote_helpers.py      # Target-side helper scripts
+│       └── remote_helpers.py      # Target-side helper scripts (bundled with package)
 └── tests/
     ├── conftest.py                # pytest fixtures (mock SSH, config, etc.)
     ├── unit/

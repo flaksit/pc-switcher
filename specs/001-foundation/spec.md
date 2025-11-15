@@ -22,8 +22,8 @@ The system defines a precise contract for how sync modules integrate with the co
    - Calls lifecycle methods in correct order (validate → pre_sync → sync → post_sync)
    - Handles module logging at all six levels
    - Processes progress updates
-   - Handles module errors (both exceptions and CRITICAL log events)
-   - Calls cleanup on interrupts
+   - Handles module errors (SyncError exceptions)
+   - Calls abort(timeout) on interrupts
 5. Demonstrating that a developer can implement a new module by only implementing the contract
 
 This delivers immediate value by establishing the development pattern for all 6 user-facing features (features 4-9 in the breakdown).
@@ -39,15 +39,15 @@ This delivers immediate value by establishing the development pattern for all 6 
 
 2. **Given** a module defines configuration schema (enabled: bool, module-specific settings), **When** user loads configuration, **Then** the system validates module config against schema, applies defaults for missing values, and makes configuration available to the module via standardized accessor methods
 
-3. **Given** a module emits log messages at any of six levels (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL), **When** logging occurs, **Then** the system routes logs to both file (with configured file log level) and terminal UI (with configured CLI log level), formats them consistently with timestamp and module name, and triggers sync abort if CRITICAL level is logged
+3. **Given** a module emits log messages at any of six levels (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL), **When** logging occurs, **Then** the system routes logs to both file (with configured file log level) and terminal UI (with configured CLI log level), and formats them consistently with timestamp and module name
 
 4. **Given** a module emits progress updates (percentage, current item, estimated remaining), **When** progress is reported, **Then** the orchestrator forwards this to the terminal UI system for display and to the log file at FULL level
 
-5. **Given** a module's validate() method returns validation errors, **When** validation phase executes, **Then** the orchestrator collects all errors, displays them in terminal UI, and halts sync before any state changes occur
+5. **Given** a module's validate() method returns validation errors, **When** validation phase executes, **Then** the orchestrator collects all errors, displays them in terminal UI, and halts sync before any state changes occur (no abort() call needed as modules haven't started executing)
 
-6. **Given** a module is executing and raises an unhandled exception, **When** the exception propagates, **Then** the orchestrator catches it, logs it as CRITICAL, attempts to call the module's cleanup() method, and aborts the sync
+6. **Given** a module is executing and raises SyncError exception, **When** the exception propagates, **Then** the orchestrator catches it, logs the error message at CRITICAL level, calls the module's abort(timeout=5.0) method, and halts the sync before any further modules execute
 
-7. **Given** user presses Ctrl+C during module execution, **When** signal is caught, **Then** orchestrator calls the currently-executing module's cleanup() method, logs interruption at WARNING level, and exits gracefully
+7. **Given** user presses Ctrl+C during module execution, **When** signal is caught, **Then** orchestrator calls the currently-executing module's abort(timeout=5.0) method, logs interruption at WARNING level, and exits gracefully with code 130
 
 ---
 
@@ -74,9 +74,9 @@ This delivers value by enabling zero-touch target setup and ensuring version con
 
 **Acceptance Scenarios**:
 
-1. **Given** source machine has pc-switcher version 0.3.2 installed and target machine has no pc-switcher installed, **When** user runs `pc-switcher sync <target>`, **Then** the orchestrator detects missing installation, installs the pc-switcher version 0.3.2 on target (using the installer from User Story 7), verifies installation succeeded, and proceeds with sync
+1. **Given** source machine has pc-switcher version 0.3.2 installed and target machine has no pc-switcher installed, **When** user runs `pc-switcher sync <target>`, **Then** the orchestrator detects missing installation, installs pc-switcher version 0.3.2 on target from GitHub Package Registry (ghcr.io) using `uv tool install`, verifies installation succeeded, and proceeds with sync
 
-2. **Given** source has version 0.4.0 and target has version 0.3.2, **When** sync begins, **Then** orchestrator detects version mismatch, logs "Target pc-switcher version 0.3.2 is outdated, upgrading to 0.4.0", installs the pc-switcher version 0.4.0 on target (using the installer from User Story 7), and verifies upgrade completed
+2. **Given** source has version 0.4.0 and target has version 0.3.2, **When** sync begins, **Then** orchestrator detects version mismatch, logs "Target pc-switcher version 0.3.2 is outdated, upgrading to 0.4.0", installs pc-switcher version 0.4.0 on target from GitHub Package Registry using `uv tool install --upgrade`, and verifies upgrade completed
 
 3. **Given** source and target both have version 0.4.0, **When** sync begins, **Then** orchestrator logs "Target pc-switcher version matches source (0.4.0), skipping installation" and proceeds immediately to next phase
 
@@ -92,12 +92,13 @@ Before any sync operations modify state, the system creates read-only btrfs snap
 
 **Independent Test**: Can be fully tested by:
 1. Running sync on test machines with btrfs filesystems
-2. Verifying snapshots are created before any module executes
-3. Confirming snapshot naming includes timestamp and sync session ID
-4. Checking that snapshots are read-only
-5. Simulating sync failure and verifying rollback can restore from pre-sync snapshot
-6. Confirming post-sync snapshots are created after successful completion
-7. Attempting to disable the snapshot module via config and verifying it remains active
+2. Verifying snapshots module validates subvolume existence during its validate() phase
+3. Verifying snapshots are created before any module executes (in pre_sync() phase)
+4. Confirming snapshot naming includes timestamp and sync session ID
+5. Checking that snapshots are read-only
+6. Simulating sync failure and verifying rollback can restore from pre-sync snapshot
+7. Confirming post-sync snapshots are created after successful completion (in post_sync() phase)
+8. Attempting to disable the snapshot module via config and verifying it remains active
 
 This delivers value by providing the foundation for all rollback and recovery operations.
 
@@ -121,9 +122,9 @@ This delivers value by providing the foundation for all rollback and recovery op
 
 7. **Given** snapshots accumulate over multiple sync runs, **When** user runs `pc-switcher cleanup-snapshots --older-than 7d`, **Then** the system deletes pre-sync and post-sync snapshots older than 7 days, retaining the most recent 3 (configurable) sync sessions regardless of age (`--older-than` is optional; default is configurable)
 
-8. **Given** orchestrator configuration includes `disk.min_free` (absolute bytes or percentage) for source and target, **When** sync begins, **Then** orchestrator MUST check free disk space on both source and target and log CRITICAL and abort if free space is below configured threshold
+8. **Given** orchestrator configuration includes `disk.min_free` (float 0.0-1.0 or percentage string like "5%", default: 0.05) for source and target, **When** sync begins, **Then** orchestrator MUST check free disk space on both source and target and log CRITICAL and abort if free space is below configured threshold
 
-9. **Given** orchestrator configuration includes `disk.check_interval` and `disk.reserve_minimum`, **When** sync is running, **Then** orchestrator MUST periodically check free disk space at the configured interval and log CRITICAL and abort if available free space falls below the reserved minimum on either side
+9. **Given** orchestrator configuration includes `disk.check_interval` (seconds, default: 30) and `disk.reserve_minimum` (float 0.0-1.0 or percentage string, default: 0.02 or "2%"), **When** sync is running, **Then** orchestrator MUST periodically check free disk space at the configured interval and log CRITICAL and abort if available free space falls below the reserved minimum on either side
 
 ---
 
@@ -161,13 +162,13 @@ This delivers value by enabling developers to diagnose issues and providing audi
 
 6. **Given** user runs `pc-switcher logs --last`, **When** command executes, **Then** the system displays the most recent sync log file in the terminal
 
-**Log Level Definitions**:
-- **CRITICAL**: Unrecoverable error requiring immediate sync abort (e.g., snapshot creation failed, target unreachable mid-sync, data corruption detected)
-- **ERROR**: Recoverable error that may impact sync quality but doesn't require abort (e.g., individual file copy failed, optional feature unavailable)
-- **WARNING**: Unexpected condition that should be reviewed but doesn't indicate failure (e.g., config value using deprecated format, unusually large transfer size)
-- **INFO**: High-level operation reporting for normal user visibility (e.g., "Starting module X", "Module X completed successfully", "Connection established")
-- **FULL**: File-level operation details (e.g., "Copying /home/user/document.txt", "Created snapshot @home-presync-20251115-abc123"). FULL captures operational detail but explicitly excludes DEBUG-level diagnostic messages.
-- **DEBUG**: Verbose diagnostic information (e.g., command outputs, detailed timings, internal state transitions). DEBUG includes all messages (FULL, INFO, etc.) and is intended for deep troubleshooting.
+**Log Level Definitions** (from most to least verbose):
+- **DEBUG**: Most verbose level for internal diagnostics, including command outputs, detailed timings, internal state transitions, and all messages from lower levels (FULL, INFO, WARNING, ERROR, CRITICAL). Intended for deep troubleshooting and development.
+- **FULL**: High-verbosity operational details including file-level operations (e.g., "Copying /home/user/document.txt", "Created snapshot @home-presync-20251115-abc123") and all messages from lower levels (INFO, WARNING, ERROR, CRITICAL). Excludes DEBUG-level internal diagnostics.
+- **INFO**: High-level operation reporting for normal user visibility (e.g., "Starting module X", "Module X completed successfully", "Connection established") and all messages from lower levels (WARNING, ERROR, CRITICAL).
+- **WARNING**: Unexpected conditions that should be reviewed but don't indicate failure (e.g., config value using deprecated format, unusually large transfer size) and all messages from lower levels (ERROR, CRITICAL).
+- **ERROR**: Recoverable errors that may impact sync quality but don't require abort (e.g., individual file copy failed, optional feature unavailable) and CRITICAL messages.
+- **CRITICAL**: Unrecoverable errors requiring immediate sync abort (e.g., snapshot creation failed, target unreachable mid-sync, data corruption detected). Triggered when modules raise SyncError exception.
 
 ---
 
@@ -181,7 +182,7 @@ When the user presses Ctrl+C during sync, the system catches the SIGINT signal, 
 1. Starting a sync operation with a long-running dummy module
 2. Pressing Ctrl+C mid-execution
 3. Verifying terminal displays "Sync interrupted by user"
-4. Confirming currently-executing module's cleanup() was called
+4. Confirming currently-executing module's abort(timeout) was called
 5. Checking that connection to target was closed
 6. Validating no orphaned processes remain on source or target
 7. Ensuring log file contains interruption event
@@ -194,11 +195,11 @@ This delivers value by giving users confidence they can safely stop operations.
 
 **Acceptance Scenarios**:
 
-1. **Given** sync operation is in progress with a module executing on target machine, **When** user presses Ctrl+C, **Then** the orchestrator catches SIGINT, logs "Sync interrupted by user" at WARNING level, calls the current module's cleanup() method, sends termination signal to target-side process, waits up to 5 seconds for graceful shutdown, then closes connection and exits with code 130
+1. **Given** sync operation is in progress with a module executing on target machine, **When** user presses Ctrl+C, **Then** the orchestrator catches SIGINT, logs "Sync interrupted by user" at WARNING level, calls the current module's abort(timeout=5.0) method, sends termination signal to target-side process, waits up to timeout for graceful shutdown, then closes connection and exits with code 130
 
 2. **Given** sync is in the orchestrator phase between modules (no module actively running), **When** user presses Ctrl+C, **Then** orchestrator logs interruption, skips remaining modules, and exits cleanly
 
-3. **Given** user presses Ctrl+C multiple times rapidly, **When** the second SIGINT arrives before cleanup completes, **Then** orchestrator immediately force-terminates (kills connection, exits with code 130) without waiting for graceful cleanup
+3. **Given** user presses Ctrl+C multiple times rapidly, **When** the second SIGINT arrives before abort completes, **Then** orchestrator immediately force-terminates (kills connection, exits with code 130) without waiting for graceful abort
 ---
 
 ### User Story 6 - Configuration System (Priority: P1)
@@ -290,9 +291,7 @@ This delivers value by streamlining initial deployment.
 
 1. **Given** a fresh Ubuntu 24.04 machine, **When** user runs the installation script, **Then** the script checks that the filesystem is btrfs, creates `~/.config/pc-switcher/` with default config, installs any software/packages and configuration necessary to run pc-switcher (if not installed/configured yet), and displays "pc-switcher installed successfully"
 
-2. **Given** user's system uses btrfs but does not have recommended subvolume structure, **When** setup runs, **Then** it displays guidance on creating subvolumes (e.g., "@home for /home", "@root for /root") and warns that some features require specific subvolumes
-
-3. **Given** user runs setup on a non-btrfs filesystem, **When** the script detects this, **Then** it logs CRITICAL error "pc-switcher requires btrfs filesystem for safety features" and exits without making changes
+2. **Given** user runs setup on a non-btrfs filesystem, **When** the script detects this, **Then** it logs CRITICAL error "pc-switcher requires btrfs filesystem for safety features" and exits without making changes
 
 ---
 
@@ -312,11 +311,11 @@ Three dummy modules exist for testing infrastructure: `dummy-success` (completes
 
 1. **Given** `dummy-success` module is enabled, **When** sync runs, **Then** the module performs 20-second busy-wait on source (logging INFO message every 2s), emits WARNING at 6s, performs 20-second busy-wait on target (logging INFO message every 2s), emits ERROR at 8s, reports progress updates (0%, 25%, 50%, 75%, 100%), and completes successfully
 
-2. **Given** `dummy-critical` module is enabled, **When** sync runs and module reaches 50% progress, **Then** the module logs CRITICAL error "Simulated critical failure for testing", continues its internal loop (does not self-abort), but the orchestrator detects the CRITICAL log, calls module's cleanup(), aborts sync, and no subsequent modules execute
+2. **Given** `dummy-critical` module is enabled, **When** sync runs and module reaches 50% progress, **Then** the module raises SyncError("Simulated critical failure for testing"), the orchestrator catches the exception, logs it at CRITICAL level, calls module's abort(timeout=5.0), halts sync, and no subsequent modules execute
 
-3. **Given** `dummy-fail` module is enabled, **When** sync runs and module reaches 60% progress, **Then** the module raises and unhandled exception, the orchestrator catches the exception, logs it as CRITICAL, attempts cleanup(), and aborts sync
+3. **Given** `dummy-fail` module is enabled, **When** sync runs and module reaches 60% progress, **Then** the module raises an unhandled RuntimeError (not SyncError), the orchestrator catches the exception, wraps it as SyncError, logs it at CRITICAL level, calls abort(timeout=5.0), and halts sync
 
-4. **Given** any dummy module is running, **When** user presses Ctrl+C, **Then** the module's cleanup() method is called, it logs "Dummy module cleanup called", stops its busy-wait loop, and returns control to orchestrator
+4. **Given** any dummy module is running, **When** user presses Ctrl+C, **Then** the module's abort(timeout) method is called, it logs "Dummy module abort called", stops its busy-wait loop within the timeout duration, and returns control to orchestrator
 
 ---
 
@@ -349,8 +348,8 @@ The terminal displays real-time sync progress including current module, operatio
   - Target-side operations should timeout and cleanup after 5 minutes of no communication; next sync will detect inconsistent state via validation
 - What happens when btrfs snapshots cannot be created due to insufficient space?
   - Snapshot module logs CRITICAL error with space usage details, orchestrator aborts before any state modification
-- What happens when a module's cleanup() method raises an exception?
-  - Orchestrator logs the exception, continues with shutdown sequence (cleanup is best-effort)
+- What happens when a module's abort() method raises an exception?
+  - Orchestrator logs the exception, continues with shutdown sequence (abort is best-effort)
 - What happens when user runs multiple sync commands concurrently?
   - Second invocation detects lock, displays "Another sync is in progress (PID: 12345)", gives instructions on how to remove a stale lock and exits
 - What happens when config file contains unknown module names?
@@ -366,18 +365,18 @@ The terminal displays real-time sync progress including current module, operatio
 
 #### Module Architecture
 
-- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized module interface specifying methods: `validate()`, `pre_sync()`, `sync()`, `post_sync()`, `cleanup()`, `get_config_schema()`, and property: `name`
+- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized module interface specifying methods: `validate()`, `pre_sync()`, `sync()`, `post_sync()`, `abort(timeout)`, `get_config_schema()`, and property: `name`
 
 
-- **FR-002** `[Reliability Without Compromise]`: System MUST call module lifecycle methods in order: `validate()` (all modules), `pre_sync()`, `sync()`, `post_sync()` for each module, then `cleanup()` on shutdown or errors
+- **FR-002** `[Reliability Without Compromise]`: System MUST call module lifecycle methods in order: `validate()` (all modules), `pre_sync()`, `sync()`, `post_sync()` for each module, then `abort(timeout)` on shutdown, errors, or user interrupt
 
-- **FR-003** `[Reliability Without Compromise]`: System MUST call currently-executing module's `cleanup()` method when Ctrl+C is pressed, waiting for a configurable timeout, before exiting
+- **FR-003** `[Reliability Without Compromise]`: System MUST call currently-executing module's `abort(timeout)` method when Ctrl+C is pressed, waiting up to the specified timeout duration, before exiting
 
 - **FR-004** `[Deliberate Simplicity]`: Modules MUST be loaded from the configuration file section `sync_modules` in the order they appear and instantiated by the orchestrator
 
 #### Self-Installation
 
-- **FR-005** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version
+- **FR-005** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version from GitHub Package Registry (ghcr.io) using uv tool install
 
 - **FR-006** `[Reliability Without Compromise]`: System MUST abort sync with CRITICAL log if the target machine's pc-switcher version is newer than the source version (preventing accidental downgrades)
 
@@ -401,27 +400,27 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-015** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort
 
-- **FR-016** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold MUST be configurable (absolute bytes or percentage)
+- **FR-016** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold MUST be configurable as either a float between 0.0 and 1.0 (e.g., 0.05 for 5%) or a percentage string (e.g., "5%"), with a default of 0.05 (5%)
 
-- **FR-017** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval during sync and abort with CRITICAL if available free space falls below the configured reserved minimum
+- **FR-017** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured reserved minimum (default: 0.02 or "2%")
 
 #### Logging System
 
-- **FR-018** `[Documentation As Runtime Contract]`: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL. DEBUG is the most verbose (includes everything); FULL is high-verbosity but explicitly excludes DEBUG messages.
+- **FR-018** `[Documentation As Runtime Contract]`: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL, where DEBUG is the most verbose. DEBUG includes all messages (FULL, INFO, WARNING, ERROR, CRITICAL, plus internal diagnostics). FULL includes all messages from INFO and below plus operational details, but excludes DEBUG-level internal diagnostics.
 
-- **FR-019** `[Reliability Without Compromise]`: Any log event at CRITICAL level MUST trigger immediate sync abort after calling cleanup() on current module
+- **FR-019** `[Reliability Without Compromise]`: When a module raises SyncError exception, the orchestrator MUST log the error at CRITICAL level, call abort(timeout) on the current module, and halt sync before any further modules execute
 
 - **FR-020** `[Frictionless Command UX]`: System MUST support independent log level configuration for file output (`log_file_level`) and terminal display (`log_cli_level`)
 
 - **FR-021** `[Documentation As Runtime Contract]`: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
 
-- **FR-022** `[Documentation As Runtime Contract]`: Log entries MUST include timestamp (ISO8601) in UTC, level, module name, and message in structured format
+- **FR-022** `[Documentation As Runtime Contract]`: Log entries MUST use structlog's JSONRenderer for file output (one JSON object per line with keys: timestamp, level, module, hostname, event, plus any additional context fields) and ConsoleRenderer for terminal output (human-readable format with timestamp, level, module@hostname, and message)
 
 - **FR-023** `[Reliability Without Compromise]`: System MUST aggregate logs from both source-side orchestrator and target-side operations into unified log stream
 
 #### Interrupt Handling
 
-- **FR-024** `[Reliability Without Compromise]`: System MUST install SIGINT handler that calls cleanup() on current module, logs interruption at WARNING level, and exits with code 130
+- **FR-024** `[Reliability Without Compromise]`: System MUST install SIGINT handler that calls abort(timeout) on current module, logs interruption at WARNING level, and exits with code 130
 
 - **FR-025** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to 5 seconds for graceful shutdown
 
@@ -435,7 +434,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-029** `[Deliberate Simplicity]`: Configuration MUST use YAML format with sections: global settings, `sync_modules` (enable/disable), and per-module settings
 
-- **FR-030** `[Reliability Without Compromise]`: System MUST validate configuration structure and module-specific settings against module-declared schemas before execution
+- **FR-030** `[Reliability Without Compromise]`: System MUST validate configuration structure and module-specific settings against module-declared schemas (Python dicts conforming to JSON Schema draft-07, validated using jsonschema library) before execution
 
 - **FR-031** `[Frictionless Command UX]`: System MUST apply reasonable defaults for missing configuration values
 
@@ -447,11 +446,9 @@ The terminal displays real-time sync progress including current module, operatio
 
 #### Installation & Setup
 
-- **FR-035** `[Frictionless Command UX]`: System MUST provide installation script that checks and installs/upgrades dependencies, installs pc-switcher package, and creates default configuration
+- **FR-035** `[Frictionless Command UX]`: System MUST provide installation script that checks btrfs filesystem presence, installs/upgrades dependencies, installs pc-switcher package, and creates default configuration
 
-- **FR-036** `[Frictionless Command UX]`: Setup script MUST detect btrfs filesystem presence and provide guidance on recommended subvolume structure if not present
-
-- **FR-037** `[Documentation As Runtime Contract]`: Setup script MUST create default config file with inline comments explaining each setting
+- **FR-036** `[Documentation As Runtime Contract]`: Setup script MUST create default config file with inline comments explaining each setting
 
 #### Testing Infrastructure
 
@@ -463,7 +460,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-041** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at 60% progress to test orchestrator exception handling
 
-- **FR-042** `[Reliability Without Compromise]`: All dummy modules MUST implement `cleanup()` that logs "Dummy module cleanup called" and stops execution
+- **FR-042** `[Reliability Without Compromise]`: All dummy modules MUST implement `abort(timeout)` that logs "Dummy module abort called" and stops execution within the timeout duration
 
 #### Progress Reporting
 
