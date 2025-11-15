@@ -9,17 +9,17 @@
 
 This feature establishes the complete foundation infrastructure for PC-switcher, a synchronization system for seamless switching between Linux desktop machines. The foundation includes:
 
-1. **Module Architecture**: Standardized contract for all sync features with lifecycle methods, config schemas, logging, progress reporting, and dependency ordering
+1. **Module Architecture**: Standardized contract for all sync features with lifecycle methods, config schemas, logging, progress reporting, and sequential execution (config-based order, no dependency resolution)
 2. **Self-Installation**: Automatic version-matching installation/upgrade of pc-switcher on target machines
 3. **Safety Infrastructure**: Btrfs snapshot creation (pre/post-sync) with rollback capability and disk space monitoring
-4. **Logging System**: Six-level logging (DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL) with file/CLI separation and CRITICAL-triggered abort
-5. **Interrupt Handling**: Graceful Ctrl+C handling with module cleanup, target termination, and no orphaned processes
+4. **Logging System**: Six-level logging (DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL) with file/CLI separation and exception-based abort (modules raise SyncError, orchestrator logs as CRITICAL)
+5. **Interrupt Handling**: Graceful Ctrl+C handling with module abort, target termination, and no orphaned processes
 6. **Configuration System**: YAML-based config with module enable/disable, schema validation, and defaults
 7. **Installation & Setup**: Deployment tooling with dependency checking and btrfs verification
 8. **Dummy Test Modules**: Three reference implementations (success, critical, fail) for testing infrastructure
 9. **Terminal UI**: Real-time progress reporting with module status, log messages, and progress bars
 
-Technical approach: Python 3.13 orchestrator using Fabric for SSH communication, structlog for logging, rich/textual for terminal UI, with modular plugin architecture enabling independent feature development.
+Technical approach: Python 3.13 orchestrator using Fabric for SSH communication, structlog for logging, rich for terminal UI, with modular plugin architecture enabling independent feature development. Dynamic versioning via GitHub releases (uv-dynamic-versioning + hatchling). uv 0.9.9 for package management (.tool-versions).
 
 ## Technical Context
 
@@ -27,11 +27,12 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 
 **Primary Dependencies**:
 - `fabric` (SSH orchestration, built on Paramiko)
-- `structlog` (structured logging)
+- `structlog` (structured logging with custom ERROR tracking processor)
 - `rich` (terminal UI - chosen over textual for simplicity, better for progress bars)
 - `typer` (CLI framework - chosen over click for modern type hints)
 - `pyyaml` (config parsing)
-- `uv` (package/dependency management)
+- `uv 0.9.9` (package/dependency management, Python installation - see `.tool-versions`)
+- `hatchling` + `uv-dynamic-versioning` (build system, dynamic versioning from Git tags)
 
 **Storage**:
 - YAML config files (`~/.config/pc-switcher/config.yaml`)
@@ -57,8 +58,8 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 **Constraints**:
 - Single persistent SSH connection (no reconnects per operation)
 - No orphaned processes after Ctrl+C (FR-028)
-- CRITICAL log event must abort within current module execution
-- Module lifecycle must follow strict ordering: validate → pre_sync → sync → post_sync → cleanup
+- Module exceptions (SyncError) trigger immediate abort with cleanup of currently-running module only
+- Module lifecycle must follow strict ordering: validate → pre_sync → sync → post_sync → abort (if error/interrupt)
 
 **Scale/Scope**:
 - ~10-15 core modules (btrfs-snapshots, user-data, packages, docker, vms, k3s, etc.)
@@ -85,9 +86,10 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - Validation phase (all modules) before any state changes (FR-003)
 
 **Transactional Safety**:
-- Module lifecycle enforces validate → execute → cleanup ordering (FR-003)
-- CRITICAL log events trigger immediate abort with cleanup (FR-020, FR-025)
-- Exception handling with orchestrator-managed cleanup (User Story 8, FR-042)
+- Module lifecycle enforces validate → execute → abort ordering (FR-003)
+- Exception-based error handling: modules raise SyncError, orchestrator logs as CRITICAL and aborts (FR-020, FR-025)
+- Orchestrator-managed cleanup via abort(timeout) on currently-running module (User Story 8, FR-042)
+- ERROR log tracking determines final state (COMPLETED vs FAILED)
 
 ### Frictionless Command UX ✅
 
@@ -95,7 +97,7 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 
 **Automation**:
 - Auto-installation/upgrade of target pc-switcher to match source version (FR-006, SC-004)
-- Module auto-discovery from config (FR-005)
+- Module loading from config in sequential order (no dependency resolution, FR-005)
 - Default config generation on installation (FR-038)
 - No manual steps except initial setup and sync trigger
 
@@ -107,12 +109,12 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 ### Proven Tooling Only ✅
 
 **Core Dependencies** (all actively maintained, widely adopted):
-- **Fabric** (latest): SSH orchestration, ~10k GitHub stars, active development, used in production deployments
-- **structlog** (latest): Structured logging, industry standard for Python logging
-- **rich** or **textual** (NEEDS CLARIFICATION): Both Textualize projects, active development, 48k+ / 25k+ stars
-- **click** or **typer** (NEEDS CLARIFICATION): click is Flask ecosystem standard (15k+ stars); typer built on click (15k+ stars)
+- **Fabric** (3.2+): SSH orchestration, ~10k GitHub stars, active development, used in production deployments
+- **structlog** (24.1+): Structured logging, industry standard for Python logging
+- **rich** (13.7+): Terminal UI from Textualize, 48k+ stars - chosen for simplicity and progress bar capabilities
+- **typer** (0.12+): CLI framework built on click, 15k+ stars - chosen for modern type hints
 - **PyYAML** (6.x): Standard YAML library for Python
-- **uv** (latest): Modern Python package manager by Astral (creators of Ruff), rapidly becoming industry standard
+- **uv** (0.9.9): Modern Python package manager by Astral (creators of Ruff), version pinned in .tool-versions
 
 **Security Posture**:
 - All dependencies available via PyPI with package signing
@@ -125,8 +127,8 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 
 **Write Amplification Mitigation**:
 - Btrfs snapshots use COW → zero initial write amplification (SC-008)
-- Single persistent SSH connection prevents repeated handshake overhead (ADR-002)
 - Structured logging minimizes redundant writes (single log file, buffered I/O)
+- Snapshot metadata managed by btrfs (COW-optimized)
 
 **Monitoring**:
 - Disk space checks before and during sync (FR-017, FR-018)
@@ -164,7 +166,7 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 
 **Maintainability**:
 - Clear module interface contract enables independent development (FR-001, SC-007)
-- Module auto-discovery removes manual registration
+- Config-based module loading with sequential execution (simple, predictable)
 - Lifecycle methods enforce consistent patterns
 - Python type hints + basedpyright for early error detection
 
@@ -242,7 +244,8 @@ specs/[###-feature]/
 
 ```text
 pc-switcher/
-├── pyproject.toml           # uv project config, package metadata, CLI entry point
+├── .tool-versions           # Tool version pinning (uv 0.9.9)
+├── pyproject.toml           # uv project config, package metadata, CLI entry point, dynamic versioning
 ├── uv.lock                  # Locked dependencies
 ├── README.md                # Project overview, installation, quick start
 ├── .github/
@@ -267,8 +270,8 @@ pc-switcher/
 │       │   └── signals.py         # SIGINT handling
 │       ├── remote/
 │       │   ├── __init__.py
-│       │   ├── connection.py      # SSH connection management (Fabric)
-│       │   └── installer.py       # Target installation/upgrade logic
+│       │   ├── connection.py      # SSH connection management (Fabric, ControlMaster)
+│       │   └── installer.py       # Installation/upgrade orchestration (source detects version, installs on target)
 │       ├── modules/
 │       │   ├── __init__.py
 │       │   ├── btrfs_snapshots.py # Snapshot creation/rollback (required)

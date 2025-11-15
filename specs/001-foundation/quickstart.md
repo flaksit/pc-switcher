@@ -11,8 +11,8 @@ This guide provides developers with quick-start instructions for understanding a
 ## Prerequisites
 
 - Ubuntu 24.04 LTS with btrfs filesystem
-- Python 3.13 installed
-- `uv` installed (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- `uv 0.9.9` installed (see `.tool-versions` for version, or `curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- uv will install Python 3.13 automatically (no system Python needed)
 - SSH access to a test target machine
 - Basic familiarity with Python, SSH, and btrfs
 
@@ -24,8 +24,11 @@ This guide provides developers with quick-start instructions for understanding a
 # Clone repository (or create new one)
 cd pc-switcher
 
-# Initialize uv project
-uv init --lib
+# Ensure Python 3.13 is available (uv installs it automatically)
+uv python install 3.13
+
+# Initialize uv project (already in directory)
+uv init --lib .
 
 # Add dependencies
 uv add fabric structlog rich typer pyyaml
@@ -54,7 +57,7 @@ touch src/pcswitcher/__init__.py
 ```toml
 [project]
 name = "pc-switcher"
-version = "0.1.0"
+dynamic = ["version"]  # Version from Git tags via uv-dynamic-versioning
 description = "Synchronization system for seamless switching between Linux desktop machines"
 authors = [{name = "Your Name", email = "your.email@example.com"}]
 requires-python = ">=3.13"
@@ -70,6 +73,15 @@ license = {text = "MIT"}
 
 [project.scripts]
 pc-switcher = "pcswitcher.cli.main:app"
+
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
+
+[tool.uv-dynamic-versioning]
+enable = true
+vcs = "git"
+style = "pep440"
 
 [tool.uv]
 dev-dependencies = [
@@ -94,18 +106,31 @@ pythonVersion = "3.13"
 
 The `SyncModule` ABC is defined in `contracts/module-interface.py`. All sync features implement this interface.
 
+**Constructor**:
+- `__init__(config: dict[str, Any], remote: RemoteExecutor)` - Receives validated config and remote executor
+
 **Required methods**:
-- `validate() -> list[str]` - Pre-sync checks
-- `pre_sync() -> None` - Setup operations
-- `sync() -> None` - Main sync logic
-- `post_sync() -> None` - Finalization
-- `cleanup() -> None` - Cleanup on error/interrupt
+- `validate() -> list[str]` - Pre-sync checks (read-only, no state changes)
+- `pre_sync() -> None` - Setup operations (e.g., create snapshots)
+- `sync() -> None` - Main sync logic (transfer data, install packages)
+- `post_sync() -> None` - Finalization (e.g., post-snapshots, verification)
+- `abort(timeout: float) -> None` - Stop processes, free resources (best-effort)
+- `get_config_schema() -> dict[str, Any]` - JSON Schema for config validation
 
 **Required properties**:
-- `name: str` - Unique identifier
-- `version: str` - Semantic version
-- `dependencies: Sequence[str]` - Module execution order
-- `required: bool` - Can be disabled?
+- `name: str` - Unique identifier (e.g., "btrfs-snapshots")
+- `required: bool` - Can be disabled? (False for optional modules)
+
+**Injected methods** (orchestrator provides after instantiation):
+- `log(level: LogLevel, message: str, **context)` - Structured logging
+- `emit_progress(percentage: float | None, item: str, eta: timedelta | None)` - Progress reporting (0.0-1.0)
+
+**Key Changes from Original Design**:
+- Modules raise `SyncError` for critical failures (orchestrator logs as CRITICAL)
+- `RemoteExecutor` injected for target communication (abstracts SSH)
+- No `version` or `dependencies` properties (sequential execution in config order)
+- `abort()` replaces `cleanup()` - only called on running module, means "stop" not "undo"
+- Progress is optional float 0.0-1.0 (not int 0-100)
 
 See `contracts/module-interface.py` for complete interface and `DummySuccessModule` reference implementation.
 
@@ -119,11 +144,12 @@ log_file_level: FULL
 log_cli_level: INFO
 
 sync_modules:
-  btrfs_snapshots: true  # Required, cannot disable
+  btrfs_snapshots: true  # Required, must be first
   dummy_success: false
 
 btrfs_snapshots:
-  subvolumes: ["/", "/home", "/root"]
+  subvolumes: ["@", "@home", "@root"]  # Flat names from "btrfs subvolume list /"
+  snapshot_dir: "/.snapshots"
   keep_recent: 3
   max_age_days: 7
 ```
@@ -133,10 +159,12 @@ btrfs_snapshots:
 See `contracts/orchestrator-module-protocol.md` for complete lifecycle sequence, error handling, logging protocol, and progress reporting.
 
 **Key points**:
-- Modules execute sequentially in dependency order
-- Lifecycle: validate → pre_sync → sync → post_sync → cleanup
-- CRITICAL log or exception → immediate abort with cleanup
-- Single SSH connection reused across all operations
+- Modules execute sequentially in config file order (no dependency resolution)
+- Lifecycle: validate → pre_sync → sync → post_sync → [abort if error/interrupt]
+- Exception-based errors: modules raise `SyncError`, orchestrator logs as CRITICAL and aborts
+- Orchestrator watches ERROR logs to set `session.has_errors` flag (determines COMPLETED vs FAILED)
+- Single SSH connection with ControlMaster reused across all operations
+- Lock file prevents concurrent syncs: `$XDG_RUNTIME_DIR/pc-switcher/pc-switcher.lock`
 
 ## Implementation Order
 
@@ -147,7 +175,7 @@ Based on task dependencies and risk reduction:
 1. **Logging system** (`core/logging.py`)
    - Configure structlog with dual output (file + terminal)
    - Define 6 custom log levels (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL)
-   - Implement CRITICAL abort hook
+   - Implement ERROR tracking processor (for session.has_errors flag)
    - Write unit tests
 
 2. **Configuration system** (`core/config.py`)
@@ -182,9 +210,10 @@ Based on task dependencies and risk reduction:
 ### Phase 3: Orchestration (Week 3-4)
 
 7. **Orchestrator** (`core/orchestrator.py`)
-   - Module discovery and registration
-   - Dependency resolution (topological sort)
-   - Lifecycle execution (validate → pre → sync → post → cleanup)
+   - Module loading from config (sequential execution in order)
+   - RemoteExecutor injection (wraps TargetConnection)
+   - Lifecycle execution (validate → pre → sync → post → abort if error)
+   - Exception catching and CRITICAL logging
    - SIGINT handling (`core/signals.py`)
    - Write integration tests with dummy modules
 
@@ -256,11 +285,11 @@ uv run pytest tests/unit/test_logging.py
 # Check for typos
 uv run codespell
 
-# Run CLI locally
+# Run CLI locally (uv runs in project's virtual environment)
 uv run pc-switcher sync test-target
 
-# Install locally for testing
-uv pip install -e .
+# Install as a tool for system-wide access
+uv tool install --editable .
 ```
 
 ## Testing Strategy
@@ -274,11 +303,16 @@ uv pip install -e .
 ```python
 from pcswitcher.core.module import SyncModule
 from pcswitcher.modules.dummy_success import DummySuccessModule
+from unittest.mock import Mock
 
 def test_module_validation():
-    config = {"enabled": True, "duration_seconds": 10}
-    logger = get_test_logger()  # Mock logger
-    module = DummySuccessModule(config, logger)
+    config = {"duration_seconds": 10}
+    remote = Mock(spec=RemoteExecutor)  # Mock RemoteExecutor
+    module = DummySuccessModule(config, remote)
+
+    # Inject mocked methods (normally done by orchestrator)
+    module.log = Mock()
+    module.emit_progress = Mock()
 
     errors = module.validate()
     assert errors == []  # No validation errors
@@ -334,28 +368,41 @@ logger.critical("Unrecoverable error", error=str(e))
 ```python
 def sync(self):
     for i, item in enumerate(items):
-        percentage = int((i + 1) / len(items) * 100)
+        # Progress as float 0.0-1.0 representing total module work
+        percentage = (i + 1) / len(items)
         self.emit_progress(percentage, f"Processing {item}")
         # ... do work
 ```
 
-### SSH Execution (via orchestrator)
+### Remote Execution (via RemoteExecutor)
 ```python
-result = self.orchestrator.run_on_target("btrfs subvolume list /", sudo=True)
-if not result.ok:
-    self.logger.error("Failed to list subvolumes", stderr=result.stderr)
+# Execute command on target (RemoteExecutor injected in constructor)
+result = self.remote.run("btrfs subvolume list /", sudo=True)
+if result.returncode != 0:
+    self.log(LogLevel.ERROR, "Failed to list subvolumes", stderr=result.stderr)
+
+# Send file to target
+self.remote.send_file_to_target(Path("/local/file"), Path("/remote/file"))
+
+# Get target hostname
+hostname = self.remote.get_hostname()  # e.g., "workstation"
 ```
 
 ### Error Handling
 ```python
+from pcswitcher.core.module import SyncError
+
+# Recoverable errors: log ERROR and continue
 try:
-    # Operation that might fail
-    dangerous_operation()
-except SomeRecoverableError as e:
-    self.logger.error("Operation failed, continuing", error=str(e))
-except UnrecoverableError as e:
-    self.logger.critical("Cannot continue", error=str(e))
-    raise  # Or just log CRITICAL (orchestrator will abort)
+    process_file(file)
+except FileNotFoundError as e:
+    self.log(LogLevel.ERROR, "File missing, skipping", path=file, error=str(e))
+    # Continue to next file
+
+# Critical failures: raise SyncError (orchestrator logs as CRITICAL and aborts)
+result = self.remote.run("critical-command", sudo=True)
+if result.returncode != 0:
+    raise SyncError(f"Critical command failed: {result.stderr}")
 ```
 
 ## Troubleshooting Development Issues

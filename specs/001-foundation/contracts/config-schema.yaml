@@ -3,56 +3,81 @@
 # This document defines the structure and validation rules for ~/.config/pc-switcher/config.yaml
 # Requirements: FR-029, FR-030, FR-031, FR-032, FR-033, FR-034, FR-035
 # User Story: 6 (Configuration System)
+#
+# Each option below includes clear documentation for the default generated config file.
 
-# Global settings (top-level)
+# Global Settings
+# ===============
+
 log_file_level:
   type: string
   enum: [DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL]
   default: FULL
-  description: "Minimum log level for file output (~/.local/share/pc-switcher/logs/)"
+  description: |
+    Minimum log level for file output (~/.local/share/pc-switcher/logs/).
+    DEBUG: All messages including verbose diagnostics
+    FULL: File-level operations but excludes DEBUG diagnostics
+    INFO: High-level operations only
+    WARNING/ERROR/CRITICAL: Progressively fewer messages
+    Recommended: FULL for troubleshooting, INFO for production
 
 log_cli_level:
   type: string
   enum: [DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL]
   default: INFO
-  description: "Minimum log level for terminal display"
+  description: |
+    Minimum log level for terminal display.
+    Controls what you see during sync.
+    Recommended: INFO (shows progress without overwhelming detail)
 
-# Module enable/disable flags
+# Module Control
+# ==============
+
 sync_modules:
   type: object
-  description: "Enable or disable individual sync modules"
+  description: |
+    Control which modules run during sync.
+    Modules execute in the order listed here.
+
+    IMPORTANT: btrfs_snapshots MUST be first and cannot be disabled.
+
   properties:
     btrfs_snapshots:
       type: boolean
       default: true
       immutable: true  # Required module, cannot be disabled (FR-012)
-      description: "Snapshot creation/rollback (REQUIRED - cannot disable)"
+      description: |
+        Snapshot creation/rollback (REQUIRED - cannot disable).
+        MUST be first in this list.
 
     dummy_success:
       type: boolean
       default: false
-      description: "Test module: success path with progress reporting"
+      description: |
+        Test module: demonstrates successful sync with progress reporting.
+        Useful for testing infrastructure without real sync operations.
 
     dummy_critical:
       type: boolean
       default: false
-      description: "Test module: CRITICAL error triggering abort"
+      description: |
+        Test module: raises exception at 50% to test error handling.
+        Demonstrates orchestrator's exception catching and cleanup.
 
     dummy_fail:
       type: boolean
       default: false
-      description: "Test module: unhandled exception"
+      description: |
+        Test module: raises unhandled exception for testing.
+        Demonstrates exception propagation and abort() calling.
 
-  # Future modules (features 4-9):
-  # user_data: {type: boolean, default: true}
-  # packages: {type: boolean, default: true}
-  # docker: {type: boolean, default: true}
-  # vms: {type: boolean, default: false}
-  # k3s: {type: boolean, default: false}
+# Disk Space Monitoring (FR-017, FR-018)
+# =======================================
 
-# Disk space monitoring (FR-017, FR-018)
 disk:
   type: object
+  description: |
+    Disk space safety checks prevent sync from filling disks.
   properties:
     min_free:
       oneOf:
@@ -64,7 +89,10 @@ disk:
           maximum: 1.0
           description: "Minimum free space as percentage (0.0-1.0)"
       default: 0.1  # 10%
-      description: "Abort sync if free space below this threshold"
+      description: |
+        Abort sync if free space below this threshold (checked before sync starts).
+        Can be absolute bytes (e.g., 10737418240 for 10GB) or fraction (0.1 for 10%).
+        Recommended: 0.1 (10%) to ensure safety margin.
 
     reserve_minimum:
       oneOf:
@@ -74,84 +102,81 @@ disk:
           minimum: 0.0
           maximum: 1.0
       default: 0.05  # 5%
-      description: "Reserved space during sync (abort if crossed)"
+      description: |
+        Reserved space during sync (abort if crossed).
+        Monitored continuously at check_interval.
+        Should be lower than min_free to allow some space consumption.
 
     check_interval:
       type: integer
       minimum: 1
       default: 60
-      description: "Seconds between disk space checks during sync"
+      description: |
+        Seconds between disk space checks during sync.
+        Lower = more responsive to space issues, higher = less overhead.
+        Recommended: 60 seconds for most use cases.
 
-# Module-specific configuration sections
+# Module-Specific Configuration
+# ==============================
 
 btrfs_snapshots:
   type: object
   required: [subvolumes]
+  description: |
+    Configuration for btrfs snapshot creation and management.
   properties:
     subvolumes:
       type: array
       items:
         type: string
       minItems: 1
-      default: ["/", "/home", "/root"]
-      description: "Subvolumes to snapshot (must exist on both source and target)"
+      default: ["@", "@home", "@root"]
+      description: |
+        Flat subvolume names (NOT full paths) to snapshot.
+        Use names as shown in "btrfs subvolume list /".
+        Examples: "@" for root, "@home" for home, "@root" for /root
+
+        These MUST exist on both source and target machines.
+        Sync will abort if any configured subvolume is missing.
+
+    snapshot_dir:
+      type: string
+      default: "/.snapshots"
+      description: |
+        Directory where snapshots are stored.
+        Must be an absolute path.
+        Snapshots will be named: {snapshot_dir}/@{subvol}-{presync|postsync}-{timestamp}-{session_id}
+
+        WARNING: This directory must exist or be creatable with appropriate permissions.
 
     keep_recent:
       type: integer
       minimum: 1
       default: 3
-      description: "Always keep this many recent sync sessions (even if older than max_age_days)"
+      description: |
+        Always keep this many recent sync sessions (snapshots), even if older than max_age_days.
+        Provides safety net for recent work.
 
     max_age_days:
       type: integer
       minimum: 1
       default: 7
-      description: "Default age for cleanup-snapshots --older-than (days)"
+      description: |
+        Default age for cleanup-snapshots --older-than (days).
+        Snapshots older than this are deleted (unless within keep_recent).
 
 dummy_success:
   type: object
+  description: |
+    Configuration for dummy-success test module.
   properties:
     duration_seconds:
       type: integer
       minimum: 1
       default: 20
-      description: "Duration of simulated sync operation"
-
-# Future module configs (features 4-9):
-#
-# user_data:
-#   type: object
-#   properties:
-#     exclude_patterns:
-#       type: array
-#       items: {type: string}
-#       default: ["**/.cache/*", "**/node_modules/*"]
-#     preserve_timestamps: {type: boolean, default: true}
-#
-# packages:
-#   type: object
-#   properties:
-#     sync_ppa: {type: boolean, default: true}
-#     sync_flatpak: {type: boolean, default: true}
-#     sync_snap: {type: boolean, default: true}
-#
-# docker:
-#   type: object
-#   properties:
-#     preserve_cache: {type: boolean, default: true}
-#     sync_volumes: {type: boolean, default: true}
-#
-# vms:
-#   type: object
-#   properties:
-#     verify_suspended: {type: boolean, default: true}
-#     sync_vm_images: {type: boolean, default: true}
-#
-# k3s:
-#   type: object
-#   properties:
-#     sync_pvcs: {type: boolean, default: true}
-#     backup_etcd: {type: boolean, default: true}
+      description: |
+        Duration of simulated sync operation (seconds).
+        Useful for testing progress reporting and UI updates.
 
 # Example valid configuration:
 #
@@ -159,7 +184,7 @@ dummy_success:
 # log_cli_level: INFO
 #
 # sync_modules:
-#   btrfs_snapshots: true
+#   btrfs_snapshots: true  # REQUIRED, must be first
 #   dummy_success: false
 #   dummy_critical: false
 #   dummy_fail: false
@@ -171,9 +196,10 @@ dummy_success:
 #
 # btrfs_snapshots:
 #   subvolumes:
-#     - "/"
-#     - "/home"
-#     - "/root"
+#     - "@"        # Root filesystem
+#     - "@home"    # /home
+#     - "@root"    # /root
+#   snapshot_dir: "/.snapshots"
 #   keep_recent: 3
 #   max_age_days: 7
 #
@@ -184,9 +210,11 @@ dummy_success:
 #
 # 1. Required modules cannot be disabled:
 #    - If sync_modules.btrfs_snapshots == false, error and abort
+#    - If btrfs_snapshots not first in sync_modules, error and abort
 #
-# 2. Unknown module names are errors:
-#    - If sync_modules contains unregistered module, error and abort
+# 2. Module execution order:
+#    - Modules run sequentially in the order listed in sync_modules
+#    - No automatic dependency resolution
 #
 # 3. Module configs must validate against module's get_config_schema():
 #    - Orchestrator loads each module's schema and validates config section
@@ -197,3 +225,6 @@ dummy_success:
 #
 # 5. Invalid YAML syntax:
 #    - Parse error with line number, abort before sync
+#
+# 6. Unknown module names:
+#    - If sync_modules contains unknown module, error and abort

@@ -4,142 +4,235 @@
 
 **Requirements**: FR-001 through FR-005, User Story 1
 
+**Key Changes from Original Design**:
+- Modules defined in config (no auto-discovery)
+- Sequential execution in config order (no dependency resolution)
+- Exception-based error handling (modules raise, not log CRITICAL)
+- Orchestrator tracks ERROR logs for final state determination
+- abort(timeout) only called on currently-running module
+- CLEANUP state before terminal states
+- Btrfs verification: / is btrfs, subvolumes exist in top-level
+
 ## Lifecycle Sequence
 
 The orchestrator executes modules in a strict sequence:
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
-│ 1. INITIALIZATION PHASE                                      │
+│ 1. INITIALIZATION PHASE (State: INITIALIZING)               │
 ├──────────────────────────────────────────────────────────────┤
 │ - Load config from ~/.config/pc-switcher/config.yaml         │
-│ - Discover registered modules                                │
-│ - Filter enabled modules (sync_modules config)               │
-│ - Instantiate each module with validated config              │
-│ - Topologically sort modules by dependencies                 │
+│ - Validate config structure and syntax                       │
+│ - Check lock file ($XDG_RUNTIME_DIR/pc-switcher/*.lock)      │
+│   - If stale: warn user, ask confirmation to proceed         │
+│   - If active: display PID, error and abort                  │
+│ - Create lock file                                            │
+│ - Get enabled modules from sync_modules config (in order)    │
+│ - Verify btrfs_snapshots is first and enabled                │
 │ - Establish SSH connection to target                         │
 │ - Check/install pc-switcher version on target                │
-│ - Create SyncSession                                          │
+│ - Verify btrfs on both source and target:                    │
+│   - Check / is btrfs filesystem                              │
+│   - Check configured subvolumes exist in top-level           │
+│     (visible in "btrfs subvolume list /")                    │
+│ - Create SyncSession with session ID                         │
+│ - Instantiate modules with validated config + RemoteExecutor │
+│ - Inject log() and emit_progress() methods into modules      │
 └──────────────────────────────────────────────────────────────┘
                            ↓
 ┌──────────────────────────────────────────────────────────────┐
-│ 2. VALIDATION PHASE                                          │
+│ 2. VALIDATION PHASE (State: VALIDATING)                     │
 ├──────────────────────────────────────────────────────────────┤
-│ For each enabled module (in dependency order):               │
+│ For each module (in config order):                           │
 │   errors = module.validate()                                 │
 │   if errors:                                                  │
-│     collect and display all errors                           │
+│     collect all errors                                        │
 │ if any_errors:                                                │
+│   display all errors in terminal                             │
 │   ABORT before any state changes                             │
 └──────────────────────────────────────────────────────────────┘
                            ↓
 ┌──────────────────────────────────────────────────────────────┐
-│ 3. PRE-SYNC PHASE                                            │
+│ 3. EXECUTING PHASE (State: EXECUTING)                       │
 ├──────────────────────────────────────────────────────────────┤
-│ For each enabled module (in dependency order):               │
+│ For each module (in config order):                           │
 │   try:                                                        │
 │     module.pre_sync()                                         │
-│   except Exception as e:                                      │
-│     log CRITICAL, call module.cleanup(), ABORT               │
-│   if abort_requested:  # CRITICAL log detected               │
-│     call module.cleanup(), ABORT                             │
-└──────────────────────────────────────────────────────────────┘
-                           ↓
-┌──────────────────────────────────────────────────────────────┐
-│ 4. SYNC PHASE                                                │
-├──────────────────────────────────────────────────────────────┤
-│ For each enabled module (in dependency order):               │
-│   try:                                                        │
 │     module.sync()                                             │
-│   except Exception as e:                                      │
-│     log CRITICAL, call module.cleanup(), ABORT               │
-│   if abort_requested:  # CRITICAL log or Ctrl+C              │
-│     call module.cleanup(), ABORT                             │
-└──────────────────────────────────────────────────────────────┘
-                           ↓
-┌──────────────────────────────────────────────────────────────┐
-│ 5. POST-SYNC PHASE                                           │
-├──────────────────────────────────────────────────────────────┤
-│ For each enabled module (in dependency order):               │
-│   try:                                                        │
 │     module.post_sync()                                        │
+│     mark module as SUCCESS                                    │
+│   except SyncError as e:                                      │
+│     log exception as CRITICAL (orchestrator does this)        │
+│     session.abort_requested = True                           │
+│     goto CLEANUP PHASE                                        │
 │   except Exception as e:                                      │
-│     log CRITICAL, call module.cleanup(), ABORT               │
-│   if abort_requested:                                         │
-│     call module.cleanup(), ABORT                             │
+│     log exception as CRITICAL                                 │
+│     session.abort_requested = True                           │
+│     goto CLEANUP PHASE                                        │
+│   if user pressed Ctrl+C:                                     │
+│     log "Sync interrupted by user" at WARNING                │
+│     session.abort_requested = True                           │
+│     goto CLEANUP PHASE                                        │
+│                                                               │
+│ if all modules completed and NO ERROR logs:                  │
+│   goto COMPLETED (skip CLEANUP)                              │
+│ if all modules completed but ERROR logs exist:               │
+│   goto CLEANUP → FAILED                                      │
 └──────────────────────────────────────────────────────────────┘
                            ↓
 ┌──────────────────────────────────────────────────────────────┐
-│ 6. CLEANUP PHASE                                             │
+│ 4. CLEANUP PHASE (State: CLEANUP)                           │
 ├──────────────────────────────────────────────────────────────┤
-│ For each module (reverse order for cleanup):                 │
+│ If currently-running module exists:                          │
 │   try:                                                        │
-│     module.cleanup()                                          │
+│     current_module.abort(timeout=5.0)                        │
 │   except Exception as e:                                      │
-│     log ERROR (cleanup is best-effort, don't abort)          │
+│     log ERROR (abort is best-effort)                         │
+│                                                               │
+│ Do NOT call abort() on completed modules                     │
+│   (abort = stop processes, not undo work)                    │
+│                                                               │
 │ Close SSH connection                                          │
 │ Release sync lock                                             │
 │ Log final session summary                                    │
+│                                                               │
+│ Determine final state:                                       │
+│   if user_interrupt (Ctrl+C): → ABORTED                     │
+│   elif exception or session.has_errors: → FAILED            │
+│   else: should not reach here (completed goes direct)        │
+└──────────────────────────────────────────────────────────────┘
+                           ↓
+┌──────────────────────────────────────────────────────────────┐
+│ 5. TERMINAL STATES                                           │
+├──────────────────────────────────────────────────────────────┤
+│ - COMPLETED: All modules succeeded, no ERROR logs            │
+│ - ABORTED: User interrupt (Ctrl+C)                          │
+│ - FAILED: Exception raised or ERROR logs emitted            │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## Module Discovery and Registration
+## Module Instantiation and Loading
 
-**Discovery**:
-1. Orchestrator scans `pcswitcher.modules` package for `SyncModule` subclasses
-2. Each module is registered by `name` property
-3. Duplicate names → ERROR and abort
+**No Auto-Discovery**: Modules are NOT auto-discovered from the codebase.
 
-**Filtering**:
-1. Load `sync_modules` section from config
-2. For each registered module:
-   - If `sync_modules[module.name]` exists, use that value (true/false)
-   - If not in config, default to module's schema default (or false)
-   - If module.required == True, ignore disable attempts (always enabled)
+**Module Loading**:
+1. Read `sync_modules` section from config (dict with module names as keys, bool as values)
+2. Modules execute in the order they appear in the config YAML
+3. For each entry where value is `true`:
+   - Import the module class (e.g., `from pcswitcher.modules.btrfs_snapshots import BtrfsSnapshotsModule`)
+   - Get config schema via `module_class.get_config_schema()`
+   - Validate module-specific config section against schema
+   - Create RemoteExecutor wrapper around TargetConnection
+   - Instantiate: `module = ModuleClass(validated_config, remote_executor)`
+   - Inject `log()` and `emit_progress()` methods into module instance
 
-**Dependency Resolution**:
-1. Build dependency graph from `module.dependencies`
-2. Topological sort (Kahn's algorithm or similar)
-3. Circular dependency → ERROR and abort
-4. Unknown dependency → ERROR and abort
+**Required Module Validation**:
+1. Check `btrfs_snapshots` is present in `sync_modules`
+2. Check `btrfs_snapshots` is first in the ordered list
+3. Check `btrfs_snapshots` value is `true` (cannot be disabled)
+4. If any check fails → ERROR and abort
+
+**Example config**:
+```yaml
+sync_modules:
+  btrfs_snapshots: true  # MUST be first, MUST be true
+  user_data: true
+  packages: true
+  docker: false  # Disabled
+  k3s: false
+```
+
+Execution order: btrfs_snapshots → user_data → packages
 
 ## Configuration Injection
 
 **Validation**:
 1. For each enabled module:
-   - Get schema from `module.get_config_schema()`
+   - Get schema from `ModuleClass.get_config_schema()` (class method or instance)
    - Extract config section from user config (e.g., `config['btrfs_snapshots']`)
-   - Validate section against schema (using jsonschema library or manual)
+   - Validate section against schema (using jsonschema library or manual validation)
    - Apply defaults from schema for missing values
-   - If validation fails → ERROR with details and abort
+   - If validation fails → log ERROR with details and abort
 
 **Injection**:
-1. Create module instance: `module = ModuleClass(validated_config, logger)`
-2. Logger is pre-bound with context: `logger.bind(module=module.name, session_id=session.id)`
+```python
+# Create RemoteExecutor wrapper
+remote = RemoteExecutor(target_connection)
+
+# Instantiate module with validated config
+module = ModuleClass(validated_config, remote)
+
+# Inject logging method
+module.log = lambda level, msg, **ctx: orchestrator.log_for_module(module.name, level, msg, **ctx)
+
+# Inject progress method
+module.emit_progress = lambda pct, item, eta: orchestrator.handle_progress(module.name, pct, item, eta)
+```
+
+## RemoteExecutor Interface
+
+Modules receive a `RemoteExecutor` instance for target communication:
+
+```python
+class RemoteExecutor:
+    def run(
+        self,
+        command: str,
+        sudo: bool = False,
+        timeout: float | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        """Execute command on target, return CompletedProcess"""
+
+    def send_file_to_target(self, local: Path, remote: Path) -> None:
+        """Upload file from source to target"""
+
+    def get_hostname(self) -> str:
+        """Get target hostname (actual name, not 'target')"""
+```
+
+**Module Usage**:
+```python
+def sync(self):
+    # Run command on target
+    result = self.remote.run("btrfs subvolume list /", sudo=True)
+    if result.returncode != 0:
+        raise SyncError(f"Failed to list subvolumes: {result.stderr}")
+
+    # Send file to target
+    self.remote.send_file_to_target(Path("local.conf"), Path("/etc/app.conf"))
+
+    # Get target hostname for logging
+    target_host = self.remote.get_hostname()
+    self.log(LogLevel.INFO, f"Syncing to {target_host}")
+```
 
 ## Progress Reporting Protocol
 
 **Module Side**:
 ```python
-# During sync() execution:
+# During sync() execution - report as fraction of TOTAL module work
 self.emit_progress(
-    percentage=50,
-    current_item="Copying /home/user/documents/file.txt",
-    eta=timedelta(seconds=120)
+    percentage=0.5,  # 50% of ALL module work (float 0.0-1.0)
+    item="Copying /home/user/documents/file.txt",
+    eta=timedelta(seconds=120)  # Optional
 )
+
+# percentage can be None if unknown
+self.emit_progress(percentage=None, item="Processing...")
 ```
 
 **Orchestrator Side**:
-1. Inject `emit_progress` callback into module base class during initialization
-2. Callback forwards to orchestrator's progress handler
+1. Orchestrator injects `emit_progress` method into module after instantiation
+2. Method forwards to orchestrator's progress handler
 3. Orchestrator:
-   - Logs progress at FULL level
-   - Updates terminal UI (if enabled)
-   - Stores last progress for each module (for UI display)
+   - Logs progress at FULL level: `[FULL] [module] Progress: 50% - Copying file.txt`
+   - Updates terminal UI with progress bar
+   - Stores last progress for each module
 
 **Requirements**:
 - Modules should emit progress at reasonable intervals (every 1-10 seconds)
-- Percentage must be 0-100
+- Percentage is float 0.0-1.0 (or None if unknown)
+- Percentage represents progress of ENTIRE module (validate + pre + sync + post)
 - current_item should be concise (<100 chars for terminal)
 - eta can be None if unknown
 
@@ -147,24 +240,27 @@ self.emit_progress(
 
 **Module Side**:
 ```python
-# Option 1: Use log() wrapper
+# Modules use injected log() method
 self.log(LogLevel.INFO, "Starting operation", file_count=42)
+self.log(LogLevel.ERROR, "File copy failed", path="/some/file")
+self.log(LogLevel.WARNING, "Unexpected condition", details="...")
 
-# Option 2: Use logger directly
-self.logger.info("Starting operation", file_count=42)
+# Modules do NOT log CRITICAL - they raise exceptions instead
+# DO NOT: self.log(LogLevel.CRITICAL, "Fatal error")
+# DO: raise SyncError("Fatal error occurred")
 ```
 
 **Orchestrator Side**:
 1. Configure structlog with dual output: file + terminal
-2. Inject bound logger into module: `logger.bind(module=module.name, session_id=session.id, hostname=hostname)`
-3. Install custom processor to detect CRITICAL events:
+2. Inject log method into module: `module.log = orchestrator.log_for_module(module.name, ...)`
+3. Install custom processor to track ERROR events:
    ```python
-   def abort_on_critical(logger, log_method, event_dict):
-       if event_dict['level'] >= 50:  # CRITICAL
-           session.abort_requested = True
+   def track_errors(logger, log_method, event_dict):
+       if event_dict['level'] >= 40:  # ERROR or CRITICAL
+           session.has_errors = True
        return event_dict
    ```
-4. Orchestrator checks `session.abort_requested` after each module operation
+4. Module exceptions are caught and logged by orchestrator as CRITICAL
 
 **Log Levels** (FR-019):
 - DEBUG (10): Verbose diagnostics (command outputs, state dumps)
@@ -172,40 +268,19 @@ self.logger.info("Starting operation", file_count=42)
 - INFO (20): High-level operations (e.g., "Module started", "Module completed")
 - WARNING (30): Unexpected but non-failing (e.g., "Config uses deprecated format")
 - ERROR (40): Recoverable errors (e.g., "File copy failed, skipping")
-- CRITICAL (50): Unrecoverable errors (sync abort)
+- CRITICAL (50): Unrecoverable errors (only logged by orchestrator when catching exceptions)
 
-## Abort Handling
-
-**Abort Sources**:
-1. **CRITICAL log**: Any module (or orchestrator) logs at CRITICAL level
-2. **Unhandled exception**: Module raises exception during lifecycle method
-3. **User interrupt**: Ctrl+C (SIGINT)
-
-**Orchestrator Response**:
-1. Set `session.abort_requested = True`
-2. If module is executing, wait for it to complete current method
-3. Call `module.cleanup()` on currently-executing module
-4. Skip remaining modules
-5. Call `cleanup()` on all previously-executed modules (reverse order)
-6. Close SSH connection
-7. Release sync lock
-8. Exit with code 130 (interrupted) or 1 (error)
-
-**Module Requirements**:
-- `cleanup()` must be idempotent (can be called multiple times)
-- `cleanup()` must handle partial state (module may have failed mid-operation)
-- `cleanup()` should not raise exceptions (best-effort)
-
-## Error Handling Contract
+## Error Handling
 
 **Module Exceptions**:
-- Modules MAY raise exceptions during validate/pre_sync/sync/post_sync
-- Orchestrator CATCHES all exceptions
+- Modules raise `SyncError` (or subclasses) for unrecoverable failures
+- Orchestrator catches ALL exceptions during module execution
 - On exception:
   1. Log exception as CRITICAL with full traceback
-  2. Call module.cleanup()
-  3. Abort sync
-  4. No further modules execute
+  2. Set `session.abort_requested = True`
+  3. Enter CLEANUP phase
+  4. Call `current_module.abort(timeout)` if it was executing
+  5. Determine final state: ABORTED (if Ctrl+C) or FAILED (if exception)
 
 **Validation Errors**:
 - `validate()` returns `list[str]` (error messages)
@@ -213,23 +288,128 @@ self.logger.info("Starting operation", file_count=42)
 - Non-empty list = errors (don't raise exception)
 - Orchestrator collects all validation errors, displays them, then aborts
 
-**Logging Errors**:
-- ERROR level: Log but continue (module can recover)
-- CRITICAL level: Log and abort (unrecoverable)
+**ERROR Log Tracking**:
+- Orchestrator tracks if any ERROR-level logs were emitted
+- Uses custom structlog processor to set `session.has_errors = True`
+- Final session state:
+  - All modules completed + no ERROR logs → COMPLETED
+  - All modules completed + ERROR logs present → CLEANUP → FAILED
+
+## Abort Handling
+
+**Abort Sources**:
+1. **Module exception**: Module raises SyncError during lifecycle method
+2. **Unhandled exception**: Module raises any exception
+3. **User interrupt**: Ctrl+C (SIGINT)
+
+**Orchestrator Response**:
+1. Set `session.abort_requested = True`
+2. Enter CLEANUP phase (change session.state to CLEANUP)
+3. If module is currently executing:
+   - Call `module.abort(timeout=5.0)`
+   - Wait for abort to complete (up to timeout)
+4. Do NOT call abort() on completed modules
+   - Semantics: abort = stop running processes, NOT undo work
+   - Rollback is a separate manual operation via snapshots
+5. Close SSH connection
+6. Release sync lock
+7. Determine final state:
+   - User interrupt (Ctrl+C) → ABORTED
+   - Exception or ERROR logs → FAILED
+
+**Module abort() Requirements**:
+- Must stop running processes/threads
+- Must release locks and file handles
+- Must be idempotent (can be called multiple times)
+- Must handle partial state gracefully
+- Should NOT raise exceptions (best-effort)
+- Should complete within timeout seconds
+
+**Example abort() implementation**:
+```python
+def abort(self, timeout: float) -> None:
+    if self.subprocess:
+        try:
+            self.subprocess.terminate()
+            self.subprocess.wait(timeout=min(timeout, 2.0))
+        except Exception:
+            pass  # Best-effort
+
+    if self.file_handle:
+        try:
+            self.file_handle.close()
+        except Exception:
+            pass
+```
 
 ## Concurrency and Locking
 
 **Lock Mechanism** (FR-048):
-1. Before INITIALIZATION, acquire lock: `/tmp/pc-switcher-sync.lock` (or XDG_RUNTIME_DIR)
-2. Lock file contains PID of running process
-3. If lock exists and PID is active → ERROR "Another sync is in progress"
-4. If lock exists and PID is stale → Remove lock and proceed
-5. Release lock in CLEANUP phase (even on abort/error)
+1. **Lock location**:
+   - Primary: `$XDG_RUNTIME_DIR/pc-switcher/pc-switcher.lock`
+   - Fallback: `/var/lock/pc-switcher.lock` (if XDG_RUNTIME_DIR not set)
+
+2. **Lock file format**:
+   ```json
+   {
+     "pid": 12345,
+     "timestamp": "2025-11-15T12:00:00Z",
+     "session_id": "abc12345"
+   }
+   ```
+
+3. **Lock acquisition**:
+   - Check if lock file exists
+   - If exists:
+     - Read PID from lock file
+     - Check if process is running: `ps -p <PID>`
+     - If running: ERROR "Another sync is in progress (PID: 12345)" and abort
+     - If stale (process not running):
+       - WARN user: "Found stale lock file from previous sync"
+       - ASK confirmation: "Previous sync may have crashed. Proceed? [y/N]"
+       - If confirmed: delete stale lock, create new lock
+       - If declined: abort
+   - If not exists: create lock file
+
+4. **Lock release**:
+   - Always release in CLEANUP phase (even on abort/error)
+   - Delete lock file
+   - If delete fails: log ERROR (best-effort)
 
 **Module Execution**:
-- Modules execute **sequentially** (one at a time)
+- Modules execute **sequentially** (one at a time, in config order)
 - No parallel module execution (for simplicity and safety)
 - Future optimization: Allow parallel execution within a module (module's responsibility)
+
+## Btrfs Verification
+
+**Pre-Sync Checks** (during INITIALIZATION):
+
+1. **Root filesystem is btrfs**:
+   ```bash
+   # On both source and target
+   stat -f -c %T /
+   # Must output: btrfs
+   ```
+   If not btrfs → ERROR "Root filesystem is not btrfs" and abort
+
+2. **Configured subvolumes exist in top-level**:
+   ```bash
+   # Get list of top-level subvolumes
+   btrfs subvolume list /
+   ```
+   For each subvolume in config (e.g., "@", "@home", "@root"):
+   - Check it appears in the output
+   - If missing → ERROR "Configured subvolume '@home' not found in top-level" and abort
+
+**Example**:
+```yaml
+btrfs_snapshots:
+  subvolumes:
+    - "@"      # Must exist in "btrfs subvolume list /" output
+    - "@home"  # Must exist
+    - "@root"  # Must exist
+```
 
 ## SSH Connection Management
 
@@ -239,18 +419,44 @@ self.logger.info("Starting operation", file_count=42)
 3. Close connection during CLEANUP
 
 **Module Access**:
-- Modules receive connection via orchestrator (not injected into constructor)
-- Orchestrator provides methods:
-  ```python
-  orchestrator.run_on_target(command: str, sudo: bool = False) -> Result
-  orchestrator.send_file(local: Path, remote: Path) -> None
-  ```
-- Modules don't manage connection directly (orchestrator responsibility)
+- Modules do NOT access connection directly
+- Modules receive `RemoteExecutor` wrapper
+- RemoteExecutor methods:
+  - `run(command, sudo, timeout) -> CompletedProcess`
+  - `send_file_to_target(local, remote)`
+  - `get_hostname() -> str`
 
 **Error Handling**:
-- Connection loss during sync → CRITICAL log and abort
-- Failed commands → module decides (ERROR or CRITICAL based on severity)
+- Connection loss during sync → log CRITICAL, enter CLEANUP, FAILED
+- Failed commands → module decides (raise SyncError or log ERROR)
 
-## Example: Complete Module Implementation
+## Example: Complete Sync Flow
 
-See `contracts/module-interface.py` for `DummySuccessModule` reference implementation demonstrating all contract requirements.
+1. User runs: `pc-switcher sync workstation`
+2. Orchestrator:
+   - Loads config
+   - Checks lock (none exists, creates lock)
+   - Connects to "workstation" via SSH
+   - Checks/installs matching pc-switcher version on target
+   - Verifies btrfs on both machines
+   - Creates session (ID: a1b2c3d4)
+   - Loads modules: [btrfs_snapshots, user_data, packages]
+   - Instantiates each with config + RemoteExecutor
+3. VALIDATING:
+   - Calls validate() on each module
+   - All return empty lists (no errors)
+4. EXECUTING:
+   - btrfs_snapshots.pre_sync() → creates pre-sync snapshots
+   - btrfs_snapshots.sync() → nothing (snapshot logic in pre/post)
+   - btrfs_snapshots.post_sync() → nothing
+   - user_data.pre_sync() → checks disk space
+   - user_data.sync() → syncs /home, emits progress
+   - user_data.post_sync() → verification
+   - packages.pre_sync() → checks apt
+   - packages.sync() → syncs packages, emits progress
+   - packages.post_sync() → creates post-sync snapshots
+5. All complete, no ERROR logs
+6. Skip CLEANUP, go directly to COMPLETED
+7. Log session summary
+8. Release lock
+9. Exit with code 0

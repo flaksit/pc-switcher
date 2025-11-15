@@ -126,42 +126,88 @@ This document resolves all NEEDS CLARIFICATION items identified in the Technical
    - Bind session ID: `log = log.bind(session_id=session.id)`
    - Context carries through all subsequent log calls
 
-5. **CRITICAL Abort Integration**:
-   - Hook into logging to detect CRITICAL events
-   - Use custom processor to set global abort flag: `if level >= CRITICAL: abort_signal.set()`
-   - Orchestrator checks abort signal after each module operation
+5. **ERROR Level Tracking**:
+   - Orchestrator must track if any ERROR-level logs were emitted during sync
+   - Use custom processor to set error flag: `if level >= ERROR: session.has_errors = True`
+   - Final session state: COMPLETED (no errors) vs FAILED (has errors)
+   - CRITICAL logs are no longer used by modules (they raise exceptions instead)
 
 **Implementation Approach**:
 - Define 6 log levels with numeric values: DEBUG=10, FULL=15, INFO=20, WARNING=30, ERROR=40, CRITICAL=50
 - Configure structlog with dual output: file (JSON, ISO timestamps) + terminal (rich, colored)
 - Create logger factory that binds context (module name, session ID, hostname)
-- Implement CRITICAL abort via custom processor + threading.Event signal
+- Track ERROR-level logs via custom processor to determine final session state
+- Modules raise exceptions for critical failures; orchestrator logs them as CRITICAL
 
 ### 5. Best Practices: uv Package Management and GitHub Actions CI/CD
 
+**Important: uv manages Python installation**
+- Do NOT assume system Python is available
+- uv will install Python into its managed environment
+- Never use system Python directly
+- All Python operations go through uv
+
+**uv Version Management**:
+- Required version: **0.9.9** (defined in `.tool-versions`)
+- Never use "latest" - always pin to specific version
+- `.tool-versions` file format: `uv 0.9.9`
+- GitHub Actions read from this file automatically
+
 **uv Project Setup**:
 
-1. **Project Initialization**:
+1. **Project Initialization** (from within project directory):
    ```bash
-   uv init --lib pc-switcher
-   cd pc-switcher
+   # Install specific uv version (from .tool-versions)
+   curl -LsSf https://astral.sh/uv/0.9.9/install.sh | sh
+
+   # Initialize project (already in pc-switcher directory)
+   uv init --lib .
+
+   # uv will install Python 3.13 into managed environment
+   uv python install 3.13
+
+   # Add dependencies
    uv add fabric structlog rich typer pyyaml
    uv add --dev pytest basedpyright ruff codespell
    ```
 
-2. **pyproject.toml Configuration**:
+2. **pyproject.toml Configuration** (Dynamic Versioning via GitHub Releases):
    ```toml
    [project]
    name = "pc-switcher"
-   version = "0.1.0"
+   dynamic = ["version"]  # Version comes from Git tags, not hardcoded
+   description = "Synchronization system for seamless switching between Linux desktop machines"
+   authors = [{name = "Flaksit", email = "info@flaksit.org"}]
    requires-python = ">=3.13"
-   dependencies = ["fabric", "structlog", "rich", "typer", "pyyaml"]
+   dependencies = [
+       "fabric>=3.2",
+       "structlog>=24.1",
+       "rich>=13.7",
+       "typer>=0.12",
+       "pyyaml>=6.0",
+   ]
+   readme = "README.md"
+   license = {text = "MIT"}
 
    [project.scripts]
    pc-switcher = "pcswitcher.cli.main:app"
 
+   [build-system]
+   requires = ["hatchling", "uv-dynamic-versioning"]
+   build-backend = "hatchling.build"
+
    [tool.uv]
-   dev-dependencies = ["pytest", "basedpyright", "ruff", "codespell"]
+   dev-dependencies = [
+       "pytest>=8.0",
+       "basedpyright>=1.15",
+       "ruff>=0.5",
+       "codespell>=2.3",
+   ]
+
+   [tool.uv-dynamic-versioning]
+   enable = true
+   vcs = "git"
+   style = "pep440"
 
    [tool.ruff]
    line-length = 119
@@ -174,7 +220,7 @@ This document resolves all NEEDS CLARIFICATION items identified in the Technical
 
 3. **Running Commands**:
    - Install/sync dependencies: `uv sync`
-   - Run CLI: `uv run pc-switcher sync <target>`
+   - Run as tool: `uv tool run pc-switcher sync <target>` or just `pc-switcher sync <target>` if installed
    - Run tests: `uv run pytest`
    - Type check: `uv run basedpyright`
    - Lint/format: `uv run ruff check` / `uv run ruff format`
@@ -192,7 +238,7 @@ This document resolves all NEEDS CLARIFICATION items identified in the Technical
          - uses: actions/checkout@v4
          - uses: astral-sh/setup-uv@v5
            with:
-             version: "latest"
+             uv-version-file: ".tool-versions"  # Uses uv 0.9.9
          - run: uv sync
          - run: uv run ruff check
          - run: uv run basedpyright
@@ -205,7 +251,7 @@ This document resolves all NEEDS CLARIFICATION items identified in the Technical
    name: Release
    on:
      release:
-       types: [created]
+       types: [published]
    jobs:
      publish:
        runs-on: ubuntu-24.04
@@ -214,16 +260,26 @@ This document resolves all NEEDS CLARIFICATION items identified in the Technical
          packages: write
        steps:
          - uses: actions/checkout@v4
+           with:
+             fetch-depth: 0  # Required to fetch tags for dynamic versioning!
          - uses: astral-sh/setup-uv@v5
-         - run: uv build
+           with:
+             uv-version-file: ".tool-versions"
+         - run: uv build  # uv-dynamic-versioning pulls version from git tag
          - run: uv publish --token ${{ secrets.GITHUB_TOKEN }} --publish-url https://ghcr.io
    ```
 
 **GitHub Package Registry Setup**:
-- Packages publish to `ghcr.io/yourusername/pc-switcher`
+- Packages publish to `ghcr.io/flaksit/pc-switcher`
 - Installation: `uv tool install --index-url https://ghcr.io/simple/ pc-switcher`
 - Authentication handled via GITHUB_TOKEN in Actions
 - Manual upload: `uv build && uv publish --token <PAT>`
+
+**Version Management Workflow**:
+1. Develop features, commit code (no version bump in code)
+2. When ready to release: Create GitHub Release with tag (e.g., `v1.0.0`)
+3. GitHub Actions automatically builds with version extracted from tag
+4. Package published to ghcr.io with correct version
 
 ### 6. Best Practices: Python Type Hints with basedpyright
 
@@ -375,14 +431,21 @@ All NEEDS CLARIFICATION items have been resolved:
 
 Best practices documented for:
 - Fabric SSH operations (connection management, streaming, error handling)
-- structlog logging (custom levels, dual output, CRITICAL abort integration)
-- uv package management (project setup, commands, CI/CD)
+- structlog logging (custom levels, dual output, ERROR tracking for session state)
+- uv package management (project setup, dynamic versioning, CI/CD with GitHub releases)
 - basedpyright type checking (modern syntax, patterns)
 - Btrfs operations (snapshots, disk space checks)
 - PyYAML configuration (safe loading, validation approach)
 
+**Key architectural decisions**:
+- uv 0.9.9 (specific version in `.tool-versions`)
+- No system Python usage - uv manages Python installation
+- Dynamic versioning via GitHub releases (no version in code)
+- Exception-based error handling (modules raise exceptions, not log CRITICAL)
+- ERROR-level logging tracked for final session state determination
+
 All decisions align with project constitution principles:
-- **Reliability**: Proven libraries, robust error handling patterns
-- **Simplicity**: Minimal dependencies, clear patterns
+- **Reliability**: Proven libraries, robust error handling patterns, exception-based critical failures
+- **Simplicity**: Minimal dependencies, clear patterns, single source of truth for versions
 - **Proven Tooling**: All libraries widely adopted, actively maintained
 - **Documentation**: Clear implementation guidance for each technology

@@ -16,34 +16,40 @@ Represents a sync component implementing the standardized module interface.
 
 **Fields**:
 - `name: str` - Unique module identifier (e.g., "btrfs-snapshots", "dummy-success")
-- `version: str` - Module version (semantic versioning)
-- `dependencies: list[str]` - Module names this module must run after (topological ordering)
 - `required: bool` - Whether module can be disabled via config (default: False, except btrfs-snapshots)
 - `config: dict[str, Any]` - Module-specific configuration (validated against schema)
-- `logger: structlog.BoundLogger` - Logger instance with bound context (module name, session ID)
+- `remote: RemoteExecutor` - Interface for executing commands on target machine (injected by orchestrator)
 
 **Methods** (all abstract, must be implemented by subclasses):
 - `get_config_schema() -> dict[str, Any]` - Returns JSON schema for module config validation
 - `validate() -> list[str]` - Pre-sync validation; returns list of error messages (empty if valid)
-- `pre_sync() -> None` - Pre-sync operations (e.g., create snapshots)
-- `sync() -> None` - Main sync operation
-- `post_sync() -> None` - Post-sync operations (e.g., create post-snapshots)
-- `cleanup() -> None` - Cleanup on shutdown/error (best-effort)
-- `emit_progress(percentage: int, item: str, eta: timedelta | None) -> None` - Report progress to orchestrator
+- `pre_sync() -> None` - Pre-sync operations (e.g., create snapshots); raise exception on critical failure
+- `sync() -> None` - Main sync operation; raise exception on critical failure
+- `post_sync() -> None` - Post-sync operations (e.g., create post-snapshots); raise exception on critical failure
+- `abort(timeout: float) -> None` - Stop running processes, free resources (best-effort, limited by timeout)
+
+**Injected Methods** (provided by orchestrator, not implemented by module):
+- `emit_progress(percentage: float | None, item: str, eta: timedelta | None) -> None` - Report progress to orchestrator
+- `log(level: LogLevel, message: str, **context) -> None` - Log message with structured context
 
 **Validation Rules**:
 - `name` must be unique across all registered modules
-- `version` must follow semantic versioning (regex: `\d+\.\d+\.\d+`)
-- `dependencies` must reference existing module names (checked at registration)
-- Circular dependencies are invalid (detected via topological sort)
+- Modules execute sequentially in the order defined in config file
+- `btrfs_snapshots` module must be first in config and cannot be disabled
 
 **State Transitions**: None (stateless, only method execution sequence matters)
+
+**Error Handling**:
+- Modules raise exceptions (e.g., `SyncError`, `CriticalSyncError`) for unrecoverable failures
+- Orchestrator catches exceptions, logs them as CRITICAL, and initiates cleanup
+- Modules do NOT log at CRITICAL level themselves
 
 **Relationships**:
 - Many-to-one with `Orchestrator` (orchestrator manages all modules)
 - Many-to-one with `SyncSession` (session tracks module execution)
+- One-to-one with `RemoteExecutor` (module uses to communicate with target)
 - Zero-to-many with `ProgressUpdate` (module emits progress updates)
-- Zero-to-many with `LogEntry` (module emits log entries)
+- Zero-to-many with `LogEntry` (module emits log entries via injected log method)
 
 ---
 
@@ -51,44 +57,58 @@ Represents a sync component implementing the standardized module interface.
 
 Represents a single sync operation from source to target.
 
+**Purpose**: Tracks the state and progress of a sync operation. Owned and managed by the Orchestrator.
+
 **Fields**:
 - `id: str` - Unique session identifier (8-char hex from UUID)
 - `timestamp: datetime` - Session start time (UTC, ISO8601)
 - `source_hostname: str` - Source machine hostname
 - `target_hostname: str` - Target machine hostname
-- `enabled_modules: list[str]` - Module names enabled for this session (from config)
+- `enabled_modules: list[str]` - Module names enabled for this session (from config, in execution order)
 - `state: SessionState` - Current session state (enum)
 - `module_results: dict[str, ModuleResult]` - Execution results per module
-- `abort_requested: bool` - Whether abort has been signaled (CRITICAL log or Ctrl+C)
-- `lock_path: Path` - Lockfile path (`/tmp/pc-switcher-sync.lock` or configurable)
+- `has_errors: bool` - Whether any ERROR-level logs were emitted (determines COMPLETED vs FAILED)
+- `abort_requested: bool` - Whether abort has been signaled (exception or Ctrl+C)
+- `lock_path: Path` - Lockfile path (default: `$XDG_RUNTIME_DIR/pc-switcher/pc-switcher.lock`)
 
 **Enums**:
-- `SessionState`: `INITIALIZING`, `VALIDATING`, `EXECUTING`, `COMPLETED`, `ABORTED`, `FAILED`
+- `SessionState`: `INITIALIZING`, `VALIDATING`, `EXECUTING`, `CLEANUP`, `COMPLETED`, `ABORTED`, `FAILED`
 - `ModuleResult`: `SUCCESS`, `SKIPPED`, `FAILED`
 
 **Validation Rules**:
 - `source_hostname` and `target_hostname` must be resolvable or valid SSH config aliases
-- `enabled_modules` must reference registered module names
-- Required modules (e.g., btrfs-snapshots) cannot be excluded from `enabled_modules`
-- Only one active session allowed (enforced via lock file)
+- `enabled_modules` must be non-empty list in execution order
+- `btrfs_snapshots` must be first in `enabled_modules` and cannot be disabled
+- Only one active session allowed (enforced via lock file with stale detection)
 
 **State Transitions**:
-```
-INITIALIZING → VALIDATING → EXECUTING → COMPLETED
-             ↓             ↓           ↓
-             └─────────→ ABORTED ←────┘
-             ↓             ↓           ↓
-             └─────────→ FAILED ←─────┘
+```text
+INITIALIZING → VALIDATING → EXECUTING ─────────────────→ CLEANUP → COMPLETED
+             ↓             ↓           ↘                     ↓
+             ↓             ↓            Exception/Ctrl+C     ↓
+             ↓             ↓                 ↓               ↓
+             └─────────────┴─────────────→ CLEANUP ───────→ ABORTED (if Ctrl+C)
+                                                       ↘
+                                                        → FAILED (if exception/ERROR logs)
 ```
 
-- `INITIALIZING`: Loading config, registering modules, establishing SSH connection
-- `VALIDATING`: Running all module `validate()` methods
-- `EXECUTING`: Running module lifecycle (pre_sync → sync → post_sync)
-- `COMPLETED`: All modules succeeded
-- `ABORTED`: User Ctrl+C or CRITICAL log event triggered abort
-- `FAILED`: One or more modules failed (ERROR level, not CRITICAL)
+**State Descriptions**:
+- `INITIALIZING`: Loading config, checking lock, establishing SSH connection, checking/installing target version
+- `VALIDATING`: Running all module `validate()` methods; abort if any validation errors
+- `EXECUTING`: Running module lifecycle (pre_sync → sync → post_sync) for each module sequentially
+- `CLEANUP`: Calling `abort(timeout)` on currently-running module (if any); triggered by exception or Ctrl+C
+- `COMPLETED`: All modules succeeded, no ERROR logs emitted
+- `ABORTED`: User requested abort (Ctrl+C)
+- `FAILED`: Module raised exception, or ERROR logs were emitted during sync
+
+**State Transition Rules**:
+- Always pass through CLEANUP before reaching ABORTED or FAILED
+- Exception: Can go EXECUTING → COMPLETED if all modules finish successfully
+- From CLEANUP: → ABORTED if user requested abort (Ctrl+C)
+- From CLEANUP: → FAILED if module raised exception or ERROR logs were emitted
 
 **Relationships**:
+- Owned by `Orchestrator` (orchestrator creates and manages session)
 - One-to-many with `SyncModule` (session executes multiple modules)
 - One-to-many with `LogEntry` (session generates log entries)
 - One-to-many with `ProgressUpdate` (session receives progress updates from modules)
@@ -103,22 +123,23 @@ Represents a btrfs snapshot created during sync.
 
 **Fields**:
 - `subvolume: str` - Subvolume path being snapshotted (e.g., "/", "/home")
-- `snapshot_path: str` - Full path to snapshot (e.g., "/@-presync-20251115T120000Z-abc123")
+- `snapshot_path: str` - Full path to snapshot (e.g., "/.snapshots/@-presync-20251115T120000Z-abc123")
 - `timestamp: datetime` - Snapshot creation time (UTC, ISO8601)
 - `session_id: str` - Associated sync session ID
 - `type: SnapshotType` - Pre-sync or post-sync (enum)
-- `location: Location` - Source or target machine (enum)
+- `hostname: str` - Actual hostname where snapshot was created (e.g., "laptop-home", "workstation")
 - `readonly: bool` - Whether snapshot is read-only (always True for our use case)
 
 **Enums**:
 - `SnapshotType`: `PRE_SYNC`, `POST_SYNC`
-- `Location`: `SOURCE`, `TARGET`
 
 **Validation Rules**:
 - `subvolume` must exist on the machine where snapshot is created
-- `snapshot_path` must follow naming pattern: `@{subvolume}-{presync|postsync}-{timestamp}-{session_id}`
+- `snapshot_path` must follow naming pattern: `{snapshot_dir}/@{subvolume}-{presync|postsync}-{timestamp}-{session_id}`
+- Default `snapshot_dir` is `/.snapshots` (configurable)
 - `timestamp` must be ISO8601 format with UTC timezone
 - `session_id` must be 8-char hex string
+- `hostname` must be actual hostname (not "source" or "target"), used for logging and tracking
 
 **State Transitions**: None (immutable once created; deletion is external operation)
 
@@ -135,8 +156,8 @@ Represents a logged event with structured context.
 **Fields**:
 - `timestamp: datetime` - Event time (UTC, ISO8601)
 - `level: LogLevel` - Severity level (enum)
-- `module: str` - Module name that emitted the log
-- `hostname: str` - Machine where event occurred (source or target)
+- `module: str` - Module name that emitted the log (or "core" for orchestrator)
+- `hostname: str` - Actual hostname where event occurred (e.g., "laptop-home", "workstation")
 - `message: str` - Log message (human-readable)
 - `context: dict[str, Any]` - Structured context data (e.g., file paths, error codes)
 - `session_id: str` - Associated sync session ID
@@ -147,15 +168,17 @@ Represents a logged event with structured context.
 **Validation Rules**:
 - `timestamp` must be ISO8601 with UTC timezone
 - `level` must be one of the six defined levels
-- `module` should reference a registered module (or "core" for orchestrator)
+- `module` should reference a registered module or "core" for orchestrator
 - `message` must be non-empty
-- If `level == CRITICAL`, orchestrator must set abort signal
+- `hostname` must be actual hostname (not "source" or "target")
+- If `level == ERROR`, orchestrator sets `session.has_errors = True` (final state will be FAILED)
+- CRITICAL logs only emitted by orchestrator when catching module exceptions
 
 **State Transitions**: None (immutable once created)
 
 **Relationships**:
 - Many-to-one with `SyncSession` (session generates log entries)
-- Emitted by `SyncModule` or `Orchestrator`
+- Emitted by `SyncModule` (via injected log method) or `Orchestrator` directly
 - Consumed by `FileLogger` and `TerminalUI`
 
 ---
@@ -166,21 +189,24 @@ Represents module progress for display and logging.
 
 **Fields**:
 - `module: str` - Module name reporting progress
-- `percentage: int` - Progress percentage (0-100)
+- `percentage: float | None` - Progress as fraction (0.0-1.0) of **total module work**, or None if unknown
 - `current_item: str` - Description of current operation (e.g., "Copying /home/user/file.txt")
 - `eta: timedelta | None` - Estimated time to completion (optional)
 - `timestamp: datetime` - Update time (UTC)
 - `session_id: str` - Associated sync session ID
 
 **Validation Rules**:
-- `percentage` must be in range [0, 100]
+- `percentage` must be in range [0.0, 1.0] if not None
+- `percentage` represents progress of **all module work** (not just current subtask)
 - `current_item` should be concise (<100 chars for terminal display)
 - `eta` can be None if module doesn't estimate completion time
+
+**Important**: The percentage field represents the overall progress of the entire module, not just the current item or subtask. For example, if a module has 3 phases (pre_sync, sync, post_sync), the percentage should reflect progress across all three phases combined.
 
 **State Transitions**: None (ephemeral, only current update matters)
 
 **Relationships**:
-- Many-to-one with `SyncModule` (module emits progress updates)
+- Many-to-one with `SyncModule` (module emits progress updates via injected method)
 - Many-to-one with `SyncSession` (session receives updates)
 - Consumed by `TerminalUI` for display
 - Logged at FULL level by orchestrator
@@ -231,11 +257,21 @@ Represents SSH connection to target machine.
 **Methods**:
 - `connect() -> None` - Establish SSH connection
 - `disconnect() -> None` - Close SSH connection gracefully
-- `run(command: str, sudo: bool = False) -> Result` - Execute command on target
+- `run(command: str, sudo: bool = False, timeout: float | None = None) -> subprocess.CompletedProcess` - Execute command on target
 - `check_version() -> str | None` - Detect pc-switcher version on target
 - `install_version(version: str, installer_path: Path) -> None` - Install/upgrade pc-switcher
-- `send_file(local: Path, remote: Path) -> None` - Upload file to target
+- `send_file_to_target(local: Path, remote: Path) -> None` - Upload file to target
 - `terminate_processes() -> None` - Send SIGTERM to target-side processes
+
+**Result Type**: `subprocess.CompletedProcess`
+- Contains: `returncode`, `stdout`, `stderr`, `args`
+- Access: `result.returncode`, `result.stdout`, etc.
+- Check success: `result.returncode == 0`
+
+**Notes**:
+- `send_file_to_target()` currently does not set permissions/ownership (future feature)
+- Future enhancement: streaming stdout/stderr line-by-line with callback
+- Future enhancement: run remote Python tasks with progress/logging streaming
 
 **Validation Rules**:
 - `hostname` must be resolvable or valid SSH config alias
@@ -243,7 +279,7 @@ Represents SSH connection to target machine.
 - `control_path` should use ControlMaster to enable multiplexing
 
 **State Transitions**:
-```
+```text
 DISCONNECTED → CONNECTING → CONNECTED → DISCONNECTING → DISCONNECTED
                ↓                        ↓
                └────────→ ERROR ←───────┘
@@ -251,74 +287,152 @@ DISCONNECTED → CONNECTING → CONNECTED → DISCONNECTING → DISCONNECTED
 
 **Relationships**:
 - One-to-one with `SyncSession` (session manages one connection)
-- Used by all modules for target-side operations
+- Wrapped by `RemoteExecutor` for module access
+
+---
+
+### 8. RemoteExecutor
+
+Interface provided to modules for executing commands on target machine.
+
+**Purpose**: Abstracts SSH details from modules, enabling easier testing and cleaner module code.
+
+**Fields**:
+- `connection: TargetConnection` - Underlying SSH connection (private)
+
+**Methods** (injected into SyncModule):
+- `run(command: str, sudo: bool = False, timeout: float | None = None) -> subprocess.CompletedProcess` - Execute command on target
+- `send_file_to_target(local: Path, remote: Path) -> None` - Upload file to target
+- `get_hostname() -> str` - Get target hostname
+
+**Usage in Modules**:
+```python
+# Module receives RemoteExecutor in constructor
+def __init__(self, config: dict[str, Any], remote: RemoteExecutor):
+    self.config = config
+    self.remote = remote
+
+# Module uses it to communicate with target
+def sync(self):
+    result = self.remote.run("btrfs subvolume list /", sudo=True)
+    if result.returncode != 0:
+        raise SyncError(f"Failed to list subvolumes: {result.stderr}")
+
+    self.remote.send_file_to_target(Path("local.txt"), Path("/tmp/remote.txt"))
+```
+
+**Relationships**:
+- One-to-one with `SyncModule` (each module gets a RemoteExecutor)
+- Wraps `TargetConnection` (orchestrator creates RemoteExecutor from connection)
+
+---
+
+## Orchestrator vs SyncSession: Separation of Concerns
+
+**Orchestrator** (Core Orchestration Logic):
+- **Responsibilities**:
+  - Load configuration and validate structure
+  - Create and manage SyncSession
+  - Instantiate modules with validated config and RemoteExecutor
+  - Execute module lifecycle in sequence (validate → pre_sync → sync → post_sync)
+  - Catch module exceptions and log as CRITICAL
+  - Track ERROR-level logs to determine final state (COMPLETED vs FAILED)
+  - Handle SIGINT (Ctrl+C) and initiate cleanup
+  - Call module abort() methods on cleanup
+  - Provide injected methods to modules (emit_progress, log)
+  - Close SSH connection and release lock on completion
+
+- **Does NOT**:
+  - Store state (that's SyncSession's job)
+  - Execute commands directly (delegates to modules via RemoteExecutor)
+  - Know about specific module implementations
+
+**SyncSession** (State Tracking):
+- **Responsibilities**:
+  - Track current sync state (INITIALIZING, VALIDATING, EXECUTING, CLEANUP, COMPLETED, ABORTED, FAILED)
+  - Store session metadata (ID, timestamp, hostnames)
+  - Track which modules are enabled and execution order
+  - Record module results (SUCCESS, SKIPPED, FAILED)
+  - Flag ERROR logs (`has_errors`) to determine final state
+  - Flag abort requests (`abort_requested`) from exceptions or Ctrl+C
+  - Manage lock file creation and cleanup
+
+- **Does NOT**:
+  - Execute modules (that's Orchestrator's job)
+  - Handle exceptions or signals
+  - Manage SSH connections
+
+**Key Pattern**: Orchestrator is the "engine" that executes the workflow. SyncSession is the "state container" that records what happened and current status. This separation enables:
+- Clear testing boundaries (mock session for unit tests)
+- State persistence (session can be serialized for resumption or reporting)
+- Clean orchestration logic (no state management cluttering the execution flow)
 
 ---
 
 ## Entity Relationship Diagram (ERD)
 
-```
+```text
 ┌─────────────────┐
 │   Orchestrator  │
 │                 │
 │ - modules: []   │
 │ - session       │
 └────────┬────────┘
-         │ manages
+         │ creates & manages
          ↓
-┌─────────────────────────────────────────────────────┐
-│              SyncSession                            │
-│                                                     │
-│ - id: str                                           │
-│ - timestamp: datetime                               │
-│ - source_hostname: str                              │
-│ - target_hostname: str                              │
-│ - enabled_modules: list[str]                        │
-│ - state: SessionState                               │
-│ - module_results: dict[str, ModuleResult]           │
-│ - abort_requested: bool                             │
-└─────┬──────────────────┬──────────────┬────────────┘
-      │ 1:N              │ 1:1          │ 1:N
-      │                  │              │
-      ↓                  ↓              ↓
-┌─────────────┐  ┌──────────────────┐  ┌─────────────┐
-│ SyncModule  │  │ TargetConnection │  │  LogEntry   │
-│             │  │                  │  │             │
-│ - name      │  │ - hostname       │  │ - timestamp │
-│ - version   │  │ - connection     │  │ - level     │
-│ - deps      │  │ - version        │  │ - module    │
-│ - required  │  │ - connected      │  │ - message   │
-└─────┬───────┘  └──────────────────┘  └─────────────┘
-      │ emits
-      │ 1:N
-      ↓
+┌───────────────────────────────────────────────────────┐
+│              SyncSession                              │
+│                                                       │
+│ - id: str                                             │
+│ - timestamp: datetime                                 │
+│ - source_hostname: str                                │
+│ - target_hostname: str                                │
+│ - enabled_modules: list[str]                          │
+│ - state: SessionState (INIT/VALID/EXEC/CLEANUP/...)  │
+│ - module_results: dict[str, ModuleResult]             │
+│ - has_errors: bool                                    │
+│ - abort_requested: bool                               │
+└────┬──────────────────┬──────────────┬───────────────┘
+     │ 1:N              │ 1:1          │ 1:N
+     │                  │              │
+     ↓                  ↓              ↓
+┌──────────────┐  ┌──────────────────┐  ┌─────────────┐
+│  SyncModule  │  │ TargetConnection │  │  LogEntry   │
+│              │  │                  │  │             │
+│ - name       │  │ - hostname       │  │ - timestamp │
+│ - required   │  │ - connection     │  │ - level     │
+│ - config     │  │ - pc_sw_version  │  │ - module    │
+│ - remote ────┼──┼─→RemoteExecutor  │  │ - hostname  │
+└──────┬───────┘  └──────────────────┘  │ - message   │
+       │ uses                            └─────────────┘
+       │ 1:1
+       ↓
 ┌──────────────────┐
-│ ProgressUpdate   │
+│ RemoteExecutor   │
 │                  │
-│ - module         │
-│ - percentage     │
-│ - current_item   │
-│ - eta            │
+│ - connection ────┼──> TargetConnection
+│ + run()          │
+│ + send_file...() │
+│ + get_hostname() │
 └──────────────────┘
 
-┌─────────────────┐
-│   Snapshot      │
-│                 │
-│ - subvolume     │
-│ - snapshot_path │
-│ - timestamp     │
-│ - session_id    │
-│ - type          │
-│ - location      │
-└─────────────────┘
-      ↑
-      │ N:1
-      │ created by
-┌─────────────────────┐
-│ BtrfsSnapshotsModule│
-│  (extends           │
-│   SyncModule)       │
-└─────────────────────┘
+┌──────────────────┐      ┌──────────────────┐
+│ ProgressUpdate   │      │   Snapshot       │
+│                  │      │                  │
+│ - module         │      │ - subvolume      │
+│ - percentage     │      │ - snapshot_path  │
+│ - current_item   │      │ - timestamp      │
+│ - eta            │      │ - session_id     │
+└──────────────────┘      │ - type           │
+        ↑                 │ - hostname       │
+        │ emits N:1       └──────────────────┘
+        │                         ↑
+   SyncModule                     │ created by N:1
+                                  │
+                     ┌────────────────────────┐
+                     │ BtrfsSnapshotsModule   │
+                     │  (extends SyncModule)  │
+                     └────────────────────────┘
 
 ┌─────────────────┐
 │  Configuration  │
@@ -328,8 +442,7 @@ DISCONNECTED → CONNECTING → CONNECTED → DISCONNECTING → DISCONNECTED
 │ - sync_modules  │
 │ - module_configs│
 └─────┬───────────┘
-      │ provides config to
-      │ 1:N
+      │ provides config 1:N
       ↓
 ┌─────────────┐
 │ SyncModule  │
@@ -342,29 +455,41 @@ DISCONNECTED → CONNECTING → CONNECTED → DISCONNECTING → DISCONNECTED
 
 The `SyncModule` ABC enforces the module contract (FR-001). All sync features implement this interface, enabling:
 - Independent module development
-- Uniform orchestration
-- Consistent logging and progress reporting
-- Topological dependency ordering
+- Uniform orchestration via standardized lifecycle methods
+- Consistent logging and progress reporting via injected methods
+- Sequential execution in config-defined order (no complex dependency resolution)
 
 ### 2. State Machine (SyncSession)
 
 Session state transitions enforce the sync workflow:
-- INITIALIZING → establish connection, load config
+- INITIALIZING → establish connection, load config, check/install target version
 - VALIDATING → all modules validate before any state changes
 - EXECUTING → sequential module execution (pre_sync → sync → post_sync)
-- COMPLETED / ABORTED / FAILED → terminal states with cleanup
+- CLEANUP → call abort() on currently-running module (if any)
+- COMPLETED / ABORTED / FAILED → terminal states (always through CLEANUP except EXECUTING → COMPLETED)
 
-### 3. Signal-Based Abort (abort_requested flag + logging hook)
+### 3. Exception-Based Error Handling
 
-CRITICAL log events set `session.abort_requested = True` via logging hook. Orchestrator checks this flag after each module operation, enabling immediate abort without exception propagation.
+Modules raise exceptions (e.g., `SyncError`, `CriticalSyncError`) for unrecoverable failures. Orchestrator catches exceptions, logs them as CRITICAL, and initiates CLEANUP phase. This is cleaner than watching log streams for CRITICAL events.
 
-### 4. Immutable Entities (Snapshot, LogEntry)
+ERROR-level logs are tracked via `session.has_errors` flag to determine final state (COMPLETED vs FAILED) for recoverable errors.
+
+### 4. Method Injection Pattern
+
+Modules receive functionality via injection rather than inheritance:
+- `RemoteExecutor` injected in constructor → module communicates with target
+- `emit_progress()` injected by orchestrator → module reports progress
+- `log()` injected by orchestrator → module logs messages
+
+This enables easier testing (mock injected dependencies) and cleaner module code.
+
+### 5. Immutable Entities (Snapshot, LogEntry)
 
 Snapshots and log entries are immutable once created. This simplifies reasoning and prevents accidental state corruption.
 
-### 5. Dependency Injection (Configuration → Modules)
+### 6. Configuration Validation and Injection
 
-Configuration is loaded once and injected into modules. Modules declare schemas; orchestrator validates and provides validated config. This separates concerns and enables testing with mock configs.
+Configuration is loaded once, validated against module schemas, and injected into modules. Modules declare schemas via `get_config_schema()`; orchestrator validates and provides validated config. This separates concerns and enables testing with mock configs.
 
 ## Implementation Notes
 

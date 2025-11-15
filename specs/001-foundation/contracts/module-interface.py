@@ -5,17 +5,24 @@ This file defines the standardized interface that all sync modules must implemen
 It serves as both documentation and a reference implementation for module developers.
 
 See User Story 1 in spec.md for complete requirements.
+
+Key Changes from Original Design:
+- Modules execute sequentially in config order (no dependencies field)
+- Modules raise exceptions for critical failures (not log CRITICAL)
+- RemoteExecutor injected for target communication
+- Logging and progress methods injected by orchestrator
+- cleanup() renamed to abort(timeout) for clarity
+- ProgressUpdate uses optional float 0.0-1.0
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
 from datetime import timedelta
 from enum import StrEnum
+from pathlib import Path
+from subprocess import CompletedProcess
 from typing import Any
-
-import structlog
 
 
 class LogLevel(StrEnum):
@@ -26,15 +33,66 @@ class LogLevel(StrEnum):
     INFO = "INFO"  # 20: High-level operation reporting
     WARNING = "WARNING"  # 30: Unexpected but non-failing conditions
     ERROR = "ERROR"  # 40: Recoverable errors
-    CRITICAL = "CRITICAL"  # 50: Unrecoverable errors (triggers sync abort)
+    CRITICAL = "CRITICAL"  # 50: Unrecoverable errors (logged by orchestrator, not modules)
 
 
-class ModuleResult(StrEnum):
-    """Module execution result"""
+class SyncError(Exception):
+    """Base exception for sync failures. Orchestrator logs as CRITICAL and aborts."""
 
-    SUCCESS = "SUCCESS"
-    SKIPPED = "SKIPPED"
-    FAILED = "FAILED"
+
+class RemoteExecutor:
+    """
+    Interface for modules to execute commands on target machine.
+
+    Abstracts SSH details from modules, enabling easier testing and cleaner code.
+    Orchestrator creates this wrapper around TargetConnection and injects into modules.
+    """
+
+    def run(
+        self,
+        command: str,
+        sudo: bool = False,
+        timeout: float | None = None,
+    ) -> CompletedProcess[str]:
+        """
+        Execute command on target machine.
+
+        Args:
+            command: Shell command to execute
+            sudo: Whether to run with sudo
+            timeout: Command timeout in seconds (None = no timeout)
+
+        Returns:
+            CompletedProcess with returncode, stdout, stderr, args
+
+        Raises:
+            SyncError: If command execution fails critically
+        """
+        raise NotImplementedError("Orchestrator provides implementation")
+
+    def send_file_to_target(self, local: Path, remote: Path) -> None:
+        """
+        Upload file from source to target.
+
+        Args:
+            local: Path on source machine
+            remote: Path on target machine
+
+        Raises:
+            SyncError: If file transfer fails
+
+        Note: Currently does not set permissions/ownership (future feature)
+        """
+        raise NotImplementedError("Orchestrator provides implementation")
+
+    def get_hostname(self) -> str:
+        """
+        Get target machine hostname.
+
+        Returns:
+            Target hostname (e.g., "workstation", not "target")
+        """
+        raise NotImplementedError("Orchestrator provides implementation")
 
 
 class SyncModule(ABC):
@@ -42,24 +100,28 @@ class SyncModule(ABC):
     Abstract base class for all sync modules.
 
     All sync features (user data, packages, Docker, VMs, k3s) implement this interface.
-    The orchestrator manages module lifecycle: validate → pre_sync → sync → post_sync → cleanup.
+    The orchestrator manages module lifecycle: validate → pre_sync → sync → post_sync → abort.
+
+    Modules execute sequentially in the order defined in config.yaml sync_modules section.
+    The btrfs_snapshots module must be first and cannot be disabled.
 
     Requirements: FR-001, FR-002, FR-003, FR-004
     User Story: 1 (Module Architecture and Integration Contract)
     """
 
-    def __init__(self, config: dict[str, Any], logger: structlog.BoundLogger) -> None:
+    def __init__(self, config: dict[str, Any], remote: RemoteExecutor) -> None:
         """
-        Initialize module with validated config and logger.
+        Initialize module with validated config and remote executor.
 
         Args:
             config: Module-specific configuration (validated against schema)
-            logger: structlog logger with bound context (module name, session ID)
+            remote: Interface for executing commands on target
 
-        Note: Orchestrator calls this after validating config against get_config_schema()
+        Note: Orchestrator calls this after validating config against get_config_schema().
+        Orchestrator also injects log() and emit_progress() methods after instantiation.
         """
-        self.config = config
-        self.logger = logger
+        self.config: dict[str, Any] = config
+        self.remote: RemoteExecutor = remote
 
     @property
     @abstractmethod
@@ -67,36 +129,9 @@ class SyncModule(ABC):
         """
         Unique module identifier (e.g., "btrfs-snapshots", "user-data", "docker").
 
-        Must be unique across all registered modules.
-        Used for config sections, logging context, dependency references.
+        Must be unique across all modules.
+        Used for config sections, logging context, execution ordering.
         """
-        ...
-
-    @property
-    @abstractmethod
-    def version(self) -> str:
-        """
-        Module version (semantic versioning: X.Y.Z).
-
-        Used for compatibility checks and debugging.
-        """
-        ...
-
-    @property
-    @abstractmethod
-    def dependencies(self) -> Sequence[str]:
-        """
-        Module names this module must run after (topological ordering).
-
-        Example: user-data module might depend on ["btrfs-snapshots-pre"]
-        to ensure snapshots are created before data sync.
-
-        Returns:
-            List of module names (can be empty if no dependencies)
-
-        Requirement: FR-002
-        """
-        ...
 
     @property
     @abstractmethod
@@ -109,7 +144,6 @@ class SyncModule(ABC):
 
         Requirement: FR-012, FR-035
         """
-        ...
 
     @abstractmethod
     def get_config_schema(self) -> dict[str, Any]:
@@ -122,10 +156,10 @@ class SyncModule(ABC):
             {
                 "type": "object",
                 "properties": {
-                    "enabled": {"type": "boolean"},
-                    "exclude_patterns": {"type": "array", "items": {"type": "string"}}
+                    "snapshot_dir": {"type": "string", "default": "/.snapshots"},
+                    "subvolumes": {"type": "array", "items": {"type": "string"}}
                 },
-                "required": ["enabled"]
+                "required": ["subvolumes"]
             }
 
         Returns:
@@ -133,7 +167,6 @@ class SyncModule(ABC):
 
         Requirement: FR-031
         """
-        ...
 
     @abstractmethod
     def validate(self) -> list[str]:
@@ -155,7 +188,6 @@ class SyncModule(ABC):
 
         Requirements: FR-003, User Story 1 Scenario 5
         """
-        ...
 
     @abstractmethod
     def pre_sync(self) -> None:
@@ -165,12 +197,11 @@ class SyncModule(ABC):
         Called during EXECUTING phase, after all validations pass.
         Examples: create snapshots, prepare temporary directories, lock resources.
 
-        May raise exceptions on unrecoverable errors (orchestrator will catch and abort).
-        May log at CRITICAL level to trigger abort.
+        Raises:
+            SyncError: On unrecoverable errors (orchestrator logs as CRITICAL and aborts)
 
         Requirement: FR-003
         """
-        ...
 
     @abstractmethod
     def sync(self) -> None:
@@ -180,13 +211,14 @@ class SyncModule(ABC):
         Called after pre_sync() completes.
         This is where the actual work happens.
 
-        Should emit progress updates via emit_progress().
-        May raise exceptions on unrecoverable errors.
-        May log at CRITICAL level to trigger abort.
+        Should call emit_progress() to report progress.
+        Should call log() to log operations.
+
+        Raises:
+            SyncError: On unrecoverable errors (orchestrator logs as CRITICAL and aborts)
 
         Requirement: FR-003
         """
-        ...
 
     @abstractmethod
     def post_sync(self) -> None:
@@ -196,82 +228,94 @@ class SyncModule(ABC):
         Called after sync() completes successfully.
         Examples: create post-sync snapshots, verify checksums, update metadata.
 
-        May raise exceptions on unrecoverable errors.
-        May log at CRITICAL level to trigger abort.
+        Raises:
+            SyncError: On unrecoverable errors (orchestrator logs as CRITICAL and aborts)
 
         Requirement: FR-003
         """
-        ...
 
     @abstractmethod
-    def cleanup(self) -> None:
+    def abort(self, timeout: float) -> None:
         """
-        Cleanup on shutdown, interrupts, or errors (best-effort).
+        Stop running processes, free resources (best-effort, limited by timeout).
 
         Called in these scenarios:
-        - Normal completion (after post_sync)
         - User interrupt (Ctrl+C)
         - Module raises exception
-        - Another module logs CRITICAL
+        - Another module raises exception
+
+        Semantics: Stop what you're doing NOW, don't undo work.
+        - Stop any running subprocesses
+        - Close file handles
+        - Release locks
+        - Do NOT delete files or rollback changes (that's manual rollback)
 
         Must be idempotent and handle partial state gracefully.
-        Should not raise exceptions (orchestrator logs but continues shutdown).
+        Should NOT raise exceptions (best-effort cleanup).
 
-        Examples: release locks, delete temporary files, close connections.
+        Args:
+            timeout: Maximum time to spend in cleanup (seconds)
+
+        Example:
+            def abort(self, timeout: float):
+                if self.subprocess:
+                    try:
+                        self.subprocess.terminate()
+                        self.subprocess.wait(timeout=min(timeout, 2.0))
+                    except Exception:
+                        pass  # Best-effort
 
         Requirements: FR-004, FR-025, User Story 5
+
+        Note: Only called on the currently-running module, not on completed modules.
         """
-        ...
+
+    # Injected methods (provided by orchestrator, signatures shown for documentation)
 
     def emit_progress(
         self,
-        percentage: int,
-        current_item: str = "",
+        percentage: float | None = None,
+        item: str = "",
         eta: timedelta | None = None,
     ) -> None:
         """
         Report progress to orchestrator for terminal UI display and logging.
 
+        Injected by orchestrator. Module just calls this method.
+
         Args:
-            percentage: Progress percentage (0-100)
-            current_item: Description of current operation (e.g., "Copying file.txt")
+            percentage: Progress as fraction (0.0-1.0) of TOTAL module work, or None if unknown
+            item: Description of current operation (e.g., "Copying file.txt")
             eta: Estimated time to completion (optional)
 
-        This method is provided by the base class and calls orchestrator.
-        Modules just call it to report progress.
+        Important: percentage represents ALL module work (validate + pre + sync + post),
+        not just the current subtask.
 
         Requirements: FR-044, FR-045, FR-046, User Story 9
         """
-        # Implementation provided by base class (injected by orchestrator)
-        # This is a placeholder showing the interface
-        raise NotImplementedError("Orchestrator must inject progress callback")
+        raise NotImplementedError("Orchestrator injects this method")
 
     def log(self, level: LogLevel, message: str, **context: Any) -> None:
         """
         Log a message with structured context.
 
-        This is a convenience wrapper around self.logger.
-        Modules can also use self.logger directly if preferred.
+        Injected by orchestrator. Module just calls this method.
 
         Args:
-            level: Log level (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL)
+            level: Log level (DEBUG, FULL, INFO, WARNING, ERROR)
             message: Log message
             **context: Structured context data (e.g., file_path="/home/user/file.txt")
 
-        CRITICAL level triggers immediate sync abort (FR-020).
+        Important: Modules should NOT log at CRITICAL level.
+        Modules should raise SyncError instead for unrecoverable failures.
+        Orchestrator catches exceptions and logs them as CRITICAL.
+
+        ERROR level: Use for recoverable errors (individual file failures, etc.)
+        Orchestrator tracks ERROR logs to determine final state (COMPLETED vs FAILED).
 
         Requirements: FR-019 through FR-024, User Story 4
         """
-        # Map our log levels to standard library levels
-        level_map = {
-            LogLevel.DEBUG: 10,
-            LogLevel.FULL: 15,
-            LogLevel.INFO: 20,
-            LogLevel.WARNING: 30,
-            LogLevel.ERROR: 40,
-            LogLevel.CRITICAL: 50,
-        }
-        self.logger.log(level_map[level], message, **context)
+        raise NotImplementedError("Orchestrator injects this method")
 
 
 # Example: Minimal module implementation demonstrating the contract
@@ -283,9 +327,10 @@ class DummySuccessModule(SyncModule):
     - All required properties and methods
     - Config schema definition
     - Validation logic
-    - Progress reporting
+    - Progress reporting (float 0.0-1.0 representing total work)
     - Logging at various levels
-    - Cleanup handling
+    - Exception-based error handling
+    - abort() for graceful cleanup
 
     See User Story 8 for complete requirements.
     """
@@ -295,14 +340,6 @@ class DummySuccessModule(SyncModule):
         return "dummy-success"
 
     @property
-    def version(self) -> str:
-        return "1.0.0"
-
-    @property
-    def dependencies(self) -> Sequence[str]:
-        return []  # No dependencies
-
-    @property
     def required(self) -> bool:
         return False  # Optional module
 
@@ -310,50 +347,94 @@ class DummySuccessModule(SyncModule):
         return {
             "type": "object",
             "properties": {
-                "enabled": {"type": "boolean"},
                 "duration_seconds": {"type": "integer", "minimum": 1, "default": 20},
             },
-            "required": ["enabled"],
         }
 
     def validate(self) -> list[str]:
         """Always validates successfully"""
-        self.logger.info("Validation passed")
+        self.log(LogLevel.INFO, "Validation passed")
         return []
 
     def pre_sync(self) -> None:
         """Simulate pre-sync operation"""
-        self.logger.info("Starting pre-sync")
+        self.log(LogLevel.INFO, "Starting pre-sync")
         # No actual work in dummy module
-        self.logger.info("Pre-sync complete")
+        self.log(LogLevel.INFO, "Pre-sync complete")
 
     def sync(self) -> None:
         """Simulate long-running sync with progress reporting"""
         import time
 
         duration = self.config.get("duration_seconds", 20)
-        self.logger.info("Starting sync", duration=duration)
+        self.log(LogLevel.INFO, "Starting sync", duration=duration)
 
         for i in range(duration):
-            percentage = int((i + 1) / duration * 100)
-            self.emit_progress(percentage, f"Processing step {i + 1}/{duration}")
+            # Report progress as fraction of TOTAL work (0.0 to 1.0)
+            progress = (i + 1) / duration
+            self.emit_progress(progress, f"Processing step {i + 1}/{duration}")
 
             if i == 6:
-                self.logger.warning("Example warning at 30%")
+                self.log(LogLevel.WARNING, "Example warning at 30%")
             if i == 8:
-                self.logger.error("Example error at 40% (non-critical)")
+                self.log(LogLevel.ERROR, "Example ERROR at 40% (recoverable, sync continues)")
 
             time.sleep(1)
 
-        self.logger.info("Sync complete")
+        self.log(LogLevel.INFO, "Sync complete")
 
     def post_sync(self) -> None:
         """Simulate post-sync operation"""
-        self.logger.info("Starting post-sync")
+        self.log(LogLevel.INFO, "Starting post-sync")
         # No actual work in dummy module
-        self.logger.info("Post-sync complete")
+        self.log(LogLevel.INFO, "Post-sync complete")
 
-    def cleanup(self) -> None:
+    def abort(self, timeout: float) -> None:
         """Best-effort cleanup"""
-        self.logger.info("Cleanup called")
+        self.log(LogLevel.INFO, "abort() called", timeout=timeout)
         # No resources to release in dummy module
+
+
+class DummyCriticalModule(SyncModule):
+    """
+    Test module that raises exception at 50% progress.
+
+    Demonstrates exception-based error handling:
+    - Module raises SyncError (not log CRITICAL)
+    - Orchestrator catches exception
+    - Orchestrator logs exception as CRITICAL
+    - Orchestrator calls abort() and initiates CLEANUP phase
+    """
+
+    @property
+    def name(self) -> str:
+        return "dummy-critical"
+
+    @property
+    def required(self) -> bool:
+        return False
+
+    def get_config_schema(self) -> dict[str, Any]:
+        return {"type": "object"}
+
+    def validate(self) -> list[str]:
+        return []
+
+    def pre_sync(self) -> None:
+        pass
+
+    def sync(self) -> None:
+        import time
+
+        for i in range(20):
+            self.emit_progress((i + 1) / 20, f"Step {i + 1}/20")
+            if i == 10:  # 50%
+                # Module raises exception, orchestrator handles it
+                raise SyncError("Simulated critical failure for testing")
+            time.sleep(1)
+
+    def post_sync(self) -> None:
+        pass
+
+    def abort(self, timeout: float) -> None:
+        self.log(LogLevel.INFO, "abort() called after exception")
