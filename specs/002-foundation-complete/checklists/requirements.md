@@ -49,10 +49,9 @@
 - Assumptions and out-of-scope items are clearly documented
 
 **Note on Implementation References**:
-While the spec does reference some technical details (Python, YAML, btrfs, SSH, structlog), these are justified because:
-1. They are established architectural decisions from ADRs (ADR-002: SSH, ADR-003: Python)
+While the spec does reference some technical details (YAML, btrfs, SSH), these are justified because:
+1. They are established architectural decisions from ADRs (ADR-002: SSH)
 2. They align with the "Proven Tooling Only" principle
-3. They are necessary context for developers implementing the module interface
-4. The core requirements remain technology-agnostic where appropriate (e.g., "System MUST create snapshots" rather than "Use btrfs send/receive")
+3. The core requirements remain technology-agnostic where appropriate (e.g., "System MUST create snapshots" rather than "Use btrfs send/receive")
 
 **Ready for Next Phase**: Yes - spec is complete and ready for `/speckit.plan` or `/speckit.clarify` (if further clarification needed).

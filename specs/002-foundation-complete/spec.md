@@ -11,10 +11,10 @@
 
 The system defines a precise contract for how sync modules integrate with the core orchestration system. Each module (representing a discrete sync capability like package sync, Docker sync, or user data sync) implements a standardized interface covering configuration, validation, execution, logging, progress reporting, error handling, and rollback. This contract is detailed enough that all feature modules can be developed independently and concurrently once the core infrastructure exists.
 
-**Why this priority**: This is P1 because it's the architectural foundation. Without a clear, detailed module contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future module developers.
+**Why this priority**: This is P1 because it's the architectural foundation. Without a clear, detailed module contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future module developers. All of the sync-features will be implemented as a module. Any of the other functionality in this spec that could use the module architecture (like User Store 2 and 3) will also be implemented as a module.
 
 **Independent Test**: Can be fully tested by:
-1. Defining the module interface contract (Python ABC or protocol)
+1. Defining the module interface contract
 2. Implementing a minimal test module that satisfies the contract
 3. Registering it with the core orchestrator
 4. Running sync and verifying the orchestrator correctly:
@@ -55,7 +55,7 @@ This delivers immediate value by establishing the development pattern for all 6 
 
 ### User Story 2 - Self-Installing Sync Orchestrator (Priority: P1)
 
-When a user initiates sync from source to target, the very first operation the orchestrator performs (before any validation or snapshots) is to ensure the pc-switcher package on the target machine is at the same version as the source machine. If versions differ or pc-switcher is not installed on target, the system automatically installs or upgrades the target installation using the source's package files.
+When a user initiates sync from source to target, the very first operation the orchestrator performs (before any validation or snapshots) is to ensure the pc-switcher package on the target machine is at the same version as the source machine. If versions differ or pc-switcher is not installed on target, the system automatically installs or upgrades the target installation.
 
 **Why this priority**: This is P1 because version consistency is required for reliable sync operations. Without matching versions, the target-side helper scripts may be incompatible with source-side orchestration logic, causing unpredictable failures. Self-installation also eliminates manual setup steps, aligning with "Frictionless Command UX".
 
@@ -63,10 +63,9 @@ When a user initiates sync from source to target, the very first operation the o
 1. Setting up a target machine without pc-switcher installed
 2. Running sync from source
 3. Verifying orchestrator detects missing installation
-4. Confirming orchestrator transfers package files via SSH
-5. Validating orchestrator installs pc-switcher on target using `uv pip install`
-6. Checking that versions now match
-7. Repeating with version mismatch (older version on target) to test upgrade path
+4. Validating orchestrator installs pc-switcher on target
+5. Checking that versions now match
+6. Repeating with version mismatch (older version on target) to test upgrade path
 
 This delivers value by enabling zero-touch target setup and ensuring version consistency.
 
@@ -77,9 +76,9 @@ This delivers value by enabling zero-touch target setup and ensuring version con
 
 **Acceptance Scenarios**:
 
-1. **Given** source machine has pc-switcher version 0.3.2 installed and target machine has no pc-switcher installed, **When** user runs `pc-switcher sync <target>`, **Then** the orchestrator detects missing installation, transfers the pc-switcher package wheel to target, runs `uv pip install --user <wheel>` on target via SSH, verifies installation succeeded, and proceeds with sync
+1. **Given** source machine has pc-switcher version 0.3.2 installed and target machine has no pc-switcher installed, **When** user runs `pc-switcher sync <target>`, **Then** the orchestrator detects missing installation, installs the pc-switcher version 0.3.2 on target (using the installer from User Story 7), verifies installation succeeded, and proceeds with sync
 
-2. **Given** source has version 0.4.0 and target has version 0.3.2, **When** sync begins, **Then** orchestrator detects version mismatch, logs "Target pc-switcher version 0.3.2 is outdated, upgrading to 0.4.0", transfers new package, runs `uv pip install --upgrade --user <wheel>` on target, and verifies upgrade completed
+2. **Given** source has version 0.4.0 and target has version 0.3.2, **When** sync begins, **Then** orchestrator detects version mismatch, logs "Target pc-switcher version 0.3.2 is outdated, upgrading to 0.4.0", installs the pc-switcher version 0.4.0 on target (using the installer from User Story 7), and verifies upgrade completed
 
 3. **Given** source and target both have version 0.4.0, **When** sync begins, **Then** orchestrator logs "Target pc-switcher version matches source (0.4.0), skipping installation" and proceeds immediately to next phase
 
@@ -110,9 +109,9 @@ This delivers value by providing the foundation for all rollback and recovery op
 
 **Acceptance Scenarios**:
 
-1. **Given** user initiates sync, **When** the snapshot module executes (after version check, before any state-modifying modules), **Then** the system creates read-only btrfs snapshots on both source and target for all configured subvolumes (e.g., `@home`, `@root`, `@docker`) with naming pattern `@<subvol>-presync-<timestamp>-<session-id>`
+1. **Given** user initiates sync, **When** the snapshot module executes (after version check, before any state-modifying modules), **Then** the system creates read-only btrfs snapshots on both source and target for all configured subvolumes (e.g., `/`, `/home`) with naming pattern `<subvol>-presync-<timestamp>-<session-id>`
 
-2. **Given** all sync modules complete successfully, **When** the post-sync phase executes, **Then** the system creates read-only btrfs snapshots on both source and target with naming pattern `@<subvol>-postsync-<timestamp>-<session-id>`
+2. **Given** all sync modules complete successfully, **When** the post-sync phase executes, **Then** the system creates read-only btrfs snapshots on both source and target with naming pattern `<subvol>-postsync-<timestamp>-<session-id>`
 
 3. **Given** user configuration includes `sync_modules: { btrfs_snapshots: false }`, **When** configuration is loaded, **Then** the system ignores this setting, logs "Btrfs snapshot module is required and cannot be disabled", and ensures the module runs
 
@@ -120,7 +119,7 @@ This delivers value by providing the foundation for all rollback and recovery op
 
 5. **Given** pre-sync snapshots exist and a sync module later fails with CRITICAL error, **When** the orchestrator detects the failure, **Then** it offers to rollback to the pre-sync snapshots (user confirmation required for rollback execution)
 
-6. **Given** snapshots accumulate over multiple sync runs, **When** user runs `pc-switcher cleanup-snapshots --older-than 7d`, **Then** the system deletes pre-sync and post-sync snapshots older than 7 days, retaining the most recent 3 sync sessions regardless of age
+6. **Given** snapshots accumulate over multiple sync runs, **When** user runs `pc-switcher cleanup-snapshots --older-than 7d`, **Then** the system deletes pre-sync and post-sync snapshots older than 7 days, retaining the most recent 3 (configurable) sync sessions regardless of age (`--older-than` is optional; default is configurable)
 
 ---
 
@@ -152,7 +151,7 @@ This delivers value by enabling developers to diagnose issues and providing audi
 
 3. **Given** sync is running, **When** any module (or orchestrator core) logs at CRITICAL level, **Then** the logging system immediately signals the orchestrator to abort sync, the current module's cleanup() is called, no further modules execute, and the terminal displays "CRITICAL error encountered, aborting sync: [error message]"
 
-4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`, **Then** the file contains structured log entries with format `[TIMESTAMP] [LEVEL] [MODULE] message` for all operations from both source and target machines
+4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`, **Then** the file contains structured log entries with format `[TIMESTAMP] [LEVEL] [MODULE] [HOSTNAME] message` for all operations from both source and target machines
 
 5. **Given** a target-side helper script emits log output to stdout, **When** the source orchestrator receives this output via SSH, **Then** it parses the log level prefix (if present) and routes the message through the unified logging system
 
@@ -170,7 +169,7 @@ This delivers value by enabling developers to diagnose issues and providing audi
 
 ### User Story 5 - Graceful Interrupt Handling (Priority: P1)
 
-When the user presses Ctrl+C during sync, the system catches the SIGINT signal, notifies the currently-executing module via its cleanup() method, logs the interruption, sends cleanup commands to the target machine, closes the SSH connection cleanly, and exits with appropriate status code. The system does not leave orphaned processes or partial state changes.
+When the user presses Ctrl+C during sync, the system catches the SIGINT signal, notifies the currently-executing module, logs the interruption, sends cleanup commands to the target machine, closes the connection cleanly, and exits with appropriate status code. The system does not leave orphaned processes. This does not issue a rollback automatically; that is a separate user action. How rollback can be initiated after an interrupt is covered in User Story 3.
 
 **Why this priority**: This is P1 because users must be able to safely interrupt long-running operations. Without graceful handling, interrupts could leave systems in inconsistent states or with orphaned processes on target machines.
 
@@ -245,6 +244,12 @@ sync_modules:
   k3s: false
 
 # Module-specific configuration
+btrfs_snapshots:
+  subvolumes:
+    - "/"
+    - "/home"
+    - "/root"
+
 user_data:
   exclude_patterns:
     - "**/.cache/*"
@@ -260,13 +265,13 @@ packages:
 
 ### User Story 7 - Installation and Setup Infrastructure (Priority: P2)
 
-The system provides installation and setup tooling to deploy pc-switcher to new machines and configure required infrastructure (Python dependencies, btrfs subvolume structure). A setup script handles initial installation, dependency checking, and subvolume creation guidance.
+The system provides installation and setup tooling to deploy pc-switcher to new machines and configure required infrastructure (packages, configuration). A setup script handles initial installation, dependency checking, and subvolume creation guidance.
 
 **Why this priority**: This is P2 because while essential for new users, developers can manually install during early development. Once the core sync system works, this becomes P1 for usability.
 
 **Independent Test**: Can be fully tested by:
 1. Running setup script on a fresh Ubuntu 24.04 machine
-2. Verifying all dependencies are installed (Python 3.13, uv, SSH, btrfs-progs)
+2. Verifying all dependencies are installed
 3. Confirming pc-switcher package is installed
 4. Checking that config directory is created with default config
 5. Validating btrfs subvolume structure guidance is provided
@@ -279,17 +284,17 @@ This delivers value by streamlining initial deployment.
 
 **Acceptance Scenarios**:
 
-1. **Given** a fresh Ubuntu 24.04 machine, **When** user runs `./install.sh`, **Then** the script checks for Python 3.13, installs `uv` if missing, installs pc-switcher package via `uv pip install --user .`, creates `~/.config/pc-switcher/` with default config, and displays "pc-switcher installed successfully"
+1. **Given** a fresh Ubuntu 24.04 machine, **When** user runs `./install.sh`, **Then** the script checks that the filesystem is btrfs, creates `~/.config/pc-switcher/` with default config, installs any software/packages and configuration necessary to run pc-switcher (if not installed/configured yet), and displays "pc-switcher installed successfully"
 
 2. **Given** user's system uses btrfs but does not have recommended subvolume structure, **When** setup runs, **Then** it displays guidance on creating subvolumes (e.g., "@home for /home", "@root for /root") and warns that some features require specific subvolumes
 
-3. **Given** required dependencies are missing (e.g., Python < 3.13), **When** setup runs, **Then** it lists missing dependencies, provides installation instructions, and exits without attempting installation
+3. **Given** user runs setup on a non-btrfs filesystem, **When** the script detects this, **Then** it logs CRITICAL error "pc-switcher requires btrfs filesystem for safety features" and exits without making changes
 
 ---
 
 ### User Story 8 - Dummy Test Modules (Priority: P1)
 
-Three dummy modules exist for testing infrastructure: `dummy-success` (completes successfully with INFO/WARNING/ERROR logs), `dummy-critical` (emits CRITICAL error mid-execution to test abort handling), and `dummy-exception` (raises unhandled exception to test exception handling). Each simulates long-running operations on both source and target with progress reporting.
+Three dummy modules exist for testing infrastructure: `dummy-success` (completes successfully with INFO/WARNING/ERROR logs), `dummy-critical` (emits CRITICAL error mid-execution to test abort handling), and `dummy-fail` (raises unhandled exception to test exception handling). Each simulates long-running operations on both source and target with progress reporting.
 
 **Why this priority**: This is P1 because these modules are essential for testing the orchestrator, logging, progress UI, error handling, and interrupt handling during development. They serve as reference implementations of the module contract.
 
@@ -301,11 +306,11 @@ Three dummy modules exist for testing infrastructure: `dummy-success` (completes
 
 **Acceptance Scenarios**:
 
-1. **Given** `dummy-success` module is enabled, **When** sync runs, **Then** the module performs 10-second busy-wait on source (logging INFO message every 2s), emits WARNING at 6s, performs 10-second busy-wait on target (logging INFO message every 2s), emits ERROR at 8s, reports progress updates (0%, 25%, 50%, 75%, 100%), and completes successfully
+1. **Given** `dummy-success` module is enabled, **When** sync runs, **Then** the module performs 20-second busy-wait on source (logging INFO message every 2s), emits WARNING at 6s, performs 10-second busy-wait on target (logging INFO message every 2s), emits ERROR at 8s, reports progress updates (0%, 25%, 50%, 75%, 100%), and completes successfully
 
 2. **Given** `dummy-critical` module is enabled, **When** sync runs and module reaches 50% progress, **Then** the module logs CRITICAL error "Simulated critical failure for testing", continues its internal loop (does not self-abort), but the orchestrator detects the CRITICAL log, calls module's cleanup(), aborts sync, and no subsequent modules execute
 
-3. **Given** `dummy-exception` module is enabled, **When** sync runs and module reaches 60% progress, **Then** the module raises `RuntimeError("Simulated unhandled exception for testing")`, the orchestrator catches the exception, logs it as CRITICAL, attempts cleanup(), and aborts sync
+3. **Given** `dummy-fail` module is enabled, **When** sync runs and module reaches 60% progress, **Then** the module raises and unhandled exception, the orchestrator catches the exception, logs it as CRITICAL, attempts cleanup(), and aborts sync
 
 4. **Given** any dummy module is running, **When** user presses Ctrl+C, **Then** the module's cleanup() method is called, it logs "Dummy module cleanup called", stops its busy-wait loop, and returns control to orchestrator
 
@@ -335,17 +340,17 @@ The terminal displays real-time sync progress including current module, operatio
 ### Edge Cases
 
 - What happens when target machine becomes unreachable mid-sync?
-  - Orchestrator detects SSH connection loss, logs CRITICAL error, attempts to reconnect once, if reconnection fails logs diagnostic information and aborts
-- What happens when source machine loses power during sync?
+  - Orchestrator detects connection loss, logs CRITICAL error, attempts to reconnect once, if reconnection fails logs diagnostic information and aborts
+- What happens when source machine crashes or powers off?
   - Target-side operations should timeout and cleanup after 5 minutes of no communication; next sync will detect inconsistent state via validation
 - What happens when btrfs snapshots cannot be created due to insufficient space?
   - Snapshot module logs CRITICAL error with space usage details, orchestrator aborts before any state modification
 - What happens when a module's cleanup() method raises an exception?
   - Orchestrator logs the exception, continues with shutdown sequence (cleanup is best-effort)
 - What happens when user runs multiple sync commands concurrently?
-  - Second invocation detects lockfile (`~/.local/share/pc-switcher/sync.lock`), displays "Another sync is in progress (PID: 12345)", and exits
+  - Second invocation detects lock, displays "Another sync is in progress (PID: 12345)", gives instructions on how to remove a stale lock and exits
 - What happens when config file contains unknown module names?
-  - Orchestrator logs WARNING "Unknown module 'xyz' in configuration, ignoring" and continues with known modules
+  - Orchestrator logs ERROR "Unknown module 'xyz' in configuration, aborting" and aborts sync
 - How does the system handle partial failures (some modules succeed, some fail)?
   - Each module's success/failure is tracked independently; orchestrator logs summary at end showing which modules succeeded/failed; overall sync is considered failed if any module fails
 - What happens when target has newer pc-switcher version than source?
@@ -357,23 +362,21 @@ The terminal displays real-time sync progress including current module, operatio
 
 #### Module Architecture
 
-- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized module interface (Python abstract base class or protocol) specifying methods: `validate()`, `pre_sync()`, `sync()`, `post_sync()`, `cleanup()`, `get_config_schema()`, and properties: `name`, `version`, `dependencies`
+- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized module interface specifying methods: `validate()`, `pre_sync()`, `sync()`, `post_sync()`, `cleanup()`, `get_config_schema()`, and properties: `name`, `version`, `dependencies`
 
 - **FR-002** `[Deliberate Simplicity]`: Each module MUST declare dependencies as list of module names it must run after; orchestrator MUST topologically sort modules by dependencies before execution
 
 - **FR-003** `[Reliability Without Compromise]`: System MUST call module lifecycle methods in order: `validate()` (all modules), `pre_sync()`, `sync()`, `post_sync()` for each module, then `cleanup()` on shutdown or errors
 
-- **FR-004** `[Reliability Without Compromise]`: System MUST call currently-executing module's `cleanup()` method when Ctrl+C is pressed, before exiting
+- **FR-004** `[Reliability Without Compromise]`: System MUST call currently-executing module's `cleanup()` method when Ctrl+C is pressed, waiting for a configurable timeout, before exiting
 
-- **FR-005** `[Deliberate Simplicity]`: Modules MUST be auto-discovered from `pcswitcher.modules` package; no manual registration required
+- **FR-005** `[Deliberate Simplicity]`: Modules MUST be auto-discovered from the configuration file section `sync_modules` and instantiated by the orchestrator
 
 #### Self-Installation
 
 - **FR-006** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version
 
-- **FR-007** `[Proven Tooling Only]`: Installation/upgrade on target MUST use `uv pip install --user` with wheel file transferred from source
-
-- **FR-008** `[Reliability Without Compromise]`: Version check MUST compare both version numbers and source package hash to detect incomplete upgrades
+- **FR-008** `[Reliability Without Compromise]`: System MUST check target machine's pc-switcher version before any other operations; if target version is higher than source version, MUST abort sync with WARNING log
 
 - **FR-009** `[Frictionless Command UX]`: If installation/upgrade fails, system MUST log CRITICAL error with diagnostic details and abort sync
 
@@ -403,11 +406,9 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-020** `[Documentation As Runtime Contract]`: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
 
-- **FR-021** `[Documentation As Runtime Contract]`: Log entries MUST include timestamp (ISO8601), level, module name, and message in structured format
+- **FR-021** `[Documentation As Runtime Contract]`: Log entries MUST include timestamp (ISO8601) in UTC, level, module name, and message in structured format
 
 - **FR-022** `[Reliability Without Compromise]`: System MUST aggregate logs from both source-side orchestrator and target-side operations into unified log stream
-
-- **FR-023** `[Proven Tooling Only]`: System MUST use `structlog` library for structured logging with consistent formatting
 
 #### Interrupt Handling
 
@@ -429,15 +430,15 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-031** `[Frictionless Command UX]`: System MUST apply reasonable defaults for missing configuration values
 
-- **FR-032** `[Frictionless Command UX]`: System MUST allow enabling/disabling optional modules via `sync_modules: { module_name: true/false }` but MUST ignore disable attempts for required modules
+- **FR-032** `[Frictionless Command UX]`: System MUST allow enabling/disabling optional modules via `sync_modules: { module_name: true/false }`
 
 - **FR-033** `[Reliability Without Compromise]`: If configuration file has syntax errors or invalid values, system MUST display clear error message with location and exit before sync
 
+- **FR-033** `[Reliability Without Compromise]`: If configuration file contains a disable attempt for a required module, system MUST display clear error message with location and exit before sync
+
 #### Installation & Setup
 
-- **FR-034** `[Frictionless Command UX]`: System MUST provide installation script that checks dependencies (Python 3.13, uv, SSH), installs pc-switcher package, and creates default configuration
-
-- **FR-035** `[Proven Tooling Only]`: Installation MUST use `uv pip install --user` for package installation
+- **FR-034** `[Frictionless Command UX]`: System MUST provide installation script that checks and installs/upgrades dependencies, installs pc-switcher package, and creates default configuration
 
 - **FR-036** `[Frictionless Command UX]`: Setup script MUST detect btrfs filesystem presence and provide guidance on recommended subvolume structure if not present
 
@@ -445,33 +446,29 @@ The terminal displays real-time sync progress including current module, operatio
 
 #### Testing Infrastructure
 
-- **FR-038** `[Deliberate Simplicity]`: System MUST include three dummy modules: `dummy-success`, `dummy-critical`, `dummy-exception`
+- **FR-038** `[Deliberate Simplicity]`: System MUST include three dummy modules: `dummy-success`, `dummy-critical`, `dummy-fail`
 
 - **FR-039** `[Deliberate Simplicity]`: `dummy-success` MUST simulate 10s operation on source (log every 2s, WARNING at 6s) and 10s on target (log every 2s, ERROR at 8s), emit progress updates, and complete successfully
 
 - **FR-040** `[Reliability Without Compromise]`: `dummy-critical` MUST log CRITICAL error at 50% progress and continue execution to test that orchestrator aborts sync
 
-- **FR-041** `[Reliability Without Compromise]`: `dummy-exception` MUST raise unhandled exception at 60% progress to test orchestrator exception handling
+- **FR-041** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at 60% progress to test orchestrator exception handling
 
 - **FR-042** `[Reliability Without Compromise]`: All dummy modules MUST implement `cleanup()` that logs "Dummy module cleanup called" and stops execution
 
 #### Progress Reporting
 
-- **FR-043** `[Frictionless Command UX]`: Modules MUST emit progress updates including percentage (0-100), current item description, and estimated completion time
+- **FR-043** `[Frictionless Command UX]`: Modules CAN emit progress updates including percentage (0-100), current item description, and estimated completion time
 
 - **FR-044** `[Frictionless Command UX]`: Orchestrator MUST forward progress updates to terminal UI system for display
 
-- **FR-045** `[Documentation As Runtime Contract]`: Progress updates at FULL log level MUST be written to log file
+- **FR-045** `[Documentation As Runtime Contract]`: Progress updates MUST be written to log file at FULL log level
 
 #### Core Orchestration
 
 - **FR-046** `[Frictionless Command UX]`: System MUST provide single command `pc-switcher sync <target>` that executes complete workflow
 
-- **FR-047** `[Proven Tooling Only]`: System MUST use persistent SSH connection with multiplexing (ControlMaster) per ADR-002
-
-- **FR-048** `[Reliability Without Compromise]`: System MUST verify SSH connection to target before beginning operations
-
-- **FR-049** `[Reliability Without Compromise]`: System MUST implement lockfile mechanism (`~/.local/share/pc-switcher/sync.lock`) to prevent concurrent sync executions
+- **FR-049** `[Reliability Without Compromise]`: System MUST implement locking mechanism to prevent concurrent sync executions
 
 - **FR-050** `[Documentation As Runtime Contract]`: System MUST log overall sync result (success/failure) and summary of module outcomes
 
@@ -483,7 +480,7 @@ The terminal displays real-time sync progress including current module, operatio
 - **LogEntry**: Represents a logged event with timestamp, level, module name, message, and structured context data
 - **ProgressUpdate**: Represents module progress including percentage, current item, estimated remaining time, and module name
 - **Configuration**: Represents parsed and validated config including global settings, module enable/disable flags, and per-module settings
-- **TargetConnection**: Represents SSH connection to target machine with methods for command execution, file transfer, and process management
+- **TargetConnection**: Represents connection to target machine with methods for command execution, file transfer, and process management
 
 ## Success Criteria *(mandatory)*
 
@@ -493,9 +490,9 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **SC-002** `[Reliability Without Compromise]`: System creates snapshots before and after sync in 100% of successful sync runs
 
-- **SC-003** `[Reliability Without Compromise]`: System successfully aborts sync within 2 seconds when CRITICAL error occurs, with no state modifications after abort
+- **SC-003** `[Reliability Without Compromise]`: System successfully aborts sync within 5 seconds when CRITICAL error occurs, with no state modifications after abort
 
-- **SC-004** `[Frictionless Command UX]`: System completes version check and installation/upgrade on target within 30 seconds for typical package size (< 10MB)
+- **SC-004** `[Frictionless Command UX]`: System completes version check and installation/upgrade on target within 30 seconds
 
 - **SC-005** `[Documentation As Runtime Contract]`: Log files contain complete audit trail of all operations with timestamps, levels, and module attribution in 100% of sync runs
 
@@ -512,14 +509,12 @@ The terminal displays real-time sync progress including current module, operatio
 ## Assumptions
 
 - Source and target machines run Ubuntu 24.04 LTS with btrfs filesystems
-- Python 3.13 is available or can be installed on both machines
 - User has SSH key-based authentication configured between source and target
 - User has sudo privileges on both machines for operations requiring elevation
 - Machines are connected via LAN during sync operations
-- Btrfs subvolumes exist for directories to be snapshotted (or will be created as part of setup)
 - Terminal emulator supports ANSI escape codes for progress UI
 - User's `~/.ssh/config` contains target machine configurations if using aliases
-- Sufficient disk space exists on target for package installation (< 50MB typically)
+- Sufficient disk space exists on target for package installation
 - No other tools are simultaneously modifying the same system state during sync
 
 ## Out of Scope
