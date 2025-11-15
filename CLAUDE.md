@@ -136,3 +136,9 @@ This repository will NOT contain:
 
 - UX: Terminal-based UI, single command to launch entire sync process
 - No implementation code exists yet - focus on specification and planning first using SpecKit workflow
+
+## Active Technologies
+- Python 3.13 (per ADR-003; Paramiko not yet supporting 3.14) (001-foundation)
+
+## Recent Changes
+- 001-foundation: Added Python 3.13 (per ADR-003; Paramiko not yet supporting 3.14)

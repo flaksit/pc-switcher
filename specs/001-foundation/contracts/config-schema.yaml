@@ -1,0 +1,199 @@
+# Configuration Schema for pc-switcher
+#
+# This document defines the structure and validation rules for ~/.config/pc-switcher/config.yaml
+# Requirements: FR-029, FR-030, FR-031, FR-032, FR-033, FR-034, FR-035
+# User Story: 6 (Configuration System)
+
+# Global settings (top-level)
+log_file_level:
+  type: string
+  enum: [DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL]
+  default: FULL
+  description: "Minimum log level for file output (~/.local/share/pc-switcher/logs/)"
+
+log_cli_level:
+  type: string
+  enum: [DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL]
+  default: INFO
+  description: "Minimum log level for terminal display"
+
+# Module enable/disable flags
+sync_modules:
+  type: object
+  description: "Enable or disable individual sync modules"
+  properties:
+    btrfs_snapshots:
+      type: boolean
+      default: true
+      immutable: true  # Required module, cannot be disabled (FR-012)
+      description: "Snapshot creation/rollback (REQUIRED - cannot disable)"
+
+    dummy_success:
+      type: boolean
+      default: false
+      description: "Test module: success path with progress reporting"
+
+    dummy_critical:
+      type: boolean
+      default: false
+      description: "Test module: CRITICAL error triggering abort"
+
+    dummy_fail:
+      type: boolean
+      default: false
+      description: "Test module: unhandled exception"
+
+  # Future modules (features 4-9):
+  # user_data: {type: boolean, default: true}
+  # packages: {type: boolean, default: true}
+  # docker: {type: boolean, default: true}
+  # vms: {type: boolean, default: false}
+  # k3s: {type: boolean, default: false}
+
+# Disk space monitoring (FR-017, FR-018)
+disk:
+  type: object
+  properties:
+    min_free:
+      oneOf:
+        - type: integer
+          minimum: 0
+          description: "Minimum free space in bytes (absolute)"
+        - type: number
+          minimum: 0.0
+          maximum: 1.0
+          description: "Minimum free space as percentage (0.0-1.0)"
+      default: 0.1  # 10%
+      description: "Abort sync if free space below this threshold"
+
+    reserve_minimum:
+      oneOf:
+        - type: integer
+          minimum: 0
+        - type: number
+          minimum: 0.0
+          maximum: 1.0
+      default: 0.05  # 5%
+      description: "Reserved space during sync (abort if crossed)"
+
+    check_interval:
+      type: integer
+      minimum: 1
+      default: 60
+      description: "Seconds between disk space checks during sync"
+
+# Module-specific configuration sections
+
+btrfs_snapshots:
+  type: object
+  required: [subvolumes]
+  properties:
+    subvolumes:
+      type: array
+      items:
+        type: string
+      minItems: 1
+      default: ["/", "/home", "/root"]
+      description: "Subvolumes to snapshot (must exist on both source and target)"
+
+    keep_recent:
+      type: integer
+      minimum: 1
+      default: 3
+      description: "Always keep this many recent sync sessions (even if older than max_age_days)"
+
+    max_age_days:
+      type: integer
+      minimum: 1
+      default: 7
+      description: "Default age for cleanup-snapshots --older-than (days)"
+
+dummy_success:
+  type: object
+  properties:
+    duration_seconds:
+      type: integer
+      minimum: 1
+      default: 20
+      description: "Duration of simulated sync operation"
+
+# Future module configs (features 4-9):
+#
+# user_data:
+#   type: object
+#   properties:
+#     exclude_patterns:
+#       type: array
+#       items: {type: string}
+#       default: ["**/.cache/*", "**/node_modules/*"]
+#     preserve_timestamps: {type: boolean, default: true}
+#
+# packages:
+#   type: object
+#   properties:
+#     sync_ppa: {type: boolean, default: true}
+#     sync_flatpak: {type: boolean, default: true}
+#     sync_snap: {type: boolean, default: true}
+#
+# docker:
+#   type: object
+#   properties:
+#     preserve_cache: {type: boolean, default: true}
+#     sync_volumes: {type: boolean, default: true}
+#
+# vms:
+#   type: object
+#   properties:
+#     verify_suspended: {type: boolean, default: true}
+#     sync_vm_images: {type: boolean, default: true}
+#
+# k3s:
+#   type: object
+#   properties:
+#     sync_pvcs: {type: boolean, default: true}
+#     backup_etcd: {type: boolean, default: true}
+
+# Example valid configuration:
+#
+# log_file_level: FULL
+# log_cli_level: INFO
+#
+# sync_modules:
+#   btrfs_snapshots: true
+#   dummy_success: false
+#   dummy_critical: false
+#   dummy_fail: false
+#
+# disk:
+#   min_free: 0.1  # 10%
+#   reserve_minimum: 0.05  # 5%
+#   check_interval: 60
+#
+# btrfs_snapshots:
+#   subvolumes:
+#     - "/"
+#     - "/home"
+#     - "/root"
+#   keep_recent: 3
+#   max_age_days: 7
+#
+# dummy_success:
+#   duration_seconds: 20
+
+# Validation rules (enforced by orchestrator):
+#
+# 1. Required modules cannot be disabled:
+#    - If sync_modules.btrfs_snapshots == false, error and abort
+#
+# 2. Unknown module names are errors:
+#    - If sync_modules contains unregistered module, error and abort
+#
+# 3. Module configs must validate against module's get_config_schema():
+#    - Orchestrator loads each module's schema and validates config section
+#
+# 4. Missing optional values get defaults:
+#    - If log_file_level missing, use FULL
+#    - If module config missing, module provides defaults via schema
+#
+# 5. Invalid YAML syntax:
+#    - Parse error with line number, abort before sync
