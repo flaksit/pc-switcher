@@ -100,9 +100,9 @@ class SyncModule(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Unique module identifier (e.g., 'btrfs-snapshots', 'user-data', 'docker').
+        """Unique module identifier (e.g., 'btrfs_snapshots', 'user_data', 'docker').
 
-        Must be unique across all modules.
+        Must be unique across all modules (using underscores per Python convention).
         Used for config sections, logging context, execution ordering.
         """
 
@@ -111,7 +111,7 @@ class SyncModule(ABC):
     def required(self) -> bool:
         """Whether this module can be disabled via configuration.
 
-        Required modules (e.g., btrfs-snapshots) cannot be disabled.
+        Required modules (e.g., btrfs_snapshots) cannot be disabled.
         Optional modules (e.g., docker, k3s) can be disabled.
         """
 

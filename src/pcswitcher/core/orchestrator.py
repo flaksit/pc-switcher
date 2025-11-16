@@ -624,11 +624,11 @@ class Orchestrator:
     def _offer_rollback(self) -> None:
         """Offer user the option to rollback to pre-sync state.
 
-        Only offered if btrfs-snapshots module is available and
+        Only offered if btrfs_snapshots module is available and
         sync failed with CRITICAL errors.
         """
         if self._btrfs_snapshots_module is None:
-            self.logger.warning("Cannot offer rollback: btrfs-snapshots module not available")
+            self.logger.warning("Cannot offer rollback: btrfs_snapshots module not available")
             return
 
         self.logger.warning("Sync failed. Rollback to pre-sync snapshots is available.")
@@ -657,13 +657,13 @@ class Orchestrator:
             SyncError: If rollback fails
         """
         if self._btrfs_snapshots_module is None:
-            raise SyncError("Cannot rollback: btrfs-snapshots module not available")
+            raise SyncError("Cannot rollback: btrfs_snapshots module not available")
 
         print("\nExecuting rollback...")
         self.logger.info("Starting rollback", session_id=self.session.id)
 
         try:
-            # Call rollback method on btrfs-snapshots module
+            # Call rollback method on btrfs_snapshots module
             from pcswitcher.modules.btrfs_snapshots import BtrfsSnapshotsModule
 
             if isinstance(self._btrfs_snapshots_module, BtrfsSnapshotsModule):
@@ -672,7 +672,7 @@ class Orchestrator:
                 print("IMPORTANT: Reboot required for changes to take effect.")
                 self.logger.info("Rollback completed successfully")
             else:
-                raise SyncError("Invalid btrfs-snapshots module type")
+                raise SyncError("Invalid btrfs_snapshots module type")
 
         except SyncError as e:
             print(f"\nRollback failed: {e}")
