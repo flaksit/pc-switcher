@@ -19,6 +19,7 @@ from pcswitcher.core.module import SyncError
 from pcswitcher.core.orchestrator import Orchestrator
 from pcswitcher.core.session import SessionState, SyncSession, generate_session_id
 from pcswitcher.remote.connection import SSHRemoteExecutor, TargetConnection
+from pcswitcher.utils.lock import LockError, LockManager
 
 console = Console()
 
@@ -52,6 +53,7 @@ def sync(
         pc-switcher sync 192.168.1.100 --config custom.yaml
     """
     exit_code = 0
+    lock_manager: LockManager | None = None
 
     try:
         # Load configuration
@@ -75,6 +77,14 @@ def sync(
             enabled_modules=list(cfg.sync_modules.keys()),
             state=SessionState.INITIALIZING,
         )
+
+        # Acquire lock to prevent concurrent syncs
+        lock_manager = LockManager(session_id)
+        try:
+            lock_manager.acquire_lock(interactive=True)
+        except LockError as e:
+            console.print(f"[red]Lock error:[/red] {e}")
+            raise typer.Exit(1) from e
 
         # Configure logging
         configure_logging(
@@ -128,6 +138,10 @@ def sync(
     except Exception as e:
         console.print(f"\n[red]Unexpected error:[/red] {e}")
         exit_code = 1
+    finally:
+        # Release lock
+        if lock_manager is not None:
+            lock_manager.release_lock()
 
     raise typer.Exit(exit_code)
 

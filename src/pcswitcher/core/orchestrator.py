@@ -27,6 +27,7 @@ from pcswitcher.core.config import Configuration, validate_module_config
 from pcswitcher.core.logging import LogLevel, get_logger
 from pcswitcher.core.module import RemoteExecutor, SyncError, SyncModule
 from pcswitcher.core.session import ModuleResult, SessionState, SyncSession
+from pcswitcher.remote.installer import InstallationError, VersionManager
 from pcswitcher.utils.disk import DiskMonitor, format_bytes
 
 if TYPE_CHECKING:
@@ -121,6 +122,7 @@ class Orchestrator:
             self.session.set_state(SessionState.INITIALIZING)
             self.logger.info("Initializing sync session", target=self.remote.get_hostname())
             self._verify_btrfs_filesystem()
+            self._ensure_version_sync()
             self._load_modules()
             self._start_disk_monitoring()
 
@@ -189,6 +191,57 @@ class Orchestrator:
         except subprocess.CalledProcessError as e:
             raise SyncError(f"Failed to check filesystem type: {e.stderr}") from e
 
+    def _ensure_version_sync(self) -> None:
+        """Ensure target machine has matching pc-switcher version.
+
+        Checks target version and installs/upgrades if needed. Aborts if
+        target version is newer than source (downgrade prevention).
+
+        Raises:
+            SyncError: If version check fails or installation fails
+        """
+        try:
+            version_manager = VersionManager(self.remote._connection)  # type: ignore[attr-defined]
+
+            # Get versions
+            local_version = version_manager.get_local_version()
+            target_version = version_manager.get_target_version()
+
+            # Ensure version sync
+            version_manager.ensure_version_sync(local_version, target_version)
+
+            # Log successful version sync
+            if target_version is None:
+                self.logger.info(
+                    f"Installed pc-switcher {local_version} on target",
+                    action="install",
+                    version=local_version,
+                )
+            elif local_version != target_version:
+                self.logger.info(
+                    f"Upgraded target from {target_version} to {local_version}",
+                    action="upgrade",
+                    from_version=target_version,
+                    to_version=local_version,
+                )
+            else:
+                self.logger.info(
+                    "Target pc-switcher version matches source",
+                    action="verify",
+                    version=local_version,
+                )
+
+        except InstallationError as e:
+            # Log the error at CRITICAL level to trigger abort
+            error_msg = f"Version synchronization failed: {e}"
+            self.logger.critical(error_msg)
+            raise SyncError(error_msg) from e
+        except Exception as e:
+            # Catch unexpected errors during version management
+            error_msg = f"Unexpected error during version check: {e}"
+            self.logger.critical(error_msg)
+            raise SyncError(error_msg) from e
+
     def _load_modules(self) -> None:
         """Load and instantiate enabled sync modules.
 
@@ -220,8 +273,8 @@ class Orchestrator:
                 self._modules.append(module)
                 self.logger.full(f"Loaded module: {module.name}")  # type: ignore[attr-defined]
 
-                # Store reference to btrfs-snapshots module
-                if module.name == "btrfs-snapshots":
+                # Store reference to btrfs_snapshots module
+                if module.name == "btrfs_snapshots":
                     self._btrfs_snapshots_module = module
 
             except Exception as e:

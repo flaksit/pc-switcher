@@ -58,7 +58,7 @@ class BtrfsSnapshotsModule(SyncModule):
     @override
     def name(self) -> str:
         """Module identifier."""
-        return "btrfs-snapshots"
+        return "btrfs_snapshots"
 
     @property
     @override

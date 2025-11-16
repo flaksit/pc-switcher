@@ -35,7 +35,7 @@ class DummyCriticalModule(SyncModule):
     @override
     def name(self) -> str:
         """Module identifier."""
-        return "dummy-critical"
+        return "dummy_critical"
 
     @property
     @override
