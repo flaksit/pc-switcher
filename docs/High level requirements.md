@@ -41,7 +41,7 @@ The machines are used for development (coding, building, testing), general produ
 - Machine hardware cache (GPU shaders, fontconfig)
 - Machine-specific packages and configuration
 
-## Enviromnent
+## Environment
 
 - All machines run Ubuntu 24.04 LTS
 - Machines are connected to same LAN (1Gb ethernet) during sync

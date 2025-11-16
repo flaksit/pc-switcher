@@ -89,9 +89,7 @@ class InterruptHandler:
 
     def install_handlers(self) -> None:
         """Install signal handlers for graceful shutdown."""
-        self._original_handlers[signal.SIGINT] = signal.signal(
-            signal.SIGINT, self.handle_interrupt
-        )
+        self._original_handlers[signal.SIGINT] = signal.signal(signal.SIGINT, self.handle_interrupt)
 
     def _restore_handlers(self) -> None:
         """Restore original signal handlers."""

@@ -55,9 +55,7 @@ class DiskMonitor:
                 except ValueError as e:
                     raise ValueError(f"Invalid percentage format '{min_free}': {e}") from e
             else:
-                raise ValueError(
-                    f"String min_free must be percentage (e.g., '20%'), got '{min_free}'"
-                )
+                raise ValueError(f"String min_free must be percentage (e.g., '20%'), got '{min_free}'")
         elif isinstance(min_free, float):
             # Float between 0.0 and 1.0 is treated as fraction
             required_bytes = total_bytes * min_free if 0.0 <= min_free <= 1.0 else min_free

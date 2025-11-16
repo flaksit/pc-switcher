@@ -1,0 +1,134 @@
+# Full-Featured PC-switcher Configuration
+# Demonstrates all available configuration options with explanations.
+# Copy this file to ~/.config/pc-switcher/config.yaml and customize.
+
+# =============================================================================
+# LOGGING CONFIGURATION
+# =============================================================================
+# Controls what gets logged to file and terminal.
+# Available levels (from most to least verbose):
+#   DEBUG    - Verbose diagnostics for development
+#   FULL     - Detailed file-level operations
+#   INFO     - High-level operations and milestones
+#   WARNING  - Potential issues that don't stop sync
+#   ERROR    - Recoverable errors (sync continues)
+#   CRITICAL - Unrecoverable errors (sync aborts)
+
+log_file_level: FULL    # Recommended: FULL for troubleshooting
+log_cli_level: INFO     # Recommended: INFO for normal operation
+
+# =============================================================================
+# DISK SPACE MONITORING
+# =============================================================================
+# Prevents sync from filling disks. Both thresholds can be:
+# - Float 0.0-1.0: Percentage of total disk (e.g., 0.10 = 10%)
+# - Integer: Absolute bytes (e.g., 10737418240 = 10GB)
+
+disk:
+  # Pre-flight check: abort if free space below this threshold
+  min_free: 0.20          # 20% free space required to start sync
+
+  # Runtime check: abort if free space drops below during sync
+  reserve_minimum: 0.15   # Abort if free space falls below 15%
+
+  # Monitoring frequency during sync (seconds)
+  check_interval: 30      # Check every 30 seconds
+
+# =============================================================================
+# SYNC MODULES
+# =============================================================================
+# Modules execute in the order listed here. Each module handles a specific
+# aspect of system synchronization.
+#
+# IMPORTANT:
+# - btrfs_snapshots MUST be first and enabled (data safety requirement)
+# - Order matters: dependencies must be listed before dependents
+# - Disabled modules (false) are skipped but must have valid config
+
+sync_modules:
+  # Required module: creates snapshots for safety and rollback
+  btrfs_snapshots: true
+
+  # Test modules (for development/testing only)
+  # dummy_success: false   # Simulates successful sync operation
+  # dummy_critical: false  # Tests error handling (fails at 50%)
+  # dummy_fail: false      # Tests exception propagation
+
+  # Future modules (not yet implemented):
+  # user_data: true        # Sync /home, /root directories
+  # packages: true         # Sync apt, snap, flatpak packages
+  # docker: true           # Sync Docker images/containers/volumes
+  # vms: true              # Sync KVM/virt-manager VMs
+  # k3s: true              # Sync k3s cluster state
+
+# =============================================================================
+# MODULE-SPECIFIC CONFIGURATIONS
+# =============================================================================
+
+# Btrfs Snapshots Module
+# Creates read-only snapshots before and after sync for data safety.
+# Provides rollback capability if sync fails.
+btrfs_snapshots:
+  # Subvolumes to snapshot (flat names from 'btrfs subvolume list /')
+  # These must exist on both source and target machines.
+  subvolumes:
+    - "@"        # Root filesystem (mounted at /)
+    - "@home"    # Home directory (mounted at /home)
+    - "@root"    # Root user's home (mounted at /root) - uncomment if exists
+
+  # Directory where snapshots are stored
+  # Format: {snapshot_dir}/{subvol}-{presync|postsync}-{timestamp}-{session_id}
+  # Example: /.snapshots/@-presync-20250116T123045Z-a1b2c3d4
+  snapshot_dir: "/.snapshots"
+
+  # Retention policy for automatic cleanup
+  keep_recent: 3         # Always keep N most recent sync sessions
+  max_age_days: 7        # Delete snapshots older than N days
+
+# Test module configuration (for development only)
+# dummy_success:
+#   duration_seconds: 20  # How long to simulate sync operation
+
+# Future module configurations will be added here:
+# user_data:
+#   exclude_patterns:
+#     - "*.cache"
+#     - ".local/share/Trash/*"
+#   include_hidden: true
+
+# packages:
+#   sync_apt: true
+#   sync_snap: true
+#   sync_flatpak: true
+#   sync_ppas: true
+
+# docker:
+#   sync_images: true
+#   sync_containers: true
+#   sync_volumes: true
+#   prune_dangling: false
+
+# =============================================================================
+# USAGE NOTES
+# =============================================================================
+#
+# 1. Before first sync:
+#    - Ensure btrfs filesystem: stat -f -c "%T" /
+#    - Check subvolumes: sudo btrfs subvolume list /
+#    - Create snapshot directory: sudo mkdir -p /.snapshots
+#    - Configure SSH: ssh-copy-id user@target
+#
+# 2. Running sync:
+#    pc-switcher sync target-hostname
+#    pc-switcher sync 192.168.1.100 --config /path/to/this/file.yaml
+#
+# 3. Viewing logs:
+#    pc-switcher logs --last
+#    pc-switcher logs --session <session-id>
+#    ls ~/.local/share/pc-switcher/logs/
+#
+# 4. Cleanup old snapshots:
+#    pc-switcher cleanup-snapshots --older-than 14d --keep-recent 5
+#
+# 5. Rollback after failed sync:
+#    pc-switcher rollback <session-id>

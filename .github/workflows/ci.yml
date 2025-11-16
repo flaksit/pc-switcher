@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.9.9"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run ruff check
+        run: uv run ruff check .
+
+      - name: Run basedpyright
+        run: uv run basedpyright
+
+      - name: Run pytest
+        run: uv run pytest
+
+      - name: Run codespell
+        run: uv run codespell --skip=".git,.venv,uv.lock" .

@@ -131,9 +131,7 @@ class VersionManager:
             )
 
             if result.returncode != 0:
-                raise InstallationError(
-                    f"Installation failed: {result.stderr or result.stdout}"
-                )
+                raise InstallationError(f"Installation failed: {result.stderr or result.stdout}")
         except Exception as e:
             raise InstallationError(f"Failed to install on target: {e}") from e
 
@@ -173,9 +171,7 @@ class VersionManager:
                 f"CRITICAL: Target version ({target_version}) is newer than source ({local_version}). "
                 "This is an unsupported configuration."
             )
-            raise InstallationError(
-                f"Target version ({target_version}) is newer than source ({local_version})"
-            )
+            raise InstallationError(f"Target version ({target_version}) is newer than source ({local_version})")
         elif comparison < 0:
             # Target version is older - upgrade
             print(f"INFO: Upgrading target from {target_version} to {local_version}")

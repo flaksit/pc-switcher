@@ -1,0 +1,16 @@
+# Minimal PC-switcher Configuration
+# This is the simplest valid configuration with only required settings.
+# Suitable for testing or machines with standard Ubuntu btrfs layout.
+
+# Modules to execute (in order)
+sync_modules:
+  btrfs_snapshots: true  # Required: must be first and cannot be disabled
+
+# Btrfs snapshot configuration
+btrfs_snapshots:
+  subvolumes:
+    - "@"               # Root filesystem (/)
+    - "@home"           # Home directory (/home)
+  snapshot_dir: "/.snapshots"
+  keep_recent: 3        # Keep at least 3 recent snapshots
+  max_age_days: 7       # Delete older snapshots during cleanup

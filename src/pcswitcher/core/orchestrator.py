@@ -1,10 +1,24 @@
-"""Core orchestration logic for pc-switcher sync operations."""
+"""Core orchestration logic for pc-switcher sync operations.
+
+The orchestrator is the central coordinator for all sync operations. It implements
+a state machine that progresses through phases: INITIALIZING -> VALIDATING ->
+EXECUTING -> terminal state (COMPLETED/ABORTED/FAILED).
+
+Key responsibilities:
+- Module lifecycle management (load, validate, execute, abort)
+- Error handling and graceful shutdown
+- Disk space monitoring during sync
+- Signal handling (SIGINT/SIGTERM)
+- Progress reporting to terminal UI
+- Session state tracking and rollback coordination
+"""
 
 from __future__ import annotations
 
 import importlib
 import signal
 import subprocess
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -30,6 +44,12 @@ class Orchestrator:
     5. Terminal state - COMPLETED, ABORTED, or FAILED
 
     Handles errors, user interrupts, and provides rollback capability.
+
+    The orchestrator enforces several invariants:
+    - btrfs_snapshots module must be first and enabled
+    - Modules execute sequentially in configuration order
+    - Exception-based error propagation (modules raise SyncError)
+    - Session.has_errors tracks whether ERROR/CRITICAL logs occurred
     """
 
     def __init__(
@@ -58,10 +78,20 @@ class Orchestrator:
         self._disk_monitor = DiskMonitor()
         self._btrfs_snapshots_module: SyncModule | None = None
         self._start_time: datetime | None = None
+        self._cli_invocation_time: float | None = None  # For startup performance tracking
 
         # Register signal handlers for graceful shutdown
+        # These handlers convert signals into KeyboardInterrupt for uniform handling
         signal.signal(signal.SIGINT, self._handle_interrupt)
         signal.signal(signal.SIGTERM, self._handle_interrupt)
+
+    def set_cli_invocation_time(self, invocation_time: float) -> None:
+        """Set the CLI invocation time for startup performance measurement.
+
+        Args:
+            invocation_time: Unix timestamp when CLI was invoked (from time.time())
+        """
+        self._cli_invocation_time = invocation_time
 
     def run(self) -> SessionState:
         """Execute the complete sync workflow.
@@ -71,12 +101,23 @@ class Orchestrator:
         """
         self._start_time = datetime.now(UTC)
 
+        # Log startup performance if CLI invocation time was set
+        if self._cli_invocation_time is not None:
+            startup_duration_ms = (time.time() - self._cli_invocation_time) * 1000
+            self.logger.info(
+                "Startup performance",
+                startup_ms=f"{startup_duration_ms:.2f}",
+                phase="orchestrator.run() entered",
+            )
+
         # Start UI if available
         if self.ui is not None:
             self.ui.start()
 
         try:
             # Phase 1: INITIALIZING
+            # This phase sets up the sync environment: verify prerequisites,
+            # load modules, and start continuous monitoring
             self.session.set_state(SessionState.INITIALIZING)
             self.logger.info("Initializing sync session", target=self.remote.get_hostname())
             self._verify_btrfs_filesystem()
@@ -84,16 +125,23 @@ class Orchestrator:
             self._start_disk_monitoring()
 
             # Phase 2: VALIDATING
+            # All modules validate prerequisites before any state changes occur.
+            # This fail-fast approach prevents partial sync from corrupting state.
             self.session.set_state(SessionState.VALIDATING)
             self.logger.info("Validating modules")
             self._validate_all_modules()
 
             # Phase 3: EXECUTING
+            # Execute each module's full lifecycle (pre_sync -> sync -> post_sync).
+            # If any module fails, abort is called and execution stops.
             self.session.set_state(SessionState.EXECUTING)
             self.logger.info("Starting module execution")
             self._execute_all_modules()
 
-            # Phase 4: Determine final state
+            # Phase 4: Determine final state based on execution results
+            # COMPLETED = all modules succeeded without errors
+            # FAILED = at least one module failed or ERROR/CRITICAL logged
+            # ABORTED = user interrupt or explicit abort request
             final_state = self._determine_final_state()
             self.session.set_state(final_state)
 
@@ -213,14 +261,22 @@ class Orchestrator:
     def _inject_module_methods(self, module: SyncModule) -> None:
         """Inject log() and emit_progress() methods into module.
 
+        This dependency injection pattern allows modules to log and report progress
+        without knowing about the specific logging or UI implementation. The orchestrator
+        acts as a mediator between modules and the logging/UI subsystems.
+
         Args:
             module: Module to inject methods into
         """
         module_logger = get_logger(f"module.{module.name}", session_id=self.session.id)
 
         def log_method(level: LogLevel, message: str, **context: Any) -> None:
-            """Module logging method that forwards to structlog."""
-            # Map LogLevel to structlog method
+            """Module logging method that forwards to structlog.
+
+            The orchestrator's ERROR log processor will set session.has_errors=True
+            when ERROR or CRITICAL levels are logged, affecting final session state.
+            """
+            # Map LogLevel enum to structlog method call
             if level == LogLevel.DEBUG:
                 module_logger.debug(message, **context)
             elif level == LogLevel.FULL:
@@ -239,8 +295,12 @@ class Orchestrator:
             item: str = "",
             eta: timedelta | None = None,
         ) -> None:
-            """Module progress reporting method."""
-            # Log at FULL level
+            """Module progress reporting method.
+
+            Progress is reported as a float 0.0-1.0 representing completion of
+            the module's total work. This is logged at FULL level and forwarded
+            to the terminal UI for visual feedback.
+            """
             context: dict[str, Any] = {"module": module.name, "item": item}
             if percentage is not None:
                 context["percentage"] = f"{percentage * 100:.1f}%"
@@ -249,7 +309,7 @@ class Orchestrator:
 
             module_logger.full(f"Progress: {item}", **context)  # type: ignore[attr-defined]
 
-            # Forward to terminal UI if available
+            # Forward to terminal UI if available for real-time progress bars
             if self.ui is not None and percentage is not None:
                 self.ui.update_progress(module.name, percentage, item)
 
@@ -281,11 +341,14 @@ class Orchestrator:
     def _execute_all_modules(self) -> None:
         """Execute all modules in sequence.
 
-        Each module goes through: pre_sync → sync → post_sync
+        Each module goes through: pre_sync -> sync -> post_sync
+        Module execution stops immediately on first failure, and abort() is called
+        on the failing module to allow cleanup of partial state.
         """
         total_modules = len(self._modules)
 
         for idx, module in enumerate(self._modules):
+            # Check for abort request (from signal handler or previous error)
             if self.session.abort_requested:
                 self.logger.warning("Abort requested, stopping module execution")
                 break
@@ -293,7 +356,7 @@ class Orchestrator:
             self._current_module = module
             self.logger.info(f"Executing module: {module.name}")
 
-            # Create UI task for this module
+            # Create UI task for this module to show progress
             if self.ui is not None:
                 self.ui.create_module_task(module.name)
                 self.ui.show_overall_progress(idx, total_modules)
@@ -303,11 +366,13 @@ class Orchestrator:
                 self.session.module_results[module.name] = ModuleResult.SUCCESS
                 self.logger.info(f"Module completed: {module.name}")
 
-                # Mark module as 100% complete
+                # Mark module as 100% complete in UI
                 if self.ui is not None:
                     self.ui.update_progress(module.name, 1.0, "Complete")
 
             except SyncError as e:
+                # SyncError is the expected exception type for module failures.
+                # These are logged as CRITICAL and trigger immediate abort.
                 self.logger.critical(f"Module failed: {module.name}", error=str(e))
                 self.session.module_results[module.name] = ModuleResult.FAILED
                 self._cleanup_phase()
@@ -315,13 +380,15 @@ class Orchestrator:
                 break
 
             except Exception as e:
+                # Unexpected exceptions indicate bugs in module code.
+                # We still abort but log full stack trace for debugging.
                 self.logger.critical(f"Unexpected error in module: {module.name}", error=str(e), exc_info=True)
                 self.session.module_results[module.name] = ModuleResult.FAILED
                 self._cleanup_phase()
                 self.session.abort_requested = True
                 break
 
-        # Update overall progress to show completion
+        # Update overall progress to show final state
         if self.ui is not None:
             completed_modules = len([r for r in self.session.module_results.values() if r == ModuleResult.SUCCESS])
             self.ui.show_overall_progress(completed_modules, total_modules)
@@ -505,8 +572,7 @@ class Orchestrator:
 
         if not is_sufficient:
             raise SyncError(
-                f"Insufficient disk space. Free: {format_bytes(free_bytes)}, "
-                f"Required: {format_bytes(required_bytes)}"
+                f"Insufficient disk space. Free: {format_bytes(free_bytes)}, Required: {format_bytes(required_bytes)}"
             )
 
         self.logger.full(  # type: ignore[attr-defined]

@@ -1,4 +1,20 @@
-"""Remote execution implementation for pc-switcher."""
+"""Remote execution implementation for pc-switcher.
+
+This module provides SSH-based remote execution capabilities using Fabric library.
+It implements the RemoteExecutor interface that modules use to communicate with
+the target machine.
+
+Key features:
+- Connection persistence via SSH ControlMaster
+- Automatic reconnection on connection loss
+- Command execution with optional sudo
+- File transfer from source to target
+- Process termination for cleanup operations
+
+The connection architecture uses a layered approach:
+- TargetConnection: Low-level SSH operations via Fabric
+- SSHRemoteExecutor: Implements RemoteExecutor interface for modules
+"""
 
 from __future__ import annotations
 
@@ -17,14 +33,23 @@ if TYPE_CHECKING:
 
 
 class ConnectionError(Exception):
-    """Raised when connection to target fails."""
+    """Raised when connection to target fails or is lost during operation."""
 
 
 class TargetConnection:
     """Manages persistent SSH connection to target machine using Fabric.
 
-    Uses ControlMaster for connection persistence and provides methods for
-    running commands, transferring files, and managing pc-switcher installation.
+    Uses SSH ControlMaster for connection persistence, which allows multiple
+    SSH operations to share a single connection. This reduces connection overhead
+    and latency for repeated operations.
+
+    Provides methods for:
+    - Command execution (with optional sudo)
+    - File transfer (SFTP-based)
+    - Process management on target
+    - Version checking and installation
+
+    Thread Safety: Not thread-safe. Each sync operation should use its own connection.
     """
 
     def __init__(self, host: str, user: str = "root", port: int = 22) -> None:
@@ -43,17 +68,23 @@ class TargetConnection:
     def connect(self) -> None:
         """Establish connection to target machine.
 
-        Configures ControlMaster for persistent connection.
+        Configures Fabric connection with SSH agent forwarding and automatic
+        key discovery. ControlMaster settings should be configured in
+        ~/.ssh/config for optimal persistence.
 
         Raises:
-            ConnectionError: If connection fails
+            ConnectionError: If connection fails. Common causes:
+                - Target machine not reachable (network issue)
+                - SSH service not running on target
+                - SSH key not authorized on target
+                - Incorrect hostname or IP address
         """
         try:
-            # Configure connection with ControlMaster
-            # Note: ControlMaster configuration should be set in ~/.ssh/config for persistence
+            # Configure connection using SSH agent and local keys
+            # ControlMaster (connection multiplexing) is configured via ~/.ssh/config
             connect_kwargs = {
-                "allow_agent": True,
-                "look_for_keys": True,
+                "allow_agent": True,  # Use SSH agent for key management
+                "look_for_keys": True,  # Automatically find keys in ~/.ssh/
             }
 
             self._connection = Connection(
@@ -63,13 +94,20 @@ class TargetConnection:
                 connect_kwargs=connect_kwargs,
             )
 
-            # Test connection
+            # Test connection with simple echo command to verify SSH is working
             result = self._connection.run("echo test", hide=True, warn=True)
             if not result.ok:
-                raise ConnectionError("Connection test failed")
+                raise ConnectionError(
+                    "Connection test failed. SSH connection established but command execution failed. "
+                    "Check target machine's shell configuration."
+                )
 
         except Exception as e:
-            raise ConnectionError(f"Failed to connect to {self._user}@{self._host}: {e}") from e
+            raise ConnectionError(
+                f"Failed to connect to {self._user}@{self._host}:{self._port}. "
+                f"Verify: (1) target is reachable (ping), (2) SSH service running, "
+                f"(3) SSH key authorized on target. Error: {e}"
+            ) from e
 
     def disconnect(self) -> None:
         """Close connection to target machine.
@@ -106,28 +144,36 @@ class TargetConnection:
     ) -> subprocess.CompletedProcess[str]:
         """Execute a command on the remote machine.
 
+        The command is executed via SSH. Output is captured (not streamed) and
+        returned in a CompletedProcess object for easy inspection.
+
+        On connection failure, one automatic reconnect attempt is made before
+        raising ConnectionError. This handles transient network issues.
+
         Args:
-            command: Shell command to execute
-            sudo: Whether to run with sudo privileges
-            timeout: Optional timeout in seconds
+            command: Shell command to execute (passed to remote shell)
+            sudo: Whether to run with sudo privileges (requires passwordless sudo)
+            timeout: Optional timeout in seconds (None = no timeout)
 
         Returns:
-            CompletedProcess-like object with stdout, stderr, and returncode
+            CompletedProcess with stdout, stderr, and returncode. Non-zero
+            returncode indicates command failure but NOT connection failure.
 
         Raises:
-            ConnectionError: If connection is lost
-            SyncError: If command execution fails
+            ConnectionError: If connection is lost and reconnect fails.
+                            This is a network/SSH issue, not a command issue.
         """
         conn = self._ensure_connected()
 
         try:
-            # Use Fabric's run or sudo
+            # Execute command with output capture
+            # hide=True suppresses local output, warn=True prevents exception on non-zero exit
             if sudo:
                 result = conn.sudo(command, hide=True, warn=True, timeout=timeout)
             else:
                 result = conn.run(command, hide=True, warn=True, timeout=timeout)
 
-            # Convert Fabric Result to CompletedProcess-like object
+            # Convert Fabric Result to standard library CompletedProcess for consistency
             return subprocess.CompletedProcess(
                 args=command,
                 returncode=result.return_code,
@@ -136,7 +182,8 @@ class TargetConnection:
             )
 
         except UnexpectedExit as e:
-            # Command failed, but that's okay - return result
+            # UnexpectedExit means command ran but had non-zero exit
+            # This is normal operation, not an error condition
             return subprocess.CompletedProcess(
                 args=command,
                 returncode=e.result.return_code,
@@ -144,11 +191,12 @@ class TargetConnection:
                 stderr=e.result.stderr,
             )
         except Exception as e:
-            # Try to reconnect once
+            # Connection or timeout error - attempt automatic reconnection once
             try:
                 self.disconnect()
                 self.connect()
-                # Retry command
+                conn = self._ensure_connected()
+                # Retry the command after reconnection
                 if sudo:
                     result = conn.sudo(command, hide=True, warn=True, timeout=timeout)
                 else:
@@ -162,7 +210,8 @@ class TargetConnection:
                 )
             except Exception as reconnect_error:
                 raise ConnectionError(
-                    f"Lost connection to target and reconnect failed: {reconnect_error}"
+                    f"Lost connection to target during command execution and automatic reconnect failed. "
+                    f"Original error: {e}. Reconnect error: {reconnect_error}"
                 ) from e
 
     def send_file_to_target(self, local: Path, remote: Path) -> None:

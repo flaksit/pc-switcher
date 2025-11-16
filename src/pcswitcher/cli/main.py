@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -20,6 +21,9 @@ from pcswitcher.core.session import SessionState, SyncSession, generate_session_
 from pcswitcher.remote.connection import SSHRemoteExecutor, TargetConnection
 
 console = Console()
+
+# Record CLI invocation time for startup performance measurement (T125)
+_cli_invocation_time = time.time()
 
 app = typer.Typer(
     name="pc-switcher",
@@ -95,6 +99,9 @@ def sync(
             session=session,
             ui=ui,
         )
+
+        # Pass CLI invocation time for startup performance measurement (T125)
+        orchestrator.set_cli_invocation_time(_cli_invocation_time)
 
         # Run sync
         console.print(f"\n[bold blue]Starting sync session {session_id}[/bold blue]")

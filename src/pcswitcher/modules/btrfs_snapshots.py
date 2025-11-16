@@ -2,6 +2,17 @@
 
 This module handles creation, cleanup, and rollback of btrfs snapshots
 to ensure data safety during sync operations.
+
+Btrfs snapshots are copy-on-write (COW), meaning they are instantaneous and
+consume no disk space initially. Only blocks that change after snapshot creation
+consume additional space. This makes snapshots ideal for backup/rollback without
+significant disk wear.
+
+Key operations:
+- pre_sync: Create read-only snapshots before sync starts
+- post_sync: Create read-only snapshots after sync completes
+- rollback_to_presync: Restore system to pre-sync state on failure
+- cleanup_old_snapshots: Remove old snapshots to free disk space
 """
 
 from __future__ import annotations
@@ -22,8 +33,15 @@ class BtrfsSnapshotsModule(SyncModule):
     It creates read-only snapshots before and after sync operations,
     provides rollback functionality, and manages snapshot cleanup.
 
-    Snapshot naming: {snapshot_dir}/{subvol}-{presync|postsync}-{timestamp}-{session_id}
-    Example: /.snapshots/@-presync-20250116T123045Z-a1b2c3d4
+    Snapshot naming convention:
+        {snapshot_dir}/{subvol}-{presync|postsync}-{timestamp}-{session_id}
+        Example: /.snapshots/@-presync-20250116T123045Z-a1b2c3d4
+
+    The naming includes:
+    - subvol: The flat subvolume name (e.g., "@", "@home")
+    - presync/postsync: Indicates when snapshot was taken
+    - timestamp: ISO 8601 UTC timestamp for ordering
+    - session_id: Links snapshot to specific sync session for rollback
     """
 
     def __init__(self, config: dict[str, Any], remote: RemoteExecutor) -> None:
@@ -87,12 +105,17 @@ class BtrfsSnapshotsModule(SyncModule):
     def validate(self) -> list[str]:
         """Validate btrfs filesystem and subvolumes exist.
 
+        This validation is read-only and makes no state changes. It verifies:
+        1. Root filesystem is btrfs (required for snapshot operations)
+        2. All configured subvolumes exist in btrfs subvolume list
+
         Returns:
-            List of validation errors (empty if valid)
+            List of validation errors (empty if valid). Each error message
+            should be user-actionable with clear remediation steps.
         """
         errors: list[str] = []
 
-        # Check if filesystem is btrfs
+        # Check if filesystem is btrfs by querying filesystem type of root
         try:
             result = subprocess.run(
                 ["stat", "-f", "-c", "%T", "/"],
@@ -102,11 +125,16 @@ class BtrfsSnapshotsModule(SyncModule):
             )
             fs_type = result.stdout.strip()
             if fs_type != "btrfs":
-                errors.append(f"Root filesystem is {fs_type}, not btrfs. Btrfs snapshots require btrfs filesystem.")
+                errors.append(
+                    f"Root filesystem is {fs_type}, not btrfs. "
+                    f"PC-switcher requires btrfs for snapshot support. "
+                    f"Please install Ubuntu with btrfs filesystem."
+                )
         except subprocess.CalledProcessError as e:
             errors.append(f"Failed to check filesystem type: {e.stderr}")
 
-        # Check all configured subvolumes exist
+        # Verify all configured subvolumes exist on this system
+        # This ensures config matches actual btrfs layout
         subvolumes: list[str] = self.config["subvolumes"]
         try:
             result = subprocess.run(
@@ -115,7 +143,8 @@ class BtrfsSnapshotsModule(SyncModule):
                 text=True,
                 check=True,
             )
-            # Parse output: "ID 256 gen 123 top level 5 path @"
+            # Parse btrfs output format: "ID 256 gen 123 top level 5 path @"
+            # We extract the path field which contains the flat subvolume name
             existing_subvols = set()
             for line in result.stdout.splitlines():
                 parts = line.split()
@@ -126,9 +155,15 @@ class BtrfsSnapshotsModule(SyncModule):
 
             for subvol in subvolumes:
                 if subvol not in existing_subvols:
-                    errors.append(f"Subvolume '{subvol}' not found in top-level btrfs subvolumes")
+                    errors.append(
+                        f"Subvolume '{subvol}' not found. "
+                        f"Run 'sudo btrfs subvolume list /' to see available subvolumes, "
+                        f"then update config to match."
+                    )
         except subprocess.CalledProcessError as e:
-            errors.append(f"Failed to list btrfs subvolumes: {e.stderr}")
+            errors.append(
+                f"Failed to list btrfs subvolumes: {e.stderr}. Ensure sudo access is configured for btrfs commands."
+            )
 
         return errors
 
@@ -136,8 +171,14 @@ class BtrfsSnapshotsModule(SyncModule):
     def pre_sync(self) -> None:
         """Create pre-sync read-only snapshots of all configured subvolumes.
 
+        These snapshots serve as the rollback point if sync fails. They are:
+        - Read-only: Prevents accidental modification
+        - Copy-on-write: Instantaneous creation, no initial disk space
+        - Session-tagged: Can be correlated with sync session for rollback
+
         Raises:
-            SyncError: If snapshot creation fails
+            SyncError: If snapshot creation fails for any subvolume.
+                       Failure here aborts the entire sync operation.
         """
         from pcswitcher.core.session import generate_session_id
 
@@ -147,17 +188,20 @@ class BtrfsSnapshotsModule(SyncModule):
         snapshot_dir = Path(self.config["snapshot_dir"])
         subvolumes: list[str] = self.config["subvolumes"]
 
-        # Ensure snapshot directory exists
+        # Ensure snapshot directory exists with proper permissions
         try:
             snapshot_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             self.log(LogLevel.CRITICAL, f"Failed to create snapshot directory: {e}")
-            raise SyncError(f"Failed to create snapshot directory {snapshot_dir}: {e}") from e
+            raise SyncError(
+                f"Failed to create snapshot directory {snapshot_dir}: {e}. "
+                f"Ensure directory is writable or create with: sudo mkdir -p {snapshot_dir}"
+            ) from e
 
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
         for subvol in subvolumes:
-            # Snapshot naming: {subvol}-presync-{timestamp}-{session_id}
+            # Build snapshot name with all correlation metadata
             snapshot_name = f"{subvol}-presync-{timestamp}-{self._session_id}"
             snapshot_path = snapshot_dir / snapshot_name
 
@@ -168,10 +212,11 @@ class BtrfsSnapshotsModule(SyncModule):
             )
 
             try:
-                # Find the mount point for this subvolume
+                # Resolve flat subvolume name to actual mount point
                 source_path = self._find_subvolume_path(subvol)
 
-                # Create read-only snapshot
+                # Create read-only snapshot using btrfs command
+                # -r flag makes snapshot read-only (safer for backup purposes)
                 subprocess.run(
                     ["sudo", "btrfs", "subvolume", "snapshot", "-r", str(source_path), str(snapshot_path)],
                     capture_output=True,
@@ -184,7 +229,10 @@ class BtrfsSnapshotsModule(SyncModule):
                     subvolume=subvol,
                 )
             except subprocess.CalledProcessError as e:
-                error_msg = f"Failed to create pre-sync snapshot for {subvol}: {e.stderr}"
+                error_msg = (
+                    f"Failed to create pre-sync snapshot for {subvol}: {e.stderr}. "
+                    f"Check sudo permissions for btrfs commands."
+                )
                 self.log(LogLevel.CRITICAL, error_msg)
                 raise SyncError(error_msg) from e
 
@@ -392,6 +440,9 @@ class BtrfsSnapshotsModule(SyncModule):
     def _find_subvolume_path(self, subvol: str) -> Path:
         """Find the mount point for a subvolume.
 
+        This maps flat btrfs subvolume names to their actual mount points.
+        Ubuntu's standard subvolume layout mounts @ at /, @home at /home, etc.
+
         Args:
             subvol: Flat subvolume name (e.g., "@", "@home")
 
@@ -399,9 +450,11 @@ class BtrfsSnapshotsModule(SyncModule):
             Path to mounted subvolume
 
         Raises:
-            SyncError: If subvolume mount point cannot be determined
+            SyncError: If subvolume mount point cannot be determined.
+                       This indicates a non-standard subvolume layout.
         """
-        # Common mappings for standard Ubuntu subvolumes
+        # Standard Ubuntu btrfs subvolume to mount point mappings
+        # These follow the common Ubuntu installer defaults
         common_mounts = {
             "@": Path("/"),
             "@home": Path("/home"),
@@ -411,8 +464,10 @@ class BtrfsSnapshotsModule(SyncModule):
         if subvol in common_mounts:
             return common_mounts[subvol]
 
-        # If not in common mappings, raise error
+        # Non-standard subvolume requires manual configuration
+        # Future enhancement: parse /etc/fstab to determine mount points automatically
         raise SyncError(
             f"Cannot determine mount point for subvolume '{subvol}'. "
-            f"Please add mapping in _find_subvolume_path()."
+            f"Standard subvolumes are: {', '.join(common_mounts.keys())}. "
+            f"For custom subvolumes, please add mapping to configuration."
         )
