@@ -139,6 +139,7 @@ This repository will NOT contain:
 
 ## Active Technologies
 - Python 3.13 (per ADR-003; Paramiko not yet supporting 3.14) (001-foundation)
+- Read ~/.claude/python.md and refered files for python conventions. Follow them strictly.
 
 ## Recent Changes
 - 001-foundation: Added Python 3.13 (per ADR-003; Paramiko not yet supporting 3.14)
