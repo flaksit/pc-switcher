@@ -136,9 +136,7 @@ def test_ensure_version_sync_target_older() -> None:
         result.stdout = ""
         result.stderr = ""
 
-        if "command -v uv" in cmd:
-            result.returncode = 0
-        elif "uv tool install" in cmd:
+        if "command -v uv" in cmd or "uv tool install" in cmd:
             result.returncode = 0
         return result
 

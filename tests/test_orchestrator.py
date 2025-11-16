@@ -7,8 +7,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from pcswitcher.core.config import Configuration
 from pcswitcher.core.logging import LogLevel
 from pcswitcher.core.orchestrator import Orchestrator
@@ -113,7 +111,7 @@ def test_orchestrator_signal_handlers_registered() -> None:
     session = create_test_session()
 
     with patch("signal.signal") as mock_signal:
-        orchestrator = Orchestrator(config, remote, session)
+        _ = Orchestrator(config, remote, session)
 
         # Verify signal handlers were registered
         import signal

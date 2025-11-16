@@ -6,7 +6,6 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 import pytest
-import yaml
 
 from pcswitcher.core.config import (
     ConfigError,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import socket
 import subprocess
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -324,16 +324,15 @@ def rollback(
 
         try:
             btrfs_module.rollback_to_presync(session_id)
-            console.print(f"\n[green bold]Rollback completed successfully[/green bold]")
+            console.print("\n[green bold]Rollback completed successfully[/green bold]")
             console.print(f"System has been restored to snapshot session {session_id}\n")
         except SyncError as e:
             console.print(f"\n[red]Rollback failed: {e}[/red]\n")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
     except Exception as e:
         console.print(f"[red]Unexpected error during rollback: {e}[/red]")
-        raise typer.Exit(1)
-
+        raise typer.Exit(1) from e
 
 @app.command()
 def cleanup_snapshots(
@@ -444,7 +443,7 @@ def cleanup_snapshots(
                 kept_count += len(snapshots)
                 console.print(f"[green]Keeping[/green] {len(snapshots)} recent snapshots from session {session_id}")
 
-    console.print(f"\n[bold]Cleanup summary:[/bold]")
+    console.print("\n[bold]Cleanup summary:[/bold]")
     console.print(f"  Deleted: {deleted_count} snapshots")
     console.print(f"  Kept: {kept_count} snapshots\n")
     raise typer.Exit(0)

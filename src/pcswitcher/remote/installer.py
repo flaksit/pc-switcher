@@ -5,8 +5,7 @@ from __future__ import annotations
 import subprocess
 from typing import TYPE_CHECKING
 
-from packaging.version import InvalidVersion
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from pcswitcher.core.logging import get_logger
 
