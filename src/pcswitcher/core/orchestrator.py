@@ -16,6 +16,7 @@ Key responsibilities:
 from __future__ import annotations
 
 import importlib
+import os
 import signal
 import subprocess
 import time
@@ -123,6 +124,7 @@ class Orchestrator:
             self.logger.info("Initializing sync session", target=self.remote.get_hostname())
             self._verify_btrfs_filesystem()
             self._ensure_version_sync()
+            self._check_disk_space()
             self._load_modules()
             self._start_disk_monitoring()
 
@@ -190,6 +192,82 @@ class Orchestrator:
             self.logger.full("Btrfs filesystem verification passed")  # type: ignore[attr-defined]
         except subprocess.CalledProcessError as e:
             raise SyncError(f"Failed to check filesystem type: {e.stderr}") from e
+
+    def _check_disk_space(self) -> None:
+        """Check disk space on both source and target machines.
+
+        Verifies minimum free space requirements before sync starts.
+        Configuration from btrfs_snapshots module if available.
+
+        Raises:
+            SyncError: If disk space is insufficient on either machine
+        """
+        # Get disk thresholds from config (use defaults if not specified)
+        min_free_threshold = self.config.module_configs.get("btrfs_snapshots", {}).get(
+            "min_free_threshold", 0.20
+        )  # Default 20%
+
+        try:
+            from pcswitcher.utils.disk import DiskMonitor
+
+            # Check local (source) disk space
+            is_sufficient, free_bytes, required_bytes = DiskMonitor.check_free_space(
+                Path("/"), min_free_threshold
+            )
+
+            if not is_sufficient:
+                error_msg = (
+                    f"Insufficient disk space on source machine. "
+                    f"Required: {format_bytes(required_bytes)}, Available: {format_bytes(free_bytes)}"
+                )
+                self.logger.critical(error_msg)
+                raise SyncError(error_msg)
+
+            self.logger.info(
+                "Source disk space check passed",
+                free_space=format_bytes(free_bytes),
+                required=format_bytes(required_bytes),
+            )
+
+            # Check remote (target) disk space via SSH
+            try:
+                result = self.remote.run(
+                    f"stat -c '%a %b %S' / | awk '{{print ($1 * $2 * $3)}}'",
+                    timeout=10.0,
+                )
+                if result.returncode == 0:
+                    try:
+                        available_bytes = float(result.stdout.strip())
+                        stat_result = os.statvfs("/")
+                        total_bytes = stat_result.f_blocks * stat_result.f_frsize
+                        required_target_bytes = total_bytes * float(min_free_threshold)
+
+                        if available_bytes < required_target_bytes:
+                            error_msg = (
+                                f"Insufficient disk space on target machine. "
+                                f"Required: {format_bytes(required_target_bytes)}, "
+                                f"Available: {format_bytes(available_bytes)}"
+                            )
+                            self.logger.critical(error_msg)
+                            raise SyncError(error_msg)
+
+                        self.logger.info(
+                            "Target disk space check passed",
+                            free_space=format_bytes(available_bytes),
+                            required=format_bytes(required_target_bytes),
+                        )
+                    except (ValueError, OSError) as e:
+                        self.logger.warning(f"Failed to parse target disk space: {e}")
+                else:
+                    self.logger.warning(f"Target disk space check failed: {result.stderr}")
+
+            except Exception as e:
+                self.logger.warning(f"Failed to check target disk space: {e}")
+
+        except Exception as e:
+            error_msg = f"Disk space check failed: {e}"
+            self.logger.critical(error_msg)
+            raise SyncError(error_msg) from e
 
     def _ensure_version_sync(self) -> None:
         """Ensure target machine has matching pc-switcher version.
