@@ -256,8 +256,6 @@ def rollback(
     Example:
         pc-switcher rollback --session abc12345
     """
-    from pcswitcher.remote.installer import VersionManager
-
     try:
         # Load configuration
         cfg = load_config(None)

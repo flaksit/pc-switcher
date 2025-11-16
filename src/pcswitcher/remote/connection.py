@@ -47,7 +47,6 @@ class TargetConnection:
     - Command execution (with optional sudo)
     - File transfer (SFTP-based)
     - Process management on target
-    - Version checking and installation
 
     Thread Safety: Not thread-safe. Each sync operation should use its own connection.
     """
@@ -260,47 +259,6 @@ class TargetConnection:
             with contextlib.suppress(Exception):
                 # Best-effort cleanup - ignore failures
                 self.run(f"pkill -9 {process_name}", sudo=True, timeout=5.0)
-
-    def check_version(self) -> str | None:
-        """Check pc-switcher version on target machine.
-
-        Returns:
-            Version string or None if not installed
-
-        Raises:
-            ConnectionError: If connection is lost
-        """
-        result = self.run("uv tool list", timeout=10.0)
-
-        if result.returncode != 0:
-            return None
-
-        # Parse version from uv tool list output
-        # Format: "pc-switcher v0.1.0" or "pc-switcher 0.1.0"
-        for line in result.stdout.splitlines():
-            if line.strip().startswith("pc-switcher"):
-                parts = line.strip().split()
-                if len(parts) >= 2:
-                    return parts[1].lstrip("v")
-        return None
-
-    def install_version(self, version: str) -> None:
-        """Install specific version of pc-switcher on target.
-
-        Args:
-            version: Version to install
-
-        Raises:
-            ConnectionError: If connection is lost
-            SyncError: If installation fails
-        """
-        github_repo = "https://github.com/flaksit/pc-switcher"
-        git_ref = f"git+{github_repo}@v{version}"
-        command = f"uv tool install {git_ref}"
-        result = self.run(command, sudo=True, timeout=300.0)
-
-        if result.returncode != 0:
-            raise SyncError(f"Installation failed: {result.stderr or result.stdout}")
 
 
 class SSHRemoteExecutor(RemoteExecutor):
