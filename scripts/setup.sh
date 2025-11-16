@@ -156,38 +156,17 @@ create_default_config() {
         return
     fi
 
-    # Create default config
-    cat > "${CONFIG_FILE}" << 'EOF'
-# PC-Switcher Configuration File
-# ~/.config/pc-switcher/config.yaml
+    # Fetch default config from GitHub repository
+    local raw_url
+    raw_url="${GITHUB_REPO/github.com/raw.githubusercontent.com}/main/config/default.yaml"
 
-# Logging Configuration
-log_file_level: FULL
-log_cli_level: INFO
-
-# Module Configuration
-sync_modules:
-  btrfs_snapshots: true  # Required - cannot be disabled
-
-# Btrfs Snapshots Module Configuration
-btrfs_snapshots:
-  subvolumes:
-    - "@"
-    - "@home"
-    - "@root"
-  snapshot_dir: "/.snapshots"
-  keep_recent: 3
-  max_age_days: 30
-  min_free_threshold: 0.20
-
-# Disk Configuration
-disk:
-  min_free: 0.20
-  check_interval: 30
-  reserve_minimum: 0.15
-EOF
-    info "Created default config file: ${CONFIG_FILE}"
-    info "Edit this file to configure sync behavior"
+    info "Fetching default config from ${raw_url}..."
+    if curl -fsSL "${raw_url}" -o "${CONFIG_FILE}"; then
+        info "Created default config file: ${CONFIG_FILE}"
+        info "Edit this file to configure sync behavior"
+    else
+        error "Failed to fetch default config from GitHub. Check network connection and repository access."
+    fi
 }
 
 main() {

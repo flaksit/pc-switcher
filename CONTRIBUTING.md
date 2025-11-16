@@ -46,7 +46,7 @@ pc-switcher/
 │   └── Premature analysis/ # Early exploration (reference only)
 ├── specs/                  # Feature specifications
 │   └── 001-foundation/    # Foundation feature specs
-├── examples/              # Example configuration files
+├── config/                # Default and example configuration files
 └── pyproject.toml         # Project configuration
 ```
 

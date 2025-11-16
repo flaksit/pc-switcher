@@ -91,38 +91,24 @@ ssh user@target-hostname hostname
 
 ### 2. Create Configuration
 
-Create the configuration directory and file:
+Create the configuration directory and copy the default config:
 
 ```bash
 mkdir -p ~/.config/pc-switcher
+curl -fsSL https://raw.githubusercontent.com/flaksit/pc-switcher/main/config/default.yaml \
+  -o ~/.config/pc-switcher/config.yaml
 ```
 
-Create `~/.config/pc-switcher/config.yaml`:
+Alternatively, if you've cloned the repository:
 
-```yaml
-# Logging levels: DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL
-log_file_level: FULL
-log_cli_level: INFO
-
-# Disk space monitoring
-disk:
-  min_free: 0.20          # Minimum 20% free space before sync starts
-  reserve_minimum: 0.15   # Abort if free space drops below 15% during sync
-  check_interval: 30      # Check disk space every 30 seconds
-
-# Modules to run (in execution order)
-sync_modules:
-  btrfs_snapshots: true   # Required: must be first and enabled
-
-# Btrfs snapshots configuration
-btrfs_snapshots:
-  subvolumes:
-    - "@"                  # Root filesystem
-    - "@home"              # Home directory
-  snapshot_dir: "/.snapshots"
-  keep_recent: 3
-  max_age_days: 7
+```bash
+mkdir -p ~/.config/pc-switcher
+cp config/default.yaml ~/.config/pc-switcher/config.yaml
 ```
+
+See [`config/default.yaml`](config/default.yaml) for all available configuration options with documentation.
+
+A minimal configuration is also available at [`config/minimal.yaml`](config/minimal.yaml).
 
 ### 3. Verify Btrfs Setup
 

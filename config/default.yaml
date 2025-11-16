@@ -1,5 +1,4 @@
-# Full-Featured PC-switcher Configuration
-# Demonstrates all available configuration options with explanations.
+# PC-switcher Default Configuration
 # Copy this file to ~/.config/pc-switcher/config.yaml and customize.
 
 # =============================================================================
@@ -25,10 +24,10 @@ log_cli_level: INFO     # Recommended: INFO for normal operation
 # - Integer: Absolute bytes (e.g., 10737418240 = 10GB)
 
 disk:
-  # Pre-flight check: abort if free space below this threshold
+  # Pre-flight check: sync doesn't start if free space below this threshold
   min_free: 0.20          # 20% free space required to start sync
 
-  # Runtime check: abort if free space drops below during sync
+  # Runtime check: abort immediately if free space drops below during sync
   reserve_minimum: 0.15   # Abort if free space falls below 15%
 
   # Monitoring frequency during sync (seconds)
@@ -54,13 +53,6 @@ sync_modules:
   # dummy_critical: false  # Tests error handling (fails at 50%)
   # dummy_fail: false      # Tests exception propagation
 
-  # Future modules (not yet implemented):
-  # user_data: true        # Sync /home, /root directories
-  # packages: true         # Sync apt, snap, flatpak packages
-  # docker: true           # Sync Docker images/containers/volumes
-  # vms: true              # Sync KVM/virt-manager VMs
-  # k3s: true              # Sync k3s cluster state
-
 # =============================================================================
 # MODULE-SPECIFIC CONFIGURATIONS
 # =============================================================================
@@ -71,10 +63,12 @@ sync_modules:
 btrfs_snapshots:
   # Subvolumes to snapshot (flat names from 'btrfs subvolume list /')
   # These must exist on both source and target machines.
+  # Add or remove subvolumes as needed for your system.
   subvolumes:
     - "@"        # Root filesystem (mounted at /)
     - "@home"    # Home directory (mounted at /home)
-    - "@root"    # Root user's home (mounted at /root) - uncomment if exists
+    - "@root"    # Root user's home (mounted at /root)
+    # - "@etc"     # System configuration (mounted at /etc) (if applicable)
 
   # Directory where snapshots are stored
   # Format: {snapshot_dir}/{subvol}-{presync|postsync}-{timestamp}-{session_id}
@@ -85,50 +79,12 @@ btrfs_snapshots:
   keep_recent: 3         # Always keep N most recent sync sessions
   max_age_days: 7        # Delete snapshots older than N days
 
-# Test module configuration (for development only)
+# Test module configurations (for development only)
 # dummy_success:
 #   duration_seconds: 20  # How long to simulate sync operation
 
-# Future module configurations will be added here:
-# user_data:
-#   exclude_patterns:
-#     - "*.cache"
-#     - ".local/share/Trash/*"
-#   include_hidden: true
+# dummy_critical:
+#   fail_at_percentage: 50  # Progress percentage at which to fail
 
-# packages:
-#   sync_apt: true
-#   sync_snap: true
-#   sync_flatpak: true
-#   sync_ppas: true
-
-# docker:
-#   sync_images: true
-#   sync_containers: true
-#   sync_volumes: true
-#   prune_dangling: false
-
-# =============================================================================
-# USAGE NOTES
-# =============================================================================
-#
-# 1. Before first sync:
-#    - Ensure btrfs filesystem: stat -f -c "%T" /
-#    - Check subvolumes: sudo btrfs subvolume list /
-#    - Create snapshot directory: sudo mkdir -p /.snapshots
-#    - Configure SSH: ssh-copy-id user@target
-#
-# 2. Running sync:
-#    pc-switcher sync target-hostname
-#    pc-switcher sync 192.168.1.100 --config /path/to/this/file.yaml
-#
-# 3. Viewing logs:
-#    pc-switcher logs --last
-#    pc-switcher logs --session <session-id>
-#    ls ~/.local/share/pc-switcher/logs/
-#
-# 4. Cleanup old snapshots:
-#    pc-switcher cleanup-snapshots --older-than 14d --keep-recent 5
-#
-# 5. Rollback after failed sync:
-#    pc-switcher rollback <session-id>
+# dummy_fail:
+#   message: "Intentional test failure"  # Error message to raise
