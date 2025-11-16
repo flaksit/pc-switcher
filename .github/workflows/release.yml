@@ -6,11 +6,10 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
-  publish:
-    name: Build and Publish
+  validate:
+    name: Validate and Build
     runs-on: ubuntu-latest
 
     steps:
@@ -29,25 +28,31 @@ jobs:
         with:
           version: "0.9.9"
 
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run linting
+        run: uv run ruff check .
+
+      - name: Run type checking
+        run: uv run basedpyright
+
+      - name: Run tests
+        run: uv run pytest
+
       - name: Build distribution packages
         run: uv build
 
-      - name: Extract version from release tag
-        id: version
+      - name: Verify version matches tag
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
-          VERSION="${VERSION#v}"  # Remove leading 'v' if present
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
-      - name: Authenticate to GitHub Container Registry
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Publish to GitHub Container Registry
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          uv publish --index-url https://ghcr.io/${{ github.repository_owner }}/
+          TAG_VERSION="${{ github.event.release.tag_name }}"
+          TAG_VERSION="${TAG_VERSION#v}"  # Remove leading 'v' if present
+          BUILT_VERSION=$(uv run python -c "import importlib.metadata; print(importlib.metadata.version('pcswitcher'))")
+          if [ "$TAG_VERSION" != "$BUILT_VERSION" ]; then
+            echo "Error: Tag version ($TAG_VERSION) does not match built version ($BUILT_VERSION)"
+            exit 1
+          fi
+          echo "Version verified: $TAG_VERSION"
 
       - name: Upload artifacts to release
         uses: softprops/action-gh-release@v1

@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "uv-dynamic-versioning"]
 build-backend = "hatchling.build"
 
 [project]
 name = "pcswitcher"
-version = "0.1.0-dev0"
+dynamic = ["version"]
 description = "Synchronization system for seamless switching between Linux desktop machines"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -54,3 +54,9 @@ typeCheckingMode = "standard"
 pythonVersion = "3.13"
 pythonPlatform = "Linux"
 reportMissingTypeStubs = false
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+fallback-version = "0.0.0-dev"

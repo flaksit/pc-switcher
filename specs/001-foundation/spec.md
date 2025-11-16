@@ -74,9 +74,9 @@ This delivers value by enabling zero-touch target setup and ensuring version con
 
 **Acceptance Scenarios**:
 
-1. **Given** source machine has pc-switcher version 0.3.2 installed and target machine has no pc-switcher installed, **When** user runs `pc-switcher sync <target>`, **Then** the orchestrator detects missing installation, installs pc-switcher version 0.3.2 on target from GitHub Package Registry (ghcr.io) using `uv tool install`, verifies installation succeeded, and proceeds with sync
+1. **Given** source machine has pc-switcher version 0.3.2 installed and target machine has no pc-switcher installed, **When** user runs `pc-switcher sync <target>`, **Then** the orchestrator detects missing installation, installs pc-switcher version 0.3.2 on target from GitHub repository using `uv tool install git+https://github.com/.../pc-switcher@v0.3.2`, verifies installation succeeded, and proceeds with sync
 
-2. **Given** source has version 0.4.0 and target has version 0.3.2, **When** sync begins, **Then** orchestrator detects version mismatch, logs "Target pc-switcher version 0.3.2 is outdated, upgrading to 0.4.0", installs pc-switcher version 0.4.0 on target from GitHub Package Registry using `uv tool install --upgrade`, and verifies upgrade completed
+2. **Given** source has version 0.4.0 and target has version 0.3.2, **When** sync begins, **Then** orchestrator detects version mismatch, logs "Target pc-switcher version 0.3.2 is outdated, upgrading to 0.4.0", upgrades pc-switcher on target from GitHub repository using Git URL installation, and verifies upgrade completed
 
 3. **Given** source and target both have version 0.4.0, **When** sync begins, **Then** orchestrator logs "Target pc-switcher version matches source (0.4.0), skipping installation" and proceeds immediately to next phase
 
@@ -378,7 +378,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 #### Self-Installation
 
-- **FR-005** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version from public GitHub Package Registry using `uv tool install pc-switcher==<version>` (package published to ghcr.io/[owner]/pc-switcher, no authentication required for public registry)
+- **FR-005** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version from public GitHub repository using `uv tool install git+https://github.com/[owner]/pc-switcher@v<version>` (no authentication required for public repository)
 
 - **FR-006** `[Reliability Without Compromise]`: System MUST abort sync with CRITICAL log if the target machine's pc-switcher version is newer than the source version (preventing accidental downgrades)
 

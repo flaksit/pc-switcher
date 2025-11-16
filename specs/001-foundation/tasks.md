@@ -180,8 +180,8 @@ Repository structure (single Python package):
 - [ ] T052 [US2] Implement TargetConnection.connect() with ControlMaster socket path configuration in src/pcswitcher/remote/connection.py (Throughput-Focused Syncing)
 - [ ] T053 [US2] Implement TargetConnection.disconnect() with graceful connection closure in src/pcswitcher/remote/connection.py (Reliability Without Compromise)
 - [ ] T054 [US2] Implement TargetConnection.run(command, sudo, timeout) using Fabric conn.run() with result handling in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
-- [ ] T055 [US2] Implement TargetConnection.check_version() that detects pc-switcher version on target via pip show pc-switcher in src/pcswitcher/remote/connection.py (Frictionless Command UX)
-- [ ] T056 [US2] Implement TargetConnection.install_version(version) that installs from GitHub Package Registry (ghcr.io) using `uv tool install pc-switcher==<version>` in src/pcswitcher/remote/installer.py (Frictionless Command UX)
+- [ ] T055 [US2] Implement TargetConnection.check_version() that detects pc-switcher version on target via uv tool list in src/pcswitcher/remote/connection.py (Frictionless Command UX)
+- [ ] T056 [US2] Implement TargetConnection.install_version(version) that installs from GitHub repository using `uv tool install git+https://github.com/.../pc-switcher@v<version>` in src/pcswitcher/remote/installer.py (Frictionless Command UX)
 - [ ] T057 [US2] Implement version comparison logic: log CRITICAL "Target version X is newer than source Y" and abort if target > source, upgrade if target < source, skip if equal in src/pcswitcher/remote/installer.py (Reliability Without Compromise)
 - [ ] T058 [US2] Add error handling for installation failures with CRITICAL logging in src/pcswitcher/remote/installer.py (Reliability Without Compromise)
 - [ ] T059 [US2] Implement TargetConnection.send_file_to_target(local, remote) using Fabric conn.put() in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
@@ -332,7 +332,7 @@ Repository structure (single Python package):
 - [ ] T111 [US7] Create setup script scripts/setup.sh that detects btrfs filesystem using stat -f -c %T / and aborts with clear error if not btrfs (Frictionless Command UX)
 - [ ] T112 [US7] Add check for uv 0.9.9 installation in scripts/setup.sh, install if missing (Proven Tooling Only)
 - [ ] T112a [US7] Add check for btrfs-progs installation using dpkg -l btrfs-progs in scripts/setup.sh, install via apt-get if missing (Proven Tooling Only)
-- [ ] T113 [US7] Implement pc-switcher package installation from GitHub Package Registry using uv tool install pc-switcher in scripts/setup.sh (Frictionless Command UX)
+- [ ] T113 [US7] Implement pc-switcher package installation from GitHub repository using uv tool install git+<repo>@<tag> in scripts/setup.sh (Frictionless Command UX)
 - [ ] T114 [US7] Create ~/.config/pc-switcher/ directory and generate default config.yaml with inline comments in scripts/setup.sh (Documentation As Runtime Contract)
 - [ ] T115 [US7] Add success message "pc-switcher installed successfully" at end of setup in scripts/setup.sh (Frictionless Command UX)
 
@@ -342,17 +342,17 @@ Repository structure (single Python package):
 
 ## Phase 15: CI/CD and Release Infrastructure (Priority: P2)
 
-**Goal**: GitHub Actions workflows for CI (lint, type check, tests) and releases (build, publish to GitHub Package Registry), dynamic versioning from Git tags
+**Goal**: GitHub Actions workflows for CI (lint, type check, tests) and releases (build, validate, attach artifacts), dynamic versioning from Git tags
 
-**Independent Test**: Create pull request and verify CI runs all checks, create GitHub release with tag and verify package publishes to ghcr.io with correct version
+**Independent Test**: Create pull request and verify CI runs all checks, create GitHub release with tag and verify build succeeds with correct version from tag
 
 **Dependencies**: All code complete
 
 ### Implementation for CI/CD
 
 - [ ] T116 [P] [CICD] Create .github/workflows/ci.yml with jobs: checkout, setup-uv (from .tool-versions), uv sync, ruff check, basedpyright, pytest, codespell (Proven Tooling Only)
-- [ ] T117 [P] [CICD] Create .github/workflows/release.yml triggered on release published with steps: checkout (fetch-depth: 0 for tags), setup-uv, uv build, authenticate to ghcr.io using GITHUB_TOKEN, uv publish --repository ghcr.io (Proven Tooling Only)
-- [ ] T118 [CICD] Configure release workflow with GITHUB_TOKEN permissions: contents read, packages write, and configure package registry URL (ghcr.io/owner/pc-switcher) in .github/workflows/release.yml (Proven Tooling Only)
+- [ ] T117 [P] [CICD] Create .github/workflows/release.yml triggered on release published with steps: checkout (fetch-depth: 0 for tags), setup-uv, uv sync, run tests, uv build, verify version matches tag, attach artifacts to release (Proven Tooling Only)
+- [ ] T118 [CICD] Configure release workflow with GITHUB_TOKEN permissions: contents write, and verify dynamic versioning extracts version from Git tag correctly in .github/workflows/release.yml (Proven Tooling Only)
 - [ ] T119 [CICD] Add workflow run verification: test CI on branch push, test release on test tag in .github/workflows/ (Reliability Without Compromise)
 
 **Checkpoint**: At this point, CI/CD should automatically test code and publish releases

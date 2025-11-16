@@ -270,15 +270,18 @@ class TargetConnection:
         Raises:
             ConnectionError: If connection is lost
         """
-        result = self.run("pip show pcswitcher", timeout=10.0)
+        result = self.run("uv tool list", timeout=10.0)
 
         if result.returncode != 0:
             return None
 
-        # Parse version from output
+        # Parse version from uv tool list output
+        # Format: "pc-switcher v0.1.0" or "pc-switcher 0.1.0"
         for line in result.stdout.splitlines():
-            if line.startswith("Version:"):
-                return line.split(":", 1)[1].strip()
+            if line.strip().startswith("pc-switcher"):
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    return parts[1].lstrip("v")
         return None
 
     def install_version(self, version: str) -> None:
@@ -291,7 +294,9 @@ class TargetConnection:
             ConnectionError: If connection is lost
             SyncError: If installation fails
         """
-        command = f"uv tool install pcswitcher=={version}"
+        github_repo = "https://github.com/flaksit/pc-switcher"
+        git_ref = f"git+{github_repo}@v{version}"
+        command = f"uv tool install {git_ref}"
         result = self.run(command, sudo=True, timeout=300.0)
 
         if result.returncode != 0:

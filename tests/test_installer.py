@@ -113,9 +113,9 @@ def test_ensure_version_sync_target_missing() -> None:
     manager = VersionManager(mock_remote)
     manager.ensure_version_sync("1.0.0", None)
 
-    # Verify installation was attempted
+    # Verify installation was attempted using Git URL
     calls = [call[0][0] for call in mock_remote.run.call_args_list]
-    assert any("uv tool install pc-switcher==1.0.0" in call for call in calls)
+    assert any("uv tool install git+" in call and "@v1.0.0" in call for call in calls)
 
 
 def test_ensure_version_sync_target_older() -> None:
@@ -130,7 +130,7 @@ def test_ensure_version_sync_target_older() -> None:
 
         if "command -v uv" in cmd:
             result.returncode = 0
-        elif "uv tool upgrade" in cmd:
+        elif "uv tool install" in cmd:
             result.returncode = 0
         return result
 
@@ -139,9 +139,9 @@ def test_ensure_version_sync_target_older() -> None:
     manager = VersionManager(mock_remote)
     manager.ensure_version_sync("2.0.0", "1.0.0")
 
-    # Verify upgrade was attempted
+    # Verify upgrade was attempted (install with Git URL replaces existing)
     calls = [call[0][0] for call in mock_remote.run.call_args_list]
-    assert any("uv tool upgrade pc-switcher==2.0.0" in call for call in calls)
+    assert any("uv tool install git+" in call and "@v2.0.0" in call for call in calls)
 
 
 def test_get_target_version_not_installed() -> None:

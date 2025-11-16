@@ -266,20 +266,20 @@ This document resolves all NEEDS CLARIFICATION items identified in the Technical
            with:
              uv-version-file: ".tool-versions"
          - run: uv build  # uv-dynamic-versioning pulls version from git tag
-         - run: uv publish --token ${{ secrets.GITHUB_TOKEN }} --publish-url https://ghcr.io
+         # No publishing to registry - install directly from Git URL
    ```
 
-**GitHub Package Registry Setup**:
-- Packages publish to `ghcr.io/flaksit/pc-switcher`
-- Installation: `uv tool install --index-url https://ghcr.io/simple/ pc-switcher`
-- Authentication handled via GITHUB_TOKEN in Actions
-- Manual upload: `uv build && uv publish --token <PAT>`
+**GitHub Repository Distribution** (Updated - NOT using ghcr.io):
+- Install directly from GitHub repository using Git URL
+- Installation: `uv tool install git+https://github.com/flaksit/pc-switcher@v1.0.0`
+- No package registry required - Git tags define versions
+- Build artifacts optionally attached to GitHub Releases
 
 **Version Management Workflow**:
 1. Develop features, commit code (no version bump in code)
 2. When ready to release: Create GitHub Release with tag (e.g., `v1.0.0`)
-3. GitHub Actions automatically builds with version extracted from tag
-4. Package published to ghcr.io with correct version
+3. GitHub Actions automatically validates and builds with version extracted from tag
+4. Users install directly from Git URL referencing the tag
 
 ### 6. Best Practices: Python Type Hints with basedpyright
 

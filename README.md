@@ -35,11 +35,23 @@ Install [uv](https://github.com/astral-sh/uv) for Python package management:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
+### Install from GitHub Release
+
+Install a specific version directly from GitHub:
+
+```bash
+# Install specific version (replace 1.0.0 with desired version)
+uv tool install git+https://github.com/flaksit/pc-switcher@v1.0.0
+
+# Verify installation
+pc-switcher --version
+```
+
 ### Install from Source
 
 ```bash
 # Clone repository
-git clone git@github.com:yourusername/pc-switcher.git
+git clone git@github.com:flaksit/pc-switcher.git
 cd pc-switcher
 
 # Install as a tool (system-wide access)
@@ -53,7 +65,7 @@ pc-switcher --version
 
 ```bash
 # Clone repository
-git clone git@github.com:yourusername/pc-switcher.git
+git clone git@github.com:flaksit/pc-switcher.git
 cd pc-switcher
 
 # Sync dependencies

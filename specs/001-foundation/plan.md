@@ -10,7 +10,7 @@
 This feature establishes the complete foundation infrastructure for PC-switcher, a synchronization system for seamless switching between Linux desktop machines. The foundation includes:
 
 1. **Module Architecture**: Standardized contract for all sync features with lifecycle methods (validate, pre_sync, sync, post_sync, abort), config schemas, logging, progress reporting, and sequential execution (config-based order, no dependency resolution)
-2. **Self-Installation**: Automatic version-matching installation/upgrade of pc-switcher on target machines from GitHub Package Registry (ghcr.io)
+2. **Self-Installation**: Automatic version-matching installation/upgrade of pc-switcher on target machines from GitHub repository via Git URL
 3. **Safety Infrastructure**: Btrfs snapshot creation (pre/post-sync) with rollback capability and disk space monitoring (configurable thresholds: float 0.0-1.0 or percentage string, defaults: min_free=0.20, reserve_minimum=0.15, check_interval=30s)
 4. **Logging System**: Six-level logging (DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL) with file/CLI separation and exception-based abort (modules raise SyncError exception, orchestrator catches, logs as CRITICAL, calls abort(timeout))
 5. **Interrupt Handling**: Graceful Ctrl+C handling with module abort, target termination, and no orphaned processes
@@ -252,7 +252,7 @@ pc-switcher/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml           # Linting, type checking, tests
-│       └── release.yml      # Publish to GitHub Package Registry on release
+│       └── release.yml      # Validate and build on release (Git tags define version)
 ├── src/
 │   └── pcswitcher/          # Installable Python package
 │       ├── __init__.py      # Package version, public API

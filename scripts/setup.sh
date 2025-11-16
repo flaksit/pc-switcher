@@ -14,7 +14,7 @@ set -euo pipefail
 readonly REQUIRED_UV_VERSION="0.9.9"
 readonly CONFIG_DIR="${HOME}/.config/pc-switcher"
 readonly CONFIG_FILE="${CONFIG_DIR}/config.yaml"
-readonly DEFAULT_GHCR_REGISTRY="ghcr.io/flaksit/pc-switcher"
+readonly GITHUB_REPO="https://github.com/flaksit/pc-switcher"
 
 # Installation mode flags
 VERSION=""
@@ -101,23 +101,23 @@ check_btrfs_progs() {
     fi
 }
 
-# T113: Install pc-switcher from GitHub Container Registry
-# Version can be specified via --version flag, otherwise uses latest
+# T113: Install pc-switcher from GitHub repository
+# Version can be specified via --version flag, otherwise uses main branch
 install_pc_switcher() {
-    local registry="ghcr.io/flaksit/pc-switcher"
+    local git_ref
 
     if [[ -n "${VERSION}" ]]; then
         info "Installing pc-switcher version ${VERSION}..."
-        local package_ref="${registry}:${VERSION}"
+        git_ref="git+${GITHUB_REPO}@v${VERSION}"
     else
-        info "Installing latest pc-switcher from GitHub Container Registry..."
-        local package_ref="${registry}:latest"
+        info "Installing pc-switcher from main branch..."
+        git_ref="git+${GITHUB_REPO}@main"
     fi
 
-    if uv tool install --from "${package_ref}" pcswitcher; then
-        info "Installed pc-switcher from ${package_ref}"
+    if uv tool install "${git_ref}"; then
+        info "Installed pc-switcher from ${git_ref}"
     else
-        error "Failed to install pc-switcher from ${package_ref}"
+        error "Failed to install pc-switcher from ${git_ref}"
     fi
 }
 

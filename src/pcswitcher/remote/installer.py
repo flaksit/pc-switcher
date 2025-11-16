@@ -19,12 +19,12 @@ class InstallationError(Exception):
 class VersionManager:
     """Manages pc-switcher installation and version comparison on target machine.
 
-    Uses `uv tool install` to install/upgrade pc-switcher from GitHub Package Registry
-    (ghcr.io) as specified in the project requirements.
+    Uses `uv tool install` to install/upgrade pc-switcher from GitHub repository
+    using Git URLs as specified in the project requirements.
     """
 
-    # Package registry URL for pc-switcher
-    PACKAGE_REGISTRY = "ghcr.io"
+    # GitHub repository URL for pc-switcher
+    GITHUB_REPO = "https://github.com/flaksit/pc-switcher"
     PACKAGE_NAME = "pc-switcher"
 
     def __init__(self, remote: RemoteExecutor, session_id: str | None = None) -> None:
@@ -172,7 +172,7 @@ class VersionManager:
     def install_on_target(self, version: str) -> None:
         """Install pc-switcher on the target machine using uv tool install.
 
-        Uses `uv tool install pc-switcher==<version>` from GitHub Package Registry.
+        Uses `uv tool install git+<repo>@v<version>` from GitHub repository.
 
         Args:
             version: Specific version to install (e.g., "0.1.0")
@@ -184,9 +184,9 @@ class VersionManager:
             # Ensure uv is available on target
             self._ensure_uv_on_target()
 
-            # Install pc-switcher using uv tool install
-            # The package is published to ghcr.io (GitHub Package Registry)
-            install_cmd = f"uv tool install pc-switcher=={version}"
+            # Install pc-switcher using uv tool install from Git URL
+            git_ref = f"git+{self.GITHUB_REPO}@v{version}"
+            install_cmd = f"uv tool install {git_ref}"
 
             self._logger.info(
                 f"Installing pc-switcher {version} on target",
@@ -209,7 +209,8 @@ class VersionManager:
     def upgrade_on_target(self, version: str) -> None:
         """Upgrade pc-switcher on the target machine.
 
-        Uses `uv tool upgrade pc-switcher --reinstall` to ensure exact version match.
+        Reinstalls from Git URL to ensure exact version match. The --reinstall flag
+        ensures the tool is replaced even if the same version is already installed.
 
         Args:
             version: Version to upgrade to (e.g., "0.4.0")
@@ -221,8 +222,9 @@ class VersionManager:
             # Ensure uv is available
             self._ensure_uv_on_target()
 
-            # Upgrade using uv tool upgrade with reinstall to ensure exact version
-            upgrade_cmd = f"uv tool upgrade pc-switcher=={version}"
+            # Install specific version from Git URL (replaces existing installation)
+            git_ref = f"git+{self.GITHUB_REPO}@v{version}"
+            upgrade_cmd = f"uv tool install {git_ref}"
 
             self._logger.info(
                 f"Upgrading pc-switcher to {version} on target",
@@ -232,15 +234,8 @@ class VersionManager:
             result = self._remote.run(upgrade_cmd, timeout=300.0)
 
             if result.returncode != 0:
-                # If upgrade fails, try uninstall + install
-                self._logger.warning("Upgrade failed, trying uninstall + install")
-                uninstall_result = self._remote.run("uv tool uninstall pc-switcher", timeout=60.0)
-                if uninstall_result.returncode != 0:
-                    self._logger.warning(f"Uninstall warning: {uninstall_result.stderr}")
-
-                # Reinstall specific version
-                self.install_on_target(version)
-                return
+                error_msg = result.stderr or result.stdout
+                raise InstallationError(f"Upgrade failed: {error_msg}")
 
             self._logger.info(f"Successfully upgraded pc-switcher to {version} on target")
 

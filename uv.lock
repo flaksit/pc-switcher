@@ -364,7 +364,6 @@ wheels = [
 
 [[package]]
 name = "pcswitcher"
-version = "0.1.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "fabric" },
