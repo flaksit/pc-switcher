@@ -70,7 +70,7 @@ class DummyFailModule(SyncModule):
         Returns:
             Empty list (always validates successfully)
         """
-        self.log(LogLevel.INFO, "Validation passed")
+        self.callbacks.log(LogLevel.INFO, "Validation passed")
         return []
 
     @override
@@ -79,8 +79,8 @@ class DummyFailModule(SyncModule):
 
         For this dummy module, just logs the operation.
         """
-        self.log(LogLevel.INFO, "Starting pre-sync")
-        self.log(LogLevel.INFO, "Pre-sync complete")
+        self.callbacks.log(LogLevel.INFO, "Starting pre-sync")
+        self.callbacks.log(LogLevel.INFO, "Pre-sync complete")
 
     @override
     def sync(self) -> None:
@@ -90,19 +90,19 @@ class DummyFailModule(SyncModule):
             RuntimeError: Always raised at 60% progress to test unhandled exception handling
         """
         duration = self.config.get("duration_seconds", 20)
-        self.log(LogLevel.INFO, "Starting sync (will fail at 60%)", duration=duration)
+        self.callbacks.log(LogLevel.INFO, "Starting sync (will fail at 60%)", duration=duration)
 
         for i in range(duration):
             if self._aborted:
-                self.log(LogLevel.INFO, "Sync aborted before failure")
+                self.callbacks.log(LogLevel.INFO, "Sync aborted before failure")
                 return
 
             progress = (i + 1) / duration
-            self.emit_progress(progress, f"Step {i + 1}/{duration}")
+            self.callbacks.emit_progress(progress, f"Step {i + 1}/{duration}")
 
             # Raise unhandled exception at 60% progress
             if i == int(duration * 0.6):
-                self.log(LogLevel.INFO, "About to raise unhandled exception")
+                self.callbacks.log(LogLevel.INFO, "About to raise unhandled exception")
                 raise RuntimeError("Simulated unhandled exception at 60% progress for testing")
 
             time.sleep(1)
@@ -113,8 +113,8 @@ class DummyFailModule(SyncModule):
 
         Note: This should never be called since sync() raises exception.
         """
-        self.log(LogLevel.INFO, "Starting post-sync")
-        self.log(LogLevel.INFO, "Post-sync complete")
+        self.callbacks.log(LogLevel.INFO, "Starting post-sync")
+        self.callbacks.log(LogLevel.INFO, "Post-sync complete")
 
     @override
     def abort(self, timeout: float) -> None:
@@ -125,5 +125,5 @@ class DummyFailModule(SyncModule):
 
         Sets abort flag to stop sync loop gracefully.
         """
-        self.log(LogLevel.INFO, "abort() called after unhandled exception", timeout=timeout)
+        self.callbacks.log(LogLevel.INFO, "abort() called after unhandled exception", timeout=timeout)
         self._aborted = True

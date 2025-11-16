@@ -1,0 +1,1 @@
+Review the python code of this project with a focus on code architecture and code design. Eliminate any dead code. Propose refactorings or other changes where needed for clean, understandable, well structured code.

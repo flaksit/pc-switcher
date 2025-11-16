@@ -16,7 +16,6 @@ Key responsibilities:
 from __future__ import annotations
 
 import importlib
-import os
 import signal
 import subprocess
 import threading
@@ -34,6 +33,374 @@ from pcswitcher.utils.disk import DiskMonitor, format_bytes
 
 if TYPE_CHECKING:
     from pcswitcher.cli.ui import TerminalUI
+
+
+class InterruptHandler:
+    """Handles interrupt signals (SIGINT/SIGTERM) with double-interrupt detection.
+
+    First interrupt initiates graceful shutdown with module abort.
+    Second interrupt within 2 seconds force terminates immediately.
+    """
+
+    def __init__(self, session: SyncSession, logger: Any) -> None:
+        """Initialize interrupt handler.
+
+        Args:
+            session: Sync session to mark as aborted
+            logger: Logger for interrupt events
+        """
+        self._session = session
+        self._logger = logger
+        self._first_interrupt_time: float | None = None
+        self._interrupt_lock = threading.Lock()
+
+    def register_handlers(self) -> None:
+        """Register signal handlers for graceful shutdown."""
+        signal.signal(signal.SIGINT, self._handle_interrupt)
+        signal.signal(signal.SIGTERM, self._handle_interrupt)
+
+    def _handle_interrupt(self, signum: int, frame: Any) -> None:
+        """Handle interrupt signals with double-SIGINT detection.
+
+        Args:
+            signum: Signal number
+            frame: Current stack frame (unused but required by signal API)
+        """
+        current_time = time.time()
+
+        with self._interrupt_lock:
+            # Check for double-SIGINT (force terminate)
+            if self._first_interrupt_time is not None:
+                elapsed = current_time - self._first_interrupt_time
+                if elapsed <= 2.0:
+                    # Force terminate immediately
+                    self._logger.critical("Second interrupt received within 2 seconds - force terminating")
+                    import sys
+
+                    sys.exit(130)  # SIGINT exit code
+
+            # First interrupt or after 2-second window
+            self._first_interrupt_time = current_time
+            self._logger.warning("Sync interrupted by user")
+            self._session.abort_requested = True
+
+        # Raise KeyboardInterrupt to trigger cleanup
+        raise KeyboardInterrupt
+
+
+class _ModuleCallbacks:
+    """Implementation of SyncModuleCallbacks for a specific module.
+
+    Created by Orchestrator for each module to provide logging and progress
+    reporting capabilities without tight coupling.
+    """
+
+    def __init__(
+        self,
+        module_name: str,
+        logger: Any,
+        ui: TerminalUI | None,
+    ) -> None:
+        """Initialize callbacks for a module.
+
+        Args:
+            module_name: Name of the module these callbacks are for
+            logger: Structlog logger for this module
+            ui: Optional terminal UI for progress display
+        """
+        self._module_name = module_name
+        self._logger = logger
+        self._ui = ui
+
+    def emit_progress(
+        self,
+        percentage: float | None = None,
+        item: str = "",
+        eta: timedelta | None = None,
+    ) -> None:
+        """Module progress reporting method."""
+        context: dict[str, Any] = {"module": self._module_name, "item": item}
+        if percentage is not None:
+            context["percentage"] = f"{percentage * 100:.1f}%"
+        if eta is not None:
+            context["eta"] = str(eta)
+
+        self._logger.log(LogLevel.FULL, f"Progress: {item}", **context)
+
+        # Forward to terminal UI if available for real-time progress bars
+        if self._ui is not None and percentage is not None:
+            self._ui.update_progress(self._module_name, percentage, item)
+
+    def log(self, level: LogLevel, message: str, **context: Any) -> None:
+        """Module logging method that forwards to structlog."""
+        if level == LogLevel.DEBUG:
+            self._logger.debug(message, **context)
+        elif level == LogLevel.FULL:
+            self._logger.log(LogLevel.FULL, message, **context)
+        elif level == LogLevel.INFO:
+            self._logger.info(message, **context)
+        elif level == LogLevel.WARNING:
+            self._logger.warning(message, **context)
+        elif level == LogLevel.ERROR:
+            self._logger.error(message, **context)
+        elif level == LogLevel.CRITICAL:
+            self._logger.critical(message, **context)
+
+    def log_remote_output(
+        self,
+        hostname: str,
+        output: str,
+        stream: str = "stdout",
+        level: LogLevel = LogLevel.FULL,
+    ) -> None:
+        """Log remote command output for cross-host log aggregation."""
+        if not output.strip():
+            return
+
+        # Split output into lines and process
+        lines = output.rstrip().split("\n")
+        max_lines = 10
+        displayed_lines = lines[:max_lines]
+
+        for line in displayed_lines:
+            if line.strip():
+                self._logger.log(
+                    level,
+                    f"[{stream.upper()}] {line}",
+                    hostname=hostname,
+                    source="remote",
+                )
+
+        # Show truncation notice if there are more lines
+        if len(lines) > max_lines:
+            self._logger.log(
+                level,
+                f"... ({len(lines) - max_lines} more lines in {stream})",
+                hostname=hostname,
+                source="remote",
+            )
+
+
+class ModuleLifecycleManager:
+    """Manages the lifecycle of sync modules: loading, validation, execution, and abort.
+
+    Handles module instantiation, dependency injection, and orchestrating the
+    module lifecycle phases (validate → pre_sync → sync → post_sync → abort).
+    """
+
+    def __init__(
+        self,
+        config: Configuration,
+        remote: RemoteExecutor,
+        session: SyncSession,
+        ui: TerminalUI | None,
+        logger: Any,
+    ) -> None:
+        """Initialize module lifecycle manager.
+
+        Args:
+            config: Validated configuration
+            remote: Remote executor for target machine
+            session: Sync session tracking state and results
+            ui: Optional terminal UI for progress display
+            logger: Logger for module operations
+        """
+        self._config = config
+        self._remote = remote
+        self._session = session
+        self._ui = ui
+        self._logger = logger
+        self._modules: list[SyncModule] = []
+        self._current_module: SyncModule | None = None
+        self._btrfs_snapshots_module: SyncModule | None = None
+
+    @property
+    def modules(self) -> list[SyncModule]:
+        """Get loaded modules."""
+        return self._modules
+
+    @property
+    def current_module(self) -> SyncModule | None:
+        """Get currently executing module."""
+        return self._current_module
+
+    @property
+    def btrfs_snapshots_module(self) -> SyncModule | None:
+        """Get btrfs_snapshots module if loaded."""
+        return self._btrfs_snapshots_module
+
+    def load_modules(self) -> None:
+        """Load and instantiate enabled sync modules.
+
+        Raises:
+            SyncError: If module loading or validation fails
+        """
+        enabled_modules = [name for name, enabled in self._config.sync_modules.items() if enabled]
+
+        for module_name in enabled_modules:
+            try:
+                # Import module class
+                module_class = self._import_module_class(module_name)
+
+                # Get module config
+                module_config = self._config.module_configs.get(module_name, {})
+
+                # Validate config against schema
+                temp_instance = module_class({}, self._remote)
+                schema = temp_instance.get_config_schema()
+                validate_module_config(module_name, module_config, schema)
+
+                # Instantiate module
+                module = module_class(module_config, self._remote)
+
+                # Inject callbacks
+                self._inject_module_callbacks(module)
+
+                self._modules.append(module)
+                self._logger.log(LogLevel.FULL, f"Loaded module: {module.name}")
+
+                # Store reference to btrfs_snapshots module
+                if module.name == "btrfs_snapshots":
+                    self._btrfs_snapshots_module = module
+
+            except Exception as e:
+                raise SyncError(f"Failed to load module '{module_name}': {e}") from e
+
+        self._logger.info(f"Loaded {len(self._modules)} modules", modules=[m.name for m in self._modules])
+
+    def _import_module_class(self, module_name: str) -> type[SyncModule]:
+        """Import module class by name.
+
+        Args:
+            module_name: Module name with underscores (e.g., "btrfs_snapshots")
+
+        Returns:
+            Module class
+
+        Raises:
+            ImportError: If module cannot be imported
+        """
+        # Convert module name: btrfs_snapshots -> BtrfsSnapshotsModule
+        class_name = "".join(word.capitalize() for word in module_name.split("_")) + "Module"
+        module_path = f"pcswitcher.modules.{module_name}"
+
+        try:
+            module = importlib.import_module(module_path)
+            return getattr(module, class_name)
+        except (ImportError, AttributeError) as e:
+            raise ImportError(f"Cannot import {class_name} from {module_path}: {e}") from e
+
+    def _inject_module_callbacks(self, module: SyncModule) -> None:
+        """Inject callbacks into module via composition pattern.
+
+        Args:
+            module: Module to inject callbacks into
+        """
+        module_logger = get_logger(f"module.{module.name}", session_id=self._session.id)
+        callbacks = _ModuleCallbacks(module.name, module_logger, self._ui)
+        module.set_callbacks(callbacks)
+
+    def validate_all_modules(self) -> None:
+        """Run validate() on all modules.
+
+        Raises:
+            SyncError: If any module validation fails
+        """
+        all_errors: list[str] = []
+
+        for module in self._modules:
+            self._logger.log(LogLevel.FULL, f"Validating module: {module.name}")
+            errors = module.validate()
+
+            if errors:
+                all_errors.extend([f"[{module.name}] {error}" for error in errors])
+
+        if all_errors:
+            error_msg = "Validation failed:\n  " + "\n  ".join(all_errors)
+            self._logger.critical(error_msg)
+            raise SyncError(error_msg)
+
+        self._logger.info("All modules validated successfully")
+
+    def execute_all_modules(self) -> None:
+        """Execute all modules in sequence.
+
+        Each module goes through: pre_sync -> sync -> post_sync
+        Module execution stops immediately on first failure, and abort() is called
+        on the failing module to allow cleanup of partial state.
+        """
+        total_modules = len(self._modules)
+
+        for idx, module in enumerate(self._modules):
+            # Check for abort request
+            if self._session.abort_requested:
+                self._logger.warning("Abort requested, stopping module execution")
+                break
+
+            self._current_module = module
+            self._logger.info(f"Executing module: {module.name}")
+
+            # Create UI task for this module
+            if self._ui is not None:
+                self._ui.create_module_task(module.name)
+                self._ui.show_overall_progress(idx, total_modules)
+
+            try:
+                self._execute_module_lifecycle(module)
+                self._session.module_results[module.name] = ModuleResult.SUCCESS
+                self._logger.info(f"Module completed: {module.name}")
+
+                # Mark module as 100% complete in UI
+                if self._ui is not None:
+                    self._ui.update_progress(module.name, 1.0, "Complete")
+
+            except SyncError as e:
+                self._logger.critical(f"Module failed: {module.name}", error=str(e))
+                self._session.module_results[module.name] = ModuleResult.FAILED
+                self.cleanup_current_module()
+                self._session.abort_requested = True
+                break
+
+            except Exception as e:
+                self._logger.critical(f"Unexpected error in module: {module.name}", error=str(e), exc_info=True)
+                self._session.module_results[module.name] = ModuleResult.FAILED
+                self.cleanup_current_module()
+                self._session.abort_requested = True
+                break
+
+        # Update overall progress
+        if self._ui is not None:
+            completed_modules = len([r for r in self._session.module_results.values() if r == ModuleResult.SUCCESS])
+            self._ui.show_overall_progress(completed_modules, total_modules)
+
+        self._current_module = None
+
+    def _execute_module_lifecycle(self, module: SyncModule) -> None:
+        """Execute complete lifecycle for a single module.
+
+        Args:
+            module: Module to execute
+
+        Raises:
+            SyncError: If any phase fails
+        """
+        self._logger.log(LogLevel.FULL, f"Running pre_sync: {module.name}")
+        module.pre_sync()
+
+        self._logger.log(LogLevel.FULL, f"Running sync: {module.name}")
+        module.sync()
+
+        self._logger.log(LogLevel.FULL, f"Running post_sync: {module.name}")
+        module.post_sync()
+
+    def cleanup_current_module(self) -> None:
+        """Call abort() on current module with timeout."""
+        if self._current_module is not None:
+            self._logger.info(f"Calling abort on module: {self._current_module.name}")
+            try:
+                self._current_module.abort(timeout=5.0)
+            except Exception as e:
+                self._logger.error(f"Error during abort: {e}")
 
 
 class Orchestrator:
@@ -76,21 +443,15 @@ class Orchestrator:
         self.ui = ui
         self.logger = get_logger("orchestrator", session_id=session.id)
 
-        self._modules: list[SyncModule] = []
-        self._current_module: SyncModule | None = None
         self._disk_monitor = DiskMonitor()
-        self._btrfs_snapshots_module: SyncModule | None = None
         self._start_time: datetime | None = None
         self._cli_invocation_time: float | None = None  # For startup performance tracking
 
-        # Interrupt handling
-        self._first_interrupt_time: float | None = None
-        self._interrupt_lock = threading.Lock()
+        # Composed components
+        self._interrupt_handler = InterruptHandler(session, self.logger)
+        self._interrupt_handler.register_handlers()
 
-        # Register signal handlers for graceful shutdown
-        # These handlers convert signals into KeyboardInterrupt for uniform handling
-        signal.signal(signal.SIGINT, self._handle_interrupt)
-        signal.signal(signal.SIGTERM, self._handle_interrupt)
+        self._module_manager = ModuleLifecycleManager(config, remote, session, ui, self.logger)
 
     def set_cli_invocation_time(self, invocation_time: float) -> None:
         """Set the CLI invocation time for startup performance measurement.
@@ -130,7 +491,7 @@ class Orchestrator:
             self._verify_btrfs_filesystem()
             self._ensure_version_sync()
             self._check_disk_space()
-            self._load_modules()
+            self._module_manager.load_modules()
             self._start_disk_monitoring()
 
             # Phase 2: VALIDATING
@@ -138,14 +499,14 @@ class Orchestrator:
             # This fail-fast approach prevents partial sync from corrupting state.
             self.session.set_state(SessionState.VALIDATING)
             self.logger.info("Validating modules")
-            self._validate_all_modules()
+            self._module_manager.validate_all_modules()
 
             # Phase 3: EXECUTING
             # Execute each module's full lifecycle (pre_sync -> sync -> post_sync).
             # If any module fails, abort is called and execution stops.
             self.session.set_state(SessionState.EXECUTING)
             self.logger.info("Starting module execution")
-            self._execute_all_modules()
+            self._module_manager.execute_all_modules()
 
             # Phase 4: Determine final state based on execution results
             # COMPLETED = all modules succeeded without errors
@@ -158,13 +519,13 @@ class Orchestrator:
             self.logger.warning("User interrupted sync operation")
             self.session.set_state(SessionState.ABORTED)
             self.session.abort_requested = True
-            self._cleanup_phase()
+            self._module_manager.cleanup_current_module()
             return SessionState.ABORTED
 
         except Exception as e:
             self.logger.critical(f"Unexpected error in orchestrator: {e}", exc_info=True)
             self.session.set_state(SessionState.FAILED)
-            self._cleanup_phase()
+            self._module_manager.cleanup_current_module()
             return SessionState.FAILED
 
         finally:
@@ -177,6 +538,26 @@ class Orchestrator:
             self._offer_rollback()
 
         return self.session.state
+
+    def _determine_final_state(self) -> SessionState:
+        """Determine final session state based on execution results.
+
+        Returns:
+            COMPLETED if successful, ABORTED if interrupted, FAILED if errors occurred
+        """
+        if self.session.abort_requested:
+            return SessionState.ABORTED
+
+        if self.session.has_errors:
+            return SessionState.FAILED
+
+        # Check if all modules completed successfully
+        for module_name in self.session.enabled_modules:
+            result = self.session.module_results.get(module_name)
+            if result != ModuleResult.SUCCESS:
+                return SessionState.FAILED
+
+        return SessionState.COMPLETED
 
     def _verify_btrfs_filesystem(self) -> None:
         """Verify that root filesystem is btrfs.
@@ -194,7 +575,7 @@ class Orchestrator:
             fs_type = result.stdout.strip()
             if fs_type != "btrfs":
                 raise SyncError(f"Root filesystem is {fs_type}, not btrfs. PC-switcher requires btrfs.")
-            self.logger.full("Btrfs filesystem verification passed")  # type: ignore[attr-defined]
+            self.logger.log(LogLevel.FULL, "Btrfs filesystem verification passed")
         except subprocess.CalledProcessError as e:
             raise SyncError(f"Failed to check filesystem type: {e.stderr}") from e
 
@@ -312,310 +693,14 @@ class Orchestrator:
             self.logger.critical(error_msg)
             raise SyncError(error_msg) from e
 
-    def _load_modules(self) -> None:
-        """Load and instantiate enabled sync modules.
-
-        Raises:
-            SyncError: If module loading or validation fails
-        """
-        enabled_modules = [name for name, enabled in self.config.sync_modules.items() if enabled]
-
-        for module_name in enabled_modules:
-            try:
-                # Import module class
-                module_class = self._import_module_class(module_name)
-
-                # Get module config
-                module_config = self.config.module_configs.get(module_name, {})
-
-                # Validate config against schema (create dummy instance to get schema)
-                dummy_remote = self.remote
-                temp_instance = module_class({}, dummy_remote)
-                schema = temp_instance.get_config_schema()
-                validate_module_config(module_name, module_config, schema)
-
-                # Instantiate module
-                module = module_class(module_config, self.remote)
-
-                # Inject logging and progress methods
-                self._inject_module_methods(module)
-
-                self._modules.append(module)
-                self.logger.full(f"Loaded module: {module.name}")  # type: ignore[attr-defined]
-
-                # Store reference to btrfs_snapshots module
-                if module.name == "btrfs_snapshots":
-                    self._btrfs_snapshots_module = module
-
-            except Exception as e:
-                raise SyncError(f"Failed to load module '{module_name}': {e}") from e
-
-        self.logger.info(f"Loaded {len(self._modules)} modules", modules=[m.name for m in self._modules])
-
-    def _import_module_class(self, module_name: str) -> type[SyncModule]:
-        """Import module class by name.
-
-        Args:
-            module_name: Module name with underscores (e.g., "btrfs_snapshots")
-
-        Returns:
-            Module class
-
-        Raises:
-            ImportError: If module cannot be imported
-        """
-        # Convert module name: btrfs_snapshots -> BtrfsSnapshotsModule
-        # Special handling for dummy modules
-        if module_name.startswith("dummy_"):
-            # dummy_success -> DummySuccessModule
-            class_name = "".join(word.capitalize() for word in module_name.split("_")) + "Module"
-        else:
-            # btrfs_snapshots -> BtrfsSnapshotsModule
-            class_name = "".join(word.capitalize() for word in module_name.split("_")) + "Module"
-
-        module_path = f"pcswitcher.modules.{module_name}"
-
-        try:
-            module = importlib.import_module(module_path)
-            return getattr(module, class_name)
-        except (ImportError, AttributeError) as e:
-            raise ImportError(f"Cannot import {class_name} from {module_path}: {e}") from e
-
-    def _inject_module_methods(self, module: SyncModule) -> None:
-        """Inject log() and emit_progress() methods into module.
-
-        This dependency injection pattern allows modules to log and report progress
-        without knowing about the specific logging or UI implementation. The orchestrator
-        acts as a mediator between modules and the logging/UI subsystems.
-
-        Args:
-            module: Module to inject methods into
-        """
-        module_logger = get_logger(f"module.{module.name}", session_id=self.session.id)
-
-        def log_method(level: LogLevel, message: str, **context: Any) -> None:
-            """Module logging method that forwards to structlog.
-
-            The orchestrator's ERROR log processor will set session.has_errors=True
-            when ERROR or CRITICAL levels are logged, affecting final session state.
-            """
-            # Map LogLevel enum to structlog method call
-            if level == LogLevel.DEBUG:
-                module_logger.debug(message, **context)
-            elif level == LogLevel.FULL:
-                module_logger.full(message, **context)  # type: ignore[attr-defined]
-            elif level == LogLevel.INFO:
-                module_logger.info(message, **context)
-            elif level == LogLevel.WARNING:
-                module_logger.warning(message, **context)
-            elif level == LogLevel.ERROR:
-                module_logger.error(message, **context)
-            elif level == LogLevel.CRITICAL:
-                module_logger.critical(message, **context)
-
-        def progress_method(
-            percentage: float | None = None,
-            item: str = "",
-            eta: timedelta | None = None,
-        ) -> None:
-            """Module progress reporting method.
-
-            Progress is reported as a float 0.0-1.0 representing completion of
-            the module's total work. This is logged at FULL level and forwarded
-            to the terminal UI for visual feedback.
-            """
-            context: dict[str, Any] = {"module": module.name, "item": item}
-            if percentage is not None:
-                context["percentage"] = f"{percentage * 100:.1f}%"
-            if eta is not None:
-                context["eta"] = str(eta)
-
-            module_logger.full(f"Progress: {item}", **context)  # type: ignore[attr-defined]
-
-            # Forward to terminal UI if available for real-time progress bars
-            if self.ui is not None and percentage is not None:
-                self.ui.update_progress(module.name, percentage, item)
-
-        def log_remote_output_method(
-            hostname: str,
-            output: str,
-            stream: str = "stdout",
-            level: LogLevel = LogLevel.FULL,
-        ) -> None:
-            """Log remote command output for cross-host log aggregation.
-
-            Captures stdout/stderr from remote operations and logs them with
-            hostname metadata so both source and target appear in unified logs.
-
-            Output is truncated to first 10 lines to avoid log spam, with a
-            count of additional lines shown.
-            """
-            if not output.strip():
-                return
-
-            # Split output into lines and process
-            lines = output.rstrip().split("\n")
-            max_lines = 10
-            displayed_lines = lines[:max_lines]
-
-            for line in displayed_lines:
-                if line.strip():
-                    module_logger.log(
-                        level,
-                        f"[{stream.upper()}] {line}",
-                        hostname=hostname,
-                        source="remote",
-                    )
-
-            # Show truncation notice if there are more lines
-            if len(lines) > max_lines:
-                module_logger.log(
-                    level,
-                    f"... ({len(lines) - max_lines} more lines in {stream})",
-                    hostname=hostname,
-                    source="remote",
-                )
-
-        module.log = log_method  # type: ignore[method-assign]
-        module.emit_progress = progress_method  # type: ignore[method-assign]
-        module.log_remote_output = log_remote_output_method  # type: ignore[method-assign]
-
-    def _validate_all_modules(self) -> None:
-        """Run validate() on all modules.
-
-        Raises:
-            SyncError: If any module validation fails
-        """
-        all_errors: list[str] = []
-
-        for module in self._modules:
-            self.logger.full(f"Validating module: {module.name}")  # type: ignore[attr-defined]
-            errors = module.validate()
-
-            if errors:
-                all_errors.extend([f"[{module.name}] {error}" for error in errors])
-
-        if all_errors:
-            error_msg = "Validation failed:\n  " + "\n  ".join(all_errors)
-            self.logger.critical(error_msg)
-            raise SyncError(error_msg)
-
-        self.logger.info("All modules validated successfully")
-
-    def _execute_all_modules(self) -> None:
-        """Execute all modules in sequence.
-
-        Each module goes through: pre_sync -> sync -> post_sync
-        Module execution stops immediately on first failure, and abort() is called
-        on the failing module to allow cleanup of partial state.
-        """
-        total_modules = len(self._modules)
-
-        for idx, module in enumerate(self._modules):
-            # Check for abort request (from signal handler or previous error)
-            if self.session.abort_requested:
-                self.logger.warning("Abort requested, stopping module execution")
-                break
-
-            self._current_module = module
-            self.logger.info(f"Executing module: {module.name}")
-
-            # Create UI task for this module to show progress
-            if self.ui is not None:
-                self.ui.create_module_task(module.name)
-                self.ui.show_overall_progress(idx, total_modules)
-
-            try:
-                self._execute_module_lifecycle(module)
-                self.session.module_results[module.name] = ModuleResult.SUCCESS
-                self.logger.info(f"Module completed: {module.name}")
-
-                # Mark module as 100% complete in UI
-                if self.ui is not None:
-                    self.ui.update_progress(module.name, 1.0, "Complete")
-
-            except SyncError as e:
-                # SyncError is the expected exception type for module failures.
-                # These are logged as CRITICAL and trigger immediate abort.
-                self.logger.critical(f"Module failed: {module.name}", error=str(e))
-                self.session.module_results[module.name] = ModuleResult.FAILED
-                self._cleanup_phase()
-                self.session.abort_requested = True
-                break
-
-            except Exception as e:
-                # Unexpected exceptions indicate bugs in module code.
-                # We still abort but log full stack trace for debugging.
-                self.logger.critical(f"Unexpected error in module: {module.name}", error=str(e), exc_info=True)
-                self.session.module_results[module.name] = ModuleResult.FAILED
-                self._cleanup_phase()
-                self.session.abort_requested = True
-                break
-
-        # Update overall progress to show final state
-        if self.ui is not None:
-            completed_modules = len([r for r in self.session.module_results.values() if r == ModuleResult.SUCCESS])
-            self.ui.show_overall_progress(completed_modules, total_modules)
-
-        self._current_module = None
-
-    def _execute_module_lifecycle(self, module: SyncModule) -> None:
-        """Execute complete lifecycle for a single module.
-
-        Args:
-            module: Module to execute
-
-        Raises:
-            SyncError: If any phase fails
-        """
-        # Pre-sync phase
-        self.logger.full(f"Running pre_sync: {module.name}")  # type: ignore[attr-defined]
-        module.pre_sync()
-
-        # Sync phase
-        self.logger.full(f"Running sync: {module.name}")  # type: ignore[attr-defined]
-        module.sync()
-
-        # Post-sync phase
-        self.logger.full(f"Running post_sync: {module.name}")  # type: ignore[attr-defined]
-        module.post_sync()
-
-    def _cleanup_phase(self) -> None:
-        """Call abort() on current module with timeout."""
-        if self._current_module is not None:
-            self.logger.info(f"Calling abort on module: {self._current_module.name}")
-            try:
-                self._current_module.abort(timeout=5.0)
-            except Exception as e:
-                self.logger.error(f"Error during abort: {e}")
-
-    def _determine_final_state(self) -> SessionState:
-        """Determine final session state based on execution results.
-
-        Returns:
-            COMPLETED if successful, ABORTED if interrupted, FAILED if errors occurred
-        """
-        if self.session.abort_requested:
-            return SessionState.ABORTED
-
-        if self.session.has_errors:
-            return SessionState.FAILED
-
-        # Check if all modules completed successfully
-        for module_name in self.session.enabled_modules:
-            result = self.session.module_results.get(module_name)
-            if result != ModuleResult.SUCCESS:
-                return SessionState.FAILED
-
-        return SessionState.COMPLETED
-
     def _offer_rollback(self) -> None:
         """Offer user the option to rollback to pre-sync state.
 
         Only offered if btrfs_snapshots module is available and
         sync failed with CRITICAL errors.
         """
-        if self._btrfs_snapshots_module is None:
+        btrfs_module = self._module_manager.btrfs_snapshots_module
+        if btrfs_module is None:
             self.logger.warning("Cannot offer rollback: btrfs_snapshots module not available")
             return
 
@@ -644,7 +729,8 @@ class Orchestrator:
         Raises:
             SyncError: If rollback fails
         """
-        if self._btrfs_snapshots_module is None:
+        btrfs_module = self._module_manager.btrfs_snapshots_module
+        if btrfs_module is None:
             raise SyncError("Cannot rollback: btrfs_snapshots module not available")
 
         print("\nExecuting rollback...")
@@ -654,8 +740,8 @@ class Orchestrator:
             # Call rollback method on btrfs_snapshots module
             from pcswitcher.modules.btrfs_snapshots import BtrfsSnapshotsModule
 
-            if isinstance(self._btrfs_snapshots_module, BtrfsSnapshotsModule):
-                self._btrfs_snapshots_module.rollback_to_presync(self.session.id)
+            if isinstance(btrfs_module, BtrfsSnapshotsModule):
+                btrfs_module.rollback_to_presync(self.session.id)
                 print("\nRollback completed successfully!")
                 print("IMPORTANT: Reboot required for changes to take effect.")
                 self.logger.info("Rollback completed successfully")
@@ -739,7 +825,8 @@ class Orchestrator:
                 f"Insufficient disk space. Free: {format_bytes(free_bytes)}, Required: {format_bytes(required_bytes)}"
             )
 
-        self.logger.full(  # type: ignore[attr-defined]
+        self.logger.log(
+            LogLevel.FULL,
             "Disk space check passed",
             free=format_bytes(free_bytes),
             required=format_bytes(required_bytes),
@@ -748,32 +835,3 @@ class Orchestrator:
     def _stop_disk_monitoring(self) -> None:
         """Stop continuous disk space monitoring."""
         self._disk_monitor.stop_monitoring()
-
-    def _handle_interrupt(self, signum: int, frame: Any) -> None:
-        """Handle interrupt signals (SIGINT, SIGTERM) with double-SIGINT detection.
-
-        First interrupt: initiates graceful shutdown with module abort.
-        Second interrupt within 2 seconds: force terminates immediately.
-
-        Args:
-            signum: Signal number
-            frame: Current stack frame
-        """
-        current_time = time.time()
-
-        # Check for double-SIGINT (force terminate)
-        if self._first_interrupt_time is not None:
-            elapsed = current_time - self._first_interrupt_time
-            if elapsed <= 2.0:
-                # Force terminate immediately
-                self.logger.critical("Second interrupt received within 2 seconds - force terminating")
-                import sys
-                sys.exit(130)  # SIGINT exit code
-
-        # First interrupt or after 2-second window
-        self._first_interrupt_time = current_time
-        self.logger.warning("Sync interrupted by user")
-        self.session.abort_requested = True
-
-        # Raise KeyboardInterrupt to trigger cleanup
-        raise KeyboardInterrupt

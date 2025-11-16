@@ -6,9 +6,62 @@ import subprocess
 from abc import ABC, abstractmethod
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from pcswitcher.core.logging import LogLevel
+
+
+class SyncModuleCallbacks(Protocol):
+    """Protocol defining callbacks injected into sync modules by the orchestrator.
+
+    These callbacks provide modules with access to logging and progress reporting
+    without tight coupling to the orchestrator implementation.
+    """
+
+    def emit_progress(
+        self,
+        percentage: float | None = None,
+        item: str = "",
+        eta: timedelta | None = None,
+    ) -> None:
+        """Report progress to orchestrator for terminal UI display and logging.
+
+        Args:
+            percentage: Progress as fraction (0.0-1.0) of TOTAL module work, or None if unknown
+            item: Description of current operation
+            eta: Estimated time to completion (optional)
+        """
+        ...
+
+    def log(self, level: LogLevel, message: str, **context: Any) -> None:
+        """Log a message with structured context.
+
+        Args:
+            level: Log level (DEBUG, FULL, INFO, WARNING, ERROR)
+            message: Log message
+            **context: Structured context data
+
+        Important: Modules should NOT log at CRITICAL level.
+        Modules should raise SyncError instead for unrecoverable failures.
+        """
+        ...
+
+    def log_remote_output(
+        self,
+        hostname: str,
+        output: str,
+        stream: str = "stdout",
+        level: LogLevel = LogLevel.FULL,
+    ) -> None:
+        """Log output from remote commands with hostname metadata.
+
+        Args:
+            hostname: Hostname of the remote machine
+            output: Command output (stdout or stderr)
+            stream: Stream name ("stdout" or "stderr")
+            level: Log level for output lines (default: FULL for detailed)
+        """
+        ...
 
 
 class SyncError(Exception):
@@ -92,10 +145,36 @@ class SyncModule(ABC):
             remote: Interface for executing commands on target
 
         Note: Orchestrator calls this after validating config against get_config_schema().
-        Orchestrator also injects log() and emit_progress() methods after instantiation.
+        Orchestrator also injects callbacks via set_callbacks() after instantiation.
         """
         self.config: dict[str, Any] = config
         self.remote: RemoteExecutor = remote
+        self._callbacks: SyncModuleCallbacks | None = None
+
+    def set_callbacks(self, callbacks: SyncModuleCallbacks) -> None:
+        """Set the callbacks for this module (called by orchestrator).
+
+        Args:
+            callbacks: Callbacks object implementing SyncModuleCallbacks protocol
+        """
+        self._callbacks = callbacks
+
+    @property
+    def callbacks(self) -> SyncModuleCallbacks:
+        """Get the callbacks object for logging and progress reporting.
+
+        Returns:
+            Callbacks object
+
+        Raises:
+            RuntimeError: If callbacks not yet injected by orchestrator
+        """
+        if self._callbacks is None:
+            raise RuntimeError(
+                f"Callbacks not injected for module {self.__class__.__name__}. "
+                "Orchestrator must call set_callbacks() before module execution."
+            )
+        return self._callbacks
 
     @property
     @abstractmethod
@@ -183,58 +262,3 @@ class SyncModule(ABC):
         Args:
             timeout: Maximum time to spend in cleanup (seconds)
         """
-
-    def emit_progress(
-        self,
-        percentage: float | None = None,
-        item: str = "",
-        eta: timedelta | None = None,
-    ) -> None:
-        """Report progress to orchestrator for terminal UI display and logging.
-
-        Injected by orchestrator. Module just calls this method.
-
-        Args:
-            percentage: Progress as fraction (0.0-1.0) of TOTAL module work, or None if unknown
-            item: Description of current operation
-            eta: Estimated time to completion (optional)
-        """
-        raise NotImplementedError("Orchestrator injects this method")
-
-    def log(self, level: LogLevel, message: str, **context: Any) -> None:
-        """Log a message with structured context.
-
-        Injected by orchestrator. Module just calls this method.
-
-        Args:
-            level: Log level (DEBUG, FULL, INFO, WARNING, ERROR)
-            message: Log message
-            **context: Structured context data
-
-        Important: Modules should NOT log at CRITICAL level.
-        Modules should raise SyncError instead for unrecoverable failures.
-        """
-        raise NotImplementedError("Orchestrator injects this method")
-
-    def log_remote_output(
-        self,
-        hostname: str,
-        output: str,
-        stream: str = "stdout",
-        level: LogLevel = LogLevel.FULL,
-    ) -> None:
-        """Log output from remote commands with hostname metadata.
-
-        Injected by orchestrator for cross-host log aggregation.
-        Automatically includes hostname in log context.
-
-        Args:
-            hostname: Hostname of the remote machine
-            output: Command output (stdout or stderr)
-            stream: Stream name ("stdout" or "stderr")
-            level: Log level for output lines (default: FULL for detailed)
-
-        This enables unified log streams containing both source and target
-        operations with proper hostname attribution.
-        """
-        raise NotImplementedError("Orchestrator injects this method")

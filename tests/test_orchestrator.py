@@ -64,12 +64,13 @@ def test_orchestrator_initialization_succeeds() -> None:
     assert orchestrator.config is config
     assert orchestrator.remote is remote
     assert orchestrator.session is session
-    assert orchestrator._interrupt_lock is not None
-    assert isinstance(orchestrator._interrupt_lock, type(threading.Lock()))
+    assert orchestrator._interrupt_handler is not None
+    assert orchestrator._interrupt_handler._interrupt_lock is not None
+    assert isinstance(orchestrator._interrupt_handler._interrupt_lock, type(threading.Lock()))
 
 
 def test_orchestrator_has_threading_lock() -> None:
-    """Test that Orchestrator uses threading.Lock for interrupt handling."""
+    """Test that InterruptHandler uses threading.Lock for interrupt handling."""
     config = create_test_config()
     remote = create_mock_remote_executor()
     session = create_test_session()
@@ -77,7 +78,7 @@ def test_orchestrator_has_threading_lock() -> None:
     orchestrator = Orchestrator(config, remote, session)
 
     # Verify it's a threading.Lock (by testing its interface)
-    lock = orchestrator._interrupt_lock
+    lock = orchestrator._interrupt_handler._interrupt_lock
     assert hasattr(lock, "acquire")
     assert hasattr(lock, "release")
     assert hasattr(lock, "__enter__")
@@ -133,8 +134,8 @@ def test_orchestrator_modules_list_initially_empty() -> None:
 
     orchestrator = Orchestrator(config, remote, session)
 
-    assert orchestrator._modules == []
-    assert orchestrator._current_module is None
+    assert orchestrator._module_manager.modules == []
+    assert orchestrator._module_manager.current_module is None
 
 
 def test_orchestrator_sets_cli_invocation_time() -> None:

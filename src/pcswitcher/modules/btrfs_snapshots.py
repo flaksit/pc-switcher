@@ -163,12 +163,13 @@ class BtrfsSnapshotsModule(SyncModule):
                     )
         except subprocess.CalledProcessError as e:
             errors.append(
-                f"Failed to list source btrfs subvolumes: {e.stderr}. Ensure sudo access is configured for btrfs commands."
+                f"Failed to list source btrfs subvolumes: {e.stderr}. "
+                f"Ensure sudo access is configured for btrfs commands."
             )
 
         # Check target filesystem and subvolumes
         try:
-            result = self._remote.run("stat -f -c '%T' /", timeout=10.0)
+            result = self.remote.run("stat -f -c '%T' /", timeout=10.0)
             if result.returncode != 0:
                 errors.append(f"Failed to check target filesystem type: {result.stderr}")
             else:
@@ -180,7 +181,7 @@ class BtrfsSnapshotsModule(SyncModule):
                     )
 
             # Verify subvolumes on target
-            result = self._remote.run("sudo btrfs subvolume list /", timeout=10.0)
+            result = self.remote.run("sudo btrfs subvolume list /", timeout=10.0)
             if result.returncode == 0:
                 existing_target_subvols = set()
                 for line in result.stdout.splitlines():
@@ -221,7 +222,7 @@ class BtrfsSnapshotsModule(SyncModule):
         from pcswitcher.core.session import generate_session_id
 
         self._session_id = generate_session_id()
-        self.log(LogLevel.INFO, "Creating pre-sync snapshots", session_id=self._session_id)
+        self.callbacks.log(LogLevel.INFO, "Creating pre-sync snapshots", session_id=self._session_id)
 
         snapshot_dir = Path(self.config["snapshot_dir"])
         subvolumes: list[str] = self.config["subvolumes"]
@@ -230,7 +231,7 @@ class BtrfsSnapshotsModule(SyncModule):
         try:
             snapshot_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            self.log(LogLevel.CRITICAL, f"Failed to create snapshot directory on source: {e}")
+            self.callbacks.log(LogLevel.CRITICAL, f"Failed to create snapshot directory on source: {e}")
             raise SyncError(
                 f"Failed to create snapshot directory {snapshot_dir}: {e}. "
                 f"Ensure directory is writable or create with: sudo mkdir -p {snapshot_dir}"
@@ -238,19 +239,22 @@ class BtrfsSnapshotsModule(SyncModule):
 
         # Ensure snapshot directory exists on target
         try:
-            result = self._remote.run(f"mkdir -p {snapshot_dir}", timeout=10.0)
+            result = self.remote.run(f"mkdir -p {snapshot_dir}", timeout=10.0)
             # Log remote command output for cross-host aggregation
             if result.stdout:
-                self.log_remote_output(self._remote.get_hostname(), result.stdout, stream="stdout")
+                self.callbacks.log_remote_output(self.remote.get_hostname(), result.stdout, stream="stdout")
             if result.stderr:
-                self.log_remote_output(self._remote.get_hostname(), result.stderr, stream="stderr", level=LogLevel.WARNING if result.returncode != 0 else LogLevel.FULL)
+                stderr_level = LogLevel.WARNING if result.returncode != 0 else LogLevel.FULL
+                self.callbacks.log_remote_output(
+                    self.remote.get_hostname(), result.stderr, stream="stderr", level=stderr_level
+                )
             if result.returncode != 0:
                 error_msg = f"Failed to create snapshot directory on target: {result.stderr}"
-                self.log(LogLevel.CRITICAL, error_msg)
+                self.callbacks.log(LogLevel.CRITICAL, error_msg)
                 raise SyncError(error_msg)
         except Exception as e:
             error_msg = f"Failed to create snapshot directory on target: {e}"
-            self.log(LogLevel.CRITICAL, error_msg)
+            self.callbacks.log(LogLevel.CRITICAL, error_msg)
             raise SyncError(error_msg) from e
 
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -261,7 +265,7 @@ class BtrfsSnapshotsModule(SyncModule):
             snapshot_name = f"{subvol}-presync-{timestamp}-{self._session_id}"
             snapshot_path = snapshot_dir / snapshot_name
 
-            self.log(
+            self.callbacks.log(
                 LogLevel.FULL,
                 f"Creating pre-sync snapshot for {subvol} on source",
                 snapshot_path=str(snapshot_path),
@@ -279,7 +283,7 @@ class BtrfsSnapshotsModule(SyncModule):
                     text=True,
                     check=True,
                 )
-                self.log(
+                self.callbacks.log(
                     LogLevel.INFO,
                     f"Created pre-sync snapshot on source: {snapshot_name}",
                     subvolume=subvol,
@@ -290,7 +294,7 @@ class BtrfsSnapshotsModule(SyncModule):
                     f"Failed to create pre-sync snapshot for {subvol} on source: {e.stderr}. "
                     f"Check sudo permissions for btrfs commands."
                 )
-                self.log(LogLevel.CRITICAL, error_msg)
+                self.callbacks.log(LogLevel.CRITICAL, error_msg)
                 raise SyncError(error_msg) from e
 
         # Create snapshots on target
@@ -298,7 +302,7 @@ class BtrfsSnapshotsModule(SyncModule):
             snapshot_name = f"{subvol}-presync-{timestamp}-{self._session_id}"
             snapshot_path = snapshot_dir / snapshot_name
 
-            self.log(
+            self.callbacks.log(
                 LogLevel.FULL,
                 f"Creating pre-sync snapshot for {subvol} on target",
                 snapshot_path=str(snapshot_path),
@@ -308,20 +312,23 @@ class BtrfsSnapshotsModule(SyncModule):
                 # Use remote executor to create snapshot on target
                 mount_point = self._find_subvolume_path(subvol)
                 command = f"sudo btrfs subvolume snapshot -r {mount_point} {snapshot_path}"
-                result = self._remote.run(command, timeout=30.0)
+                result = self.remote.run(command, timeout=30.0)
 
                 # Log remote command output for cross-host aggregation
                 if result.stdout:
-                    self.log_remote_output(self._remote.get_hostname(), result.stdout, stream="stdout")
+                    self.callbacks.log_remote_output(self.remote.get_hostname(), result.stdout, stream="stdout")
                 if result.stderr:
-                    self.log_remote_output(self._remote.get_hostname(), result.stderr, stream="stderr", level=LogLevel.WARNING if result.returncode != 0 else LogLevel.FULL)
+                    stderr_level = LogLevel.WARNING if result.returncode != 0 else LogLevel.FULL
+                    self.callbacks.log_remote_output(
+                        self.remote.get_hostname(), result.stderr, stream="stderr", level=stderr_level
+                    )
 
                 if result.returncode != 0:
                     error_msg = f"Failed to create pre-sync snapshot for {subvol} on target: {result.stderr}"
-                    self.log(LogLevel.CRITICAL, error_msg)
+                    self.callbacks.log(LogLevel.CRITICAL, error_msg)
                     raise SyncError(error_msg)
 
-                self.log(
+                self.callbacks.log(
                     LogLevel.INFO,
                     f"Created pre-sync snapshot on target: {snapshot_name}",
                     subvolume=subvol,
@@ -331,7 +338,7 @@ class BtrfsSnapshotsModule(SyncModule):
                 raise
             except Exception as e:
                 error_msg = f"Failed to create pre-sync snapshot for {subvol} on target: {e}"
-                self.log(LogLevel.CRITICAL, error_msg)
+                self.callbacks.log(LogLevel.CRITICAL, error_msg)
                 raise SyncError(error_msg) from e
 
     @override
@@ -349,7 +356,7 @@ class BtrfsSnapshotsModule(SyncModule):
         Raises:
             SyncError: If snapshot creation fails
         """
-        self.log(LogLevel.INFO, "Creating post-sync snapshots", session_id=self._session_id)
+        self.callbacks.log(LogLevel.INFO, "Creating post-sync snapshots", session_id=self._session_id)
 
         snapshot_dir = Path(self.config["snapshot_dir"])
         subvolumes: list[str] = self.config["subvolumes"]
@@ -361,7 +368,7 @@ class BtrfsSnapshotsModule(SyncModule):
             snapshot_name = f"{subvol}-postsync-{timestamp}-{self._session_id}"
             snapshot_path = snapshot_dir / snapshot_name
 
-            self.log(
+            self.callbacks.log(
                 LogLevel.FULL,
                 f"Creating post-sync snapshot for {subvol} on source",
                 snapshot_path=str(snapshot_path),
@@ -378,7 +385,7 @@ class BtrfsSnapshotsModule(SyncModule):
                     text=True,
                     check=True,
                 )
-                self.log(
+                self.callbacks.log(
                     LogLevel.INFO,
                     f"Created post-sync snapshot on source: {snapshot_name}",
                     subvolume=subvol,
@@ -386,7 +393,7 @@ class BtrfsSnapshotsModule(SyncModule):
                 )
             except subprocess.CalledProcessError as e:
                 error_msg = f"Failed to create post-sync snapshot for {subvol} on source: {e.stderr}"
-                self.log(LogLevel.CRITICAL, error_msg)
+                self.callbacks.log(LogLevel.CRITICAL, error_msg)
                 raise SyncError(error_msg) from e
 
         # Create post-sync snapshots on target
@@ -394,7 +401,7 @@ class BtrfsSnapshotsModule(SyncModule):
             snapshot_name = f"{subvol}-postsync-{timestamp}-{self._session_id}"
             snapshot_path = snapshot_dir / snapshot_name
 
-            self.log(
+            self.callbacks.log(
                 LogLevel.FULL,
                 f"Creating post-sync snapshot for {subvol} on target",
                 snapshot_path=str(snapshot_path),
@@ -404,20 +411,23 @@ class BtrfsSnapshotsModule(SyncModule):
                 # Use remote executor to create snapshot on target
                 mount_point = self._find_subvolume_path(subvol)
                 command = f"sudo btrfs subvolume snapshot -r {mount_point} {snapshot_path}"
-                result = self._remote.run(command, timeout=30.0)
+                result = self.remote.run(command, timeout=30.0)
 
                 # Log remote command output for cross-host aggregation
                 if result.stdout:
-                    self.log_remote_output(self._remote.get_hostname(), result.stdout, stream="stdout")
+                    self.callbacks.log_remote_output(self.remote.get_hostname(), result.stdout, stream="stdout")
                 if result.stderr:
-                    self.log_remote_output(self._remote.get_hostname(), result.stderr, stream="stderr", level=LogLevel.WARNING if result.returncode != 0 else LogLevel.FULL)
+                    stderr_level = LogLevel.WARNING if result.returncode != 0 else LogLevel.FULL
+                    self.callbacks.log_remote_output(
+                        self.remote.get_hostname(), result.stderr, stream="stderr", level=stderr_level
+                    )
 
                 if result.returncode != 0:
                     error_msg = f"Failed to create post-sync snapshot for {subvol} on target: {result.stderr}"
-                    self.log(LogLevel.CRITICAL, error_msg)
+                    self.callbacks.log(LogLevel.CRITICAL, error_msg)
                     raise SyncError(error_msg)
 
-                self.log(
+                self.callbacks.log(
                     LogLevel.INFO,
                     f"Created post-sync snapshot on target: {snapshot_name}",
                     subvolume=subvol,
@@ -427,7 +437,7 @@ class BtrfsSnapshotsModule(SyncModule):
                 raise
             except Exception as e:
                 error_msg = f"Failed to create post-sync snapshot for {subvol} on target: {e}"
-                self.log(LogLevel.CRITICAL, error_msg)
+                self.callbacks.log(LogLevel.CRITICAL, error_msg)
                 raise SyncError(error_msg) from e
 
     @override
@@ -439,7 +449,7 @@ class BtrfsSnapshotsModule(SyncModule):
 
         Snapshot creation is atomic at btrfs level, so no cleanup needed.
         """
-        self.log(LogLevel.INFO, "Snapshot module abort called", timeout=timeout)
+        self.callbacks.log(LogLevel.INFO, "Snapshot module abort called", timeout=timeout)
 
     def rollback_to_presync(self, session_id: str) -> None:
         """Restore system state from pre-sync snapshots.
@@ -453,7 +463,7 @@ class BtrfsSnapshotsModule(SyncModule):
         Raises:
             SyncError: If rollback fails
         """
-        self.log(LogLevel.INFO, "Starting rollback to pre-sync state", session_id=session_id)
+        self.callbacks.log(LogLevel.INFO, "Starting rollback to pre-sync state", session_id=session_id)
 
         snapshot_dir = Path(self.config["snapshot_dir"])
         subvolumes: list[str] = self.config["subvolumes"]
@@ -463,7 +473,7 @@ class BtrfsSnapshotsModule(SyncModule):
             matching_snapshots = list(snapshot_dir.glob(f"{subvol}-presync-*-{session_id}"))
             if not matching_snapshots:
                 error_msg = f"No pre-sync snapshot found for {subvol} with session {session_id}"
-                self.log(LogLevel.CRITICAL, error_msg)
+                self.callbacks.log(LogLevel.CRITICAL, error_msg)
                 raise SyncError(error_msg)
 
         # Perform rollback for each subvolume
@@ -471,7 +481,7 @@ class BtrfsSnapshotsModule(SyncModule):
             matching_snapshots = list(snapshot_dir.glob(f"{subvol}-presync-*-{session_id}"))
             snapshot_path = matching_snapshots[0]
 
-            self.log(
+            self.callbacks.log(
                 LogLevel.INFO,
                 f"Rolling back {subvol} from {snapshot_path.name}",
                 subvolume=subvol,
@@ -482,7 +492,7 @@ class BtrfsSnapshotsModule(SyncModule):
                 current_path = self._find_subvolume_path(subvol)
 
                 # Delete current subvolume
-                self.log(LogLevel.FULL, f"Deleting current subvolume: {current_path}")
+                self.callbacks.log(LogLevel.FULL, f"Deleting current subvolume: {current_path}")
                 subprocess.run(
                     ["sudo", "btrfs", "subvolume", "delete", str(current_path)],
                     capture_output=True,
@@ -491,7 +501,7 @@ class BtrfsSnapshotsModule(SyncModule):
                 )
 
                 # Create new read-write subvolume from snapshot
-                self.log(LogLevel.FULL, f"Restoring subvolume from snapshot: {snapshot_path}")
+                self.callbacks.log(LogLevel.FULL, f"Restoring subvolume from snapshot: {snapshot_path}")
                 subprocess.run(
                     ["sudo", "btrfs", "subvolume", "snapshot", str(snapshot_path), str(current_path)],
                     capture_output=True,
@@ -499,13 +509,13 @@ class BtrfsSnapshotsModule(SyncModule):
                     check=True,
                 )
 
-                self.log(LogLevel.INFO, f"Successfully rolled back {subvol}", subvolume=subvol)
+                self.callbacks.log(LogLevel.INFO, f"Successfully rolled back {subvol}", subvolume=subvol)
             except subprocess.CalledProcessError as e:
                 error_msg = f"Failed to rollback {subvol}: {e.stderr}"
-                self.log(LogLevel.CRITICAL, error_msg)
+                self.callbacks.log(LogLevel.CRITICAL, error_msg)
                 raise SyncError(error_msg) from e
 
-        self.log(LogLevel.INFO, "Rollback completed successfully", session_id=session_id)
+        self.callbacks.log(LogLevel.INFO, "Rollback completed successfully", session_id=session_id)
 
     def cleanup_old_snapshots(self, older_than_days: int | None = None, keep_recent: int | None = None) -> None:
         """Delete old snapshots to free disk space.
@@ -519,7 +529,7 @@ class BtrfsSnapshotsModule(SyncModule):
         if keep_recent is None:
             keep_recent = self.config["keep_recent"]
 
-        self.log(
+        self.callbacks.log(
             LogLevel.INFO,
             "Starting snapshot cleanup",
             older_than_days=older_than_days,
@@ -528,7 +538,7 @@ class BtrfsSnapshotsModule(SyncModule):
 
         snapshot_dir = Path(self.config["snapshot_dir"])
         if not snapshot_dir.exists():
-            self.log(LogLevel.INFO, "Snapshot directory does not exist, nothing to clean")
+            self.callbacks.log(LogLevel.INFO, "Snapshot directory does not exist, nothing to clean")
             return
 
         # Ensure older_than_days is not None (already set from config if None)
@@ -556,7 +566,7 @@ class BtrfsSnapshotsModule(SyncModule):
                 mtime = datetime.fromtimestamp(snapshot_path.stat().st_mtime, tz=UTC)
 
                 if mtime < cutoff_date:
-                    self.log(
+                    self.callbacks.log(
                         LogLevel.FULL,
                         f"Deleting old snapshot: {snapshot_path.name}",
                         age_days=(datetime.now(UTC) - mtime).days,
@@ -569,14 +579,14 @@ class BtrfsSnapshotsModule(SyncModule):
                             text=True,
                             check=True,
                         )
-                        self.log(LogLevel.INFO, f"Deleted snapshot: {snapshot_path.name}")
+                        self.callbacks.log(LogLevel.INFO, f"Deleted snapshot: {snapshot_path.name}")
                     except subprocess.CalledProcessError as e:
-                        self.log(
+                        self.callbacks.log(
                             LogLevel.ERROR,
                             f"Failed to delete snapshot {snapshot_path.name}: {e.stderr}",
                         )
 
-        self.log(LogLevel.INFO, "Snapshot cleanup completed")
+        self.callbacks.log(LogLevel.INFO, "Snapshot cleanup completed")
 
     def _find_subvolume_path(self, subvol: str) -> Path:
         """Find the mount point for a subvolume.

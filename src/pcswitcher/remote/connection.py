@@ -21,7 +21,7 @@ from __future__ import annotations
 import contextlib
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fabric import Connection
 from invoke.exceptions import UnexpectedExit
@@ -162,17 +162,31 @@ class TargetConnection:
             ConnectionError: If connection is lost and reconnect fails.
                             This is a network/SSH issue, not a command issue.
         """
+        return self._execute_with_retry(command, sudo=sudo, timeout=timeout)
+
+    def _execute_with_retry(
+        self,
+        command: str,
+        sudo: bool = False,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Execute command with automatic retry on connection failure.
+
+        Args:
+            command: Shell command to execute
+            sudo: Whether to run with sudo privileges
+            timeout: Optional timeout in seconds
+
+        Returns:
+            CompletedProcess with stdout, stderr, and returncode
+
+        Raises:
+            ConnectionError: If connection is lost and reconnect fails
+        """
         conn = self._ensure_connected()
 
         try:
-            # Execute command with output capture
-            # hide=True suppresses local output, warn=True prevents exception on non-zero exit
-            if sudo:
-                result = conn.sudo(command, hide=True, warn=True, timeout=timeout)
-            else:
-                result = conn.run(command, hide=True, warn=True, timeout=timeout)
-
-            # Convert Fabric Result to standard library CompletedProcess for consistency
+            result = self._execute_command(conn, command, sudo, timeout)
             return subprocess.CompletedProcess(
                 args=command,
                 returncode=result.return_code,
@@ -181,8 +195,7 @@ class TargetConnection:
             )
 
         except UnexpectedExit as e:
-            # UnexpectedExit means command ran but had non-zero exit
-            # This is normal operation, not an error condition
+            # Command ran but had non-zero exit - normal operation
             return subprocess.CompletedProcess(
                 args=command,
                 returncode=e.result.return_code,
@@ -191,27 +204,68 @@ class TargetConnection:
             )
         except Exception as e:
             # Connection or timeout error - attempt automatic reconnection once
-            try:
-                self.disconnect()
-                self.connect()
-                conn = self._ensure_connected()
-                # Retry the command after reconnection
-                if sudo:
-                    result = conn.sudo(command, hide=True, warn=True, timeout=timeout)
-                else:
-                    result = conn.run(command, hide=True, warn=True, timeout=timeout)
+            return self._retry_after_reconnect(command, sudo, timeout, e)
 
-                return subprocess.CompletedProcess(
-                    args=command,
-                    returncode=result.return_code,
-                    stdout=result.stdout,
-                    stderr=result.stderr,
-                )
-            except Exception as reconnect_error:
-                raise ConnectionError(
-                    f"Lost connection to target during command execution and automatic reconnect failed. "
-                    f"Original error: {e}. Reconnect error: {reconnect_error}"
-                ) from e
+    def _execute_command(
+        self,
+        conn: Connection,
+        command: str,
+        sudo: bool,
+        timeout: float | None,
+    ) -> Any:
+        """Execute a single command on the connection.
+
+        Args:
+            conn: Active Fabric connection
+            command: Shell command to execute
+            sudo: Whether to run with sudo privileges
+            timeout: Optional timeout in seconds
+
+        Returns:
+            Fabric Result object
+        """
+        if sudo:
+            return conn.sudo(command, hide=True, warn=True, timeout=timeout)
+        else:
+            return conn.run(command, hide=True, warn=True, timeout=timeout)
+
+    def _retry_after_reconnect(
+        self,
+        command: str,
+        sudo: bool,
+        timeout: float | None,
+        original_error: Exception,
+    ) -> subprocess.CompletedProcess[str]:
+        """Retry command after reconnecting to target.
+
+        Args:
+            command: Shell command to execute
+            sudo: Whether to run with sudo privileges
+            timeout: Optional timeout in seconds
+            original_error: The exception that triggered the retry
+
+        Returns:
+            CompletedProcess with stdout, stderr, and returncode
+
+        Raises:
+            ConnectionError: If reconnect or retry fails
+        """
+        try:
+            self.disconnect()
+            self.connect()
+            conn = self._ensure_connected()
+            result = self._execute_command(conn, command, sudo, timeout)
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=result.return_code,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+        except Exception as reconnect_error:
+            raise ConnectionError(
+                f"Lost connection to target during command execution and automatic reconnect failed. "
+                f"Original error: {original_error}. Reconnect error: {reconnect_error}"
+            ) from original_error
 
     def send_file_to_target(self, local: Path, remote: Path) -> None:
         """Transfer a file from local machine to remote target.

@@ -70,7 +70,7 @@ class DummyCriticalModule(SyncModule):
         Returns:
             Empty list (always validates successfully)
         """
-        self.log(LogLevel.INFO, "Validation passed")
+        self.callbacks.log(LogLevel.INFO, "Validation passed")
         return []
 
     @override
@@ -79,8 +79,8 @@ class DummyCriticalModule(SyncModule):
 
         For this dummy module, just logs the operation.
         """
-        self.log(LogLevel.INFO, "Starting pre-sync")
-        self.log(LogLevel.INFO, "Pre-sync complete")
+        self.callbacks.log(LogLevel.INFO, "Starting pre-sync")
+        self.callbacks.log(LogLevel.INFO, "Pre-sync complete")
 
     @override
     def sync(self) -> None:
@@ -90,19 +90,19 @@ class DummyCriticalModule(SyncModule):
             SyncError: Always raised at 50% progress to test error handling
         """
         duration = self.config.get("duration_seconds", 20)
-        self.log(LogLevel.INFO, "Starting sync (will fail at 50%)", duration=duration)
+        self.callbacks.log(LogLevel.INFO, "Starting sync (will fail at 50%)", duration=duration)
 
         for i in range(duration):
             if self._aborted:
-                self.log(LogLevel.INFO, "Sync aborted before critical failure")
+                self.callbacks.log(LogLevel.INFO, "Sync aborted before critical failure")
                 return
 
             progress = (i + 1) / duration
-            self.emit_progress(progress, f"Step {i + 1}/{duration}")
+            self.callbacks.emit_progress(progress, f"Step {i + 1}/{duration}")
 
             # Raise exception at 50% progress
             if i == duration // 2:
-                self.log(LogLevel.INFO, "About to raise critical error")
+                self.callbacks.log(LogLevel.INFO, "About to raise critical error")
                 raise SyncError("Simulated critical failure at 50% progress for testing")
 
             time.sleep(1)
@@ -113,8 +113,8 @@ class DummyCriticalModule(SyncModule):
 
         Note: This should never be called since sync() raises exception.
         """
-        self.log(LogLevel.INFO, "Starting post-sync")
-        self.log(LogLevel.INFO, "Post-sync complete")
+        self.callbacks.log(LogLevel.INFO, "Starting post-sync")
+        self.callbacks.log(LogLevel.INFO, "Post-sync complete")
 
     @override
     def abort(self, timeout: float) -> None:
@@ -125,5 +125,5 @@ class DummyCriticalModule(SyncModule):
 
         Sets abort flag to stop sync loop gracefully.
         """
-        self.log(LogLevel.INFO, "abort() called after exception", timeout=timeout)
+        self.callbacks.log(LogLevel.INFO, "abort() called after exception", timeout=timeout)
         self._aborted = True
