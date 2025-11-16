@@ -103,11 +103,13 @@ class BtrfsSnapshotsModule(SyncModule):
 
     @override
     def validate(self) -> list[str]:
-        """Validate btrfs filesystem and subvolumes exist.
+        """Validate btrfs filesystem and subvolumes exist on both source and target.
 
         This validation is read-only and makes no state changes. It verifies:
-        1. Root filesystem is btrfs (required for snapshot operations)
-        2. All configured subvolumes exist in btrfs subvolume list
+        1. Root filesystem is btrfs on source (required for snapshot operations)
+        2. All configured subvolumes exist in btrfs subvolume list on source
+        3. Target machine has btrfs filesystem
+        4. All configured subvolumes exist on target
 
         Returns:
             List of validation errors (empty if valid). Each error message
@@ -115,7 +117,7 @@ class BtrfsSnapshotsModule(SyncModule):
         """
         errors: list[str] = []
 
-        # Check if filesystem is btrfs by querying filesystem type of root
+        # Check source filesystem
         try:
             result = subprocess.run(
                 ["stat", "-f", "-c", "%T", "/"],
@@ -126,15 +128,14 @@ class BtrfsSnapshotsModule(SyncModule):
             fs_type = result.stdout.strip()
             if fs_type != "btrfs":
                 errors.append(
-                    f"Root filesystem is {fs_type}, not btrfs. "
+                    f"Source root filesystem is {fs_type}, not btrfs. "
                     f"PC-switcher requires btrfs for snapshot support. "
                     f"Please install Ubuntu with btrfs filesystem."
                 )
         except subprocess.CalledProcessError as e:
-            errors.append(f"Failed to check filesystem type: {e.stderr}")
+            errors.append(f"Failed to check source filesystem type: {e.stderr}")
 
-        # Verify all configured subvolumes exist on this system
-        # This ensures config matches actual btrfs layout
+        # Verify all configured subvolumes exist on source
         subvolumes: list[str] = self.config["subvolumes"]
         try:
             result = subprocess.run(
@@ -156,25 +157,62 @@ class BtrfsSnapshotsModule(SyncModule):
             for subvol in subvolumes:
                 if subvol not in existing_subvols:
                     errors.append(
-                        f"Subvolume '{subvol}' not found. "
+                        f"Subvolume '{subvol}' not found on source. "
                         f"Run 'sudo btrfs subvolume list /' to see available subvolumes, "
                         f"then update config to match."
                     )
         except subprocess.CalledProcessError as e:
             errors.append(
-                f"Failed to list btrfs subvolumes: {e.stderr}. Ensure sudo access is configured for btrfs commands."
+                f"Failed to list source btrfs subvolumes: {e.stderr}. Ensure sudo access is configured for btrfs commands."
             )
+
+        # Check target filesystem and subvolumes
+        try:
+            result = self._remote.run("stat -f -c '%T' /", timeout=10.0)
+            if result.returncode != 0:
+                errors.append(f"Failed to check target filesystem type: {result.stderr}")
+            else:
+                fs_type = result.stdout.strip()
+                if fs_type != "btrfs":
+                    errors.append(
+                        f"Target root filesystem is {fs_type}, not btrfs. "
+                        f"Target machine must have btrfs filesystem."
+                    )
+
+            # Verify subvolumes on target
+            result = self._remote.run("sudo btrfs subvolume list /", timeout=10.0)
+            if result.returncode == 0:
+                existing_target_subvols = set()
+                for line in result.stdout.splitlines():
+                    parts = line.split()
+                    if "path" in parts:
+                        path_idx = parts.index("path")
+                        if path_idx + 1 < len(parts):
+                            existing_target_subvols.add(parts[path_idx + 1])
+
+                for subvol in subvolumes:
+                    if subvol not in existing_target_subvols:
+                        errors.append(
+                            f"Subvolume '{subvol}' not found on target. "
+                            f"Target must have matching btrfs subvolume layout."
+                        )
+            else:
+                errors.append(f"Failed to list target btrfs subvolumes: {result.stderr}")
+
+        except Exception as e:
+            errors.append(f"Failed to validate target btrfs configuration: {e}")
 
         return errors
 
     @override
     def pre_sync(self) -> None:
-        """Create pre-sync read-only snapshots of all configured subvolumes.
+        """Create pre-sync read-only snapshots of all configured subvolumes on both machines.
 
         These snapshots serve as the rollback point if sync fails. They are:
         - Read-only: Prevents accidental modification
         - Copy-on-write: Instantaneous creation, no initial disk space
         - Session-tagged: Can be correlated with sync session for rollback
+        - Dual-target: Created on both source and target machines
 
         Raises:
             SyncError: If snapshot creation fails for any subvolume.
@@ -188,18 +226,31 @@ class BtrfsSnapshotsModule(SyncModule):
         snapshot_dir = Path(self.config["snapshot_dir"])
         subvolumes: list[str] = self.config["subvolumes"]
 
-        # Ensure snapshot directory exists with proper permissions
+        # Ensure snapshot directory exists on source with proper permissions
         try:
             snapshot_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            self.log(LogLevel.CRITICAL, f"Failed to create snapshot directory: {e}")
+            self.log(LogLevel.CRITICAL, f"Failed to create snapshot directory on source: {e}")
             raise SyncError(
                 f"Failed to create snapshot directory {snapshot_dir}: {e}. "
                 f"Ensure directory is writable or create with: sudo mkdir -p {snapshot_dir}"
             ) from e
 
+        # Ensure snapshot directory exists on target
+        try:
+            result = self._remote.run(f"mkdir -p {snapshot_dir}", timeout=10.0)
+            if result.returncode != 0:
+                error_msg = f"Failed to create snapshot directory on target: {result.stderr}"
+                self.log(LogLevel.CRITICAL, error_msg)
+                raise SyncError(error_msg)
+        except Exception as e:
+            error_msg = f"Failed to create snapshot directory on target: {e}"
+            self.log(LogLevel.CRITICAL, error_msg)
+            raise SyncError(error_msg) from e
+
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
+        # Create snapshots on source
         for subvol in subvolumes:
             # Build snapshot name with all correlation metadata
             snapshot_name = f"{subvol}-presync-{timestamp}-{self._session_id}"
@@ -207,7 +258,7 @@ class BtrfsSnapshotsModule(SyncModule):
 
             self.log(
                 LogLevel.FULL,
-                f"Creating pre-sync snapshot for {subvol}",
+                f"Creating pre-sync snapshot for {subvol} on source",
                 snapshot_path=str(snapshot_path),
             )
 
@@ -225,14 +276,50 @@ class BtrfsSnapshotsModule(SyncModule):
                 )
                 self.log(
                     LogLevel.INFO,
-                    f"Created pre-sync snapshot: {snapshot_name}",
+                    f"Created pre-sync snapshot on source: {snapshot_name}",
                     subvolume=subvol,
+                    location="source",
                 )
             except subprocess.CalledProcessError as e:
                 error_msg = (
-                    f"Failed to create pre-sync snapshot for {subvol}: {e.stderr}. "
+                    f"Failed to create pre-sync snapshot for {subvol} on source: {e.stderr}. "
                     f"Check sudo permissions for btrfs commands."
                 )
+                self.log(LogLevel.CRITICAL, error_msg)
+                raise SyncError(error_msg) from e
+
+        # Create snapshots on target
+        for subvol in subvolumes:
+            snapshot_name = f"{subvol}-presync-{timestamp}-{self._session_id}"
+            snapshot_path = snapshot_dir / snapshot_name
+
+            self.log(
+                LogLevel.FULL,
+                f"Creating pre-sync snapshot for {subvol} on target",
+                snapshot_path=str(snapshot_path),
+            )
+
+            try:
+                # Use remote executor to create snapshot on target
+                mount_point = self._find_subvolume_path(subvol)
+                command = f"sudo btrfs subvolume snapshot -r {mount_point} {snapshot_path}"
+                result = self._remote.run(command, timeout=30.0)
+
+                if result.returncode != 0:
+                    error_msg = f"Failed to create pre-sync snapshot for {subvol} on target: {result.stderr}"
+                    self.log(LogLevel.CRITICAL, error_msg)
+                    raise SyncError(error_msg)
+
+                self.log(
+                    LogLevel.INFO,
+                    f"Created pre-sync snapshot on target: {snapshot_name}",
+                    subvolume=subvol,
+                    location="target",
+                )
+            except SyncError:
+                raise
+            except Exception as e:
+                error_msg = f"Failed to create pre-sync snapshot for {subvol} on target: {e}"
                 self.log(LogLevel.CRITICAL, error_msg)
                 raise SyncError(error_msg) from e
 
@@ -246,7 +333,7 @@ class BtrfsSnapshotsModule(SyncModule):
 
     @override
     def post_sync(self) -> None:
-        """Create post-sync read-only snapshots of all configured subvolumes.
+        """Create post-sync read-only snapshots of all configured subvolumes on both machines.
 
         Raises:
             SyncError: If snapshot creation fails
@@ -257,6 +344,7 @@ class BtrfsSnapshotsModule(SyncModule):
         subvolumes: list[str] = self.config["subvolumes"]
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
+        # Create post-sync snapshots on source
         for subvol in subvolumes:
             # Snapshot naming: {subvol}-postsync-{timestamp}-{session_id}
             snapshot_name = f"{subvol}-postsync-{timestamp}-{self._session_id}"
@@ -264,7 +352,7 @@ class BtrfsSnapshotsModule(SyncModule):
 
             self.log(
                 LogLevel.FULL,
-                f"Creating post-sync snapshot for {subvol}",
+                f"Creating post-sync snapshot for {subvol} on source",
                 snapshot_path=str(snapshot_path),
             )
 
@@ -281,11 +369,47 @@ class BtrfsSnapshotsModule(SyncModule):
                 )
                 self.log(
                     LogLevel.INFO,
-                    f"Created post-sync snapshot: {snapshot_name}",
+                    f"Created post-sync snapshot on source: {snapshot_name}",
                     subvolume=subvol,
+                    location="source",
                 )
             except subprocess.CalledProcessError as e:
-                error_msg = f"Failed to create post-sync snapshot for {subvol}: {e.stderr}"
+                error_msg = f"Failed to create post-sync snapshot for {subvol} on source: {e.stderr}"
+                self.log(LogLevel.CRITICAL, error_msg)
+                raise SyncError(error_msg) from e
+
+        # Create post-sync snapshots on target
+        for subvol in subvolumes:
+            snapshot_name = f"{subvol}-postsync-{timestamp}-{self._session_id}"
+            snapshot_path = snapshot_dir / snapshot_name
+
+            self.log(
+                LogLevel.FULL,
+                f"Creating post-sync snapshot for {subvol} on target",
+                snapshot_path=str(snapshot_path),
+            )
+
+            try:
+                # Use remote executor to create snapshot on target
+                mount_point = self._find_subvolume_path(subvol)
+                command = f"sudo btrfs subvolume snapshot -r {mount_point} {snapshot_path}"
+                result = self._remote.run(command, timeout=30.0)
+
+                if result.returncode != 0:
+                    error_msg = f"Failed to create post-sync snapshot for {subvol} on target: {result.stderr}"
+                    self.log(LogLevel.CRITICAL, error_msg)
+                    raise SyncError(error_msg)
+
+                self.log(
+                    LogLevel.INFO,
+                    f"Created post-sync snapshot on target: {snapshot_name}",
+                    subvolume=subvol,
+                    location="target",
+                )
+            except SyncError:
+                raise
+            except Exception as e:
+                error_msg = f"Failed to create post-sync snapshot for {subvol} on target: {e}"
                 self.log(LogLevel.CRITICAL, error_msg)
                 raise SyncError(error_msg) from e
 
