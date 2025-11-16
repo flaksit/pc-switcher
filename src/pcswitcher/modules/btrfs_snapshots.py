@@ -239,6 +239,11 @@ class BtrfsSnapshotsModule(SyncModule):
         # Ensure snapshot directory exists on target
         try:
             result = self._remote.run(f"mkdir -p {snapshot_dir}", timeout=10.0)
+            # Log remote command output for cross-host aggregation
+            if result.stdout:
+                self.log_remote_output(self._remote.get_hostname(), result.stdout, stream="stdout")
+            if result.stderr:
+                self.log_remote_output(self._remote.get_hostname(), result.stderr, stream="stderr", level=LogLevel.WARNING if result.returncode != 0 else LogLevel.FULL)
             if result.returncode != 0:
                 error_msg = f"Failed to create snapshot directory on target: {result.stderr}"
                 self.log(LogLevel.CRITICAL, error_msg)
@@ -304,6 +309,12 @@ class BtrfsSnapshotsModule(SyncModule):
                 mount_point = self._find_subvolume_path(subvol)
                 command = f"sudo btrfs subvolume snapshot -r {mount_point} {snapshot_path}"
                 result = self._remote.run(command, timeout=30.0)
+
+                # Log remote command output for cross-host aggregation
+                if result.stdout:
+                    self.log_remote_output(self._remote.get_hostname(), result.stdout, stream="stdout")
+                if result.stderr:
+                    self.log_remote_output(self._remote.get_hostname(), result.stderr, stream="stderr", level=LogLevel.WARNING if result.returncode != 0 else LogLevel.FULL)
 
                 if result.returncode != 0:
                     error_msg = f"Failed to create pre-sync snapshot for {subvol} on target: {result.stderr}"
@@ -394,6 +405,12 @@ class BtrfsSnapshotsModule(SyncModule):
                 mount_point = self._find_subvolume_path(subvol)
                 command = f"sudo btrfs subvolume snapshot -r {mount_point} {snapshot_path}"
                 result = self._remote.run(command, timeout=30.0)
+
+                # Log remote command output for cross-host aggregation
+                if result.stdout:
+                    self.log_remote_output(self._remote.get_hostname(), result.stdout, stream="stdout")
+                if result.stderr:
+                    self.log_remote_output(self._remote.get_hostname(), result.stderr, stream="stderr", level=LogLevel.WARNING if result.returncode != 0 else LogLevel.FULL)
 
                 if result.returncode != 0:
                     error_msg = f"Failed to create post-sync snapshot for {subvol} on target: {result.stderr}"

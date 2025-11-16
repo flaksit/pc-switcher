@@ -448,8 +448,49 @@ class Orchestrator:
             if self.ui is not None and percentage is not None:
                 self.ui.update_progress(module.name, percentage, item)
 
+        def log_remote_output_method(
+            hostname: str,
+            output: str,
+            stream: str = "stdout",
+            level: LogLevel = LogLevel.FULL,
+        ) -> None:
+            """Log remote command output for cross-host log aggregation.
+
+            Captures stdout/stderr from remote operations and logs them with
+            hostname metadata so both source and target appear in unified logs.
+
+            Output is truncated to first 10 lines to avoid log spam, with a
+            count of additional lines shown.
+            """
+            if not output.strip():
+                return
+
+            # Split output into lines and process
+            lines = output.rstrip().split("\n")
+            max_lines = 10
+            displayed_lines = lines[:max_lines]
+
+            for line in displayed_lines:
+                if line.strip():
+                    module_logger.log(
+                        level,
+                        f"[{stream.upper()}] {line}",
+                        hostname=hostname,
+                        source="remote",
+                    )
+
+            # Show truncation notice if there are more lines
+            if len(lines) > max_lines:
+                module_logger.log(
+                    level,
+                    f"... ({len(lines) - max_lines} more lines in {stream})",
+                    hostname=hostname,
+                    source="remote",
+                )
+
         module.log = log_method  # type: ignore[method-assign]
         module.emit_progress = progress_method  # type: ignore[method-assign]
+        module.log_remote_output = log_remote_output_method  # type: ignore[method-assign]
 
     def _validate_all_modules(self) -> None:
         """Run validate() on all modules.

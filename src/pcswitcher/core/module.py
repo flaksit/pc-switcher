@@ -215,3 +215,26 @@ class SyncModule(ABC):
         Modules should raise SyncError instead for unrecoverable failures.
         """
         raise NotImplementedError("Orchestrator injects this method")
+
+    def log_remote_output(
+        self,
+        hostname: str,
+        output: str,
+        stream: str = "stdout",
+        level: LogLevel = LogLevel.FULL,
+    ) -> None:
+        """Log output from remote commands with hostname metadata.
+
+        Injected by orchestrator for cross-host log aggregation.
+        Automatically includes hostname in log context.
+
+        Args:
+            hostname: Hostname of the remote machine
+            output: Command output (stdout or stderr)
+            stream: Stream name ("stdout" or "stderr")
+            level: Log level for output lines (default: FULL for detailed)
+
+        This enables unified log streams containing both source and target
+        operations with proper hostname attribution.
+        """
+        raise NotImplementedError("Orchestrator injects this method")
