@@ -13,7 +13,7 @@ You **MUST** consider the user input before proceeding (if not empty). The user 
 
 We use speckit as workflow to implement features in this project. The feature we are currently working has a specific feature folder under specs/ with the same name as the current branch. In the feature folder, there is a spec.md file that contains the specification of the feature.
 
-You just finished the implementation of the feature. My quality assurance analyst reviewed your implementation against the specs. You find their feedback in the file "implementation-review.md" in the feature folder. In case there are multiple files with that name (e.g. implementation-review-2.md), make sure to read only the one with the highest number.
+You just finished the implementation of the feature. My quality assurance analyst reviewed your implementation against the specs. You find their feedback in the file "implementation-review-N*.md" in the feature folder. Make sure to read only the file with the highest number N.
 First, critically read through their feedback. Come back to me and ask me clarifying questions if you think parts of the feedback are not relevant.
 
 Then, when all your questions are answered, fix your implementation according to the feedback. Ensure all points raised in the feedback are addressed and that the implementation fully complies with the specifications outlined in "spec.md".
