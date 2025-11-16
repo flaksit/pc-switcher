@@ -11,19 +11,19 @@ from pcswitcher.utils.disk import DiskMonitor, format_bytes
 
 
 def test_check_free_space_with_percentage() -> None:
-    """Test disk space check with percentage threshold."""
+    """Test disk space check with percentage threshold (string format)."""
     monitor = DiskMonitor()
 
     # Use a real path that exists
     with tempfile.TemporaryDirectory() as tmpdir:
         # Very low threshold should pass
-        is_sufficient, free_bytes, required_bytes = monitor.check_free_space(Path(tmpdir), 0.01)
+        is_sufficient, free_bytes, required_bytes = monitor.check_free_space(Path(tmpdir), "1%")
         assert is_sufficient
         assert free_bytes > 0
         assert required_bytes > 0
 
         # Very high threshold should fail
-        is_sufficient, free_bytes, required_bytes = monitor.check_free_space(Path(tmpdir), 0.99)
+        is_sufficient, free_bytes, required_bytes = monitor.check_free_space(Path(tmpdir), "99%")
         assert not is_sufficient
         assert free_bytes > 0
         assert required_bytes > 0
@@ -42,15 +42,15 @@ def test_check_free_space_with_percentage_string() -> None:
 
 
 def test_check_free_space_with_bytes() -> None:
-    """Test disk space check with absolute bytes threshold."""
+    """Test disk space check with absolute GiB threshold."""
     monitor = DiskMonitor()
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Very small byte requirement should pass
-        is_sufficient, free_bytes, required_bytes = monitor.check_free_space(Path(tmpdir), 1024)
+        # Very small GiB requirement should pass
+        is_sufficient, free_bytes, required_bytes = monitor.check_free_space(Path(tmpdir), "1GiB")
         assert is_sufficient
         assert free_bytes > 0
-        assert required_bytes == 1024.0
+        assert required_bytes == 1024 * 1024 * 1024  # 1 GiB in bytes
 
 
 def test_check_free_space_invalid_format() -> None:
@@ -58,13 +58,21 @@ def test_check_free_space_invalid_format() -> None:
     monitor = DiskMonitor()
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Invalid percentage string
-        with pytest.raises(ValueError, match="String min_free must be percentage"):
+        # Invalid string without proper unit suffix
+        with pytest.raises(ValueError, match="Disk minimum must be specified with explicit units"):
             monitor.check_free_space(Path(tmpdir), "invalid")
 
-        # Invalid percentage value
+        # Invalid percentage value (out of range)
         with pytest.raises(ValueError, match="Percentage.*must be between"):
             monitor.check_free_space(Path(tmpdir), "150%")
+
+        # Bare float without units should fail
+        with pytest.raises(ValueError, match="Bare numbers without units"):
+            monitor.check_free_space(Path(tmpdir), 0.20)  # type: ignore[arg-type]
+
+        # Bare int without units should fail
+        with pytest.raises(ValueError, match="Bare numbers without units"):
+            monitor.check_free_space(Path(tmpdir), 1024)  # type: ignore[arg-type]
 
 
 def test_monitor_continuously_start_stop() -> None:
@@ -81,7 +89,7 @@ def test_monitor_continuously_start_stop() -> None:
         monitor.monitor_continuously(
             path=Path(tmpdir),
             interval=1,
-            reserve_minimum=0.99,  # 99% - should trigger warning
+            reserve_minimum="99%",  # 99% - should trigger warning
             callback=callback,
         )
 
@@ -104,7 +112,7 @@ def test_monitor_continuously_already_running() -> None:
             monitor.monitor_continuously(
                 path=Path(tmpdir),
                 interval=1,
-                reserve_minimum=0.20,
+                reserve_minimum="20%",
                 callback=callback,
             )
 
@@ -113,7 +121,7 @@ def test_monitor_continuously_already_running() -> None:
                 monitor.monitor_continuously(
                     path=Path(tmpdir),
                     interval=1,
-                    reserve_minimum=0.20,
+                    reserve_minimum="20%",
                     callback=callback,
                 )
         finally:

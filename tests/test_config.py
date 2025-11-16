@@ -57,8 +57,8 @@ def test_apply_defaults_adds_disk_config() -> None:
     result = apply_defaults(config_dict)
 
     assert "disk" in result
-    assert result["disk"]["min_free"] == 0.20
-    assert result["disk"]["reserve_minimum"] == 0.15
+    assert result["disk"]["preflight_minimum"] == "20%"
+    assert result["disk"]["runtime_minimum"] == "15%"
     assert result["disk"]["check_interval"] == 30
 
 
@@ -220,13 +220,15 @@ sync_modules:
 
 
 def test_config_disk_keys_match_spec() -> None:
-    """Test that disk config uses canonical key names from spec (min_free, reserve_minimum, check_interval)."""
+    """Test that disk config uses canonical key names from spec."""
     defaults = apply_defaults({"sync_modules": {"btrfs_snapshots": True}})
 
     # These are the canonical keys from the spec
-    assert "min_free" in defaults["disk"]
-    assert "reserve_minimum" in defaults["disk"]
+    assert "preflight_minimum" in defaults["disk"]
+    assert "runtime_minimum" in defaults["disk"]
     assert "check_interval" in defaults["disk"]
 
     # Old/incorrect keys should NOT be present
+    assert "min_free" not in defaults["disk"]
+    assert "reserve_minimum" not in defaults["disk"]
     assert "min_free_threshold" not in defaults["disk"]
