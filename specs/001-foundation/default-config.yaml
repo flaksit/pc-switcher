@@ -1,0 +1,52 @@
+# PC-Switcher Configuration File
+# ~/.config/pc-switcher/config.yaml
+
+# Logging Configuration
+# log_file_level: Log level for file output (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL)
+# log_cli_level: Log level for terminal/UI output
+log_file_level: FULL
+log_cli_level: INFO
+
+# Module Configuration
+# Enable or disable sync modules
+sync_modules:
+  btrfs_snapshots: true  # Required - cannot be disabled
+  dummy_success: false   # Test module
+  dummy_critical: false  # Test module
+  dummy_fail: false      # Test module
+
+# Btrfs Snapshots Module Configuration
+# Required for data safety - creates pre-sync and post-sync snapshots
+btrfs_snapshots:
+  # Flat subvolume names from 'btrfs subvolume list /'
+  # IMPORTANT: Use flat names like '@', '@home', '@root'
+  # Do NOT use full paths
+  subvolumes:
+    - "@"
+    - "@home"
+    - "@root"
+
+  # Directory where snapshots are stored
+  # Must be writable and on the btrfs filesystem
+  snapshot_dir: "/.snapshots"
+
+  # Number of recent snapshots to keep per subvolume
+  keep_recent: 3
+
+  # Delete snapshots older than this many days
+  max_age_days: 30
+
+  # Minimum free disk space threshold (default 20%)
+  # Can be float (0.20) or percentage string ("20%")
+  min_free_threshold: 0.20
+
+# Disk Configuration
+disk:
+  # Minimum free space before sync starts
+  min_free: 0.20  # 20% or "20%"
+
+  # Check free space every N seconds during sync
+  check_interval: 30
+
+  # Abort if free space drops below this threshold during sync
+  reserve_minimum: 0.15  # 15% or "15%"

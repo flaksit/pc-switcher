@@ -5,7 +5,7 @@ from __future__ import annotations
 import socket
 import subprocess
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -121,6 +121,45 @@ def sync(
         console.print(f"Log: [dim]{log_path}[/dim]\n")
 
         final_state = orchestrator.run()
+
+        # Display summary table
+        duration = datetime.now(UTC) - timestamp if session else timedelta(0)
+        duration_str = str(duration).split(".")[0]  # Remove microseconds
+
+        from rich.table import Table
+
+        console.print("\n[bold]Sync Summary[/bold]\n")
+
+        summary_table = Table(show_header=True, header_style="bold magenta")
+        summary_table.add_column("Metric", style="cyan", width=20)
+        summary_table.add_column("Value", width=30)
+
+        summary_table.add_row("Session ID", session.id)
+        summary_table.add_row("Status", f"[bold {('green' if final_state == SessionState.COMPLETED else 'red')}]{final_state.value.upper()}[/bold]")
+        summary_table.add_row("Duration", duration_str)
+        summary_table.add_row("Modules Executed", str(len(session.module_results)))
+
+        modules_succeeded = sum(
+            1 for r in session.module_results.values() if r.value == "SUCCESS"
+        )
+        modules_failed = sum(1 for r in session.module_results.values() if r.value == "FAILED")
+
+        summary_table.add_row("Modules Succeeded", f"[green]{modules_succeeded}[/green]")
+        if modules_failed > 0:
+            summary_table.add_row("Modules Failed", f"[red]{modules_failed}[/red]")
+
+        summary_table.add_row("Log File", str(log_path))
+
+        console.print(summary_table)
+        console.print()
+
+        # Show module details if there are failures
+        if modules_failed > 0:
+            console.print("[bold red]Failed Modules:[/bold red]")
+            for module_name, result in session.module_results.items():
+                if result.value == "FAILED":
+                    console.print(f"  • {module_name}")
+            console.print()
 
         # Determine exit code
         if final_state == SessionState.COMPLETED:

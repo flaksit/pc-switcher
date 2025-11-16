@@ -58,13 +58,18 @@ check_btrfs_progs() {
 }
 
 # T113: Install pc-switcher from GitHub Package Registry
+# Installs from public ghcr.io container registry (no authentication needed)
 install_pc_switcher() {
-    info "Installing pc-switcher..."
-    uv tool install pc-switcher
+    info "Installing pc-switcher from GitHub Container Registry..."
+    # Get version from package metadata or use latest
+    # uv tool install from ghcr.io requires the full path
+    uv tool install --from 'ghcr.io/flaksit/pc-switcher:latest' pc-switcher 2>/dev/null || \
+        uv tool install 'pc-switcher' || \
+        error "Failed to install pc-switcher"
     info "Installed pc-switcher"
 }
 
-# T114: Create config directory and generate default config.yaml
+# T114: Create config directory and copy default config.yaml
 create_default_config() {
     if [[ -d "${CONFIG_DIR}" ]]; then
         info "Config directory already exists: ${CONFIG_DIR}"
@@ -76,48 +81,39 @@ create_default_config() {
     if [[ -f "${CONFIG_FILE}" ]]; then
         info "Config file already exists: ${CONFIG_FILE}"
     else
+        # Try to get default config from repository at same version
+        # For now, create inline (would be better to download from repo)
         cat > "${CONFIG_FILE}" << 'EOF'
-# PC-Switcher Configuration
-# See documentation for full configuration options
+# PC-Switcher Configuration File
+# ~/.config/pc-switcher/config.yaml
 
-# Remote machine connection settings
-remote:
-  # SSH host for the target machine
-  host: ""
-  # SSH user (defaults to current user if empty)
-  user: ""
-  # SSH port (defaults to 22)
-  port: 22
+# Logging Configuration
+log_file_level: FULL
+log_cli_level: INFO
 
-# Sync behavior settings
-sync:
-  # Paths to sync (relative to home directory)
-  include_paths:
-    - "Documents"
-    - "Projects"
-    - ".config"
-    - ".local/share"
-  # Paths to exclude from sync
-  exclude_paths:
-    - ".ssh/id_*"
-    - ".config/tailscale"
-    - ".cache"
+# Module Configuration
+sync_modules:
+  btrfs_snapshots: true  # Required - cannot be disabled
 
-# Logging configuration
-logging:
-  # Log level: DEBUG, INFO, WARNING, ERROR
-  level: "INFO"
-  # Log file location (empty for stdout only)
-  file: ""
+# Btrfs Snapshots Module Configuration
+btrfs_snapshots:
+  subvolumes:
+    - "@"
+    - "@home"
+    - "@root"
+  snapshot_dir: "/.snapshots"
+  keep_recent: 3
+  max_age_days: 30
+  min_free_threshold: 0.20
 
-# Safety settings
-safety:
-  # Require confirmation before destructive operations
-  confirm_destructive: true
-  # Create backup snapshots before sync
-  create_snapshots: true
+# Disk Configuration
+disk:
+  min_free: 0.20
+  check_interval: 30
+  reserve_minimum: 0.15
 EOF
         info "Created default config file: ${CONFIG_FILE}"
+        info "Edit this file to configure sync behavior"
     fi
 }
 
@@ -132,11 +128,28 @@ main() {
 
     # T115: Success message
     echo ""
-    echo "pc-switcher installed successfully"
+    echo "================================================"
+    echo "pc-switcher installed successfully!"
+    echo "================================================"
     echo ""
     echo "Next steps:"
-    echo "  1. Edit ${CONFIG_FILE} to configure your sync settings"
-    echo "  2. Run 'pc-switcher --help' to see available commands"
+    echo "  1. List your btrfs subvolumes:"
+    echo "     sudo btrfs subvolume list /"
+    echo ""
+    echo "  2. Edit ${CONFIG_FILE}"
+    echo "     Update the 'subvolumes' list to match your layout"
+    echo ""
+    echo "  3. Verify your config:"
+    echo "     pc-switcher --help"
+    echo ""
+    echo "  4. Perform your first sync:"
+    echo "     pc-switcher sync <target-hostname>"
+    echo ""
+    echo "Important:"
+    echo "  - Target machine must have btrfs filesystem"
+    echo "  - Target must have matching subvolume layout"
+    echo "  - 'pc-switcher sync' automatically installs pc-switcher on target"
+    echo ""
 }
 
 main "$@"
