@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import re
 import subprocess
 from typing import TYPE_CHECKING
+
+from packaging.version import InvalidVersion
+from packaging.version import Version
 
 from pcswitcher.core.logging import get_logger
 
@@ -113,7 +115,7 @@ class VersionManager:
             raise InstallationError(f"Failed to check target version: {e}") from e
 
     def compare_versions(self, version1: str, version2: str) -> int:
-        """Compare two version strings.
+        """Compare two version strings using PEP 440 semantics.
 
         Args:
             version1: First version string (e.g., "0.1.0")
@@ -123,22 +125,20 @@ class VersionManager:
             -1 if version1 < version2
              0 if version1 == version2
              1 if version1 > version2
+
+        Raises:
+            ValueError: If either version string is not PEP 440 compliant
         """
-        # Parse version components
-        v1_parts = [int(x) for x in re.split(r"[.-]", version1) if x.isdigit()]
-        v2_parts = [int(x) for x in re.split(r"[.-]", version2) if x.isdigit()]
+        try:
+            v1 = Version(version1)
+            v2 = Version(version2)
+        except InvalidVersion as e:
+            raise ValueError(f"Invalid version format: {e}") from e
 
-        # Pad shorter version with zeros
-        max_len = max(len(v1_parts), len(v2_parts))
-        v1_parts.extend([0] * (max_len - len(v1_parts)))
-        v2_parts.extend([0] * (max_len - len(v2_parts)))
-
-        # Compare component by component
-        for p1, p2 in zip(v1_parts, v2_parts, strict=False):
-            if p1 < p2:
-                return -1
-            if p1 > p2:
-                return 1
+        if v1 < v2:
+            return -1
+        if v1 > v2:
+            return 1
         return 0
 
     def _ensure_uv_on_target(self) -> None:

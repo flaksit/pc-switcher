@@ -51,14 +51,22 @@ def test_version_comparison_different_lengths() -> None:
 
 
 def test_version_comparison_edge_cases() -> None:
-    """Test version comparison with edge cases."""
+    """Test version comparison with edge cases using PEP 440 semantics."""
     mock_remote = create_mock_remote_executor()
     manager = VersionManager(mock_remote)
 
-    # Pre-release versions
-    assert manager.compare_versions("1.0.0-alpha", "1.0.0") == 0  # Ignores non-numeric parts
-    assert manager.compare_versions("1.0.0-1", "1.0.0-2") == -1
-    assert manager.compare_versions("2.0.0-beta", "1.9.9") == 1
+    # Pre-release versions are less than final release (PEP 440)
+    assert manager.compare_versions("1.0.0a1", "1.0.0") == -1
+    assert manager.compare_versions("1.0.0a1", "1.0.0b1") == -1
+    assert manager.compare_versions("1.0.0b1", "1.0.0rc1") == -1
+    assert manager.compare_versions("1.0.0rc1", "1.0.0") == -1
+
+    # Post-release is after final release
+    assert manager.compare_versions("1.0.0", "1.0.0.post1") == -1
+
+    # Dev releases
+    assert manager.compare_versions("1.0.0.dev1", "1.0.0a1") == -1
+    assert manager.compare_versions("1.0.0.dev1", "1.0.0") == -1
 
 
 def test_ensure_version_sync_missing_local() -> None:

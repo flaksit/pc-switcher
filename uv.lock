@@ -368,6 +368,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fabric" },
     { name = "jsonschema" },
+    { name = "packaging" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "structlog" },
@@ -386,6 +387,7 @@ dev = [
 requires-dist = [
     { name = "fabric", specifier = ">=3.2.2" },
     { name = "jsonschema", specifier = ">=4.23.0" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "structlog", specifier = ">=25.1.0" },
