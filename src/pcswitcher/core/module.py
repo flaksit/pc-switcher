@@ -12,10 +12,10 @@ from pcswitcher.core.logging import LogLevel
 
 
 class SyncModuleCallbacks(Protocol):
-    """Protocol defining callbacks injected into sync modules by the orchestrator.
+    """Protocol for orchestrator-provided callbacks. Internal implementation detail.
 
-    These callbacks provide modules with access to logging and progress reporting
-    without tight coupling to the orchestrator implementation.
+    Module developers should use SyncModule.emit_progress(), SyncModule.log(), and
+    SyncModule.log_remote_output() methods directly instead of accessing this protocol.
     """
 
     def emit_progress(
@@ -24,26 +24,11 @@ class SyncModuleCallbacks(Protocol):
         item: str = "",
         eta: timedelta | None = None,
     ) -> None:
-        """Report progress to orchestrator for terminal UI display and logging.
-
-        Args:
-            percentage: Progress as fraction (0.0-1.0) of TOTAL module work, or None if unknown
-            item: Description of current operation
-            eta: Estimated time to completion (optional)
-        """
+        """Emit progress update. See SyncModule.emit_progress() for full documentation."""
         ...
 
     def log(self, level: LogLevel, message: str, **context: Any) -> None:
-        """Log a message with structured context.
-
-        Args:
-            level: Log level (DEBUG, FULL, INFO, WARNING, ERROR)
-            message: Log message
-            **context: Structured context data
-
-        Important: Modules should NOT log at CRITICAL level.
-        Modules should raise SyncError instead for unrecoverable failures.
-        """
+        """Log a message. See SyncModule.log() for full documentation."""
         ...
 
     def log_remote_output(
@@ -53,14 +38,7 @@ class SyncModuleCallbacks(Protocol):
         stream: str = "stdout",
         level: LogLevel = LogLevel.FULL,
     ) -> None:
-        """Log output from remote commands with hostname metadata.
-
-        Args:
-            hostname: Hostname of the remote machine
-            output: Command output (stdout or stderr)
-            stream: Stream name ("stdout" or "stderr")
-            level: Log level for output lines (default: FULL for detailed)
-        """
+        """Log remote output. See SyncModule.log_remote_output() for full documentation."""
         ...
 
 
@@ -175,6 +153,91 @@ class SyncModule(ABC):
                 "Orchestrator must call set_callbacks() before module execution."
             )
         return self._callbacks
+
+    def emit_progress(
+        self,
+        percentage: float | None = None,
+        item: str = "",
+        eta: timedelta | None = None,
+    ) -> None:
+        """Report sync progress to the orchestrator.
+
+        Call this method during sync() to provide progress feedback for
+        terminal UI display and logging. Progress is per-module (not global).
+
+        Args:
+            percentage: Progress as fraction (0.0-1.0) of total module work.
+                        Use None if total work is unknown (indeterminate progress).
+            item: Brief description of current operation (e.g., "Copying /home/user/docs").
+                  Keep concise for terminal display.
+            eta: Estimated time to completion for this module. Optional.
+
+        Example:
+            self.emit_progress(0.5, "Transferring Docker images")
+            self.emit_progress(0.75, "Syncing volumes", eta=timedelta(minutes=2))
+            self.emit_progress(item="Processing unknown number of items")  # indeterminate
+        """
+        self.callbacks.emit_progress(percentage, item, eta)
+
+    def log(self, level: LogLevel, message: str, **context: Any) -> None:
+        """Log a message with structured context.
+
+        Use this method to log operations, warnings, and errors during module execution.
+        All log messages are tagged with module name automatically by the orchestrator.
+
+        Args:
+            level: Log level determining visibility:
+                   - DEBUG: Development/troubleshooting details (rarely shown)
+                   - FULL: Verbose operational details (shown in verbose mode)
+                   - INFO: Normal operational messages (default visibility)
+                   - WARNING: Recoverable issues that may need attention
+                   - ERROR: Serious issues that may affect sync integrity
+            message: Human-readable log message describing the event.
+            **context: Structured key-value data for machine-readable logging.
+                       Common keys: subvolume, file_count, duration_seconds, etc.
+
+        Important:
+            - Do NOT log at CRITICAL level. Instead, raise SyncError for
+              unrecoverable failures. The orchestrator logs CRITICAL errors.
+
+        Example:
+            self.log(LogLevel.INFO, "Starting package sync", package_count=150)
+            self.log(LogLevel.WARNING, "Package cache outdated", cache_age_days=30)
+            self.log(LogLevel.ERROR, "Failed to sync optional file", path="/etc/foo")
+        """
+        self.callbacks.log(level, message, **context)
+
+    def log_remote_output(
+        self,
+        hostname: str,
+        output: str,
+        stream: str = "stdout",
+        level: LogLevel = LogLevel.FULL,
+    ) -> None:
+        """Log output from remote command execution.
+
+        Use this after running commands on the target machine to capture their
+        output with proper hostname tagging. Output is typically logged at FULL
+        level to avoid cluttering normal output but remain available for debugging.
+
+        Args:
+            hostname: Hostname of the remote machine (use self.remote.get_hostname()).
+            output: Raw command output (stdout or stderr string).
+            stream: Which output stream this came from ("stdout" or "stderr").
+                    Helps identify error output during troubleshooting.
+            level: Log level for the output lines (default: FULL for detailed logs).
+                   Use WARNING or ERROR for important error output.
+
+        Example:
+            result = self.remote.run("apt update", sudo=True)
+            if result.stdout:
+                self.log_remote_output(self.remote.get_hostname(), result.stdout)
+            if result.stderr:
+                self.log_remote_output(
+                    self.remote.get_hostname(), result.stderr, stream="stderr", level=LogLevel.WARNING
+                )
+        """
+        self.callbacks.log_remote_output(hostname, output, stream, level)
 
     @property
     @abstractmethod

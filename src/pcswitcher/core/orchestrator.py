@@ -125,7 +125,7 @@ class _ModuleCallbacks:
         if eta is not None:
             context["eta"] = str(eta)
 
-        self._logger.log(LogLevel.FULL, f"Progress: {item}", **context)
+        self.log(LogLevel.FULL, f"Progress: {item}", **context)
 
         # Forward to terminal UI if available for real-time progress bars
         if self._ui is not None and percentage is not None:
@@ -133,18 +133,7 @@ class _ModuleCallbacks:
 
     def log(self, level: LogLevel, message: str, **context: Any) -> None:
         """Module logging method that forwards to structlog."""
-        if level == LogLevel.DEBUG:
-            self._logger.debug(message, **context)
-        elif level == LogLevel.FULL:
-            self._logger.log(LogLevel.FULL, message, **context)
-        elif level == LogLevel.INFO:
-            self._logger.info(message, **context)
-        elif level == LogLevel.WARNING:
-            self._logger.warning(message, **context)
-        elif level == LogLevel.ERROR:
-            self._logger.error(message, **context)
-        elif level == LogLevel.CRITICAL:
-            self._logger.critical(message, **context)
+        self._logger.log(level, message, **context)
 
     def log_remote_output(
         self,
@@ -173,7 +162,7 @@ class _ModuleCallbacks:
 
         # Show truncation notice if there are more lines
         if len(lines) > max_lines:
-            self._logger.log(
+            self.log(
                 level,
                 f"... ({len(lines) - max_lines} more lines in {stream})",
                 hostname=hostname,

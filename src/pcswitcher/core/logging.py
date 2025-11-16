@@ -23,12 +23,12 @@ class LogLevel(IntEnum):
     with custom FULL level between DEBUG and INFO for detailed output.
     """
 
-    DEBUG = 10
-    FULL = 15
-    INFO = 20
-    WARNING = 30
-    ERROR = 40
-    CRITICAL = 50
+    DEBUG = logging.DEBUG
+    FULL = logging.DEBUG + 5  # Custom level between DEBUG and INFO
+    INFO = logging.INFO
+    WARNING = logging.WARNING
+    ERROR = logging.ERROR
+    CRITICAL = logging.CRITICAL
 
 
 # Register custom FULL log level with Python's logging module

@@ -70,7 +70,7 @@ class DummySuccessModule(SyncModule):
         Returns:
             Empty list (always validates successfully)
         """
-        self.callbacks.log(LogLevel.INFO, "Validation passed")
+        self.log(LogLevel.INFO, "Validation passed")
         return []
 
     @override
@@ -79,8 +79,8 @@ class DummySuccessModule(SyncModule):
 
         For this dummy module, just logs the operation.
         """
-        self.callbacks.log(LogLevel.INFO, "Starting pre-sync")
-        self.callbacks.log(LogLevel.INFO, "Pre-sync complete")
+        self.log(LogLevel.INFO, "Starting pre-sync")
+        self.log(LogLevel.INFO, "Pre-sync complete")
 
     @override
     def sync(self) -> None:
@@ -95,33 +95,33 @@ class DummySuccessModule(SyncModule):
         Respects abort signal for graceful termination.
         """
         duration = self.config.get("duration_seconds", 20)
-        self.callbacks.log(LogLevel.INFO, "Starting sync", duration=duration)
+        self.log(LogLevel.INFO, "Starting sync", duration=duration)
 
         for i in range(duration):
             if self._aborted:
-                self.callbacks.log(LogLevel.INFO, "Sync aborted by user")
+                self.log(LogLevel.INFO, "Sync aborted by user")
                 return
 
             # Calculate and report progress (0.0 to 1.0)
             progress = (i + 1) / duration
-            self.callbacks.emit_progress(progress, f"Processing step {i + 1}/{duration}")
+            self.emit_progress(progress, f"Processing step {i + 1}/{duration}")
 
             # Log at various levels to test logging
             if (i + 1) % 2 == 0:
-                self.callbacks.log(LogLevel.INFO, f"Completed step {i + 1}/{duration}")
+                self.log(LogLevel.INFO, f"Completed step {i + 1}/{duration}")
 
             if i == 6:
-                self.callbacks.log(LogLevel.WARNING, "Example warning at 30% progress")
+                self.log(LogLevel.WARNING, "Example warning at 30% progress")
 
             if i == 8:
-                self.callbacks.log(
+                self.log(
                     LogLevel.ERROR,
                     "Example ERROR at 40% progress (recoverable, sync continues)",
                 )
 
             time.sleep(1)
 
-        self.callbacks.log(LogLevel.INFO, "Sync complete", total_steps=duration)
+        self.log(LogLevel.INFO, "Sync complete", total_steps=duration)
 
     @override
     def post_sync(self) -> None:
@@ -129,8 +129,8 @@ class DummySuccessModule(SyncModule):
 
         For this dummy module, just logs the operation.
         """
-        self.callbacks.log(LogLevel.INFO, "Starting post-sync")
-        self.callbacks.log(LogLevel.INFO, "Post-sync complete")
+        self.log(LogLevel.INFO, "Starting post-sync")
+        self.log(LogLevel.INFO, "Post-sync complete")
 
     @override
     def abort(self, timeout: float) -> None:
@@ -141,5 +141,5 @@ class DummySuccessModule(SyncModule):
 
         Sets abort flag to stop sync loop gracefully.
         """
-        self.callbacks.log(LogLevel.INFO, "abort() called", timeout=timeout)
+        self.log(LogLevel.INFO, "abort() called", timeout=timeout)
         self._aborted = True
