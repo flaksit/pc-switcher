@@ -29,9 +29,9 @@ Repository structure (single Python package):
 **Purpose**: Project initialization and basic structure
 
 - [ ] T001 Create .tool-versions file with uv 0.9.9 (Proven Tooling Only)
-- [ ] T002 Initialize Python 3.13 environment with uv and create pyproject.toml with dependencies: fabric, structlog, rich, typer, pyyaml, hatchling, uv-dynamic-versioning (Proven Tooling Only)
+- [ ] T002 Initialize Python 3.13 environment with uv and create pyproject.toml with dependencies: fabric, structlog, rich, typer, pyyaml, jsonschema, hatchling, uv-dynamic-versioning (Proven Tooling Only)
 - [ ] T003 [P] Create project directory structure: src/pcswitcher/{cli,core,remote,modules,utils}/, tests/{unit,integration,e2e}/, scripts/target/ (Deliberate Simplicity)
-- [ ] T004 [P] Configure pyproject.toml with CLI entry point pc-switcher=pcswitcher.cli.main:app and dynamic versioning (Frictionless Command UX)
+- [ ] T004 [P] Configure pyproject.toml with CLI entry point pc-switcher=pcswitcher.cli.main:app and dynamic versioning via [tool.hatch.version] source="vcs" and [tool.uv-dynamic-versioning] enable=true (Frictionless Command UX)
 - [ ] T005 [P] Add dev dependencies: pytest, basedpyright, ruff, codespell to pyproject.toml (Proven Tooling Only)
 - [ ] T006 [P] Configure ruff in pyproject.toml with line-length=119, target-version=py313 (Deliberate Simplicity)
 - [ ] T007 [P] Configure basedpyright in pyproject.toml with typeCheckingMode=standard, pythonVersion=3.13 (Deliberate Simplicity)
@@ -90,11 +90,12 @@ Repository structure (single Python package):
 - [ ] T023 [US6] Create Configuration dataclass with fields: log_file_level, log_cli_level, sync_modules, module_configs, disk, config_path in src/pcswitcher/core/config.py (Deliberate Simplicity)
 - [ ] T024 [US6] Implement load_config(path: Path) -> Configuration that uses yaml.safe_load() to load YAML in src/pcswitcher/core/config.py (Reliability Without Compromise)
 - [ ] T025 [US6] Implement validate_config_structure(config_dict) that checks required fields exist and types are correct in src/pcswitcher/core/config.py (Reliability Without Compromise)
-- [ ] T026 [US6] Implement validate_required_modules(sync_modules_dict) that verifies btrfs_snapshots is first and enabled in src/pcswitcher/core/config.py (Reliability Without Compromise)
+- [ ] T026 [US6] Implement validate_required_modules(sync_modules_dict, config_path) that verifies btrfs_snapshots is first and enabled; if disabled, displays error "Required module 'btrfs_snapshots' cannot be disabled" with config file location in src/pcswitcher/core/config.py (Reliability Without Compromise)
 - [ ] T027 [US6] Implement apply_defaults(config_dict, schema) that fills missing values with defaults from config-schema.yaml in src/pcswitcher/core/config.py (Frictionless Command UX)
 - [ ] T028 [US6] Implement validate_module_config(module_name, module_config, schema) using jsonschema library (JSON Schema draft-07) in src/pcswitcher/core/config.py (Reliability Without Compromise)
 - [ ] T029 [US6] Create generate_default_config() -> str that produces default YAML with inline comments from config-schema.yaml in src/pcswitcher/core/config.py (Frictionless Command UX)
 - [ ] T030 [US6] Implement get_enabled_modules(sync_modules_dict) -> list[str] that returns module names in config order in src/pcswitcher/core/config.py (Deliberate Simplicity)
+- [ ] T030a [US6] Implement validate_module_names(sync_modules_dict, available_modules) that checks for unknown module names in config and logs ERROR "Unknown module 'xyz' in configuration" before aborting in src/pcswitcher/core/config.py (Reliability Without Compromise)
 
 **Checkpoint**: At this point, configuration system should be fully functional with loading, validation, defaults, and module management
 
@@ -181,10 +182,11 @@ Repository structure (single Python package):
 - [ ] T054 [US2] Implement TargetConnection.run(command, sudo, timeout) using Fabric conn.run() with result handling in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
 - [ ] T055 [US2] Implement TargetConnection.check_version() that detects pc-switcher version on target via pip show pc-switcher in src/pcswitcher/remote/connection.py (Frictionless Command UX)
 - [ ] T056 [US2] Implement TargetConnection.install_version(version) that installs from GitHub Package Registry (ghcr.io) using `uv tool install pc-switcher==<version>` in src/pcswitcher/remote/installer.py (Frictionless Command UX)
-- [ ] T057 [US2] Implement version comparison logic: abort if target > source, upgrade if target < source, skip if equal in src/pcswitcher/remote/installer.py (Reliability Without Compromise)
+- [ ] T057 [US2] Implement version comparison logic: log CRITICAL "Target version X is newer than source Y" and abort if target > source, upgrade if target < source, skip if equal in src/pcswitcher/remote/installer.py (Reliability Without Compromise)
 - [ ] T058 [US2] Add error handling for installation failures with CRITICAL logging in src/pcswitcher/remote/installer.py (Reliability Without Compromise)
 - [ ] T059 [US2] Implement TargetConnection.send_file_to_target(local, remote) using Fabric conn.put() in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
 - [ ] T060 [US2] Implement TargetConnection.terminate_processes() for target cleanup on abort in src/pcswitcher/remote/connection.py (Reliability Without Compromise)
+- [ ] T060a [US2] Implement TargetConnection connection loss detection and single reconnect attempt: detect connection loss via Fabric exceptions, log CRITICAL error, attempt reconnect once, if reconnection fails log diagnostic information and abort in src/pcswitcher/remote/connection.py (Reliability Without Compromise)
 
 **Checkpoint**: At this point, self-installation should work end-to-end with version detection, installation, and upgrade
 
@@ -228,10 +230,10 @@ Repository structure (single Python package):
 
 ### Implementation for Session Management
 
-- [ ] T074 [SESSION] Create SyncSession dataclass with fields: id, timestamp, source_hostname, target_hostname, enabled_modules, state, module_results, has_errors, abort_requested, lock_path in src/pcswitcher/core/session.py (Reliability Without Compromise)
+- [ ] T074 [SESSION] Create SyncSession dataclass with fields: id, timestamp, source_hostname, target_hostname, enabled_modules (populated from Configuration.get_enabled_modules()), state, module_results, has_errors, abort_requested, lock_path in src/pcswitcher/core/session.py (Reliability Without Compromise)
 - [ ] T075 [SESSION] Implement generate_session_id() that returns 8-char hex from uuid.uuid4() in src/pcswitcher/core/session.py (Deliberate Simplicity)
 - [ ] T076 [SESSION] Implement state transition methods: set_state(new_state), is_terminal_state() in src/pcswitcher/core/session.py (Reliability Without Compromise)
-- [ ] T077 [SESSION] Create LockManager class with acquire_lock(), release_lock(), check_lock_exists() in src/pcswitcher/utils/lock.py (Reliability Without Compromise)
+- [ ] T077 [SESSION] Create LockManager class with acquire_lock() (includes PID validation using ps -p check to detect stale locks), release_lock(), check_lock_exists() in src/pcswitcher/utils/lock.py (Reliability Without Compromise)
 - [ ] T078 [SESSION] Implement lock file format: JSON with pid, timestamp, session_id in $XDG_RUNTIME_DIR/pc-switcher/pc-switcher.lock in src/pcswitcher/utils/lock.py (Reliability Without Compromise)
 - [ ] T079 [SESSION] Implement stale lock detection using `ps -p <PID>` check in src/pcswitcher/utils/lock.py (Reliability Without Compromise)
 - [ ] T080 [SESSION] Add user confirmation prompt for stale lock removal in src/pcswitcher/utils/lock.py (Frictionless Command UX)
@@ -325,8 +327,11 @@ Repository structure (single Python package):
 
 ### Implementation for User Story 7
 
-- [ ] T111 [P] [US7] Create setup script scripts/setup.sh that detects btrfs filesystem using stat -f -c %T / and aborts with clear error if not btrfs (Frictionless Command UX)
-- [ ] T112 [P] [US7] Add check for uv 0.9.9 installation in scripts/setup.sh, install if missing (Proven Tooling Only)
+**Note**: Tasks execute in order T111 → T112 → T112a → T113 → T114 → T115 (sequential steps in single setup script)
+
+- [ ] T111 [US7] Create setup script scripts/setup.sh that detects btrfs filesystem using stat -f -c %T / and aborts with clear error if not btrfs (Frictionless Command UX)
+- [ ] T112 [US7] Add check for uv 0.9.9 installation in scripts/setup.sh, install if missing (Proven Tooling Only)
+- [ ] T112a [US7] Add check for btrfs-progs installation using dpkg -l btrfs-progs in scripts/setup.sh, install via apt-get if missing (Proven Tooling Only)
 - [ ] T113 [US7] Implement pc-switcher package installation from GitHub Package Registry using uv tool install pc-switcher in scripts/setup.sh (Frictionless Command UX)
 - [ ] T114 [US7] Create ~/.config/pc-switcher/ directory and generate default config.yaml with inline comments in scripts/setup.sh (Documentation As Runtime Contract)
 - [ ] T115 [US7] Add success message "pc-switcher installed successfully" at end of setup in scripts/setup.sh (Frictionless Command UX)

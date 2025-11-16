@@ -11,7 +11,7 @@
 
 The system defines a precise contract for how sync modules integrate with the core orchestration system. Each module (representing a discrete sync capability like package sync, Docker sync, or user data sync) implements a standardized interface covering configuration, validation, execution, logging, progress reporting, error handling, and rollback. This contract is detailed enough that all feature modules can be developed independently and concurrently once the core infrastructure exists.
 
-**Why this priority**: This is P1 because it's the architectural foundation. Without a clear, detailed module contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future module developers. All of the sync-features will be implemented as a module. Any of the other functionality in this spec that could use the module architecture (like User Story 2 and 3) will also be implemented as a module.
+**Why this priority**: This is P1 because it's the architectural foundation. Without a clear, detailed module contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future module developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as modules. The btrfs snapshots safety infrastructure (User Story 3) is also a module (though required and non-disableable). Self-installation (User Story 2) is NOT a module—it is pre-module orchestrator logic that runs before any module execution.
 
 **Independent Test**: Can be fully tested by:
 1. Defining the module interface contract
@@ -154,13 +154,13 @@ This delivers value by enabling developers to diagnose issues and providing audi
 
 2. **Given** user configures `log_file_level: INFO`, **When** sync runs and a module logs at FULL level (e.g., "Copying /home/user/file.txt"), **Then** the message does not appear in either log file or terminal UI
 
-3. **Given** sync is running, **When** any module (or orchestrator core) logs at CRITICAL level, **Then** the logging system immediately signals the orchestrator to abort sync, the current module's cleanup() is called, no further modules execute, and the terminal displays "CRITICAL error encountered, aborting sync: [error message]"
+3. **Given** sync is running, **When** any module (or orchestrator core) logs at CRITICAL level, **Then** the logging system immediately signals the orchestrator to abort sync, the current module's abort(timeout) is called, no further modules execute, and the terminal displays "CRITICAL error encountered, aborting sync: [error message]"
 
 4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`, **Then** the file contains structured log entries with format `[TIMESTAMP] [LEVEL] [MODULE] [HOSTNAME] message` for all operations from both source and target machines
 
 5. **Given** a target-side helper script emits log output to stdout, **When** the source orchestrator receives this output, **Then** it parses the log level prefix (if present) and routes the message through the unified logging system
 
-6. **Given** user runs `pc-switcher logs --last`, **When** command executes, **Then** the system displays the most recent sync log file in the terminal
+6. **Given** user runs `pc-switcher logs --last`, **When** command executes, **Then** the system displays the most recent sync log file in the terminal using rich console with syntax highlighting for improved readability
 
 **Log Level Definitions** (from most to least verbose):
 - **DEBUG**: Most verbose level for internal diagnostics, including command outputs, detailed timings, internal state transitions, and all messages from lower levels (FULL, INFO, WARNING, ERROR, CRITICAL). Intended for deep troubleshooting and development.
@@ -266,6 +266,8 @@ packages:
   sync_flatpak: true
 ```
 
+**Configuration Schema**: The formal configuration schema structure (global settings, sync_modules section, and per-module settings) is defined in `specs/001-foundation/contracts/config-schema.yaml`. Module-specific settings appear as top-level keys (e.g., `btrfs_snapshots`, `user_data`) outside of the `sync_modules` section.
+
 ---
 
 ### User Story 7 - Installation and Setup Infrastructure (Priority: P2)
@@ -365,18 +367,18 @@ The terminal displays real-time sync progress including current module, operatio
 
 #### Module Architecture
 
-- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized module interface specifying methods: `validate()`, `pre_sync()`, `sync()`, `post_sync()`, `abort(timeout)`, `get_config_schema()`, and property: `name`
+- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized module interface specifying methods with return types: `validate() -> list[str]` (returns validation error messages, empty list if valid), `pre_sync() -> None`, `sync() -> None`, `post_sync() -> None`, `abort(timeout: float) -> None`, `get_config_schema() -> dict`, and properties: `name: str`, `required: bool`
 
 
 - **FR-002** `[Reliability Without Compromise]`: System MUST call module lifecycle methods in order: `validate()` (all modules), `pre_sync()`, `sync()`, `post_sync()` for each module, then `abort(timeout)` on shutdown, errors, or user interrupt
 
-- **FR-003** `[Reliability Without Compromise]`: System MUST call currently-executing module's `abort(timeout)` method when Ctrl+C is pressed, waiting up to the specified timeout duration, before exiting
+- **FR-003** `[Reliability Without Compromise]`: System MUST call currently-executing module's `abort(timeout)` method when Ctrl+C is pressed, waiting up to the specified timeout duration; if module does not complete within timeout, orchestrator MUST force-kill the RemoteExecutor connections and module thread, then proceed with exit
 
-- **FR-004** `[Deliberate Simplicity]`: Modules MUST be loaded from the configuration file section `sync_modules` in the order they appear and instantiated by the orchestrator
+- **FR-004** `[Deliberate Simplicity]`: Modules MUST be loaded from the configuration file section `sync_modules` in the order they appear and instantiated by the orchestrator; module execution order is strictly sequential from config (no dependency resolution is provided—simplicity over flexibility)
 
 #### Self-Installation
 
-- **FR-005** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version from GitHub Package Registry (ghcr.io) using uv tool install
+- **FR-005** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version from public GitHub Package Registry using `uv tool install pc-switcher==<version>` (package published to ghcr.io/[owner]/pc-switcher, no authentication required for public registry)
 
 - **FR-006** `[Reliability Without Compromise]`: System MUST abort sync with CRITICAL log if the target machine's pc-switcher version is newer than the source version (preventing accidental downgrades)
 
@@ -388,7 +390,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-009** `[Reliability Without Compromise]`: System MUST create post-sync snapshots after all modules complete successfully
 
-- **FR-010** `[Solid-State Stewardship]`: Snapshot naming MUST follow pattern `@<subvolume>-{presync|postsync}-<ISO8601-timestamp>-<session-id>` for clear identification and cleanup
+- **FR-010** `[Solid-State Stewardship]`: Snapshot naming MUST follow pattern `<subvolume>-{presync|postsync}-<ISO8601-timestamp>-<session-id>` for clear identification and cleanup (e.g., if subvolume is "@", snapshot is "@-presync-20251116T143022-abc12345", not "@@-presync-...")
 
 - **FR-011** `[Reliability Without Compromise]`: Snapshot module MUST be marked as required and system MUST ignore attempts to disable it via configuration
 
@@ -396,7 +398,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-013** `[Reliability Without Compromise]`: System MUST provide rollback capability to restore from pre-sync snapshots (requires user confirmation)
 
-- **FR-014** `[Solid-State Stewardship]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs
+- **FR-014** `[Solid-State Stewardship]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs; default retention policy (keep_recent count and max_age_days) MUST be configurable in the btrfs_snapshots module section of config.yaml
 
 - **FR-015** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort
 
@@ -408,19 +410,19 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-018** `[Documentation As Runtime Contract]`: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL, where DEBUG is the most verbose. DEBUG includes all messages (FULL, INFO, WARNING, ERROR, CRITICAL, plus internal diagnostics). FULL includes all messages from INFO and below plus operational details, but excludes DEBUG-level internal diagnostics.
 
-- **FR-019** `[Reliability Without Compromise]`: When a module raises SyncError exception, the orchestrator MUST log the error at CRITICAL level, call abort(timeout) on the current module, and halt sync before any further modules execute
+- **FR-019** `[Reliability Without Compromise]`: When a module raises SyncError exception, the orchestrator MUST log the error at CRITICAL level, call abort(timeout) on the currently-executing module only (queued modules never execute and do not receive abort calls), and halt sync immediately
 
 - **FR-020** `[Frictionless Command UX]`: System MUST support independent log level configuration for file output (`log_file_level`) and terminal display (`log_cli_level`)
 
 - **FR-021** `[Documentation As Runtime Contract]`: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
 
-- **FR-022** `[Documentation As Runtime Contract]`: Log entries MUST use structlog's JSONRenderer for file output (one JSON object per line with keys: timestamp, level, module, hostname, event, plus any additional context fields) and ConsoleRenderer for terminal output (human-readable format with timestamp, level, module@hostname, and message)
+- **FR-022** `[Documentation As Runtime Contract]`: Log entries MUST use structlog's JSONRenderer for file output (one JSON object per line with keys: timestamp in ISO8601 format, level, module, hostname, event, plus any additional context fields) and ConsoleRenderer for terminal output (human-readable format with ISO8601 timestamp, level, module@hostname, and message)
 
 - **FR-023** `[Reliability Without Compromise]`: System MUST aggregate logs from both source-side orchestrator and target-side operations into unified log stream
 
 #### Interrupt Handling
 
-- **FR-024** `[Reliability Without Compromise]`: System MUST install SIGINT handler that calls abort(timeout) on current module, logs interruption at WARNING level, and exits with code 130
+- **FR-024** `[Reliability Without Compromise]`: System MUST install SIGINT handler that calls abort(timeout) on current module, logs "Sync interrupted by user" at WARNING level, and exits with code 130
 
 - **FR-025** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to 5 seconds for graceful shutdown
 
@@ -442,11 +444,11 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-033** `[Reliability Without Compromise]`: If configuration file has syntax errors or invalid values, system MUST display clear error message with location and exit before sync
 
-- **FR-034** `[Reliability Without Compromise]`: If configuration file contains a disable attempt for a required module, system MUST display clear error message with location and exit before sync
+- **FR-034** `[Reliability Without Compromise]`: If configuration file contains a disable attempt for a required module, system MUST display error message in format "Required module 'MODULE_NAME' cannot be disabled" followed by config file location (e.g., "in /home/user/.config/pc-switcher/config.yaml"), and exit before sync
 
 #### Installation & Setup
 
-- **FR-035** `[Frictionless Command UX]`: System MUST provide installation script that checks btrfs filesystem presence, installs/upgrades dependencies, installs pc-switcher package, and creates default configuration
+- **FR-035** `[Frictionless Command UX]`: System MUST provide installation script that checks btrfs filesystem presence, installs/upgrades dependencies (uv via installation method if not present, btrfs-progs via apt-get if not present; list will be extended by future modules), installs pc-switcher package, and creates default configuration
 
 - **FR-036** `[Frictionless Command UX]`: Setup script MUST detect whether the host filesystem is btrfs and abort with a clear error if it is not
 
@@ -466,7 +468,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 #### Progress Reporting
 
-- **FR-043** `[Frictionless Command UX]`: Modules CAN emit progress updates including percentage (0-100), current item description, and estimated completion time
+- **FR-043** `[Frictionless Command UX]`: Modules CAN emit progress updates including percentage (0-100), current item description, and estimated completion time (progress updates are optional for modules, but recommended for long-running operations; dummy test modules emit progress for infrastructure testing)
 
 - **FR-044** `[Frictionless Command UX]`: Orchestrator MUST forward progress updates to terminal UI system for display
 
@@ -478,7 +480,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-047** `[Reliability Without Compromise]`: System MUST implement locking mechanism to prevent concurrent sync executions
 
-- **FR-048** `[Documentation As Runtime Contract]`: System MUST log overall sync result (success/failure) and summary of module outcomes
+- **FR-048** `[Documentation As Runtime Contract]`: System MUST log overall sync result (success/failure) and summary of module outcomes; summary MUST list each module with its result (SUCCESS/SKIPPED/FAILED), total duration, error count, and names of any modules that failed
 
 ### Key Entities
 
@@ -488,7 +490,8 @@ The terminal displays real-time sync progress including current module, operatio
 - **LogEntry**: Represents a logged event with timestamp, level, module name, message, and structured context data
 - **ProgressUpdate**: Represents module progress including percentage, current item, estimated remaining time, and module name
 - **Configuration**: Represents parsed and validated config including global settings, module enable/disable flags, and per-module settings
-- **TargetConnection**: Represents connection to target machine with methods for command execution, file transfer, and process management
+- **TargetConnection**: Represents the Fabric SSH connection wrapper with methods for command execution, file transfer, process management, and connection loss detection/recovery
+- **RemoteExecutor**: Represents the interface injected into modules wrapping TargetConnection with simplified run(), send_file_to_target(), and get_hostname() methods
 
 ## Success Criteria *(mandatory)*
 
