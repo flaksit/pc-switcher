@@ -36,17 +36,17 @@ btrfs_snapshots:
   # Delete snapshots older than this many days
   max_age_days: 30
 
-  # Minimum free disk space threshold (default 20%)
-  # Can be float (0.20) or percentage string ("20%")
-  min_free_threshold: 0.20
-
 # Disk Configuration
+# Monitoring prevents sync from filling disks. Both thresholds MUST have explicit units:
+# - Percentage format: "nn%" (e.g., "20%")
+# - Absolute format: "nnGiB" (e.g., "50GiB")
+# Values without units are invalid.
 disk:
-  # Minimum free space before sync starts
-  min_free: 0.20  # 20% or "20%"
+  # Pre-flight check: minimum free space before sync starts
+  preflight_minimum: "20%"
 
   # Check free space every N seconds during sync
   check_interval: 30
 
-  # Abort if free space drops below this threshold during sync
-  reserve_minimum: 0.15  # 15% or "15%"
+  # Runtime check: abort if free space drops below this during sync
+  runtime_minimum: "15%"

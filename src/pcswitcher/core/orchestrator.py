@@ -589,7 +589,7 @@ class Orchestrator:
             SyncError: If disk space is insufficient on either machine
         """
         # Get disk thresholds from canonical config location (self.config.disk)
-        min_free_threshold = self.config.disk.get("min_free", 0.20)  # Default 20%
+        min_free_threshold = self.config.disk.get("preflight_minimum", "20%")  # Default 20%
 
         try:
             from pcswitcher.utils.disk import DiskMonitor
@@ -794,7 +794,7 @@ class Orchestrator:
     def _start_disk_monitoring(self) -> None:
         """Start continuous disk space monitoring."""
         disk_config = self.config.disk
-        reserve_minimum = disk_config.get("reserve_minimum", 0.15)
+        runtime_minimum = disk_config.get("runtime_minimum", "15%")
         check_interval = disk_config.get("check_interval", 30)
 
         def disk_warning_callback(free_bytes: float, required_bytes: float) -> None:
@@ -812,13 +812,13 @@ class Orchestrator:
         self._disk_monitor.monitor_continuously(
             path=Path("/"),
             interval=check_interval,
-            reserve_minimum=reserve_minimum,
+            reserve_minimum=runtime_minimum,
             callback=disk_warning_callback,
         )
 
         # Pre-flight check
-        min_free = disk_config.get("min_free", 0.20)
-        is_sufficient, free_bytes, required_bytes = DiskMonitor.check_free_space(Path("/"), min_free)
+        preflight_minimum = disk_config.get("preflight_minimum", "20%")
+        is_sufficient, free_bytes, required_bytes = DiskMonitor.check_free_space(Path("/"), preflight_minimum)
 
         if not is_sufficient:
             raise SyncError(

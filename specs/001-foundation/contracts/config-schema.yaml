@@ -71,50 +71,44 @@ sync_modules:
         Test module: raises unhandled exception for testing.
         Demonstrates exception propagation and abort() calling.
 
-# Disk Space Monitoring (FR-002, FR-002)
+# Disk Space Monitoring (FR-016, FR-017)
 # =======================================
 
 disk:
   type: object
   description: |
     Disk space safety checks prevent sync from filling disks.
+    Both thresholds MUST be specified with explicit units.
   properties:
-    min_free:
-      oneOf:
-        - type: integer
-          minimum: 0
-          description: "Minimum free space in bytes (absolute)"
-        - type: number
-          minimum: 0.0
-          maximum: 1.0
-          description: "Minimum free space as percentage (0.0-1.0)"
-      default: 0.1  # 10%
+    preflight_minimum:
+      type: string
+      pattern: '^(\d+(\.\d+)?%|[1-9]\d*GiB)$'
+      default: "20%"
       description: |
-        Abort sync if free space below this threshold (checked before sync starts).
-        Can be absolute bytes (e.g., 10737418240 for 10GB) or fraction (0.1 for 10%).
-        Recommended: 0.1 (10%) to ensure safety margin.
+        Pre-flight check: abort if free space below this threshold BEFORE sync starts.
+        Format: percentage with "%" (e.g., "20%") or absolute with "GiB" (e.g., "50GiB").
+        Values without explicit units are invalid.
+        Recommended: "20%" to ensure safety margin.
 
-    reserve_minimum:
-      oneOf:
-        - type: integer
-          minimum: 0
-        - type: number
-          minimum: 0.0
-          maximum: 1.0
-      default: 0.05  # 5%
+    runtime_minimum:
+      type: string
+      pattern: '^(\d+(\.\d+)?%|[1-9]\d*GiB)$'
+      default: "15%"
       description: |
-        Reserved space during sync (abort if crossed).
+        Runtime check: abort if free space falls below this during sync.
         Monitored continuously at check_interval.
-        Should be lower than min_free to allow some space consumption.
+        Format: percentage with "%" (e.g., "15%") or absolute with "GiB" (e.g., "40GiB").
+        Values without explicit units are invalid.
+        Should be lower than preflight_minimum to allow some space consumption.
 
     check_interval:
       type: integer
       minimum: 1
-      default: 60
+      default: 30
       description: |
         Seconds between disk space checks during sync.
         Lower = more responsive to space issues, higher = less overhead.
-        Recommended: 60 seconds for most use cases.
+        Recommended: 30 seconds for continuous monitoring.
 
 # Module-Specific Configuration
 # ==============================
@@ -190,9 +184,9 @@ dummy_success:
 #   dummy_fail: false
 #
 # disk:
-#   min_free: 0.1  # 10%
-#   reserve_minimum: 0.05  # 5%
-#   check_interval: 60
+#   preflight_minimum: "20%"      # Percentage with % suffix
+#   runtime_minimum: "15%"        # Or use "50GiB" for absolute values
+#   check_interval: 30
 #
 # btrfs_snapshots:
 #   subvolumes:

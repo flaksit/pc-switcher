@@ -26,16 +26,16 @@ class DiskMonitor:
 
         Args:
             path: Path to check (any path on the filesystem)
-            min_free: Minimum free space as:
-                - float 0.0-1.0: fraction of total space (e.g., 0.20 = 20%)
+            min_free: Minimum free space MUST be specified with explicit units:
                 - str percentage: "20%" = 20% of total space
-                - int/float bytes: absolute bytes (e.g., 1073741824 = 1GB)
+                - str absolute: "50GiB" = 50 gigabytes
+                Values without explicit units (bare numbers) are invalid.
 
         Returns:
             Tuple of (is_sufficient, free_bytes, required_bytes)
 
         Raises:
-            ValueError: If min_free format is invalid
+            ValueError: If min_free format is invalid (missing units or invalid format)
             OSError: If path doesn't exist or is inaccessible
         """
         # Get disk usage
@@ -43,7 +43,7 @@ class DiskMonitor:
         total_bytes = stat.f_blocks * stat.f_frsize
         free_bytes = stat.f_bavail * stat.f_frsize
 
-        # Parse min_free requirement
+        # Parse min_free requirement - MUST be string with explicit units
         if isinstance(min_free, str):
             # Handle percentage string like "20%"
             if min_free.endswith("%"):
@@ -54,16 +54,27 @@ class DiskMonitor:
                     required_bytes = total_bytes * percentage
                 except ValueError as e:
                     raise ValueError(f"Invalid percentage format '{min_free}': {e}") from e
+            # Handle absolute value with GiB suffix like "50GiB"
+            elif min_free.endswith("GiB"):
+                try:
+                    gib_value = float(min_free[:-3])
+                    if gib_value <= 0:
+                        raise ValueError("GiB value must be positive")
+                    required_bytes = gib_value * 1024 * 1024 * 1024
+                except ValueError as e:
+                    raise ValueError(f"Invalid GiB format '{min_free}': {e}") from e
             else:
-                raise ValueError(f"String min_free must be percentage (e.g., '20%'), got '{min_free}'")
-        elif isinstance(min_free, float):
-            # Float between 0.0 and 1.0 is treated as fraction
-            required_bytes = total_bytes * min_free if 0.0 <= min_free <= 1.0 else min_free
-        elif isinstance(min_free, int):
-            # Integer treated as absolute bytes
-            required_bytes = float(min_free)
+                raise ValueError(
+                    f"Disk minimum must be specified with explicit units. "
+                    f"Use percentage format '20%' or absolute format '50GiB'. Got: '{min_free}'"
+                )
         else:
-            raise ValueError(f"Invalid min_free type: {type(min_free)}")
+            # Bare numbers (int/float) are invalid
+            raise ValueError(
+                f"Disk minimum must be a string with explicit units (e.g., '20%' or '50GiB'). "
+                f"Got {type(min_free).__name__}: {min_free}. "
+                f"Bare numbers without units are ambiguous and not allowed."
+            )
 
         is_sufficient = free_bytes >= required_bytes
         return is_sufficient, free_bytes, required_bytes

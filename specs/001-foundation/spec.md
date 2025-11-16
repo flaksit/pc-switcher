@@ -122,9 +122,9 @@ This delivers value by providing the foundation for all rollback and recovery op
 
 7. **Given** snapshots accumulate over multiple sync runs, **When** user runs `pc-switcher cleanup-snapshots --older-than 7d`, **Then** the system deletes pre-sync and post-sync snapshots older than 7 days, retaining the most recent 3 (configurable) sync sessions regardless of age (`--older-than` is optional; default is configurable)
 
-8. **Given** orchestrator configuration includes `disk.min_free` (float 0.0-1.0 or percentage string like "5%", default: 0.05) for source and target, **When** sync begins, **Then** orchestrator MUST check free disk space on both source and target and log CRITICAL and abort if free space is below configured threshold
+8. **Given** orchestrator configuration includes `disk.preflight_minimum` (percentage like "20%" or absolute value like "50GiB", default: "20%") for source and target, **When** sync begins, **Then** orchestrator MUST check free disk space on both source and target and log CRITICAL and abort if free space is below configured threshold
 
-9. **Given** orchestrator configuration includes `disk.check_interval` (seconds, default: 30) and `disk.reserve_minimum` (float 0.0-1.0 or percentage string, default: 0.02 or "2%"), **When** sync is running, **Then** orchestrator MUST periodically check free disk space at the configured interval and log CRITICAL and abort if available free space falls below the reserved minimum on either side
+9. **Given** orchestrator configuration includes `disk.check_interval` (seconds, default: 30) and `disk.runtime_minimum` (percentage like "15%" or absolute value like "40GiB", default: "15%"), **When** sync is running, **Then** orchestrator MUST periodically check free disk space at the configured interval and log CRITICAL and abort if available free space falls below the configured runtime minimum on either side
 
 ---
 
@@ -402,9 +402,9 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-015** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort
 
-- **FR-016** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold MUST be configurable as either a float between 0.0 and 1.0 (e.g., 0.20 for 20%) or a percentage string (e.g., "20%"), with a default of 0.20 (20%)
+- **FR-016** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold is configured via `disk.preflight_minimum` and MUST be specified as a percentage (e.g., "20%") or absolute value (e.g., "50GiB"); values without explicit units are invalid; default is "20%"
 
-- **FR-017** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured reserved minimum (default: 0.15 or "15%")
+- **FR-017** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured runtime minimum via `disk.runtime_minimum` (e.g., "15%" or "40GiB"); values without explicit units are invalid; default is "15%"
 
 #### Logging System
 

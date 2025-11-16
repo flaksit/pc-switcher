@@ -174,9 +174,9 @@ def apply_defaults(config_dict: dict[str, Any]) -> dict[str, Any]:
         "log_file_level": "FULL",
         "log_cli_level": "INFO",
         "disk": {
-            "min_free": 0.20,  # 20% as float
-            "reserve_minimum": 0.15,  # 15% as float
-            "check_interval": 30,  # seconds
+            "preflight_minimum": "20%",  # Pre-flight threshold with explicit units
+            "runtime_minimum": "15%",    # Runtime threshold with explicit units
+            "check_interval": 30,        # seconds
         },
     }
 
@@ -224,10 +224,11 @@ log_file_level: FULL  # Minimum level for file logs: DEBUG, FULL, INFO, WARNING,
 log_cli_level: INFO   # Minimum level for terminal output: DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL
 
 # Disk space monitoring
+# Values MUST include explicit units: "nn%" for percentage, "nnGiB" for absolute
 disk:
-  min_free: 0.20          # Minimum free space (20% or absolute bytes)
-  reserve_minimum: 0.15   # Reserved space during sync (15% or absolute bytes)
-  check_interval: 30      # Seconds between disk space checks
+  preflight_minimum: "20%"     # Pre-flight check: free space required to start sync
+  runtime_minimum: "15%"       # Runtime check: abort if space falls below during sync
+  check_interval: 30           # Seconds between disk space checks
 
 # Enabled sync modules (in execution order)
 sync_modules:
