@@ -28,7 +28,7 @@ Repository structure (single Python package):
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Create .tool-versions file with uv 0.9.9 (Proven Tooling Only)
+- [ ] T001 ~~Create .tool-versions file with uv 0.9.9~~ REMOVED: uv version no longer pinned (Proven Tooling Only)
 - [ ] T002 Initialize Python 3.13 environment with uv and create pyproject.toml with dependencies: fabric, structlog, rich, typer, pyyaml, jsonschema, hatchling, uv-dynamic-versioning (Proven Tooling Only)
 - [ ] T003 [P] Create project directory structure: src/pcswitcher/{cli,core,remote,modules,utils}/, tests/{unit,integration,e2e}/, scripts/target/ (Deliberate Simplicity)
 - [ ] T004 [P] Configure pyproject.toml with CLI entry point pc-switcher=pcswitcher.cli.main:app and dynamic versioning via [tool.hatch.version] source="vcs" and [tool.uv-dynamic-versioning] enable=true (Frictionless Command UX)
@@ -330,7 +330,7 @@ Repository structure (single Python package):
 **Note**: Tasks execute in order T111 → T112 → T112a → T113 → T114 → T115 (sequential steps in single setup script)
 
 - [ ] T111 [US7] Create setup script scripts/setup.sh that detects btrfs filesystem using stat -f -c %T / and aborts with clear error if not btrfs (Frictionless Command UX)
-- [ ] T112 [US7] Add check for uv 0.9.9 installation in scripts/setup.sh, install if missing (Proven Tooling Only)
+- [ ] T112 [US7] Add check for uv installation in scripts/setup.sh, install latest if missing (Proven Tooling Only)
 - [ ] T112a [US7] Add check for btrfs-progs installation using dpkg -l btrfs-progs in scripts/setup.sh, install via apt-get if missing (Proven Tooling Only)
 - [ ] T113 [US7] Implement pc-switcher package installation from GitHub repository using uv tool install git+<repo>@<tag> in scripts/setup.sh (Frictionless Command UX)
 - [ ] T114 [US7] Create ~/.config/pc-switcher/ directory and generate default config.yaml with inline comments in scripts/setup.sh (Documentation As Runtime Contract)

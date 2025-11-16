@@ -11,7 +11,6 @@ set -euo pipefail
 #   setup.sh --upgrade            # Alias for latest with --sync-mode
 #   setup.sh --force-config       # Override config with source version (explicit flag)
 
-readonly REQUIRED_UV_VERSION="0.9.9"
 readonly CONFIG_DIR="${HOME}/.config/pc-switcher"
 readonly CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 readonly GITHUB_REPO="https://github.com/flaksit/pc-switcher"
@@ -78,14 +77,16 @@ check_uv() {
         current_version=$(uv --version | awk '{print $2}')
         info "Found uv version ${current_version}"
     else
-        info "uv not found, installing version ${REQUIRED_UV_VERSION}..."
-        curl -LsSf https://astral.sh/uv/${REQUIRED_UV_VERSION}/install.sh | sh
+        info "uv not found, installing latest version..."
+        curl -LsSf https://astral.sh/uv/install.sh | sh
         # Source the updated PATH
         export PATH="${HOME}/.local/bin:${PATH}"
         if ! command -v uv &>/dev/null; then
             error "Failed to install uv"
         fi
-        info "Installed uv version ${REQUIRED_UV_VERSION}"
+        local installed_version
+        installed_version=$(uv --version | awk '{print $2}')
+        info "Installed uv version ${installed_version}"
     fi
 }
 

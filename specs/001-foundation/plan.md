@@ -19,7 +19,7 @@ This feature establishes the complete foundation infrastructure for PC-switcher,
 8. **Dummy Test Modules**: Three reference implementations (success, critical, fail) for testing infrastructure
 9. **Terminal UI**: Real-time progress reporting with module status, log messages, and progress bars
 
-Technical approach: Python 3.13 orchestrator using Fabric for SSH communication, structlog for logging, rich for terminal UI, with modular plugin architecture enabling independent feature development. Dynamic versioning via GitHub releases (uv-dynamic-versioning + hatchling). uv 0.9.9 for package management (.tool-versions).
+Technical approach: Python 3.13 orchestrator using Fabric for SSH communication, structlog for logging, rich for terminal UI, with modular plugin architecture enabling independent feature development. Dynamic versioning via GitHub releases (uv-dynamic-versioning + hatchling). uv (latest stable) for package management.
 
 ## Technical Context
 
@@ -31,7 +31,7 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - `rich` (terminal UI - chosen over textual for simplicity, better for progress bars)
 - `typer` (CLI framework - chosen over click for modern type hints)
 - `pyyaml` (config parsing)
-- `uv 0.9.9` (package/dependency management, Python installation - see `.tool-versions`)
+- `uv` (latest stable) (package/dependency management, Python installation)
 - `hatchling` + `uv-dynamic-versioning` (build system, dynamic versioning from Git tags)
 
 **Storage**:
@@ -115,7 +115,7 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - **rich** (13.7+): Terminal UI from Textualize, 48k+ stars - chosen for simplicity and progress bar capabilities
 - **typer** (0.12+): CLI framework built on click, 15k+ stars - chosen for modern type hints
 - **PyYAML** (6.x): Standard YAML library for Python
-- **uv** (0.9.9): Modern Python package manager by Astral (creators of Ruff), version pinned in .tool-versions
+- **uv** (latest stable): Modern Python package manager by Astral (creators of Ruff)
 
 **Security Posture**:
 - All dependencies available via PyPI with package signing
@@ -245,7 +245,6 @@ specs/[###-feature]/
 
 ```text
 pc-switcher/
-├── .tool-versions           # Tool version pinning (uv 0.9.9)
 ├── pyproject.toml           # uv project config, package metadata, CLI entry point, dynamic versioning
 ├── uv.lock                  # Locked dependencies
 ├── README.md                # Project overview, installation, quick start

@@ -148,17 +148,17 @@ This document resolves all NEEDS CLARIFICATION items identified in the Technical
 - All Python operations go through uv
 
 **uv Version Management**:
-- Required version: **0.9.9** (defined in `.tool-versions`)
-- Never use "latest" - always pin to specific version
-- `.tool-versions` file format: `uv 0.9.9`
-- GitHub Actions read from this file automatically
+- Use latest stable version (no pinning required)
+- Reproducibility comes from uv.lock file, not uv version
+- uv maintains excellent backwards compatibility
+- GitHub Actions use latest version from astral-sh/setup-uv
 
 **uv Project Setup**:
 
 1. **Project Initialization** (from within project directory):
    ```bash
-   # Install specific uv version (from .tool-versions)
-   curl -LsSf https://astral.sh/uv/0.9.9/install.sh | sh
+   # Install latest stable uv
+   curl -LsSf https://astral.sh/uv/install.sh | sh
 
    # Initialize project (already in pc-switcher directory)
    uv init --lib .
@@ -236,9 +236,7 @@ This document resolves all NEEDS CLARIFICATION items identified in the Technical
        runs-on: ubuntu-24.04
        steps:
          - uses: actions/checkout@v4
-         - uses: astral-sh/setup-uv@v5
-           with:
-             uv-version-file: ".tool-versions"  # Uses uv 0.9.9
+         - uses: astral-sh/setup-uv@v5  # Uses latest stable uv
          - run: uv sync
          - run: uv run ruff check
          - run: uv run basedpyright
@@ -262,9 +260,7 @@ This document resolves all NEEDS CLARIFICATION items identified in the Technical
          - uses: actions/checkout@v4
            with:
              fetch-depth: 0  # Required to fetch tags for dynamic versioning!
-         - uses: astral-sh/setup-uv@v5
-           with:
-             uv-version-file: ".tool-versions"
+         - uses: astral-sh/setup-uv@v5  # Uses latest stable uv
          - run: uv build  # uv-dynamic-versioning pulls version from git tag
          # No publishing to registry - install directly from Git URL
    ```
@@ -445,7 +441,7 @@ Best practices documented for:
 - PyYAML configuration (safe loading, validation approach)
 
 **Key architectural decisions**:
-- uv 0.9.9 (specific version in `.tool-versions`)
+- uv (latest stable, no version pinning)
 - No system Python usage - uv manages Python installation
 - Dynamic versioning via GitHub releases (no version in code)
 - Exception-based error handling (modules raise exceptions, not log CRITICAL)
