@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -201,6 +202,73 @@ def logs(
 
 
 @app.command()
+def rollback(
+    session_id: Annotated[
+        str,
+        typer.Option("--session", "-s", help="Session ID to rollback to"),
+    ],
+) -> None:
+    """Rollback to a previous sync state using btrfs snapshots.
+
+    This command restores the system from pre-sync snapshots of a specific session.
+    This is a destructive operation that replaces current subvolumes with their
+    pre-sync snapshots.
+
+    Example:
+        pc-switcher rollback --session abc12345
+    """
+    from pcswitcher.remote.installer import VersionManager
+
+    try:
+        # Load configuration
+        cfg = load_config(None)
+    except (FileNotFoundError, ConfigError) as e:
+        console.print(f"[red]Configuration error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    # Confirm with user
+    console.print(f"\n[bold red]WARNING: This will rollback to snapshot session {session_id}[/bold red]")
+    console.print("This is a destructive operation that will replace current data with snapshots.")
+    response = console.input("\nAre you sure you want to proceed? Type 'yes' to confirm: ")
+
+    if response.lower() != "yes":
+        console.print("[yellow]Rollback cancelled[/yellow]")
+        raise typer.Exit(0)
+
+    try:
+        # Connect to target (for rollback on target)
+        connection = TargetConnection("localhost")
+        connection.connect()
+        remote = SSHRemoteExecutor(connection)
+
+        # Import btrfs module to use rollback method
+        from pcswitcher.modules.btrfs_snapshots import BtrfsSnapshotsModule
+
+        # Get config for btrfs module
+        btrfs_config = cfg.module_configs.get("btrfs_snapshots", {})
+        if not btrfs_config:
+            console.print("[red]Error: btrfs_snapshots not configured[/red]")
+            raise typer.Exit(1)
+
+        # Create module instance and perform rollback
+        btrfs_module = BtrfsSnapshotsModule(btrfs_config, remote)
+
+        console.print(f"\n[bold blue]Rolling back to session {session_id}...[/bold blue]\n")
+
+        try:
+            btrfs_module.rollback_to_presync(session_id)
+            console.print(f"\n[green bold]Rollback completed successfully[/green bold]")
+            console.print(f"System has been restored to snapshot session {session_id}\n")
+        except SyncError as e:
+            console.print(f"\n[red]Rollback failed: {e}[/red]\n")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Unexpected error during rollback: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def cleanup_snapshots(
     older_than: Annotated[
         str,
@@ -220,9 +288,98 @@ def cleanup_snapshots(
         pc-switcher cleanup-snapshots
         pc-switcher cleanup-snapshots --older-than 14d --keep-recent 5
     """
-    console.print("[yellow]Not implemented yet[/yellow]")
-    console.print("This command will clean up snapshots older than the specified time")
-    console.print(f"Parameters: older_than={older_than}, keep_recent={keep_recent}")
+    import re
+    from pathlib import Path
+
+    # Parse time expression (e.g., "7d", "2w", "30d")
+    match = re.match(r"(\d+)([dwh])", older_than)
+    if not match:
+        console.print(
+            f"[red]Invalid time format: {older_than}[/red]\n"
+            f"Use format like: 7d (7 days), 2w (2 weeks), 24h (24 hours)"
+        )
+        raise typer.Exit(1)
+
+    value, unit = int(match.group(1)), match.group(2)
+    if unit == "d":
+        max_age_days = value
+    elif unit == "w":
+        max_age_days = value * 7
+    elif unit == "h":
+        max_age_days = value / 24
+    else:
+        max_age_days = value
+
+    # Get default config to find snapshot directory
+    try:
+        cfg = load_config(None)
+    except (FileNotFoundError, ConfigError) as e:
+        console.print(f"[red]Configuration error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    # Get snapshot directory from config
+    snapshot_dir = Path(
+        cfg.module_configs.get("btrfs_snapshots", {}).get("snapshot_dir", "/.snapshots")
+    )
+
+    if not snapshot_dir.exists():
+        console.print(f"[yellow]Snapshot directory does not exist: {snapshot_dir}[/yellow]")
+        raise typer.Exit(0)
+
+    # Find and delete old snapshots
+    console.print(f"\n[bold]Cleaning up snapshots older than {older_than}[/bold]\n")
+    console.print(f"Snapshot directory: {snapshot_dir}")
+    console.print(f"Keep recent: {keep_recent} syncs")
+    console.print(f"Delete older than: {max_age_days} days\n")
+
+    from datetime import UTC, datetime, timedelta
+
+    cutoff_date = datetime.now(UTC) - timedelta(days=max_age_days)
+
+    # Group snapshots by session
+    snapshots_by_session: dict[str, list[Path]] = {}
+    all_snapshots = sorted(snapshot_dir.glob("*-presync-*-*"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    for snapshot_path in all_snapshots:
+        # Extract session ID from name (last component after last dash)
+        parts = snapshot_path.name.split("-")
+        if len(parts) >= 4:
+            session_id = parts[-1]
+            if session_id not in snapshots_by_session:
+                snapshots_by_session[session_id] = []
+            snapshots_by_session[session_id].append(snapshot_path)
+
+    # Keep recent sessions, delete old ones
+    deleted_count = 0
+    kept_count = 0
+
+    for i, (session_id, snapshots) in enumerate(sorted(snapshots_by_session.items(), reverse=True)):
+        if i < keep_recent:
+            # Keep this session
+            kept_count += len(snapshots)
+            console.print(f"[green]Keeping[/green] {len(snapshots)} snapshots from session {session_id}")
+        else:
+            # Check age and delete if old enough
+            mtime = datetime.fromtimestamp(snapshots[0].stat().st_mtime, tz=UTC)
+            if mtime < cutoff_date:
+                for snapshot_path in snapshots:
+                    try:
+                        subprocess.run(
+                            ["sudo", "btrfs", "subvolume", "delete", str(snapshot_path)],
+                            capture_output=True,
+                            check=True,
+                        )
+                        console.print(f"[red]Deleted[/red] {snapshot_path.name}")
+                        deleted_count += 1
+                    except subprocess.CalledProcessError as e:
+                        console.print(f"[yellow]Failed to delete {snapshot_path.name}: {e.stderr}[/yellow]")
+            else:
+                kept_count += len(snapshots)
+                console.print(f"[green]Keeping[/green] {len(snapshots)} recent snapshots from session {session_id}")
+
+    console.print(f"\n[bold]Cleanup summary:[/bold]")
+    console.print(f"  Deleted: {deleted_count} snapshots")
+    console.print(f"  Kept: {kept_count} snapshots\n")
     raise typer.Exit(0)
 
 

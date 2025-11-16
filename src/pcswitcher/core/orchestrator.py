@@ -82,6 +82,10 @@ class Orchestrator:
         self._start_time: datetime | None = None
         self._cli_invocation_time: float | None = None  # For startup performance tracking
 
+        # Interrupt handling
+        self._first_interrupt_time: float | None = None
+        self._interrupt_lock = signal.lock()
+
         # Register signal handlers for graceful shutdown
         # These handlers convert signals into KeyboardInterrupt for uniform handling
         signal.signal(signal.SIGINT, self._handle_interrupt)
@@ -717,13 +721,29 @@ class Orchestrator:
         self._disk_monitor.stop_monitoring()
 
     def _handle_interrupt(self, signum: int, frame: Any) -> None:
-        """Handle interrupt signals (SIGINT, SIGTERM).
+        """Handle interrupt signals (SIGINT, SIGTERM) with double-SIGINT detection.
+
+        First interrupt: initiates graceful shutdown with module abort.
+        Second interrupt within 2 seconds: force terminates immediately.
 
         Args:
             signum: Signal number
             frame: Current stack frame
         """
-        self.logger.warning(f"Received signal {signum}, requesting abort")
+        current_time = time.time()
+
+        # Check for double-SIGINT (force terminate)
+        if self._first_interrupt_time is not None:
+            elapsed = current_time - self._first_interrupt_time
+            if elapsed <= 2.0:
+                # Force terminate immediately
+                self.logger.critical("Second interrupt received within 2 seconds - force terminating")
+                import sys
+                sys.exit(130)  # SIGINT exit code
+
+        # First interrupt or after 2-second window
+        self._first_interrupt_time = current_time
+        self.logger.warning("Sync interrupted by user")
         self.session.abort_requested = True
 
         # Raise KeyboardInterrupt to trigger cleanup
