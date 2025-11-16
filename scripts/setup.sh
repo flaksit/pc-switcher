@@ -3,10 +3,24 @@ set -euo pipefail
 
 # PC-Switcher Installation Script
 # Installs pc-switcher and its dependencies on Ubuntu systems with btrfs filesystem
+#
+# Usage:
+#   setup.sh                      # Install latest release, preserve config
+#   setup.sh --version=0.1.0      # Install specific version, preserve config
+#   setup.sh --sync-mode --version=0.1.0  # Called by pc-switcher sync, override config
+#   setup.sh --upgrade            # Alias for latest with --sync-mode
+#   setup.sh --force-config       # Override config with source version (explicit flag)
 
 readonly REQUIRED_UV_VERSION="0.9.9"
 readonly CONFIG_DIR="${HOME}/.config/pc-switcher"
 readonly CONFIG_FILE="${CONFIG_DIR}/config.yaml"
+readonly DEFAULT_GHCR_REGISTRY="ghcr.io/flaksit/pc-switcher"
+
+# Installation mode flags
+VERSION=""
+SYNC_MODE=false
+FORCE_CONFIG=false
+UPGRADE_MODE=false
 
 error() {
     echo "ERROR: $1" >&2
@@ -15,6 +29,36 @@ error() {
 
 info() {
     echo "INFO: $1"
+}
+
+# Parse command-line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --version=*)
+                VERSION="${1#*=}"
+                shift
+                ;;
+            --sync-mode)
+                SYNC_MODE=true
+                FORCE_CONFIG=true
+                shift
+                ;;
+            --force-config)
+                FORCE_CONFIG=true
+                shift
+                ;;
+            --upgrade)
+                UPGRADE_MODE=true
+                SYNC_MODE=true
+                FORCE_CONFIG=true
+                shift
+                ;;
+            *)
+                error "Unknown option: $1"
+                ;;
+        esac
+    done
 }
 
 # T111: Detect btrfs filesystem
@@ -57,33 +101,62 @@ check_btrfs_progs() {
     fi
 }
 
-# T113: Install pc-switcher from GitHub Package Registry
-# Installs from public ghcr.io container registry (no authentication needed)
+# T113: Install pc-switcher from GitHub Container Registry
+# Version can be specified via --version flag, otherwise uses latest
 install_pc_switcher() {
-    info "Installing pc-switcher from GitHub Container Registry..."
-    # Get version from package metadata or use latest
-    # uv tool install from ghcr.io requires the full path
-    uv tool install --from 'ghcr.io/flaksit/pc-switcher:latest' pc-switcher 2>/dev/null || \
-        uv tool install 'pc-switcher' || \
-        error "Failed to install pc-switcher"
-    info "Installed pc-switcher"
+    local registry="ghcr.io/flaksit/pc-switcher"
+
+    if [[ -n "${VERSION}" ]]; then
+        info "Installing pc-switcher version ${VERSION}..."
+        local package_ref="${registry}:${VERSION}"
+    else
+        info "Installing latest pc-switcher from GitHub Container Registry..."
+        local package_ref="${registry}:latest"
+    fi
+
+    if uv tool install --from "${package_ref}" pcswitcher; then
+        info "Installed pc-switcher from ${package_ref}"
+    else
+        error "Failed to install pc-switcher from ${package_ref}"
+    fi
 }
 
-# T114: Create config directory and copy default config.yaml
+# T114: Create config directory and manage config.yaml
+# Behavior depends on mode:
+# - Standalone install: create if missing, preserve if exists
+# - Sync mode: backup existing, copy from source (via stdin)
 create_default_config() {
     if [[ -d "${CONFIG_DIR}" ]]; then
-        info "Config directory already exists: ${CONFIG_DIR}"
+        info "Config directory exists: ${CONFIG_DIR}"
     else
         mkdir -p "${CONFIG_DIR}"
         info "Created config directory: ${CONFIG_DIR}"
     fi
 
+    # If in sync mode and FORCE_CONFIG is true, expect config from stdin
+    if [[ "${SYNC_MODE}" == true && "${FORCE_CONFIG}" == true ]]; then
+        if [[ -f "${CONFIG_FILE}" ]]; then
+            info "Backing up existing config: ${CONFIG_FILE}.bak"
+            cp "${CONFIG_FILE}" "${CONFIG_FILE}.bak"
+        fi
+
+        # Read config from stdin (provided by pc-switcher sync command)
+        if cat > "${CONFIG_FILE}"; then
+            info "Updated config file from source machine: ${CONFIG_FILE}"
+        else
+            error "Failed to write config file. Restored from backup if available."
+        fi
+        return
+    fi
+
+    # Standalone install: preserve existing config, create if missing
     if [[ -f "${CONFIG_FILE}" ]]; then
-        info "Config file already exists: ${CONFIG_FILE}"
-    else
-        # Try to get default config from repository at same version
-        # For now, create inline (would be better to download from repo)
-        cat > "${CONFIG_FILE}" << 'EOF'
+        info "Preserving existing config: ${CONFIG_FILE}"
+        return
+    fi
+
+    # Create default config
+    cat > "${CONFIG_FILE}" << 'EOF'
 # PC-Switcher Configuration File
 # ~/.config/pc-switcher/config.yaml
 
@@ -112,13 +185,26 @@ disk:
   check_interval: 30
   reserve_minimum: 0.15
 EOF
-        info "Created default config file: ${CONFIG_FILE}"
-        info "Edit this file to configure sync behavior"
-    fi
+    info "Created default config file: ${CONFIG_FILE}"
+    info "Edit this file to configure sync behavior"
 }
 
 main() {
-    info "Starting pc-switcher installation..."
+    parse_args "$@"
+
+    if [[ "${SYNC_MODE}" == true ]]; then
+        info "Running in sync mode (config will be synchronized from source)"
+    elif [[ "${UPGRADE_MODE}" == true ]]; then
+        info "Running in upgrade mode"
+    else
+        info "Running in standalone mode (existing config will be preserved)"
+    fi
+
+    if [[ -n "${VERSION}" ]]; then
+        info "Target version: ${VERSION}"
+    else
+        info "Installing latest available version"
+    fi
 
     check_btrfs
     check_uv
@@ -132,24 +218,30 @@ main() {
     echo "pc-switcher installed successfully!"
     echo "================================================"
     echo ""
-    echo "Next steps:"
-    echo "  1. List your btrfs subvolumes:"
-    echo "     sudo btrfs subvolume list /"
-    echo ""
-    echo "  2. Edit ${CONFIG_FILE}"
-    echo "     Update the 'subvolumes' list to match your layout"
-    echo ""
-    echo "  3. Verify your config:"
-    echo "     pc-switcher --help"
-    echo ""
-    echo "  4. Perform your first sync:"
-    echo "     pc-switcher sync <target-hostname>"
-    echo ""
-    echo "Important:"
-    echo "  - Target machine must have btrfs filesystem"
-    echo "  - Target must have matching subvolume layout"
-    echo "  - 'pc-switcher sync' automatically installs pc-switcher on target"
-    echo ""
+
+    # Different next steps for sync mode vs standalone
+    if [[ "${SYNC_MODE}" == true ]]; then
+        info "Installation complete. Config has been synchronized from source."
+    else
+        echo "Next steps:"
+        echo "  1. List your btrfs subvolumes:"
+        echo "     sudo btrfs subvolume list /"
+        echo ""
+        echo "  2. Edit ${CONFIG_FILE}"
+        echo "     Update the 'subvolumes' list to match your layout"
+        echo ""
+        echo "  3. Verify your config:"
+        echo "     pc-switcher --help"
+        echo ""
+        echo "  4. Perform your first sync:"
+        echo "     pc-switcher sync <target-hostname>"
+        echo ""
+        echo "Important:"
+        echo "  - Target machine must have btrfs filesystem"
+        echo "  - Target must have matching subvolume layout"
+        echo "  - 'pc-switcher sync' automatically installs pc-switcher on target"
+        echo ""
+    fi
 }
 
 main "$@"

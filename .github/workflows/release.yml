@@ -5,7 +5,7 @@ on:
     types: [published]
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -19,20 +19,39 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
         with:
           version: "0.9.9"
 
-      - name: Build package
+      - name: Build distribution packages
         run: uv build
+
+      - name: Extract version from release tag
+        id: version
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"  # Remove leading 'v' if present
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Authenticate to GitHub Container Registry
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Publish to GitHub Package Registry
+      - name: Publish to GitHub Container Registry
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           uv publish --index-url https://ghcr.io/${{ github.repository_owner }}/
+
+      - name: Upload artifacts to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*
+            scripts/setup.sh

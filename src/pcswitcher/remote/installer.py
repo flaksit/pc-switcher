@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -17,7 +18,8 @@ class InstallationError(Exception):
 class VersionManager:
     """Manages pc-switcher installation and version comparison on target machine.
 
-    Handles version detection, comparison, and installation using uv tool.
+    Handles version detection, comparison, and installation using the setup script
+    to ensure consistent installation behavior across machines.
     """
 
     def __init__(self, connection: TargetConnection) -> None:
@@ -27,6 +29,7 @@ class VersionManager:
             connection: Connection to target machine
         """
         self._connection = connection
+        self._setup_script_path = Path(__file__).parent.parent.parent / "scripts" / "setup.sh"
 
     def get_local_version(self) -> str | None:
         """Get the version of pc-switcher on the local machine.
@@ -107,24 +110,51 @@ class VersionManager:
                 return 1
         return 0
 
-    def install_on_target(self, version: str | None = None) -> None:
-        """Install pc-switcher on the target machine using uv tool.
+    def install_on_target(
+        self,
+        version: str | None = None,
+        config_content: str | None = None,
+    ) -> None:
+        """Install pc-switcher on the target machine using the setup script.
+
+        The setup script handles all dependencies (uv, btrfs-progs) and manages
+        configuration files appropriately based on installation mode.
 
         Args:
             version: Specific version to install, or None for latest
+            config_content: Configuration file content to sync (implies sync mode).
+                           If provided, setup script runs in sync mode and receives
+                           config via stdin.
 
         Raises:
             InstallationError: If installation fails
         """
-        # Build installation command
-        package_spec = f"pcswitcher=={version}" if version else "pcswitcher"
+        import base64
 
-        # Use uv tool install to install from ghcr.io or PyPI
-        # Note: This assumes the package is available in a registry
-        # For ghcr.io, we might need to use a different installation method
-        command = f"uv tool install {package_spec}"
+        if not self._setup_script_path.exists():
+            raise InstallationError(f"Setup script not found: {self._setup_script_path}")
 
         try:
+            # Transfer setup script to target
+            remote_script_path = Path("/tmp/pc-switcher-setup.sh")
+            self._connection.send_file_to_target(self._setup_script_path, remote_script_path)
+
+            # Build command with appropriate flags
+            cmd_parts = [f"bash {remote_script_path}"]
+
+            # Add version flag if specified
+            if version:
+                cmd_parts.append(f"--version={version}")
+
+            # Add sync mode flag if config is provided
+            if config_content:
+                cmd_parts.append("--sync-mode")
+                # Use base64 encoding to safely pass config through shell without quoting issues
+                encoded_config = base64.b64encode(config_content.encode()).decode()
+                command = f"echo '{encoded_config}' | base64 -d | bash {remote_script_path} --sync-mode --version={version or 'latest'}"
+            else:
+                command = " ".join(cmd_parts)
+
             result = self._connection.run(
                 command,
                 timeout=300.0,  # 5 minutes for installation
@@ -132,6 +162,12 @@ class VersionManager:
 
             if result.returncode != 0:
                 raise InstallationError(f"Installation failed: {result.stderr or result.stdout}")
+
+            # Clean up remote script
+            self._connection.run(f"rm -f {remote_script_path}", timeout=5.0)
+
+        except InstallationError:
+            raise
         except Exception as e:
             raise InstallationError(f"Failed to install on target: {e}") from e
 
@@ -139,15 +175,18 @@ class VersionManager:
         self,
         local_version: str | None,
         target_version: str | None,
+        config_content: str | None = None,
     ) -> None:
         """Ensure target has compatible version, upgrading if needed.
 
         Logs messages via print. CRITICAL if target > source (unsupported scenario).
-        Upgrades target if target < source.
+        Upgrades target if target < source. Synchronizes config if provided.
 
         Args:
             local_version: Version on source machine
             target_version: Version on target machine
+            config_content: Configuration file content from source (optional).
+                           If provided, will be synchronized to target during install.
 
         Raises:
             InstallationError: If version sync fails
@@ -159,7 +198,7 @@ class VersionManager:
         if target_version is None:
             # Target doesn't have pc-switcher - install it
             print(f"INFO: Installing pc-switcher {local_version} on target")
-            self.install_on_target(local_version)
+            self.install_on_target(local_version, config_content)
             return
 
         # Compare versions
@@ -175,7 +214,11 @@ class VersionManager:
         elif comparison < 0:
             # Target version is older - upgrade
             print(f"INFO: Upgrading target from {target_version} to {local_version}")
-            self.install_on_target(local_version)
+            self.install_on_target(local_version, config_content)
         else:
             # Versions match - no action needed
             print(f"DEBUG: Target version matches source: {local_version}")
+            # Even if versions match, sync config if provided
+            if config_content:
+                print("INFO: Synchronizing configuration to target")
+                self.install_on_target(local_version, config_content)
