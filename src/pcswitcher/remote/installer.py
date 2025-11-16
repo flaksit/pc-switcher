@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import re
 import subprocess
-from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pcswitcher.core.logging import get_logger
+
 if TYPE_CHECKING:
-    from pcswitcher.remote.connection import TargetConnection
+    from pcswitcher.core.module import RemoteExecutor
 
 
 class InstallationError(Exception):
@@ -18,18 +19,23 @@ class InstallationError(Exception):
 class VersionManager:
     """Manages pc-switcher installation and version comparison on target machine.
 
-    Handles version detection, comparison, and installation using the setup script
-    to ensure consistent installation behavior across machines.
+    Uses `uv tool install` to install/upgrade pc-switcher from GitHub Package Registry
+    (ghcr.io) as specified in the project requirements.
     """
 
-    def __init__(self, connection: TargetConnection) -> None:
+    # Package registry URL for pc-switcher
+    PACKAGE_REGISTRY = "ghcr.io"
+    PACKAGE_NAME = "pc-switcher"
+
+    def __init__(self, remote: RemoteExecutor, session_id: str | None = None) -> None:
         """Initialize version manager.
 
         Args:
-            connection: Connection to target machine
+            remote: RemoteExecutor interface for target machine commands
+            session_id: Optional session ID for logging context
         """
-        self._connection = connection
-        self._setup_script_path = Path(__file__).parent.parent.parent / "scripts" / "setup.sh"
+        self._remote = remote
+        self._logger = get_logger("version_manager", session_id=session_id)
 
     def get_local_version(self) -> str | None:
         """Get the version of pc-switcher on the local machine.
@@ -38,21 +44,33 @@ class VersionManager:
             Version string (e.g., "0.1.0") or None if not installed
         """
         try:
+            # Try uv tool list first (preferred method)
             result = subprocess.run(
-                ["pip", "show", "pcswitcher"],
+                ["uv", "tool", "list"],
                 capture_output=True,
                 text=True,
                 check=False,
             )
-            if result.returncode != 0:
-                return None
+            if result.returncode == 0:
+                # Parse output for pc-switcher entry
+                # Format: "pc-switcher v0.1.0" or "pc-switcher 0.1.0"
+                for line in result.stdout.splitlines():
+                    if line.strip().startswith("pc-switcher"):
+                        # Extract version from line
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            version = parts[1].lstrip("v")
+                            self._logger.debug("Found local version via uv tool list", version=version)
+                            return version
 
-            # Parse version from output
-            for line in result.stdout.splitlines():
-                if line.startswith("Version:"):
-                    return line.split(":", 1)[1].strip()
-            return None
-        except Exception:
+            # Fallback to importlib.metadata
+            from importlib.metadata import version as get_version
+
+            version = get_version("pcswitcher")
+            self._logger.debug("Found local version via importlib.metadata", version=version)
+            return version
+        except Exception as e:
+            self._logger.warning(f"Failed to get local version: {e}")
             return None
 
     def get_target_version(self) -> str | None:
@@ -62,22 +80,35 @@ class VersionManager:
             Version string or None if not installed
 
         Raises:
-            InstallationError: If version check fails
+            InstallationError: If version check fails due to connection issues
         """
         try:
-            result = self._connection.run(
-                "pip show pcswitcher",
-                timeout=10.0,
-            )
-
-            if result.returncode != 0:
+            # Check if uv is available on target
+            uv_check = self._remote.run("command -v uv", timeout=10.0)
+            if uv_check.returncode != 0:
+                self._logger.debug("uv not found on target, pc-switcher likely not installed")
                 return None
 
-            # Parse version from output
+            # Try uv tool list
+            result = self._remote.run("uv tool list", timeout=10.0)
+
+            if result.returncode != 0:
+                self._logger.debug("uv tool list failed on target", stderr=result.stderr)
+                return None
+
+            # Parse output for pc-switcher entry
             for line in result.stdout.splitlines():
-                if line.startswith("Version:"):
-                    return line.split(":", 1)[1].strip()
+                if line.strip().startswith("pc-switcher"):
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        version = parts[1].lstrip("v")
+                        self._logger.debug("Found target version", version=version)
+                        return version
+
+            # pc-switcher not in tool list
+            self._logger.debug("pc-switcher not found in uv tool list on target")
             return None
+
         except Exception as e:
             raise InstallationError(f"Failed to check target version: {e}") from e
 
@@ -110,115 +141,174 @@ class VersionManager:
                 return 1
         return 0
 
-    def install_on_target(
-        self,
-        version: str | None = None,
-        config_content: str | None = None,
-    ) -> None:
-        """Install pc-switcher on the target machine using the setup script.
+    def _ensure_uv_on_target(self) -> None:
+        """Ensure uv is installed on target machine.
 
-        The setup script handles all dependencies (uv, btrfs-progs) and manages
-        configuration files appropriately based on installation mode.
+        Raises:
+            InstallationError: If uv installation fails
+        """
+        # Check if uv is already available
+        result = self._remote.run("command -v uv", timeout=10.0)
+        if result.returncode == 0:
+            self._logger.debug("uv already available on target")
+            return
+
+        self._logger.info("Installing uv on target machine")
+
+        # Install uv using the official installer
+        install_cmd = "curl -LsSf https://astral.sh/uv/install.sh | sh"
+        result = self._remote.run(install_cmd, timeout=120.0)
+
+        if result.returncode != 0:
+            raise InstallationError(f"Failed to install uv on target: {result.stderr}")
+
+        # Verify installation
+        result = self._remote.run("~/.local/bin/uv --version", timeout=10.0)
+        if result.returncode != 0:
+            raise InstallationError("uv installation verification failed")
+
+        self._logger.info("uv installed successfully on target")
+
+    def install_on_target(self, version: str) -> None:
+        """Install pc-switcher on the target machine using uv tool install.
+
+        Uses `uv tool install pc-switcher==<version>` from GitHub Package Registry.
 
         Args:
-            version: Specific version to install, or None for latest
-            config_content: Configuration file content to sync (implies sync mode).
-                           If provided, setup script runs in sync mode and receives
-                           config via stdin.
+            version: Specific version to install (e.g., "0.1.0")
 
         Raises:
             InstallationError: If installation fails
         """
-        import base64
-
-        if not self._setup_script_path.exists():
-            raise InstallationError(f"Setup script not found: {self._setup_script_path}")
-
         try:
-            # Transfer setup script to target
-            remote_script_path = Path("/tmp/pc-switcher-setup.sh")
-            self._connection.send_file_to_target(self._setup_script_path, remote_script_path)
+            # Ensure uv is available on target
+            self._ensure_uv_on_target()
 
-            # Build command with appropriate flags
-            cmd_parts = [f"bash {remote_script_path}"]
+            # Install pc-switcher using uv tool install
+            # The package is published to ghcr.io (GitHub Package Registry)
+            install_cmd = f"uv tool install pc-switcher=={version}"
 
-            # Add version flag if specified
-            if version:
-                cmd_parts.append(f"--version={version}")
-
-            # Add sync mode flag if config is provided
-            if config_content:
-                cmd_parts.append("--sync-mode")
-                # Use base64 encoding to safely pass config through shell without quoting issues
-                encoded_config = base64.b64encode(config_content.encode()).decode()
-                command = f"echo '{encoded_config}' | base64 -d | bash {remote_script_path} --sync-mode --version={version or 'latest'}"
-            else:
-                command = " ".join(cmd_parts)
-
-            result = self._connection.run(
-                command,
-                timeout=300.0,  # 5 minutes for installation
+            self._logger.info(
+                f"Installing pc-switcher {version} on target",
+                command=install_cmd,
             )
 
-            if result.returncode != 0:
-                raise InstallationError(f"Installation failed: {result.stderr or result.stdout}")
+            result = self._remote.run(install_cmd, timeout=300.0)  # 5 minutes timeout
 
-            # Clean up remote script
-            self._connection.run(f"rm -f {remote_script_path}", timeout=5.0)
+            if result.returncode != 0:
+                error_msg = result.stderr or result.stdout
+                raise InstallationError(f"Installation failed: {error_msg}")
+
+            self._logger.info(f"Successfully installed pc-switcher {version} on target")
 
         except InstallationError:
             raise
         except Exception as e:
             raise InstallationError(f"Failed to install on target: {e}") from e
 
+    def upgrade_on_target(self, version: str) -> None:
+        """Upgrade pc-switcher on the target machine.
+
+        Uses `uv tool upgrade pc-switcher --reinstall` to ensure exact version match.
+
+        Args:
+            version: Version to upgrade to (e.g., "0.4.0")
+
+        Raises:
+            InstallationError: If upgrade fails
+        """
+        try:
+            # Ensure uv is available
+            self._ensure_uv_on_target()
+
+            # Upgrade using uv tool upgrade with reinstall to ensure exact version
+            upgrade_cmd = f"uv tool upgrade pc-switcher=={version}"
+
+            self._logger.info(
+                f"Upgrading pc-switcher to {version} on target",
+                command=upgrade_cmd,
+            )
+
+            result = self._remote.run(upgrade_cmd, timeout=300.0)
+
+            if result.returncode != 0:
+                # If upgrade fails, try uninstall + install
+                self._logger.warning("Upgrade failed, trying uninstall + install")
+                uninstall_result = self._remote.run("uv tool uninstall pc-switcher", timeout=60.0)
+                if uninstall_result.returncode != 0:
+                    self._logger.warning(f"Uninstall warning: {uninstall_result.stderr}")
+
+                # Reinstall specific version
+                self.install_on_target(version)
+                return
+
+            self._logger.info(f"Successfully upgraded pc-switcher to {version} on target")
+
+        except InstallationError:
+            raise
+        except Exception as e:
+            raise InstallationError(f"Failed to upgrade on target: {e}") from e
+
     def ensure_version_sync(
         self,
         local_version: str | None,
         target_version: str | None,
-        config_content: str | None = None,
     ) -> None:
-        """Ensure target has compatible version, upgrading if needed.
+        """Ensure target has matching version, installing or upgrading if needed.
 
-        Logs messages via print. CRITICAL if target > source (unsupported scenario).
-        Upgrades target if target < source. Synchronizes config if provided.
+        Follows spec requirements:
+        - If target has no pc-switcher: install matching version
+        - If target version < source: upgrade to source version
+        - If target version > source: raise InstallationError (prevent downgrade)
+        - If versions match: no action needed
 
         Args:
             local_version: Version on source machine
-            target_version: Version on target machine
-            config_content: Configuration file content from source (optional).
-                           If provided, will be synchronized to target during install.
+            target_version: Version on target machine (None if not installed)
 
         Raises:
-            InstallationError: If version sync fails
+            InstallationError: If version sync fails or target is newer (downgrade prevention)
         """
-        # Handle missing versions
+        # Handle missing local version
         if local_version is None:
             raise InstallationError("pc-switcher not installed on source machine")
 
+        # Handle missing target installation
         if target_version is None:
-            # Target doesn't have pc-switcher - install it
-            print(f"INFO: Installing pc-switcher {local_version} on target")
-            self.install_on_target(local_version, config_content)
+            self._logger.info(
+                f"pc-switcher not installed on target, installing version {local_version}",
+                action="install",
+                version=local_version,
+            )
+            self.install_on_target(local_version)
             return
 
         # Compare versions
         comparison = self.compare_versions(target_version, local_version)
 
         if comparison > 0:
-            # Target version is newer than source - log CRITICAL
-            print(
-                f"CRITICAL: Target version ({target_version}) is newer than source ({local_version}). "
-                "This is an unsupported configuration."
+            # Target version is newer than source - this is unsupported
+            error_msg = (
+                f"Target version ({target_version}) is newer than source ({local_version}). "
+                "This is an unsupported configuration that could cause compatibility issues."
             )
-            raise InstallationError(f"Target version ({target_version}) is newer than source ({local_version})")
+            self._logger.critical(error_msg)
+            raise InstallationError(error_msg)
+
         elif comparison < 0:
             # Target version is older - upgrade
-            print(f"INFO: Upgrading target from {target_version} to {local_version}")
-            self.install_on_target(local_version, config_content)
+            self._logger.info(
+                f"Target pc-switcher version {target_version} is outdated, upgrading to {local_version}",
+                action="upgrade",
+                from_version=target_version,
+                to_version=local_version,
+            )
+            self.upgrade_on_target(local_version)
+
         else:
             # Versions match - no action needed
-            print(f"DEBUG: Target version matches source: {local_version}")
-            # Even if versions match, sync config if provided
-            if config_content:
-                print("INFO: Synchronizing configuration to target")
-                self.install_on_target(local_version, config_content)
+            self._logger.info(
+                f"Target pc-switcher version matches source ({local_version}), skipping installation",
+                action="skip",
+                version=local_version,
+            )

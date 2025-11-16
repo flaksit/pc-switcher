@@ -19,6 +19,7 @@ import importlib
 import os
 import signal
 import subprocess
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -84,7 +85,7 @@ class Orchestrator:
 
         # Interrupt handling
         self._first_interrupt_time: float | None = None
-        self._interrupt_lock = signal.lock()
+        self._interrupt_lock = threading.Lock()
 
         # Register signal handlers for graceful shutdown
         # These handlers convert signals into KeyboardInterrupt for uniform handling
@@ -201,15 +202,13 @@ class Orchestrator:
         """Check disk space on both source and target machines.
 
         Verifies minimum free space requirements before sync starts.
-        Configuration from btrfs_snapshots module if available.
+        Configuration from disk section in config (self.config.disk).
 
         Raises:
             SyncError: If disk space is insufficient on either machine
         """
-        # Get disk thresholds from config (use defaults if not specified)
-        min_free_threshold = self.config.module_configs.get("btrfs_snapshots", {}).get(
-            "min_free_threshold", 0.20
-        )  # Default 20%
+        # Get disk thresholds from canonical config location (self.config.disk)
+        min_free_threshold = self.config.disk.get("min_free", 0.20)  # Default 20%
 
         try:
             from pcswitcher.utils.disk import DiskMonitor
@@ -234,33 +233,37 @@ class Orchestrator:
             )
 
             # Check remote (target) disk space via SSH
+            # Use Python on remote for robust parsing (avoids awk parsing issues)
             try:
                 result = self.remote.run(
-                    f"stat -c '%a %b %S' / | awk '{{print ($1 * $2 * $3)}}'",
+                    "python3 -c 'import shutil; st=shutil.disk_usage(\"/\"); print(st.free, st.total)'",
                     timeout=10.0,
                 )
                 if result.returncode == 0:
                     try:
-                        available_bytes = float(result.stdout.strip())
-                        stat_result = os.statvfs("/")
-                        total_bytes = stat_result.f_blocks * stat_result.f_frsize
-                        required_target_bytes = total_bytes * float(min_free_threshold)
+                        parts = result.stdout.strip().split()
+                        if len(parts) >= 2:
+                            target_free_bytes = int(parts[0])
+                            target_total_bytes = int(parts[1])
+                            required_target_bytes = target_total_bytes * float(min_free_threshold)
 
-                        if available_bytes < required_target_bytes:
-                            error_msg = (
-                                f"Insufficient disk space on target machine. "
-                                f"Required: {format_bytes(required_target_bytes)}, "
-                                f"Available: {format_bytes(available_bytes)}"
+                            if target_free_bytes < required_target_bytes:
+                                error_msg = (
+                                    f"Insufficient disk space on target machine. "
+                                    f"Required: {format_bytes(required_target_bytes)}, "
+                                    f"Available: {format_bytes(target_free_bytes)}"
+                                )
+                                self.logger.critical(error_msg)
+                                raise SyncError(error_msg)
+
+                            self.logger.info(
+                                "Target disk space check passed",
+                                free_space=format_bytes(target_free_bytes),
+                                required=format_bytes(required_target_bytes),
                             )
-                            self.logger.critical(error_msg)
-                            raise SyncError(error_msg)
-
-                        self.logger.info(
-                            "Target disk space check passed",
-                            free_space=format_bytes(available_bytes),
-                            required=format_bytes(required_target_bytes),
-                        )
-                    except (ValueError, OSError) as e:
+                        else:
+                            self.logger.warning(f"Unexpected output format from target disk check: {result.stdout}")
+                    except (ValueError, IndexError) as e:
                         self.logger.warning(f"Failed to parse target disk space: {e}")
                 else:
                     self.logger.warning(f"Target disk space check failed: {result.stderr}")
@@ -268,6 +271,8 @@ class Orchestrator:
             except Exception as e:
                 self.logger.warning(f"Failed to check target disk space: {e}")
 
+        except SyncError:
+            raise
         except Exception as e:
             error_msg = f"Disk space check failed: {e}"
             self.logger.critical(error_msg)
@@ -279,39 +284,22 @@ class Orchestrator:
         Checks target version and installs/upgrades if needed. Aborts if
         target version is newer than source (downgrade prevention).
 
+        Uses VersionManager which installs via `uv tool install pc-switcher==<version>`
+        from GitHub Package Registry (ghcr.io).
+
         Raises:
             SyncError: If version check fails or installation fails
         """
         try:
-            version_manager = VersionManager(self.remote._connection)  # type: ignore[attr-defined]
+            # Pass RemoteExecutor interface (not private connection) to VersionManager
+            version_manager = VersionManager(self.remote, session_id=self.session.id)
 
             # Get versions
             local_version = version_manager.get_local_version()
             target_version = version_manager.get_target_version()
 
-            # Ensure version sync
+            # Ensure version sync (VersionManager handles logging internally)
             version_manager.ensure_version_sync(local_version, target_version)
-
-            # Log successful version sync
-            if target_version is None:
-                self.logger.info(
-                    f"Installed pc-switcher {local_version} on target",
-                    action="install",
-                    version=local_version,
-                )
-            elif local_version != target_version:
-                self.logger.info(
-                    f"Upgraded target from {target_version} to {local_version}",
-                    action="upgrade",
-                    from_version=target_version,
-                    to_version=local_version,
-                )
-            else:
-                self.logger.info(
-                    "Target pc-switcher version matches source",
-                    action="verify",
-                    version=local_version,
-                )
 
         except InstallationError as e:
             # Log the error at CRITICAL level to trigger abort
