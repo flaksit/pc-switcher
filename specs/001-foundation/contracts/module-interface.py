@@ -395,46 +395,4 @@ class DummySuccessModule(SyncModule):
         # No resources to release in dummy module
 
 
-class DummyCriticalModule(SyncModule):
-    """
-    Test module that raises exception at 50% progress.
-
-    Demonstrates exception-based error handling:
-    - Module raises SyncError (not log CRITICAL)
-    - Orchestrator catches exception
-    - Orchestrator logs exception as CRITICAL
-    - Orchestrator calls abort() and initiates CLEANUP phase
-    """
-
-    @property
-    def name(self) -> str:
-        return "dummy-critical"
-
-    @property
-    def required(self) -> bool:
-        return False
-
-    def get_config_schema(self) -> dict[str, Any]:
-        return {"type": "object"}
-
-    def validate(self) -> list[str]:
-        return []
-
-    def pre_sync(self) -> None:
-        pass
-
-    def sync(self) -> None:
-        import time
-
-        for i in range(20):
-            self.emit_progress((i + 1) / 20, f"Step {i + 1}/20")
-            if i == 10:  # 50%
-                # Module raises exception, orchestrator handles it
-                raise SyncError("Simulated critical failure for testing")
-            time.sleep(1)
-
-    def post_sync(self) -> None:
-        pass
-
-    def abort(self, timeout: float) -> None:
-        self.log(LogLevel.INFO, "abort() called after exception")
+# DummyCriticalModule - (Removed)

@@ -84,13 +84,13 @@ class DummyFailModule(SyncModule):
 
     @override
     def sync(self) -> None:
-        """Execute sync operation that fails with unhandled exception at 60%.
+        """Execute sync operation that fails with unhandled exception at exactly 60%.
 
         Raises:
-            RuntimeError: Always raised at 60% progress to test unhandled exception handling
+            RuntimeError: Always raised at exactly 60% progress (FR-041)
         """
         duration = self.config.get("duration_seconds", 20)
-        self.log(LogLevel.INFO, "Starting sync (will fail at 60%)", duration=duration)
+        self.log(LogLevel.INFO, "Starting sync (will fail at exactly 60%)", duration=duration)
 
         for i in range(duration):
             if self._aborted:
@@ -100,9 +100,10 @@ class DummyFailModule(SyncModule):
             progress = (i + 1) / duration
             self.emit_progress(progress, f"Step {i + 1}/{duration}")
 
-            # Raise unhandled exception at 60% progress
-            if i == int(duration * 0.6):
-                self.log(LogLevel.INFO, "About to raise unhandled exception")
+            # Raise unhandled exception at exactly 60% progress (FR-041)
+            # When i=11, progress = 12/20 = 0.6 = 60%
+            if progress >= 0.6:
+                self.log(LogLevel.INFO, f"Raising exception at {progress * 100:.0f}% progress")
                 raise RuntimeError("Simulated unhandled exception at 60% progress for testing")
 
             time.sleep(1)
@@ -124,6 +125,7 @@ class DummyFailModule(SyncModule):
             timeout: Maximum time to spend in cleanup (seconds)
 
         Sets abort flag to stop sync loop gracefully.
+        Logs "Dummy module abort called" per FR-042.
         """
-        self.log(LogLevel.INFO, "abort() called after unhandled exception", timeout=timeout)
+        self.log(LogLevel.INFO, "Dummy module abort called", timeout=timeout)
         self._aborted = True

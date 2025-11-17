@@ -10,10 +10,9 @@ log_cli_level: INFO
 # Module Configuration
 # Enable or disable sync modules
 sync_modules:
-  btrfs_snapshots: true  # Required - cannot be disabled
   dummy_success: false   # Test module
-  dummy_critical: false  # Test module
   dummy_fail: false      # Test module
+  # NOTE: btrfs_snapshots is orchestrator-level infrastructure, not a SyncModule
 
 # Btrfs Snapshots Module Configuration
 # Required for data safety - creates pre-sync and post-sync snapshots

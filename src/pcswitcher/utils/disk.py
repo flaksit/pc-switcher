@@ -164,3 +164,50 @@ def format_bytes(bytes_value: float) -> str:
         unit_index += 1
 
     return f"{value:.1f} {units[unit_index]}"
+
+
+def parse_disk_threshold(threshold: str, total_bytes: float) -> float:
+    """Parse a disk threshold string and calculate required bytes.
+
+    Args:
+        threshold: Threshold string with explicit units:
+            - Percentage format: "20%" = 20% of total_bytes
+            - Absolute format: "50GiB" = 50 gigabytes
+        total_bytes: Total disk space in bytes (for percentage calculations)
+
+    Returns:
+        Required bytes as float
+
+    Raises:
+        ValueError: If threshold format is invalid (missing units or invalid format)
+    """
+    if not isinstance(threshold, str):
+        raise ValueError(
+            f"Disk threshold must be a string with explicit units (e.g., '20%' or '50GiB'). "
+            f"Got {type(threshold).__name__}: {threshold}"
+        )
+
+    # Handle percentage string like "20%"
+    if threshold.endswith("%"):
+        try:
+            percentage = float(threshold[:-1]) / 100.0
+            if not 0.0 <= percentage <= 1.0:
+                raise ValueError(f"Percentage {threshold} must be between 0% and 100%")
+            return total_bytes * percentage
+        except ValueError as e:
+            raise ValueError(f"Invalid percentage format '{threshold}': {e}") from e
+
+    # Handle absolute value with GiB suffix like "50GiB"
+    if threshold.endswith("GiB"):
+        try:
+            gib_value = float(threshold[:-3])
+            if gib_value <= 0:
+                raise ValueError("GiB value must be positive")
+            return gib_value * 1024 * 1024 * 1024
+        except ValueError as e:
+            raise ValueError(f"Invalid GiB format '{threshold}': {e}") from e
+
+    raise ValueError(
+        f"Disk threshold must be specified with explicit units. "
+        f"Use percentage format '20%' or absolute format '50GiB'. Got: '{threshold}'"
+    )

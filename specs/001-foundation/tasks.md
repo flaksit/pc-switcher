@@ -126,9 +126,9 @@ Repository structure (single Python package):
 
 ## Phase 6: User Story 8 - Dummy Test Modules (Priority: P1) 🎯 MVP Component 4/9
 
-**Goal**: Three reference modules (dummy-success, dummy-critical, dummy-fail) demonstrating successful execution, CRITICAL abort, and exception handling with progress reporting
+**Goal**: Two reference modules (dummy-success, dummy-fail) demonstrating successful execution and exception handling with progress reporting
 
-**Independent Test**: Enable each dummy module in config and run sync, verify expected behavior for each (success completes, critical raises exception at 50%, fail raises unhandled exception), check abort() is called on interrupts
+**Independent Test**: Enable each dummy module in config and run sync, verify expected behavior for each (success completes, fail raises unhandled exception at 60%), check abort() is called on interrupts
 
 **Dependencies**: US1 (needs module interface), US4 (needs logging), US6 (needs config)
 
@@ -138,11 +138,11 @@ Repository structure (single Python package):
 - [ ] T040 [P] [US8] Implement DummySuccessModule.validate() that returns empty list in src/pcswitcher/modules/dummy_success.py (Deliberate Simplicity)
 - [ ] T041 [P] [US8] Implement DummySuccessModule.sync() with time.sleep loop, progress emission, and log calls in src/pcswitcher/modules/dummy_success.py (Deliberate Simplicity)
 - [ ] T042 [P] [US8] Implement DummySuccessModule.abort(timeout) that logs and stops execution in src/pcswitcher/modules/dummy_success.py (Reliability Without Compromise)
-- [ ] T043 [P] [US8] Create DummyCriticalModule in src/pcswitcher/modules/dummy_critical.py that raises SyncError at 50% progress (Reliability Without Compromise)
+- [ ] T043 *(Removed)*
 - [ ] T044 [P] [US8] Create DummyFailModule in src/pcswitcher/modules/dummy_fail.py that raises unhandled exception at 60% progress (Reliability Without Compromise)
-- [ ] T045 [P] [US8] Implement get_config_schema() for all three dummy modules with duration_seconds parameter in respective module files (Documentation As Runtime Contract)
+- [ ] T045 [P] [US8] Implement get_config_schema() for all dummy modules with duration_seconds parameter in respective module files (Documentation As Runtime Contract)
 
-**Checkpoint**: At this point, all three dummy modules should be fully functional for infrastructure testing
+**Checkpoint**: At this point, both dummy modules should be fully functional for infrastructure testing
 
 ---
 

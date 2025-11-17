@@ -230,7 +230,6 @@ Based on task dependencies and risk reduction:
 
 9. **Dummy modules** (`modules/dummy_*.py`)
    - `dummy_success`: Complete reference implementation
-   - `dummy_critical`: CRITICAL abort testing
    - `dummy_fail`: Exception handling testing
    - Write unit tests
 

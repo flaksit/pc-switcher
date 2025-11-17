@@ -46,13 +46,11 @@ disk:
 # - Disabled modules (false) are skipped but must have valid config
 
 sync_modules:
-  # Required module: creates snapshots for safety and rollback
-  btrfs_snapshots: true
-
   # Test modules (for development/testing only)
   # dummy_success: false   # Simulates successful sync operation
-  # dummy_critical: false  # Tests error handling (fails at 50%)
   # dummy_fail: false      # Tests exception propagation
+  # NOTE: btrfs_snapshots is orchestrator-level infrastructure, not a SyncModule.
+  # It's configured in the btrfs_snapshots section below but not listed here.
 
 # =============================================================================
 # MODULE-SPECIFIC CONFIGURATIONS
@@ -83,9 +81,6 @@ btrfs_snapshots:
 # Test module configurations (for development only)
 # dummy_success:
 #   duration_seconds: 20  # How long to simulate sync operation
-
-# dummy_critical:
-#   fail_at_percentage: 50  # Progress percentage at which to fail
 
 # dummy_fail:
 #   message: "Intentional test failure"  # Error message to raise

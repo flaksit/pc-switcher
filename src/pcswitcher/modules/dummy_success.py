@@ -75,53 +75,78 @@ class DummySuccessModule(SyncModule):
 
     @override
     def pre_sync(self) -> None:
-        """Execute pre-sync operations.
+        """Execute pre-sync operations on source machine.
 
-        For this dummy module, just logs the operation.
+        Simulates 20-second source operation (FR-039):
+        - Logs every 2 seconds
+        - WARNING at 6 seconds
+        - Emits progress at 0%, 25%, 50%, 75%, 100%
         """
-        self.log(LogLevel.INFO, "Starting pre-sync")
-        self.log(LogLevel.INFO, "Pre-sync complete")
+        duration = self.config.get("duration_seconds", 20)
+        self.log(LogLevel.INFO, "Starting source phase", duration=duration)
+
+        for i in range(duration):
+            if self._aborted:
+                self.log(LogLevel.INFO, "Source phase aborted")
+                return
+
+            # Emit progress at 0%, 25%, 50%, 75%, 100%
+            elapsed_percent = int((i / duration) * 100)
+            if i == 0 or elapsed_percent in [25, 50, 75]:
+                self.emit_progress(i / duration, f"Source: {elapsed_percent}%")
+
+            # Log every 2 seconds
+            if i > 0 and i % 2 == 0:
+                self.log(LogLevel.INFO, f"Source phase: {i}s elapsed")
+
+            # WARNING at 6 seconds
+            if i == 6:
+                self.log(LogLevel.WARNING, "Warning at 6s on source (expected)")
+
+            time.sleep(1)
+
+        self.emit_progress(1.0, "Source: 100%")
+        self.log(LogLevel.INFO, "Source phase complete", total_seconds=duration)
 
     @override
     def sync(self) -> None:
-        """Execute main sync operation with progress reporting.
+        """Execute main sync operation on target machine.
 
-        Simulates a 20-second sync operation with:
-        - Progress updates every second (0-100%)
-        - INFO log every 2 seconds
-        - WARNING at 6 seconds (30%)
-        - ERROR at 8 seconds (40%)
+        Simulates 20-second target operation (FR-039):
+        - Logs every 2 seconds
+        - ERROR at 8 seconds (recoverable)
+        - Emits progress at 0%, 25%, 50%, 75%, 100%
 
         Respects abort signal for graceful termination.
         """
         duration = self.config.get("duration_seconds", 20)
-        self.log(LogLevel.INFO, "Starting sync", duration=duration)
+        self.log(LogLevel.INFO, "Starting target phase", duration=duration)
 
         for i in range(duration):
             if self._aborted:
-                self.log(LogLevel.INFO, "Sync aborted by user")
+                self.log(LogLevel.INFO, "Target phase aborted")
                 return
 
-            # Calculate and report progress (0.0 to 1.0)
-            progress = (i + 1) / duration
-            self.emit_progress(progress, f"Processing step {i + 1}/{duration}")
+            # Emit progress at 0%, 25%, 50%, 75%, 100%
+            elapsed_percent = int((i / duration) * 100)
+            if i == 0 or elapsed_percent in [25, 50, 75]:
+                self.emit_progress(i / duration, f"Target: {elapsed_percent}%")
 
-            # Log at various levels to test logging
-            if (i + 1) % 2 == 0:
-                self.log(LogLevel.INFO, f"Completed step {i + 1}/{duration}")
+            # Log every 2 seconds
+            if i > 0 and i % 2 == 0:
+                self.log(LogLevel.INFO, f"Target phase: {i}s elapsed")
 
-            if i == 6:
-                self.log(LogLevel.WARNING, "Example warning at 30% progress")
-
+            # ERROR at 8 seconds (recoverable)
             if i == 8:
                 self.log(
                     LogLevel.ERROR,
-                    "Example ERROR at 40% progress (recoverable, sync continues)",
+                    "Error at 8s on target (recoverable, sync continues)",
                 )
 
             time.sleep(1)
 
-        self.log(LogLevel.INFO, "Sync complete", total_steps=duration)
+        self.emit_progress(1.0, "Target: 100%")
+        self.log(LogLevel.INFO, "Target phase complete", total_seconds=duration)
 
     @override
     def post_sync(self) -> None:
@@ -140,6 +165,7 @@ class DummySuccessModule(SyncModule):
             timeout: Maximum time to spend in cleanup (seconds)
 
         Sets abort flag to stop sync loop gracefully.
+        Logs "Dummy module abort called" per FR-042.
         """
-        self.log(LogLevel.INFO, "abort() called", timeout=timeout)
+        self.log(LogLevel.INFO, "Dummy module abort called", timeout=timeout)
         self._aborted = True

@@ -86,19 +86,19 @@ This delivers value by enabling zero-touch target setup and ensuring version con
 
 ### User Story 3 - Safety Infrastructure with Btrfs Snapshots (Priority: P1)
 
-Before any sync operations modify state, the system creates read-only btrfs snapshots of critical subvolumes on both source and target machines. These "pre-sync" snapshots serve as rollback points. After all sync modules complete successfully, the system creates "post-sync" snapshots capturing the final state. This safety mechanism is implemented as a special required module that cannot be disabled by users.
+Before any sync operations modify state, the system creates read-only btrfs snapshots of critical subvolumes on both source and target machines. These "pre-sync" snapshots serve as rollback points. After all sync modules complete successfully, the system creates "post-sync" snapshots capturing the final state. This safety mechanism is implemented as orchestrator-level infrastructure (not a SyncModule) that is always active and cannot be disabled by users.
 
 **Why this priority**: This is P1 because it's the primary safety mechanism protecting against data loss. Without snapshots, there's no reliable way to recover from failed sync operations. This directly enforces the top project principle: "Reliability Without Compromise".
 
 **Independent Test**: Can be fully tested by:
 1. Running sync on test machines with btrfs filesystems
-2. Verifying snapshots module validates subvolume existence during its validate() phase
-3. Verifying snapshots are created before any module executes (in pre_sync() phase)
+2. Verifying orchestrator validates subvolume existence during pre-sync checks
+3. Verifying snapshots are created before any SyncModule executes
 4. Confirming snapshot naming includes timestamp and sync session ID
 5. Checking that snapshots are read-only
 6. Simulating sync failure and verifying rollback can restore from pre-sync snapshot
-7. Confirming post-sync snapshots are created after successful completion (in post_sync() phase)
-8. Attempting to disable the snapshot module via config and verifying it remains active
+7. Confirming post-sync snapshots are created after successful completion of all SyncModules
+8. Verifying that snapshot infrastructure is always active (no config option to disable)
 
 This delivers value by providing the foundation for all rollback and recovery operations.
 
@@ -110,13 +110,13 @@ This delivers value by providing the foundation for all rollback and recovery op
 
 1. **Given** a sync is requested with configured subvolumes, **When** orchestrator begins pre-sync checks, **Then** it MUST verify that all configured subvolumes exist on both source and target; if any configured subvolume is missing on either side the system MUST log a CRITICAL error and abort sync before creating snapshots
 
-2. **Given** user initiates sync, **When** the snapshot module executes (after version check and subvolume existence checks, before any state-modifying modules), **Then** the system creates read-only btrfs snapshots on both source and target for all configured subvolumes (e.g., `@`, `@home`) with naming pattern `@<subvol>-presync-<timestamp>-<session-id>`
+2. **Given** user initiates sync, **When** the orchestrator begins the pre-sync phase (after version check and subvolume existence checks, before any SyncModules execute), **Then** the system creates read-only btrfs snapshots on both source and target for all configured subvolumes (e.g., `@`, `@home`) with naming pattern `@<subvol>-presync-<timestamp>-<session-id>`
 
-3. **Given** all sync modules complete successfully, **When** the post-sync phase executes, **Then** the system creates read-only btrfs snapshots on both source and target with naming pattern `@<subvol>-postsync-<timestamp>-<session-id>`
+3. **Given** all sync modules complete successfully, **When** the orchestrator begins the post-sync phase, **Then** the system creates read-only btrfs snapshots on both source and target with naming pattern `@<subvol>-postsync-<timestamp>-<session-id>`
 
-4. **Given** user configuration includes `sync_modules: { btrfs_snapshots: false }`, **When** configuration is loaded, **Then** the system displays a clear error message "Required module 'btrfs_snapshots' cannot be disabled" with config file location and exits before sync begins
+4. *(Removed - snapshot management is orchestrator-level infrastructure, not a SyncModule, so it cannot be disabled via sync_modules)*
 
-5. **Given** snapshot creation fails on target (e.g., insufficient space), **When** the failure occurs, **Then** the snapshot module logs CRITICAL error, and the orchestrator aborts sync before any state changes occur
+5. **Given** snapshot creation fails on target (e.g., insufficient space), **When** the failure occurs, **Then** the orchestrator logs CRITICAL error and aborts sync before any state changes occur
 
 6. **Given** pre-sync snapshots exist and a sync module later fails with CRITICAL error, **When** the orchestrator detects the failure, **Then** it offers to rollback to the pre-sync snapshots (user confirmation required for rollback execution)
 
@@ -130,17 +130,16 @@ This delivers value by providing the foundation for all rollback and recovery op
 
 ### User Story 4 - Comprehensive Logging System (Priority: P1)
 
-The system implements a six-level logging hierarchy (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL) with independent level configuration for file logging and terminal UI display. Log levels follow the ordering DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL: DEBUG is the most verbose and includes all messages, while FULL is a high-verbosity operational level that does NOT include DEBUG-level diagnostics. Logs are written to timestamped files in `~/.local/share/pc-switcher/logs/` on the source machine. All operations (core orchestrator, individual modules, target-side scripts) contribute to the unified log stream. CRITICAL log events automatically trigger sync abortion.
+The system implements a six-level logging hierarchy (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL) with independent level configuration for file logging and terminal UI display. Log levels follow the ordering DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL: DEBUG is the most verbose and includes all messages, while FULL is a high-verbosity operational level that does NOT include DEBUG-level diagnostics. Logs are written to timestamped files in `~/.local/share/pc-switcher/logs/` on the source machine. All operations (core orchestrator, individual modules, target-side scripts) contribute to the unified log stream.
 
-**Why this priority**: This is P1 because comprehensive logging is essential for development, troubleshooting, and reliability verification. The distinction between CRITICAL (abort sync) and ERROR (log but continue) is fundamental to error handling throughout the system.
+**Why this priority**: This is P1 because comprehensive logging is essential for development, troubleshooting, and reliability verification.
 
 **Independent Test**: Can be fully tested by:
 1. Running sync with various log level configurations
 2. Verifying file contains events at configured level and above
 3. Confirming terminal shows only events at CLI log level and above
-4. Testing that CRITICAL log triggers immediate sync abort
-5. Checking log format includes timestamp, level, module name, and message
-6. Validating that both source and target operations contribute to unified log
+4. Checking log format includes timestamp, level, module name, and message
+5. Validating that both source and target operations contribute to unified log
 
 This delivers value by enabling developers to diagnose issues and providing audit trails for sync operations.
 
@@ -154,7 +153,7 @@ This delivers value by enabling developers to diagnose issues and providing audi
 
 2. **Given** user configures `log_file_level: INFO`, **When** sync runs and a module logs at FULL level (e.g., "Copying /home/user/file.txt"), **Then** the message does not appear in either log file or terminal UI
 
-3. **Given** sync is running, **When** any module (or orchestrator core) logs at CRITICAL level, **Then** the logging system immediately signals the orchestrator to abort sync, the current module's abort(timeout) is called, no further modules execute, and the terminal displays "CRITICAL error encountered, aborting sync: [error message]"
+3. *(Removed)*
 
 4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`, **Then** the file contains structured log entries with format `[TIMESTAMP] [LEVEL] [MODULE] [HOSTNAME] message` for all operations from both source and target machines
 
@@ -299,7 +298,7 @@ This delivers value by streamlining initial deployment.
 
 ### User Story 8 - Dummy Test Modules (Priority: P1)
 
-Three dummy modules exist for testing infrastructure: `dummy-success` (completes successfully with INFO/WARNING/ERROR logs), `dummy-critical` (emits CRITICAL error mid-execution to test abort handling), and `dummy-fail` (raises unhandled exception to test exception handling). Each simulates long-running operations on both source and target with progress reporting.
+Two dummy modules exist for testing infrastructure: `dummy-success` (completes successfully with INFO/WARNING/ERROR logs) and `dummy-fail` (raises unhandled exception to test exception handling). Each simulates long-running operations on both source and target with progress reporting.
 
 **Why this priority**: This is P1 because these modules are essential for testing the orchestrator, logging, progress UI, error handling, and interrupt handling during development. They serve as reference implementations of the module contract.
 
@@ -313,7 +312,7 @@ Three dummy modules exist for testing infrastructure: `dummy-success` (completes
 
 1. **Given** `dummy-success` module is enabled, **When** sync runs, **Then** the module performs 20-second busy-wait on source (logging INFO message every 2s), emits WARNING at 6s, performs 20-second busy-wait on target (logging INFO message every 2s), emits ERROR at 8s, reports progress updates (0%, 25%, 50%, 75%, 100%), and completes successfully
 
-2. **Given** `dummy-critical` module is enabled, **When** sync runs and module reaches 50% progress, **Then** the module raises SyncError("Simulated critical failure for testing"), the orchestrator catches the exception, logs it at CRITICAL level, calls module's abort(timeout=5.0), halts sync, and no subsequent modules execute
+2. *(Removed)*
 
 3. **Given** `dummy-fail` module is enabled, **When** sync runs and module reaches 60% progress, **Then** the module raises an unhandled RuntimeError (not SyncError), the orchestrator catches the exception, wraps it as SyncError, logs it at CRITICAL level, calls abort(timeout=5.0), and halts sync
 
@@ -392,7 +391,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-010** `[Solid-State Stewardship]`: Snapshot naming MUST follow pattern `<subvolume>-{presync|postsync}-<ISO8601-timestamp>-<session-id>` for clear identification and cleanup (e.g., if subvolume is "@", snapshot is "@-presync-20251116T143022-abc12345", not "@@-presync-...")
 
-- **FR-011** `[Reliability Without Compromise]`: Snapshot module MUST be marked as required and system MUST ignore attempts to disable it via configuration
+- **FR-011** `[Reliability Without Compromise]`: Snapshot management MUST be implemented as orchestrator-level infrastructure (not a SyncModule) that is always active; there is no configuration option to disable snapshot creation
 
 - **FR-012** `[Frictionless Command UX]`: If pre-sync snapshot creation fails, system MUST log CRITICAL error and abort before any state modifications occur
 
@@ -456,11 +455,11 @@ The terminal displays real-time sync progress including current module, operatio
 
 #### Testing Infrastructure
 
-- **FR-038** `[Deliberate Simplicity]`: System MUST include three dummy modules: `dummy-success`, `dummy-critical`, `dummy-fail`
+- **FR-038** `[Deliberate Simplicity]`: System MUST include two dummy modules: `dummy-success`, `dummy-fail`
 
 - **FR-039** `[Deliberate Simplicity]`: `dummy-success` MUST simulate 20s operation on source (log every 2s, WARNING at 6s) and 20s on target (log every 2s, ERROR at 8s), emit progress updates, and complete successfully
 
-- **FR-040** `[Reliability Without Compromise]`: `dummy-critical` MUST log CRITICAL error at 50% progress and continue execution to test that orchestrator aborts sync
+- **FR-040** *(Removed)*
 
 - **FR-041** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at 60% progress to test orchestrator exception handling
 

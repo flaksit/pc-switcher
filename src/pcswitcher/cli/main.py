@@ -143,12 +143,18 @@ def sync(
 
         # Create session
         session_id = generate_session_id()
+        # Only include actually enabled modules (not btrfs_snapshots which is now infrastructure)
+        enabled_module_list = [
+            name
+            for name, enabled in cfg.sync_modules.items()
+            if enabled and name != "btrfs_snapshots"
+        ]
         session = SyncSession(
             id=session_id,
             timestamp=timestamp,
             source_hostname=socket.gethostname(),
             target_hostname=target,
-            enabled_modules=list(cfg.sync_modules.keys()),
+            enabled_modules=enabled_module_list,
             state=SessionState.INITIALIZING,
         )
 
@@ -337,18 +343,19 @@ def rollback(
 @app.command()
 def cleanup_snapshots(
     older_than: Annotated[
-        str,
+        str | None,
         typer.Option("--older-than", help="Delete snapshots older than this (e.g., '7d', '30d')"),
-    ] = "7d",
+    ] = None,
     keep_recent: Annotated[
-        int,
-        typer.Option("--keep-recent", help="Minimum number of recent snapshots to keep"),
-    ] = 3,
+        int | None,
+        typer.Option("--keep-recent", help="Minimum number of recent snapshots to keep. Uses config default."),
+    ] = None,
 ) -> None:
     """Clean up old btrfs snapshots.
 
     This command removes old snapshots while keeping a minimum number of
-    recent snapshots. Use with caution.
+    recent snapshots. Default values come from btrfs_snapshots config section.
+    Use with caution.
 
     Example:
         pc-switcher cleanup-snapshots
@@ -357,54 +364,76 @@ def cleanup_snapshots(
     import re
     from pathlib import Path
 
-    # Parse time expression (e.g., "7d", "2w", "30d")
-    match = re.match(r"(\d+)([dwh])", older_than)
-    if not match:
-        console.print(
-            f"[red]Invalid time format: {older_than}[/red]\n"
-            f"Use format like: 7d (7 days), 2w (2 weeks), 24h (24 hours)"
-        )
-        raise typer.Exit(1)
-
-    value, unit = int(match.group(1)), match.group(2)
-    if unit == "d":
-        max_age_days = value
-    elif unit == "w":
-        max_age_days = value * 7
-    elif unit == "h":
-        max_age_days = value / 24
-    else:
-        max_age_days = value
-
-    # Get default config to find snapshot directory
+    # Get default config for snapshot settings
     try:
         cfg = load_config(None)
     except (FileNotFoundError, ConfigError) as e:
         console.print(f"[red]Configuration error:[/red] {e}")
         raise typer.Exit(1) from e
 
+    # Get btrfs config section
+    btrfs_config = cfg.module_configs.get("btrfs_snapshots", {})
+    if not btrfs_config:
+        # Try top-level btrfs_snapshots section (not in sync_modules since it's infrastructure)
+        # Re-read raw config to get btrfs_snapshots section
+        import yaml
+
+        config_path = cfg.config_path
+        with config_path.open("r") as f:
+            raw_config = yaml.safe_load(f) or {}
+        btrfs_config = raw_config.get("btrfs_snapshots", {})
+
+    # Get default values from config
+    config_keep_recent = btrfs_config.get("keep_recent", 3)
+    config_max_age_days = btrfs_config.get("max_age_days", 7)
+
+    # Use CLI args or fall back to config defaults
+    actual_keep_recent = keep_recent if keep_recent is not None else config_keep_recent
+    if older_than is not None:
+        # Parse time expression (e.g., "7d", "2w", "30d")
+        match = re.match(r"(\d+)([dwh])", older_than)
+        if not match:
+            console.print(
+                f"[red]Invalid time format: {older_than}[/red]\n"
+                f"Use format like: 7d (7 days), 2w (2 weeks), 24h (24 hours)"
+            )
+            raise typer.Exit(1)
+
+        value, unit = int(match.group(1)), match.group(2)
+        if unit == "d":
+            max_age_days: float = value
+        elif unit == "w":
+            max_age_days = value * 7
+        elif unit == "h":
+            max_age_days = value / 24
+        else:
+            max_age_days = value
+    else:
+        max_age_days = config_max_age_days
+
     # Get snapshot directory from config
-    snapshot_dir = Path(
-        cfg.module_configs.get("btrfs_snapshots", {}).get("snapshot_dir", "/.snapshots")
-    )
+    snapshot_dir = Path(btrfs_config.get("snapshot_dir", "/.snapshots"))
 
     if not snapshot_dir.exists():
         console.print(f"[yellow]Snapshot directory does not exist: {snapshot_dir}[/yellow]")
         raise typer.Exit(0)
 
     # Find and delete old snapshots
-    console.print(f"\n[bold]Cleaning up snapshots older than {older_than}[/bold]\n")
+    console.print(f"\n[bold]Cleaning up snapshots older than {max_age_days} days[/bold]\n")
     console.print(f"Snapshot directory: {snapshot_dir}")
-    console.print(f"Keep recent: {keep_recent} syncs")
+    console.print(f"Keep recent: {actual_keep_recent} syncs")
     console.print(f"Delete older than: {max_age_days} days\n")
 
     from datetime import UTC, datetime, timedelta
 
     cutoff_date = datetime.now(UTC) - timedelta(days=max_age_days)
 
-    # Group snapshots by session
+    # Group snapshots by session (include both presync and postsync)
     snapshots_by_session: dict[str, list[Path]] = {}
-    all_snapshots = sorted(snapshot_dir.glob("*-presync-*-*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    # Collect both presync AND postsync snapshots
+    presync_snapshots = list(snapshot_dir.glob("*-presync-*-*"))
+    postsync_snapshots = list(snapshot_dir.glob("*-postsync-*-*"))
+    all_snapshots = sorted(presync_snapshots + postsync_snapshots, key=lambda p: p.stat().st_mtime, reverse=True)
 
     for snapshot_path in all_snapshots:
         # Extract session ID from name (last component after last dash)
@@ -420,7 +449,7 @@ def cleanup_snapshots(
     kept_count = 0
 
     for i, (session_id, snapshots) in enumerate(sorted(snapshots_by_session.items(), reverse=True)):
-        if i < keep_recent:
+        if i < actual_keep_recent:
             # Keep this session
             kept_count += len(snapshots)
             console.print(f"[green]Keeping[/green] {len(snapshots)} snapshots from session {session_id}")

@@ -28,8 +28,9 @@ from pcswitcher.core.config import Configuration, validate_module_config
 from pcswitcher.core.logging import LogLevel, get_logger
 from pcswitcher.core.module import RemoteExecutor, SyncError, SyncModule
 from pcswitcher.core.session import ModuleResult, SessionState, SyncSession
+from pcswitcher.core.snapshot import SnapshotCallbacks, SnapshotManager
 from pcswitcher.remote.installer import InstallationError, VersionManager
-from pcswitcher.utils.disk import DiskMonitor, format_bytes
+from pcswitcher.utils.disk import DiskMonitor, format_bytes, parse_disk_threshold
 
 if TYPE_CHECKING:
     from pcswitcher.cli.ui import TerminalUI
@@ -201,7 +202,7 @@ class ModuleLifecycleManager:
         self._logger = logger
         self._modules: list[SyncModule] = []
         self._current_module: SyncModule | None = None
-        self._btrfs_snapshots_module: SyncModule | None = None
+        self._snapshot_manager: SnapshotManager | None = None
 
     @property
     def modules(self) -> list[SyncModule]:
@@ -214,12 +215,47 @@ class ModuleLifecycleManager:
         return self._current_module
 
     @property
-    def btrfs_snapshots_module(self) -> SyncModule | None:
-        """Get btrfs_snapshots module if loaded."""
-        return self._btrfs_snapshots_module
+    def snapshot_manager(self) -> SnapshotManager | None:
+        """Get snapshot manager if loaded."""
+        return self._snapshot_manager
+
+    def load_snapshot_manager(self) -> None:
+        """Load and instantiate the snapshot manager (btrfs_snapshots).
+
+        This is orchestrator-level infrastructure, not a SyncModule.
+
+        Raises:
+            SyncError: If snapshot manager loading fails
+        """
+        try:
+            from pcswitcher.modules.btrfs_snapshots import BtrfsSnapshotsModule
+
+            # Get btrfs_snapshots config
+            snapshot_config = self._config.module_configs.get("btrfs_snapshots", {})
+
+            # Validate config against schema
+            temp_instance = BtrfsSnapshotsModule({}, self._remote)
+            schema = temp_instance.get_config_schema()
+            validate_module_config("btrfs_snapshots", snapshot_config, schema)
+
+            # Instantiate snapshot manager
+            self._snapshot_manager = BtrfsSnapshotsModule(snapshot_config, self._remote)
+
+            # Inject callbacks for logging
+            snapshot_logger = get_logger("snapshot_manager", session_id=self._session.id)
+            callbacks = SnapshotCallbacks(snapshot_logger, self._ui)
+            self._snapshot_manager.set_callbacks(callbacks)
+
+            self._logger.log(LogLevel.FULL, "Loaded snapshot manager")
+
+        except Exception as e:
+            raise SyncError(f"Failed to load snapshot manager: {e}") from e
 
     def load_modules(self) -> None:
         """Load and instantiate enabled sync modules.
+
+        Note: btrfs_snapshots is no longer a SyncModule. It's now orchestrator-level
+        infrastructure and is loaded separately via load_snapshot_manager().
 
         Raises:
             SyncError: If module loading or validation fails
@@ -227,6 +263,10 @@ class ModuleLifecycleManager:
         enabled_modules = [name for name, enabled in self._config.sync_modules.items() if enabled]
 
         for module_name in enabled_modules:
+            # Skip btrfs_snapshots - it's now orchestrator-level infrastructure
+            if module_name == "btrfs_snapshots":
+                continue
+
             try:
                 # Import module class
                 module_class = self._import_module_class(module_name)
@@ -247,10 +287,6 @@ class ModuleLifecycleManager:
 
                 self._modules.append(module)
                 self._logger.log(LogLevel.FULL, f"Loaded module: {module.name}")
-
-                # Store reference to btrfs_snapshots module
-                if module.name == "btrfs_snapshots":
-                    self._btrfs_snapshots_module = module
 
             except Exception as e:
                 raise SyncError(f"Failed to load module '{module_name}': {e}") from e
@@ -480,22 +516,46 @@ class Orchestrator:
             self._verify_btrfs_filesystem()
             self._ensure_version_sync()
             self._check_disk_space()
+            self._module_manager.load_snapshot_manager()
             self._module_manager.load_modules()
             self._start_disk_monitoring()
 
             # Phase 2: VALIDATING
-            # All modules validate prerequisites before any state changes occur.
+            # Validate snapshot infrastructure and all modules before any state changes.
             # This fail-fast approach prevents partial sync from corrupting state.
             self.session.set_state(SessionState.VALIDATING)
+            self.logger.info("Validating configuration")
+
+            # Validate snapshot subvolumes first
+            if self._module_manager.snapshot_manager is not None:
+                self.logger.info("Validating btrfs subvolumes")
+                snapshot_errors = self._module_manager.snapshot_manager.validate_subvolumes()
+                if snapshot_errors:
+                    for error in snapshot_errors:
+                        self.logger.critical(f"Snapshot validation error: {error}")
+                    raise SyncError(f"Subvolume validation failed: {snapshot_errors[0]}")
+
             self.logger.info("Validating modules")
             self._module_manager.validate_all_modules()
 
             # Phase 3: EXECUTING
-            # Execute each module's full lifecycle (pre_sync -> sync -> post_sync).
+            # Create pre-sync snapshots, execute modules, create post-sync snapshots.
             # If any module fails, abort is called and execution stops.
             self.session.set_state(SessionState.EXECUTING)
+
+            # Create pre-sync snapshots before any module runs
+            if self._module_manager.snapshot_manager is not None:
+                self.logger.info("Creating pre-sync snapshots")
+                self._module_manager.snapshot_manager.create_presync_snapshots(self.session.id)
+
+            # Execute all sync modules
             self.logger.info("Starting module execution")
             self._module_manager.execute_all_modules()
+
+            # Create post-sync snapshots after all modules complete successfully
+            if self._module_manager.snapshot_manager is not None:
+                self.logger.info("Creating post-sync snapshots")
+                self._module_manager.snapshot_manager.create_postsync_snapshots(self.session.id)
 
             # Phase 4: Determine final state based on execution results
             # COMPLETED = all modules succeeded without errors
@@ -615,7 +675,10 @@ class Orchestrator:
                         if len(parts) >= 2:
                             target_free_bytes = int(parts[0])
                             target_total_bytes = int(parts[1])
-                            required_target_bytes = target_total_bytes * float(min_free_threshold)
+                            # Parse threshold with units (e.g., "20%" or "50GiB")
+                            required_target_bytes = parse_disk_threshold(
+                                min_free_threshold, target_total_bytes
+                            )
 
                             if target_free_bytes < required_target_bytes:
                                 error_msg = (
@@ -685,12 +748,12 @@ class Orchestrator:
     def _offer_rollback(self) -> None:
         """Offer user the option to rollback to pre-sync state.
 
-        Only offered if btrfs_snapshots module is available and
+        Only offered if snapshot manager is available and
         sync failed with CRITICAL errors.
         """
-        btrfs_module = self._module_manager.btrfs_snapshots_module
-        if btrfs_module is None:
-            self.logger.warning("Cannot offer rollback: btrfs_snapshots module not available")
+        snapshot_mgr = self._module_manager.snapshot_manager
+        if snapshot_mgr is None:
+            self.logger.warning("Cannot offer rollback: snapshot manager not available")
             return
 
         self.logger.warning("Sync failed. Rollback to pre-sync snapshots is available.")
@@ -718,24 +781,19 @@ class Orchestrator:
         Raises:
             SyncError: If rollback fails
         """
-        btrfs_module = self._module_manager.btrfs_snapshots_module
-        if btrfs_module is None:
-            raise SyncError("Cannot rollback: btrfs_snapshots module not available")
+        snapshot_mgr = self._module_manager.snapshot_manager
+        if snapshot_mgr is None:
+            raise SyncError("Cannot rollback: snapshot manager not available")
 
         print("\nExecuting rollback...")
         self.logger.info("Starting rollback", session_id=self.session.id)
 
         try:
-            # Call rollback method on btrfs_snapshots module
-            from pcswitcher.modules.btrfs_snapshots import BtrfsSnapshotsModule
-
-            if isinstance(btrfs_module, BtrfsSnapshotsModule):
-                btrfs_module.rollback_to_presync(self.session.id)
-                print("\nRollback completed successfully!")
-                print("IMPORTANT: Reboot required for changes to take effect.")
-                self.logger.info("Rollback completed successfully")
-            else:
-                raise SyncError("Invalid btrfs_snapshots module type")
+            # Call rollback method on snapshot manager
+            snapshot_mgr.rollback_to_presync(self.session.id)
+            print("\nRollback completed successfully!")
+            print("IMPORTANT: Reboot required for changes to take effect.")
+            self.logger.info("Rollback completed successfully")
 
         except SyncError as e:
             print(f"\nRollback failed: {e}")

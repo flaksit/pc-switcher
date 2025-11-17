@@ -39,30 +39,16 @@ sync_modules:
     Control which modules run during sync.
     Modules execute in the order listed here.
 
-    IMPORTANT: btrfs_snapshots MUST be first and cannot be disabled.
+    NOTE: btrfs_snapshots is orchestrator-level infrastructure, NOT a SyncModule.
+    It is configured separately in the btrfs_snapshots section.
 
   properties:
-    btrfs_snapshots:
-      type: boolean
-      default: true
-      immutable: true  # Required module, cannot be disabled (FR-002)
-      description: |
-        Snapshot creation/rollback (REQUIRED - cannot disable).
-        MUST be first in this list.
-
     dummy_success:
       type: boolean
       default: false
       description: |
         Test module: demonstrates successful sync with progress reporting.
         Useful for testing infrastructure without real sync operations.
-
-    dummy_critical:
-      type: boolean
-      default: false
-      description: |
-        Test module: raises exception at 50% to test error handling.
-        Demonstrates orchestrator's exception catching and cleanup.
 
     dummy_fail:
       type: boolean
@@ -180,7 +166,6 @@ dummy_success:
 # sync_modules:
 #   btrfs_snapshots: true  # REQUIRED, must be first
 #   dummy_success: false
-#   dummy_critical: false
 #   dummy_fail: false
 #
 # disk:

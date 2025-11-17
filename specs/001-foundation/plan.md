@@ -279,7 +279,6 @@ pc-switcher/
 │       │   ├── __init__.py
 │       │   ├── btrfs_snapshots.py # Snapshot creation/rollback (required)
 │       │   ├── dummy_success.py   # Test module: success path
-│       │   ├── dummy_critical.py  # Test module: CRITICAL abort
 │       │   └── dummy_fail.py      # Test module: exception handling
 │       └── utils/
 │           ├── __init__.py

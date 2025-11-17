@@ -70,8 +70,8 @@ def load_config(path: Path | None = None) -> Configuration:
     # Apply defaults
     config_dict = apply_defaults(config_dict)
 
-    # Validate required modules
-    validate_required_modules(config_dict.get("sync_modules", {}), path)
+    # Note: validate_required_modules() disabled since btrfs_snapshots is now
+    # orchestrator-level infrastructure, not a SyncModule in sync_modules
 
     # Parse log levels
     log_file_level = _parse_log_level(config_dict.get("log_file_level", "FULL"))
@@ -131,33 +131,21 @@ def validate_config_structure(config_dict: dict[str, Any], config_path: Path) ->
 def validate_required_modules(sync_modules: dict[str, bool], config_path: Path) -> None:
     """Validate that required modules are present and enabled.
 
+    Note: btrfs_snapshots is now orchestrator-level infrastructure, not a SyncModule.
+    It should NOT be listed in sync_modules.
+
     Args:
         sync_modules: Dictionary of module names to enabled flags
         config_path: Path to config file (for error messages)
 
     Raises:
-        ConfigError: If required module is missing or disabled
+        ConfigError: If btrfs_snapshots is incorrectly listed as a SyncModule
     """
-    # Check btrfs_snapshots is present
-    if "btrfs_snapshots" not in sync_modules:
+    # btrfs_snapshots should NOT be in sync_modules (it's infrastructure, not a SyncModule)
+    if "btrfs_snapshots" in sync_modules:
         raise ConfigError(
-            f"Required module 'btrfs_snapshots' is missing from sync_modules in {config_path}. "
-            f"This module cannot be removed."
-        )
-
-    # Check btrfs_snapshots is enabled
-    if not sync_modules["btrfs_snapshots"]:
-        raise ConfigError(
-            f"Required module 'btrfs_snapshots' cannot be disabled in {config_path}. "
-            f"This module is mandatory for data safety."
-        )
-
-    # Check btrfs_snapshots is first
-    module_names = list(sync_modules.keys())
-    if module_names[0] != "btrfs_snapshots":
-        raise ConfigError(
-            f"Required module 'btrfs_snapshots' must be first in sync_modules in {config_path}. "
-            f"Found '{module_names[0]}' as first module."
+            f"'btrfs_snapshots' should not be listed in sync_modules in {config_path}. "
+            f"It is orchestrator-level infrastructure configured separately in the btrfs_snapshots section."
         )
 
 
@@ -232,10 +220,9 @@ disk:
 
 # Enabled sync modules (in execution order)
 sync_modules:
-  btrfs_snapshots: true   # Required: Cannot be disabled or moved from first position
   # dummy_success: false  # Example: Uncomment to enable test module
-  # dummy_critical: false
   # dummy_fail: false
+  # NOTE: btrfs_snapshots is orchestrator-level infrastructure, not a SyncModule
 
 # Module-specific configurations
 
