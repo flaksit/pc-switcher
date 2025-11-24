@@ -422,7 +422,7 @@ Key points:
 
 The orchestrator measures startup performance (T125):
 
-```
+```plain
 CLI invocation -> Config load -> Session create -> Orchestrator init -> run()
                    ~10ms           ~5ms              ~1ms              logged
 ```
