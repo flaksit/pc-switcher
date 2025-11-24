@@ -124,7 +124,7 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 
 **Support Horizon**: All libraries support Python 3.13; migration path to 3.14 clear once Paramiko adds support
 
-### Solid-State Stewardship ✅
+### Minimize SSD Wear ✅
 
 **Write Amplification Mitigation**:
 - Btrfs snapshots use COW → zero initial write amplification (SC-008)
@@ -176,7 +176,7 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - Module cleanup methods ensure graceful degradation
 - No persistent state outside of config and logs
 
-### Documentation As Runtime Contract ✅
+### Up-to-date Documentation ✅
 
 **Artifacts to Update** (in this plan):
 - `specs/001-foundation/plan.md` (this file) - owner: plan generation
@@ -210,13 +210,13 @@ After completing Phase 0 (research) and Phase 1 (design):
 
 3. **Proven Tooling Only** ✅: All NEEDS CLARIFICATION items resolved with proven libraries (rich, typer)
 
-4. **Solid-State Stewardship** ✅: Design minimizes writes (single SSH connection, COW snapshots, buffered logging)
+4. **Minimize SSD Wear** ✅: Design minimizes writes (single SSH connection, COW snapshots, buffered logging)
 
 5. **Throughput-Focused Syncing** ✅: Foundation overhead remains <60 seconds (version check, snapshot creation, orchestration)
 
 6. **Deliberate Simplicity** ✅: Design maintains simplicity (no additional components, clear module contract, sequential execution)
 
-7. **Documentation As Runtime Contract** ✅: All design artifacts generated (research, data-model, contracts, quickstart)
+7. **Up-to-date Documentation** ✅: All design artifacts generated (research, data-model, contracts, quickstart)
 
 **Design Validation**:
 - Module interface contract is concrete and implementable (see `contracts/module-interface.py`)

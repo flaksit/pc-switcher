@@ -10,7 +10,7 @@ I'm reviewing the generated deliverables. Incorporate the following feedback:
   - / should be a btrfs filesystem
   - configured subvolumes should exist in the top-level: visible as output of "btrfs subvolume list /"
 - The default yaml config file (generated upon install), should contain clear documentation of each option.
-- "Single persistent SSH connection prevents repeated handshake overhead (ADR-002)" has nothing to do with "Solid-State Stewardship". "Solid-State Stewardship" is about avoiding wear on SSD disk drives.
+- "Single persistent SSH connection prevents repeated handshake overhead (ADR-002)" has nothing to do with "Minimize SSD Wear". "Minimize SSD Wear" is about avoiding wear on SSD disk drives.
 - "SSH as only network protocol (ADR-002)": should be "SSH as only network protocol for orchestration (ADR-002)". To avoid confusion about the other sync modules, which might use entirely other protocols (e.g. Syncthing)
 - In the Project Structure - Source Code, I see only an entry installer.py for "Target installation/upgrade logic". I miss the installer itself (should be used on the source system as well).
 - Actually, in uv language, we should not be talking about the pc-switcher "package", but the pc-switcher "tool". Run like "uv tool run pc-switcher sync my_target_machine" or when the tool is installed just "pc-switcher sync my_target_machine". Is what I say clear and correct? If so, update all relevant references to "package". If not, tell me. In that light, validate if "--lib" is the correct flag for "uv init".

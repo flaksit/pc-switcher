@@ -31,7 +31,7 @@ This delivers immediate value by establishing the development pattern for all 6 
 **Constitution Alignment**:
 - Deliberate Simplicity (clear interface reduces complexity)
 - Reliability Without Compromise (standardized contract ensures consistent behavior)
-- Documentation As Runtime Contract (interface serves as implementation specification)
+- Up-to-date Documentation (interface serves as implementation specification)
 
 **Acceptance Scenarios**:
 
@@ -104,7 +104,7 @@ This delivers value by providing the foundation for all rollback and recovery op
 
 **Constitution Alignment**:
 - Reliability Without Compromise (transactional safety via snapshots)
-- Solid-State Stewardship (btrfs snapshots use copy-on-write, minimizing write amplification)
+- Minimize SSD Wear (btrfs snapshots use copy-on-write, minimizing write amplification)
 
 **Acceptance Scenarios**:
 
@@ -145,7 +145,7 @@ This delivers value by enabling developers to diagnose issues and providing audi
 
 **Constitution Alignment**:
 - Reliability Without Compromise (detailed audit trail)
-- Documentation As Runtime Contract (logs document actual system behavior)
+- Up-to-date Documentation (logs document actual system behavior)
 
 **Acceptance Scenarios**:
 
@@ -389,7 +389,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-009** `[Reliability Without Compromise]`: System MUST create post-sync snapshots after all modules complete successfully
 
-- **FR-010** `[Solid-State Stewardship]`: Snapshot naming MUST follow pattern `<subvolume>-{presync|postsync}-<ISO8601-timestamp>-<session-id>` for clear identification and cleanup (e.g., if subvolume is "@", snapshot is "@-presync-20251116T143022-abc12345", not "@@-presync-...")
+- **FR-010** `[Minimize SSD Wear]`: Snapshot naming MUST follow pattern `<subvolume>-{presync|postsync}-<ISO8601-timestamp>-<session-id>` for clear identification and cleanup (e.g., if subvolume is "@", snapshot is "@-presync-20251116T143022-abc12345", not "@@-presync-...")
 
 - **FR-011** `[Reliability Without Compromise]`: Snapshot management MUST be implemented as orchestrator-level infrastructure (not a SyncModule) that is always active; there is no configuration option to disable snapshot creation
 
@@ -397,7 +397,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-013** `[Reliability Without Compromise]`: System MUST provide rollback capability to restore from pre-sync snapshots (requires user confirmation)
 
-- **FR-014** `[Solid-State Stewardship]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs; default retention policy (keep_recent count and max_age_days) MUST be configurable in the btrfs_snapshots module section of config.yaml
+- **FR-014** `[Minimize SSD Wear]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs; default retention policy (keep_recent count and max_age_days) MUST be configurable in the btrfs_snapshots module section of config.yaml
 
 - **FR-015** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort
 
@@ -407,15 +407,15 @@ The terminal displays real-time sync progress including current module, operatio
 
 #### Logging System
 
-- **FR-018** `[Documentation As Runtime Contract]`: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL, where DEBUG is the most verbose. DEBUG includes all messages (FULL, INFO, WARNING, ERROR, CRITICAL, plus internal diagnostics). FULL includes all messages from INFO and below plus operational details, but excludes DEBUG-level internal diagnostics.
+- **FR-018** `[Up-to-date Documentation]`: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL, where DEBUG is the most verbose. DEBUG includes all messages (FULL, INFO, WARNING, ERROR, CRITICAL, plus internal diagnostics). FULL includes all messages from INFO and below plus operational details, but excludes DEBUG-level internal diagnostics.
 
 - **FR-019** `[Reliability Without Compromise]`: When a module raises SyncError exception, the orchestrator MUST log the error at CRITICAL level, call abort(timeout) on the currently-executing module only (queued modules never execute and do not receive abort calls), and halt sync immediately
 
 - **FR-020** `[Frictionless Command UX]`: System MUST support independent log level configuration for file output (`log_file_level`) and terminal display (`log_cli_level`)
 
-- **FR-021** `[Documentation As Runtime Contract]`: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
+- **FR-021** `[Up-to-date Documentation]`: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
 
-- **FR-022** `[Documentation As Runtime Contract]`: Log entries MUST use structlog's JSONRenderer for file output (one JSON object per line with keys: timestamp in ISO8601 format, level, module, hostname, event, plus any additional context fields) and ConsoleRenderer for terminal output (human-readable format with ISO8601 timestamp, level, module@hostname, and message)
+- **FR-022** `[Up-to-date Documentation]`: Log entries MUST use structlog's JSONRenderer for file output (one JSON object per line with keys: timestamp in ISO8601 format, level, module, hostname, event, plus any additional context fields) and ConsoleRenderer for terminal output (human-readable format with ISO8601 timestamp, level, module@hostname, and message)
 
 - **FR-023** `[Reliability Without Compromise]`: System MUST aggregate logs from both source-side orchestrator and target-side operations into unified log stream
 
@@ -451,7 +451,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-036** `[Frictionless Command UX]`: Setup script MUST detect whether the host filesystem is btrfs and abort with a clear error if it is not
 
-- **FR-037** `[Documentation As Runtime Contract]`: Setup script MUST create default config file with inline comments explaining each setting
+- **FR-037** `[Up-to-date Documentation]`: Setup script MUST create default config file with inline comments explaining each setting
 
 #### Testing Infrastructure
 
@@ -471,7 +471,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-044** `[Frictionless Command UX]`: Orchestrator MUST forward progress updates to terminal UI system for display
 
-- **FR-045** `[Documentation As Runtime Contract]`: Progress updates MUST be written to log file at FULL log level
+- **FR-045** `[Up-to-date Documentation]`: Progress updates MUST be written to log file at FULL log level
 
 #### Core Orchestration
 
@@ -479,7 +479,7 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **FR-047** `[Reliability Without Compromise]`: System MUST implement locking mechanism to prevent concurrent sync executions
 
-- **FR-048** `[Documentation As Runtime Contract]`: System MUST log overall sync result (success/failure) and summary of module outcomes; summary MUST list each module with its result (SUCCESS/SKIPPED/FAILED), total duration, error count, and names of any modules that failed
+- **FR-048** `[Up-to-date Documentation]`: System MUST log overall sync result (success/failure) and summary of module outcomes; summary MUST list each module with its result (SUCCESS/SKIPPED/FAILED), total duration, error count, and names of any modules that failed
 
 ### Key Entities
 
@@ -504,13 +504,13 @@ The terminal displays real-time sync progress including current module, operatio
 
 - **SC-004** `[Frictionless Command UX]`: System completes version check and installation/upgrade on target within 30 seconds
 
-- **SC-005** `[Documentation As Runtime Contract]`: Log files contain complete audit trail of all operations with timestamps, levels, and module attribution in 100% of sync runs
+- **SC-005** `[Up-to-date Documentation]`: Log files contain complete audit trail of all operations with timestamps, levels, and module attribution in 100% of sync runs
 
 - **SC-006** `[Reliability Without Compromise]`: User interrupt (Ctrl+C) results in graceful shutdown with no orphaned processes in 100% of tests
 
 - **SC-007** `[Deliberate Simplicity]`: New feature module implementation requires only implementing module interface (< 200 lines of code for basic module) with no changes to core orchestrator
 
-- **SC-008** `[Solid-State Stewardship]`: Btrfs snapshots use copy-on-write with zero initial write amplification (verified via btrfs filesystem usage commands)
+- **SC-008** `[Minimize SSD Wear]`: Btrfs snapshots use copy-on-write with zero initial write amplification (verified via btrfs filesystem usage commands)
 
 - **SC-009** `[Frictionless Command UX]`: Installation script completes setup on fresh Ubuntu 24.04 machine in under 2 minutes with network connection
 

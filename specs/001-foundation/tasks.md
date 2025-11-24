@@ -35,7 +35,7 @@ Repository structure (single Python package):
 - [ ] T005 [P] Add dev dependencies: pytest, basedpyright, ruff, codespell to pyproject.toml (Proven Tooling Only)
 - [ ] T006 [P] Configure ruff in pyproject.toml with line-length=119, target-version=py313 (Deliberate Simplicity)
 - [ ] T007 [P] Configure basedpyright in pyproject.toml with typeCheckingMode=standard, pythonVersion=3.13 (Deliberate Simplicity)
-- [ ] T008 Create README.md with project overview, installation instructions, and quick start (Documentation As Runtime Contract)
+- [ ] T008 Create README.md with project overview, installation instructions, and quick start (Up-to-date Documentation)
 
 ---
 
@@ -47,7 +47,7 @@ Repository structure (single Python package):
 
 - [ ] T009 Create `src/pcswitcher/__init__.py` with package version exposure (Deliberate Simplicity)
 - [ ] T010 Create `src/pcswitcher/__main__.py` for python -m pcswitcher entry point (Frictionless Command UX)
-- [ ] T011 Define LogLevel enum (DEBUG=10, FULL=15, INFO=20, WARNING=30, ERROR=40, CRITICAL=50) in `src/pcswitcher/core/logging.py` (Documentation As Runtime Contract)
+- [ ] T011 Define LogLevel enum (DEBUG=10, FULL=15, INFO=20, WARNING=30, ERROR=40, CRITICAL=50) in `src/pcswitcher/core/logging.py` (Up-to-date Documentation)
 - [ ] T012 Define SyncError exception in `src/pcswitcher/core/module.py` (Reliability Without Compromise)
 - [ ] T013 Define RemoteExecutor interface class with run(), send_file_to_target(), get_hostname() methods in `src/pcswitcher/core/module.py` (Deliberate Simplicity)
 - [ ] T014 Create SessionState enum (INITIALIZING, VALIDATING, EXECUTING, CLEANUP, COMPLETED, ABORTED, FAILED) in `src/pcswitcher/core/session.py` (Reliability Without Compromise)
@@ -65,13 +65,13 @@ Repository structure (single Python package):
 
 ### Implementation for User Story 4
 
-- [ ] T016 [US4] Add custom FULL log level (15) to Python logging module using logging.addLevelName(15, 'FULL') in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
-- [ ] T017 [US4] Configure structlog with dual output: file (JSONRenderer with keys: timestamp, level, module, hostname, event, context) and terminal (ConsoleRenderer with human-readable format) in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
+- [ ] T016 [US4] Add custom FULL log level (15) to Python logging module using logging.addLevelName(15, 'FULL') in src/pcswitcher/core/logging.py (Up-to-date Documentation)
+- [ ] T017 [US4] Configure structlog with dual output: file (JSONRenderer with keys: timestamp, level, module, hostname, event, context) and terminal (ConsoleRenderer with human-readable format) in src/pcswitcher/core/logging.py (Up-to-date Documentation)
 - [ ] T018 [US4] Create custom structlog processor track_error_logs() that sets session.has_errors=True when level >= ERROR in src/pcswitcher/core/logging.py (Reliability Without Compromise)
-- [ ] T019 [US4] Implement get_logger(name) factory that binds context (module name, session ID, hostname) in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
-- [ ] T020 [US4] Create configure_logging(log_file_level, log_cli_level, log_file_path, session) function that sets up structlog with processors and handlers in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
-- [ ] T021 [US4] Add BoundLogger.full() custom method for FULL level logging in src/pcswitcher/core/logging.py (Documentation As Runtime Contract)
-- [ ] T022 [US4] Implement log file creation in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log` with directory creation in src/pcswitcher/core/logging.py (Solid-State Stewardship)
+- [ ] T019 [US4] Implement get_logger(name) factory that binds context (module name, session ID, hostname) in src/pcswitcher/core/logging.py (Up-to-date Documentation)
+- [ ] T020 [US4] Create configure_logging(log_file_level, log_cli_level, log_file_path, session) function that sets up structlog with processors and handlers in src/pcswitcher/core/logging.py (Up-to-date Documentation)
+- [ ] T021 [US4] Add BoundLogger.full() custom method for FULL level logging in src/pcswitcher/core/logging.py (Up-to-date Documentation)
+- [ ] T022 [US4] Implement log file creation in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log` with directory creation in src/pcswitcher/core/logging.py (Minimize SSD Wear)
 
 **Checkpoint**: At this point, logging system should be fully functional with all six levels, dual output, and ERROR tracking
 
@@ -114,7 +114,7 @@ Repository structure (single Python package):
 - [ ] T031 [P] [US1] Create SyncModule ABC with abstract methods validate(), pre_sync(), sync(), post_sync(), abort(timeout), get_config_schema() in src/pcswitcher/core/module.py (Deliberate Simplicity)
 - [ ] T032 [P] [US1] Add abstract properties name: str and required: bool to SyncModule in src/pcswitcher/core/module.py (Deliberate Simplicity)
 - [ ] T033 [US1] Add `__init__(config, remote)` to SyncModule that stores config and remote executor in src/pcswitcher/core/module.py (Deliberate Simplicity)
-- [ ] T034 [US1] Add emit_progress(percentage, item, eta) and log(level, message, **context) method signatures to SyncModule for orchestrator injection in src/pcswitcher/core/module.py (Documentation As Runtime Contract)
+- [ ] T034 [US1] Add emit_progress(percentage, item, eta) and log(level, message, **context) method signatures to SyncModule for orchestrator injection in src/pcswitcher/core/module.py (Up-to-date Documentation)
 - [ ] T035 [US1] Create RemoteExecutor implementation class that wraps TargetConnection in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
 - [ ] T036 [US1] Implement RemoteExecutor.run(command, sudo, timeout) that delegates to TargetConnection in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
 - [ ] T037 [US1] Implement RemoteExecutor.send_file_to_target(local, remote) that delegates to TargetConnection in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
@@ -140,7 +140,7 @@ Repository structure (single Python package):
 - [ ] T042 [P] [US8] Implement DummySuccessModule.abort(timeout) that logs and stops execution in src/pcswitcher/modules/dummy_success.py (Reliability Without Compromise)
 - [ ] T043 *(Removed)*
 - [ ] T044 [P] [US8] Create DummyFailModule in src/pcswitcher/modules/dummy_fail.py that raises unhandled exception at 60% progress (Reliability Without Compromise)
-- [ ] T045 [P] [US8] Implement get_config_schema() for all dummy modules with duration_seconds parameter in respective module files (Documentation As Runtime Contract)
+- [ ] T045 [P] [US8] Implement get_config_schema() for all dummy modules with duration_seconds parameter in respective module files (Up-to-date Documentation)
 
 **Checkpoint**: At this point, both dummy modules should be fully functional for infrastructure testing
 
@@ -203,14 +203,14 @@ Repository structure (single Python package):
 ### Implementation for User Story 3
 
 - [ ] T061 [US3] Create BtrfsSnapshotsModule extending SyncModule in src/pcswitcher/modules/btrfs_snapshots.py with name="btrfs-snapshots", required=True (Reliability Without Compromise)
-- [ ] T062 [US3] Implement get_config_schema() for btrfs_snapshots with subvolumes (array), snapshot_dir, keep_recent, max_age_days in src/pcswitcher/modules/btrfs_snapshots.py (Documentation As Runtime Contract)
+- [ ] T062 [US3] Implement get_config_schema() for btrfs_snapshots with subvolumes (array), snapshot_dir, keep_recent, max_age_days in src/pcswitcher/modules/btrfs_snapshots.py (Up-to-date Documentation)
 - [ ] T063 [US3] Implement validate() that checks btrfs filesystem exists (stat -f -c %T / == btrfs) on both source and target in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
 - [ ] T064 [US3] Implement validate() check that all configured subvolumes exist in top-level (btrfs subvolume list /) on both source and target in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
-- [ ] T065 [US3] Implement pre_sync() that creates read-only snapshots with naming {snapshot_dir}/@{subvol}-presync-{timestamp}-{session_id} using btrfs subvolume snapshot -r in src/pcswitcher/modules/btrfs_snapshots.py (Solid-State Stewardship)
-- [ ] T066 [US3] Implement post_sync() that creates post-sync snapshots with naming {snapshot_dir}/@{subvol}-postsync-{timestamp}-{session_id} in src/pcswitcher/modules/btrfs_snapshots.py (Solid-State Stewardship)
+- [ ] T065 [US3] Implement pre_sync() that creates read-only snapshots with naming {snapshot_dir}/@{subvol}-presync-{timestamp}-{session_id} using btrfs subvolume snapshot -r in src/pcswitcher/modules/btrfs_snapshots.py (Minimize SSD Wear)
+- [ ] T066 [US3] Implement post_sync() that creates post-sync snapshots with naming {snapshot_dir}/@{subvol}-postsync-{timestamp}-{session_id} in src/pcswitcher/modules/btrfs_snapshots.py (Minimize SSD Wear)
 - [ ] T067 [US3] Add snapshot creation error handling: log CRITICAL and raise SyncError if snapshot fails in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
 - [ ] T068 [US3] Implement rollback_to_presync(session_id) that restores from pre-sync snapshots in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
-- [ ] T069 [US3] Implement cleanup_old_snapshots(older_than_days, keep_recent) using btrfs subvolume delete in src/pcswitcher/modules/btrfs_snapshots.py (Solid-State Stewardship)
+- [ ] T069 [US3] Implement cleanup_old_snapshots(older_than_days, keep_recent) using btrfs subvolume delete in src/pcswitcher/modules/btrfs_snapshots.py (Minimize SSD Wear)
 - [ ] T070 [US3] Create DiskMonitor utility class with check_free_space(path, min_free) that accepts float (0.0-1.0) or percentage string (e.g., "20%"), default 0.20, in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
 - [ ] T071 [US3] Implement DiskMonitor.monitor_continuously(interval, reserve_minimum, callback) with interval default 30s, reserve_minimum default 0.15 or "15%", for periodic checks during sync in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
 - [ ] T072 [US3] Add orchestration pre-flight disk check that runs before any modules execute, aborting if disk.min_free falls below threshold in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
@@ -264,7 +264,7 @@ Repository structure (single Python package):
 - [ ] T090 [ORCH] Implement rollback offer workflow after CRITICAL failure if pre-sync snapshots exist in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T091 [ORCH] Add user confirmation prompt for rollback: "Would you like to restore snapshots? [y/N]" in src/pcswitcher/core/orchestrator.py (Frictionless Command UX)
 - [ ] T092 [ORCH] Implement execute_rollback() that calls BtrfsSnapshotsModule.rollback_to_presync() on user confirmation in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
-- [ ] T093 [ORCH] Implement log_session_summary() that reports final state (COMPLETED/ABORTED/FAILED), per-module results (SUCCESS/SKIPPED/FAILED), total duration, error count, and lists any modules that failed in src/pcswitcher/core/orchestrator.py (Documentation As Runtime Contract)
+- [ ] T093 [ORCH] Implement log_session_summary() that reports final state (COMPLETED/ABORTED/FAILED), per-module results (SUCCESS/SKIPPED/FAILED), total duration, error count, and lists any modules that failed in src/pcswitcher/core/orchestrator.py (Up-to-date Documentation)
 - [ ] T094 [ORCH] Implement run() method that orchestrates: INITIALIZING → VALIDATING → EXECUTING → CLEANUP → terminal state in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T095 [ORCH] Add btrfs filesystem verification during INITIALIZING: check / is btrfs (this is a fast sanity check before module validation; detailed subvolume checks are done by BtrfsSnapshotsModule.validate()) in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T096 [ORCH] Implement progress forwarding: receive from module, log at FULL, forward to terminal UI in src/pcswitcher/core/orchestrator.py (Frictionless Command UX)
@@ -308,7 +308,7 @@ Repository structure (single Python package):
 - [ ] T104 [P] [CLI] Create Typer app instance in src/pcswitcher/cli/main.py (Proven Tooling Only)
 - [ ] T105 [P] [CLI] Implement sync(target: str, config: Path | None = None) command that loads config, creates orchestrator, runs sync in src/pcswitcher/cli/main.py (Frictionless Command UX)
 - [ ] T106 [P] [CLI] Implement logs(last: bool = False, session_id: str | None = None) command that displays log file in src/pcswitcher/cli/main.py (Frictionless Command UX)
-- [ ] T107 [P] [CLI] Implement cleanup_snapshots(older_than: str = "7d", keep_recent: int = 3) command in src/pcswitcher/cli/main.py (Solid-State Stewardship)
+- [ ] T107 [P] [CLI] Implement cleanup_snapshots(older_than: str = "7d", keep_recent: int = 3) command in src/pcswitcher/cli/main.py (Minimize SSD Wear)
 - [ ] T108 [CLI] Add error handling and exit codes: 0 for success, 1 for failure, 130 for interrupt in src/pcswitcher/cli/main.py (Reliability Without Compromise)
 - [ ] T109 [CLI] Add --version flag that displays pc-switcher version in src/pcswitcher/cli/main.py (Frictionless Command UX)
 - [ ] T110 [CLI] Configure typer rich integration for formatted help output in src/pcswitcher/cli/main.py (Frictionless Command UX)
@@ -333,7 +333,7 @@ Repository structure (single Python package):
 - [ ] T112 [US7] Add check for uv installation in scripts/setup.sh, install latest if missing (Proven Tooling Only)
 - [ ] T112a [US7] Add check for btrfs-progs installation using dpkg -l btrfs-progs in scripts/setup.sh, install via apt-get if missing (Proven Tooling Only)
 - [ ] T113 [US7] Implement pc-switcher package installation from GitHub repository using uv tool install git+<repo>@<tag> in scripts/setup.sh (Frictionless Command UX)
-- [ ] T114 [US7] Create ~/.config/pc-switcher/ directory and generate default config.yaml with inline comments in scripts/setup.sh (Documentation As Runtime Contract)
+- [ ] T114 [US7] Create ~/.config/pc-switcher/ directory and generate default config.yaml with inline comments in scripts/setup.sh (Up-to-date Documentation)
 - [ ] T115 [US7] Add success message "pc-switcher installed successfully" at end of setup in scripts/setup.sh (Frictionless Command UX)
 
 **Checkpoint**: At this point, installation script should handle end-to-end setup on new machines
@@ -363,15 +363,15 @@ Repository structure (single Python package):
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T120 [P] Update README.md with complete installation instructions, configuration guide, usage examples, troubleshooting section (Documentation As Runtime Contract)
-- [ ] T121 [P] Add inline code comments for complex logic in orchestrator, btrfs module, remote connection (Documentation As Runtime Contract)
-- [ ] T122 [P] Create CONTRIBUTING.md with development setup, testing guide, PR workflow (Documentation As Runtime Contract)
+- [ ] T120 [P] Update README.md with complete installation instructions, configuration guide, usage examples, troubleshooting section (Up-to-date Documentation)
+- [ ] T121 [P] Add inline code comments for complex logic in orchestrator, btrfs module, remote connection (Up-to-date Documentation)
+- [ ] T122 [P] Create CONTRIBUTING.md with development setup, testing guide, PR workflow (Up-to-date Documentation)
 - [ ] T123 [P] Add example config files in examples/ directory: minimal.yaml, full-featured.yaml (Frictionless Command UX)
 - [ ] T124 Review all error messages for clarity and actionability, ensure they guide user to resolution (Frictionless Command UX)
 - [ ] T125 Add startup performance measurement: log timing from CLI invocation to sync start (Throughput-Focused Syncing)
-- [ ] T126 Verify all file operations use minimal writes: structured logging buffer, snapshot COW verification (Solid-State Stewardship)
+- [ ] T126 Verify all file operations use minimal writes: structured logging buffer, snapshot COW verification (Minimize SSD Wear)
 - [ ] T127 Run complete sync flow validation per quickstart.md test scenarios (Reliability Without Compromise)
-- [ ] T128 Create ARCHITECTURE.md documenting module interface, orchestrator workflow, state transitions with diagrams (Documentation As Runtime Contract)
+- [ ] T128 Create ARCHITECTURE.md documenting module interface, orchestrator workflow, state transitions with diagrams (Up-to-date Documentation)
 
 ---
 
