@@ -76,6 +76,3 @@ logs/
 tmp/
 temp/
 *.tmp
-
-# Tools
-.tool-versions (except we keep this)
