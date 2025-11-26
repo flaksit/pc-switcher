@@ -1,18 +1,20 @@
 """
 Module Interface Contract
 
-This file defines the standardized interface that all sync modules must implement.
+This file defines the standardized interface that all modules must implement.
 It serves as both documentation and a reference implementation for module developers.
 
 See User Story 1 in spec.md for complete requirements.
 
-Key Changes from Original Design:
+Key Design Decisions:
+- Simple lifecycle: validate() → execute() → abort() (removed unnecessary pre_sync/sync/post_sync complexity)
 - Modules execute sequentially in config order (no dependencies field)
 - Modules raise exceptions for critical failures (not log CRITICAL)
 - RemoteExecutor injected for target communication
 - Logging and progress methods injected by orchestrator
-- cleanup() renamed to abort(timeout) for clarity
 - ProgressUpdate uses optional float 0.0-1.0
+- BtrfsSnapshotModule is instantiated twice by orchestrator (phase="pre" and phase="post")
+  to bracket all sync operations, but inherits same Module infrastructure
 """
 
 from __future__ import annotations
@@ -95,15 +97,16 @@ class RemoteExecutor:
         raise NotImplementedError("Orchestrator provides implementation")
 
 
-class SyncModule(ABC):
+class Module(ABC):
     """
-    Abstract base class for all sync modules.
+    Abstract base class for all pc-switcher modules.
 
-    All sync features (user data, packages, Docker, VMs, k3s) implement this interface.
-    The orchestrator manages module lifecycle: validate → pre_sync → sync → post_sync → abort.
+    All operations (sync features, snapshot infrastructure) implement this interface.
+    The orchestrator manages module lifecycle: validate → execute → abort.
 
-    Modules execute sequentially in the order defined in config.yaml sync_modules section.
-    The btrfs_snapshots module must be first and cannot be disabled.
+    User-configurable sync modules (SyncModule) execute sequentially in config.yaml order.
+    Orchestrator-managed infrastructure modules (like BtrfsSnapshotModule) are hardcoded
+    and execute at specific points in the workflow (before/after all sync modules).
 
     Requirements: FR-001, FR-002, FR-002, FR-002
     User Story: 1 (Module Architecture and Integration Contract)
@@ -190,43 +193,23 @@ class SyncModule(ABC):
         """
 
     @abstractmethod
-    def pre_sync(self) -> None:
+    def execute(self) -> None:
         """
-        Pre-sync operations executed before main sync.
+        Execute the module's operation.
 
         Called during EXECUTING phase, after all validations pass.
-        Examples: create snapshots, prepare temporary directories, lock resources.
+        This is where the module does its work.
 
-        Raises:
-            SyncError: On unrecoverable errors (orchestrator logs as CRITICAL and aborts)
+        Modules structure their work internally as needed (preparation, main work,
+        verification, etc.). For user visibility, use logging and progress reporting.
 
-        Requirement: FR-002
-        """
+        Should call emit_progress() to report progress (0.0-1.0 representing all work).
+        Should call log() to log operations at appropriate levels.
 
-    @abstractmethod
-    def sync(self) -> None:
-        """
-        Main sync operation: transfer data, install packages, etc.
-
-        Called after pre_sync() completes.
-        This is where the actual work happens.
-
-        Should call emit_progress() to report progress.
-        Should call log() to log operations.
-
-        Raises:
-            SyncError: On unrecoverable errors (orchestrator logs as CRITICAL and aborts)
-
-        Requirement: FR-002
-        """
-
-    @abstractmethod
-    def post_sync(self) -> None:
-        """
-        Post-sync operations: cleanup, verification, post-snapshots.
-
-        Called after sync() completes successfully.
-        Examples: create post-sync snapshots, verify checksums, update metadata.
+        Examples:
+        - BtrfsSnapshotModule(phase="pre"): Create pre-sync snapshots
+        - PackagesModule: Sync packages from source to target
+        - BtrfsSnapshotModule(phase="post"): Create post-sync snapshots
 
         Raises:
             SyncError: On unrecoverable errors (orchestrator logs as CRITICAL and aborts)
@@ -288,8 +271,8 @@ class SyncModule(ABC):
             item: Description of current operation (e.g., "Copying file.txt")
             eta: Estimated time to completion (optional)
 
-        Important: percentage represents ALL module work (validate + pre + sync + post),
-        not just the current subtask.
+        Important: percentage represents ALL module work (validation + execution),
+        not just the current subtask or operation.
 
         Requirements: FR-002, FR-002, FR-002, User Story 9
         """
@@ -316,6 +299,22 @@ class SyncModule(ABC):
         Requirements: FR-002 through FR-002, User Story 4
         """
         raise NotImplementedError("Orchestrator injects this method")
+
+
+class SyncModule(Module):
+    """
+    Subclass for user-configurable sync modules.
+
+    This is a marker/documentation class showing that sync modules (packages, docker, VMs, etc.)
+    are configured by users in config.yaml sync_modules section.
+
+    Infrastructure modules (like BtrfsSnapshotModule) inherit directly from Module and are
+    managed by the orchestrator, not user-configurable.
+
+    This subclass currently adds no additional methods/behavior, but provides conceptual clarity
+    and future extensibility for sync-specific functionality if needed.
+    """
+    pass
 
 
 # Example: Minimal module implementation demonstrating the contract
@@ -347,7 +346,7 @@ class DummySuccessModule(SyncModule):
         return {
             "type": "object",
             "properties": {
-                "duration_seconds": {"type": "integer", "minimum": 1, "default": 20},
+                "duration_seconds": {"type": "integer", "minimum": 1, "default": 40},
             },
         }
 
@@ -356,43 +355,38 @@ class DummySuccessModule(SyncModule):
         self.log(LogLevel.INFO, "Validation passed")
         return []
 
-    def pre_sync(self) -> None:
-        """Simulate pre-sync operation"""
-        self.log(LogLevel.INFO, "Starting pre-sync")
-        # No actual work in dummy module
-        self.log(LogLevel.INFO, "Pre-sync complete")
-
-    def sync(self) -> None:
-        """Simulate long-running sync with progress reporting"""
+    def execute(self) -> None:
+        """Simulate long-running operation with progress reporting"""
         import time
 
-        duration = self.config.get("duration_seconds", 20)
-        self.log(LogLevel.INFO, "Starting sync", duration=duration)
+        duration = self.config.get("duration_seconds", 40)
+        self.log(LogLevel.INFO, "Starting execution", duration=duration)
 
-        for i in range(duration):
-            # Report progress as fraction of TOTAL work (0.0 to 1.0)
+        # Simulate source-side operation (first 20s)
+        self.log(LogLevel.INFO, "Processing on source machine")
+        for i in range(20):
             progress = (i + 1) / duration
-            self.emit_progress(progress, f"Processing step {i + 1}/{duration}")
+            self.emit_progress(progress, f"Source operation step {i + 1}/20")
 
             if i == 6:
-                self.log(LogLevel.WARNING, "Example warning at 30%")
-            if i == 8:
-                self.log(LogLevel.ERROR, "Example ERROR at 40% (recoverable, sync continues)")
+                self.log(LogLevel.WARNING, "Example warning at 17.5%")
 
             time.sleep(1)
 
-        self.log(LogLevel.INFO, "Sync complete")
+        # Simulate target-side operation (next 20s)
+        self.log(LogLevel.INFO, "Processing on target machine")
+        for i in range(20, 40):
+            progress = (i + 1) / duration
+            self.emit_progress(progress, f"Target operation step {i + 1 - 20}/20")
 
-    def post_sync(self) -> None:
-        """Simulate post-sync operation"""
-        self.log(LogLevel.INFO, "Starting post-sync")
-        # No actual work in dummy module
-        self.log(LogLevel.INFO, "Post-sync complete")
+            if i == 28:
+                self.log(LogLevel.ERROR, "Example ERROR at 72.5% (recoverable, execution continues)")
+
+            time.sleep(1)
+
+        self.log(LogLevel.INFO, "Execution complete")
 
     def abort(self, timeout: float) -> None:
         """Best-effort cleanup"""
-        self.log(LogLevel.INFO, "abort() called", timeout=timeout)
+        self.log(LogLevel.INFO, "Dummy module abort called", timeout=timeout)
         # No resources to release in dummy module
-
-
-# DummyCriticalModule - (Removed)

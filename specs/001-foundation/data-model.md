@@ -10,37 +10,41 @@ This document defines the key entities, their fields, relationships, and state t
 
 ## Entities
 
-### 1. SyncModule (Abstract Base Class)
+### 1. Module (Abstract Base Class)
 
-Represents a sync component implementing the standardized module interface.
+Base class for all pc-switcher modules (sync modules and infrastructure modules).
 
 **Fields**:
-- `name: str` - Unique module identifier (e.g., "btrfs-snapshots", "dummy-success")
-- `required: bool` - Whether module can be disabled via config (default: False, except btrfs-snapshots)
+- `name: str` - Unique module identifier (e.g., "btrfs-snapshots", "dummy-success", "packages")
+- `required: bool` - Whether module can be disabled via config (False for optional modules)
 - `config: dict[str, Any]` - Module-specific configuration (validated against schema)
 - `remote: RemoteExecutor` - Interface for executing commands on target machine (injected by orchestrator)
 
 **Methods** (all abstract, must be implemented by subclasses):
 - `get_config_schema() -> dict[str, Any]` - Returns JSON schema for module config validation
 - `validate() -> list[str]` - Pre-sync validation; returns list of error messages (empty if valid)
-- `pre_sync() -> None` - Pre-sync operations (e.g., create snapshots); raise exception on critical failure
-- `sync() -> None` - Main sync operation; raise exception on critical failure
-- `post_sync() -> None` - Post-sync operations (e.g., create post-snapshots); raise exception on critical failure
+- `execute() -> None` - Execute the module's operation; raise exception on critical failure
 - `abort(timeout: float) -> None` - Stop running processes, free resources (best-effort, limited by timeout)
 
 **Injected Methods** (provided by orchestrator, not implemented by module):
 - `emit_progress(percentage: float | None, item: str, eta: timedelta | None) -> None` - Report progress to orchestrator
 - `log(level: LogLevel, message: str, **context) -> None` - Log message with structured context
 
+**Subclasses**:
+- `SyncModule`: User-configurable sync modules (packages, docker, VMs, k3s, user data)
+- Infrastructure modules inherit directly from `Module` (e.g., `BtrfsSnapshotModule`)
+
 **Validation Rules**:
 - `name` must be unique across all registered modules
-- Modules execute sequentially in the order defined in config file
-- `btrfs_snapshots` module must be first in config and cannot be disabled
+- SyncModules execute sequentially in the order defined in config file
+- Infrastructure modules (BtrfsSnapshotModule) are hardcoded by orchestrator:
+  - `BtrfsSnapshotModule(phase="pre")` executes before all SyncModules
+  - `BtrfsSnapshotModule(phase="post")` executes after all SyncModules
 
 **State Transitions**: None (stateless, only method execution sequence matters)
 
 **Error Handling**:
-- Modules raise exceptions (e.g., `SyncError`, `CriticalSyncError`) for unrecoverable failures
+- Modules raise exceptions (e.g., `SyncError`) for unrecoverable failures
 - Orchestrator catches exceptions, logs them as CRITICAL, and initiates cleanup
 - Modules do NOT log at CRITICAL level themselves
 
@@ -95,11 +99,11 @@ INITIALIZING → VALIDATING → EXECUTING ────────────�
 **State Descriptions**:
 - `INITIALIZING`: Loading config, checking lock, establishing SSH connection, checking/installing target version
 - `VALIDATING`: Running all module `validate()` methods; abort if any validation errors
-- `EXECUTING`: Running module lifecycle (pre_sync → sync → post_sync) for each module sequentially
+- `EXECUTING`: Running module `execute()` for each module sequentially (pre-snapshots, then sync modules, then post-snapshots)
 - `CLEANUP`: Calling `abort(timeout)` on currently-running module (if any); triggered by exception or Ctrl+C
 - `COMPLETED`: All modules succeeded, no ERROR logs emitted
 - `ABORTED`: User requested abort (Ctrl+C)
-- `FAILED`: Module raised exception, or ERROR logs were emitted during sync
+- `FAILED`: Module raised exception, or ERROR logs were emitted during execution
 
 **State Transition Rules**:
 - Always pass through CLEANUP before reaching ABORTED or FAILED
@@ -205,11 +209,11 @@ Represents module progress for display and logging.
 
 **Validation Rules**:
 - `percentage` must be in range [0.0, 1.0] if not None
-- `percentage` represents progress of **all module work** (not just current subtask)
+- `percentage` represents progress of **all module work** (validation + execution), not just current subtask
 - `current_item` should be concise (<100 chars for terminal display)
 - `eta` can be None if module doesn't estimate completion time
 
-**Important**: The percentage field represents the overall progress of the entire module, not just the current item or subtask. For example, if a module has 3 phases (pre_sync, sync, post_sync), the percentage should reflect progress across all three phases combined.
+**Important**: The percentage field represents the overall progress of the entire module's operation, not just the current item or subtask. Modules structure their work internally as needed and report overall progress.
 
 **State Transitions**: None (ephemeral, only current update matters)
 
@@ -470,18 +474,20 @@ def sync(self):
 
 ### 1. Abstract Base Class (Module Interface)
 
-The `SyncModule` ABC enforces the module contract (FR-001). All sync features implement this interface, enabling:
+The `Module` ABC enforces the module contract (FR-001). All operations (sync features and infrastructure) implement this interface, enabling:
 - Independent module development
-- Uniform orchestration via standardized lifecycle methods
+- Uniform orchestration via simple lifecycle: validate() → execute() → abort()
 - Consistent logging and progress reporting via injected methods
-- Sequential execution in config-defined order (no complex dependency resolution)
+- Sequential execution for SyncModules in config-defined order (no complex dependency resolution)
+- Infrastructure modules (BtrfsSnapshotModule) hardcoded by orchestrator to bracket all operations
+- DRY: All modules reuse the same infrastructure (logging, progress, abort, RemoteExecutor)
 
 ### 2. State Machine (SyncSession)
 
 Session state transitions enforce the sync workflow:
 - INITIALIZING → establish connection, load config, check/install target version
 - VALIDATING → all modules validate before any state changes
-- EXECUTING → sequential module execution (pre_sync → sync → post_sync)
+- EXECUTING → sequential module execution: BtrfsSnapshot(pre) → SyncModules → BtrfsSnapshot(post)
 - CLEANUP → call abort() on currently-running module (if any)
 - COMPLETED / ABORTED / FAILED → terminal states (always through CLEANUP except EXECUTING → COMPLETED)
 

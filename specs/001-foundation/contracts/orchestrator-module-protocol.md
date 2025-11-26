@@ -4,8 +4,10 @@
 
 **Requirements**: FR-001 through FR-002, User Story 1
 
-**Key Changes from Original Design**:
-- Modules defined in config (no auto-discovery)
+**Key Architectural Decisions**:
+- Simple module lifecycle: validate() → execute() → abort() (removed unnecessary pre_sync/sync/post_sync)
+- SyncModules defined in config (no auto-discovery)
+- Infrastructure modules (BtrfsSnapshotModule) hardcoded by orchestrator, instantiated twice (phase="pre"/"post")
 - Sequential execution in config order (no dependency resolution)
 - Exception-based error handling (modules raise, not log CRITICAL)
 - Orchestrator tracks ERROR logs for final state determination
@@ -27,8 +29,7 @@ The orchestrator executes modules in a strict sequence:
 │   - If stale: warn user, ask confirmation to proceed         │
 │   - If active: display PID, error and abort                  │
 │ - Create lock file                                            │
-│ - Get enabled modules from sync_modules config (in order)    │
-│ - Verify btrfs_snapshots is first and enabled                │
+│ - Get enabled SyncModules from sync_modules config (in order)│
 │ - Establish SSH connection to target                         │
 │ - Check/install pc-switcher version on target                │
 │ - Verify btrfs on both source and target:                    │
@@ -36,8 +37,9 @@ The orchestrator executes modules in a strict sequence:
 │   - Check configured subvolumes exist in top-level           │
 │     (visible in "btrfs subvolume list /")                    │
 │ - Create SyncSession with session ID                         │
-│ - Instantiate modules with validated config + RemoteExecutor │
-│ - Inject log() and emit_progress() methods into modules      │
+│ - Instantiate BtrfsSnapshotModule twice (phase="pre"/"post") │
+│ - Instantiate SyncModules with validated config + RemoteExec │
+│ - Inject log() and emit_progress() methods into all modules  │
 └──────────────────────────────────────────────────────────────┘
                            ↓
 ┌──────────────────────────────────────────────────────────────┐
@@ -55,11 +57,15 @@ The orchestrator executes modules in a strict sequence:
 ┌──────────────────────────────────────────────────────────────┐
 │ 3. EXECUTING PHASE (State: EXECUTING)                       │
 ├──────────────────────────────────────────────────────────────┤
-│ For each module (in config order):                           │
+│ 1. Execute BtrfsSnapshotModule(phase="pre"):                 │
 │   try:                                                        │
-│     module.pre_sync()                                         │
-│     module.sync()                                             │
-│     module.post_sync()                                        │
+│     pre_snapshot_module.execute()  # creates pre-sync snaps  │
+│   except Exception as e:                                      │
+│     log exception as CRITICAL, goto CLEANUP PHASE            │
+│                                                               │
+│ 2. For each SyncModule (in config order):                    │
+│   try:                                                        │
+│     module.execute()                                          │
 │     mark module as SUCCESS                                    │
 │   except SyncError as e:                                      │
 │     log exception as CRITICAL (orchestrator does this)        │
@@ -73,6 +79,12 @@ The orchestrator executes modules in a strict sequence:
 │     log "Sync interrupted by user" at WARNING                │
 │     session.abort_requested = True                           │
 │     goto CLEANUP PHASE                                        │
+│                                                               │
+│ 3. Execute BtrfsSnapshotModule(phase="post"):                │
+│   try:                                                        │
+│     post_snapshot_module.execute()  # creates post-sync snaps│
+│   except Exception as e:                                      │
+│     log exception as CRITICAL, goto CLEANUP PHASE            │
 │                                                               │
 │ if all modules completed and NO ERROR logs:                  │
 │   goto COMPLETED (skip CLEANUP)                              │
@@ -115,34 +127,40 @@ The orchestrator executes modules in a strict sequence:
 
 **No Auto-Discovery**: Modules are NOT auto-discovered from the codebase.
 
-**Module Loading**:
+**SyncModule Loading**:
 1. Read `sync_modules` section from config (dict with module names as keys, bool as values)
-2. Modules execute in the order they appear in the config YAML
+2. SyncModules execute in the order they appear in the config YAML
 3. For each entry where value is `true`:
-   - Import the module class (e.g., `from pcswitcher.modules.btrfs_snapshots import BtrfsSnapshotsModule`)
+   - Import the module class (e.g., `from pcswitcher.modules.packages import PackagesModule`)
    - Get config schema via `module_class.get_config_schema()`
    - Validate module-specific config section against schema
    - Create RemoteExecutor wrapper around TargetConnection
    - Instantiate: `module = ModuleClass(validated_config, remote_executor)`
    - Inject `log()` and `emit_progress()` methods into module instance
 
-**Required Module Validation**:
-1. Check `btrfs_snapshots` is present in `sync_modules`
-2. Check `btrfs_snapshots` is first in the ordered list
-3. Check `btrfs_snapshots` value is `true` (cannot be disabled)
-4. If any check fails → ERROR and abort
+**Infrastructure Module Loading** (BtrfsSnapshotModule):
+1. Hardcoded by orchestrator (not in sync_modules config)
+2. Instantiated twice with different phase parameters:
+   - `pre_snapshot = BtrfsSnapshotModule(btrfs_config, remote, phase="pre")`
+   - `post_snapshot = BtrfsSnapshotModule(btrfs_config, remote, phase="post")`
+3. Config comes from separate `btrfs_snapshots` section (not sync_modules)
+4. Cannot be disabled by user
 
 **Example config**:
 ```yaml
 sync_modules:
-  btrfs_snapshots: true  # MUST be first, MUST be true
   user_data: true
   packages: true
   docker: false  # Disabled
   k3s: false
+
+btrfs_snapshots:  # Infrastructure module config (separate from sync_modules)
+  subvolumes:
+    - "@"
+    - "@home"
 ```
 
-Execution order: btrfs_snapshots → user_data → packages
+Execution order: BtrfsSnapshot(pre) → user_data → packages → BtrfsSnapshot(post)
 
 ## Configuration Injection
 
@@ -514,21 +532,17 @@ btrfs_snapshots:
    - Checks/installs matching pc-switcher version on target
    - Verifies btrfs on both machines
    - Creates session (ID: a1b2c3d4)
-   - Loads modules: [btrfs_snapshots, user_data, packages]
+   - Instantiates BtrfsSnapshotModule twice (phase="pre" and phase="post")
+   - Loads SyncModules from config: [user_data, packages]
    - Instantiates each with config + RemoteExecutor
 3. VALIDATING:
-   - Calls validate() on each module
+   - Calls validate() on all modules (pre_snapshot, user_data, packages, post_snapshot)
    - All return empty lists (no errors)
 4. EXECUTING:
-   - btrfs_snapshots.pre_sync() → creates pre-sync snapshots
-   - btrfs_snapshots.sync() → nothing (snapshot logic in pre/post)
-   - btrfs_snapshots.post_sync() → nothing
-   - user_data.pre_sync() → checks disk space
-   - user_data.sync() → syncs /home, emits progress
-   - user_data.post_sync() → verification
-   - packages.pre_sync() → checks apt
-   - packages.sync() → syncs packages, emits progress
-   - packages.post_sync() → creates post-sync snapshots
+   - pre_snapshot.execute() → creates pre-sync snapshots on both machines
+   - user_data.execute() → syncs /home, emits progress
+   - packages.execute() → syncs packages, emits progress
+   - post_snapshot.execute() → creates post-sync snapshots on both machines
 5. All complete, no ERROR logs
 6. Skip CLEANUP, go directly to COMPLETED
 7. Log session summary
