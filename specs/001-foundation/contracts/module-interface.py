@@ -393,7 +393,7 @@ class DummySuccessModule(SyncModule):
 
 
 # Example: Infrastructure module that runs continuously in parallel
-class DiskMonitorModule(Module):
+class DiskSpaceMonitorModule(Module):
     """
     Infrastructure module that monitors disk space throughout sync operation.
 
@@ -405,6 +405,9 @@ class DiskMonitorModule(Module):
 
     Unlike SyncModules that execute once and complete, this module runs
     continuously until stopped via abort() or until it detects a critical condition.
+
+    Named "DiskSpaceMonitor" to clarify it monitors disk space/usage,
+    not other disk characteristics like disk health or I/O performance.
     """
 
     def __init__(self, config: dict[str, Any], remote: RemoteExecutor) -> None:
@@ -415,7 +418,7 @@ class DiskMonitorModule(Module):
 
     @property
     def name(self) -> str:
-        return "disk-monitor"
+        return "disk-space-monitor"
 
     @property
     def required(self) -> bool:
@@ -459,7 +462,7 @@ class DiskMonitorModule(Module):
 
         self.log(
             LogLevel.INFO,
-            "Disk monitor validation complete",
+            "Disk space monitor validation complete",
             errors=len(errors),
         )
         return errors
@@ -501,11 +504,11 @@ class DiskMonitorModule(Module):
             # Interruptible wait (respects stop_event)
             self._stop_event.wait(check_interval)
 
-        self.log(LogLevel.INFO, "Disk monitoring stopped")
+        self.log(LogLevel.INFO, "Disk space monitoring stopped")
 
     def abort(self, timeout: float) -> None:
         """Stop monitoring gracefully"""
-        self.log(LogLevel.INFO, "Stopping disk monitor", timeout=timeout)
+        self.log(LogLevel.INFO, "Stopping disk space monitor", timeout=timeout)
         self._stop_event.set()
 
     def _get_free_space(self, path: Path) -> int:

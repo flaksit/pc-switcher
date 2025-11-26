@@ -40,7 +40,7 @@ Base class for all pc-switcher modules (sync modules and infrastructure modules)
 - Infrastructure modules are hardcoded by orchestrator:
   - `BtrfsSnapshotModule(phase="pre")` executes before all SyncModules (sequential)
   - `BtrfsSnapshotModule(phase="post")` executes after all SyncModules (sequential)
-  - `DiskMonitorModule` runs in parallel throughout entire sync operation
+  - `DiskSpaceMonitorModule` runs in parallel throughout entire sync operation
 
 **State Transitions**: None (stateless, only method execution sequence matters)
 
@@ -99,9 +99,9 @@ INITIALIZING → VALIDATING → EXECUTING ────────────�
 
 **State Descriptions**:
 - `INITIALIZING`: Loading config, checking lock, establishing SSH connection, checking/installing target version
-- `VALIDATING`: Running all module `validate()` methods (including disk_monitor); abort if any validation errors
-- `EXECUTING`: Start disk monitor in parallel, then run modules sequentially (pre-snapshots, sync modules, post-snapshots)
-- `CLEANUP`: Stop disk monitor, call `abort(timeout)` on currently-running module (if any); triggered by exception or Ctrl+C
+- `VALIDATING`: Running all module `validate()` methods (including disk_space_monitor); abort if any validation errors
+- `EXECUTING`: Start disk space monitor in parallel, then run modules sequentially (pre-snapshots, sync modules, post-snapshots)
+- `CLEANUP`: Stop disk space monitor, call `abort(timeout)` on currently-running module (if any); triggered by exception or Ctrl+C
 - `COMPLETED`: All modules succeeded, no ERROR logs emitted
 - `ABORTED`: User requested abort (Ctrl+C)
 - `FAILED`: Module raised exception (including DiskSpaceError from monitor), or ERROR logs were emitted during execution
@@ -482,16 +482,16 @@ The `Module` ABC enforces the module contract (FR-001). All operations (sync fea
 - Sequential execution for SyncModules in config-defined order (no complex dependency resolution)
 - Infrastructure modules hardcoded by orchestrator:
   - BtrfsSnapshotModule brackets all operations (sequential execution)
-  - DiskMonitorModule runs throughout entire operation (parallel execution)
+  - DiskSpaceMonitorModule runs throughout entire operation (parallel execution)
 - DRY: All modules (sync and infrastructure, sequential and parallel) reuse the same infrastructure (logging, progress, abort, RemoteExecutor)
 
 ### 2. State Machine (SyncSession)
 
 Session state transitions enforce the sync workflow:
 - INITIALIZING → establish connection, load config, check/install target version
-- VALIDATING → all modules validate before any state changes (including disk_monitor)
-- EXECUTING → start DiskMonitor (parallel), then sequential execution: BtrfsSnapshot(pre) → SyncModules → BtrfsSnapshot(post)
-- CLEANUP → stop disk_monitor, call abort() on currently-running module (if any)
+- VALIDATING → all modules validate before any state changes (including disk_space_monitor)
+- EXECUTING → start DiskSpaceMonitor (parallel), then sequential execution: BtrfsSnapshot(pre) → SyncModules → BtrfsSnapshot(post)
+- CLEANUP → stop disk_space_monitor, call abort() on currently-running module (if any)
 - COMPLETED / ABORTED / FAILED → terminal states (always through CLEANUP except EXECUTING → COMPLETED)
 
 ### 3. Exception-Based Error Handling

@@ -9,7 +9,7 @@
 - SyncModules defined in config (no auto-discovery)
 - Infrastructure modules hardcoded by orchestrator:
   - BtrfsSnapshotModule: instantiated twice (phase="pre"/"post"), executes sequentially
-  - DiskMonitorModule: runs in parallel throughout entire sync operation
+  - DiskSpaceMonitorModule: runs in parallel throughout entire sync operation
 - SyncModules execute sequentially in config order (no dependency resolution)
 - Exception-based error handling (modules raise, not log CRITICAL)
 - Orchestrator tracks ERROR logs for final state determination
@@ -41,7 +41,7 @@ The orchestrator executes modules in a strict sequence:
 │ - Create SyncSession with session ID                         │
 │ - Instantiate infrastructure modules:                        │
 │   - BtrfsSnapshotModule twice (phase="pre"/"post")           │
-│   - DiskMonitorModule (for parallel execution)               │
+│   - DiskSpaceMonitorModule (for parallel execution)          │
 │ - Instantiate SyncModules with validated config + RemoteExec │
 │ - Inject log() and emit_progress() methods into all modules  │
 └──────────────────────────────────────────────────────────────┘
@@ -61,8 +61,8 @@ The orchestrator executes modules in a strict sequence:
 ┌──────────────────────────────────────────────────────────────┐
 │ 3. EXECUTING PHASE (State: EXECUTING)                       │
 ├──────────────────────────────────────────────────────────────┤
-│ 0. Start DiskMonitorModule in parallel (thread/async task):  │
-│   disk_monitor_task = start_parallel(disk_monitor.execute()) │
+│ 0. Start DiskSpaceMonitorModule in parallel (thread/async):  │
+│   disk_space_monitor = start_parallel(disk_space_mon.exec()) │
 │   # Runs continuously, monitoring disk space every interval  │
 │   # Raises DiskSpaceError if space critically low            │
 │                                                               │
@@ -84,7 +84,7 @@ The orchestrator executes modules in a strict sequence:
 │     log exception as CRITICAL                                 │
 │     session.abort_requested = True                           │
 │     goto CLEANUP PHASE                                        │
-│   except DiskSpaceError as e:  # From disk monitor           │
+│   except DiskSpaceError as e:  # From disk space monitor     │
 │     log exception as CRITICAL                                 │
 │     session.abort_requested = True                           │
 │     goto CLEANUP PHASE                                        │
@@ -100,9 +100,9 @@ The orchestrator executes modules in a strict sequence:
 │     log exception as CRITICAL, goto CLEANUP PHASE            │
 │                                                               │
 │ if all modules completed and NO ERROR logs:                  │
-│   stop disk_monitor (call abort), goto COMPLETED             │
+│   stop disk_space_monitor (call abort), goto COMPLETED       │
 │ if all modules completed but ERROR logs exist:               │
-│   stop disk_monitor (call abort), goto CLEANUP → FAILED      │
+│   stop disk_space_monitor (call abort), goto CLEANUP→FAILED  │
 └──────────────────────────────────────────────────────────────┘
                            ↓
 ┌──────────────────────────────────────────────────────────────┐
@@ -110,8 +110,8 @@ The orchestrator executes modules in a strict sequence:
 ├──────────────────────────────────────────────────────────────┤
 │ Stop parallel monitoring:                                    │
 │   try:                                                        │
-│     disk_monitor.abort(timeout=2.0)                          │
-│     wait for disk_monitor thread/task to finish              │
+│     disk_space_monitor.abort(timeout=2.0)                    │
+│     wait for disk_space_monitor thread/task to finish        │
 │   except Exception as e:                                      │
 │     log ERROR (abort is best-effort)                         │
 │                                                               │
@@ -168,10 +168,10 @@ The orchestrator executes modules in a strict sequence:
    - Config comes from separate `btrfs_snapshots` section (not sync_modules)
    - Cannot be disabled by user
 
-2. **DiskMonitorModule** (parallel execution):
+2. **DiskSpaceMonitorModule** (parallel execution):
    - Hardcoded by orchestrator (not in sync_modules config)
-   - Instantiated once: `disk_monitor = DiskMonitorModule(disk_config, remote)`
-   - Config comes from separate `disk_monitor` section
+   - Instantiated once: `disk_space_monitor = DiskSpaceMonitorModule(disk_config, remote)`
+   - Config comes from separate `disk_space_monitor` section
    - Runs in parallel thread/task throughout entire sync operation
    - Cannot be disabled by user
 
@@ -188,7 +188,7 @@ btrfs_snapshots:  # Infrastructure module config (separate from sync_modules)
     - "@"
     - "@home"
 
-disk_monitor:  # Infrastructure module config (separate from sync_modules)
+disk_space_monitor:  # Infrastructure module config (separate from sync_modules)
   check_interval: 1.0  # seconds
   min_free: "10GB"  # or "5%" for percentage
   paths:
@@ -196,9 +196,9 @@ disk_monitor:  # Infrastructure module config (separate from sync_modules)
     - "/home"
 ```
 
-Execution order (parallel ║ for disk monitor):
+Execution order (parallel ║ for disk space monitor):
 ```
-DiskMonitor.execute() ║════════════════════════════════════════║
+DiskSpaceMonitor.execute() ║════════════════════════════════════║
 BtrfsSnapshot(pre).execute() → user_data.execute() → packages.execute() → BtrfsSnapshot(post).execute()
 ```
 
@@ -574,21 +574,21 @@ btrfs_snapshots:
    - Creates session (ID: a1b2c3d4)
    - Instantiates infrastructure modules:
      - BtrfsSnapshotModule twice (phase="pre" and phase="post")
-     - DiskMonitorModule
+     - DiskSpaceMonitorModule
    - Loads SyncModules from config: [user_data, packages]
    - Instantiates each with config + RemoteExecutor
 3. VALIDATING:
-   - Calls validate() on all modules (disk_monitor, pre_snapshot, user_data, packages, post_snapshot)
+   - Calls validate() on all modules (disk_space_monitor, pre_snapshot, user_data, packages, post_snapshot)
    - All return empty lists (no errors)
 4. EXECUTING:
-   - Start disk_monitor.execute() in parallel thread/task
+   - Start disk_space_monitor.execute() in parallel thread/task
    - pre_snapshot.execute() → creates pre-sync snapshots on both machines
    - user_data.execute() → syncs /home, emits progress
    - packages.execute() → syncs packages, emits progress
    - post_snapshot.execute() → creates post-sync snapshots on both machines
-   - disk_monitor runs throughout, checking space every 1 second
+   - disk_space_monitor runs throughout, checking space every 1 second
 5. All complete, no ERROR logs
-6. Stop disk_monitor (call abort), go directly to COMPLETED
+6. Stop disk_space_monitor (call abort), go directly to COMPLETED
 7. Log session summary
 8. Release lock
 9. Exit with code 0

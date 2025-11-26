@@ -82,7 +82,7 @@ Module (base abstraction)
 │
 └─ Infrastructure modules (orchestrator-managed, hardcoded)
     ├─ BtrfsSnapshotModule (sequential execution)
-    └─ DiskMonitorModule (parallel execution)
+    └─ DiskSpaceMonitorModule (parallel execution)
 ```
 
 **SyncModule**: Marker subclass for user-configurable modules in `config.yaml` `sync_modules` section.
@@ -93,7 +93,7 @@ Module (base abstraction)
 - Cannot be disabled or reordered by users
 - Gets all Module infrastructure (logging, progress, abort, RemoteExecutor) for free
 
-**DiskMonitorModule**: Inherits directly from `Module`, runs in parallel:
+**DiskSpaceMonitorModule**: Inherits directly from `Module`, runs in parallel:
 - Instantiated once, runs in separate thread/task throughout entire sync
 - Continuously monitors disk space at configured intervals
 - Raises `DiskSpaceError` if space critically low, triggering abort of all modules
@@ -102,13 +102,13 @@ Module (base abstraction)
 ### 3. Execution Flow
 
 ```
-1. Validate all modules (disk_monitor, pre_snapshot, sync modules, post_snapshot)
-2. Start parallel: DiskMonitorModule.execute() ║══════════════════════════║
+1. Validate all modules (disk_space_monitor, pre_snapshot, sync modules, post_snapshot)
+2. Start parallel: DiskSpaceMonitorModule.execute() ║════════════════════║
 3. Execute sequential: BtrfsSnapshotModule(phase="pre").execute()
 4. Execute sequential: SyncModule1.execute()
 5. Execute sequential: SyncModule2.execute()
 6. Execute sequential: BtrfsSnapshotModule(phase="post").execute()
-7. Stop parallel: DiskMonitorModule.abort()
+7. Stop parallel: DiskSpaceMonitorModule.abort()
 ```
 
 ## Advantages
@@ -117,7 +117,7 @@ Module (base abstraction)
 - All modules (sync and infrastructure, sequential and parallel) share same base infrastructure
 - No duplication of logging, progress reporting, abort handling, RemoteExecutor patterns
 - If Module infrastructure improves, all modules (snapshots, monitoring, sync) benefit automatically
-- Disk monitoring gets proper logging, progress, abort just by inheriting from Module
+- Disk space monitoring gets proper logging, progress, abort just by inheriting from Module
 
 ### Conceptual Clarity
 - "Module" = any operation needing infrastructure (base abstraction)
@@ -169,7 +169,7 @@ btrfs_snapshots:
     - "@"
     - "@home"
 
-disk_monitor:
+disk_space_monitor:
   check_interval: 1.0  # seconds
   min_free: "10GB"
   paths:
