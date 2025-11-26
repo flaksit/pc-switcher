@@ -17,7 +17,7 @@ def test_interrupt_handler_initialization() -> None:
         timestamp=datetime.now(),
         source_hostname="source",
         target_hostname="target",
-        enabled_modules=[],
+        enabled_jobs=[],
         state=SessionState.INITIALIZING,
     )
 
@@ -33,23 +33,23 @@ def test_interrupt_handler_first_interrupt() -> None:
         timestamp=datetime.now(),
         source_hostname="source",
         target_hostname="target",
-        enabled_modules=[],
+        enabled_jobs=[],
         state=SessionState.INITIALIZING,
     )
 
-    # Create mock module
-    mock_module = MagicMock()
-    mock_module.abort = MagicMock()
+    # Create mock job
+    mock_job = MagicMock()
+    mock_job.abort = MagicMock()
 
     handler = InterruptHandler(session)
-    handler.set_current_module(mock_module)
+    handler.set_current_job(mock_job)
 
     # Simulate interrupt
     handler.handle_interrupt(signal.SIGINT, None)
 
     assert handler.is_interrupted()
     assert session.abort_requested is True
-    mock_module.abort.assert_called_once_with(timeout=5.0)
+    mock_job.abort.assert_called_once_with(timeout=5.0)
 
 
 def test_install_signal_handlers() -> None:
@@ -59,7 +59,7 @@ def test_install_signal_handlers() -> None:
         timestamp=datetime.now(),
         source_hostname="source",
         target_hostname="target",
-        enabled_modules=[],
+        enabled_jobs=[],
         state=SessionState.INITIALIZING,
     )
 

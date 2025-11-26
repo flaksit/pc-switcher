@@ -27,8 +27,8 @@ def create_test_config() -> Configuration:
     return Configuration(
         log_file_level=LogLevel.INFO,
         log_cli_level=LogLevel.INFO,
-        sync_modules={"btrfs_snapshots": True},
-        module_configs={"btrfs_snapshots": {"subvolumes": ["@", "@home"]}},
+        sync_jobs={"btrfs_snapshots": True},
+        job_configs={"btrfs_snapshots": {"subvolumes": ["@", "@home"]}},
         disk={"min_free": 0.20, "reserve_minimum": 0.15, "check_interval": 30},
         config_path=Path("/tmp/test-config.yaml"),
     )
@@ -41,7 +41,7 @@ def create_test_session() -> SyncSession:
         timestamp=datetime.now(UTC),
         source_hostname="source-machine",
         target_hostname="target-machine",
-        enabled_modules=["btrfs_snapshots"],
+        enabled_jobs=["btrfs_snapshots"],
         state=SessionState.INITIALIZING,
     )
 
@@ -88,8 +88,8 @@ def test_orchestrator_disk_config_uses_correct_location() -> None:
     config = Configuration(
         log_file_level=LogLevel.INFO,
         log_cli_level=LogLevel.INFO,
-        sync_modules={"btrfs_snapshots": True},
-        module_configs={"btrfs_snapshots": {"subvolumes": ["@"]}},
+        sync_jobs={"btrfs_snapshots": True},
+        job_configs={"btrfs_snapshots": {"subvolumes": ["@"]}},
         disk={"min_free": 0.30, "reserve_minimum": 0.10, "check_interval": 60},  # Custom values
         config_path=Path("/tmp/test-config.yaml"),
     )
@@ -124,16 +124,16 @@ def test_orchestrator_signal_handlers_registered() -> None:
         assert sigterm_registered, "SIGTERM handler should be registered"
 
 
-def test_orchestrator_modules_list_initially_empty() -> None:
-    """Test that modules list is empty before loading."""
+def test_orchestrator_jobs_list_initially_empty() -> None:
+    """Test that jobs list is empty before loading."""
     config = create_test_config()
     remote = create_mock_remote_executor()
     session = create_test_session()
 
     orchestrator = Orchestrator(config, remote, session)
 
-    assert orchestrator._module_manager.modules == []
-    assert orchestrator._module_manager.current_module is None
+    assert orchestrator._job_manager.jobs == []
+    assert orchestrator._job_manager.current_job is None
 
 
 def test_orchestrator_sets_cli_invocation_time() -> None:

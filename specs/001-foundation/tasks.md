@@ -30,7 +30,7 @@ Repository structure (single Python package):
 
 - [ ] T001 ~~Create .tool-versions file with uv 0.9.9~~ REMOVED: uv version no longer pinned (Proven Tooling Only)
 - [ ] T002 Initialize Python 3.13 environment with uv and create pyproject.toml with dependencies: fabric, structlog, rich, typer, pyyaml, jsonschema, hatchling, uv-dynamic-versioning (Proven Tooling Only)
-- [ ] T003 [P] Create project directory structure: src/pcswitcher/{cli,core,remote,modules,utils}/, tests/{unit,integration,e2e}/, scripts/target/ (Deliberate Simplicity)
+- [ ] T003 [P] Create project directory structure: src/pcswitcher/{cli,core,remote,jobs,utils}/, tests/{unit,integration,e2e}/, scripts/target/ (Deliberate Simplicity)
 - [ ] T004 [P] Configure pyproject.toml with CLI entry point pc-switcher=pcswitcher.cli.main:app and dynamic versioning via [tool.hatch.version] source="vcs" and [tool.uv-dynamic-versioning] enable=true (Frictionless Command UX)
 - [ ] T005 [P] Add dev dependencies: pytest, basedpyright, ruff, codespell to pyproject.toml (Proven Tooling Only)
 - [ ] T006 [P] Configure ruff in pyproject.toml with line-length=119, target-version=py313 (Deliberate Simplicity)
@@ -48,10 +48,10 @@ Repository structure (single Python package):
 - [ ] T009 Create `src/pcswitcher/__init__.py` with package version exposure (Deliberate Simplicity)
 - [ ] T010 Create `src/pcswitcher/__main__.py` for python -m pcswitcher entry point (Frictionless Command UX)
 - [ ] T011 Define LogLevel enum (DEBUG=10, FULL=15, INFO=20, WARNING=30, ERROR=40, CRITICAL=50) in `src/pcswitcher/core/logging.py` (Up-to-date Documentation)
-- [ ] T012 Define SyncError exception in `src/pcswitcher/core/module.py` (Reliability Without Compromise)
-- [ ] T013 Define RemoteExecutor interface class with run(), send_file_to_target(), get_hostname() methods in `src/pcswitcher/core/module.py` (Deliberate Simplicity)
+- [ ] T012 Define SyncError exception in `src/pcswitcher/core/job.py` (Reliability Without Compromise)
+- [ ] T013 Define RemoteExecutor interface class with run(), send_file_to_target(), get_hostname() methods in `src/pcswitcher/core/job.py` (Deliberate Simplicity)
 - [ ] T014 Create SessionState enum (INITIALIZING, VALIDATING, EXECUTING, CLEANUP, COMPLETED, ABORTED, FAILED) in `src/pcswitcher/core/session.py` (Reliability Without Compromise)
-- [ ] T015 Create ModuleResult enum (SUCCESS, SKIPPED, FAILED) in `src/pcswitcher/core/session.py` (Reliability Without Compromise)
+- [ ] T015 Create JobResult enum (SUCCESS, SKIPPED, FAILED) in `src/pcswitcher/core/session.py` (Reliability Without Compromise)
 
 **Checkpoint**: Foundation types and enums ready - user story implementation can now begin in parallel
 
@@ -61,14 +61,14 @@ Repository structure (single Python package):
 
 **Goal**: Six-level logging (DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL) with independent file/CLI configuration, unified log stream from source and target, structured logging with context
 
-**Independent Test**: Configure different log levels for file and CLI, run sync with dummy modules, verify file contains all events at configured level and above, terminal shows only CLI level events, both source and target operations appear in unified log with correct timestamps and structured context
+**Independent Test**: Configure different log levels for file and CLI, run sync with dummy jobs, verify file contains all events at configured level and above, terminal shows only CLI level events, both source and target operations appear in unified log with correct timestamps and structured context
 
 ### Implementation for User Story 4
 
-- [ ] T016 [US4] Add custom FULL log level (15) to Python logging module using logging.addLevelName(15, 'FULL') in src/pcswitcher/core/logging.py (Up-to-date Documentation)
-- [ ] T017 [US4] Configure structlog with dual output: file (JSONRenderer with keys: timestamp, level, module, hostname, event, context) and terminal (ConsoleRenderer with human-readable format) in src/pcswitcher/core/logging.py (Up-to-date Documentation)
+- [ ] T016 [US4] Add custom FULL log level (15) to Python logging job using logging.addLevelName(15, 'FULL') in src/pcswitcher/core/logging.py (Up-to-date Documentation)
+- [ ] T017 [US4] Configure structlog with dual output: file (JSONRenderer with keys: timestamp, level, job, hostname, event, context) and terminal (ConsoleRenderer with human-readable format) in src/pcswitcher/core/logging.py (Up-to-date Documentation)
 - [ ] T018 [US4] Create custom structlog processor track_error_logs() that sets session.has_errors=True when level >= ERROR in src/pcswitcher/core/logging.py (Reliability Without Compromise)
-- [ ] T019 [US4] Implement get_logger(name) factory that binds context (module name, session ID, hostname) in src/pcswitcher/core/logging.py (Up-to-date Documentation)
+- [ ] T019 [US4] Implement get_logger(name) factory that binds context (job name, session ID, hostname) in src/pcswitcher/core/logging.py (Up-to-date Documentation)
 - [ ] T020 [US4] Create configure_logging(log_file_level, log_cli_level, log_file_path, session) function that sets up structlog with processors and handlers in src/pcswitcher/core/logging.py (Up-to-date Documentation)
 - [ ] T021 [US4] Add BoundLogger.full() custom method for FULL level logging in src/pcswitcher/core/logging.py (Up-to-date Documentation)
 - [ ] T022 [US4] Implement log file creation in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log` with directory creation in src/pcswitcher/core/logging.py (Minimize SSD Wear)
@@ -79,88 +79,88 @@ Repository structure (single Python package):
 
 ## Phase 4: User Story 6 - Configuration System (Priority: P1) 🎯 MVP Component 2/9
 
-**Goal**: YAML-based config loading from ~/.config/pc-switcher/config.yaml with global settings (log levels, enabled modules) and module-specific settings, schema validation, defaults application, required module enforcement
+**Goal**: YAML-based config loading from ~/.config/pc-switcher/config.yaml with global settings (log levels, enabled jobs) and job-specific settings, schema validation, defaults application, required job enforcement
 
-**Independent Test**: Create config file with various settings, run sync, verify modules receive correct configuration, test invalid config triggers validation errors, confirm log levels are applied correctly, disable optional module and verify it's skipped, attempt to disable required module and verify error
+**Independent Test**: Create config file with various settings, run sync, verify jobs receive correct configuration, test invalid config triggers validation errors, confirm log levels are applied correctly, disable optional job and verify it's skipped, attempt to disable required job and verify error
 
 **Dependencies**: US4 (needs logging for error reporting)
 
 ### Implementation for User Story 6
 
-- [ ] T023 [US6] Create Configuration dataclass with fields: log_file_level, log_cli_level, sync_modules, module_configs, disk, config_path in src/pcswitcher/core/config.py (Deliberate Simplicity)
+- [ ] T023 [US6] Create Configuration dataclass with fields: log_file_level, log_cli_level, sync_jobs, job_configs, disk, config_path in src/pcswitcher/core/config.py (Deliberate Simplicity)
 - [ ] T024 [US6] Implement load_config(path: Path) -> Configuration that uses yaml.safe_load() to load YAML in src/pcswitcher/core/config.py (Reliability Without Compromise)
 - [ ] T025 [US6] Implement validate_config_structure(config_dict) that checks required fields exist and types are correct in src/pcswitcher/core/config.py (Reliability Without Compromise)
-- [ ] T026 [US6] Implement validate_required_modules(sync_modules_dict, config_path) that verifies btrfs_snapshots is first and enabled; if disabled, displays error "Required module 'btrfs_snapshots' cannot be disabled" with config file location in src/pcswitcher/core/config.py (Reliability Without Compromise)
+- [ ] T026 [US6] Implement validate_required_jobs(sync_jobs_dict, config_path) that verifies btrfs_snapshots is first and enabled; if disabled, displays error "Required job 'btrfs_snapshots' cannot be disabled" with config file location in src/pcswitcher/core/config.py (Reliability Without Compromise)
 - [ ] T027 [US6] Implement apply_defaults(config_dict, schema) that fills missing values with defaults from config-schema.yaml in src/pcswitcher/core/config.py (Frictionless Command UX)
-- [ ] T028 [US6] Implement validate_module_config(module_name, module_config, schema) using jsonschema library (JSON Schema draft-07) in src/pcswitcher/core/config.py (Reliability Without Compromise)
+- [ ] T028 [US6] Implement validate_job_config(job_name, job_config, schema) using jsonschema library (JSON Schema draft-07) in src/pcswitcher/core/config.py (Reliability Without Compromise)
 - [ ] T029 [US6] Create generate_default_config() -> str that produces default YAML with inline comments from config-schema.yaml in src/pcswitcher/core/config.py (Frictionless Command UX)
-- [ ] T030 [US6] Implement get_enabled_modules(sync_modules_dict) -> list[str] that returns module names in config order in src/pcswitcher/core/config.py (Deliberate Simplicity)
-- [ ] T030a [US6] Implement validate_module_names(sync_modules_dict, available_modules) that checks for unknown module names in config and logs ERROR "Unknown module 'xyz' in configuration" before aborting in src/pcswitcher/core/config.py (Reliability Without Compromise)
+- [ ] T030 [US6] Implement get_enabled_jobs(sync_jobs_dict) -> list[str] that returns job names in config order in src/pcswitcher/core/config.py (Deliberate Simplicity)
+- [ ] T030a [US6] Implement validate_job_names(sync_jobs_dict, available_jobs) that checks for unknown job names in config and logs ERROR "Unknown job 'xyz' in configuration" before aborting in src/pcswitcher/core/config.py (Reliability Without Compromise)
 
-**Checkpoint**: At this point, configuration system should be fully functional with loading, validation, defaults, and module management
+**Checkpoint**: At this point, configuration system should be fully functional with loading, validation, defaults, and job management
 
 ---
 
-## Phase 5: User Story 1 - Module Architecture and Integration Contract (Priority: P1) 🎯 MVP Component 3/9
+## Phase 5: User Story 1 - Job Architecture and Integration Contract (Priority: P1) 🎯 MVP Component 3/9
 
-**Goal**: Standardized module interface (SyncModule ABC) with lifecycle methods (validate, pre_sync, sync, post_sync, abort), config schemas, logging/progress injection, sequential execution in config order
+**Goal**: Standardized job interface (SyncJob ABC) with lifecycle methods (validate, pre_sync, sync, post_sync, abort), config schemas, logging/progress injection, sequential execution in config order
 
-**Independent Test**: Define minimal test module, register with orchestrator, run sync and verify orchestrator calls lifecycle methods in order, handles module logging at all levels, processes progress updates, handles errors (exceptions and CRITICAL), calls cleanup on interrupts
+**Independent Test**: Define minimal test job, register with orchestrator, run sync and verify orchestrator calls lifecycle methods in order, handles job logging at all levels, processes progress updates, handles errors (exceptions and CRITICAL), calls cleanup on interrupts
 
 **Dependencies**: US4 (needs logging), US6 (needs config)
 
 ### Implementation for User Story 1
 
-- [ ] T031 [P] [US1] Create SyncModule ABC with abstract methods validate(), pre_sync(), sync(), post_sync(), abort(timeout), get_config_schema() in src/pcswitcher/core/module.py (Deliberate Simplicity)
-- [ ] T032 [P] [US1] Add abstract properties name: str and required: bool to SyncModule in src/pcswitcher/core/module.py (Deliberate Simplicity)
-- [ ] T033 [US1] Add `__init__(config, remote)` to SyncModule that stores config and remote executor in src/pcswitcher/core/module.py (Deliberate Simplicity)
-- [ ] T034 [US1] Add emit_progress(percentage, item, eta) and log(level, message, **context) method signatures to SyncModule for orchestrator injection in src/pcswitcher/core/module.py (Up-to-date Documentation)
+- [ ] T031 [P] [US1] Create SyncJob ABC with abstract methods validate(), pre_sync(), sync(), post_sync(), abort(timeout), get_config_schema() in src/pcswitcher/core/job.py (Deliberate Simplicity)
+- [ ] T032 [P] [US1] Add abstract properties name: str and required: bool to SyncJob in src/pcswitcher/core/job.py (Deliberate Simplicity)
+- [ ] T033 [US1] Add `__init__(config, remote)` to SyncJob that stores config and remote executor in src/pcswitcher/core/job.py (Deliberate Simplicity)
+- [ ] T034 [US1] Add emit_progress(percentage, item, eta) and log(level, message, **context) method signatures to SyncJob for orchestrator injection in src/pcswitcher/core/job.py (Up-to-date Documentation)
 - [ ] T035 [US1] Create RemoteExecutor implementation class that wraps TargetConnection in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
 - [ ] T036 [US1] Implement RemoteExecutor.run(command, sudo, timeout) that delegates to TargetConnection in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
 - [ ] T037 [US1] Implement RemoteExecutor.send_file_to_target(local, remote) that delegates to TargetConnection in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
 - [ ] T038 [US1] Implement RemoteExecutor.get_hostname() that returns target hostname in src/pcswitcher/remote/connection.py (Deliberate Simplicity)
 
-**Checkpoint**: At this point, module interface and remote executor should be fully defined and ready for module implementations
+**Checkpoint**: At this point, job interface and remote executor should be fully defined and ready for job implementations
 
 ---
 
-## Phase 6: User Story 8 - Dummy Test Modules (Priority: P1) 🎯 MVP Component 4/9
+## Phase 6: User Story 8 - Dummy Test Jobs (Priority: P1) 🎯 MVP Component 4/9
 
-**Goal**: Two reference modules (dummy-success, dummy-fail) demonstrating successful execution and exception handling with progress reporting
+**Goal**: Two reference jobs (dummy-success, dummy-fail) demonstrating successful execution and exception handling with progress reporting
 
-**Independent Test**: Enable each dummy module in config and run sync, verify expected behavior for each (success completes, fail raises unhandled exception at 60%), check abort() is called on interrupts
+**Independent Test**: Enable each dummy job in config and run sync, verify expected behavior for each (success completes, fail raises unhandled exception at 60%), check abort() is called on interrupts
 
-**Dependencies**: US1 (needs module interface), US4 (needs logging), US6 (needs config)
+**Dependencies**: US1 (needs job interface), US4 (needs logging), US6 (needs config)
 
 ### Implementation for User Story 8
 
-- [ ] T039 [P] [US8] Create DummySuccessModule extending SyncModule in src/pcswitcher/modules/dummy_success.py with 20s simulation, INFO logs every 2s, WARNING at 6s, ERROR at 8s, progress 0-100% (Deliberate Simplicity)
-- [ ] T040 [P] [US8] Implement DummySuccessModule.validate() that returns empty list in src/pcswitcher/modules/dummy_success.py (Deliberate Simplicity)
-- [ ] T041 [P] [US8] Implement DummySuccessModule.sync() with time.sleep loop, progress emission, and log calls in src/pcswitcher/modules/dummy_success.py (Deliberate Simplicity)
-- [ ] T042 [P] [US8] Implement DummySuccessModule.abort(timeout) that logs and stops execution in src/pcswitcher/modules/dummy_success.py (Reliability Without Compromise)
+- [ ] T039 [P] [US8] Create DummySuccessJob extending SyncJob in src/pcswitcher/jobs/dummy_success.py with 20s simulation, INFO logs every 2s, WARNING at 6s, ERROR at 8s, progress 0-100% (Deliberate Simplicity)
+- [ ] T040 [P] [US8] Implement DummySuccessJob.validate() that returns empty list in src/pcswitcher/jobs/dummy_success.py (Deliberate Simplicity)
+- [ ] T041 [P] [US8] Implement DummySuccessJob.sync() with time.sleep loop, progress emission, and log calls in src/pcswitcher/jobs/dummy_success.py (Deliberate Simplicity)
+- [ ] T042 [P] [US8] Implement DummySuccessJob.abort(timeout) that logs and stops execution in src/pcswitcher/jobs/dummy_success.py (Reliability Without Compromise)
 - [ ] T043 *(Removed)*
-- [ ] T044 [P] [US8] Create DummyFailModule in src/pcswitcher/modules/dummy_fail.py that raises unhandled exception at 60% progress (Reliability Without Compromise)
-- [ ] T045 [P] [US8] Implement get_config_schema() for all dummy modules with duration_seconds parameter in respective module files (Up-to-date Documentation)
+- [ ] T044 [P] [US8] Create DummyFailJob in src/pcswitcher/jobs/dummy_fail.py that raises unhandled exception at 60% progress (Reliability Without Compromise)
+- [ ] T045 [P] [US8] Implement get_config_schema() for all dummy jobs with duration_seconds parameter in respective job files (Up-to-date Documentation)
 
-**Checkpoint**: At this point, both dummy modules should be fully functional for infrastructure testing
+**Checkpoint**: At this point, both dummy jobs should be fully functional for infrastructure testing
 
 ---
 
 ## Phase 7: User Story 5 - Graceful Interrupt Handling (Priority: P1) 🎯 MVP Component 5/9
 
-**Goal**: SIGINT (Ctrl+C) handler that calls abort() on current module, logs interruption, sends cleanup to target, closes connection cleanly, exits with code 130, no orphaned processes
+**Goal**: SIGINT (Ctrl+C) handler that calls abort() on current job, logs interruption, sends cleanup to target, closes connection cleanly, exits with code 130, no orphaned processes
 
-**Independent Test**: Start sync with long-running dummy module, press Ctrl+C mid-execution, verify terminal displays "Sync interrupted by user", currently-executing module's abort() was called, connection to target was closed, no orphaned processes on source or target, log file contains interruption event
+**Independent Test**: Start sync with long-running dummy job, press Ctrl+C mid-execution, verify terminal displays "Sync interrupted by user", currently-executing job's abort() was called, connection to target was closed, no orphaned processes on source or target, log file contains interruption event
 
-**Dependencies**: US1 (needs module interface), US4 (needs logging)
+**Dependencies**: US1 (needs job interface), US4 (needs logging)
 
 ### Implementation for User Story 5
 
 - [ ] T046 [US5] Create SIGINT handler function handle_interrupt(signal_num, frame) in src/pcswitcher/core/signals.py (Reliability Without Compromise)
 - [ ] T047 [US5] Implement interrupt flag tracking with threading.Event for graceful vs forced shutdown in src/pcswitcher/core/signals.py (Reliability Without Compromise)
-- [ ] T048 [US5] Add signal handler installation install_signal_handlers(session, current_module_ref) in src/pcswitcher/core/signals.py (Reliability Without Compromise)
+- [ ] T048 [US5] Add signal handler installation install_signal_handlers(session, current_job_ref) in src/pcswitcher/core/signals.py (Reliability Without Compromise)
 - [ ] T049 [US5] Implement double-SIGINT detection for immediate force-terminate (second Ctrl+C within 2 seconds) in src/pcswitcher/core/signals.py (Reliability Without Compromise)
-- [ ] T050 [US5] Add cleanup logic: call current_module.abort(timeout=5.0), log interruption at WARNING, set session.abort_requested=True in src/pcswitcher/core/signals.py (Reliability Without Compromise)
+- [ ] T050 [US5] Add cleanup logic: call current_job.abort(timeout=5.0), log interruption at WARNING, set session.abort_requested=True in src/pcswitcher/core/signals.py (Reliability Without Compromise)
 
 **Checkpoint**: At this point, interrupt handling should gracefully stop operations and prevent orphaned processes
 
@@ -194,26 +194,26 @@ Repository structure (single Python package):
 
 ## Phase 9: User Story 3 - Safety Infrastructure with Btrfs Snapshots (Priority: P1) 🎯 MVP Component 7/9
 
-**Goal**: Pre-sync and post-sync btrfs snapshots for configured subvolumes on source and target, read-only snapshots with timestamp+session-id naming, rollback capability, cleanup command, disk space monitoring, required module that cannot be disabled
+**Goal**: Pre-sync and post-sync btrfs snapshots for configured subvolumes on source and target, read-only snapshots with timestamp+session-id naming, rollback capability, cleanup command, disk space monitoring, required job that cannot be disabled
 
-**Independent Test**: Run sync on btrfs machines, verify pre-sync snapshots created before any module executes, snapshot naming includes timestamp and session ID, snapshots are read-only, simulate failure and verify rollback restores from pre-sync snapshot, confirm post-sync snapshots created after success, attempt to disable snapshot module and verify error
+**Independent Test**: Run sync on btrfs machines, verify pre-sync snapshots created before any job executes, snapshot naming includes timestamp and session ID, snapshots are read-only, simulate failure and verify rollback restores from pre-sync snapshot, confirm post-sync snapshots created after success, attempt to disable snapshot job and verify error
 
-**Dependencies**: US1 (needs module interface), US4 (needs logging), US6 (needs config)
+**Dependencies**: US1 (needs job interface), US4 (needs logging), US6 (needs config)
 
 ### Implementation for User Story 3
 
-- [ ] T061 [US3] Create BtrfsSnapshotsModule extending SyncModule in src/pcswitcher/modules/btrfs_snapshots.py with name="btrfs-snapshots", required=True (Reliability Without Compromise)
-- [ ] T062 [US3] Implement get_config_schema() for btrfs_snapshots with subvolumes (array), snapshot_dir, keep_recent, max_age_days in src/pcswitcher/modules/btrfs_snapshots.py (Up-to-date Documentation)
-- [ ] T063 [US3] Implement validate() that checks btrfs filesystem exists (stat -f -c %T / == btrfs) on both source and target in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
-- [ ] T064 [US3] Implement validate() check that all configured subvolumes exist in top-level (btrfs subvolume list /) on both source and target in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
-- [ ] T065 [US3] Implement pre_sync() that creates read-only snapshots with naming {snapshot_dir}/@{subvol}-presync-{timestamp}-{session_id} using btrfs subvolume snapshot -r in src/pcswitcher/modules/btrfs_snapshots.py (Minimize SSD Wear)
-- [ ] T066 [US3] Implement post_sync() that creates post-sync snapshots with naming {snapshot_dir}/@{subvol}-postsync-{timestamp}-{session_id} in src/pcswitcher/modules/btrfs_snapshots.py (Minimize SSD Wear)
-- [ ] T067 [US3] Add snapshot creation error handling: log CRITICAL and raise SyncError if snapshot fails in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
-- [ ] T068 [US3] Implement rollback_to_presync(session_id) that restores from pre-sync snapshots in src/pcswitcher/modules/btrfs_snapshots.py (Reliability Without Compromise)
-- [ ] T069 [US3] Implement cleanup_old_snapshots(older_than_days, keep_recent) using btrfs subvolume delete in src/pcswitcher/modules/btrfs_snapshots.py (Minimize SSD Wear)
+- [ ] T061 [US3] Create BtrfsSnapshotsJob extending SyncJob in src/pcswitcher/jobs/btrfs_snapshots.py with name="btrfs-snapshots", required=True (Reliability Without Compromise)
+- [ ] T062 [US3] Implement get_config_schema() for btrfs_snapshots with subvolumes (array), snapshot_dir, keep_recent, max_age_days in src/pcswitcher/jobs/btrfs_snapshots.py (Up-to-date Documentation)
+- [ ] T063 [US3] Implement validate() that checks btrfs filesystem exists (stat -f -c %T / == btrfs) on both source and target in src/pcswitcher/jobs/btrfs_snapshots.py (Reliability Without Compromise)
+- [ ] T064 [US3] Implement validate() check that all configured subvolumes exist in top-level (btrfs subvolume list /) on both source and target in src/pcswitcher/jobs/btrfs_snapshots.py (Reliability Without Compromise)
+- [ ] T065 [US3] Implement pre_sync() that creates read-only snapshots with naming {snapshot_dir}/@{subvol}-presync-{timestamp}-{session_id} using btrfs subvolume snapshot -r in src/pcswitcher/jobs/btrfs_snapshots.py (Minimize SSD Wear)
+- [ ] T066 [US3] Implement post_sync() that creates post-sync snapshots with naming {snapshot_dir}/@{subvol}-postsync-{timestamp}-{session_id} in src/pcswitcher/jobs/btrfs_snapshots.py (Minimize SSD Wear)
+- [ ] T067 [US3] Add snapshot creation error handling: log CRITICAL and raise SyncError if snapshot fails in src/pcswitcher/jobs/btrfs_snapshots.py (Reliability Without Compromise)
+- [ ] T068 [US3] Implement rollback_to_presync(session_id) that restores from pre-sync snapshots in src/pcswitcher/jobs/btrfs_snapshots.py (Reliability Without Compromise)
+- [ ] T069 [US3] Implement cleanup_old_snapshots(older_than_days, keep_recent) using btrfs subvolume delete in src/pcswitcher/jobs/btrfs_snapshots.py (Minimize SSD Wear)
 - [ ] T070 [US3] Create DiskMonitor utility class with check_free_space(path, min_free) that accepts float (0.0-1.0) or percentage string (e.g., "20%"), default 0.20, in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
 - [ ] T071 [US3] Implement DiskMonitor.monitor_continuously(interval, reserve_minimum, callback) with interval default 30s, reserve_minimum default 0.15 or "15%", for periodic checks during sync in src/pcswitcher/utils/disk.py (Reliability Without Compromise)
-- [ ] T072 [US3] Add orchestration pre-flight disk check that runs before any modules execute, aborting if disk.min_free falls below threshold in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
+- [ ] T072 [US3] Add orchestration pre-flight disk check that runs before any jobs execute, aborting if disk.min_free falls below threshold in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T073 [US3] Wire continuous disk monitoring into orchestrator run loop so reserve_minimum breaches trigger CRITICAL abort and user messaging in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 
 **Checkpoint**: At this point, btrfs snapshot safety infrastructure should be fully functional with pre/post snapshots, rollback, and disk monitoring
@@ -230,7 +230,7 @@ Repository structure (single Python package):
 
 ### Implementation for Session Management
 
-- [ ] T074 [SESSION] Create SyncSession dataclass with fields: id, timestamp, source_hostname, target_hostname, enabled_modules (populated from Configuration.get_enabled_modules()), state, module_results, has_errors, abort_requested, lock_path in src/pcswitcher/core/session.py (Reliability Without Compromise)
+- [ ] T074 [SESSION] Create SyncSession dataclass with fields: id, timestamp, source_hostname, target_hostname, enabled_jobs (populated from Configuration.get_enabled_jobs()), state, job_results, has_errors, abort_requested, lock_path in src/pcswitcher/core/session.py (Reliability Without Compromise)
 - [ ] T075 [SESSION] Implement generate_session_id() that returns 8-char hex from uuid.uuid4() in src/pcswitcher/core/session.py (Deliberate Simplicity)
 - [ ] T076 [SESSION] Implement state transition methods: set_state(new_state), is_terminal_state() in src/pcswitcher/core/session.py (Reliability Without Compromise)
 - [ ] T077 [SESSION] Create LockManager class with acquire_lock() (includes PID validation using ps -p check to detect stale locks), release_lock(), check_lock_exists() in src/pcswitcher/utils/lock.py (Reliability Without Compromise)
@@ -245,29 +245,29 @@ Repository structure (single Python package):
 
 ## Phase 11: User Story Core Orchestration (Priority: P1) 🎯 MVP Component 9/9
 
-**Goal**: Main orchestrator that manages complete sync workflow: initialization → validation → execution → cleanup, module loading from config, lifecycle execution, exception handling, final state determination
+**Goal**: Main orchestrator that manages complete sync workflow: initialization → validation → execution → cleanup, job loading from config, lifecycle execution, exception handling, final state determination
 
-**Independent Test**: Run complete sync flow with dummy modules, verify all phases execute in order, modules receive injected methods, exceptions are caught and logged as CRITICAL, ERROR logs tracked for final state, session summary logged
+**Independent Test**: Run complete sync flow with dummy jobs, verify all phases execute in order, jobs receive injected methods, exceptions are caught and logged as CRITICAL, ERROR logs tracked for final state, session summary logged
 
 **Dependencies**: ALL previous user stories (this integrates everything)
 
 ### Implementation for Core Orchestration
 
 - [ ] T082 [ORCH] Create Orchestrator class with `__init__(config, target_hostname)` in src/pcswitcher/core/orchestrator.py (Deliberate Simplicity)
-- [ ] T083 [ORCH] Implement _load_modules() that imports module classes by name and instantiates with config + RemoteExecutor in src/pcswitcher/core/orchestrator.py (Deliberate Simplicity)
-- [ ] T084 [ORCH] Implement _inject_module_methods(module) that sets module.log and module.emit_progress in src/pcswitcher/core/orchestrator.py (Deliberate Simplicity)
-- [ ] T085 [ORCH] Implement _validate_all_modules() that calls validate() on each module and collects errors in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
-- [ ] T086 [ORCH] Implement _execute_module_lifecycle(module) that calls pre_sync() → sync() → post_sync() with exception handling in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
-- [ ] T087 [ORCH] Implement exception catching: catch SyncError specifically, log error message at CRITICAL level, call abort(timeout) on current module, set session.abort_requested=True, enter CLEANUP phase; catch other exceptions, wrap as SyncError in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
-- [ ] T088 [ORCH] Implement _cleanup_phase() that calls current_module.abort(timeout=5.0) if module is running in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
+- [ ] T083 [ORCH] Implement _load_jobs() that imports job classes by name and instantiates with config + RemoteExecutor in src/pcswitcher/core/orchestrator.py (Deliberate Simplicity)
+- [ ] T084 [ORCH] Implement _inject_job_methods(job) that sets job.log and job.emit_progress in src/pcswitcher/core/orchestrator.py (Deliberate Simplicity)
+- [ ] T085 [ORCH] Implement _validate_all_jobs() that calls validate() on each job and collects errors in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
+- [ ] T086 [ORCH] Implement _execute_job_lifecycle(job) that calls pre_sync() → sync() → post_sync() with exception handling in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
+- [ ] T087 [ORCH] Implement exception catching: catch SyncError specifically, log error message at CRITICAL level, call abort(timeout) on current job, set session.abort_requested=True, enter CLEANUP phase; catch other exceptions, wrap as SyncError in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
+- [ ] T088 [ORCH] Implement _cleanup_phase() that calls current_job.abort(timeout=5.0) if job is running in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T089 [ORCH] Implement _determine_final_state() logic: Ctrl+C → ABORTED, exception/ERROR logs → FAILED, success → COMPLETED in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T090 [ORCH] Implement rollback offer workflow after CRITICAL failure if pre-sync snapshots exist in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
 - [ ] T091 [ORCH] Add user confirmation prompt for rollback: "Would you like to restore snapshots? [y/N]" in src/pcswitcher/core/orchestrator.py (Frictionless Command UX)
-- [ ] T092 [ORCH] Implement execute_rollback() that calls BtrfsSnapshotsModule.rollback_to_presync() on user confirmation in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
-- [ ] T093 [ORCH] Implement log_session_summary() that reports final state (COMPLETED/ABORTED/FAILED), per-module results (SUCCESS/SKIPPED/FAILED), total duration, error count, and lists any modules that failed in src/pcswitcher/core/orchestrator.py (Up-to-date Documentation)
+- [ ] T092 [ORCH] Implement execute_rollback() that calls BtrfsSnapshotsJob.rollback_to_presync() on user confirmation in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
+- [ ] T093 [ORCH] Implement log_session_summary() that reports final state (COMPLETED/ABORTED/FAILED), per-job results (SUCCESS/SKIPPED/FAILED), total duration, error count, and lists any jobs that failed in src/pcswitcher/core/orchestrator.py (Up-to-date Documentation)
 - [ ] T094 [ORCH] Implement run() method that orchestrates: INITIALIZING → VALIDATING → EXECUTING → CLEANUP → terminal state in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
-- [ ] T095 [ORCH] Add btrfs filesystem verification during INITIALIZING: check / is btrfs (this is a fast sanity check before module validation; detailed subvolume checks are done by BtrfsSnapshotsModule.validate()) in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
-- [ ] T096 [ORCH] Implement progress forwarding: receive from module, log at FULL, forward to terminal UI in src/pcswitcher/core/orchestrator.py (Frictionless Command UX)
+- [ ] T095 [ORCH] Add btrfs filesystem verification during INITIALIZING: check / is btrfs (this is a fast sanity check before job validation; detailed subvolume checks are done by BtrfsSnapshotsJob.validate()) in src/pcswitcher/core/orchestrator.py (Reliability Without Compromise)
+- [ ] T096 [ORCH] Implement progress forwarding: receive from job, log at FULL, forward to terminal UI in src/pcswitcher/core/orchestrator.py (Frictionless Command UX)
 
 **Checkpoint**: At this point, core orchestrator should execute complete sync workflow end-to-end
 
@@ -275,20 +275,20 @@ Repository structure (single Python package):
 
 ## Phase 12: User Story 9 - Terminal UI with Progress Reporting (Priority: P2)
 
-**Goal**: Real-time terminal display with progress bars (rich library), current module name, operation phase, progress percentage, current item, log messages at CLI log level, smooth updates without flicker
+**Goal**: Real-time terminal display with progress bars (rich library), current job name, operation phase, progress percentage, current item, log messages at CLI log level, smooth updates without flicker
 
-**Independent Test**: Run sync with dummy modules, verify terminal shows progress bars, module names, log messages, updates smoothly, handles terminal resize gracefully
+**Independent Test**: Run sync with dummy jobs, verify terminal shows progress bars, job names, log messages, updates smoothly, handles terminal resize gracefully
 
 **Dependencies**: ORCH (needs orchestrator), US4 (needs logging)
 
 ### Implementation for User Story 9
 
 - [ ] T097 [P] [US9] Create TerminalUI class with rich.console.Console and rich.progress.Progress in src/pcswitcher/cli/ui.py (Frictionless Command UX)
-- [ ] T098 [US9] Implement TerminalUI.create_module_task(module_name) that adds progress bar for module in src/pcswitcher/cli/ui.py (Frictionless Command UX)
-- [ ] T099 [US9] Implement TerminalUI.update_progress(module_name, percentage, item) that updates progress bar and description in src/pcswitcher/cli/ui.py (Frictionless Command UX)
+- [ ] T098 [US9] Implement TerminalUI.create_job_task(job_name) that adds progress bar for job in src/pcswitcher/cli/ui.py (Frictionless Command UX)
+- [ ] T099 [US9] Implement TerminalUI.update_progress(job_name, percentage, item) that updates progress bar and description in src/pcswitcher/cli/ui.py (Frictionless Command UX)
 - [ ] T100 [US9] Implement TerminalUI.display_log(level, message) with color-coding by level using rich.logging.RichHandler in src/pcswitcher/cli/ui.py (Frictionless Command UX)
 - [ ] T101 [US9] Add rich.live.Live for real-time updates without flicker in src/pcswitcher/cli/ui.py (Frictionless Command UX)
-- [ ] T102 [US9] Implement TerminalUI.show_overall_progress(current_module_index, total_modules) in src/pcswitcher/cli/ui.py (Frictionless Command UX)
+- [ ] T102 [US9] Implement TerminalUI.show_overall_progress(current_job_index, total_jobs) in src/pcswitcher/cli/ui.py (Frictionless Command UX)
 - [ ] T103 [US9] Integrate TerminalUI with Orchestrator: create UI, update on progress events, display logs in src/pcswitcher/core/orchestrator.py (Frictionless Command UX)
 
 **Checkpoint**: At this point, terminal UI should display real-time progress with bars and logs
@@ -364,14 +364,14 @@ Repository structure (single Python package):
 **Purpose**: Improvements that affect multiple user stories
 
 - [ ] T120 [P] Update README.md with complete installation instructions, configuration guide, usage examples, troubleshooting section (Up-to-date Documentation)
-- [ ] T121 [P] Add inline code comments for complex logic in orchestrator, btrfs module, remote connection (Up-to-date Documentation)
+- [ ] T121 [P] Add inline code comments for complex logic in orchestrator, btrfs job, remote connection (Up-to-date Documentation)
 - [ ] T122 [P] Create CONTRIBUTING.md with development setup, testing guide, PR workflow (Up-to-date Documentation)
 - [ ] T123 [P] Add example config files in examples/ directory: minimal.yaml, full-featured.yaml (Frictionless Command UX)
 - [ ] T124 Review all error messages for clarity and actionability, ensure they guide user to resolution (Frictionless Command UX)
 - [ ] T125 Add startup performance measurement: log timing from CLI invocation to sync start (Throughput-Focused Syncing)
 - [ ] T126 Verify all file operations use minimal writes: structured logging buffer, snapshot COW verification (Minimize SSD Wear)
 - [ ] T127 Run complete sync flow validation per quickstart.md test scenarios (Reliability Without Compromise)
-- [ ] T128 Create ARCHITECTURE.md documenting module interface, orchestrator workflow, state transitions with diagrams (Up-to-date Documentation)
+- [ ] T128 Create ARCHITECTURE.md documenting job interface, orchestrator workflow, state transitions with diagrams (Up-to-date Documentation)
 
 ---
 
@@ -384,11 +384,11 @@ Repository structure (single Python package):
 - **User Stories (Phases 3-14)**: All depend on Foundational phase completion
   - US4 (Logging) → blocks US6, US1, US8, US5, US2, US3, SESSION, ORCH, US9, CLI
   - US6 (Config) → blocks US1, US8, US2, US3, SESSION, ORCH, CLI
-  - US1 (Module Interface) → blocks US8, US2, US3, ORCH
-  - US8 (Dummy Modules) → enables ORCH testing
+  - US1 (Job Interface) → blocks US8, US2, US3, ORCH
+  - US8 (Dummy Jobs) → enables ORCH testing
   - US5 (Interrupt Handling) → independent, integrates with ORCH
   - US2 (Self-Install) → independent, integrates with ORCH
-  - US3 (Btrfs Snapshots) → independent module, integrates with ORCH
+  - US3 (Btrfs Snapshots) → independent job, integrates with ORCH
   - SESSION → blocks ORCH
   - ORCH → blocks US9, CLI, US7
   - US9 (Terminal UI) → integrates with ORCH and CLI
@@ -400,8 +400,8 @@ Repository structure (single Python package):
 ### Critical Path (Minimum for Working System)
 
 1. Phase 1 (Setup) → Phase 2 (Foundational)
-1. US4 (Logging) → US6 (Config) → US1 (Module Interface)
-1. US8 (Dummy Modules) + US5 (Interrupt) + US2 (Self-Install) + US3 (Btrfs)
+1. US4 (Logging) → US6 (Config) → US1 (Job Interface)
+1. US8 (Dummy Jobs) + US5 (Interrupt) + US2 (Self-Install) + US3 (Btrfs)
 1. SESSION → ORCH (Core Orchestration)
 1. CLI → Working system!
 
@@ -410,9 +410,9 @@ Repository structure (single Python package):
 After Foundational phase (T015) completes:
 - US4 (Logging) must complete first
 - Then US6 (Config) must complete
-- Then US1 (Module Interface) must complete
+- Then US1 (Job Interface) must complete
 - Then these can run in parallel:
-  - US8 (Dummy Modules): T039-T045
+  - US8 (Dummy Jobs): T039-T045
   - US5 (Interrupt Handling): T046-T050
   - US2 (Self-Install): T051-T060
   - US3 (Btrfs Snapshots): T061-T073
@@ -432,10 +432,10 @@ Finally in parallel:
 ## Parallel Example: After Foundational Phase
 
 ```bash
-# After US1 (Module Interface) is complete, these can run in parallel:
+# After US1 (Job Interface) is complete, these can run in parallel:
 
 # Team Member 1:
-Task T039-T045: "Dummy test modules"
+Task T039-T045: "Dummy test jobs"
 
 # Team Member 2:
 Task T046-T050: "Interrupt handling"
@@ -444,7 +444,7 @@ Task T046-T050: "Interrupt handling"
 Task T051-T060: "Self-installation"
 
 # Team Member 4:
-Task T061-T073: "Btrfs snapshots module"
+Task T061-T073: "Btrfs snapshots job"
 
 # Team Member 5:
 Task T074-T081: "Session management and locking"
@@ -462,19 +462,19 @@ Task T074-T081: "Session management and locking"
 1. Complete Phase 2: Foundational (T009-T015)
 1. Complete US4: Logging (T016-T022)
 1. Complete US6: Config (T023-T030)
-1. Complete US1: Module Interface (T031-T038)
-1. Complete US8: Dummy Modules (T039-T045)
+1. Complete US1: Job Interface (T031-T038)
+1. Complete US8: Dummy Jobs (T039-T045)
 1. Complete SESSION: Session Management (T074-T081)
 1. Complete ORCH: Core Orchestration (T082-T096)
 1. Complete CLI: Basic Commands (T104-T110)
-1. **STOP and VALIDATE**: Test complete sync flow with dummy modules
+1. **STOP and VALIDATE**: Test complete sync flow with dummy jobs
 
 **At this checkpoint**:
 - Can run `pc-switcher sync <target>`
-- Dummy modules demonstrate all infrastructure
+- Dummy jobs demonstrate all infrastructure
 - Logging works (file + terminal)
 - Config loading works
-- Module lifecycle executes correctly
+- Job lifecycle executes correctly
 - Can test error handling, interrupts, state transitions
 
 **Timeline**: ~2-3 weeks for single developer
@@ -492,7 +492,7 @@ Add safety infrastructure for real usage:
 - Full safety with snapshots
 - Rollback capability
 - Graceful interrupts
-- Ready for real sync module development
+- Ready for real sync job development
 
 **Timeline**: +1-2 weeks
 
@@ -511,10 +511,10 @@ Add UX polish and deployment:
 
 ### Incremental Delivery
 
-1. **Week 1-2**: Setup → Foundational → Logging → Config → Module Interface
-   - Deliverable: Architecture complete, can write modules
-1. **Week 3**: Dummy Modules → Session → Orchestrator → CLI
-   - Deliverable: Working sync system (dummy modules only)
+1. **Week 1-2**: Setup → Foundational → Logging → Config → Job Interface
+   - Deliverable: Architecture complete, can write jobs
+1. **Week 3**: Dummy Jobs → Session → Orchestrator → CLI
+   - Deliverable: Working sync system (dummy jobs only)
    - Demo: Show sync flow, error handling, logging
 1. **Week 4**: Self-Install → Btrfs Snapshots → Interrupt Handling
    - Deliverable: Production-ready foundation
@@ -524,7 +524,7 @@ Add UX polish and deployment:
    - Demo: Full UX with progress bars, easy installation
 1. **Week 6**: Polish and validation
    - Deliverable: Release-ready v1.0.0
-   - Enable: Feature module development can begin
+   - Enable: Feature job development can begin
 
 ---
 
@@ -538,4 +538,4 @@ Add UX polish and deployment:
 - **Independent test criteria**: Each user story phase includes clear test criteria for verification
 - **Format validation**: All 129 tasks follow strict format: `- [ ] [ID] [P?] [Story] Description with file path`
 
-**Suggested MVP**: Complete through US8 + SESSION + ORCH + CLI (checkpoints at T045, T081, T096, T110) for working system with dummy modules, then add US2/US3/US5 for production safety.
+**Suggested MVP**: Complete through US8 + SESSION + ORCH + CLI (checkpoints at T045, T081, T096, T110) for working system with dummy jobs, then add US2/US3/US5 for production safety.

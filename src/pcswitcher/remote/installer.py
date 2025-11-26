@@ -10,7 +10,7 @@ from packaging.version import InvalidVersion, Version
 from pcswitcher.core.logging import get_logger
 
 if TYPE_CHECKING:
-    from pcswitcher.core.module import RemoteExecutor
+    from pcswitcher.core.job import RemoteExecutor
 
 
 class InstallationError(Exception):

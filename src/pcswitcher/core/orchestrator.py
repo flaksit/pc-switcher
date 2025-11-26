@@ -5,7 +5,7 @@ a state machine that progresses through phases: INITIALIZING -> VALIDATING ->
 EXECUTING -> terminal state (COMPLETED/ABORTED/FAILED).
 
 Key responsibilities:
-- Module lifecycle management (load, validate, execute, abort)
+- Job lifecycle management (load, validate, execute, abort)
 - Error handling and graceful shutdown
 - Disk space monitoring during sync
 - Signal handling (SIGINT/SIGTERM)
@@ -24,10 +24,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pcswitcher.core.config import Configuration, validate_module_config
+from pcswitcher.core.config import Configuration, validate_job_config
 from pcswitcher.core.logging import LogLevel, get_logger
-from pcswitcher.core.module import RemoteExecutor, SyncError, SyncModule
-from pcswitcher.core.session import ModuleResult, SessionState, SyncSession
+from pcswitcher.core.job import RemoteExecutor, SyncError, SyncJob
+from pcswitcher.core.session import JobResult, SessionState, SyncSession
 from pcswitcher.core.snapshot import SnapshotCallbacks, SnapshotManager
 from pcswitcher.remote.installer import InstallationError, VersionManager
 from pcswitcher.utils.disk import DiskMonitor, format_bytes, parse_disk_threshold
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 class InterruptHandler:
     """Handles interrupt signals (SIGINT/SIGTERM) with double-interrupt detection.
 
-    First interrupt initiates graceful shutdown with module abort.
+    First interrupt initiates graceful shutdown with job abort.
     Second interrupt within 2 seconds force terminates immediately.
     """
 
@@ -89,27 +89,27 @@ class InterruptHandler:
         raise KeyboardInterrupt
 
 
-class _ModuleCallbacks:
-    """Implementation of SyncModuleCallbacks for a specific module.
+class _JobCallbacks:
+    """Implementation of SyncJobCallbacks for a specific job.
 
-    Created by Orchestrator for each module to provide logging and progress
+    Created by Orchestrator for each job to provide logging and progress
     reporting capabilities without tight coupling.
     """
 
     def __init__(
         self,
-        module_name: str,
+        job_name: str,
         logger: Any,
         ui: TerminalUI | None,
     ) -> None:
-        """Initialize callbacks for a module.
+        """Initialize callbacks for a job.
 
         Args:
-            module_name: Name of the module these callbacks are for
-            logger: Structlog logger for this module
+            job_name: Name of the job these callbacks are for
+            logger: Structlog logger for this job
             ui: Optional terminal UI for progress display
         """
-        self._module_name = module_name
+        self._job_name = job_name
         self._logger = logger
         self._ui = ui
 
@@ -119,8 +119,8 @@ class _ModuleCallbacks:
         item: str = "",
         eta: timedelta | None = None,
     ) -> None:
-        """Module progress reporting method."""
-        context: dict[str, Any] = {"module": self._module_name, "item": item}
+        """Job progress reporting method."""
+        context: dict[str, Any] = {"job": self._job_name, "item": item}
         if percentage is not None:
             context["percentage"] = f"{percentage * 100:.1f}%"
         if eta is not None:
@@ -130,10 +130,10 @@ class _ModuleCallbacks:
 
         # Forward to terminal UI if available for real-time progress bars
         if self._ui is not None and percentage is not None:
-            self._ui.update_progress(self._module_name, percentage, item)
+            self._ui.update_progress(self._job_name, percentage, item)
 
     def log(self, level: LogLevel, message: str, **context: Any) -> None:
-        """Module logging method that forwards to structlog."""
+        """Job logging method that forwards to structlog."""
         self._logger.log(level, message, **context)
 
     def log_remote_output(
@@ -171,11 +171,11 @@ class _ModuleCallbacks:
             )
 
 
-class ModuleLifecycleManager:
-    """Manages the lifecycle of sync modules: loading, validation, execution, and abort.
+class JobLifecycleManager:
+    """Manages the lifecycle of sync jobs: loading, validation, execution, and abort.
 
-    Handles module instantiation, dependency injection, and orchestrating the
-    module lifecycle phases (validate → pre_sync → sync → post_sync → abort).
+    Handles job instantiation, dependency injection, and orchestrating the
+    job lifecycle phases (validate → pre_sync → sync → post_sync → abort).
     """
 
     def __init__(
@@ -186,33 +186,33 @@ class ModuleLifecycleManager:
         ui: TerminalUI | None,
         logger: Any,
     ) -> None:
-        """Initialize module lifecycle manager.
+        """Initialize job lifecycle manager.
 
         Args:
             config: Validated configuration
             remote: Remote executor for target machine
             session: Sync session tracking state and results
             ui: Optional terminal UI for progress display
-            logger: Logger for module operations
+            logger: Logger for job operations
         """
         self._config = config
         self._remote = remote
         self._session = session
         self._ui = ui
         self._logger = logger
-        self._modules: list[SyncModule] = []
-        self._current_module: SyncModule | None = None
+        self._jobs: list[SyncJob] = []
+        self._current_job: SyncJob | None = None
         self._snapshot_manager: SnapshotManager | None = None
 
     @property
-    def modules(self) -> list[SyncModule]:
-        """Get loaded modules."""
-        return self._modules
+    def jobs(self) -> list[SyncJob]:
+        """Get loaded jobs."""
+        return self._jobs
 
     @property
-    def current_module(self) -> SyncModule | None:
-        """Get currently executing module."""
-        return self._current_module
+    def current_job(self) -> SyncJob | None:
+        """Get currently executing job."""
+        return self._current_job
 
     @property
     def snapshot_manager(self) -> SnapshotManager | None:
@@ -222,24 +222,24 @@ class ModuleLifecycleManager:
     def load_snapshot_manager(self) -> None:
         """Load and instantiate the snapshot manager (btrfs_snapshots).
 
-        This is orchestrator-level infrastructure, not a SyncModule.
+        This is orchestrator-level infrastructure, not a SyncJob.
 
         Raises:
             SyncError: If snapshot manager loading fails
         """
         try:
-            from pcswitcher.modules.btrfs_snapshots import BtrfsSnapshotsModule
+            from pcswitcher.jobs.btrfs_snapshots import BtrfsSnapshotsJob
 
             # Get btrfs_snapshots config
-            snapshot_config = self._config.module_configs.get("btrfs_snapshots", {})
+            snapshot_config = self._config.job_configs.get("btrfs_snapshots", {})
 
             # Validate config against schema
-            temp_instance = BtrfsSnapshotsModule({}, self._remote)
+            temp_instance = BtrfsSnapshotsJob({}, self._remote)
             schema = temp_instance.get_config_schema()
-            validate_module_config("btrfs_snapshots", snapshot_config, schema)
+            validate_job_config("btrfs_snapshots", snapshot_config, schema)
 
             # Instantiate snapshot manager
-            self._snapshot_manager = BtrfsSnapshotsModule(snapshot_config, self._remote)
+            self._snapshot_manager = BtrfsSnapshotsJob(snapshot_config, self._remote)
 
             # Inject callbacks for logging
             snapshot_logger = get_logger("snapshot_manager", session_id=self._session.id)
@@ -251,63 +251,63 @@ class ModuleLifecycleManager:
         except Exception as e:
             raise SyncError(f"Failed to load snapshot manager: {e}") from e
 
-    def load_modules(self) -> None:
-        """Load and instantiate enabled sync modules.
+    def load_jobs(self) -> None:
+        """Load and instantiate enabled sync jobs.
 
-        Note: btrfs_snapshots is no longer a SyncModule. It's now orchestrator-level
+        Note: btrfs_snapshots is no longer a SyncJob. It's now orchestrator-level
         infrastructure and is loaded separately via load_snapshot_manager().
 
         Raises:
-            SyncError: If module loading or validation fails
+            SyncError: If job loading or validation fails
         """
-        enabled_modules = [name for name, enabled in self._config.sync_modules.items() if enabled]
+        enabled_jobs = [name for name, enabled in self._config.sync_jobs.items() if enabled]
 
-        for module_name in enabled_modules:
+        for job_name in enabled_jobs:
             # Skip btrfs_snapshots - it's now orchestrator-level infrastructure
-            if module_name == "btrfs_snapshots":
+            if job_name == "btrfs_snapshots":
                 continue
 
             try:
-                # Import module class
-                module_class = self._import_module_class(module_name)
+                # Import job class
+                job_class = self._import_job_class(job_name)
 
-                # Get module config
-                module_config = self._config.module_configs.get(module_name, {})
+                # Get job config
+                job_config = self._config.job_configs.get(job_name, {})
 
                 # Validate config against schema
-                temp_instance = module_class({}, self._remote)
+                temp_instance = job_class({}, self._remote)
                 schema = temp_instance.get_config_schema()
-                validate_module_config(module_name, module_config, schema)
+                validate_job_config(job_name, job_config, schema)
 
-                # Instantiate module
-                module = module_class(module_config, self._remote)
+                # Instantiate job
+                job = job_class(job_config, self._remote)
 
                 # Inject callbacks
-                self._inject_module_callbacks(module)
+                self._inject_job_callbacks(job)
 
-                self._modules.append(module)
-                self._logger.log(LogLevel.FULL, f"Loaded module: {module.name}")
+                self._jobs.append(job)
+                self._logger.log(LogLevel.FULL, f"Loaded job: {job.name}")
 
             except Exception as e:
-                raise SyncError(f"Failed to load module '{module_name}': {e}") from e
+                raise SyncError(f"Failed to load job '{job_name}': {e}") from e
 
-        self._logger.info(f"Loaded {len(self._modules)} modules", modules=[m.name for m in self._modules])
+        self._logger.info(f"Loaded {len(self._jobs)} jobs", jobs=[j.name for j in self._jobs])
 
-    def _import_module_class(self, module_name: str) -> type[SyncModule]:
-        """Import module class by name.
+    def _import_job_class(self, job_name: str) -> type[SyncJob]:
+        """Import job class by name.
 
         Args:
-            module_name: Module name with underscores (e.g., "btrfs_snapshots")
+            job_name: Job name with underscores (e.g., "btrfs_snapshots")
 
         Returns:
-            Module class
+            Job class
 
         Raises:
-            ImportError: If module cannot be imported
+            ImportError: If job cannot be imported
         """
-        # Convert module name: btrfs_snapshots -> BtrfsSnapshotsModule
-        class_name = "".join(word.capitalize() for word in module_name.split("_")) + "Module"
-        module_path = f"pcswitcher.modules.{module_name}"
+        # Convert job name: btrfs_snapshots -> BtrfsSnapshotsJob
+        class_name = "".join(word.capitalize() for word in job_name.split("_")) + "Job"
+        module_path = f"pcswitcher.jobs.{job_name}"
 
         try:
             module = importlib.import_module(module_path)
@@ -315,135 +315,135 @@ class ModuleLifecycleManager:
         except (ImportError, AttributeError) as e:
             raise ImportError(f"Cannot import {class_name} from {module_path}: {e}") from e
 
-    def _inject_module_callbacks(self, module: SyncModule) -> None:
-        """Inject callbacks into module via composition pattern.
+    def _inject_job_callbacks(self, job: SyncJob) -> None:
+        """Inject callbacks into job via composition pattern.
 
         Args:
-            module: Module to inject callbacks into
+            job: Job to inject callbacks into
         """
-        module_logger = get_logger(f"module.{module.name}", session_id=self._session.id)
-        callbacks = _ModuleCallbacks(module.name, module_logger, self._ui)
-        module.set_callbacks(callbacks)
+        job_logger = get_logger(f"job.{job.name}", session_id=self._session.id)
+        callbacks = _JobCallbacks(job.name, job_logger, self._ui)
+        job.set_callbacks(callbacks)
 
-    def validate_all_modules(self) -> None:
-        """Run validate() on all modules.
+    def validate_all_jobs(self) -> None:
+        """Run validate() on all jobs.
 
         Raises:
-            SyncError: If any module validation fails
+            SyncError: If any job validation fails
         """
         all_errors: list[str] = []
 
-        for module in self._modules:
-            self._logger.log(LogLevel.FULL, f"Validating module: {module.name}")
-            errors = module.validate()
+        for job in self._jobs:
+            self._logger.log(LogLevel.FULL, f"Validating job: {job.name}")
+            errors = job.validate()
 
             if errors:
-                all_errors.extend([f"[{module.name}] {error}" for error in errors])
+                all_errors.extend([f"[{job.name}] {error}" for error in errors])
 
         if all_errors:
             error_msg = "Validation failed:\n  " + "\n  ".join(all_errors)
             self._logger.critical(error_msg)
             raise SyncError(error_msg)
 
-        self._logger.info("All modules validated successfully")
+        self._logger.info("All jobs validated successfully")
 
-    def execute_all_modules(self) -> None:
-        """Execute all modules in sequence.
+    def execute_all_jobs(self) -> None:
+        """Execute all jobs in sequence.
 
-        Each module goes through: pre_sync -> sync -> post_sync
-        Module execution stops immediately on first failure, and abort() is called
-        on the failing module to allow cleanup of partial state.
+        Each job goes through: pre_sync -> sync -> post_sync
+        Job execution stops immediately on first failure, and abort() is called
+        on the failing job to allow cleanup of partial state.
         """
-        total_modules = len(self._modules)
+        total_jobs = len(self._jobs)
 
-        for idx, module in enumerate(self._modules):
+        for idx, job in enumerate(self._jobs):
             # Check for abort request
             if self._session.abort_requested:
-                self._logger.warning("Abort requested, stopping module execution")
+                self._logger.warning("Abort requested, stopping job execution")
                 break
 
-            self._current_module = module
-            self._logger.info(f"Executing module: {module.name}")
+            self._current_job = job
+            self._logger.info(f"Executing job: {job.name}")
 
-            # Create UI task for this module
+            # Create UI task for this job
             if self._ui is not None:
-                self._ui.create_module_task(module.name)
-                self._ui.show_overall_progress(idx, total_modules)
+                self._ui.create_job_task(job.name)
+                self._ui.show_overall_progress(idx, total_jobs)
 
             try:
-                self._execute_module_lifecycle(module)
-                self._session.module_results[module.name] = ModuleResult.SUCCESS
-                self._logger.info(f"Module completed: {module.name}")
+                self._execute_job_lifecycle(job)
+                self._session.job_results[job.name] = JobResult.SUCCESS
+                self._logger.info(f"Job completed: {job.name}")
 
-                # Mark module as 100% complete in UI
+                # Mark job as 100% complete in UI
                 if self._ui is not None:
-                    self._ui.update_progress(module.name, 1.0, "Complete")
+                    self._ui.update_progress(job.name, 1.0, "Complete")
 
             except SyncError as e:
-                self._logger.critical(f"Module failed: {module.name}", error=str(e))
-                self._session.module_results[module.name] = ModuleResult.FAILED
-                self.cleanup_current_module()
+                self._logger.critical(f"Job failed: {job.name}", error=str(e))
+                self._session.job_results[job.name] = JobResult.FAILED
+                self.cleanup_current_job()
                 self._session.abort_requested = True
                 break
 
             except Exception as e:
-                self._logger.critical(f"Unexpected error in module: {module.name}", error=str(e), exc_info=True)
-                self._session.module_results[module.name] = ModuleResult.FAILED
-                self.cleanup_current_module()
+                self._logger.critical(f"Unexpected error in job: {job.name}", error=str(e), exc_info=True)
+                self._session.job_results[job.name] = JobResult.FAILED
+                self.cleanup_current_job()
                 self._session.abort_requested = True
                 break
 
         # Update overall progress
         if self._ui is not None:
-            completed_modules = len([r for r in self._session.module_results.values() if r == ModuleResult.SUCCESS])
-            self._ui.show_overall_progress(completed_modules, total_modules)
+            completed_jobs = len([r for r in self._session.job_results.values() if r == JobResult.SUCCESS])
+            self._ui.show_overall_progress(completed_jobs, total_jobs)
 
-        self._current_module = None
+        self._current_job = None
 
-    def _execute_module_lifecycle(self, module: SyncModule) -> None:
-        """Execute complete lifecycle for a single module.
+    def _execute_job_lifecycle(self, job: SyncJob) -> None:
+        """Execute complete lifecycle for a single job.
 
         Args:
-            module: Module to execute
+            job: Job to execute
 
         Raises:
             SyncError: If any phase fails
         """
-        self._logger.log(LogLevel.FULL, f"Running pre_sync: {module.name}")
-        module.pre_sync()
+        self._logger.log(LogLevel.FULL, f"Running pre_sync: {job.name}")
+        job.pre_sync()
 
-        self._logger.log(LogLevel.FULL, f"Running sync: {module.name}")
-        module.sync()
+        self._logger.log(LogLevel.FULL, f"Running sync: {job.name}")
+        job.sync()
 
-        self._logger.log(LogLevel.FULL, f"Running post_sync: {module.name}")
-        module.post_sync()
+        self._logger.log(LogLevel.FULL, f"Running post_sync: {job.name}")
+        job.post_sync()
 
-    def cleanup_current_module(self) -> None:
-        """Call abort() on current module with timeout."""
-        if self._current_module is not None:
-            self._logger.info(f"Calling abort on module: {self._current_module.name}")
+    def cleanup_current_job(self) -> None:
+        """Call abort() on current job with timeout."""
+        if self._current_job is not None:
+            self._logger.info(f"Calling abort on job: {self._current_job.name}")
             try:
-                self._current_module.abort(timeout=5.0)
+                self._current_job.abort(timeout=5.0)
             except Exception as e:
                 self._logger.error(f"Error during abort: {e}")
 
 
 class Orchestrator:
-    """Coordinates sync operation lifecycle and module execution.
+    """Coordinates sync operation lifecycle and job execution.
 
     The orchestrator manages the complete sync workflow:
-    1. INITIALIZING - Setup logging, verify btrfs, load modules
-    2. VALIDATING - Run all module validate() methods
-    3. EXECUTING - Execute modules: pre_sync → sync → post_sync
-    4. CLEANUP - Call abort() on current module if needed
+    1. INITIALIZING - Setup logging, verify btrfs, load jobs
+    2. VALIDATING - Run all job validate() methods
+    3. EXECUTING - Execute jobs: pre_sync → sync → post_sync
+    4. CLEANUP - Call abort() on current job if needed
     5. Terminal state - COMPLETED, ABORTED, or FAILED
 
     Handles errors, user interrupts, and provides rollback capability.
 
     The orchestrator enforces several invariants:
-    - btrfs_snapshots module must be first and enabled
-    - Modules execute sequentially in configuration order
-    - Exception-based error propagation (modules raise SyncError)
+    - btrfs_snapshots job must be first and enabled
+    - Jobs execute sequentially in configuration order
+    - Exception-based error propagation (jobs raise SyncError)
     - Session.has_errors tracks whether ERROR/CRITICAL logs occurred
     """
 
@@ -476,7 +476,7 @@ class Orchestrator:
         self._interrupt_handler = InterruptHandler(session, self.logger)
         self._interrupt_handler.register_handlers()
 
-        self._module_manager = ModuleLifecycleManager(config, remote, session, ui, self.logger)
+        self._job_manager = JobLifecycleManager(config, remote, session, ui, self.logger)
 
     def set_cli_invocation_time(self, invocation_time: float) -> None:
         """Set the CLI invocation time for startup performance measurement.
@@ -510,56 +510,56 @@ class Orchestrator:
         try:
             # Phase 1: INITIALIZING
             # This phase sets up the sync environment: verify prerequisites,
-            # load modules, and start continuous monitoring
+            # load jobs, and start continuous monitoring
             self.session.set_state(SessionState.INITIALIZING)
             self.logger.info("Initializing sync session", target=self.remote.get_hostname())
             self._verify_btrfs_filesystem()
             self._ensure_version_sync()
             self._check_disk_space()
-            self._module_manager.load_snapshot_manager()
-            self._module_manager.load_modules()
+            self._job_manager.load_snapshot_manager()
+            self._job_manager.load_jobs()
             self._start_disk_monitoring()
 
             # Phase 2: VALIDATING
-            # Validate snapshot infrastructure and all modules before any state changes.
+            # Validate snapshot infrastructure and all jobs before any state changes.
             # This fail-fast approach prevents partial sync from corrupting state.
             self.session.set_state(SessionState.VALIDATING)
             self.logger.info("Validating configuration")
 
             # Validate snapshot subvolumes first
-            if self._module_manager.snapshot_manager is not None:
+            if self._job_manager.snapshot_manager is not None:
                 self.logger.info("Validating btrfs subvolumes")
-                snapshot_errors = self._module_manager.snapshot_manager.validate_subvolumes()
+                snapshot_errors = self._job_manager.snapshot_manager.validate_subvolumes()
                 if snapshot_errors:
                     for error in snapshot_errors:
                         self.logger.critical(f"Snapshot validation error: {error}")
                     raise SyncError(f"Subvolume validation failed: {snapshot_errors[0]}")
 
-            self.logger.info("Validating modules")
-            self._module_manager.validate_all_modules()
+            self.logger.info("Validating jobs")
+            self._job_manager.validate_all_jobs()
 
             # Phase 3: EXECUTING
-            # Create pre-sync snapshots, execute modules, create post-sync snapshots.
-            # If any module fails, abort is called and execution stops.
+            # Create pre-sync snapshots, execute jobs, create post-sync snapshots.
+            # If any job fails, abort is called and execution stops.
             self.session.set_state(SessionState.EXECUTING)
 
-            # Create pre-sync snapshots before any module runs
-            if self._module_manager.snapshot_manager is not None:
+            # Create pre-sync snapshots before any job runs
+            if self._job_manager.snapshot_manager is not None:
                 self.logger.info("Creating pre-sync snapshots")
-                self._module_manager.snapshot_manager.create_presync_snapshots(self.session.id)
+                self._job_manager.snapshot_manager.create_presync_snapshots(self.session.id)
 
-            # Execute all sync modules
-            self.logger.info("Starting module execution")
-            self._module_manager.execute_all_modules()
+            # Execute all sync jobs
+            self.logger.info("Starting job execution")
+            self._job_manager.execute_all_jobs()
 
-            # Create post-sync snapshots after all modules complete successfully
-            if self._module_manager.snapshot_manager is not None:
+            # Create post-sync snapshots after all jobs complete successfully
+            if self._job_manager.snapshot_manager is not None:
                 self.logger.info("Creating post-sync snapshots")
-                self._module_manager.snapshot_manager.create_postsync_snapshots(self.session.id)
+                self._job_manager.snapshot_manager.create_postsync_snapshots(self.session.id)
 
             # Phase 4: Determine final state based on execution results
-            # COMPLETED = all modules succeeded without errors
-            # FAILED = at least one module failed or ERROR/CRITICAL logged
+            # COMPLETED = all jobs succeeded without errors
+            # FAILED = at least one job failed or ERROR/CRITICAL logged
             # ABORTED = user interrupt or explicit abort request
             final_state = self._determine_final_state()
             self.session.set_state(final_state)
@@ -568,13 +568,13 @@ class Orchestrator:
             self.logger.warning("User interrupted sync operation")
             self.session.set_state(SessionState.ABORTED)
             self.session.abort_requested = True
-            self._module_manager.cleanup_current_module()
+            self._job_manager.cleanup_current_job()
             return SessionState.ABORTED
 
         except Exception as e:
             self.logger.critical(f"Unexpected error in orchestrator: {e}", exc_info=True)
             self.session.set_state(SessionState.FAILED)
-            self._module_manager.cleanup_current_module()
+            self._job_manager.cleanup_current_job()
             return SessionState.FAILED
 
         finally:
@@ -600,10 +600,10 @@ class Orchestrator:
         if self.session.has_errors:
             return SessionState.FAILED
 
-        # Check if all modules completed successfully
-        for module_name in self.session.enabled_modules:
-            result = self.session.module_results.get(module_name)
-            if result != ModuleResult.SUCCESS:
+        # Check if all jobs completed successfully
+        for job_name in self.session.enabled_jobs:
+            result = self.session.job_results.get(job_name)
+            if result != JobResult.SUCCESS:
                 return SessionState.FAILED
 
         return SessionState.COMPLETED
@@ -751,7 +751,7 @@ class Orchestrator:
         Only offered if snapshot manager is available and
         sync failed with CRITICAL errors.
         """
-        snapshot_mgr = self._module_manager.snapshot_manager
+        snapshot_mgr = self._job_manager.snapshot_manager
         if snapshot_mgr is None:
             self.logger.warning("Cannot offer rollback: snapshot manager not available")
             return
@@ -781,7 +781,7 @@ class Orchestrator:
         Raises:
             SyncError: If rollback fails
         """
-        snapshot_mgr = self._module_manager.snapshot_manager
+        snapshot_mgr = self._job_manager.snapshot_manager
         if snapshot_mgr is None:
             raise SyncError("Cannot rollback: snapshot manager not available")
 
@@ -808,17 +808,17 @@ class Orchestrator:
             "session_id": self.session.id,
             "final_state": self.session.state.value,
             "duration": str(duration),
-            "modules_executed": len(self.session.module_results),
-            "modules_succeeded": sum(1 for r in self.session.module_results.values() if r == ModuleResult.SUCCESS),
-            "modules_failed": sum(1 for r in self.session.module_results.values() if r == ModuleResult.FAILED),
+            "jobs_executed": len(self.session.job_results),
+            "jobs_succeeded": sum(1 for r in self.session.job_results.values() if r == JobResult.SUCCESS),
+            "jobs_failed": sum(1 for r in self.session.job_results.values() if r == JobResult.FAILED),
             "has_errors": self.session.has_errors,
         }
 
         self.logger.info("Session summary", **summary)
 
-        # Log per-module results
-        for module_name, result in self.session.module_results.items():
-            self.logger.info(f"Module result: {module_name} = {result.value}")
+        # Log per-job results
+        for job_name, result in self.session.job_results.items():
+            self.logger.info(f"Job result: {job_name} = {result.value}")
 
     def _show_ui_summary(self) -> None:
         """Display session summary in terminal UI."""
@@ -826,16 +826,16 @@ class Orchestrator:
             return
 
         duration = timedelta(0) if self._start_time is None else datetime.now(UTC) - self._start_time
-        modules_succeeded = sum(1 for r in self.session.module_results.values() if r == ModuleResult.SUCCESS)
-        modules_failed = sum(1 for r in self.session.module_results.values() if r == ModuleResult.FAILED)
-        total_modules = len(self.session.module_results)
+        jobs_succeeded = sum(1 for r in self.session.job_results.values() if r == JobResult.SUCCESS)
+        jobs_failed = sum(1 for r in self.session.job_results.values() if r == JobResult.FAILED)
+        total_jobs = len(self.session.job_results)
 
         self.ui.show_session_summary(
             state=self.session.state,
             duration=str(duration).split(".")[0],  # Remove microseconds
-            modules_succeeded=modules_succeeded,
-            modules_failed=modules_failed,
-            total_modules=total_modules,
+            jobs_succeeded=jobs_succeeded,
+            jobs_failed=jobs_failed,
+            total_jobs=total_jobs,
         )
 
     def _start_disk_monitoring(self) -> None:

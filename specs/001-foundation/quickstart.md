@@ -47,7 +47,7 @@ uv sync
 Follow the structure in `plan.md` → Project Structure → Source Code:
 
 ```bash
-mkdir -p src/pcswitcher/{cli,core,remote,modules,utils}
+mkdir -p src/pcswitcher/{cli,core,remote,jobs,utils}
 mkdir -p tests/{unit,integration,e2e}
 mkdir -p scripts/target
 touch src/pcswitcher/__init__.py
@@ -104,9 +104,9 @@ pythonVersion = "3.13"
 
 ## Key Contracts and Interfaces
 
-### Module Interface
+### Job Interface
 
-The `SyncModule` ABC is defined in `contracts/module-interface.py`. All sync features implement this interface.
+The `SyncJob` ABC is defined in `contracts/job-interface.py`. All sync features implement this interface.
 
 **Constructor**:
 - `__init__(config: dict[str, Any], remote: RemoteExecutor)` - Receives validated config and remote executor
@@ -121,20 +121,20 @@ The `SyncModule` ABC is defined in `contracts/module-interface.py`. All sync fea
 
 **Required properties**:
 - `name: str` - Unique identifier (e.g., "btrfs-snapshots")
-- `required: bool` - Can be disabled? (False for optional modules)
+- `required: bool` - Can be disabled? (False for optional jobs)
 
 **Injected methods** (orchestrator provides after instantiation):
 - `log(level: LogLevel, message: str, **context)` - Structured logging
 - `emit_progress(percentage: float | None, item: str, eta: timedelta | None)` - Progress reporting (0.0-1.0)
 
 **Key Changes from Original Design**:
-- Modules raise `SyncError` for critical failures (orchestrator logs as CRITICAL)
+- Jobs raise `SyncError` for critical failures (orchestrator logs as CRITICAL)
 - `RemoteExecutor` injected for target communication (abstracts SSH)
 - No `version` or `dependencies` properties (sequential execution in config order)
-- `abort()` replaces `cleanup()` - only called on running module, means "stop" not "undo"
+- `abort()` replaces `cleanup()` - only called on running job, means "stop" not "undo"
 - Progress is optional float 0.0-1.0 (not int 0-100)
 
-See `contracts/module-interface.py` for complete interface and `DummySuccessModule` reference implementation.
+See `contracts/job-interface.py` for complete interface and `DummySuccessJob` reference implementation.
 
 ### Configuration Schema
 
@@ -145,7 +145,7 @@ Config lives at `~/.config/pc-switcher/config.yaml`. See `contracts/config-schem
 log_file_level: FULL
 log_cli_level: INFO
 
-sync_modules:
+sync_jobs:
   btrfs_snapshots: true  # Required, must be first
   dummy_success: false
 
@@ -156,14 +156,14 @@ btrfs_snapshots:
   max_age_days: 7
 ```
 
-### Orchestrator-Module Protocol
+### Orchestrator-Job Protocol
 
-See `contracts/orchestrator-module-protocol.md` for complete lifecycle sequence, error handling, logging protocol, and progress reporting.
+See `contracts/orchestrator-job-protocol.md` for complete lifecycle sequence, error handling, logging protocol, and progress reporting.
 
 **Key points**:
-- Modules execute sequentially in config file order (no dependency resolution)
+- Jobs execute sequentially in config file order (no dependency resolution)
 - Lifecycle: validate → pre_sync → sync → post_sync → [abort if error/interrupt]
-- Exception-based errors: modules raise `SyncError`, orchestrator logs as CRITICAL and aborts
+- Exception-based errors: jobs raise `SyncError`, orchestrator logs as CRITICAL and aborts
 - Orchestrator watches ERROR logs to set `session.has_errors` flag (determines COMPLETED vs FAILED)
 - Single SSH connection with ControlMaster reused across all operations
 - Lock file prevents concurrent syncs: `$XDG_RUNTIME_DIR/pc-switcher/pc-switcher.lock`
@@ -186,8 +186,8 @@ Based on task dependencies and risk reduction:
    - Default value application
    - Write unit tests
 
-3. **Module interface** (`core/module.py`)
-   - Define `SyncModule` ABC
+3. **Job interface** (`core/job.py`)
+   - Define `SyncJob` ABC
    - Implement base class with logging and progress reporting
    - Write unit tests for base class
 
@@ -212,23 +212,23 @@ Based on task dependencies and risk reduction:
 ### Phase 3: Orchestration (Week 3-4)
 
 7. **Orchestrator** (`core/orchestrator.py`)
-   - Module loading from config (sequential execution in order)
+   - Job loading from config (sequential execution in order)
    - RemoteExecutor injection (wraps TargetConnection)
    - Lifecycle execution (validate → pre → sync → post → abort if error)
    - Exception catching and CRITICAL logging
    - SIGINT handling (`core/signals.py`)
-   - Write integration tests with dummy modules
+   - Write integration tests with dummy jobs
 
-### Phase 4: Modules (Week 4-5)
+### Phase 4: Jobs (Week 4-5)
 
-8. **Btrfs snapshots module** (`modules/btrfs_snapshots.py`)
+8. **Btrfs snapshots job** (`jobs/btrfs_snapshots.py`)
    - Snapshot creation (pre/post)
    - Rollback capability
    - Disk space monitoring (`utils/disk.py`)
    - Cleanup command
    - Write integration tests (requires btrfs)
 
-9. **Dummy modules** (`modules/dummy_*.py`)
+9. **Dummy jobs** (`jobs/dummy_*.py`)
    - `dummy_success`: Complete reference implementation
    - `dummy_fail`: Exception handling testing
    - Write unit tests
@@ -300,22 +300,22 @@ uv tool install --editable .
 - Test individual components in isolation
 - Fast execution (no network or disk I/O)
 
-**Example**: `tests/unit/test_module.py`
+**Example**: `tests/unit/test_job.py`
 ```python
-from pcswitcher.core.module import SyncModule
-from pcswitcher.modules.dummy_success import DummySuccessModule
+from pcswitcher.core.job import SyncJob
+from pcswitcher.jobs.dummy_success import DummySuccessJob
 from unittest.mock import Mock
 
-def test_module_validation():
+def test_job_validation():
     config = {"duration_seconds": 10}
     remote = Mock(spec=RemoteExecutor)  # Mock RemoteExecutor
-    module = DummySuccessModule(config, remote)
+    job = DummySuccessJob(config, remote)
 
     # Inject mocked methods (normally done by orchestrator)
-    module.log = Mock()
-    module.emit_progress = Mock()
+    job.log = Mock()
+    job.emit_progress = Mock()
 
-    errors = module.validate()
+    errors = job.validate()
     assert errors == []  # No validation errors
 ```
 
@@ -365,11 +365,11 @@ logger.warning("Unexpected condition", path="/some/path")
 logger.critical("Unrecoverable error", error=str(e))
 ```
 
-### Progress Reporting (in modules)
+### Progress Reporting (in jobs)
 ```python
 def sync(self):
     for i, item in enumerate(items):
-        # Progress as float 0.0-1.0 representing total module work
+        # Progress as float 0.0-1.0 representing total job work
         percentage = (i + 1) / len(items)
         self.emit_progress(percentage, f"Processing {item}")
         # ... do work
@@ -391,7 +391,7 @@ hostname = self.remote.get_hostname()  # e.g., "workstation"
 
 ### Error Handling
 ```python
-from pcswitcher.core.module import SyncError
+from pcswitcher.core.job import SyncError
 
 # Recoverable errors: log ERROR and continue
 try:
@@ -423,9 +423,9 @@ if result.returncode != 0:
 1. Read `spec.md` for complete requirements
 2. Review `contracts/` for interface definitions
 3. Study `data-model.md` for entity relationships
-4. Start implementing in order: logging → config → module interface → orchestrator
+4. Start implementing in order: logging → config → job interface → orchestrator
 5. Write tests alongside implementation (TDD recommended)
-6. Use dummy modules for testing orchestrator without real sync operations
+6. Use dummy jobs for testing orchestrator without real sync operations
 
 ## Resources
 

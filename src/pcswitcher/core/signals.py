@@ -8,7 +8,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from pcswitcher.core.module import SyncModule
+    from pcswitcher.core.job import SyncJob
     from pcswitcher.core.session import SyncSession
 
 
@@ -17,7 +17,7 @@ class InterruptHandler:
 
     Tracks interrupt requests and supports double-SIGINT detection for immediate
     termination. Coordinates with SyncSession to request abort and calls the
-    current module's abort() method.
+    current job's abort() method.
     """
 
     def __init__(self, session: SyncSession) -> None:
@@ -29,18 +29,18 @@ class InterruptHandler:
         self._session = session
         self._interrupt_event = threading.Event()
         self._first_interrupt_time: float | None = None
-        self._current_module: SyncModule | None = None
+        self._current_job: SyncJob | None = None
         self._original_handlers: dict[int, Any] = {}
         self._lock = threading.Lock()
 
-    def set_current_module(self, module: SyncModule | None) -> None:
-        """Update the currently executing module.
+    def set_current_job(self, job: SyncJob | None) -> None:
+        """Update the currently executing job.
 
         Args:
-            module: Module currently being executed, or None if between modules
+            job: Job currently being executed, or None if between jobs
         """
         with self._lock:
-            self._current_module = module
+            self._current_job = job
 
     def handle_interrupt(self, signal_num: int, frame: Any) -> None:
         """Handle SIGINT signal with graceful shutdown or force-terminate.
@@ -77,15 +77,15 @@ class InterruptHandler:
             print("\n\nInterrupt received. Initiating graceful shutdown...")
             print("Press Ctrl+C again within 2 seconds to force terminate.\n")
 
-            # Get current module and call abort
-            current_module = self._current_module
+            # Get current job and call abort
+            current_job = self._current_job
 
         # Call abort outside the lock to avoid deadlock
-        if current_module is not None:
+        if current_job is not None:
             try:
-                current_module.abort(timeout=5.0)
+                current_job.abort(timeout=5.0)
             except Exception as e:
-                print(f"Warning: Error during module abort: {e}")
+                print(f"Warning: Error during job abort: {e}")
 
     def install_handlers(self) -> None:
         """Install signal handlers for graceful shutdown."""
@@ -112,17 +112,17 @@ class InterruptHandler:
 
 def install_signal_handlers(
     session: SyncSession,
-    current_module_ref: list[SyncModule | None] | None = None,
+    current_job_ref: list[SyncJob | None] | None = None,
 ) -> InterruptHandler:
     """Install signal handlers for the sync session.
 
-    Creates an InterruptHandler and installs it for SIGINT. If current_module_ref
+    Creates an InterruptHandler and installs it for SIGINT. If current_job_ref
     is provided, it should be a single-element list that will be updated with the
-    current module being executed.
+    current job being executed.
 
     Args:
         session: Current sync session
-        current_module_ref: Optional mutable reference to current module
+        current_job_ref: Optional mutable reference to current job
 
     Returns:
         InterruptHandler instance for managing interrupts

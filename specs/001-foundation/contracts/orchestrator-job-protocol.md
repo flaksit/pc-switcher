@@ -1,25 +1,25 @@
-# Orchestrator-Module Protocol
+# Orchestrator-Job Protocol
 
-**Purpose**: Define the precise interaction contract between the orchestrator and sync modules.
+**Purpose**: Define the precise interaction contract between the orchestrator and sync jobs.
 
 **Requirements**: FR-001 through FR-002, User Story 1
 
 **Key Architectural Decisions**:
-- Simple module lifecycle: validate() → execute() → abort() (removed unnecessary pre_sync/sync/post_sync)
-- SyncModules defined in config (no auto-discovery)
-- Infrastructure modules hardcoded by orchestrator:
-  - BtrfsSnapshotModule: instantiated twice (phase="pre"/"post"), executes sequentially
-  - DiskSpaceMonitorModule: runs in parallel throughout entire sync operation
-- SyncModules execute sequentially in config order (no dependency resolution)
-- Exception-based error handling (modules raise, not log CRITICAL)
+- Simple job lifecycle: validate() → execute() → abort() (removed unnecessary pre_sync/sync/post_sync)
+- SyncJobs defined in config (no auto-discovery)
+- Infrastructure jobs hardcoded by orchestrator:
+  - BtrfsSnapshotJob: instantiated twice (phase="pre"/"post"), executes sequentially
+  - DiskSpaceMonitorJob: runs in parallel throughout entire sync operation
+- SyncJobs execute sequentially in config order (no dependency resolution)
+- Exception-based error handling (jobs raise, not log CRITICAL)
 - Orchestrator tracks ERROR logs for final state determination
-- abort(timeout) called on currently-running module and parallel monitoring module
+- abort(timeout) called on currently-running job and parallel monitoring job
 - CLEANUP state before terminal states
 - Btrfs verification: / is btrfs, subvolumes exist in top-level
 
 ## Lifecycle Sequence
 
-The orchestrator executes modules in a strict sequence:
+The orchestrator executes jobs in a strict sequence:
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
@@ -31,7 +31,7 @@ The orchestrator executes modules in a strict sequence:
 │   - If stale: warn user, ask confirmation to proceed         │
 │   - If active: display PID, error and abort                  │
 │ - Create lock file                                            │
-│ - Get enabled SyncModules from sync_modules config (in order)│
+│ - Get enabled SyncJobs from sync_jobs config (in order)│
 │ - Establish SSH connection to target                         │
 │ - Check/install pc-switcher version on target                │
 │ - Verify btrfs on both source and target:                    │
@@ -39,18 +39,18 @@ The orchestrator executes modules in a strict sequence:
 │   - Check configured subvolumes exist in top-level           │
 │     (visible in "btrfs subvolume list /")                    │
 │ - Create SyncSession with session ID                         │
-│ - Instantiate infrastructure modules:                        │
-│   - BtrfsSnapshotModule twice (phase="pre"/"post")           │
-│   - DiskSpaceMonitorModule (for parallel execution)          │
-│ - Instantiate SyncModules with validated config + RemoteExec │
-│ - Inject log() and emit_progress() methods into all modules  │
+│ - Instantiate infrastructure jobs:                        │
+│   - BtrfsSnapshotJob twice (phase="pre"/"post")           │
+│   - DiskSpaceMonitorJob (for parallel execution)          │
+│ - Instantiate SyncJobs with validated config + RemoteExec │
+│ - Inject log() and emit_progress() methods into all jobs  │
 └──────────────────────────────────────────────────────────────┘
                            ↓
 ┌──────────────────────────────────────────────────────────────┐
 │ 2. VALIDATION PHASE (State: VALIDATING)                     │
 ├──────────────────────────────────────────────────────────────┤
-│ For each module (in config order):                           │
-│   errors = module.validate()                                 │
+│ For each job (in config order):                           │
+│   errors = job.validate()                                 │
 │   if errors:                                                  │
 │     collect all errors                                        │
 │ if any_errors:                                                │
@@ -61,21 +61,21 @@ The orchestrator executes modules in a strict sequence:
 ┌──────────────────────────────────────────────────────────────┐
 │ 3. EXECUTING PHASE (State: EXECUTING)                       │
 ├──────────────────────────────────────────────────────────────┤
-│ 0. Start DiskSpaceMonitorModule in parallel (thread/async):  │
+│ 0. Start DiskSpaceMonitorJob in parallel (thread/async):  │
 │   disk_space_monitor = start_parallel(disk_space_mon.exec()) │
 │   # Runs continuously, monitoring disk space every interval  │
 │   # Raises DiskSpaceError if space critically low            │
 │                                                               │
-│ 1. Execute BtrfsSnapshotModule(phase="pre"):                 │
+│ 1. Execute BtrfsSnapshotJob(phase="pre"):                 │
 │   try:                                                        │
-│     pre_snapshot_module.execute()  # creates pre-sync snaps  │
+│     pre_snapshot_job.execute()  # creates pre-sync snaps     │
 │   except Exception as e:                                      │
 │     log exception as CRITICAL, goto CLEANUP PHASE            │
 │                                                               │
-│ 2. For each SyncModule (in config order):                    │
+│ 2. For each SyncJob (in config order):                    │
 │   try:                                                        │
-│     module.execute()                                          │
-│     mark module as SUCCESS                                    │
+│     job.execute()                                          │
+│     mark job as SUCCESS                                    │
 │   except SyncError as e:                                      │
 │     log exception as CRITICAL (orchestrator does this)        │
 │     session.abort_requested = True                           │
@@ -93,15 +93,15 @@ The orchestrator executes modules in a strict sequence:
 │     session.abort_requested = True                           │
 │     goto CLEANUP PHASE                                        │
 │                                                               │
-│ 3. Execute BtrfsSnapshotModule(phase="post"):                │
+│ 3. Execute BtrfsSnapshotJob(phase="post"):                │
 │   try:                                                        │
-│     post_snapshot_module.execute()  # creates post-sync snaps│
+│     post_snapshot_job.execute()  # creates post-sync snaps   │
 │   except Exception as e:                                      │
 │     log exception as CRITICAL, goto CLEANUP PHASE            │
 │                                                               │
-│ if all modules completed and NO ERROR logs:                  │
+│ if all jobs completed and NO ERROR logs:                  │
 │   stop disk_space_monitor (call abort), goto COMPLETED       │
-│ if all modules completed but ERROR logs exist:               │
+│ if all jobs completed but ERROR logs exist:               │
 │   stop disk_space_monitor (call abort), goto CLEANUP→FAILED  │
 └──────────────────────────────────────────────────────────────┘
                            ↓
@@ -115,13 +115,13 @@ The orchestrator executes modules in a strict sequence:
 │   except Exception as e:                                      │
 │     log ERROR (abort is best-effort)                         │
 │                                                               │
-│ If currently-running module exists:                          │
+│ If currently-running job exists:                          │
 │   try:                                                        │
-│     current_module.abort(timeout=5.0)                        │
+│     current_job.abort(timeout=5.0)                        │
 │   except Exception as e:                                      │
 │     log ERROR (abort is best-effort)                         │
 │                                                               │
-│ Do NOT call abort() on completed modules                     │
+│ Do NOT call abort() on completed jobs                     │
 │   (abort = stop processes, not undo work)                    │
 │                                                               │
 │ Close SSH connection                                          │
@@ -137,58 +137,58 @@ The orchestrator executes modules in a strict sequence:
 ┌──────────────────────────────────────────────────────────────┐
 │ 5. TERMINAL STATES                                           │
 ├──────────────────────────────────────────────────────────────┤
-│ - COMPLETED: All modules succeeded, no ERROR logs            │
+│ - COMPLETED: All jobs succeeded, no ERROR logs            │
 │ - ABORTED: User interrupt (Ctrl+C)                          │
 │ - FAILED: Exception raised or ERROR logs emitted            │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## Module Instantiation and Loading
+## Job Instantiation and Loading
 
-**No Auto-Discovery**: Modules are NOT auto-discovered from the codebase.
+**No Auto-Discovery**: Jobs are NOT auto-discovered from the codebase.
 
-**SyncModule Loading**:
-1. Read `sync_modules` section from config (dict with module names as keys, bool as values)
-2. SyncModules execute in the order they appear in the config YAML
+**SyncJob Loading**:
+1. Read `sync_jobs` section from config (dict with job names as keys, bool as values)
+2. SyncJobs execute in the order they appear in the config YAML
 3. For each entry where value is `true`:
-   - Import the module class (e.g., `from pcswitcher.modules.packages import PackagesModule`)
-   - Get config schema via `module_class.get_config_schema()`
-   - Validate module-specific config section against schema
+   - Import the job class (e.g., `from pcswitcher.jobs.packages import PackagesJob`)
+   - Get config schema via `job_class.get_config_schema()`
+   - Validate job-specific config section against schema
    - Create RemoteExecutor wrapper around TargetConnection
-   - Instantiate: `module = ModuleClass(validated_config, remote_executor)`
-   - Inject `log()` and `emit_progress()` methods into module instance
+   - Instantiate: `job = JobClass(validated_config, remote_executor)`
+   - Inject `log()` and `emit_progress()` methods into job instance
 
-**Infrastructure Module Loading**:
+**Infrastructure Job Loading**:
 
-1. **BtrfsSnapshotModule** (sequential execution):
-   - Hardcoded by orchestrator (not in sync_modules config)
+1. **BtrfsSnapshotJob** (sequential execution):
+   - Hardcoded by orchestrator (not in sync_jobs config)
    - Instantiated twice with different phase parameters:
-     - `pre_snapshot = BtrfsSnapshotModule(btrfs_config, remote, phase="pre")`
-     - `post_snapshot = BtrfsSnapshotModule(btrfs_config, remote, phase="post")`
-   - Config comes from separate `btrfs_snapshots` section (not sync_modules)
+     - `pre_snapshot = BtrfsSnapshotJob(btrfs_config, remote, phase="pre")`
+     - `post_snapshot = BtrfsSnapshotJob(btrfs_config, remote, phase="post")`
+   - Config comes from separate `btrfs_snapshots` section (not sync_jobs)
    - Cannot be disabled by user
 
-2. **DiskSpaceMonitorModule** (parallel execution):
-   - Hardcoded by orchestrator (not in sync_modules config)
-   - Instantiated once: `disk_space_monitor = DiskSpaceMonitorModule(disk_config, remote)`
+2. **DiskSpaceMonitorJob** (parallel execution):
+   - Hardcoded by orchestrator (not in sync_jobs config)
+   - Instantiated once: `disk_space_monitor = DiskSpaceMonitorJob(disk_config, remote)`
    - Config comes from separate `disk_space_monitor` section
    - Runs in parallel thread/task throughout entire sync operation
    - Cannot be disabled by user
 
 **Example config**:
 ```yaml
-sync_modules:
+sync_jobs:
   user_data: true
   packages: true
   docker: false  # Disabled
   k3s: false
 
-btrfs_snapshots:  # Infrastructure module config (separate from sync_modules)
+btrfs_snapshots:  # Infrastructure job config (separate from sync_jobs)
   subvolumes:
     - "@"
     - "@home"
 
-disk_space_monitor:  # Infrastructure module config (separate from sync_modules)
+disk_space_monitor:  # Infrastructure job config (separate from sync_jobs)
   check_interval: 1.0  # seconds
   min_free: "10GB"  # or "5%" for percentage
   paths:
@@ -205,8 +205,8 @@ BtrfsSnapshot(pre).execute() → user_data.execute() → packages.execute() → 
 ## Configuration Injection
 
 **Validation**:
-1. For each enabled module:
-   - Get schema from `ModuleClass.get_config_schema()` (class method or instance)
+1. For each enabled job:
+   - Get schema from `JobClass.get_config_schema()` (class method or instance)
    - Extract config section from user config (e.g., `config['btrfs_snapshots']`)
    - Validate section against schema (using jsonschema library or manual validation)
    - Apply defaults from schema for missing values
@@ -217,19 +217,19 @@ BtrfsSnapshot(pre).execute() → user_data.execute() → packages.execute() → 
 # Create RemoteExecutor wrapper
 remote = RemoteExecutor(target_connection)
 
-# Instantiate module with validated config
-module = ModuleClass(validated_config, remote)
+# Instantiate job with validated config
+job = JobClass(validated_config, remote)
 
 # Inject logging method
-module.log = lambda level, msg, **ctx: orchestrator.log_for_module(module.name, level, msg, **ctx)
+job.log = lambda level, msg, **ctx: orchestrator.log_for_job(job.name, level, msg, **ctx)
 
 # Inject progress method
-module.emit_progress = lambda pct, item, eta: orchestrator.handle_progress(module.name, pct, item, eta)
+job.emit_progress = lambda pct, item, eta: orchestrator.handle_progress(job.name, pct, item, eta)
 ```
 
 ## RemoteExecutor Interface
 
-Modules receive a `RemoteExecutor` instance for target communication:
+Jobs receive a `RemoteExecutor` instance for target communication:
 
 ```python
 class RemoteExecutor:
@@ -248,7 +248,7 @@ class RemoteExecutor:
         """Get target hostname (actual name, not 'target')"""
 ```
 
-**Module Usage**:
+**Job Usage**:
 ```python
 def sync(self):
     # Run command on target
@@ -266,11 +266,11 @@ def sync(self):
 
 ## Progress Reporting Protocol
 
-**Module Side**:
+**Job Side**:
 ```python
-# During sync() execution - report as fraction of TOTAL module work
+# During sync() execution - report as fraction of TOTAL job work
 self.emit_progress(
-    percentage=0.5,  # 50% of ALL module work (float 0.0-1.0)
+    percentage=0.5,  # 50% of ALL job work (float 0.0-1.0)
     item="Copying /home/user/documents/file.txt",
     eta=timedelta(seconds=120)  # Optional
 )
@@ -280,37 +280,37 @@ self.emit_progress(percentage=None, item="Processing...")
 ```
 
 **Orchestrator Side**:
-1. Orchestrator injects `emit_progress` method into module after instantiation
+1. Orchestrator injects `emit_progress` method into job after instantiation
 2. Method forwards to orchestrator's progress handler
 3. Orchestrator:
-   - Logs progress at FULL level: `[FULL] [module] Progress: 50% - Copying file.txt`
+   - Logs progress at FULL level: `[FULL] [job] Progress: 50% - Copying file.txt`
    - Updates terminal UI with progress bar
-   - Stores last progress for each module
+   - Stores last progress for each job
 
 **Requirements**:
-- Modules should emit progress at reasonable intervals (every 1-10 seconds)
+- Jobs should emit progress at reasonable intervals (every 1-10 seconds)
 - Percentage is float 0.0-1.0 (or None if unknown)
-- Percentage represents progress of ENTIRE module (validate + pre + sync + post)
+- Percentage represents progress of ENTIRE job (validate + pre + sync + post)
 - current_item should be concise (<100 chars for terminal)
 - eta can be None if unknown
 
 ## Logging Protocol
 
-**Module Side**:
+**Job Side**:
 ```python
-# Modules use injected log() method
+# Jobs use injected log() method
 self.log(LogLevel.INFO, "Starting operation", file_count=42)
 self.log(LogLevel.ERROR, "File copy failed", path="/some/file")
 self.log(LogLevel.WARNING, "Unexpected condition", details="...")
 
-# Modules do NOT log CRITICAL - they raise exceptions instead
+# Jobs do NOT log CRITICAL - they raise exceptions instead
 # DO NOT: self.log(LogLevel.CRITICAL, "Fatal error")
 # DO: raise SyncError("Fatal error occurred")
 ```
 
 **Orchestrator Side**:
 1. Configure structlog with dual output: file + terminal
-2. Inject log method into module: `module.log = orchestrator.log_for_module(module.name, ...)`
+2. Inject log method into job: `job.log = orchestrator.log_for_job(job.name, ...)`
 3. Install custom processor to track ERROR events:
    ```python
    def track_errors(logger, log_method, event_dict):
@@ -318,26 +318,26 @@ self.log(LogLevel.WARNING, "Unexpected condition", details="...")
            session.has_errors = True
        return event_dict
    ```
-4. Module exceptions are caught and logged by orchestrator as CRITICAL
+4. Job exceptions are caught and logged by orchestrator as CRITICAL
 
 **Log Levels** (FR-002):
 - DEBUG (10): Verbose diagnostics (command outputs, state dumps)
 - FULL (15): File-level operations (e.g., "Copying /home/user/file.txt")
-- INFO (20): High-level operations (e.g., "Module started", "Module completed")
+- INFO (20): High-level operations (e.g., "Job started", "Job completed")
 - WARNING (30): Unexpected but non-failing (e.g., "Config uses deprecated format")
 - ERROR (40): Recoverable errors (e.g., "File copy failed, skipping")
 - CRITICAL (50): Unrecoverable errors (only logged by orchestrator when catching exceptions)
 
 ## Error Handling
 
-**Module Exceptions**:
-- Modules raise `SyncError` (or subclasses) for unrecoverable failures
-- Orchestrator catches ALL exceptions during module execution
+**Job Exceptions**:
+- Jobs raise `SyncError` (or subclasses) for unrecoverable failures
+- Orchestrator catches ALL exceptions during job execution
 - On exception:
   1. Log exception as CRITICAL with full traceback
   2. Set `session.abort_requested = True`
   3. Enter CLEANUP phase
-  4. Call `current_module.abort(timeout)` if it was executing
+  4. Call `current_job.abort(timeout)` if it was executing
   5. Determine final state: ABORTED (if Ctrl+C) or FAILED (if exception)
 
 **Validation Errors**:
@@ -350,23 +350,23 @@ self.log(LogLevel.WARNING, "Unexpected condition", details="...")
 - Orchestrator tracks if any ERROR-level logs were emitted
 - Uses custom structlog processor to set `session.has_errors = True`
 - Final session state:
-  - All modules completed + no ERROR logs → COMPLETED
-  - All modules completed + ERROR logs present → CLEANUP → FAILED
+  - All jobs completed + no ERROR logs → COMPLETED
+  - All jobs completed + ERROR logs present → CLEANUP → FAILED
 
 ## Abort Handling
 
 **Abort Sources**:
-1. **Module exception**: Module raises SyncError during lifecycle method
-2. **Unhandled exception**: Module raises any exception
+1. **Job exception**: Job raises SyncError during lifecycle method
+2. **Unhandled exception**: Job raises any exception
 3. **User interrupt**: Ctrl+C (SIGINT)
 
 **Orchestrator Response**:
 1. Set `session.abort_requested = True`
 2. Enter CLEANUP phase (change session.state to CLEANUP)
-3. If module is currently executing:
-   - Call `module.abort(timeout=5.0)`
+3. If job is currently executing:
+   - Call `job.abort(timeout=5.0)`
    - Wait for abort to complete (up to timeout)
-4. Do NOT call abort() on completed modules
+4. Do NOT call abort() on completed jobs
    - Semantics: abort = stop running processes, NOT undo work
    - Rollback is a separate manual operation via snapshots
 5. Close SSH connection
@@ -383,9 +383,9 @@ When a sync fails with a CRITICAL error and pre-sync snapshots exist, the orches
 **Requirements**: User Story 3, Scenario 6
 
 **When to Offer Rollback**:
-- A module raised an exception (logged as CRITICAL by orchestrator)
+- A job raised an exception (logged as CRITICAL by orchestrator)
 - Pre-sync snapshots were successfully created before the failure
-- Cleanup phase has completed (module abort() called if needed, SSH closed, lock released)
+- Cleanup phase has completed (job abort() called if needed, SSH closed, lock released)
 
 **Workflow**:
 
@@ -395,7 +395,7 @@ When a sync fails with a CRITICAL error and pre-sync snapshots exist, the orches
 
 2. **Display Rollback Prompt**:
    ```text
-   CRITICAL ERROR: Sync failed during <module-name> module.
+   CRITICAL ERROR: Sync failed during <job-name> job.
    Pre-sync snapshots are available for rollback.
 
    Available snapshots:
@@ -449,7 +449,7 @@ When a sync fails with a CRITICAL error and pre-sync snapshots exist, the orches
 - Rollback operates on the source machine where the orchestrator runs
 - Target machine rollback is NOT automatic - user must manually restore target if needed
 
-**Module abort() Requirements**:
+**Job abort() Requirements**:
 - Must stop running processes/threads
 - Must release locks and file handles
 - Must be idempotent (can be called multiple times)
@@ -508,10 +508,10 @@ def abort(self, timeout: float) -> None:
    - Delete lock file
    - If delete fails: log ERROR (best-effort)
 
-**Module Execution**:
-- Modules execute **sequentially** (one at a time, in config order)
-- No parallel module execution (for simplicity and safety)
-- Future optimization: Allow parallel execution within a module (module's responsibility)
+**Job Execution**:
+- Jobs execute **sequentially** (one at a time, in config order)
+- No parallel job execution (for simplicity and safety)
+- Future optimization: Allow parallel execution within a job (job's responsibility)
 
 ## Btrfs Verification
 
@@ -550,9 +550,9 @@ btrfs_snapshots:
 2. Reuse single connection for all operations (ControlMaster)
 3. Close connection during CLEANUP
 
-**Module Access**:
-- Modules do NOT access connection directly
-- Modules receive `RemoteExecutor` wrapper
+**Job Access**:
+- Jobs do NOT access connection directly
+- Jobs receive `RemoteExecutor` wrapper
 - RemoteExecutor methods:
   - `run(command, sudo, timeout) -> CompletedProcess`
   - `send_file_to_target(local, remote)`
@@ -560,7 +560,7 @@ btrfs_snapshots:
 
 **Error Handling**:
 - Connection loss during sync → log CRITICAL, enter CLEANUP, FAILED
-- Failed commands → module decides (raise SyncError or log ERROR)
+- Failed commands → job decides (raise SyncError or log ERROR)
 
 ## Example: Complete Sync Flow
 
@@ -572,13 +572,13 @@ btrfs_snapshots:
    - Checks/installs matching pc-switcher version on target
    - Verifies btrfs on both machines
    - Creates session (ID: a1b2c3d4)
-   - Instantiates infrastructure modules:
-     - BtrfsSnapshotModule twice (phase="pre" and phase="post")
-     - DiskSpaceMonitorModule
-   - Loads SyncModules from config: [user_data, packages]
+   - Instantiates infrastructure jobs:
+     - BtrfsSnapshotJob twice (phase="pre" and phase="post")
+     - DiskSpaceMonitorJob
+   - Loads SyncJobs from config: [user_data, packages]
    - Instantiates each with config + RemoteExecutor
 3. VALIDATING:
-   - Calls validate() on all modules (disk_space_monitor, pre_snapshot, user_data, packages, post_snapshot)
+   - Calls validate() on all jobs (disk_space_monitor, pre_snapshot, user_data, packages, post_snapshot)
    - All return empty lists (no errors)
 4. EXECUTING:
    - Start disk_space_monitor.execute() in parallel thread/task

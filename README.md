@@ -139,7 +139,7 @@ pc-switcher sync target-hostname
 
 The sync will:
 1. Create pre-sync snapshots of configured subvolumes
-2. Execute enabled modules in order
+2. Execute enabled jobs in order
 3. Create post-sync snapshots
 4. Report final status
 
@@ -221,28 +221,28 @@ The sync will:
 - Abort before starting if free space < `min_free`
 - Abort during sync if free space drops below `reserve_minimum`
 
-### Module Configuration
+### Job Configuration
 
-Modules execute sequentially in the order listed in `sync_modules`.
+Jobs execute sequentially in the order listed in `sync_jobs`.
 
 **Important constraints:**
 - `btrfs_snapshots` must be first and cannot be disabled
-- Module order determines execution sequence
-- Each module can have its own configuration section
+- Job order determines execution sequence
+- Each job can have its own configuration section
 
 ```yaml
-sync_modules:
-  btrfs_snapshots: true   # Required
-  # future_module: true   # Add more modules as they become available
+sync_jobs:
+  btrfs_snapshots: true       # Required
+  # future_job_module: true   # Add more jobs as they become available
 
 btrfs_snapshots:
   subvolumes:
-    - "@"                  # Root filesystem (mounted at /)
-    - "@home"              # Home directory (mounted at /home)
-    - "@root"              # Root user home (mounted at /root, if exists)
+    - "@"                     # Root filesystem (mounted at /)
+    - "@home"                 # Home directory (mounted at /home)
+    - "@root"                 # Root user home (mounted at /root, if exists)
   snapshot_dir: "/.snapshots"
-  keep_recent: 3           # Always keep 3 most recent snapshots
-  max_age_days: 7          # Delete older snapshots during cleanup
+  keep_recent: 3              # Always keep 3 most recent snapshots
+  max_age_days: 7             # Delete older snapshots during cleanup
 ```
 
 ## What Gets Synced
@@ -250,7 +250,7 @@ btrfs_snapshots:
 **Current implementation (foundation):**
 - Btrfs snapshots for safety and rollback capability
 
-**Planned modules:**
+**Planned jobs:**
 - User data: `/home`, `/root` with documents, code, configs
 - Packages: apt, snap, flatpak, PPAs
 - Application configurations: GNOME, systemd services
@@ -283,13 +283,13 @@ Configuration error: Configuration file not found: /home/user/.config/pc-switche
 
 **Solution:** Create the configuration file as shown in Quick Start section 2.
 
-### Required Module Missing
+### Required Job Missing
 
 ```text
-ConfigError: Required module 'btrfs_snapshots' is missing from sync_modules
+ConfigError: Required job 'btrfs_snapshots' is missing from sync_jobs
 ```
 
-**Solution:** Ensure `btrfs_snapshots: true` is the first entry in `sync_modules`.
+**Solution:** Ensure `btrfs_snapshots: true` is the first entry in `sync_jobs`.
 
 ### Filesystem Not Btrfs
 
@@ -397,7 +397,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and contr
 - **[High level requirements](docs/High%20level%20requirements.md)** - Project vision, scope, workflow
 - **[Feature breakdown](docs/Feature%20breakdown.md)** - Implementation phases
 - **[Architecture Decision Records](docs/adr/_index.md)** - Design decisions and rationale
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Module interfaces and workflow diagrams
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Job interfaces and workflow diagrams
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development and contribution guide
 
 ## License

@@ -30,16 +30,16 @@ log_cli_level:
     Controls what you see during sync.
     Recommended: INFO (shows progress without overwhelming detail)
 
-# Module Control
+# Job Control
 # ==============
 
-sync_modules:
+sync_jobs:
   type: object
   description: |
-    Control which modules run during sync.
-    Modules execute in the order listed here.
+    Control which jobs run during sync.
+    Jobs execute in the order listed here.
 
-    NOTE: btrfs_snapshots is orchestrator-level infrastructure, NOT a SyncModule.
+    NOTE: btrfs_snapshots is orchestrator-level infrastructure, NOT a SyncJob.
     It is configured separately in the btrfs_snapshots section.
 
   properties:
@@ -47,14 +47,14 @@ sync_modules:
       type: boolean
       default: false
       description: |
-        Test module: demonstrates successful sync with progress reporting.
+        Test job: demonstrates successful sync with progress reporting.
         Useful for testing infrastructure without real sync operations.
 
     dummy_fail:
       type: boolean
       default: false
       description: |
-        Test module: raises unhandled exception for testing.
+        Test job: raises unhandled exception for testing.
         Demonstrates exception propagation and abort() calling.
 
 # Disk Space Monitoring (FR-016, FR-017)
@@ -96,7 +96,7 @@ disk:
         Lower = more responsive to space issues, higher = less overhead.
         Recommended: 30 seconds for continuous monitoring.
 
-# Module-Specific Configuration
+# Job-Specific Configuration
 # ==============================
 
 btrfs_snapshots:
@@ -148,7 +148,7 @@ btrfs_snapshots:
 dummy_success:
   type: object
   description: |
-    Configuration for dummy-success test module.
+    Configuration for dummy-success test job.
   properties:
     duration_seconds:
       type: integer
@@ -163,8 +163,7 @@ dummy_success:
 # log_file_level: FULL
 # log_cli_level: INFO
 #
-# sync_modules:
-#   btrfs_snapshots: true  # REQUIRED, must be first
+# sync_jobs:
 #   dummy_success: false
 #   dummy_fail: false
 #
@@ -187,23 +186,19 @@ dummy_success:
 
 # Validation rules (enforced by orchestrator):
 #
-# 1. Required modules cannot be disabled:
-#    - If sync_modules.btrfs_snapshots == false, error and abort
-#    - If btrfs_snapshots not first in sync_modules, error and abort
-#
-# 2. Module execution order:
-#    - Modules run sequentially in the order listed in sync_modules
+# 1. Job execution order:
+#    - Jobs run sequentially in the order listed in sync_jobs
 #    - No automatic dependency resolution
 #
-# 3. Module configs must validate against module's get_config_schema():
-#    - Orchestrator loads each module's schema and validates config section
+# 2. Job configs must validate against job's get_config_schema():
+#    - Orchestrator loads each job's schema and validates config section
 #
-# 4. Missing optional values get defaults:
+# 3. Missing optional values get defaults:
 #    - If log_file_level missing, use FULL
-#    - If module config missing, module provides defaults via schema
+#    - If job config missing, job provides defaults via schema
 #
-# 5. Invalid YAML syntax:
+# 4. Invalid YAML syntax:
 #    - Parse error with line number, abort before sync
 #
-# 6. Unknown module names:
-#    - If sync_modules contains unknown module, error and abort
+# 5. Unknown job names:
+#    - If sync_jobs contains unknown job, error and abort

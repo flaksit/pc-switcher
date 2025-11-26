@@ -1,4 +1,4 @@
-"""Dummy fail module for testing unhandled exception handling."""
+"""Dummy fail job for testing unhandled exception handling."""
 
 from __future__ import annotations
 
@@ -6,14 +6,14 @@ import time
 from typing import Any, override
 
 from pcswitcher.core.logging import LogLevel
-from pcswitcher.core.module import RemoteExecutor, SyncModule
+from pcswitcher.core.job import RemoteExecutor, SyncJob
 
 
-class DummyFailModule(SyncModule):
-    """Test module that raises unhandled exception at 60% progress.
+class DummyFailJob(SyncJob):
+    """Test job that raises unhandled exception at 60% progress.
 
-    This module demonstrates unhandled exception behavior:
-    - Module raises generic Exception (not SyncError)
+    This job demonstrates unhandled exception behavior:
+    - Job raises generic Exception (not SyncError)
     - Orchestrator catches it and treats it as critical failure
     - Orchestrator logs exception as CRITICAL
     - Orchestrator calls abort() and initiates CLEANUP phase
@@ -22,10 +22,10 @@ class DummyFailModule(SyncModule):
     """
 
     def __init__(self, config: dict[str, Any], remote: RemoteExecutor) -> None:
-        """Initialize DummyFailModule.
+        """Initialize DummyFailJob.
 
         Args:
-            config: Module configuration
+            config: Job configuration
             remote: Remote executor interface
         """
         super().__init__(config, remote)
@@ -34,13 +34,13 @@ class DummyFailModule(SyncModule):
     @property
     @override
     def name(self) -> str:
-        """Module identifier."""
+        """Job identifier."""
         return "dummy_fail"
 
     @property
     @override
     def required(self) -> bool:
-        """This is an optional test module."""
+        """This is an optional test job."""
         return False
 
     @override
@@ -65,7 +65,7 @@ class DummyFailModule(SyncModule):
 
     @override
     def validate(self) -> list[str]:
-        """Validate module configuration.
+        """Validate job configuration.
 
         Returns:
             Empty list (always validates successfully)
@@ -77,7 +77,7 @@ class DummyFailModule(SyncModule):
     def pre_sync(self) -> None:
         """Execute pre-sync operations.
 
-        For this dummy module, just logs the operation.
+        For this dummy job, just logs the operation.
         """
         self.log(LogLevel.INFO, "Starting pre-sync")
         self.log(LogLevel.INFO, "Pre-sync complete")
@@ -125,7 +125,7 @@ class DummyFailModule(SyncModule):
             timeout: Maximum time to spend in cleanup (seconds)
 
         Sets abort flag to stop sync loop gracefully.
-        Logs "Dummy module abort called" per FR-042.
+        Logs "Dummy job abort called" per FR-042.
         """
-        self.log(LogLevel.INFO, "Dummy module abort called", timeout=timeout)
+        self.log(LogLevel.INFO, "Dummy job abort called", timeout=timeout)
         self._aborted = True

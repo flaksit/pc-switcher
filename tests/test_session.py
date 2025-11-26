@@ -29,7 +29,7 @@ def test_session_state_transitions() -> None:
         timestamp=datetime.now(),
         source_hostname="source",
         target_hostname="target",
-        enabled_modules=[],
+        enabled_jobs=[],
         state=SessionState.INITIALIZING,
     )
 
@@ -52,7 +52,7 @@ def test_session_terminal_states() -> None:
         timestamp=datetime.now(),
         source_hostname="source",
         target_hostname="target",
-        enabled_modules=[],
+        enabled_jobs=[],
         state=SessionState.INITIALIZING,
     )
 

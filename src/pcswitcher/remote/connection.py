@@ -1,7 +1,7 @@
 """Remote execution implementation for pc-switcher.
 
 This module provides SSH-based remote execution capabilities using Fabric library.
-It implements the RemoteExecutor interface that modules use to communicate with
+It implements the RemoteExecutor interface that jobs use to communicate with
 the target machine.
 
 Key features:
@@ -13,7 +13,7 @@ Key features:
 
 The connection architecture uses a layered approach:
 - TargetConnection: Low-level SSH operations via Fabric
-- SSHRemoteExecutor: Implements RemoteExecutor interface for modules
+- SSHRemoteExecutor: Implements RemoteExecutor interface for jobs
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 from fabric import Connection
 from invoke.exceptions import UnexpectedExit
 
-from pcswitcher.core.module import RemoteExecutor, SyncError
+from pcswitcher.core.job import RemoteExecutor, SyncError
 
 if TYPE_CHECKING:
     pass
@@ -319,7 +319,7 @@ class SSHRemoteExecutor(RemoteExecutor):
     """Implementation of RemoteExecutor using TargetConnection.
 
     Wraps TargetConnection and provides the RemoteExecutor interface
-    for modules to use.
+    for jobs to use.
     """
 
     def __init__(self, connection: TargetConnection) -> None:

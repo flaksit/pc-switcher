@@ -37,7 +37,7 @@ pc-switcher/
 ├── src/pcswitcher/         # Main source code
 │   ├── cli/                # Command-line interface
 │   ├── core/               # Core orchestration logic
-│   ├── modules/            # Sync modules (btrfs, user-data, etc.)
+│   ├── jobs/               # Sync jobs (btrfs, user-data, etc.)
 │   ├── remote/             # SSH remote execution
 │   └── utils/              # Utility functions
 ├── tests/                  # Test suite
@@ -202,25 +202,25 @@ raise ConfigError(
 raise ConfigError(f"Invalid subvolume: {subvol}")
 ```
 
-## Module Development
+## Job Development
 
-### Creating a New Module
+### Creating a New Job
 
-1. Create module file in `src/pcswitcher/modules/`
-2. Implement `SyncModule` interface from `core/module.py`
-3. Add module to default config schema
+1. Create job file in `src/pcswitcher/jobs/`
+2. Implement `SyncJob` interface from `core/job.py`
+3. Add job to default config schema
 4. Write unit tests
 5. Update documentation
 
-### Module Interface
+### Job Interface
 
 ```python
-from pcswitcher.core.module import SyncModule
+from pcswitcher.core.job import SyncJob
 
-class MyModule(SyncModule):
+class MyJob(SyncJob):
     @property
     def name(self) -> str:
-        return "my-module"
+        return "my_job"
 
     @property
     def required(self) -> bool:
@@ -251,12 +251,12 @@ class MyModule(SyncModule):
         pass
 ```
 
-### Module Logging
+### Job Logging
 
 ```python
 from pcswitcher.core.logging import LogLevel
 
-# In module methods
+# In job methods
 self.log(LogLevel.INFO, "Starting operation", count=42)
 self.log(LogLevel.FULL, "Processing file", path="/some/path")
 self.log(LogLevel.ERROR, "File missing, skipping", path=missing_path)
@@ -298,7 +298,7 @@ state from pre-sync snapshots. This provides data safety when
 sync operations fail.
 
 Key changes:
-- Add rollback method to BtrfsSnapshotsModule
+- Add rollback method to BtrfsSnapshotsJob
 - Verify snapshot existence before rollback
 - Delete current subvolume and restore from snapshot
 - Log all operations for auditability
@@ -409,18 +409,18 @@ ADRs are immutable once accepted. If a decision needs to change:
 
 ```python
 from unittest.mock import Mock
-from pcswitcher.modules.dummy_success import DummySuccessModule
+from pcswitcher.jobs.dummy_success import DummySuccessJob
 
-def test_module_validation():
+def test_job_validation():
     config = {"duration_seconds": 10}
     remote = Mock()
-    module = DummySuccessModule(config, remote)
+    job = DummySuccessJob(config, remote)
 
     # Inject mocked methods (normally done by orchestrator)
-    module.log = Mock()
-    module.emit_progress = Mock()
+    job.log = Mock()
+    job.emit_progress = Mock()
 
-    errors = module.validate()
+    errors = job.validate()
     assert errors == []
 ```
 
@@ -441,8 +441,7 @@ from pathlib import Path
 def temp_config_file(tmp_path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text("""
-sync_modules:
-  btrfs_snapshots: true
+sync_jobs: {}
 btrfs_snapshots:
   subvolumes: ["@"]
   snapshot_dir: "/.snapshots"

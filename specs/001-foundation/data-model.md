@@ -10,51 +10,51 @@ This document defines the key entities, their fields, relationships, and state t
 
 ## Entities
 
-### 1. Module (Abstract Base Class)
+### 1. Job (Abstract Base Class)
 
-Base class for all pc-switcher modules (sync modules and infrastructure modules).
+Base class for all pc-switcher jobs (sync jobs and infrastructure jobs).
 
 **Fields**:
-- `name: str` - Unique module identifier (e.g., "btrfs-snapshots", "dummy-success", "packages")
-- `required: bool` - Whether module can be disabled via config (False for optional modules)
-- `config: dict[str, Any]` - Module-specific configuration (validated against schema)
+- `name: str` - Unique job identifier (e.g., "btrfs-snapshots", "dummy-success", "packages")
+- `required: bool` - Whether job can be disabled via config (False for optional jobs)
+- `config: dict[str, Any]` - Job-specific configuration (validated against schema)
 - `remote: RemoteExecutor` - Interface for executing commands on target machine (injected by orchestrator)
 
 **Methods** (all abstract, must be implemented by subclasses):
-- `get_config_schema() -> dict[str, Any]` - Returns JSON schema for module config validation
+- `get_config_schema() -> dict[str, Any]` - Returns JSON schema for job config validation
 - `validate() -> list[str]` - Pre-sync validation; returns list of error messages (empty if valid)
-- `execute() -> None` - Execute the module's operation; raise exception on critical failure
+- `execute() -> None` - Execute the job's operation; raise exception on critical failure
 - `abort(timeout: float) -> None` - Stop running processes, free resources (best-effort, limited by timeout)
 
-**Injected Methods** (provided by orchestrator, not implemented by module):
+**Injected Methods** (provided by orchestrator, not implemented by job):
 - `emit_progress(percentage: float | None, item: str, eta: timedelta | None) -> None` - Report progress to orchestrator
 - `log(level: LogLevel, message: str, **context) -> None` - Log message with structured context
 
 **Subclasses**:
-- `SyncModule`: User-configurable sync modules (packages, docker, VMs, k3s, user data)
-- Infrastructure modules inherit directly from `Module` (e.g., `BtrfsSnapshotModule`)
+- `SyncJob`: User-configurable sync jobs (packages, docker, VMs, k3s, user data)
+- Infrastructure jobs inherit directly from `Job` (e.g., `BtrfsSnapshotJob`)
 
 **Validation Rules**:
-- `name` must be unique across all registered modules
-- SyncModules execute sequentially in the order defined in config file
-- Infrastructure modules are hardcoded by orchestrator:
-  - `BtrfsSnapshotModule(phase="pre")` executes before all SyncModules (sequential)
-  - `BtrfsSnapshotModule(phase="post")` executes after all SyncModules (sequential)
-  - `DiskSpaceMonitorModule` runs in parallel throughout entire sync operation
+- `name` must be unique across all registered jobs
+- SyncJobs execute sequentially in the order defined in config file
+- Infrastructure jobs are hardcoded by orchestrator:
+  - `BtrfsSnapshotJob(phase="pre")` executes before all SyncJobs (sequential)
+  - `BtrfsSnapshotJob(phase="post")` executes after all SyncJobs (sequential)
+  - `DiskSpaceMonitorJob` runs in parallel throughout entire sync operation
 
 **State Transitions**: None (stateless, only method execution sequence matters)
 
 **Error Handling**:
-- Modules raise exceptions (e.g., `SyncError`) for unrecoverable failures
+- Jobs raise exceptions (e.g., `SyncError`) for unrecoverable failures
 - Orchestrator catches exceptions, logs them as CRITICAL, and initiates cleanup
-- Modules do NOT log at CRITICAL level themselves
+- Jobs do NOT log at CRITICAL level themselves
 
 **Relationships**:
-- Many-to-one with `Orchestrator` (orchestrator manages all modules)
-- Many-to-one with `SyncSession` (session tracks module execution)
-- One-to-one with `RemoteExecutor` (module uses to communicate with target)
-- Zero-to-many with `ProgressUpdate` (module emits progress updates)
-- Zero-to-many with `LogEntry` (module emits log entries via injected log method)
+- Many-to-one with `Orchestrator` (orchestrator manages all jobs)
+- Many-to-one with `SyncSession` (session tracks job execution)
+- One-to-one with `RemoteExecutor` (job uses to communicate with target)
+- Zero-to-many with `ProgressUpdate` (job emits progress updates)
+- Zero-to-many with `LogEntry` (job emits log entries via injected log method)
 
 ---
 
@@ -69,21 +69,21 @@ Represents a single sync operation from source to target.
 - `timestamp: datetime` - Session start time (UTC, ISO8601)
 - `source_hostname: str` - Source machine hostname
 - `target_hostname: str` - Target machine hostname
-- `enabled_modules: list[str]` - Module names enabled for this session (from config, in execution order)
+- `enabled_jobs: list[str]` - Job names enabled for this session (from config, in execution order)
 - `state: SessionState` - Current session state (enum)
-- `module_results: dict[str, ModuleResult]` - Execution results per module
+- `job_results: dict[str, JobResult]` - Execution results per job
 - `has_errors: bool` - Whether any ERROR-level logs were emitted (determines COMPLETED vs FAILED)
 - `abort_requested: bool` - Whether abort has been signaled (exception or Ctrl+C)
 - `lock_path: Path` - Lockfile path (default: `$XDG_RUNTIME_DIR/pc-switcher/pc-switcher.lock`)
 
 **Enums**:
 - `SessionState`: `INITIALIZING`, `VALIDATING`, `EXECUTING`, `CLEANUP`, `COMPLETED`, `ABORTED`, `FAILED`
-- `ModuleResult`: `SUCCESS`, `SKIPPED`, `FAILED`
+- `JobResult`: `SUCCESS`, `SKIPPED`, `FAILED`
 
 **Validation Rules**:
 - `source_hostname` and `target_hostname` must be resolvable or valid SSH config aliases
-- `enabled_modules` must be non-empty list in execution order
-- `btrfs_snapshots` must be first in `enabled_modules` and cannot be disabled
+- `enabled_jobs` must be non-empty list in execution order
+- `btrfs_snapshots` must be first in `enabled_jobs` and cannot be disabled
 - Only one active session allowed (enforced via lock file with stale detection)
 
 **State Transitions**:
@@ -99,24 +99,24 @@ INITIALIZING → VALIDATING → EXECUTING ────────────�
 
 **State Descriptions**:
 - `INITIALIZING`: Loading config, checking lock, establishing SSH connection, checking/installing target version
-- `VALIDATING`: Running all module `validate()` methods (including disk_space_monitor); abort if any validation errors
-- `EXECUTING`: Start disk space monitor in parallel, then run modules sequentially (pre-snapshots, sync modules, post-snapshots)
-- `CLEANUP`: Stop disk space monitor, call `abort(timeout)` on currently-running module (if any); triggered by exception or Ctrl+C
-- `COMPLETED`: All modules succeeded, no ERROR logs emitted
+- `VALIDATING`: Running all job `validate()` methods (including disk_space_monitor); abort if any validation errors
+- `EXECUTING`: Start disk space monitor in parallel, then run jobs sequentially (pre-snapshots, sync jobs, post-snapshots)
+- `CLEANUP`: Stop disk space monitor, call `abort(timeout)` on currently-running job (if any); triggered by exception or Ctrl+C
+- `COMPLETED`: All jobs succeeded, no ERROR logs emitted
 - `ABORTED`: User requested abort (Ctrl+C)
-- `FAILED`: Module raised exception (including DiskSpaceError from monitor), or ERROR logs were emitted during execution
+- `FAILED`: Job raised exception (including DiskSpaceError from monitor), or ERROR logs were emitted during execution
 
 **State Transition Rules**:
 - Always pass through CLEANUP before reaching ABORTED or FAILED
-- Exception: Can go EXECUTING → COMPLETED if all modules finish successfully
+- Exception: Can go EXECUTING → COMPLETED if all jobs finish successfully
 - From CLEANUP: → ABORTED if user requested abort (Ctrl+C)
-- From CLEANUP: → FAILED if module raised exception or ERROR logs were emitted
+- From CLEANUP: → FAILED if job raised exception or ERROR logs were emitted
 
 **Relationships**:
 - Owned by `Orchestrator` (orchestrator creates and manages session)
-- One-to-many with `SyncModule` (session executes multiple modules)
+- One-to-many with `SyncJob` (session executes multiple jobs)
 - One-to-many with `LogEntry` (session generates log entries)
-- One-to-many with `ProgressUpdate` (session receives progress updates from modules)
+- One-to-many with `ProgressUpdate` (session receives progress updates from jobs)
 - One-to-one with `TargetConnection` (session manages SSH connection)
 - Zero-to-many with `Snapshot` (session may create snapshots)
 
@@ -158,7 +158,7 @@ Represents a btrfs snapshot created during sync.
 
 **Relationships**:
 - Many-to-one with `SyncSession` (session creates multiple snapshots)
-- Created by `BtrfsSnapshotsModule` (implementation detail)
+- Created by `BtrfsSnapshotsJob` (implementation detail)
 
 ---
 
@@ -169,7 +169,7 @@ Represents a logged event with structured context.
 **Fields**:
 - `timestamp: datetime` - Event time (UTC, ISO8601)
 - `level: LogLevel` - Severity level (enum)
-- `module: str` - Module name that emitted the log (or "core" for orchestrator)
+- `job: str` - Job name that emitted the log (or "core" for orchestrator)
 - `hostname: str` - Actual hostname where event occurred (e.g., "laptop-home", "workstation")
 - `message: str` - Log message (human-readable)
 - `context: dict[str, Any]` - Structured context data (e.g., file paths, error codes)
@@ -181,28 +181,28 @@ Represents a logged event with structured context.
 **Validation Rules**:
 - `timestamp` must be ISO8601 with UTC timezone
 - `level` must be one of the six defined levels
-- `module` should reference a registered module or "core" for orchestrator
+- `job` should reference a registered job or "core" for orchestrator
 - `message` must be non-empty
 - `hostname` must be actual hostname (not "source" or "target")
 - If `level == ERROR`, orchestrator sets `session.has_errors = True` (final state will be FAILED)
-- CRITICAL logs only emitted by orchestrator when catching module exceptions
+- CRITICAL logs only emitted by orchestrator when catching job exceptions
 
 **State Transitions**: None (immutable once created)
 
 **Relationships**:
 - Many-to-one with `SyncSession` (session generates log entries)
-- Emitted by `SyncModule` (via injected log method) or `Orchestrator` directly
+- Emitted by `SyncJob` (via injected log method) or `Orchestrator` directly
 - Consumed by `FileLogger` and `TerminalUI`
 
 ---
 
 ### 5. ProgressUpdate
 
-Represents module progress for display and logging.
+Represents job progress for display and logging.
 
 **Fields**:
-- `module: str` - Module name reporting progress
-- `percentage: float | None` - Progress as fraction (0.0-1.0) of **total module work**, or None if unknown
+- `job: str` - Job name reporting progress
+- `percentage: float | None` - Progress as fraction (0.0-1.0) of **total job work**, or None if unknown
 - `current_item: str` - Description of current operation (e.g., "Copying /home/user/file.txt")
 - `eta: timedelta | None` - Estimated time to completion (optional)
 - `timestamp: datetime` - Update time (UTC)
@@ -210,16 +210,16 @@ Represents module progress for display and logging.
 
 **Validation Rules**:
 - `percentage` must be in range [0.0, 1.0] if not None
-- `percentage` represents progress of **all module work** (validation + execution), not just current subtask
+- `percentage` represents progress of **all job work** (validation + execution), not just current subtask
 - `current_item` should be concise (<100 chars for terminal display)
-- `eta` can be None if module doesn't estimate completion time
+- `eta` can be None if job doesn't estimate completion time
 
-**Important**: The percentage field represents the overall progress of the entire module's operation, not just the current item or subtask. Modules structure their work internally as needed and report overall progress.
+**Important**: The percentage field represents the overall progress of the entire job's operation, not just the current item or subtask. Jobs structure their work internally as needed and report overall progress.
 
 **State Transitions**: None (ephemeral, only current update matters)
 
 **Relationships**:
-- Many-to-one with `SyncModule` (module emits progress updates via injected method)
+- Many-to-one with `SyncJob` (job emits progress updates via injected method)
 - Many-to-one with `SyncSession` (session receives updates)
 - Consumed by `TerminalUI` for display
 - Logged at FULL level by orchestrator
@@ -233,8 +233,8 @@ Represents parsed and validated configuration.
 **Fields**:
 - `log_file_level: LogLevel` - Minimum level for file logging
 - `log_cli_level: LogLevel` - Minimum level for terminal display
-- `sync_modules: dict[str, bool]` - Module enable/disable flags
-- `module_configs: dict[str, dict[str, Any]]` - Per-module configuration sections
+- `sync_jobs: dict[str, bool]` - Job enable/disable flags
+- `job_configs: dict[str, dict[str, Any]]` - Per-job configuration sections
 - `disk: dict` - Disk space monitoring configuration with keys:
   - `min_free: int | float` - Minimum free disk space (bytes or percentage)
   - `reserve_minimum: int | float` - Reserved space during sync
@@ -243,9 +243,9 @@ Represents parsed and validated configuration.
 
 **Validation Rules**:
 - `log_file_level` and `log_cli_level` must be valid LogLevel enum values
-- `sync_modules` keys must reference registered module names
-- Required modules (btrfs-snapshots) cannot be disabled (sync_modules value ignored)
-- Each entry in `module_configs` must validate against module's `get_config_schema()`
+- `sync_jobs` keys must reference registered job names
+- Required jobs (btrfs-snapshots) cannot be disabled (sync_jobs value ignored)
+- Each entry in `job_configs` must validate against job's `get_config_schema()`
 - `disk.min_free`: if float, must be in (0.0, 1.0) for percentage; if int, must be positive bytes
 - `disk.reserve_minimum`: if float, must be in (0.0, 1.0) for percentage; if int, must be positive bytes
 - `disk.check_interval` must be positive integer (seconds)
@@ -254,7 +254,7 @@ Represents parsed and validated configuration.
 **State Transitions**: None (immutable once loaded; reload requires new session)
 
 **Relationships**:
-- One-to-many with `SyncModule` (provides config to each module)
+- One-to-many with `SyncJob` (provides config to each job)
 - One-to-one with `SyncSession` (session uses one config)
 
 ---
@@ -290,10 +290,10 @@ Represents SSH connection to target machine.
 - Future enhancement: run remote Python tasks with progress/logging streaming
 
 **Design Decision: Synchronous Methods with Callbacks**:
-- Module lifecycle methods (`validate()`, `pre_sync()`, `sync()`, `post_sync()`, `abort()`) are **synchronous** (not `async`)
+- Job lifecycle methods (`validate()`, `pre_sync()`, `sync()`, `post_sync()`, `abort()`) are **synchronous** (not `async`)
 - Progress and log reporting use **injected callback methods** (`emit_progress()`, `log()`)
-- Background operations within modules can use **threading** if needed (module responsibility)
-- **Rationale**: Synchronous methods with callbacks are simpler to implement and test than async/await patterns. This approach is sufficient for the current requirements and avoids the complexity of async context management, event loops, and async-compatible libraries. If continuous streaming becomes a requirement in the future, individual modules can use threading internally while maintaining the synchronous interface contract.
+- Background operations within jobs can use **threading** if needed (job responsibility)
+- **Rationale**: Synchronous methods with callbacks are simpler to implement and test than async/await patterns. This approach is sufficient for the current requirements and avoids the complexity of async context management, event loops, and async-compatible libraries. If continuous streaming becomes a requirement in the future, individual jobs can use threading internally while maintaining the synchronous interface contract.
 
 **Validation Rules**:
 - `hostname` must be resolvable or valid SSH config alias
@@ -309,32 +309,32 @@ DISCONNECTED → CONNECTING → CONNECTED → DISCONNECTING → DISCONNECTED
 
 **Relationships**:
 - One-to-one with `SyncSession` (session manages one connection)
-- Wrapped by `RemoteExecutor` for module access
+- Wrapped by `RemoteExecutor` for job access
 
 ---
 
 ### 8. RemoteExecutor
 
-Interface provided to modules for executing commands on target machine.
+Interface provided to jobs for executing commands on target machine.
 
-**Purpose**: Abstracts SSH details from modules, enabling easier testing and cleaner module code.
+**Purpose**: Abstracts SSH details from jobs, enabling easier testing and cleaner job code.
 
 **Fields**:
 - `connection: TargetConnection` - Underlying SSH connection (private)
 
-**Methods** (injected into SyncModule):
+**Methods** (injected into SyncJob):
 - `run(command: str, sudo: bool = False, timeout: float | None = None) -> subprocess.CompletedProcess` - Execute command on target
 - `send_file_to_target(local: Path, remote: Path) -> None` - Upload file to target
 - `get_hostname() -> str` - Get target hostname
 
-**Usage in Modules**:
+**Usage in Jobs**:
 ```python
-# Module receives RemoteExecutor in constructor
+# Job receives RemoteExecutor in constructor
 def __init__(self, config: dict[str, Any], remote: RemoteExecutor):
     self.config = config
     self.remote = remote
 
-# Module uses it to communicate with target
+# Job uses it to communicate with target
 def sync(self):
     result = self.remote.run("btrfs subvolume list /", sudo=True)
     if result.returncode != 0:
@@ -344,7 +344,7 @@ def sync(self):
 ```
 
 **Relationships**:
-- One-to-one with `SyncModule` (each module gets a RemoteExecutor)
+- One-to-one with `SyncJob` (each job gets a RemoteExecutor)
 - Wraps `TargetConnection` (orchestrator creates RemoteExecutor from connection)
 
 ---
@@ -355,32 +355,32 @@ def sync(self):
 - **Responsibilities**:
   - Load configuration and validate structure
   - Create and manage SyncSession
-  - Instantiate modules with validated config and RemoteExecutor
-  - Execute module lifecycle in sequence (validate → pre_sync → sync → post_sync)
-  - Catch module exceptions and log as CRITICAL
+  - Instantiate jobs with validated config and RemoteExecutor
+  - Execute job lifecycle in sequence (validate → pre_sync → sync → post_sync)
+  - Catch job exceptions and log as CRITICAL
   - Track ERROR-level logs to determine final state (COMPLETED vs FAILED)
   - Handle SIGINT (Ctrl+C) and initiate cleanup
-  - Call module abort() methods on cleanup
-  - Provide injected methods to modules (emit_progress, log)
+  - Call job abort() methods on cleanup
+  - Provide injected methods to jobs (emit_progress, log)
   - Close SSH connection and release lock on completion
 
 - **Does NOT**:
   - Store state (that's SyncSession's job)
-  - Execute commands directly (delegates to modules via RemoteExecutor)
-  - Know about specific module implementations
+  - Execute commands directly (delegates to jobs via RemoteExecutor)
+  - Know about specific job implementations
 
 **SyncSession** (State Tracking):
 - **Responsibilities**:
   - Track current sync state (INITIALIZING, VALIDATING, EXECUTING, CLEANUP, COMPLETED, ABORTED, FAILED)
   - Store session metadata (ID, timestamp, hostnames)
-  - Track which modules are enabled and execution order
-  - Record module results (SUCCESS, SKIPPED, FAILED)
+  - Track which jobs are enabled and execution order
+  - Record job results (SUCCESS, SKIPPED, FAILED)
   - Flag ERROR logs (`has_errors`) to determine final state
   - Flag abort requests (`abort_requested`) from exceptions or Ctrl+C
   - Manage lock file creation and cleanup
 
 - **Does NOT**:
-  - Execute modules (that's Orchestrator's job)
+  - Execute jobs (that's Orchestrator's job)
   - Handle exceptions or signals
   - Manage SSH connections
 
@@ -397,7 +397,7 @@ def sync(self):
 ┌─────────────────┐
 │   Orchestrator  │
 │                 │
-│ - modules: []   │
+│ - jobs: []   │
 │ - session       │
 └────────┬────────┘
          │ creates & manages
@@ -409,9 +409,9 @@ def sync(self):
 │ - timestamp: datetime                                 │
 │ - source_hostname: str                                │
 │ - target_hostname: str                                │
-│ - enabled_modules: list[str]                          │
+│ - enabled_jobs: list[str]                          │
 │ - state: SessionState (INIT/VALID/EXEC/CLEANUP/...)  │
-│ - module_results: dict[str, ModuleResult]             │
+│ - job_results: dict[str, JobResult]             │
 │ - has_errors: bool                                    │
 │ - abort_requested: bool                               │
 └────┬──────────────────┬──────────────┬───────────────┘
@@ -419,11 +419,11 @@ def sync(self):
      │                  │              │
      ↓                  ↓              ↓
 ┌──────────────┐  ┌──────────────────┐  ┌─────────────┐
-│  SyncModule  │  │ TargetConnection │  │  LogEntry   │
+│  SyncJob  │  │ TargetConnection │  │  LogEntry   │
 │              │  │                  │  │             │
 │ - name       │  │ - hostname       │  │ - timestamp │
 │ - required   │  │ - connection     │  │ - level     │
-│ - config     │  │ - pc_sw_version  │  │ - module    │
+│ - config     │  │ - pc_sw_version  │  │ - job    │
 │ - remote ────┼──┼─→RemoteExecutor  │  │ - hostname  │
 └──────┬───────┘  └──────────────────┘  │ - message   │
        │ uses                            └─────────────┘
@@ -441,7 +441,7 @@ def sync(self):
 ┌──────────────────┐      ┌──────────────────┐
 │ ProgressUpdate   │      │   Snapshot       │
 │                  │      │                  │
-│ - module         │      │ - subvolume      │
+│ - job         │      │ - subvolume      │
 │ - percentage     │      │ - snapshot_path  │
 │ - current_item   │      │ - timestamp      │
 │ - eta            │      │ - session_id     │
@@ -449,11 +449,11 @@ def sync(self):
         ↑                 │ - hostname       │
         │ emits N:1       └──────────────────┘
         │                         ↑
-   SyncModule                     │ created by N:1
+   SyncJob                     │ created by N:1
                                   │
                      ┌────────────────────────┐
-                     │ BtrfsSnapshotsModule   │
-                     │  (extends SyncModule)  │
+                     │ BtrfsSnapshotsJob   │
+                     │  (extends SyncJob)  │
                      └────────────────────────┘
 
 ┌─────────────────┐
@@ -461,53 +461,53 @@ def sync(self):
 │                 │
 │ - log_file_level│
 │ - log_cli_level │
-│ - sync_modules  │
-│ - module_configs│
+│ - sync_jobs  │
+│ - job_configs│
 └─────┬───────────┘
       │ provides config 1:N
       ↓
 ┌─────────────┐
-│ SyncModule  │
+│ SyncJob  │
 └─────────────┘
 ```
 
 ## Key Design Patterns
 
-### 1. Abstract Base Class (Module Interface)
+### 1. Abstract Base Class (Job Interface)
 
-The `Module` ABC enforces the module contract (FR-001). All operations (sync features and infrastructure) implement this interface, enabling:
-- Independent module development
+The `Job` ABC enforces the job contract (FR-001). All operations (sync features and infrastructure) implement this interface, enabling:
+- Independent job development
 - Uniform orchestration via simple lifecycle: validate() → execute() → abort()
 - Consistent logging and progress reporting via injected methods
-- Sequential execution for SyncModules in config-defined order (no complex dependency resolution)
-- Infrastructure modules hardcoded by orchestrator:
-  - BtrfsSnapshotModule brackets all operations (sequential execution)
-  - DiskSpaceMonitorModule runs throughout entire operation (parallel execution)
-- DRY: All modules (sync and infrastructure, sequential and parallel) reuse the same infrastructure (logging, progress, abort, RemoteExecutor)
+- Sequential execution for SyncJobs in config-defined order (no complex dependency resolution)
+- Infrastructure jobs hardcoded by orchestrator:
+  - BtrfsSnapshotJob brackets all operations (sequential execution)
+  - DiskSpaceMonitorJob runs throughout entire operation (parallel execution)
+- DRY: All jobs (sync and infrastructure, sequential and parallel) reuse the same infrastructure (logging, progress, abort, RemoteExecutor)
 
 ### 2. State Machine (SyncSession)
 
 Session state transitions enforce the sync workflow:
 - INITIALIZING → establish connection, load config, check/install target version
-- VALIDATING → all modules validate before any state changes (including disk_space_monitor)
-- EXECUTING → start DiskSpaceMonitor (parallel), then sequential execution: BtrfsSnapshot(pre) → SyncModules → BtrfsSnapshot(post)
-- CLEANUP → stop disk_space_monitor, call abort() on currently-running module (if any)
+- VALIDATING → all jobs validate before any state changes (including disk_space_monitor)
+- EXECUTING → start DiskSpaceMonitor (parallel), then sequential execution: BtrfsSnapshot(pre) → SyncJobs → BtrfsSnapshot(post)
+- CLEANUP → stop disk_space_monitor, call abort() on currently-running job (if any)
 - COMPLETED / ABORTED / FAILED → terminal states (always through CLEANUP except EXECUTING → COMPLETED)
 
 ### 3. Exception-Based Error Handling
 
-Modules raise exceptions (e.g., `SyncError`, `CriticalSyncError`) for unrecoverable failures. Orchestrator catches exceptions, logs them as CRITICAL, and initiates CLEANUP phase. This is cleaner than watching log streams for CRITICAL events.
+Jobs raise exceptions (e.g., `SyncError`, `CriticalSyncError`) for unrecoverable failures. Orchestrator catches exceptions, logs them as CRITICAL, and initiates CLEANUP phase. This is cleaner than watching log streams for CRITICAL events.
 
 ERROR-level logs are tracked via `session.has_errors` flag to determine final state (COMPLETED vs FAILED) for recoverable errors.
 
 ### 4. Method Injection Pattern
 
-Modules receive functionality via injection rather than inheritance:
-- `RemoteExecutor` injected in constructor → module communicates with target
-- `emit_progress()` injected by orchestrator → module reports progress
-- `log()` injected by orchestrator → module logs messages
+Jobs receive functionality via injection rather than inheritance:
+- `RemoteExecutor` injected in constructor → job communicates with target
+- `emit_progress()` injected by orchestrator → job reports progress
+- `log()` injected by orchestrator → job logs messages
 
-This enables easier testing (mock injected dependencies) and cleaner module code.
+This enables easier testing (mock injected dependencies) and cleaner job code.
 
 ### 5. Immutable Entities (Snapshot, LogEntry)
 
@@ -515,7 +515,7 @@ Snapshots and log entries are immutable once created. This simplifies reasoning 
 
 ### 6. Configuration Validation and Injection
 
-Configuration is loaded once, validated against module schemas, and injected into modules. Modules declare schemas via `get_config_schema()`; orchestrator validates and provides validated config. This separates concerns and enables testing with mock configs.
+Configuration is loaded once, validated against job schemas, and injected into jobs. Jobs declare schemas via `get_config_schema()`; orchestrator validates and provides validated config. This separates concerns and enables testing with mock configs.
 
 ## Implementation Notes
 

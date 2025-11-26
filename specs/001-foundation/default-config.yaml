@@ -7,14 +7,14 @@
 log_file_level: FULL
 log_cli_level: INFO
 
-# Module Configuration
-# Enable or disable sync modules
-sync_modules:
-  dummy_success: false   # Test module
-  dummy_fail: false      # Test module
-  # NOTE: btrfs_snapshots is orchestrator-level infrastructure, not a SyncModule
+# Job Configuration
+# Enable or disable sync jobs
+sync_jobs:
+  dummy_success: false   # Test job
+  dummy_fail: false      # Test job
+  # NOTE: btrfs_snapshots is orchestrator-level infrastructure, not a SyncJob
 
-# Btrfs Snapshots Module Configuration
+# Btrfs Snapshots Configuration (Orchestrator Infrastructure)
 # Required for data safety - creates pre-sync and post-sync snapshots
 btrfs_snapshots:
   # Flat subvolume names from 'btrfs subvolume list /'

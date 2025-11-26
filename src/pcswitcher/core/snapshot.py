@@ -1,8 +1,8 @@
 """Snapshot management interface for orchestrator-level infrastructure.
 
-This module defines the interface for snapshot management which is NOT a SyncModule.
+This defines the interface for snapshot management which is NOT a SyncJob.
 Snapshot management is orchestrator-level infrastructure that runs before and after
-all SyncModules, providing safety and rollback capabilities.
+all SyncJobs, providing safety and rollback capabilities.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from pcswitcher.core.logging import LogLevel
-from pcswitcher.core.module import RemoteExecutor
+from pcswitcher.core.job import RemoteExecutor
 
 
 class SnapshotCallbacks:
@@ -39,10 +39,10 @@ class SnapshotCallbacks:
 class SnapshotManager(ABC):
     """Abstract base class for snapshot management infrastructure.
 
-    This is NOT a SyncModule. It's orchestrator-level infrastructure that:
+    This is NOT a SyncJob. It's orchestrator-level infrastructure that:
     - Validates subvolumes before sync starts
-    - Creates pre-sync snapshots before any SyncModule runs
-    - Creates post-sync snapshots after all SyncModules complete
+    - Creates pre-sync snapshots before any SyncJob runs
+    - Creates post-sync snapshots after all SyncJobs complete
     - Provides rollback capability from pre-sync snapshots
     - Manages snapshot cleanup and retention
 
@@ -113,7 +113,7 @@ class SnapshotManager(ABC):
     def create_presync_snapshots(self, session_id: str) -> None:
         """Create pre-sync snapshots on both source and target.
 
-        Called by orchestrator after validation, before any SyncModule runs.
+        Called by orchestrator after validation, before any SyncJob runs.
 
         Args:
             session_id: Sync session identifier for snapshot naming
@@ -127,7 +127,7 @@ class SnapshotManager(ABC):
     def create_postsync_snapshots(self, session_id: str) -> None:
         """Create post-sync snapshots on both source and target.
 
-        Called by orchestrator after all SyncModules complete successfully.
+        Called by orchestrator after all SyncJobs complete successfully.
 
         Args:
             session_id: Sync session identifier for snapshot naming

@@ -1,20 +1,20 @@
 """
-Module Interface Contract
+Job Interface Contract
 
-This file defines the standardized interface that all modules must implement.
-It serves as both documentation and a reference implementation for module developers.
+This file defines the standardized interface that all jobs must implement.
+It serves as both documentation and a reference implementation for job developers.
 
 See User Story 1 in spec.md for complete requirements.
 
 Key Design Decisions:
 - Simple lifecycle: validate() → execute() → abort() (removed unnecessary pre_sync/sync/post_sync complexity)
-- Modules execute sequentially in config order (no dependencies field)
-- Modules raise exceptions for critical failures (not log CRITICAL)
+- Jobs execute sequentially in config order (no dependencies field)
+- Jobs raise exceptions for critical failures (not log CRITICAL)
 - RemoteExecutor injected for target communication
 - Logging and progress methods injected by orchestrator
 - ProgressUpdate uses optional float 0.0-1.0
-- BtrfsSnapshotModule is instantiated twice by orchestrator (phase="pre" and phase="post")
-  to bracket all sync operations, but inherits same Module infrastructure
+- BtrfsSnapshotJob is instantiated twice by orchestrator (phase="pre" and phase="post")
+  to bracket all sync operations, but inherits same Job infrastructure
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ class LogLevel(StrEnum):
     INFO = "INFO"  # 20: High-level operation reporting
     WARNING = "WARNING"  # 30: Unexpected but non-failing conditions
     ERROR = "ERROR"  # 40: Recoverable errors
-    CRITICAL = "CRITICAL"  # 50: Unrecoverable errors (logged by orchestrator, not modules)
+    CRITICAL = "CRITICAL"  # 50: Unrecoverable errors
 
 
 class SyncError(Exception):
@@ -44,10 +44,10 @@ class SyncError(Exception):
 
 class RemoteExecutor:
     """
-    Interface for modules to execute commands on target machine.
+    Interface for jobs to execute commands on target machine.
 
-    Abstracts SSH details from modules, enabling easier testing and cleaner code.
-    Orchestrator creates this wrapper around TargetConnection and injects into modules.
+    Abstracts SSH details from jobs, enabling easier testing and cleaner code.
+    Orchestrator creates this wrapper around TargetConnection and injects into jobs.
     """
 
     def run(
@@ -97,27 +97,27 @@ class RemoteExecutor:
         raise NotImplementedError("Orchestrator provides implementation")
 
 
-class Module(ABC):
+class Job(ABC):
     """
-    Abstract base class for all pc-switcher modules.
+    Abstract base class for all pc-switcher jobs.
 
     All operations (sync features, snapshot infrastructure) implement this interface.
-    The orchestrator manages module lifecycle: validate → execute → abort.
+    The orchestrator manages job lifecycle: validate → execute → abort.
 
-    User-configurable sync modules (SyncModule) execute sequentially in config.yaml order.
-    Orchestrator-managed infrastructure modules (like BtrfsSnapshotModule) are hardcoded
-    and execute at specific points in the workflow (before/after all sync modules).
+    User-configurable sync jobs (SyncJob) execute sequentially in config.yaml order.
+    Orchestrator-managed infrastructure jobs (like BtrfsSnapshotJob) are hardcoded
+    and execute at specific points in the workflow (before/after all sync jobs).
 
     Requirements: FR-001, FR-002, FR-002, FR-002
-    User Story: 1 (Module Architecture and Integration Contract)
+    User Story: 1 (Job Architecture and Integration Contract)
     """
 
     def __init__(self, config: dict[str, Any], remote: RemoteExecutor) -> None:
         """
-        Initialize module with validated config and remote executor.
+        Initialize job with validated config and remote executor.
 
         Args:
-            config: Module-specific configuration (validated against schema)
+            config: Job-specific configuration (validated against schema)
             remote: Interface for executing commands on target
 
         Note: Orchestrator calls this after validating config against get_config_schema().
@@ -130,9 +130,9 @@ class Module(ABC):
     @abstractmethod
     def name(self) -> str:
         """
-        Unique module identifier (e.g., "btrfs-snapshots", "user-data", "docker").
+        Unique job identifier (e.g., "btrfs-snapshots", "user-data", "docker").
 
-        Must be unique across all modules.
+        Must be unique across all jobs.
         Used for config sections, logging context, execution ordering.
         """
 
@@ -140,10 +140,10 @@ class Module(ABC):
     @abstractmethod
     def required(self) -> bool:
         """
-        Whether this module can be disabled via configuration.
+        Whether this job can be disabled via configuration.
 
-        Required modules (e.g., btrfs-snapshots) cannot be disabled.
-        Optional modules (e.g., docker, k3s) can be disabled.
+        Required jobs (e.g., btrfs-snapshots) cannot be disabled.
+        Optional jobs (e.g., docker, k3s) can be disabled.
 
         Requirement: FR-002, FR-002
         """
@@ -151,9 +151,9 @@ class Module(ABC):
     @abstractmethod
     def get_config_schema(self) -> dict[str, Any]:
         """
-        Return JSON Schema for module configuration validation.
+        Return JSON Schema for job configuration validation.
 
-        Orchestrator validates user config against this schema before instantiating module.
+        Orchestrator validates user config against this schema before instantiating job.
 
         Example:
             {
@@ -176,8 +176,8 @@ class Module(ABC):
         """
         Pre-sync validation: check preconditions without modifying state.
 
-        Called during VALIDATING phase before any module executes.
-        All modules' validate() methods run before any state changes occur.
+        Called during VALIDATING phase before any job executes.
+        All jobs' validate() methods run before any state changes occur.
 
         Examples of validations:
         - Check required tools are installed (btrfs, docker, etc.)
@@ -195,21 +195,21 @@ class Module(ABC):
     @abstractmethod
     def execute(self) -> None:
         """
-        Execute the module's operation.
+        Execute the job's operation.
 
         Called during EXECUTING phase, after all validations pass.
-        This is where the module does its work.
+        This is where the job does its work.
 
-        Modules structure their work internally as needed (preparation, main work,
+        Jobs structure their work internally as needed (preparation, main work,
         verification, etc.). For user visibility, use logging and progress reporting.
 
         Should call emit_progress() to report progress (0.0-1.0 representing all work).
         Should call log() to log operations at appropriate levels.
 
         Examples:
-        - BtrfsSnapshotModule(phase="pre"): Create pre-sync snapshots
-        - PackagesModule: Sync packages from source to target
-        - BtrfsSnapshotModule(phase="post"): Create post-sync snapshots
+        - BtrfsSnapshotJob(phase="pre"): Create pre-sync snapshots
+        - PackagesJob: Sync packages from source to target
+        - BtrfsSnapshotJob(phase="post"): Create post-sync snapshots
 
         Raises:
             SyncError: On unrecoverable errors (orchestrator logs as CRITICAL and aborts)
@@ -224,8 +224,8 @@ class Module(ABC):
 
         Called in these scenarios:
         - User interrupt (Ctrl+C)
-        - Module raises exception
-        - Another module raises exception
+        - Job raises exception
+        - Another job raises exception
 
         Semantics: Stop what you're doing NOW, don't undo work.
         - Stop any running subprocesses
@@ -250,7 +250,7 @@ class Module(ABC):
 
         Requirements: FR-002, FR-002, User Story 5
 
-        Note: Only called on the currently-running module, not on completed modules.
+        Note: Only called on the currently-running job, not on completed jobs.
         """
 
     # Injected methods (provided by orchestrator, signatures shown for documentation)
@@ -264,14 +264,14 @@ class Module(ABC):
         """
         Report progress to orchestrator for terminal UI display and logging.
 
-        Injected by orchestrator. Module just calls this method.
+        Injected by orchestrator. Job just calls this method.
 
         Args:
-            percentage: Progress as fraction (0.0-1.0) of TOTAL module work, or None if unknown
+            percentage: Progress as fraction (0.0-1.0) of TOTAL job work, or None if unknown
             item: Description of current operation (e.g., "Copying file.txt")
             eta: Estimated time to completion (optional)
 
-        Important: percentage represents ALL module work (validation + execution),
+        Important: percentage represents ALL job work (validation + execution),
         not just the current subtask or operation.
 
         Requirements: FR-002, FR-002, FR-002, User Story 9
@@ -282,15 +282,15 @@ class Module(ABC):
         """
         Log a message with structured context.
 
-        Injected by orchestrator. Module just calls this method.
+        Injected by orchestrator. Job just calls this method.
 
         Args:
             level: Log level (DEBUG, FULL, INFO, WARNING, ERROR)
             message: Log message
             **context: Structured context data (e.g., file_path="/home/user/file.txt")
 
-        Important: Modules should NOT log at CRITICAL level.
-        Modules should raise SyncError instead for unrecoverable failures.
+        Important: Jobs should NOT log at CRITICAL level.
+        Jobs should raise SyncError instead for unrecoverable failures.
         Orchestrator catches exceptions and logs them as CRITICAL.
 
         ERROR level: Use for recoverable errors (individual file failures, etc.)
@@ -301,14 +301,14 @@ class Module(ABC):
         raise NotImplementedError("Orchestrator injects this method")
 
 
-class SyncModule(Module):
+class SyncJob(Job):
     """
-    Subclass for user-configurable sync modules.
+    Subclass for user-configurable sync jobs.
 
-    This is a marker/documentation class showing that sync modules (packages, docker, VMs, etc.)
-    are configured by users in config.yaml sync_modules section.
+    This is a marker/documentation class showing that sync jobs (packages, docker, VMs, etc.)
+    are configured by users in config.yaml sync_jobs section.
 
-    Infrastructure modules (like BtrfsSnapshotModule) inherit directly from Module and are
+    Infrastructure jobs (like BtrfsSnapshotJob) inherit directly from Job and are
     managed by the orchestrator, not user-configurable.
 
     This subclass currently adds no additional methods/behavior, but provides conceptual clarity
@@ -317,12 +317,12 @@ class SyncModule(Module):
     pass
 
 
-# Example: Minimal module implementation demonstrating the contract
-class DummySuccessModule(SyncModule):
+# Example: Minimal job implementation demonstrating the contract
+class DummySuccessJob(SyncJob):
     """
-    Reference implementation of module interface.
+    Reference implementation of job interface.
 
-    This dummy module demonstrates:
+    This dummy job demonstrates:
     - All required properties and methods
     - Config schema definition
     - Validation logic
@@ -340,7 +340,7 @@ class DummySuccessModule(SyncModule):
 
     @property
     def required(self) -> bool:
-        return False  # Optional module
+        return False  # Optional job
 
     def get_config_schema(self) -> dict[str, Any]:
         return {
@@ -388,22 +388,22 @@ class DummySuccessModule(SyncModule):
 
     def abort(self, timeout: float) -> None:
         """Best-effort cleanup"""
-        self.log(LogLevel.INFO, "Dummy module abort called", timeout=timeout)
-        # No resources to release in dummy module
+        self.log(LogLevel.INFO, "Dummy job abort called", timeout=timeout)
+        # No resources to release in dummy job
 
 
-# Example: Infrastructure module that runs continuously in parallel
-class DiskSpaceMonitorModule(Module):
+# Example: Infrastructure job that runs continuously in parallel
+class DiskSpaceMonitorJob(Job):
     """
-    Infrastructure module that monitors disk space throughout sync operation.
+    Infrastructure job that monitors disk space throughout sync operation.
 
-    This module demonstrates:
-    - Parallel execution (runs in thread/task alongside sequential modules)
+    This job demonstrates:
+    - Parallel execution (runs in thread/task alongside sequential jobs)
     - Continuous monitoring pattern
     - Interruptible waiting using threading.Event
     - Raising exceptions to trigger abort
 
-    Unlike SyncModules that execute once and complete, this module runs
+    Unlike SyncJobs that execute once and complete, this job runs
     continuously until stopped via abort() or until it detects a critical condition.
 
     Named "DiskSpaceMonitor" to clarify it monitors disk space/usage,
@@ -422,7 +422,7 @@ class DiskSpaceMonitorModule(Module):
 
     @property
     def required(self) -> bool:
-        return True  # Infrastructure module, cannot be disabled
+        return True  # Infrastructure job, cannot be disabled
 
     def get_config_schema(self) -> dict[str, Any]:
         return {

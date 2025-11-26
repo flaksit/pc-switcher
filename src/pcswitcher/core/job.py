@@ -1,4 +1,4 @@
-"""Module interfaces and exceptions for pc-switcher."""
+"""Job interfaces and exceptions for pc-switcher."""
 
 from __future__ import annotations
 
@@ -11,11 +11,11 @@ from typing import Any, Protocol
 from pcswitcher.core.logging import LogLevel
 
 
-class SyncModuleCallbacks(Protocol):
+class SyncJobCallbacks(Protocol):
     """Protocol for orchestrator-provided callbacks. Internal implementation detail.
 
-    Module developers should use SyncModule.emit_progress(), SyncModule.log(), and
-    SyncModule.log_remote_output() methods directly instead of accessing this protocol.
+    Job developers should use SyncJob.emit_progress(), SyncJob.log(), and
+    SyncJob.log_remote_output() methods directly instead of accessing this protocol.
     """
 
     def emit_progress(
@@ -24,11 +24,11 @@ class SyncModuleCallbacks(Protocol):
         item: str = "",
         eta: timedelta | None = None,
     ) -> None:
-        """Emit progress update. See SyncModule.emit_progress() for full documentation."""
+        """Emit progress update. See SyncJob.emit_progress() for full documentation."""
         ...
 
     def log(self, level: LogLevel, message: str, **context: Any) -> None:
-        """Log a message. See SyncModule.log() for full documentation."""
+        """Log a message. See SyncJob.log() for full documentation."""
         ...
 
     def log_remote_output(
@@ -38,7 +38,7 @@ class SyncModuleCallbacks(Protocol):
         stream: str = "stdout",
         level: LogLevel = LogLevel.FULL,
     ) -> None:
-        """Log remote output. See SyncModule.log_remote_output() for full documentation."""
+        """Log remote output. See SyncJob.log_remote_output() for full documentation."""
         ...
 
 
@@ -106,20 +106,20 @@ class RemoteExecutor(ABC):
         """
 
 
-class SyncModule(ABC):
-    """Abstract base class for all sync modules.
+class SyncJob(ABC):
+    """Abstract base class for all sync jobs.
 
     All sync features (user data, packages, Docker, VMs, k3s) implement this interface.
-    The orchestrator manages module lifecycle: validate → pre_sync → sync → post_sync → abort.
+    The orchestrator manages job lifecycle: validate → pre_sync → sync → post_sync → abort.
 
-    Modules execute sequentially in the order defined in config.yaml sync_modules section.
+    Jobs execute sequentially in the order defined in config.yaml sync_jobs section.
     """
 
     def __init__(self, config: dict[str, Any], remote: RemoteExecutor) -> None:
-        """Initialize module with validated config and remote executor.
+        """Initialize job with validated config and remote executor.
 
         Args:
-            config: Module-specific configuration (validated against schema)
+            config: Job-specific configuration (validated against schema)
             remote: Interface for executing commands on target
 
         Note: Orchestrator calls this after validating config against get_config_schema().
@@ -127,18 +127,18 @@ class SyncModule(ABC):
         """
         self.config: dict[str, Any] = config
         self.remote: RemoteExecutor = remote
-        self._callbacks: SyncModuleCallbacks | None = None
+        self._callbacks: SyncJobCallbacks | None = None
 
-    def set_callbacks(self, callbacks: SyncModuleCallbacks) -> None:
-        """Set the callbacks for this module (called by orchestrator).
+    def set_callbacks(self, callbacks: SyncJobCallbacks) -> None:
+        """Set the callbacks for this job (called by orchestrator).
 
         Args:
-            callbacks: Callbacks object implementing SyncModuleCallbacks protocol
+            callbacks: Callbacks object implementing SyncJobCallbacks protocol
         """
         self._callbacks = callbacks
 
     @property
-    def callbacks(self) -> SyncModuleCallbacks:
+    def callbacks(self) -> SyncJobCallbacks:
         """Get the callbacks object for logging and progress reporting.
 
         Returns:
@@ -149,8 +149,8 @@ class SyncModule(ABC):
         """
         if self._callbacks is None:
             raise RuntimeError(
-                f"Callbacks not injected for module {self.__class__.__name__}. "
-                "Orchestrator must call set_callbacks() before module execution."
+                f"Callbacks not injected for job {self.__class__.__name__}. "
+                "Orchestrator must call set_callbacks() before job execution."
             )
         return self._callbacks
 
@@ -163,14 +163,14 @@ class SyncModule(ABC):
         """Report sync progress to the orchestrator.
 
         Call this method during sync() to provide progress feedback for
-        terminal UI display and logging. Progress is per-module (not global).
+        terminal UI display and logging. Progress is per-job (not global).
 
         Args:
-            percentage: Progress as fraction (0.0-1.0) of total module work.
+            percentage: Progress as fraction (0.0-1.0) of total job work.
                         Use None if total work is unknown (indeterminate progress).
             item: Brief description of current operation (e.g., "Copying /home/user/docs").
                   Keep concise for terminal display.
-            eta: Estimated time to completion for this module. Optional.
+            eta: Estimated time to completion for this job. Optional.
 
         Example:
             self.emit_progress(0.5, "Transferring Docker images")
@@ -182,8 +182,8 @@ class SyncModule(ABC):
     def log(self, level: LogLevel, message: str, **context: Any) -> None:
         """Log a message with structured context.
 
-        Use this method to log operations, warnings, and errors during module execution.
-        All log messages are tagged with module name automatically by the orchestrator.
+        Use this method to log operations, warnings, and errors during job execution.
+        All log messages are tagged with job name automatically by the orchestrator.
 
         Args:
             level: Log level determining visibility:
@@ -242,26 +242,26 @@ class SyncModule(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Unique module identifier (e.g., 'btrfs_snapshots', 'user_data', 'docker').
+        """Unique job identifier (e.g., 'btrfs_snapshots', 'user_data', 'docker').
 
-        Must be unique across all modules (using underscores per Python convention).
+        Must be unique across all jobs (using underscores per Python convention).
         Used for config sections, logging context, execution ordering.
         """
 
     @property
     @abstractmethod
     def required(self) -> bool:
-        """Whether this module can be disabled via configuration.
+        """Whether this job can be disabled via configuration.
 
-        Required modules (e.g., btrfs_snapshots) cannot be disabled.
-        Optional modules (e.g., docker, k3s) can be disabled.
+        Required jobs (e.g., btrfs_snapshots) cannot be disabled.
+        Optional jobs (e.g., docker, k3s) can be disabled.
         """
 
     @abstractmethod
     def get_config_schema(self) -> dict[str, Any]:
-        """Return JSON Schema for module configuration validation.
+        """Return JSON Schema for job configuration validation.
 
-        Orchestrator validates user config against this schema before instantiating module.
+        Orchestrator validates user config against this schema before instantiating job.
 
         Returns:
             JSON Schema dict (see https://json-schema.org/)
@@ -271,8 +271,8 @@ class SyncModule(ABC):
     def validate(self) -> list[str]:
         """Pre-sync validation: check preconditions without modifying state.
 
-        Called during VALIDATING phase before any module executes.
-        All modules' validate() methods run before any state changes occur.
+        Called during VALIDATING phase before any job executes.
+        All jobs' validate() methods run before any state changes occur.
 
         Returns:
             List of validation error messages (empty list = valid)
@@ -316,7 +316,7 @@ class SyncModule(ABC):
     def abort(self, timeout: float) -> None:
         """Stop running processes, free resources (best-effort, limited by timeout).
 
-        Called in scenarios like user interrupt, module exception, etc.
+        Called in scenarios like user interrupt, job exception, etc.
 
         Semantics: Stop what you're doing NOW, don't undo work.
         Must be idempotent and handle partial state gracefully.

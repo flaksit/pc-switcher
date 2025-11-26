@@ -35,14 +35,14 @@
 
 **Observations**:
 - Spec covers all three foundation features (CLI & Infrastructure, Safety Infrastructure, Installation & Setup)
-- Module architecture is detailed enough to serve as implementation contract for all future modules
+- Job architecture is detailed enough to serve as implementation contract for all future jobs
 - Six-level logging system (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL) is clearly defined
 - CRITICAL error handling and sync abortion is well-specified
-- Three dummy test modules provide comprehensive testing scenarios
-- Btrfs snapshot safety mechanism is clearly defined as required (non-disableable) module
+- Three dummy test jobs provide comprehensive testing scenarios
+- Btrfs snapshot safety mechanism is clearly defined as required (non-disableable) job
 - Self-installation/upgrade mechanism ensures version consistency
 - Graceful interrupt handling (Ctrl+C) is thoroughly specified
-- Configuration system supports module enable/disable and log level control
+- Configuration system supports job enable/disable and log level control
 - All user stories have independent test criteria and constitution alignment
 - Edge cases cover important failure scenarios
 - Success criteria are measurable and technology-agnostic

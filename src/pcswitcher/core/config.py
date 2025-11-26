@@ -19,16 +19,16 @@ class Configuration:
     Attributes:
         log_file_level: Minimum level for file logging
         log_cli_level: Minimum level for terminal display
-        sync_modules: Module enable/disable flags
-        module_configs: Per-module configuration sections
+        sync_jobs: Job enable/disable flags
+        job_configs: Per-job configuration sections
         disk: Disk space monitoring configuration
         config_path: Path to loaded config file
     """
 
     log_file_level: LogLevel
     log_cli_level: LogLevel
-    sync_modules: dict[str, bool]
-    module_configs: dict[str, dict[str, Any]]
+    sync_jobs: dict[str, bool]
+    job_configs: dict[str, dict[str, Any]]
     disk: dict[str, Any]
     config_path: Path = field(default_factory=lambda: Path.home() / ".config" / "pc-switcher" / "config.yaml")
 
@@ -70,24 +70,24 @@ def load_config(path: Path | None = None) -> Configuration:
     # Apply defaults
     config_dict = apply_defaults(config_dict)
 
-    # Note: validate_required_modules() disabled since btrfs_snapshots is now
-    # orchestrator-level infrastructure, not a SyncModule in sync_modules
+    # Note: validate_required_jobs() disabled since btrfs_snapshots is now
+    # orchestrator-level infrastructure, not a SyncJob in sync_jobs
 
     # Parse log levels
     log_file_level = _parse_log_level(config_dict.get("log_file_level", "FULL"))
     log_cli_level = _parse_log_level(config_dict.get("log_cli_level", "INFO"))
 
-    # Extract module configs
-    module_configs = {}
-    for module_name in config_dict.get("sync_modules", {}):
-        if module_name in config_dict:
-            module_configs[module_name] = config_dict[module_name]
+    # Extract job configs
+    job_configs = {}
+    for job_name in config_dict.get("sync_jobs", {}):
+        if job_name in config_dict:
+            job_configs[job_name] = config_dict[job_name]
 
     return Configuration(
         log_file_level=log_file_level,
         log_cli_level=log_cli_level,
-        sync_modules=config_dict.get("sync_modules", {}),
-        module_configs=module_configs,
+        sync_jobs=config_dict.get("sync_jobs", {}),
+        job_configs=job_configs,
         disk=config_dict.get("disk", {}),
         config_path=path,
     )
@@ -103,21 +103,21 @@ def validate_config_structure(config_dict: dict[str, Any], config_path: Path) ->
     Raises:
         ConfigError: If required fields are missing or types are incorrect
     """
-    required_fields = ["sync_modules"]
+    required_fields = ["sync_jobs"]
 
     for field_name in required_fields:
         if field_name not in config_dict:
             raise ConfigError(f"Missing required field '{field_name}' in {config_path}")
 
-    # Validate sync_modules is a dict
-    if not isinstance(config_dict["sync_modules"], dict):
-        raise ConfigError(f"Field 'sync_modules' must be a dictionary in {config_path}")
+    # Validate sync_jobs is a dict
+    if not isinstance(config_dict["sync_jobs"], dict):
+        raise ConfigError(f"Field 'sync_jobs' must be a dictionary in {config_path}")
 
-    # Validate sync_modules values are boolean
-    for module_name, enabled in config_dict["sync_modules"].items():
+    # Validate sync_jobs values are boolean
+    for job_name, enabled in config_dict["sync_jobs"].items():
         if not isinstance(enabled, bool):
             raise ConfigError(
-                f"Module '{module_name}' in 'sync_modules' must have boolean value (true/false) in {config_path}"
+                f"Job '{job_name}' in 'sync_jobs' must have boolean value (true/false) in {config_path}"
             )
 
     # Validate log levels if present
@@ -128,23 +128,23 @@ def validate_config_structure(config_dict: dict[str, Any], config_path: Path) ->
         _parse_log_level(config_dict["log_cli_level"])  # Will raise if invalid
 
 
-def validate_required_modules(sync_modules: dict[str, bool], config_path: Path) -> None:
-    """Validate that required modules are present and enabled.
+def validate_required_jobs(sync_jobs: dict[str, bool], config_path: Path) -> None:
+    """Validate that required jobs are present and enabled.
 
-    Note: btrfs_snapshots is now orchestrator-level infrastructure, not a SyncModule.
-    It should NOT be listed in sync_modules.
+    Note: btrfs_snapshots is now orchestrator-level infrastructure, not a SyncJob.
+    It should NOT be listed in sync_jobs.
 
     Args:
-        sync_modules: Dictionary of module names to enabled flags
+        sync_jobs: Dictionary of job names to enabled flags
         config_path: Path to config file (for error messages)
 
     Raises:
-        ConfigError: If btrfs_snapshots is incorrectly listed as a SyncModule
+        ConfigError: If btrfs_snapshots is incorrectly listed as a SyncJob
     """
-    # btrfs_snapshots should NOT be in sync_modules (it's infrastructure, not a SyncModule)
-    if "btrfs_snapshots" in sync_modules:
+    # btrfs_snapshots should NOT be in sync_jobs (it's infrastructure, not a SyncJob)
+    if "btrfs_snapshots" in sync_jobs:
         raise ConfigError(
-            f"'btrfs_snapshots' should not be listed in sync_modules in {config_path}. "
+            f"'btrfs_snapshots' should not be listed in sync_jobs in {config_path}. "
             f"It is orchestrator-level infrastructure configured separately in the btrfs_snapshots section."
         )
 
@@ -181,21 +181,21 @@ def apply_defaults(config_dict: dict[str, Any]) -> dict[str, Any]:
     return config_dict
 
 
-def validate_module_config(module_name: str, module_config: dict[str, Any], schema: dict[str, Any]) -> None:
-    """Validate module configuration against JSON schema.
+def validate_job_config(job_name: str, job_config: dict[str, Any], schema: dict[str, Any]) -> None:
+    """Validate job configuration against JSON schema.
 
     Args:
-        module_name: Name of the module
-        module_config: Module configuration dictionary
-        schema: JSON Schema (draft-07) for module config
+        job_name: Name of the job
+        job_config: Job configuration dictionary
+        schema: JSON Schema (draft-07) for job config
 
     Raises:
-        ConfigError: If module config doesn't match schema
+        ConfigError: If job config doesn't match schema
     """
     try:
-        validate(instance=module_config, schema=schema)
+        validate(instance=job_config, schema=schema)
     except ValidationError as e:
-        raise ConfigError(f"Invalid configuration for module '{module_name}': {e.message}") from e
+        raise ConfigError(f"Invalid configuration for job '{job_name}': {e.message}") from e
 
 
 def generate_default_config() -> str:
@@ -218,13 +218,13 @@ disk:
   runtime_minimum: "15%"       # Runtime check: abort if space falls below during sync
   check_interval: 30           # Seconds between disk space checks
 
-# Enabled sync modules (in execution order)
-sync_modules:
-  # dummy_success: false  # Example: Uncomment to enable test module
+# Enabled sync jobs (in execution order)
+sync_jobs:
+  # dummy_success: false  # Example: Uncomment to enable test job
   # dummy_fail: false
-  # NOTE: btrfs_snapshots is orchestrator-level infrastructure, not a SyncModule
+  # NOTE: btrfs_snapshots is orchestrator-level infrastructure, not a SyncJob
 
-# Module-specific configurations
+# Job-specific configurations
 
 # Btrfs snapshots configuration
 btrfs_snapshots:
@@ -239,34 +239,34 @@ btrfs_snapshots:
     return config
 
 
-def get_enabled_modules(sync_modules: dict[str, bool]) -> list[str]:
-    """Get list of enabled module names in configuration order.
+def get_enabled_jobs(sync_jobs: dict[str, bool]) -> list[str]:
+    """Get list of enabled job names in configuration order.
 
     Args:
-        sync_modules: Dictionary of module names to enabled flags
+        sync_jobs: Dictionary of job names to enabled flags
 
     Returns:
-        List of enabled module names in order
+        List of enabled job names in order
     """
-    return [name for name, enabled in sync_modules.items() if enabled]
+    return [name for name, enabled in sync_jobs.items() if enabled]
 
 
-def validate_module_names(sync_modules: dict[str, bool], available_modules: list[str]) -> None:
-    """Validate that all modules in config are known/available.
+def validate_job_names(sync_jobs: dict[str, bool], available_jobs: list[str]) -> None:
+    """Validate that all jobs in config are known/available.
 
     Args:
-        sync_modules: Dictionary of module names to enabled flags
-        available_modules: List of known module names
+        sync_jobs: Dictionary of job names to enabled flags
+        available_jobs: List of known job names
 
     Raises:
-        ConfigError: If unknown module name found in config
+        ConfigError: If unknown job name found in config
     """
-    unknown_modules = [name for name in sync_modules if name not in available_modules]
+    unknown_jobs = [name for name in sync_jobs if name not in available_jobs]
 
-    if unknown_modules:
+    if unknown_jobs:
         raise ConfigError(
-            f"Unknown modules in configuration: {', '.join(unknown_modules)}. "
-            f"Available modules: {', '.join(available_modules)}"
+            f"Unknown jobs in configuration: {', '.join(unknown_jobs)}. "
+            f"Available jobs: {', '.join(available_jobs)}"
         )
 
 

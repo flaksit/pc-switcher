@@ -11,50 +11,50 @@ from pcswitcher.core.config import (
     ConfigError,
     apply_defaults,
     load_config,
-    validate_module_config,
-    validate_required_modules,
+    validate_job_config,
+    validate_required_jobs,
 )
 from pcswitcher.core.logging import LogLevel
 
 
-def test_config_validates_btrfs_snapshots_not_in_sync_modules() -> None:
-    """Test that config validation fails if btrfs_snapshots is in sync_modules.
+def test_config_validates_btrfs_snapshots_not_in_sync_jobs() -> None:
+    """Test that config validation fails if btrfs_snapshots is in sync_jobs.
 
-    btrfs_snapshots is orchestrator-level infrastructure, not a SyncModule.
+    btrfs_snapshots is orchestrator-level infrastructure, not a SyncJob.
     """
     config_path = Path("/tmp/test-config.yaml")
 
-    with pytest.raises(ConfigError, match="should not be listed in sync_modules"):
-        validate_required_modules({"btrfs_snapshots": True, "user_data": True}, config_path)
+    with pytest.raises(ConfigError, match="should not be listed in sync_jobs"):
+        validate_required_jobs({"btrfs_snapshots": True, "user_data": True}, config_path)
 
 
-def test_config_validates_btrfs_snapshots_disabled_in_sync_modules() -> None:
-    """Test that config validation fails even if btrfs_snapshots is disabled in sync_modules."""
+def test_config_validates_btrfs_snapshots_disabled_in_sync_jobs() -> None:
+    """Test that config validation fails even if btrfs_snapshots is disabled in sync_jobs."""
     config_path = Path("/tmp/test-config.yaml")
 
-    with pytest.raises(ConfigError, match="should not be listed in sync_modules"):
-        validate_required_modules({"btrfs_snapshots": False}, config_path)
+    with pytest.raises(ConfigError, match="should not be listed in sync_jobs"):
+        validate_required_jobs({"btrfs_snapshots": False}, config_path)
 
 
-def test_config_validates_sync_modules_without_btrfs() -> None:
-    """Test that config validation passes when btrfs_snapshots is NOT in sync_modules."""
+def test_config_validates_sync_jobs_without_btrfs() -> None:
+    """Test that config validation passes when btrfs_snapshots is NOT in sync_jobs."""
     config_path = Path("/tmp/test-config.yaml")
 
-    # Should not raise - btrfs_snapshots is infrastructure, not a SyncModule
-    validate_required_modules({"dummy_success": True, "dummy_fail": False}, config_path)
+    # Should not raise - btrfs_snapshots is infrastructure, not a SyncJob
+    validate_required_jobs({"dummy_success": True, "dummy_fail": False}, config_path)
 
 
-def test_config_validates_empty_sync_modules() -> None:
-    """Test that config validation passes with empty sync_modules."""
+def test_config_validates_empty_sync_jobs() -> None:
+    """Test that config validation passes with empty sync_jobs."""
     config_path = Path("/tmp/test-config.yaml")
 
-    # Should not raise - no SyncModules configured is valid
-    validate_required_modules({}, config_path)
+    # Should not raise - no SyncJobs configured is valid
+    validate_required_jobs({}, config_path)
 
 
 def test_apply_defaults_adds_disk_config() -> None:
     """Test that apply_defaults adds disk configuration with correct keys."""
-    config_dict: dict = {"sync_modules": {"dummy_success": False}}
+    config_dict: dict = {"sync_jobs": {"dummy_success": False}}
 
     result = apply_defaults(config_dict)
 
@@ -67,7 +67,7 @@ def test_apply_defaults_adds_disk_config() -> None:
 def test_apply_defaults_preserves_custom_disk_config() -> None:
     """Test that apply_defaults preserves user's custom disk settings."""
     config_dict: dict = {
-        "sync_modules": {"dummy_success": False},
+        "sync_jobs": {"dummy_success": False},
         "disk": {
             "min_free": 0.30,
             "reserve_minimum": 0.10,
@@ -85,7 +85,7 @@ def test_apply_defaults_preserves_custom_disk_config() -> None:
 
 def test_apply_defaults_adds_log_levels() -> None:
     """Test that apply_defaults adds default log levels."""
-    config_dict: dict = {"sync_modules": {"dummy_success": False}}
+    config_dict: dict = {"sync_jobs": {"dummy_success": False}}
 
     result = apply_defaults(config_dict)
 
@@ -93,9 +93,9 @@ def test_apply_defaults_adds_log_levels() -> None:
     assert result["log_cli_level"] == "INFO"
 
 
-def test_validate_module_config_valid_schema() -> None:
-    """Test that valid module config passes validation."""
-    module_config = {
+def test_validate_job_config_valid_schema() -> None:
+    """Test that valid job config passes validation."""
+    job_config = {
         "subvolumes": ["@", "@home"],
         "keep_recent": 3,
     }
@@ -108,12 +108,12 @@ def test_validate_module_config_valid_schema() -> None:
     }
 
     # Should not raise
-    validate_module_config("test_module", module_config, schema)
+    validate_job_config("test_job", job_config, schema)
 
 
-def test_validate_module_config_invalid_schema() -> None:
-    """Test that invalid module config fails validation."""
-    module_config = {
+def test_validate_job_config_invalid_schema() -> None:
+    """Test that invalid job config fails validation."""
+    job_config = {
         "subvolumes": "not-an-array",  # Should be array
     }
     schema = {
@@ -123,8 +123,8 @@ def test_validate_module_config_invalid_schema() -> None:
         },
     }
 
-    with pytest.raises(ConfigError, match="Invalid configuration for module"):
-        validate_module_config("test_module", module_config, schema)
+    with pytest.raises(ConfigError, match="Invalid configuration for job"):
+        validate_job_config("test_job", job_config, schema)
 
 
 def test_load_config_full_integration() -> None:
@@ -138,7 +138,7 @@ disk:
   reserve_minimum: 0.12
   check_interval: 45
 
-sync_modules:
+sync_jobs:
   dummy_success: false
   dummy_fail: false
 
@@ -157,12 +157,12 @@ btrfs_snapshots:
 
         assert config.log_file_level == LogLevel.DEBUG
         assert config.log_cli_level == LogLevel.WARNING
-        assert config.sync_modules == {"dummy_success": False, "dummy_fail": False}
+        assert config.sync_jobs == {"dummy_success": False, "dummy_fail": False}
         assert config.disk["min_free"] == 0.25
         assert config.disk["reserve_minimum"] == 0.12
         assert config.disk["check_interval"] == 45
-        # btrfs_snapshots config is still loaded even though not in sync_modules
-        assert config.module_configs == {}  # No module configs since no modules in sync_modules match
+        # btrfs_snapshots config is still loaded even though not in sync_jobs
+        assert config.job_configs == {}  # No job configs since no jobs in sync_jobs match
     finally:
         config_path.unlink()
 
@@ -186,8 +186,8 @@ def test_load_config_empty_file() -> None:
         config_path.unlink()
 
 
-def test_load_config_missing_sync_modules() -> None:
-    """Test that config without sync_modules raises ConfigError."""
+def test_load_config_missing_sync_jobs() -> None:
+    """Test that config without sync_jobs raises ConfigError."""
     config_content = """
 log_file_level: INFO
 """
@@ -197,7 +197,7 @@ log_file_level: INFO
         config_path = Path(f.name)
 
     try:
-        with pytest.raises(ConfigError, match="Missing required field 'sync_modules'"):
+        with pytest.raises(ConfigError, match="Missing required field 'sync_jobs'"):
             load_config(config_path)
     finally:
         config_path.unlink()
@@ -207,7 +207,7 @@ def test_load_config_invalid_log_level() -> None:
     """Test that invalid log level raises ConfigError."""
     config_content = """
 log_file_level: INVALID_LEVEL
-sync_modules:
+sync_jobs:
   dummy_success: false
 """
 
@@ -224,7 +224,7 @@ sync_modules:
 
 def test_config_disk_keys_match_spec() -> None:
     """Test that disk config uses canonical key names from spec."""
-    defaults = apply_defaults({"sync_modules": {"dummy_success": False}})
+    defaults = apply_defaults({"sync_jobs": {"dummy_success": False}})
 
     # These are the canonical keys from the spec
     assert "preflight_minimum" in defaults["disk"]

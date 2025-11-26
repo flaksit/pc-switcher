@@ -71,7 +71,7 @@ def configure_logging(
         session: Optional session for error tracking
 
     The function sets up:
-    - File output: JSON format with timestamp, level, module, hostname, event, context
+    - File output: JSON format with timestamp, level, job, hostname, event, context
     - Terminal output: Human-readable format with colors via rich
     - Custom FULL log level
     - ERROR tracking for session.has_errors flag
@@ -143,7 +143,7 @@ def get_logger(name: str, **context: Any) -> structlog.stdlib.BoundLogger:
     """Get a logger with bound context.
 
     Args:
-        name: Logger name (typically module name)
+        name: Logger name (typically job name)
         **context: Additional context to bind (e.g., session_id, hostname)
 
     Returns:

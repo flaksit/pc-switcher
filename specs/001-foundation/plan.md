@@ -9,15 +9,15 @@
 
 This feature establishes the complete foundation infrastructure for PC-switcher, a synchronization system for seamless switching between Linux desktop machines. The foundation includes:
 
-1. **Module Architecture**: Standardized contract for all sync features with lifecycle methods (validate, pre_sync, sync, post_sync, abort), config schemas, logging, progress reporting, and sequential execution (config-based order, no dependency resolution)
+1. **Job Architecture**: Standardized contract for all sync features with lifecycle methods (validate, pre_sync, sync, post_sync, abort), config schemas, logging, progress reporting, and sequential execution (config-based order, no dependency resolution)
 2. **Self-Installation**: Automatic version-matching installation/upgrade of pc-switcher on target machines from GitHub repository via Git URL
 3. **Safety Infrastructure**: Btrfs snapshot creation (pre/post-sync) with rollback capability and disk space monitoring (configurable thresholds: float 0.0-1.0 or percentage string, defaults: min_free=0.20, reserve_minimum=0.15, check_interval=30s)
-4. **Logging System**: Six-level logging (DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL) with file/CLI separation and exception-based abort (modules raise SyncError exception, orchestrator catches, logs as CRITICAL, calls abort(timeout))
-5. **Interrupt Handling**: Graceful Ctrl+C handling with module abort, target termination, and no orphaned processes
-6. **Configuration System**: YAML-based config with module enable/disable, schema validation, and defaults
+4. **Logging System**: Six-level logging (DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL) with file/CLI separation and exception-based abort (jobs raise SyncError exception, orchestrator catches, logs as CRITICAL, calls abort(timeout))
+5. **Interrupt Handling**: Graceful Ctrl+C handling with job abort, target termination, and no orphaned processes
+6. **Configuration System**: YAML-based config with job enable/disable, schema validation, and defaults
 7. **Installation & Setup**: Deployment tooling with dependency checking and btrfs verification
-8. **Dummy Test Modules**: Three reference implementations (success, critical, fail) for testing infrastructure
-9. **Terminal UI**: Real-time progress reporting with module status, log messages, and progress bars
+8. **Dummy Test Jobs**: Three reference implementations (success, critical, fail) for testing infrastructure
+9. **Terminal UI**: Real-time progress reporting with job status, log messages, and progress bars
 
 Technical approach: Python 3.13 orchestrator using Fabric for SSH communication, structlog for logging, rich for terminal UI, with modular plugin architecture enabling independent feature development. Dynamic versioning via GitHub releases (uv-dynamic-versioning + hatchling). uv (latest stable) for package management.
 
@@ -58,14 +58,14 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 **Constraints**:
 - Single persistent SSH connection (no reconnects per operation)
 - No orphaned processes after Ctrl+C (FR-027)
-- Module exceptions (SyncError) trigger immediate abort with abort(timeout) call on currently-running module only
-- Module lifecycle must follow strict ordering: validate → pre_sync → sync → post_sync → abort(timeout) (if error/interrupt)
+- Job exceptions (SyncError) trigger immediate abort with abort(timeout) call on currently-running job only
+- Job lifecycle must follow strict ordering: validate → pre_sync → sync → post_sync → abort(timeout) (if error/interrupt)
 - Disk space thresholds configurable as float (0.0-1.0) or percentage string (e.g., "20%")
 
 **Scale/Scope**:
-- ~10-15 core modules (btrfs-snapshots, user-data, packages, docker, vms, k3s, etc.)
+- ~10-15 core jobs (btrfs-snapshots, user-data, packages, docker, vms, k3s, etc.)
 - ~3000-5000 lines Python for core orchestrator
-- ~500-1000 lines per feature module
+- ~500-1000 lines per feature job
 - Support for 2-10 configured subvolumes for snapshots
 
 ## Constitution Check
@@ -84,12 +84,12 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 **Conflict Detection**:
 - Lock mechanism prevents concurrent sync executions (FR-047)
 - Version mismatch detection (newer target → CRITICAL abort to prevent downgrade) (FR-006)
-- Validation phase (all modules) before any state changes (FR-002)
+- Validation phase (all jobs) before any state changes (FR-002)
 
 **Transactional Safety**:
-- Module lifecycle enforces validate → execute → abort ordering (FR-002)
-- Exception-based error handling: modules raise SyncError, orchestrator logs as CRITICAL and aborts (FR-019)
-- Orchestrator-managed cleanup via abort(timeout) on currently-running module (User Story 5, FR-003, FR-024)
+- Job lifecycle enforces validate → execute → abort ordering (FR-002)
+- Exception-based error handling: jobs raise SyncError, orchestrator logs as CRITICAL and aborts (FR-019)
+- Orchestrator-managed cleanup via abort(timeout) on currently-running job (User Story 5, FR-003, FR-024)
 - ERROR log tracking during execution determines final state (COMPLETED vs FAILED)
 
 ### Frictionless Command UX ✅
@@ -98,12 +98,12 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 
 **Automation**:
 - Auto-installation/upgrade of target pc-switcher to match source version (FR-005, SC-004)
-- Module loading from config in sequential order (no dependency resolution, FR-004)
+- Job loading from config in sequential order (no dependency resolution, FR-004)
 - Default config generation on installation (FR-037)
 - No manual steps except initial setup and sync trigger
 
 **Progressive Feedback**:
-- Real-time progress reporting (module, percentage, current item) (FR-043, FR-044, User Story 9)
+- Real-time progress reporting (job, percentage, current item) (FR-043, FR-044, User Story 9)
 - Terminal UI with structured progress and log display (User Story 9)
 - Clear error messages with remediation guidance (FR-007, FR-033)
 
@@ -153,9 +153,9 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 **Measurement Plan**:
 - Log timestamps (ISO8601) for all operations (FR-021)
 - Phase timing captured in logs (validate, pre_sync, sync, post_sync)
-- Progress percentage and ETA from modules (FR-043)
+- Progress percentage and ETA from jobs (FR-043)
 
-**Parallelization**: Not applicable to foundation (sequential by design for safety); future modules can parallelize internally
+**Parallelization**: Not applicable to foundation (sequential by design for safety); future jobs can parallelize internally
 
 ### Deliberate Simplicity ✅
 
@@ -166,14 +166,14 @@ Technical approach: Python 3.13 orchestrator using Fabric for SSH communication,
 - File-based logging (no centralized log aggregation)
 
 **Maintainability**:
-- Clear module interface contract enables independent development (FR-001, SC-007)
-- Config-based module loading with sequential execution (simple, predictable)
+- Clear job interface contract enables independent development (FR-001, SC-007)
+- Config-based job loading with sequential execution (simple, predictable)
 - Lifecycle methods enforce consistent patterns
 - Python type hints + basedpyright for early error detection
 
 **Reversibility**:
 - Btrfs snapshots enable full rollback (FR-013)
-- Module cleanup methods ensure graceful degradation
+- Job cleanup methods ensure graceful degradation
 - No persistent state outside of config and logs
 
 ### Up-to-date Documentation ✅
@@ -214,13 +214,13 @@ After completing Phase 0 (research) and Phase 1 (design):
 
 5. **Throughput-Focused Syncing** ✅: Foundation overhead remains <60 seconds (version check, snapshot creation, orchestration)
 
-6. **Deliberate Simplicity** ✅: Design maintains simplicity (no additional components, clear module contract, sequential execution)
+6. **Deliberate Simplicity** ✅: Design maintains simplicity (no additional components, clear job contract, sequential execution)
 
 7. **Up-to-date Documentation** ✅: All design artifacts generated (research, data-model, contracts, quickstart)
 
 **Design Validation**:
-- Module interface contract is concrete and implementable (see `contracts/module-interface.py`)
-- Orchestrator-module protocol is complete and unambiguous (see `contracts/orchestrator-module-protocol.md`)
+- Job interface contract is concrete and implementable (see `contracts/job-interface.py`)
+- Orchestrator-job protocol is complete and unambiguous (see `contracts/orchestrator-job-protocol.md`)
 - Configuration schema is well-defined (see `contracts/config-schema.yaml`)
 - Data model entities have clear relationships and state transitions (see `data-model.md`)
 - Implementation path is clear with defined phases (see `quickstart.md`)
@@ -262,8 +262,8 @@ pc-switcher/
 │       │   └── ui.py        # Terminal UI (rich integration)
 │       ├── core/
 │       │   ├── __init__.py
-│       │   ├── orchestrator.py    # Main sync orchestration, module lifecycle
-│       │   ├── module.py          # Module interface (ABC), base class, SyncError exception
+│       │   ├── orchestrator.py    # Main sync orchestration, job lifecycle
+│       │   ├── job.py          # Job interface (ABC), base class, SyncError exception
 │       │   ├── session.py         # SyncSession state management
 │       │   ├── config.py          # Configuration loading, validation
 │       │   ├── logging.py         # Logging setup (structlog integration)
@@ -275,11 +275,11 @@ pc-switcher/
 │       │   ├── __init__.py
 │       │   ├── connection.py      # SSH connection management (Fabric, ControlMaster)
 │       │   └── installer.py       # Remote installation orchestration (source detects version, installs on target)
-│       ├── modules/
+│       ├── jobs/
 │       │   ├── __init__.py
 │       │   ├── btrfs_snapshots.py # Snapshot creation/rollback (required)
-│       │   ├── dummy_success.py   # Test module: success path
-│       │   └── dummy_fail.py      # Test module: exception handling
+│       │   ├── dummy_success.py   # Test job: success path
+│       │   └── dummy_fail.py      # Test job: exception handling
 │       └── utils/
 │           ├── __init__.py
 │           ├── disk.py            # Disk space monitoring
@@ -292,12 +292,12 @@ pc-switcher/
     ├── conftest.py                # pytest fixtures (mock SSH, config, etc.)
     ├── unit/
     │   ├── test_orchestrator.py
-    │   ├── test_module.py
+    │   ├── test_job.py
     │   ├── test_config.py
     │   └── test_logging.py
     ├── integration/
     │   ├── test_ssh_connection.py
-    │   ├── test_module_lifecycle.py
+    │   ├── test_job_lifecycle.py
     │   └── test_installer.py
     └── e2e/
         └── test_sync_flow.py      # End-to-end with test machines
@@ -305,7 +305,7 @@ pc-switcher/
 
 **Structure Decision**: Single Python project (Option 1 from template). This is a CLI orchestration tool, not a web/mobile application. The structure follows Python packaging best practices:
 - `src/pcswitcher/` layout for installable package
-- Clear separation: CLI, core orchestration, remote operations, modules, utilities
+- Clear separation: CLI, core orchestration, remote operations, jobs, utilities
 - Test structure mirrors source for discoverability
 - Scripts bundled via package data for target deployment
 

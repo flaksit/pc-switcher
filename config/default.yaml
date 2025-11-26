@@ -35,28 +35,29 @@ disk:
   check_interval: 30          # Check every 30 seconds
 
 # =============================================================================
-# SYNC MODULES
+# SYNC JOBS
 # =============================================================================
-# Modules execute in the order listed here. Each module handles a specific
+# Jobs execute in the order listed here. Each job handles a specific
 # aspect of system synchronization.
 #
 # IMPORTANT:
-# - btrfs_snapshots MUST be first and enabled (data safety requirement)
+# - btrfs_snapshots is orchestrator-level infrastructure, NOT a sync job.
+#   It runs automatically before and after sync jobs for data safety.
 # - Order matters: dependencies must be listed before dependents
-# - Disabled modules (false) are skipped but must have valid config
+# - Disabled jobs (false) are skipped but must have valid config
 
-sync_modules:
-  # Test modules (for development/testing only)
+sync_jobs:
+  # Test jobs (for development/testing only)
   # dummy_success: false   # Simulates successful sync operation
   # dummy_fail: false      # Tests exception propagation
-  # NOTE: btrfs_snapshots is orchestrator-level infrastructure, not a SyncModule.
+  # NOTE: btrfs_snapshots is orchestrator-level infrastructure, not a SyncJob.
   # It's configured in the btrfs_snapshots section below but not listed here.
 
 # =============================================================================
-# MODULE-SPECIFIC CONFIGURATIONS
+# JOB-SPECIFIC CONFIGURATIONS
 # =============================================================================
 
-# Btrfs Snapshots Module
+# Btrfs Snapshots (Orchestrator Infrastructure)
 # Creates read-only snapshots before and after sync for data safety.
 # Provides rollback capability if sync fails.
 btrfs_snapshots:
@@ -78,7 +79,7 @@ btrfs_snapshots:
   keep_recent: 3         # Always keep N most recent sync sessions
   max_age_days: 7        # Delete snapshots older than N days
 
-# Test module configurations (for development only)
+# Test job configurations (for development only)
 # dummy_success:
 #   duration_seconds: 20  # How long to simulate sync operation
 

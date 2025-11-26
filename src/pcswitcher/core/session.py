@@ -1,4 +1,4 @@
-"""Session and module execution types for pc-switcher."""
+"""Session and job execution types for pc-switcher."""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ class SessionState(StrEnum):
     FAILED = "FAILED"
 
 
-class ModuleResult(StrEnum):
-    """Result of a module execution within a sync session."""
+class JobResult(StrEnum):
+    """Result of a job execution within a sync session."""
 
     SUCCESS = "SUCCESS"
     SKIPPED = "SKIPPED"
@@ -43,7 +43,7 @@ def generate_session_id() -> str:
 class SyncSession:
     """Represents a single sync operation from source to target.
 
-    Tracks state and progress of sync operation including module results,
+    Tracks state and progress of sync operation including job results,
     error status, and abort requests.
     """
 
@@ -51,9 +51,9 @@ class SyncSession:
     timestamp: datetime
     source_hostname: str
     target_hostname: str
-    enabled_modules: list[str]
+    enabled_jobs: list[str]
     state: SessionState
-    module_results: dict[str, ModuleResult] = field(default_factory=dict)
+    job_results: dict[str, JobResult] = field(default_factory=dict)
     has_errors: bool = False
     abort_requested: bool = False
     lock_path: Path = field(default_factory=lambda: _get_default_lock_path())

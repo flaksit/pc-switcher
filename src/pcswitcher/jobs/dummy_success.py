@@ -1,4 +1,4 @@
-"""Dummy success module for testing pc-switcher."""
+"""Dummy success job for testing pc-switcher."""
 
 from __future__ import annotations
 
@@ -6,13 +6,13 @@ import time
 from typing import Any, override
 
 from pcswitcher.core.logging import LogLevel
-from pcswitcher.core.module import RemoteExecutor, SyncModule
+from pcswitcher.core.job import RemoteExecutor, SyncJob
 
 
-class DummySuccessModule(SyncModule):
-    """Test module that simulates successful sync with progress reporting.
+class DummySuccessJob(SyncJob):
+    """Test job that simulates successful sync with progress reporting.
 
-    This module demonstrates:
+    This job demonstrates:
     - Progress reporting (0-100% over 20 seconds)
     - Logging at various levels (INFO, WARNING, ERROR)
     - Graceful abort handling
@@ -22,10 +22,10 @@ class DummySuccessModule(SyncModule):
     """
 
     def __init__(self, config: dict[str, Any], remote: RemoteExecutor) -> None:
-        """Initialize DummySuccessModule.
+        """Initialize DummySuccessJob.
 
         Args:
-            config: Module configuration
+            config: Job configuration
             remote: Remote executor interface
         """
         super().__init__(config, remote)
@@ -34,13 +34,13 @@ class DummySuccessModule(SyncModule):
     @property
     @override
     def name(self) -> str:
-        """Module identifier."""
+        """Job identifier."""
         return "dummy_success"
 
     @property
     @override
     def required(self) -> bool:
-        """This is an optional test module."""
+        """This is an optional test job."""
         return False
 
     @override
@@ -65,7 +65,7 @@ class DummySuccessModule(SyncModule):
 
     @override
     def validate(self) -> list[str]:
-        """Validate module configuration and environment.
+        """Validate job configuration and environment.
 
         Returns:
             Empty list (always validates successfully)
@@ -152,7 +152,7 @@ class DummySuccessModule(SyncModule):
     def post_sync(self) -> None:
         """Execute post-sync operations.
 
-        For this dummy module, just logs the operation.
+        For this dummy job, just logs the operation.
         """
         self.log(LogLevel.INFO, "Starting post-sync")
         self.log(LogLevel.INFO, "Post-sync complete")
@@ -165,7 +165,7 @@ class DummySuccessModule(SyncModule):
             timeout: Maximum time to spend in cleanup (seconds)
 
         Sets abort flag to stop sync loop gracefully.
-        Logs "Dummy module abort called" per FR-042.
+        Logs "Dummy job abort called" per FR-042.
         """
-        self.log(LogLevel.INFO, "Dummy module abort called", timeout=timeout)
+        self.log(LogLevel.INFO, "Dummy job abort called", timeout=timeout)
         self._aborted = True

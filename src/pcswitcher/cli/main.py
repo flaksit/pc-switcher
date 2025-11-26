@@ -16,7 +16,7 @@ from pcswitcher import __version__  # type: ignore[attr-defined]
 from pcswitcher.cli.ui import TerminalUI
 from pcswitcher.core.config import ConfigError, load_config
 from pcswitcher.core.logging import configure_logging, create_log_file_path
-from pcswitcher.core.module import SyncError
+from pcswitcher.core.job import SyncError
 from pcswitcher.core.orchestrator import Orchestrator
 from pcswitcher.core.session import SessionState, SyncSession, generate_session_id
 from pcswitcher.remote.connection import SSHRemoteExecutor, TargetConnection
@@ -68,26 +68,26 @@ def _render_sync_summary(
         f"[bold {status_color}]{final_state.value.upper()}[/bold]",
     )
     summary_table.add_row("Duration", duration_str)
-    summary_table.add_row("Modules Executed", str(len(session.module_results)))
+    summary_table.add_row("Jobs Executed", str(len(session.job_results)))
 
-    modules_succeeded = sum(1 for r in session.module_results.values() if r.value == "SUCCESS")
-    modules_failed = sum(1 for r in session.module_results.values() if r.value == "FAILED")
+    jobs_succeeded = sum(1 for r in session.job_results.values() if r.value == "SUCCESS")
+    jobs_failed = sum(1 for r in session.job_results.values() if r.value == "FAILED")
 
-    summary_table.add_row("Modules Succeeded", f"[green]{modules_succeeded}[/green]")
-    if modules_failed > 0:
-        summary_table.add_row("Modules Failed", f"[red]{modules_failed}[/red]")
+    summary_table.add_row("Jobs Succeeded", f"[green]{jobs_succeeded}[/green]")
+    if jobs_failed > 0:
+        summary_table.add_row("Jobs Failed", f"[red]{jobs_failed}[/red]")
 
     summary_table.add_row("Log File", str(log_path))
 
     console.print(summary_table)
     console.print()
 
-    # Show module details if there are failures
-    if modules_failed > 0:
-        console.print("[bold red]Failed Modules:[/bold red]")
-        for module_name, result in session.module_results.items():
+    # Show job details if there are failures
+    if jobs_failed > 0:
+        console.print("[bold red]Failed Jobs:[/bold red]")
+        for job_name, result in session.job_results.items():
             if result.value == "FAILED":
-                console.print(f"  • {module_name}")
+                console.print(f"  • {job_name}")
         console.print()
 
 
@@ -119,7 +119,7 @@ def sync(
     """Synchronize this machine to the target machine.
 
     This command performs a complete sync operation, executing all enabled
-    modules in the configured order. The sync is uni-directional from this
+    jobs in the configured order. The sync is uni-directional from this
     machine (source) to the target.
 
     Example:
@@ -143,10 +143,10 @@ def sync(
 
         # Create session
         session_id = generate_session_id()
-        # Only include actually enabled modules (not btrfs_snapshots which is now infrastructure)
-        enabled_module_list = [
+        # Only include actually enabled jobs (not btrfs_snapshots which is now infrastructure)
+        enabled_job_list = [
             name
-            for name, enabled in cfg.sync_modules.items()
+            for name, enabled in cfg.sync_jobs.items()
             if enabled and name != "btrfs_snapshots"
         ]
         session = SyncSession(
@@ -154,7 +154,7 @@ def sync(
             timestamp=timestamp,
             source_hostname=socket.gethostname(),
             target_hostname=target,
-            enabled_modules=enabled_module_list,
+            enabled_jobs=enabled_job_list,
             state=SessionState.INITIALIZING,
         )
 
@@ -314,22 +314,22 @@ def rollback(
         connection.connect()
         remote = SSHRemoteExecutor(connection)
 
-        # Import btrfs module to use rollback method
-        from pcswitcher.modules.btrfs_snapshots import BtrfsSnapshotsModule
+        # Import btrfs job to use rollback method
+        from pcswitcher.jobs.btrfs_snapshots import BtrfsSnapshotsJob
 
-        # Get config for btrfs module
-        btrfs_config = cfg.module_configs.get("btrfs_snapshots", {})
+        # Get config for btrfs job
+        btrfs_config = cfg.job_configs.get("btrfs_snapshots", {})
         if not btrfs_config:
             console.print("[red]Error: btrfs_snapshots not configured[/red]")
             raise typer.Exit(1)
 
-        # Create module instance and perform rollback
-        btrfs_module = BtrfsSnapshotsModule(btrfs_config, remote)
+        # Create job instance and perform rollback
+        btrfs_job = BtrfsSnapshotsJob(btrfs_config, remote)
 
         console.print(f"\n[bold blue]Rolling back to session {session_id}...[/bold blue]\n")
 
         try:
-            btrfs_module.rollback_to_presync(session_id)
+            btrfs_job.rollback_to_presync(session_id)
             console.print("\n[green bold]Rollback completed successfully[/green bold]")
             console.print(f"System has been restored to snapshot session {session_id}\n")
         except SyncError as e:
@@ -372,9 +372,9 @@ def cleanup_snapshots(
         raise typer.Exit(1) from e
 
     # Get btrfs config section
-    btrfs_config = cfg.module_configs.get("btrfs_snapshots", {})
+    btrfs_config = cfg.job_configs.get("btrfs_snapshots", {})
     if not btrfs_config:
-        # Try top-level btrfs_snapshots section (not in sync_modules since it's infrastructure)
+        # Try top-level btrfs_snapshots section (not in sync_jobs since it's infrastructure)
         # Re-read raw config to get btrfs_snapshots section
         import yaml
 

@@ -1,7 +1,7 @@
-"""Btrfs snapshot management module for pc-switcher.
+"""Btrfs snapshot management job for pc-switcher.
 
-This module implements orchestrator-level snapshot management infrastructure
-(NOT a SyncModule). It handles creation, cleanup, and rollback of btrfs snapshots
+This job implements orchestrator-level snapshot management infrastructure
+(NOT a SyncJob). It handles creation, cleanup, and rollback of btrfs snapshots
 to ensure data safety during sync operations.
 
 Btrfs snapshots are copy-on-write (COW), meaning they are instantaneous and
@@ -11,8 +11,8 @@ significant disk wear.
 
 Key operations:
 - validate_subvolumes: Verify subvolumes exist before sync starts
-- create_presync_snapshots: Create read-only snapshots before SyncModules run
-- create_postsync_snapshots: Create read-only snapshots after SyncModules complete
+- create_presync_snapshots: Create read-only snapshots before SyncJobs run
+- create_postsync_snapshots: Create read-only snapshots after SyncJobs complete
 - rollback_to_presync: Restore system to pre-sync state on failure
 - cleanup_old_snapshots: Remove old snapshots to free disk space
 """
@@ -25,14 +25,14 @@ from pathlib import Path
 from typing import Any, override
 
 from pcswitcher.core.logging import LogLevel
-from pcswitcher.core.module import SyncError
+from pcswitcher.core.job import SyncError
 from pcswitcher.core.snapshot import SnapshotManager
 
 
-class BtrfsSnapshotsModule(SnapshotManager):
+class BtrfsSnapshotsJob(SnapshotManager):
     """Manages btrfs snapshots for sync safety and rollback capability.
 
-    This is orchestrator-level infrastructure (NOT a SyncModule) that:
+    This is orchestrator-level infrastructure (NOT a SyncJob) that:
     - Validates btrfs subvolumes before any sync operations
     - Creates read-only snapshots before and after sync operations
     - Provides rollback functionality
