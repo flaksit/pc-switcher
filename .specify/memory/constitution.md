@@ -4,10 +4,10 @@ Modified principles:
 - Template principle slot 1 -> Reliability Without Compromise
 - Template principle slot 2 -> Frictionless Command UX
 - Template principle slot 3 -> Proven Tooling Only
-- Template principle slot 4 -> Solid-State Stewardship
+- Template principle slot 4 -> Minimize SSD Wear
 - Template principle slot 5 -> Throughput-Focused Syncing
 - (new) Deliberate Simplicity
-- (new) Documentation As Runtime Contract
+- (new) Up-to-date Documentation
 Added sections:
 - Core Principles (populated)
 - Operational Constraints
@@ -46,7 +46,7 @@ Follow-up TODOs:
 
 *Rationale: Stable foundations limit unexpected maintenance overhead and security risk.*
 
-### Solid-State Stewardship
+### Minimize SSD Wear
 - Implementation MUST minimize write amplification on NVMe SSDs via incremental transfers, deduplication, and avoidance of unnecessary temporary copies.
 - Long-running sync stages MUST prefer RAM or ephemeral storage when staging data instead of repeated SSD writes.
 - Sync runs MUST measure or estimate write volumes; exceeding planned thresholds triggers remediation tasks.
@@ -65,7 +65,7 @@ Follow-up TODOs:
 
 *Rationale: Simple systems are easier to reason about, maintain, and keep reliable.*
 
-### Documentation As Runtime Contract
+### Up-to-date Documentation
 - Behavioral changes MUST update rationale, architecture, implementation, and user guides within the same change set.
 - Documentation MUST remain navigable from high-level intent down to scripts, keeping references synchronized.
 - Out-of-date documentation identified during reviews MUST block release until corrected.

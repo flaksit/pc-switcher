@@ -23,7 +23,7 @@ Based on PC-switcher's High Level Requirements, the orchestration system must su
 - Log messages at multiple severity levels (debug, info, warning, error)
 - Heartbeat indicators every 2-3 seconds for operations exceeding this duration
 - Operation phase transitions (connecting, validating, syncing phases)
-- Per-module progress tracking
+- Per-job progress tracking
 
 ### Error Handling & Recovery
 - Pre-sync validation errors detected on target before full sync begins
@@ -296,7 +296,7 @@ pkill -f "rsync"
 pkill -f "docker cp"
 
 # Restore any partially-synced state
-# (implementation depends on specific modules)
+# (implementation depends on specific jobs)
 
 echo "Cleanup complete"
 exit 0
@@ -649,7 +649,7 @@ SSH is the optimal choice for PC-switcher orchestration:
 5. **Superior to all alternatives**: Every alternative adds complexity without providing benefit
 
 The project should confidently proceed with SSH as the orchestration mechanism and focus remaining design effort on:
-- Module architecture and coordination logic
+- Job architecture and coordination logic
 - Terminal UI implementation for progress visualization
 - Error handling patterns and validation workflows
 - Target-side script structure and reusability

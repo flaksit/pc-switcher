@@ -1,8 +1,8 @@
 ## Foundation (cross-cutting)
 
-1. Basic CLI & Infrastructure - Command parser, config system, SSH connection, logging, terminal UI skeleton, architecture for modular features
+1. Basic CLI & Infrastructure - Command parser, config system, connection, logging, terminal UI skeleton, architecture for modular features
 2. Safety Infrastructure - Pre-sync validation framework, btrfs snapshot management, rollback capability
-3. Installation & Setup - Deploy to machines, dependency installation, btrfs subvolume structure setup
+3. Installation & Setup - Deploy to machines, dependency installation
 
 ## User Features
 

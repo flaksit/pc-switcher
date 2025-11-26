@@ -1,0 +1,204 @@
+# Configuration Schema for pc-switcher
+#
+# This document defines the structure and validation rules for ~/.config/pc-switcher/config.yaml
+# Requirements: FR-002, FR-002, FR-002, FR-002, FR-002, FR-002, FR-002
+# User Story: 6 (Configuration System)
+#
+# Each option below includes clear documentation for the default generated config file.
+
+# Global Settings
+# ===============
+
+log_file_level:
+  type: string
+  enum: [DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL]
+  default: FULL
+  description: |
+    Minimum log level for file output (~/.local/share/pc-switcher/logs/).
+    DEBUG: All messages including verbose diagnostics
+    FULL: File-level operations but excludes DEBUG diagnostics
+    INFO: High-level operations only
+    WARNING/ERROR/CRITICAL: Progressively fewer messages
+    Recommended: FULL for troubleshooting, INFO for production
+
+log_cli_level:
+  type: string
+  enum: [DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL]
+  default: INFO
+  description: |
+    Minimum log level for terminal display.
+    Controls what you see during sync.
+    Recommended: INFO (shows progress without overwhelming detail)
+
+# Job Control
+# ==============
+
+sync_jobs:
+  type: object
+  description: |
+    Control which jobs run during sync.
+    Jobs execute in the order listed here.
+
+    NOTE: btrfs_snapshots is orchestrator-level infrastructure, NOT a SyncJob.
+    It is configured separately in the btrfs_snapshots section.
+
+  properties:
+    dummy_success:
+      type: boolean
+      default: false
+      description: |
+        Test job: demonstrates successful sync with progress reporting.
+        Useful for testing infrastructure without real sync operations.
+
+    dummy_fail:
+      type: boolean
+      default: false
+      description: |
+        Test job: raises unhandled exception for testing.
+        Demonstrates exception propagation and abort() calling.
+
+# Disk Space Monitoring (FR-016, FR-017)
+# =======================================
+
+disk:
+  type: object
+  description: |
+    Disk space safety checks prevent sync from filling disks.
+    Both thresholds MUST be specified with explicit units.
+  properties:
+    preflight_minimum:
+      type: string
+      pattern: '^(\d+(\.\d+)?%|[1-9]\d*GiB)$'
+      default: "20%"
+      description: |
+        Pre-flight check: abort if free space below this threshold BEFORE sync starts.
+        Format: percentage with "%" (e.g., "20%") or absolute with "GiB" (e.g., "50GiB").
+        Values without explicit units are invalid.
+        Recommended: "20%" to ensure safety margin.
+
+    runtime_minimum:
+      type: string
+      pattern: '^(\d+(\.\d+)?%|[1-9]\d*GiB)$'
+      default: "15%"
+      description: |
+        Runtime check: abort if free space falls below this during sync.
+        Monitored continuously at check_interval.
+        Format: percentage with "%" (e.g., "15%") or absolute with "GiB" (e.g., "40GiB").
+        Values without explicit units are invalid.
+        Should be lower than preflight_minimum to allow some space consumption.
+
+    check_interval:
+      type: integer
+      minimum: 1
+      default: 30
+      description: |
+        Seconds between disk space checks during sync.
+        Lower = more responsive to space issues, higher = less overhead.
+        Recommended: 30 seconds for continuous monitoring.
+
+# Job-Specific Configuration
+# ==============================
+
+btrfs_snapshots:
+  type: object
+  required: [subvolumes]
+  description: |
+    Configuration for btrfs snapshot creation and management.
+  properties:
+    subvolumes:
+      type: array
+      items:
+        type: string
+      minItems: 1
+      default: ["@", "@home", "@root"]
+      description: |
+        Flat subvolume names (NOT full paths) to snapshot.
+        Use names as shown in "btrfs subvolume list /".
+        Examples: "@" for root, "@home" for home, "@root" for /root
+
+        These MUST exist on both source and target machines.
+        Sync will abort if any configured subvolume is missing.
+
+    snapshot_dir:
+      type: string
+      default: "/.snapshots"
+      description: |
+        Directory where snapshots are stored.
+        Must be an absolute path.
+        Snapshots will be named: {snapshot_dir}/@{subvol}-{presync|postsync}-{timestamp}-{session_id}
+
+        WARNING: This directory must exist or be creatable with appropriate permissions.
+
+    keep_recent:
+      type: integer
+      minimum: 1
+      default: 3
+      description: |
+        Always keep this many recent sync sessions (snapshots), even if older than max_age_days.
+        Provides safety net for recent work.
+
+    max_age_days:
+      type: integer
+      minimum: 1
+      default: 7
+      description: |
+        Default age for cleanup-snapshots --older-than (days).
+        Snapshots older than this are deleted (unless within keep_recent).
+
+dummy_success:
+  type: object
+  description: |
+    Configuration for dummy-success test job.
+  properties:
+    duration_seconds:
+      type: integer
+      minimum: 1
+      default: 20
+      description: |
+        Duration of simulated sync operation (seconds).
+        Useful for testing progress reporting and UI updates.
+
+# Example valid configuration:
+#
+# log_file_level: FULL
+# log_cli_level: INFO
+#
+# sync_jobs:
+#   dummy_success: false
+#   dummy_fail: false
+#
+# disk:
+#   preflight_minimum: "20%"      # Percentage with % suffix
+#   runtime_minimum: "15%"        # Or use "50GiB" for absolute values
+#   check_interval: 30
+#
+# btrfs_snapshots:
+#   subvolumes:
+#     - "@"        # Root filesystem
+#     - "@home"    # /home
+#     - "@root"    # /root
+#   snapshot_dir: "/.snapshots"
+#   keep_recent: 3
+#   max_age_days: 7
+#
+# dummy_success:
+#   duration_seconds: 20
+
+# Validation rules (enforced by orchestrator):
+#
+# 1. Job execution order:
+#    - Jobs run sequentially in the order listed in sync_jobs
+#    - No automatic dependency resolution
+#
+# 2. Job configs must validate against job's get_config_schema():
+#    - Orchestrator loads each job's schema and validates config section
+#
+# 3. Missing optional values get defaults:
+#    - If log_file_level missing, use FULL
+#    - If job config missing, job provides defaults via schema
+#
+# 4. Invalid YAML syntax:
+#    - Parse error with line number, abort before sync
+#
+# 5. Unknown job names:
+#    - If sync_jobs contains unknown job, error and abort

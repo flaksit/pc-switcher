@@ -1,0 +1,87 @@
+# PC-switcher Default Configuration
+# Copy this file to ~/.config/pc-switcher/config.yaml and customize.
+
+# =============================================================================
+# LOGGING CONFIGURATION
+# =============================================================================
+# Controls what gets logged to file and terminal.
+# Available levels (from most to least verbose):
+#   DEBUG    - Verbose diagnostics for development
+#   FULL     - Detailed file-level operations
+#   INFO     - High-level operations and milestones
+#   WARNING  - Potential issues that don't stop sync
+#   ERROR    - Recoverable errors (sync continues)
+#   CRITICAL - Unrecoverable errors (sync aborts)
+
+log_file_level: FULL    # Recommended: FULL for troubleshooting
+log_cli_level: INFO     # Recommended: INFO for normal operation
+
+# =============================================================================
+# DISK SPACE MONITORING
+# =============================================================================
+# Prevents sync from filling disks. Both thresholds MUST be specified with units:
+# - Percentage: Use "nn%" format (e.g., "20%" for 20% of total disk)
+# - Absolute: Use "nnGiB" format (e.g., "50GiB" for 50 gigabytes)
+# Values without explicit units are invalid.
+
+disk:
+  # Pre-flight check: sync doesn't start if free space below this threshold
+  preflight_minimum: "20%"    # 20% free space required to start sync
+
+  # Runtime check: abort immediately if free space drops below during sync
+  runtime_minimum: "15%"      # Abort if free space falls below 15%
+
+  # Monitoring frequency during sync (seconds)
+  check_interval: 30          # Check every 30 seconds
+
+# =============================================================================
+# SYNC JOBS
+# =============================================================================
+# Jobs execute in the order listed here. Each job handles a specific
+# aspect of system synchronization.
+#
+# IMPORTANT:
+# - btrfs_snapshots is orchestrator-level infrastructure, NOT a sync job.
+#   It runs automatically before and after sync jobs for data safety.
+# - Order matters: dependencies must be listed before dependents
+# - Disabled jobs (false) are skipped but must have valid config
+
+sync_jobs:
+  # Test jobs (for development/testing only)
+  # dummy_success: false   # Simulates successful sync operation
+  # dummy_fail: false      # Tests exception propagation
+  # NOTE: btrfs_snapshots is orchestrator-level infrastructure, not a SyncJob.
+  # It's configured in the btrfs_snapshots section below but not listed here.
+
+# =============================================================================
+# JOB-SPECIFIC CONFIGURATIONS
+# =============================================================================
+
+# Btrfs Snapshots (Orchestrator Infrastructure)
+# Creates read-only snapshots before and after sync for data safety.
+# Provides rollback capability if sync fails.
+btrfs_snapshots:
+  # Subvolumes to snapshot (flat names from 'btrfs subvolume list /')
+  # These must exist on both source and target machines.
+  # Add or remove subvolumes as needed for your system.
+  subvolumes:
+    - "@"        # Root filesystem (mounted at /)
+    - "@home"    # Home directory (mounted at /home)
+    - "@root"    # Root user's home (mounted at /root)
+    # - "@etc"     # System configuration (mounted at /etc) (if applicable)
+
+  # Directory where snapshots are stored
+  # Format: {snapshot_dir}/{subvol}-{presync|postsync}-{timestamp}-{session_id}
+  # Example: /.snapshots/@-presync-20250116T123045Z-a1b2c3d4
+  snapshot_dir: "/.snapshots"
+
+  # Retention policy for automatic cleanup
+  keep_recent: 3         # Always keep N most recent sync sessions
+  max_age_days: 7        # Delete snapshots older than N days
+
+# Test job configurations (for development only)
+# dummy_success:
+#   duration_seconds: 20  # How long to simulate sync operation
+
+# dummy_fail:
+#   message: "Intentional test failure"  # Error message to raise
