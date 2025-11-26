@@ -390,3 +390,127 @@ class DummySuccessModule(SyncModule):
         """Best-effort cleanup"""
         self.log(LogLevel.INFO, "Dummy module abort called", timeout=timeout)
         # No resources to release in dummy module
+
+
+# Example: Infrastructure module that runs continuously in parallel
+class DiskMonitorModule(Module):
+    """
+    Infrastructure module that monitors disk space throughout sync operation.
+
+    This module demonstrates:
+    - Parallel execution (runs in thread/task alongside sequential modules)
+    - Continuous monitoring pattern
+    - Interruptible waiting using threading.Event
+    - Raising exceptions to trigger abort
+
+    Unlike SyncModules that execute once and complete, this module runs
+    continuously until stopped via abort() or until it detects a critical condition.
+    """
+
+    def __init__(self, config: dict[str, Any], remote: RemoteExecutor) -> None:
+        super().__init__(config, remote)
+        import threading
+
+        self._stop_event = threading.Event()
+
+    @property
+    def name(self) -> str:
+        return "disk-monitor"
+
+    @property
+    def required(self) -> bool:
+        return True  # Infrastructure module, cannot be disabled
+
+    def get_config_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "check_interval": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "default": 1.0,
+                    "description": "Seconds between disk space checks",
+                },
+                "min_free": {
+                    "type": "string",
+                    "description": "Minimum free space (e.g., '10GB' or '5%')",
+                },
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "default": ["/"],
+                    "description": "Paths to monitor",
+                },
+            },
+            "required": ["min_free"],
+        }
+
+    def validate(self) -> list[str]:
+        """Validate monitoring configuration"""
+        errors = []
+        check_interval = self.config.get("check_interval", 1.0)
+        if check_interval < 0.1:
+            errors.append("check_interval must be >= 0.1 seconds")
+
+        # Validate min_free format (simplified example)
+        min_free = self.config.get("min_free")
+        if not min_free:
+            errors.append("min_free is required")
+
+        self.log(
+            LogLevel.INFO,
+            "Disk monitor validation complete",
+            errors=len(errors),
+        )
+        return errors
+
+    def execute(self) -> None:
+        """Run continuously, monitoring disk space"""
+        from pathlib import Path
+
+        check_interval = self.config.get("check_interval", 1.0)
+        paths = [Path(p) for p in self.config.get("paths", ["/"])]
+
+        self.log(
+            LogLevel.INFO,
+            "Starting disk space monitoring",
+            check_interval=check_interval,
+            paths=len(paths),
+        )
+
+        check_count = 0
+        while not self._stop_event.is_set():
+            for path in paths:
+                free_bytes = self._get_free_space(path)
+
+                # Check against threshold (simplified example)
+                if free_bytes < 10_000_000_000:  # 10GB hardcoded for example
+                    self.log(
+                        LogLevel.CRITICAL,
+                        "Disk space critically low",
+                        path=str(path),
+                        free_bytes=free_bytes,
+                    )
+                    raise SyncError(f"Insufficient disk space on {path}")
+
+            # Log periodically at DEBUG level
+            check_count += 1
+            if check_count % 30 == 0:  # Every 30 checks
+                self.log(LogLevel.DEBUG, "Disk space check", count=check_count)
+
+            # Interruptible wait (respects stop_event)
+            self._stop_event.wait(check_interval)
+
+        self.log(LogLevel.INFO, "Disk monitoring stopped")
+
+    def abort(self, timeout: float) -> None:
+        """Stop monitoring gracefully"""
+        self.log(LogLevel.INFO, "Stopping disk monitor", timeout=timeout)
+        self._stop_event.set()
+
+    def _get_free_space(self, path: Path) -> int:
+        """Get free space in bytes for given path"""
+        import os
+
+        stat = os.statvfs(path)
+        return stat.f_bavail * stat.f_frsize

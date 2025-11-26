@@ -80,7 +80,9 @@ Module (base abstraction)
 │   ├─ DockerModule
 │   └─ ...
 │
-└─ BtrfsSnapshotModule (orchestrator-managed, hardcoded)
+└─ Infrastructure modules (orchestrator-managed, hardcoded)
+    ├─ BtrfsSnapshotModule (sequential execution)
+    └─ DiskMonitorModule (parallel execution)
 ```
 
 **SyncModule**: Marker subclass for user-configurable modules in `config.yaml` `sync_modules` section.
@@ -91,27 +93,37 @@ Module (base abstraction)
 - Cannot be disabled or reordered by users
 - Gets all Module infrastructure (logging, progress, abort, RemoteExecutor) for free
 
+**DiskMonitorModule**: Inherits directly from `Module`, runs in parallel:
+- Instantiated once, runs in separate thread/task throughout entire sync
+- Continuously monitors disk space at configured intervals
+- Raises `DiskSpaceError` if space critically low, triggering abort of all modules
+- Gets all Module infrastructure (logging, progress, abort, RemoteExecutor) for free
+
 ### 3. Execution Flow
 
 ```
-1. Validate all modules (pre_snapshot, sync modules, post_snapshot)
-2. Execute: BtrfsSnapshotModule(phase="pre").execute()
-3. Execute: SyncModule1.execute()
-4. Execute: SyncModule2.execute()
-5. Execute: BtrfsSnapshotModule(phase="post").execute()
+1. Validate all modules (disk_monitor, pre_snapshot, sync modules, post_snapshot)
+2. Start parallel: DiskMonitorModule.execute() ║══════════════════════════║
+3. Execute sequential: BtrfsSnapshotModule(phase="pre").execute()
+4. Execute sequential: SyncModule1.execute()
+5. Execute sequential: SyncModule2.execute()
+6. Execute sequential: BtrfsSnapshotModule(phase="post").execute()
+7. Stop parallel: DiskMonitorModule.abort()
 ```
 
 ## Advantages
 
 ### DRY (Don't Repeat Yourself)
-- All modules (sync and infrastructure) share same base infrastructure
+- All modules (sync and infrastructure, sequential and parallel) share same base infrastructure
 - No duplication of logging, progress reporting, abort handling, RemoteExecutor patterns
-- If Module infrastructure improves, snapshots benefit automatically
+- If Module infrastructure improves, all modules (snapshots, monitoring, sync) benefit automatically
+- Disk monitoring gets proper logging, progress, abort just by inheriting from Module
 
 ### Conceptual Clarity
 - "Module" = any operation needing infrastructure (base abstraction)
 - "SyncModule" = user-configurable sync operations (policy)
 - Infrastructure modules are just modules that orchestrator manages
+- Parallel vs sequential execution is an orchestrator concern, not a Module concern
 
 ### Safety Preserved
 - Snapshots hardcoded in orchestrator, users can't disable/reorder
@@ -151,10 +163,18 @@ sync_modules:
   packages: true  # User-configurable only
   docker: true
 
-btrfs_snapshots:  # Infrastructure module config (separate section)
+# Infrastructure modules (separate sections, cannot be disabled)
+btrfs_snapshots:
   subvolumes:
     - "@"
     - "@home"
+
+disk_monitor:
+  check_interval: 1.0  # seconds
+  min_free: "10GB"
+  paths:
+    - "/"
+    - "/home"
 ```
 
 ## Migration Path

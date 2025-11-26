@@ -7,11 +7,13 @@
 **Key Architectural Decisions**:
 - Simple module lifecycle: validate() → execute() → abort() (removed unnecessary pre_sync/sync/post_sync)
 - SyncModules defined in config (no auto-discovery)
-- Infrastructure modules (BtrfsSnapshotModule) hardcoded by orchestrator, instantiated twice (phase="pre"/"post")
-- Sequential execution in config order (no dependency resolution)
+- Infrastructure modules hardcoded by orchestrator:
+  - BtrfsSnapshotModule: instantiated twice (phase="pre"/"post"), executes sequentially
+  - DiskMonitorModule: runs in parallel throughout entire sync operation
+- SyncModules execute sequentially in config order (no dependency resolution)
 - Exception-based error handling (modules raise, not log CRITICAL)
 - Orchestrator tracks ERROR logs for final state determination
-- abort(timeout) only called on currently-running module
+- abort(timeout) called on currently-running module and parallel monitoring module
 - CLEANUP state before terminal states
 - Btrfs verification: / is btrfs, subvolumes exist in top-level
 
@@ -37,7 +39,9 @@ The orchestrator executes modules in a strict sequence:
 │   - Check configured subvolumes exist in top-level           │
 │     (visible in "btrfs subvolume list /")                    │
 │ - Create SyncSession with session ID                         │
-│ - Instantiate BtrfsSnapshotModule twice (phase="pre"/"post") │
+│ - Instantiate infrastructure modules:                        │
+│   - BtrfsSnapshotModule twice (phase="pre"/"post")           │
+│   - DiskMonitorModule (for parallel execution)               │
 │ - Instantiate SyncModules with validated config + RemoteExec │
 │ - Inject log() and emit_progress() methods into all modules  │
 └──────────────────────────────────────────────────────────────┘
@@ -57,6 +61,11 @@ The orchestrator executes modules in a strict sequence:
 ┌──────────────────────────────────────────────────────────────┐
 │ 3. EXECUTING PHASE (State: EXECUTING)                       │
 ├──────────────────────────────────────────────────────────────┤
+│ 0. Start DiskMonitorModule in parallel (thread/async task):  │
+│   disk_monitor_task = start_parallel(disk_monitor.execute()) │
+│   # Runs continuously, monitoring disk space every interval  │
+│   # Raises DiskSpaceError if space critically low            │
+│                                                               │
 │ 1. Execute BtrfsSnapshotModule(phase="pre"):                 │
 │   try:                                                        │
 │     pre_snapshot_module.execute()  # creates pre-sync snaps  │
@@ -75,6 +84,10 @@ The orchestrator executes modules in a strict sequence:
 │     log exception as CRITICAL                                 │
 │     session.abort_requested = True                           │
 │     goto CLEANUP PHASE                                        │
+│   except DiskSpaceError as e:  # From disk monitor           │
+│     log exception as CRITICAL                                 │
+│     session.abort_requested = True                           │
+│     goto CLEANUP PHASE                                        │
 │   if user pressed Ctrl+C:                                     │
 │     log "Sync interrupted by user" at WARNING                │
 │     session.abort_requested = True                           │
@@ -87,14 +100,21 @@ The orchestrator executes modules in a strict sequence:
 │     log exception as CRITICAL, goto CLEANUP PHASE            │
 │                                                               │
 │ if all modules completed and NO ERROR logs:                  │
-│   goto COMPLETED (skip CLEANUP)                              │
+│   stop disk_monitor (call abort), goto COMPLETED             │
 │ if all modules completed but ERROR logs exist:               │
-│   goto CLEANUP → FAILED                                      │
+│   stop disk_monitor (call abort), goto CLEANUP → FAILED      │
 └──────────────────────────────────────────────────────────────┘
                            ↓
 ┌──────────────────────────────────────────────────────────────┐
 │ 4. CLEANUP PHASE (State: CLEANUP)                           │
 ├──────────────────────────────────────────────────────────────┤
+│ Stop parallel monitoring:                                    │
+│   try:                                                        │
+│     disk_monitor.abort(timeout=2.0)                          │
+│     wait for disk_monitor thread/task to finish              │
+│   except Exception as e:                                      │
+│     log ERROR (abort is best-effort)                         │
+│                                                               │
 │ If currently-running module exists:                          │
 │   try:                                                        │
 │     current_module.abort(timeout=5.0)                        │
@@ -138,13 +158,22 @@ The orchestrator executes modules in a strict sequence:
    - Instantiate: `module = ModuleClass(validated_config, remote_executor)`
    - Inject `log()` and `emit_progress()` methods into module instance
 
-**Infrastructure Module Loading** (BtrfsSnapshotModule):
-1. Hardcoded by orchestrator (not in sync_modules config)
-2. Instantiated twice with different phase parameters:
-   - `pre_snapshot = BtrfsSnapshotModule(btrfs_config, remote, phase="pre")`
-   - `post_snapshot = BtrfsSnapshotModule(btrfs_config, remote, phase="post")`
-3. Config comes from separate `btrfs_snapshots` section (not sync_modules)
-4. Cannot be disabled by user
+**Infrastructure Module Loading**:
+
+1. **BtrfsSnapshotModule** (sequential execution):
+   - Hardcoded by orchestrator (not in sync_modules config)
+   - Instantiated twice with different phase parameters:
+     - `pre_snapshot = BtrfsSnapshotModule(btrfs_config, remote, phase="pre")`
+     - `post_snapshot = BtrfsSnapshotModule(btrfs_config, remote, phase="post")`
+   - Config comes from separate `btrfs_snapshots` section (not sync_modules)
+   - Cannot be disabled by user
+
+2. **DiskMonitorModule** (parallel execution):
+   - Hardcoded by orchestrator (not in sync_modules config)
+   - Instantiated once: `disk_monitor = DiskMonitorModule(disk_config, remote)`
+   - Config comes from separate `disk_monitor` section
+   - Runs in parallel thread/task throughout entire sync operation
+   - Cannot be disabled by user
 
 **Example config**:
 ```yaml
@@ -158,9 +187,20 @@ btrfs_snapshots:  # Infrastructure module config (separate from sync_modules)
   subvolumes:
     - "@"
     - "@home"
+
+disk_monitor:  # Infrastructure module config (separate from sync_modules)
+  check_interval: 1.0  # seconds
+  min_free: "10GB"  # or "5%" for percentage
+  paths:
+    - "/"
+    - "/home"
 ```
 
-Execution order: BtrfsSnapshot(pre) → user_data → packages → BtrfsSnapshot(post)
+Execution order (parallel ║ for disk monitor):
+```
+DiskMonitor.execute() ║════════════════════════════════════════║
+BtrfsSnapshot(pre).execute() → user_data.execute() → packages.execute() → BtrfsSnapshot(post).execute()
+```
 
 ## Configuration Injection
 
@@ -532,19 +572,23 @@ btrfs_snapshots:
    - Checks/installs matching pc-switcher version on target
    - Verifies btrfs on both machines
    - Creates session (ID: a1b2c3d4)
-   - Instantiates BtrfsSnapshotModule twice (phase="pre" and phase="post")
+   - Instantiates infrastructure modules:
+     - BtrfsSnapshotModule twice (phase="pre" and phase="post")
+     - DiskMonitorModule
    - Loads SyncModules from config: [user_data, packages]
    - Instantiates each with config + RemoteExecutor
 3. VALIDATING:
-   - Calls validate() on all modules (pre_snapshot, user_data, packages, post_snapshot)
+   - Calls validate() on all modules (disk_monitor, pre_snapshot, user_data, packages, post_snapshot)
    - All return empty lists (no errors)
 4. EXECUTING:
+   - Start disk_monitor.execute() in parallel thread/task
    - pre_snapshot.execute() → creates pre-sync snapshots on both machines
    - user_data.execute() → syncs /home, emits progress
    - packages.execute() → syncs packages, emits progress
    - post_snapshot.execute() → creates post-sync snapshots on both machines
+   - disk_monitor runs throughout, checking space every 1 second
 5. All complete, no ERROR logs
-6. Skip CLEANUP, go directly to COMPLETED
+6. Stop disk_monitor (call abort), go directly to COMPLETED
 7. Log session summary
 8. Release lock
 9. Exit with code 0
