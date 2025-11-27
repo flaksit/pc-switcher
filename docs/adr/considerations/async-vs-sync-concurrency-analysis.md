@@ -346,11 +346,8 @@ classDiagram
         <<abstract>>
         #_session: SyncSession
         #_remote: AsyncRemoteExecutor
-        +async validate() bool
-        +async pre_sync() void
-        +async sync() void
-        +async post_sync() void
-        +async cleanup() void
+        +async validate()
+        +async execute()
     }
 
     class AsyncOrchestrator {

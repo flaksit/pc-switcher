@@ -19,11 +19,11 @@ The system defines a precise contract for how sync jobs integrate with the core 
 3. Registering it with the core orchestrator
 4. Running sync and verifying the orchestrator correctly:
    - Loads the job configuration
-   - Calls lifecycle methods in correct order (validate → pre_sync → sync → post_sync)
+   - Calls lifecycle methods in correct order (validate → execute)
    - Handles job logging at all six levels
    - Processes progress updates
    - Handles job errors (SyncError exceptions)
-   - Calls abort(timeout) on interrupts
+   - Requests job termination on interrupts
 5. Demonstrating that a developer can implement a new job by only implementing the contract
 
 This delivers immediate value by establishing the development pattern for all 6 user-facing features (features 4-9 in the breakdown).
@@ -43,11 +43,11 @@ This delivers immediate value by establishing the development pattern for all 6 
 
 4. **Given** a job emits progress updates (percentage, current item, estimated remaining), **When** progress is reported, **Then** the orchestrator forwards this to the terminal UI system for display and to the log file at FULL level
 
-5. **Given** a job's validate() method returns validation errors, **When** validation phase executes, **Then** the orchestrator collects all errors, displays them in terminal UI, and halts sync before any state changes occur (no abort() call needed as jobs haven't started executing)
+5. **Given** a job's validate() method returns validation errors, **When** validation phase executes, **Then** the orchestrator collects all errors, displays them in terminal UI, and halts sync before any state changes occur (no termination request needed as jobs haven't started executing)
 
-6. **Given** a job is executing and raises SyncError exception, **When** the exception propagates, **Then** the orchestrator catches it, logs the error message at CRITICAL level, calls the job's abort(timeout=5.0) method, and halts the sync before any further jobs execute
+6. **Given** a job is executing and raises SyncError exception, **When** the exception propagates, **Then** the orchestrator catches it, logs the error message at CRITICAL level, requests job termination with up to 5 seconds for cleanup, and halts the sync before any further jobs execute
 
-7. **Given** user presses Ctrl+C during job execution, **When** signal is caught, **Then** orchestrator calls the currently-executing job's abort(timeout=5.0) method, logs interruption at WARNING level, and exits gracefully with code 130
+7. **Given** user presses Ctrl+C during job execution, **When** signal is caught, **Then** orchestrator requests termination of the currently-executing job with up to 5 seconds for cleanup, logs interruption at WARNING level, and exits gracefully with code 130
 
 ---
 
@@ -181,7 +181,7 @@ When the user presses Ctrl+C during sync, the system catches the SIGINT signal, 
 1. Starting a sync operation with a long-running dummy job
 2. Pressing Ctrl+C mid-execution
 3. Verifying terminal displays "Sync interrupted by user"
-4. Confirming currently-executing job's abort(timeout) was called
+4. Confirming currently-executing job received termination request and performed cleanup
 5. Checking that connection to target was closed
 6. Validating no orphaned processes remain on source or target
 7. Ensuring log file contains interruption event
@@ -194,11 +194,11 @@ This delivers value by giving users confidence they can safely stop operations.
 
 **Acceptance Scenarios**:
 
-1. **Given** sync operation is in progress with a job executing on target machine, **When** user presses Ctrl+C, **Then** the orchestrator catches SIGINT, logs "Sync interrupted by user" at WARNING level, calls the current job's abort(timeout=5.0) method, sends termination signal to target-side process, waits up to timeout for graceful shutdown, then closes connection and exits with code 130
+1. **Given** sync operation is in progress with a job executing on target machine, **When** user presses Ctrl+C, **Then** the orchestrator catches SIGINT, logs "Sync interrupted by user" at WARNING level, requests termination of the current job, sends termination signal to target-side processes, waits up to 5 seconds for graceful cleanup, then closes connection and exits with code 130
 
 2. **Given** sync is in the orchestrator phase between jobs (no job actively running), **When** user presses Ctrl+C, **Then** orchestrator logs interruption, skips remaining jobs, and exits cleanly
 
-3. **Given** user presses Ctrl+C multiple times rapidly, **When** the second SIGINT arrives before abort completes, **Then** orchestrator immediately force-terminates (kills connection, exits with code 130) without waiting for graceful abort
+3. **Given** user presses Ctrl+C multiple times rapidly, **When** the second SIGINT arrives before cleanup completes, **Then** orchestrator immediately force-terminates (kills connection, exits with code 130) without waiting for graceful cleanup
 ---
 
 ### User Story 6 - Configuration System (Priority: P1)
@@ -314,9 +314,9 @@ Two dummy jobs exist for testing infrastructure: `dummy-success` (completes succ
 
 2. *(Removed)*
 
-3. **Given** `dummy-fail` job is enabled, **When** sync runs and job reaches 60% progress, **Then** the job raises an unhandled RuntimeError (not SyncError), the orchestrator catches the exception, wraps it as SyncError, logs it at CRITICAL level, calls abort(timeout=5.0), and halts sync
+3. **Given** `dummy-fail` job is enabled, **When** sync runs and job reaches 60% progress, **Then** the job raises an unhandled RuntimeError (not SyncError), the orchestrator catches the exception, wraps it as SyncError, logs it at CRITICAL level, requests job termination with up to 5 seconds for cleanup, and halts sync
 
-4. **Given** any dummy job is running, **When** user presses Ctrl+C, **Then** the job's abort(timeout) method is called, it logs "Dummy job abort called", stops its busy-wait loop within the timeout duration, and returns control to orchestrator
+4. **Given** any dummy job is running, **When** user presses Ctrl+C, **Then** the job receives termination request, it logs "Dummy job termination requested", stops its busy-wait loop within the grace period, and returns control to orchestrator
 
 ---
 
@@ -349,8 +349,8 @@ The terminal displays real-time sync progress including current job, operation p
   - Target-side operations should timeout and cleanup after 5 minutes of no communication; next sync will detect inconsistent state via validation
 - What happens when btrfs snapshots cannot be created due to insufficient space?
   - Snapshot job logs CRITICAL error with space usage details, orchestrator aborts before any state modification
-- What happens when a job's abort() method raises an exception?
-  - Orchestrator logs the exception, continues with shutdown sequence (abort is best-effort)
+- What happens when a job's cleanup logic raises an exception during termination?
+  - Orchestrator logs the exception, continues with shutdown sequence (cleanup is best-effort)
 - What happens when user runs multiple sync commands concurrently?
   - Second invocation detects lock, displays "Another sync is in progress (PID: 12345)", gives instructions on how to remove a stale lock and exits
 - What happens when config file contains unknown job names?
@@ -366,12 +366,12 @@ The terminal displays real-time sync progress including current job, operation p
 
 #### Job Architecture
 
-- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized job interface specifying methods with return types: `validate() -> list[str]` (returns validation error messages, empty list if valid), `pre_sync() -> None`, `sync() -> None`, `post_sync() -> None`, `abort(timeout: float) -> None`, `get_config_schema() -> dict`, and properties: `name: str`, `required: bool`
+- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized Job interface specifying how the orchestrator interacts with jobs, including how logging is done, how a job reports progress to the user, methods, error handling, termination request handling, timeout handling and at least methods like `validate()`, `execute()`, `get_config_schema()`, and properties: `name: str`, `required: bool`
 
 
-- **FR-002** `[Reliability Without Compromise]`: System MUST call job lifecycle methods in order: `validate()` (all jobs), `pre_sync()`, `sync()`, `post_sync()` for each job, then `abort(timeout)` on shutdown, errors, or user interrupt
+- **FR-002** `[Reliability Without Compromise]`: System MUST call job lifecycle methods in order: `validate()` (all jobs), then `execute()` for each job in the specified order; on shutdown, errors, or user interrupt the system requests termination of the currently-executing job
 
-- **FR-003** `[Reliability Without Compromise]`: System MUST call currently-executing job's `abort(timeout)` method when Ctrl+C is pressed, waiting up to the specified timeout duration; if job does not complete within timeout, orchestrator MUST force-kill the RemoteExecutor connections and job thread, then proceed with exit
+- **FR-003** `[Reliability Without Compromise]`: System MUST request termination of currently-executing job when Ctrl+C is pressed, allowing up to 5 seconds for graceful cleanup; if job does not complete cleanup within timeout, orchestrator MUST force-terminate connections and the job, then proceed with exit
 
 - **FR-004** `[Deliberate Simplicity]`: Jobs MUST be loaded from the configuration file section `sync_jobs` in the order they appear and instantiated by the orchestrator; job execution order is strictly sequential from config (no dependency resolution is provided—simplicity over flexibility)
 
@@ -409,7 +409,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **FR-018** `[Up-to-date Documentation]`: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL, where DEBUG is the most verbose. DEBUG includes all messages (FULL, INFO, WARNING, ERROR, CRITICAL, plus internal diagnostics). FULL includes all messages from INFO and below plus operational details, but excludes DEBUG-level internal diagnostics.
 
-- **FR-019** `[Reliability Without Compromise]`: When a job raises SyncError exception, the orchestrator MUST log the error at CRITICAL level, call abort(timeout) on the currently-executing job only (queued jobs never execute and do not receive abort calls), and halt sync immediately
+- **FR-019** `[Reliability Without Compromise]`: When a job raises SyncError exception, the orchestrator MUST log the error at CRITICAL level, request termination of the currently-executing job (queued jobs never execute and do not receive termination requests), and halt sync immediately
 
 - **FR-020** `[Frictionless Command UX]`: System MUST support independent log level configuration for file output (`log_file_level`) and terminal display (`log_cli_level`)
 
@@ -421,7 +421,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 #### Interrupt Handling
 
-- **FR-024** `[Reliability Without Compromise]`: System MUST install SIGINT handler that calls abort(timeout) on current job, logs "Sync interrupted by user" at WARNING level, and exits with code 130
+- **FR-024** `[Reliability Without Compromise]`: System MUST install SIGINT handler that requests current job termination with up to 5 second grace period for cleanup, logs "Sync interrupted by user" at WARNING level, and exits with code 130
 
 - **FR-025** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to 5 seconds for graceful shutdown
 
@@ -463,7 +463,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **FR-041** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at 60% progress to test orchestrator exception handling
 
-- **FR-042** `[Reliability Without Compromise]`: All dummy jobs MUST implement `abort(timeout)` that logs "Dummy job abort called" and stops execution within the timeout duration
+- **FR-042** `[Reliability Without Compromise]`: All dummy jobs MUST handle termination requests by logging "Dummy job termination requested" and stopping execution within the grace period
 
 #### Progress Reporting
 
@@ -489,8 +489,8 @@ The terminal displays real-time sync progress including current job, operation p
 - **LogEntry**: Represents a logged event with timestamp, level, job name, message, and structured context data
 - **ProgressUpdate**: Represents job progress including percentage, current item, estimated remaining time, and job name
 - **Configuration**: Represents parsed and validated config including global settings, job enable/disable flags, and per-job settings
-- **TargetConnection**: Represents the Fabric SSH connection wrapper with methods for command execution, file transfer, process management, and connection loss detection/recovery
-- **RemoteExecutor**: Represents the interface injected into jobs wrapping TargetConnection with simplified run(), send_file_to_target(), and get_hostname() methods
+- **TargetConnection**: Represents the connection with methods for command execution, file transfer, process management, and connection loss detection/recovery
+- **RemoteExecutor**: Represents the interface injected into jobs wrapping TargetConnection with simplified run_command(), send_file(), and get_hostname() methods
 
 ## Success Criteria *(mandatory)*
 

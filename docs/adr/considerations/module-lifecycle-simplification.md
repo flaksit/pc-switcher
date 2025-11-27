@@ -58,10 +58,6 @@ class Job(ABC):
     @abstractmethod
     def execute(self) -> None:
         """Execute the job's operation"""
-
-    @abstractmethod
-    def abort(self, timeout: float) -> None:
-        """Stop gracefully"""
 ```
 
 **Benefits**:
@@ -108,7 +104,7 @@ Job (base abstraction)
 4. Execute sequential: SyncJob1.execute()
 5. Execute sequential: SyncJob2.execute()
 6. Execute sequential: BtrfsSnapshotJob(phase="post").execute()
-7. Stop parallel: DiskSpaceMonitorJob.abort()
+7. Stop parallel: DiskSpaceMonitorJob.cancel()
 ```
 
 ## Advantages
@@ -149,10 +145,10 @@ The chosen approach (single job instantiated twice by orchestrator) maintains lo
 
 ## Configuration Examples
 
-**Before** (hypothetical—snapshots could never work correctly as first job):
+**Before**:
 ```yaml
 sync_jobs:
-  btrfs_snapshots: true  # Would create post-snapshots too early!
+  btrfs_snapshots: true
   packages: true
   docker: true
 ```
@@ -170,7 +166,7 @@ btrfs_snapshots:
     - "@home"
 
 disk_space_monitor:
-  check_interval: 1.0  # seconds
+  check_interval: 30.0  # seconds
   min_free: "10GB"
   paths:
     - "/"
