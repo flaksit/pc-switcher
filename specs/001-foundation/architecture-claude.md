@@ -36,7 +36,7 @@ graph TD
 
     SyncJobs["<b>SyncJobs</b><br/>- User data<br/>- Packages<br/>- Docker<br/>- VMs<br/>- k3s<br/>[configurable]"]
 
-    DiskSpaceMonitorJob["<b>DiskSpaceMonitorJob</b><br/>- Periodic check<br/>- Source+target<br/>- Raises exception if low<br/>[required, background]"]
+    DiskSpaceMonitorJob["<b>DiskSpaceMonitorJob</b><br/>- Periodic check<br/>- One instance per host<br/>- Raises exception if low<br/>[required, background]"]
 
     CLI --> Orchestrator
     Orchestrator --> Config
@@ -63,13 +63,13 @@ graph TD
 | Component | Responsibility |
 |-----------|----------------|
 | **CLI** | Entry point. Parses commands (`sync`, `logs`, `cleanup-snapshots`), loads config file (YAML), instantiates and runs Orchestrator |
-| **Orchestrator** | Central coordinator. Validates config (schema + job configs), manages job lifecycle via TaskGroup, handles SIGINT via asyncio cancellation, produces final sync summary |
+| **Orchestrator** | Central coordinator. Validates config (schema + general config + (delegated) job configs), manages job lifecycle via TaskGroup, handles SIGINT via asyncio cancellation, produces final sync summary |
 | **Config** | Validated configuration dataclass. Holds global settings, job enable/disable flags, and per-job settings after validation |
 | **Connection** | Manages SSH connection via asyncssh. Provides multiplexed sessions (multiple concurrent commands over single connection) |
 | **RemoteExecutor** | Job-facing interface to Connection. Runs commands returning `(exit_code, stdout, stderr)`, transfers files, can terminate running processes |
 | **Logger** | Unified logging with 6 levels. Routes to file (JSON) and terminal (formatted). Jobs call logger directly |
 | **TerminalUI** | Rich-based live display. Shows progress bars, log messages (filtered by cli_level), overall status |
-| **Jobs** | Encapsulated sync operations. Each job validates system state, executes operations, reports progress, cleans up own resources on cancellation |
+| **Jobs** | Encapsulated sync operations. Each job validates their specific config, validates the system state, executes operations, reports progress, cleans up own resources on cancellation |
 
 ---
 
@@ -134,8 +134,10 @@ classDiagram
     }
 
     class DiskSpaceMonitorJob {
+        +host: Host
         +interval: float
         +execute() None
+        Note: host = source or target
     }
 
     Job <|-- SystemJob
@@ -183,7 +185,7 @@ classDiagram
     class RemoteExecutor {
         -_connection: Connection
         +run_command(cmd, timeout) CommandResult
-        +run_command_stream(cmd) AsyncIterator~str~
+        +run_command_stream(cmd, stdout_callback, stderr_callback, timeout) CommandResult
         +send_file(local, remote) None
         +get_file(remote, local) None
         +get_hostname() str
@@ -227,6 +229,13 @@ classDiagram
         +get_job_logger(job_name, hostname) JobLogger
     }
 
+    class JobLogger {
+        -_logger: Logger
+        -_job_name: str
+        -_hostname: str
+        +log(level, message, **ctx) None
+    }
+
     class TerminalUI {
         -_console: Console
         -_live: Live
@@ -242,12 +251,14 @@ classDiagram
     }
 
     class DiskSpaceCriticalError {
+        +hostname: str
         +message: str
         +free_space: str
         +threshold: str
     }
 
     JobContext --> RemoteExecutor : uses
+    JobContext --> JobLogger : uses
     JobContext --> ProgressUpdate : creates
     RemoteExecutor --> Connection : wraps
     RemoteExecutor --> CommandResult : returns
@@ -255,6 +266,8 @@ classDiagram
     Orchestrator --> Logger : uses
     Orchestrator --> TerminalUI : uses
     Orchestrator --> Job : manages
+    Logger --> JobLogger : creates
+    JobLogger --> Logger : delegates to
     Logger --> TerminalUI : sends messages
     DiskSpaceMonitorJob --> DiskSpaceCriticalError : raises
 ```
@@ -267,10 +280,12 @@ classDiagram
 | Orchestrator → Job[] | Creates, validates, and executes jobs; uses TaskGroup for background jobs |
 | Job → JobContext | Receives context at execution time (config, remote, logger, ui, session_id) |
 | JobContext → RemoteExecutor | Jobs use this to run commands on target |
+| JobContext → JobLogger | Jobs use this to log messages with pre-bound job name and hostname |
 | RemoteExecutor → Connection | Wraps Connection with job-friendly interface |
 | RemoteExecutor → CommandResult | Returns structured result; Job interprets and logs |
+| Logger → JobLogger | Creates bound logger instances for each job |
 | Logger → TerminalUI | Sends log messages for display (if level >= cli_level) |
-| DiskSpaceMonitorJob → DiskSpaceCriticalError | Raises exception when space low; TaskGroup propagates |
+| DiskSpaceMonitorJob → DiskSpaceCriticalError | Raises exception (with hostname) when space low; TaskGroup propagates |
 
 ---
 
@@ -518,33 +533,37 @@ sequenceDiagram
 
 ### 6. DiskSpaceMonitor Detects Low Space
 
-The DiskSpaceMonitor runs as a background task. When space falls below threshold, it raises `DiskSpaceCriticalError`. The TaskGroup catches this and cancels other tasks.
+Two `DiskSpaceMonitorJob` instances run as background tasks: one for source (local), one for target (remote). When space falls below threshold on either host, the job raises `DiskSpaceCriticalError` with the hostname. The TaskGroup catches this and cancels other tasks.
 
 ```mermaid
 sequenceDiagram
-    participant DiskSpaceMonitorJob
+    participant SourceMonitor as DiskSpaceMonitorJob (source)
+    participant TargetMonitor as DiskSpaceMonitorJob (target)
     participant RemoteExecutor
     participant TaskGroup
     participant CurrentJob
     participant Logger
-    participant TerminalUI
 
-    loop background monitoring
-        DiskSpaceMonitorJob->>RemoteExecutor: run_command("df -h /")
-        RemoteExecutor-->>DiskSpaceMonitorJob: CommandResult
-
-        Note over DiskSpaceMonitorJob: parse: 12% free
-
-        alt space >= threshold
-            DiskSpaceMonitorJob->>DiskSpaceMonitorJob: await asyncio.sleep(interval)
-        else space < threshold (15%)
-            DiskSpaceMonitorJob->>Logger: log(CRITICAL, "Disk space below threshold")
-            Logger->>TerminalUI: add_log(CRITICAL)
-            DiskSpaceMonitorJob->>DiskSpaceMonitorJob: raise DiskSpaceCriticalError
+    par background monitoring
+        loop source monitoring
+            SourceMonitor->>SourceMonitor: run local df command
+            Note over SourceMonitor: check free space
+        end
+    and
+        loop target monitoring
+            TargetMonitor->>RemoteExecutor: run_command("df -h /")
+            RemoteExecutor-->>TargetMonitor: CommandResult
+            Note over TargetMonitor: check free space
         end
     end
 
+    Note over TargetMonitor: target: 12% free < 15% threshold
+
+    TargetMonitor->>Logger: log(CRITICAL, "target: Disk space below threshold")
+    TargetMonitor->>TargetMonitor: raise DiskSpaceCriticalError(hostname="target")
+
     DiskSpaceCriticalError-->>TaskGroup: exception propagates
+    TaskGroup->>SourceMonitor: CancelledError
     TaskGroup->>CurrentJob: CancelledError
     CurrentJob->>CurrentJob: cleanup in except handler
 
@@ -553,10 +572,10 @@ sequenceDiagram
 ```
 
 **Key points:**
-- DiskSpaceMonitor simply raises an exception - no `request_shutdown()` method
-- TaskGroup automatically propagates cancellation to other tasks
-- Current job cleans up its own resources in `CancelledError` handler
-- Orchestrator receives `ExceptionGroup` and can inspect cause
+- Two instances: source monitor runs local commands, target monitor uses `RemoteExecutor`
+- `DiskSpaceCriticalError` includes `hostname` to identify which host ran low
+- Either monitor can trigger sync abort - TaskGroup cancels all other tasks
+- Orchestrator receives `ExceptionGroup` and can inspect cause and hostname
 
 ---
 
@@ -575,7 +594,8 @@ graph TD
     subgraph EventLoop ["asyncio Event Loop"]
         OrchestratorTask["Orchestrator Task"]
         JobTask["Current Job Task"]
-        DiskMonTask["DiskSpaceMonitor Task"]
+        DiskMonSourceTask["DiskSpaceMonitor<br/>(source)"]
+        DiskMonTargetTask["DiskSpaceMonitor<br/>(target)"]
         UIRefreshTask["UI Refresh Task"]
     end
 
@@ -590,7 +610,8 @@ graph TD
     OrchestratorTask --> Orchestrator
     JobTask --> Jobs
     JobTask --> Logger
-    DiskMonTask -.-> Logger
+    DiskMonSourceTask -.-> Logger
+    DiskMonTargetTask -.-> Logger
     UIRefreshTask --> TerminalUI
 
     style TerminalUI fill:#e1f5ff
@@ -625,8 +646,24 @@ class RemoteExecutor:
     async def run_command(self, cmd: str, timeout: float | None = None) -> CommandResult:
         """Run command, wait for completion, return result."""
 
-    async def run_command_stream(self, cmd: str) -> AsyncIterator[str]:
-        """Run command, yield stdout lines as they arrive."""
+    async def run_command_stream(
+        self,
+        cmd: str,
+        stdout_callback: Callable[[str], None] | None = None,
+        stderr_callback: Callable[[str], None] | None = None,
+        timeout: float | None = None,
+    ) -> CommandResult:
+        """Run command, invoke callbacks for each line, return result.
+
+        Args:
+            cmd: Command to execute.
+            stdout_callback: Optional callback invoked per stdout line.
+            stderr_callback: Optional callback invoked per stderr line.
+            timeout: Optional timeout in seconds. Omitted = no hard timeout (use asyncio cancellation).
+
+        Returns:
+            CommandResult with exit_code, stdout, stderr captured during execution.
+        """
 
     async def send_file(self, local: Path, remote: Path) -> None:
         """Upload file to target."""
@@ -650,19 +687,40 @@ Jobs choose their approach based on complexity:
 result = await self.remote.run_command("apt list --installed")
 for line in result.stdout.splitlines():
     self.log(DEBUG, f"Installed: {line}")
+if not result.success:
+    raise SyncError(f"apt list failed: {result.stderr}")
 ```
 
-**(b) Complex operations**: Write helper script, deploy and execute
+**(b) Streaming with callbacks**: Process output as it arrives
+```python
+lines = []
+def collect_stdout(line: str) -> None:
+    lines.append(line)
+    self.report_progress(ProgressUpdate(current=len(lines), item=line))
+
+result = await self.remote.run_command_stream(
+    "rsync -av /home /backup",
+    stdout_callback=collect_stdout,
+    timeout=3600,
+)
+if not result.success:
+    raise SyncError(f"rsync failed: {result.stderr}")
+```
+
+**(c) Complex operations**: Write helper script, deploy and execute
 ```python
 await self.remote.send_file(local_script, "/tmp/sync-helper.py")
 result = await self.remote.run_command("python3 /tmp/sync-helper.py")
 # Parse structured output if helper produces it
+if not result.success:
+    raise SyncError(f"Helper failed: {result.stderr}")
 ```
 
 Jobs are responsible for:
-- Interpreting command output
-- Deciding appropriate log levels
+- Interpreting command output and exit code
+- Deciding appropriate log levels and error handling
 - Reporting progress based on overall job state (not per-command)
+- Checking `result.success` to determine next action
 
 ---
 
@@ -686,7 +744,7 @@ graph TD
 
     InstallTarget["<b>InstallOnTargetJob</b><br/>Check/install/upgrade<br/>pc-switcher on target"]
 
-    StartDiskMon["<b>Start background</b><br/>DiskSpaceMonitorJob"]
+    StartDiskMon["<b>Start background</b><br/>DiskSpaceMonitorJob x2<br/>(source + target)"]
 
     SyncJobs["<b>Sequential job execution</b><br/>- SyncJob1.execute<br/>- SyncJob2.execute<br/>- ..."]
 
@@ -731,4 +789,4 @@ graph TD
 **Key ordering notes:**
 1. **Snapshots BEFORE InstallOnTargetJob**: BtrfsSnapshotJob runs direct `btrfs` commands via SSH, no pc-switcher dependency. This ensures we have a rollback point before ANY system modifications.
 2. **Three validation phases**: Schema → Job config → System state, with distinct error messages.
-3. **DiskSpaceMonitor as background task**: Runs throughout sync execution, raises exception on low space.
+3. **DiskSpaceMonitor as background tasks**: Two instances run throughout sync - one monitors source (local commands), one monitors target (via `RemoteExecutor`). Either can abort sync on low space.
