@@ -12,6 +12,26 @@ This document describes the architecture for the pc-switcher foundation infrastr
 
 ---
 
+## Terminology: Host vs Hostname
+
+Throughout this document, two related but distinct concepts are used:
+
+| Term | Type | Values | Description |
+|------|------|--------|-------------|
+| **host** | `Host` (enum) | `SOURCE`, `TARGET` | The logical role of a machine in the sync operation |
+| **hostname** | `str` | e.g., `"laptop-work"`, `"desktop-home"` | The actual machine name |
+
+**Resolution:**
+- Source hostname: obtained from local machine (e.g., `socket.gethostname()`)
+- Target hostname: provided via CLI argument `sync <target>`, resolved from config if alias
+
+**Usage:**
+- All internal code uses `host` (role enum) exclusively
+- Logger resolves `host` → `hostname` internally for output (UI and log files)
+- Only `DiskSpaceCriticalError` contains both (for error display without Logger access)
+
+---
+
 ## Component Architecture
 
 ```mermaid
@@ -67,7 +87,7 @@ graph TD
 | **Config** | Validated configuration dataclass. Holds global settings, job enable/disable flags, and per-job settings after validation |
 | **Connection** | Manages SSH connection via asyncssh. Provides multiplexed sessions (multiple concurrent commands over single connection) |
 | **RemoteExecutor** | Job-facing interface to Connection. Runs commands returning `(exit_code, stdout, stderr)`, transfers files, can terminate running processes |
-| **Logger** | Unified logging with 6 levels. Routes to file (JSON) and terminal (formatted). Jobs call logger directly |
+| **Logger** | Unified logging with 6 levels. Routes to file (JSON) and terminal (formatted). Resolves host→hostname internally |
 | **TerminalUI** | Rich-based live display. Shows progress bars, log messages (filtered by cli_level), overall status |
 | **Jobs** | Encapsulated sync operations. Each job validates their specific config, validates the system state, executes operations, reports progress, cleans up own resources on cancellation |
 
@@ -165,6 +185,8 @@ classDiagram
         +logger: JobLogger
         +ui: TerminalUI
         +session_id: str
+        +source_hostname: str
+        +target_hostname: str
     }
 
     class ProgressUpdate {
@@ -225,14 +247,15 @@ classDiagram
         -_structlog_logger: BoundLogger
         -_ui: TerminalUI
         -_log_file: Path
-        +log(level, job, hostname, message, **ctx) None
-        +get_job_logger(job_name, hostname) JobLogger
+        -_hostnames: dict~Host, str~
+        +log(level, job, host, message, **ctx) None
+        +get_job_logger(job_name, host) JobLogger
     }
 
     class JobLogger {
         -_logger: Logger
         -_job_name: str
-        -_hostname: str
+        -_host: Host
         +log(level, message, **ctx) None
     }
 
@@ -251,6 +274,7 @@ classDiagram
     }
 
     class DiskSpaceCriticalError {
+        +host: Host
         +hostname: str
         +message: str
         +free_space: str
@@ -280,12 +304,12 @@ classDiagram
 | Orchestrator → Job[] | Creates, validates, and executes jobs; uses TaskGroup for background jobs |
 | Job → JobContext | Receives context at execution time (config, remote, logger, ui, session_id) |
 | JobContext → RemoteExecutor | Jobs use this to run commands on target |
-| JobContext → JobLogger | Jobs use this to log messages with pre-bound job name and hostname |
+| JobContext → JobLogger | Jobs use this to log messages with pre-bound job name and host (role) |
 | RemoteExecutor → Connection | Wraps Connection with job-friendly interface |
 | RemoteExecutor → CommandResult | Returns structured result; Job interprets and logs |
 | Logger → JobLogger | Creates bound logger instances for each job |
 | Logger → TerminalUI | Sends log messages for display (if level >= cli_level) |
-| DiskSpaceMonitorJob → DiskSpaceCriticalError | Raises exception (with hostname) when space low; TaskGroup propagates |
+| DiskSpaceMonitorJob → DiskSpaceCriticalError | Raises exception (with host and hostname) when space low; TaskGroup propagates |
 
 ---
 
@@ -475,7 +499,7 @@ sequenceDiagram
     Note over Logger: check file_level
     alt file_level <= INFO
         Logger->>File: write JSON line
-        Note over File: {"ts": "...", "level": "INFO",<br/>"job": "packages", "host": "source",<br/>"event": "Installing package X"}
+        Note over File: {"ts": "...", "level": "INFO",<br/>"job": "packages", "host": "source",<br/>"hostname": "laptop-work",<br/>"event": "Installing package X"}
     end
 
     Note over Logger: check cli_level
@@ -533,7 +557,7 @@ sequenceDiagram
 
 ### 6. DiskSpaceMonitor Detects Low Space
 
-Two `DiskSpaceMonitorJob` instances run as background tasks: one for source (local), one for target (remote). When space falls below threshold on either host, the job raises `DiskSpaceCriticalError` with the hostname. The TaskGroup catches this and cancels other tasks.
+Two `DiskSpaceMonitorJob` instances run as background tasks: one for source (local), one for target (remote). When space falls below threshold on either host, the job raises `DiskSpaceCriticalError` with both `host` (role) and `hostname` (actual name). The TaskGroup catches this and cancels other tasks.
 
 ```mermaid
 sequenceDiagram
@@ -557,10 +581,10 @@ sequenceDiagram
         end
     end
 
-    Note over TargetMonitor: target: 12% free < 15% threshold
+    Note over TargetMonitor: desktop-home: 12% free < 15% threshold
 
-    TargetMonitor->>Logger: log(CRITICAL, "target: Disk space below threshold")
-    TargetMonitor->>TargetMonitor: raise DiskSpaceCriticalError(hostname="target")
+    TargetMonitor->>Logger: log(CRITICAL, "desktop-home: Disk space below threshold")
+    TargetMonitor->>TargetMonitor: raise DiskSpaceCriticalError(host=TARGET, hostname="desktop-home")
 
     DiskSpaceCriticalError-->>TaskGroup: exception propagates
     TaskGroup->>SourceMonitor: CancelledError
@@ -573,9 +597,9 @@ sequenceDiagram
 
 **Key points:**
 - Two instances: source monitor runs local commands, target monitor uses `RemoteExecutor`
-- `DiskSpaceCriticalError` includes `hostname` to identify which host ran low
+- `DiskSpaceCriticalError` includes both `host` (role) and `hostname` (actual name)
 - Either monitor can trigger sync abort - TaskGroup cancels all other tasks
-- Orchestrator receives `ExceptionGroup` and can inspect cause and hostname
+- Orchestrator receives `ExceptionGroup` and can inspect cause, host, and hostname
 
 ---
 
