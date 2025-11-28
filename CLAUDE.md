@@ -1,6 +1,7 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI agents when working with code in this repository.
+
 
 ## Project Overview
 
@@ -13,6 +14,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Critical Context Files
 
 **ALWAYS READ FIRST**:
+- `~/.claude/CLAUDE.md` - General agent instructions for all projects
+- `~/.claude/python_conventions.md` and `~/.claude/python_tools.md` - Python coding conventions for this project. Read all referenced files therein as well!
 - `High level requirements.md` - Complete project vision, scope, workflow, and constraints
 - `docs/adr/_index.md` - Summary of all architectural decisions
 
@@ -139,7 +142,7 @@ This repository will NOT contain:
 
 ## Active Technologies
 - Python 3.13 (per ADR-003; Paramiko not yet supporting 3.14) (001-foundation)
-- IMPORTANT: Read ~/.claude/python.md and refered files for python conventions. Follow them strictly.
+- IMPORTANT: Read ~/.claude/python.md and refered files therein for python conventions. Follow them strictly.
 
 ## Recent Changes
 - 001-foundation: Added Python 3.13 (per ADR-003; Paramiko not yet supporting 3.14)
