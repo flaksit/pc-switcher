@@ -24,7 +24,7 @@ flowchart LR
 
   subgraph Target Machine
     TargetConn["TargetConnection (persistent SSH)"]
-    RemoteExec["Remote commands/scripts\n(line-buffered stdout)"]
+    RemoteExec["Remote commands/scripts<br/>(line-buffered stdout)"]
   end
 
   CLI --> Config --> Orchestrator
@@ -300,16 +300,16 @@ sequenceDiagram
 ```mermaid
 flowchart LR
   subgraph Producers
-    O["Orchestrator events\n(state changes, health)"]
-    J["Active Job\n(logs + progress)"]
-    D["DiskSpaceMonitor\n(runtime alerts)"]
-    H["TargetConnection health\n(keepalive, reconnect)"]
+    O["Orchestrator events<br/>(state changes, health)"]
+    J["Active Job<br/>(logs + progress)"]
+    D["DiskSpaceMonitor<br/>(runtime alerts)"]
+    H["TargetConnection health<br/>(keepalive, reconnect)"]
   end
   subgraph Transport
-    Q["Async Event Bus\n(log queue + progress queue)"]
+    Q["Async Event Bus<br/>(log queue + progress queue)"]
   end
   subgraph Consumer
-    U["Terminal UI renderer\n(non-blocking)"]
+    U["Terminal UI renderer<br/>(non-blocking)"]
   end
 
   O --> Q

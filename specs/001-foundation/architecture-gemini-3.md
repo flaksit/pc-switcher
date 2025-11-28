@@ -45,15 +45,15 @@ graph TD
 
     subgraph "Job Layer"
         JobFactory[Job Factory]
-        Proto[<<Protocol>>\nSyncJob]
+        SyncJob["&lt;&lt;Protocol&gt;&gt;<br/>SyncJob"]
         
         DiskMon[DiskSpaceMonitor Job]
         SnapJob[BtrfsSnapshot Job]
         FeatJob[Feature Sync Jobs]
         
-        DiskMon -.-> Proto
-        SnapJob -.-> Proto
-        FeatJob -.-> Proto
+        DiskMon -.-> SyncJob
+        SnapJob -.-> SyncJob
+        FeatJob -.-> SyncJob
     end
 
     subgraph "Infrastructure Layer"
@@ -68,14 +68,14 @@ graph TD
     
     Orch --> JobFactory
     Orch --> SSH
-    Orch -- Executes --> Proto
+    Orch -- Executes --> SyncJob
     Orch -- Updates --> TUI
     
     JobFactory --> Config
     
-    Proto --> SSH
-    Proto --> LocalFS
-    Proto -- Emits Logs/Progress --> LogSys
+    SyncJob --> SSH
+    SyncJob --> LocalFS
+    SyncJob -- Emits Logs/Progress --> LogSys
     
     LogSys -- Streams Events --> TUI
     LogSys -- Writes --> LocalFS
@@ -229,7 +229,7 @@ sequenceDiagram
     Note over Orch: Skip remaining SyncJobs
     Note over Orch: Skip Post-Sync Snapshots
     
-    Note over Orch: Optional: Trigger Rollback\n(Depends on config/interaction)
+    Note over Orch: Optional: Trigger Rollback<br/>(Depends on config/interaction)
     
     Orch->>RemoteExecutor: close()
     Orch-->>CLI: Exit Failure
@@ -260,7 +260,7 @@ sequenceDiagram
     
     Job->>Job: raise SyncError("Remote command failed: ...")
     
-    Note right of Job: This triggers the Exception\nflow (Diagram 5)
+    Note right of Job: This triggers the Exception flow (Diagram 5)
 ```
 
 -----

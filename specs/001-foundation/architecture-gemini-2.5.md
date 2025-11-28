@@ -19,13 +19,13 @@ This diagram shows the high-level components and their relationships.
 ```mermaid
 graph TD
     subgraph "User Interaction"
-        CLI[<b>CLI</b><br/>(Typer/Click)<br/>Parses commands, entry point]
+        CLI["<b>CLI</b><br/>(Typer/Click)<br/>Parses commands, entry point"]
     end
 
     subgraph "Core Logic"
-        Orchestrator[<b>Orchestrator</b><br/>- Manages sync lifecycle & TaskGroup<br/>- Handles errors & signals<br/>- Coordinates all components]
-        Config[<b>Configuration</b><br/>- Loads & validates YAML<br/>- Provides settings]
-        EventBus[<b>Event Bus</b><br/>(asyncio.Queue)<br/>- Decouples logic from UI<br/>- Channels Log & Progress events]
+        Orchestrator["<b>Orchestrator</b><br/>- Manages sync lifecycle & TaskGroup<br/>- Handles errors & signals<br/>- Coordinates all components"]
+        Config["<b>Configuration</b><br/>- Loads & validates YAML<br/>- Provides settings"]
+        EventBus["<b>Event Bus</b><br/>(asyncio.Queue)<br/>- Decouples logic from UI<br/>- Channels Log & Progress events"]
     end
 
     subgraph "Job Layer"
@@ -35,12 +35,12 @@ graph TD
     end
 
     subgraph "Infrastructure"
-        RemoteExecutor[<b>Remote Executor</b><br/>- Wraps asyncssh<br/>- `run_command`<br/>- `send_file`]
-        FileLogger[<b>File Logger</b><br/>(structlog)<br/>- Writes JSON logs to disk]
+        RemoteExecutor["<b>Remote Executor</b><br/>- Wraps asyncssh<br/>- `run_command`<br/>- `send_file`"]
+        FileLogger["<b>File Logger</b><br/>(structlog)<br/>- Writes JSON logs to disk"]
     end
 
     subgraph "Presentation"
-        TUI[<b>Terminal UI</b><br/>(Rich)<br/>- Renders progress & logs<br/>- Consumes from Event Bus]
+        TUI["<b>Terminal UI</b><br/>(Rich)<br/>- Renders progress & logs<br/>- Consumes from Event Bus"]
     end
 
     CLI --> Config
