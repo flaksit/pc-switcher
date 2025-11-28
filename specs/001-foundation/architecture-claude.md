@@ -48,11 +48,13 @@ graph TD
 
     TerminalUI["<b>TerminalUI</b><br/>- Rich Live<br/>- Progress bars<br/>- Log messages<br/>- Status"]
 
-    RemoteExecutor["<b>RemoteExecutor</b><br/>- run_command()<br/>- stream stdout/stderr<br/>- send/get file<br/>- terminate processes"]
+    LocalExecutor["<b>LocalExecutor</b><br/>- Implements Executor<br/>- Async subprocess"]
+
+    RemoteExecutor["<b>RemoteExecutor</b><br/>- Implements Executor<br/>- + send/get file<br/>- + get_hostname()"]
 
     InstallOnTargetJob["<b>InstallOnTargetJob</b><br/>- Check version<br/>- Install/upgrade<br/>- Verify<br/>[required]"]
 
-    BtrfsSnapshotJob["<b>BtrfsSnapshotJob</b><br/>- pre/post mode<br/>- Direct btrfs commands<br/>- No pc-switcher dependency<br/>[required]"]
+    BtrfsSnapshotJob["<b>BtrfsSnapshotJob</b><br/>- pre/post mode<br/>- One instance per host<br/>- Direct btrfs commands<br/>- No pc-switcher dependency<br/>[required]"]
 
     SyncJobs["<b>SyncJobs</b><br/>- User data<br/>- Packages<br/>- Docker<br/>- VMs<br/>- k3s<br/>[configurable]"]
 
@@ -63,6 +65,7 @@ graph TD
     Orchestrator --> Connection
     Orchestrator --> Logger
     Orchestrator --> TerminalUI
+    Orchestrator --> LocalExecutor
     Connection --> RemoteExecutor
     Orchestrator --> InstallOnTargetJob
     Orchestrator --> BtrfsSnapshotJob
@@ -71,6 +74,7 @@ graph TD
 
     style CLI fill:#e1f5ff
     style Orchestrator fill:#fff3e0
+    style LocalExecutor fill:#f3e5f5
     style RemoteExecutor fill:#f3e5f5
     style InstallOnTargetJob fill:#e8f5e9
     style BtrfsSnapshotJob fill:#e8f5e9
@@ -86,7 +90,8 @@ graph TD
 | **Orchestrator** | Central coordinator. Validates config (schema + general config + (delegated) job configs), manages job lifecycle via TaskGroup, handles SIGINT via asyncio cancellation, produces final sync summary |
 | **Config** | Validated configuration dataclass. Holds global settings, job enable/disable flags, and per-job settings after validation |
 | **Connection** | Manages SSH connection via asyncssh. Provides multiplexed sessions (multiple concurrent commands over single connection) |
-| **RemoteExecutor** | Job-facing interface to Connection. Runs commands returning `(exit_code, stdout, stderr)`, transfers files, can terminate running processes |
+| **LocalExecutor** | Implements `Executor` interface for local async subprocess execution. Used by source-side jobs |
+| **RemoteExecutor** | Implements `Executor` interface via Connection. Adds file transfer (`send_file`, `get_file`) and `get_hostname()` |
 | **Logger** | Unified logging with 6 levels. Routes to file (JSON) and terminal (formatted). Resolves host→hostname internally |
 | **TerminalUI** | Rich-based live display. Shows progress bars, log messages (filtered by cli_level), overall status |
 | **Jobs** | Encapsulated sync operations. Each job validates their specific config, validates the system state, executes operations, reports progress, cleans up own resources on cancellation |
@@ -181,7 +186,8 @@ classDiagram
 classDiagram
     class JobContext {
         +config: JobConfig
-        +remote: RemoteExecutor
+        +source: LocalExecutor
+        +target: RemoteExecutor
         +logger: JobLogger
         +ui: TerminalUI
         +session_id: str
@@ -204,15 +210,31 @@ classDiagram
         +success: bool
     }
 
+    class Executor {
+        <<interface>>
+        +run_command(cmd, timeout) CommandResult
+        +run_command_stream(cmd, stdout_callback, stderr_callback, timeout) CommandResult
+        +terminate_all_processes() None
+    }
+
+    class LocalExecutor {
+        +run_command(cmd, timeout) CommandResult
+        +run_command_stream(cmd, stdout_callback, stderr_callback, timeout) CommandResult
+        +terminate_all_processes() None
+    }
+
     class RemoteExecutor {
         -_connection: Connection
         +run_command(cmd, timeout) CommandResult
         +run_command_stream(cmd, stdout_callback, stderr_callback, timeout) CommandResult
+        +terminate_all_processes() None
         +send_file(local, remote) None
         +get_file(remote, local) None
         +get_hostname() str
-        +terminate_all_processes() None
     }
+
+    Executor <|-- LocalExecutor : implements
+    Executor <|-- RemoteExecutor : implements
 
     class Connection {
         -_conn: SSHClientConnection
@@ -281,12 +303,15 @@ classDiagram
         +threshold: str
     }
 
-    JobContext --> RemoteExecutor : uses
+    JobContext --> LocalExecutor : source
+    JobContext --> RemoteExecutor : target
     JobContext --> JobLogger : uses
     JobContext --> ProgressUpdate : creates
+    LocalExecutor --> CommandResult : returns
     RemoteExecutor --> Connection : wraps
     RemoteExecutor --> CommandResult : returns
     Orchestrator --> Connection : owns
+    Orchestrator --> LocalExecutor : creates
     Orchestrator --> Logger : uses
     Orchestrator --> TerminalUI : uses
     Orchestrator --> Job : manages
@@ -301,9 +326,11 @@ classDiagram
 | Relationship | Description |
 |--------------|-------------|
 | Orchestrator → Connection | Owns and manages the SSH connection lifecycle |
+| Orchestrator → LocalExecutor | Creates for local command execution |
 | Orchestrator → Job[] | Creates, validates, and executes jobs; uses TaskGroup for background jobs |
-| Job → JobContext | Receives context at execution time (config, remote, logger, ui, session_id) |
-| JobContext → RemoteExecutor | Jobs use this to run commands on target |
+| Job → JobContext | Receives context at execution time (config, source, target, logger, ui, session_id) |
+| JobContext → LocalExecutor | `source` field - for running commands on source machine |
+| JobContext → RemoteExecutor | `target` field - for running commands on target machine + file transfers |
 | JobContext → JobLogger | Jobs use this to log messages with pre-bound job name and host (role) |
 | RemoteExecutor → Connection | Wraps Connection with job-friendly interface |
 | RemoteExecutor → CommandResult | Returns structured result; Job interprets and logs |
@@ -562,6 +589,7 @@ Two `DiskSpaceMonitorJob` instances run as background tasks: one for source (loc
 ```mermaid
 sequenceDiagram
     participant SourceMonitor as DiskSpaceMonitorJob (source)
+    participant LocalExecutor
     participant TargetMonitor as DiskSpaceMonitorJob (target)
     participant RemoteExecutor
     participant TaskGroup
@@ -570,7 +598,8 @@ sequenceDiagram
 
     par background monitoring
         loop source monitoring
-            SourceMonitor->>SourceMonitor: run local df command
+            SourceMonitor->>LocalExecutor: run_command("df -h /")
+            LocalExecutor-->>SourceMonitor: CommandResult
             Note over SourceMonitor: check free space
         end
     and
@@ -596,10 +625,11 @@ sequenceDiagram
 ```
 
 **Key points:**
-- Two instances: source monitor runs local commands, target monitor uses `RemoteExecutor`
+- Two instances of same class, each with different `host` parameter
+- Both instances receive same `JobContext` with `source` and `target` executors
+- Job selects executor based on its `host` field (see code example in "Job Approaches")
 - `DiskSpaceCriticalError` includes both `host` (role) and `hostname` (actual name)
 - Either monitor can trigger sync abort - TaskGroup cancels all other tasks
-- Orchestrator receives `ExceptionGroup` and can inspect cause, host, and hostname
 
 ---
 
@@ -659,14 +689,16 @@ graph TD
 
 ---
 
-## Remote Command Execution
+## Command Execution
 
-Jobs run commands on the target via RemoteExecutor. There is **no mandatory output protocol** - Jobs interpret stdout/stderr as needed.
+Jobs have access to both `source` (LocalExecutor) and `target` (RemoteExecutor) via JobContext. They choose which to use based on the operation. There is **no mandatory output protocol** - Jobs interpret stdout/stderr as needed.
 
-### RemoteExecutor Interface
+### Executor Interface
 
 ```python
-class RemoteExecutor:
+class Executor(Protocol):
+    """Common interface for command execution on source or target."""
+
     async def run_command(self, cmd: str, timeout: float | None = None) -> CommandResult:
         """Run command, wait for completion, return result."""
 
@@ -689,55 +721,65 @@ class RemoteExecutor:
             CommandResult with exit_code, stdout, stderr captured during execution.
         """
 
-    async def send_file(self, local: Path, remote: Path) -> None:
-        """Upload file to target."""
-
-    async def get_file(self, remote: Path, local: Path) -> None:
-        """Download file from target."""
-
-    def get_hostname(self) -> str:
-        """Return target hostname."""
-
     async def terminate_all_processes(self) -> None:
         """Kill all processes started by this executor."""
 ```
 
-### Job Approaches for Remote Commands
+### Implementations
+
+| Implementation | Description |
+|----------------|-------------|
+| **LocalExecutor** | Runs commands via async subprocess on source machine |
+| **RemoteExecutor** | Runs commands via SSH on target machine. Adds: `send_file()`, `get_file()`, `get_hostname()` |
+
+### Job Approaches for Commands
 
 Jobs choose their approach based on complexity:
 
-**(a) Simple commands**: Run bare command, parse output directly
+**(a) Commands on source or target**:
 ```python
-result = await self.remote.run_command("apt list --installed")
-for line in result.stdout.splitlines():
-    self.log(DEBUG, f"Installed: {line}")
-if not result.success:
-    raise SyncError(f"apt list failed: {result.stderr}")
+# Run on source machine
+result = await self.source.run_command("df -h /")
+
+# Run on target machine
+result = await self.target.run_command("df -h /")
 ```
 
-**(b) Streaming with callbacks**: Process output as it arrives
+**(b) Jobs using both executors** (e.g., comparing source vs target):
+```python
+# Get package list from both machines
+source_pkgs = await self.source.run_command("dpkg --get-selections")
+target_pkgs = await self.target.run_command("dpkg --get-selections")
+# Compare and sync differences...
+```
+
+**(c) Parameterized jobs** (DiskSpaceMonitorJob, BtrfsSnapshotJob):
+```python
+# Job has host: Host field, selects executor based on it
+executor = self.source if self.host == Host.SOURCE else self.target
+result = await executor.run_command("df -h /")
+```
+
+**(d) Streaming with callbacks**: Process output as it arrives
 ```python
 lines = []
 def collect_stdout(line: str) -> None:
     lines.append(line)
     self.report_progress(ProgressUpdate(current=len(lines), item=line))
 
-result = await self.remote.run_command_stream(
-    "rsync -av /home /backup",
+result = await self.target.run_command_stream(
+    "btrfs subvolume snapshot ...",
     stdout_callback=collect_stdout,
     timeout=3600,
 )
 if not result.success:
-    raise SyncError(f"rsync failed: {result.stderr}")
+    raise SyncError(f"snapshot failed: {result.stderr}")
 ```
 
-**(c) Complex operations**: Write helper script, deploy and execute
+**(e) File transfer + execution**:
 ```python
-await self.remote.send_file(local_script, "/tmp/sync-helper.py")
-result = await self.remote.run_command("python3 /tmp/sync-helper.py")
-# Parse structured output if helper produces it
-if not result.success:
-    raise SyncError(f"Helper failed: {result.stderr}")
+await self.target.send_file(local_script, "/tmp/sync-helper.py")
+result = await self.target.run_command("python3 /tmp/sync-helper.py")
 ```
 
 Jobs are responsible for:
