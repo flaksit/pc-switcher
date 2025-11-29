@@ -389,6 +389,14 @@ class DiskSpaceCriticalError(Exception):
 from typing import Protocol, AsyncIterator
 
 class Process(Protocol):
+    """Handle for a running process with streaming output.
+
+    Note: stdin is intentionally not supported. All commands must be
+    non-interactive. This is a design constraint to ensure reliable
+    automated execution without prompts or user input requirements.
+    Commands that require input should be invoked with appropriate
+    flags (e.g., apt-get -y, rm -f) or have input pre-configured.
+    """
     async def stdout(self) -> AsyncIterator[str]: ...
     async def stderr(self) -> AsyncIterator[str]: ...
     async def wait(self) -> CommandResult: ...
@@ -446,11 +454,16 @@ class Job(ABC):
     def _log(
         self,
         context: JobContext,
+        host: Host,
         level: LogLevel,
         message: str,
         **extra: Any,
     ) -> None:
-        """Log a message through EventBus."""
+        """Log a message through EventBus.
+
+        Args:
+            host: Which machine this log relates to (SOURCE or TARGET)
+        """
         ...
 
     def _report_progress(
@@ -484,9 +497,8 @@ class BackgroundJob(Job):
 
 ```python
 import asyncio
-from typing import TypeVar
 
-Event = TypeVar("Event", LogEvent, ProgressEvent, ConnectionEvent)
+type Event = LogEvent | ProgressEvent | ConnectionEvent
 
 class EventBus:
     def __init__(self) -> None:

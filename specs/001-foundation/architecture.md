@@ -85,7 +85,7 @@ graph TD
 
 | Component | Responsibility |
 |-----------|----------------|
-| **CLI** | Entry point. Parses commands (`sync`, `logs`, `cleanup-snapshots`), loads config file (YAML), instantiates and runs Orchestrator |
+| **CLI** | Entry point. Parses commands (`sync`, `logs`, `cleanup-snapshots`, `rollback`), loads config file (YAML), instantiates and runs Orchestrator |
 | **Orchestrator** | Central coordinator. Validates config (schema + general config + (delegated) job configs), manages job lifecycle via TaskGroup, handles SIGINT via asyncio cancellation, produces final sync summary |
 | **Config** | Validated configuration dataclass. Holds global settings, job enable/disable flags, and per-job settings after validation |
 | **Connection** | Manages SSH connection via asyncssh. Provides multiplexed sessions (multiple concurrent commands over single connection) |
@@ -142,8 +142,8 @@ graph LR
 
 | Event | Fields | Description |
 |-------|--------|-------------|
-| `LogEvent` | level, job, host, message, context | Log message from any component |
-| `ProgressEvent` | job, percent, current, total, item, heartbeat | Job progress update |
+| `LogEvent` | level, job, host, message, context, timestamp | Log message from any component |
+| `ProgressEvent` | job, update (ProgressUpdate), timestamp | Job progress update (update contains percent, current, total, item, heartbeat) |
 | `ConnectionEvent` | status, latency | SSH connection status change |
 
 ### Properties
@@ -286,11 +286,8 @@ classDiagram
 
     class ProgressEvent {
         +job: str
-        +percent: int | None
-        +current: int | None
-        +total: int | None
-        +item: str | None
-        +heartbeat: bool = False
+        +update: ProgressUpdate
+        +timestamp: datetime
     }
 
     class ConnectionEvent {
@@ -486,6 +483,43 @@ graph TD
 | 2. Job Config | Orchestrator | Job.validate_config() | Invalid config for 'job': ... |
 | 3. System State | Jobs | Job.validate() | Cannot sync: ... |
 
+### BtrfsSnapshotJob Validation (Phase 3)
+
+Per FR-015, `BtrfsSnapshotJob.validate()` MUST verify subvolumes exist on **both** source and target:
+
+```python
+async def validate(self, context: JobContext) -> list[ValidationError]:
+    errors = []
+    subvolumes = context.config.get("subvolumes", ["@", "@home"])
+
+    for subvol in subvolumes:
+        # Check source
+        result = await context.source.run_command(
+            f"sudo btrfs subvolume show /{subvol} 2>/dev/null"
+        )
+        if not result.success:
+            errors.append(ValidationError(
+                job=self.name,
+                host=Host.SOURCE,
+                message=f"Subvolume '{subvol}' not found on source",
+            ))
+
+        # Check target (identical subvolume structure assumed)
+        result = await context.target.run_command(
+            f"sudo btrfs subvolume show /{subvol} 2>/dev/null"
+        )
+        if not result.success:
+            errors.append(ValidationError(
+                job=self.name,
+                host=Host.TARGET,
+                message=f"Subvolume '{subvol}' not found on target",
+            ))
+
+    return errors
+```
+
+**Important**: The configuration assumes identical subvolume names on source and target. If target has different subvolume structure, validation will fail with clear error messages before any sync operations begin.
+
 ---
 
 ## Sequence Diagrams
@@ -530,6 +564,36 @@ sequenceDiagram
 - Job owns cleanup of its own remote processes in its `except CancelledError` handler
 - Orchestrator only does final safety sweep after timeout (belt-and-suspenders)
 - Exit code 130 indicates SIGINT termination (128 + signal number 2)
+
+### Double SIGINT (Force Terminate)
+
+Per FR-026, if a second SIGINT arrives during cleanup, the system force-terminates immediately:
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Orchestrator
+    participant CurrentJob
+    participant Connection
+
+    User->>Orchestrator: Ctrl+C (first SIGINT)
+    Note over Orchestrator: Set cleanup_in_progress = True
+    Orchestrator->>CurrentJob: CancelledError raised
+
+    Note over CurrentJob: Cleanup starting...
+
+    User->>Orchestrator: Ctrl+C (second SIGINT)
+    Note over Orchestrator: cleanup_in_progress already True
+
+    Orchestrator->>Connection: force close (no wait)
+    Orchestrator->>Orchestrator: log WARNING "Force terminated"
+    Orchestrator->>User: exit(130) immediately
+```
+
+**Implementation note**: The signal handler checks a `_cleanup_in_progress` flag. On second SIGINT:
+- Skip graceful cleanup entirely
+- Close SSH connection immediately (kills remote processes)
+- Exit with code 130
 
 ---
 
@@ -816,6 +880,38 @@ graph TD
 - **UI Refresh Task**: TerminalUI consumes from its queue, renders at fixed interval (e.g., 100ms)
 - **FileLogger Task**: FileLogger consumes from its queue, writes JSON lines to disk
 
+### Target Log Aggregation (FR-023)
+
+All logging happens on the **source machine**. Target-side operations do not run independent logging processes—instead:
+
+1. **Command output**: Jobs run commands on target via `RemoteExecutor.run_command()`. The job receives `CommandResult` with stdout/stderr and decides what to log.
+
+2. **Background processes**: Jobs can stream output via `RemoteExecutor.start_process()` with async iteration over stdout. The job parses output and emits LogEvents to the source-side EventBus.
+
+3. **DiskSpaceMonitor (target)**: Runs on source, executes commands on target via RemoteExecutor. Logs are emitted from source-side code with `host=TARGET`.
+
+```mermaid
+graph LR
+    subgraph Source Machine
+        Job["Job (source-side code)"]
+        EventBus["EventBus"]
+        FileLogger["FileLogger"]
+        TerminalUI["TerminalUI"]
+    end
+
+    subgraph Target Machine
+        RemoteCmd["Remote Command"]
+    end
+
+    Job -->|run_command| RemoteCmd
+    RemoteCmd -->|stdout/stderr| Job
+    Job -->|LogEvent host=TARGET| EventBus
+    EventBus --> FileLogger
+    EventBus --> TerminalUI
+```
+
+**Key point**: There is no target-side logging daemon. The `host` field in LogEvent indicates which machine the log *relates to*, not where the logging code runs. All logging code runs on source.
+
 ---
 
 ## Command Execution
@@ -982,3 +1078,117 @@ graph TD
 1. **Snapshots BEFORE InstallOnTargetJob**: BtrfsSnapshotJob runs direct `btrfs` commands via SSH, no pc-switcher dependency. This ensures we have a rollback point before ANY system modifications.
 2. **Three validation phases**: Schema → Job config → System state, with distinct error messages.
 3. **DiskSpaceMonitor as background tasks**: Two instances run throughout sync - one monitors source (local commands), one monitors target (via `RemoteExecutor`). Either can abort sync on low space.
+
+---
+
+## Rollback Workflow
+
+Per FR-013, the system provides rollback capability to restore from pre-sync snapshots. Rollback requires explicit user confirmation.
+
+### CLI Command
+
+```bash
+# List available rollback points
+pc-switcher rollback --list
+
+# Rollback to most recent pre-sync snapshot
+pc-switcher rollback
+
+# Rollback to specific session
+pc-switcher rollback --session abc12345
+```
+
+### Rollback Process
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant CLI
+    participant Orchestrator
+    participant SourceBtrfs as Source btrfs
+    participant TargetBtrfs as Target btrfs
+
+    User->>CLI: pc-switcher rollback
+    CLI->>CLI: List available pre-sync snapshots
+    CLI->>User: Display snapshot options
+
+    User->>CLI: Confirm selection
+    Note over CLI: Requires explicit confirmation
+
+    CLI->>Orchestrator: Execute rollback
+
+    par Rollback source
+        Orchestrator->>SourceBtrfs: btrfs subvolume snapshot (restore)
+        Note over SourceBtrfs: For each subvolume:<br/>1. Rename current → .backup<br/>2. Snapshot presync → current<br/>3. Delete .backup
+    and Rollback target
+        Orchestrator->>TargetBtrfs: btrfs subvolume snapshot (restore)
+        Note over TargetBtrfs: Same process via SSH
+    end
+
+    Orchestrator->>CLI: Rollback complete
+    CLI->>User: "Rollback to session abc12345 complete"
+```
+
+### Rollback Steps (per subvolume)
+
+1. **Validate**: Verify pre-sync snapshot exists
+2. **Rename current**: `mv /btrfs-root/@home /btrfs-root/@home.rollback-backup`
+3. **Restore snapshot**: `btrfs subvolume snapshot /btrfs-root/@home-presync-... /btrfs-root/@home`
+4. **Delete backup**: `btrfs subvolume delete /btrfs-root/@home.rollback-backup`
+
+### Post-Sync Snapshots During Rollback
+
+Post-sync snapshots (if they exist from a successful sync) are **retained** during rollback. They can be manually deleted via `pc-switcher cleanup-snapshots` if no longer needed.
+
+### Error Handling
+
+- If rollback fails mid-process, the `.rollback-backup` subvolumes are preserved for manual recovery
+- Rollback logs all operations at INFO level for audit trail
+- User must have sudo privileges for btrfs operations
+
+---
+
+## Setup and Default Configuration (FR-037)
+
+The setup script creates a default configuration file with inline comments explaining each setting:
+
+```yaml
+# ~/.config/pc-switcher/config.yaml
+# PC-Switcher Configuration
+
+# Logging levels: DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL
+# DEBUG = most verbose (internal diagnostics)
+# FULL = operational details (file-level operations)
+# INFO = high-level operations (recommended for terminal)
+log_file_level: FULL    # Written to ~/.local/share/pc-switcher/logs/
+log_cli_level: INFO     # Displayed in terminal
+
+# Enable/disable sync jobs (true = enabled, false = skipped)
+# Required jobs (snapshots) cannot be disabled
+sync_jobs:
+  user_data: true       # Sync /home and /root
+  packages: true        # Sync apt, snap, flatpak packages
+  docker: false         # Sync Docker images, containers, volumes
+  vms: false            # Sync KVM/virt-manager VMs
+  k3s: false            # Sync k3s cluster state
+
+# Disk space safety thresholds
+disk:
+  preflight_minimum: "20%"   # Minimum free space before sync starts
+  runtime_minimum: "15%"     # Minimum during sync (abort if below)
+  check_interval: 30         # Seconds between runtime checks
+
+# Btrfs snapshot configuration (cannot be disabled)
+btrfs_snapshots:
+  subvolumes:           # Subvolume names to snapshot (must exist on both machines)
+    - "@"               # Root filesystem
+    - "@home"           # Home directories
+  keep_recent: 3        # Always keep N most recent sync sessions
+  max_age_days: null    # Delete snapshots older than N days (null = no age limit)
+```
+
+**Implementation**: The setup script generates this file by:
+1. Loading the schema from `config-schema.yaml`
+2. Extracting `description` fields from each property
+3. Generating YAML with descriptions as inline comments
+4. Writing to `~/.config/pc-switcher/config.yaml`

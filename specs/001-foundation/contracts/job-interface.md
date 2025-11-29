@@ -116,7 +116,7 @@ async def execute(self, context: JobContext) -> None:
 
 ## Helper Methods (Provided by Base Class)
 
-### `_log(context, level, message, **extra)`
+### `_log(context, host, level, message, **extra)`
 
 Log a message through EventBus.
 
@@ -124,6 +124,7 @@ Log a message through EventBus.
 def _log(
     self,
     context: JobContext,
+    host: Host,
     level: LogLevel,
     message: str,
     **extra: Any,
@@ -132,6 +133,7 @@ def _log(
 
     Args:
         context: JobContext for EventBus access
+        host: Which machine this log relates to (SOURCE or TARGET)
         level: Log level (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL)
         message: Human-readable message
         **extra: Additional structured context
@@ -140,9 +142,9 @@ def _log(
 
 **Usage**:
 ```python
-self._log(context, LogLevel.INFO, "Starting package comparison")
-self._log(context, LogLevel.FULL, "Comparing package", package="nginx")
-self._log(context, LogLevel.ERROR, "Package installation failed", error=str(e))
+self._log(context, Host.SOURCE, LogLevel.INFO, "Starting package comparison")
+self._log(context, Host.TARGET, LogLevel.FULL, "Comparing package", package="nginx")
+self._log(context, Host.TARGET, LogLevel.ERROR, "Package installation failed", error=str(e))
 ```
 
 ### `_report_progress(context, update)`
@@ -189,7 +191,7 @@ async def execute(self, context: JobContext) -> None:
         await self._do_work(context)
     except asyncio.CancelledError:
         # Cleanup: terminate remote processes, remove temp files
-        self._log(context, LogLevel.WARNING, f"{self.name} cancelled, cleaning up")
+        self._log(context, Host.SOURCE, LogLevel.WARNING, f"{self.name} cancelled, cleaning up")
         await self._cleanup(context)
         raise  # MUST re-raise
 ```
@@ -218,6 +220,7 @@ class JobContext:
     config: dict[str, Any]        # Validated job-specific config
     source: LocalExecutor         # Execute on source machine
     target: RemoteExecutor        # Execute on target machine
+    logger: JobLogger             # Pre-bound logger for this job
     event_bus: EventBus           # For logging and progress
     session_id: str               # 8-char hex session ID
     source_hostname: str          # Actual source machine name
@@ -285,7 +288,7 @@ class ExampleSyncJob(SyncJob):
         items = context.config.get("items_to_sync", [])
         total = len(items)
 
-        self._log(context, LogLevel.INFO, f"Syncing {total} items")
+        self._log(context, Host.SOURCE, LogLevel.INFO, f"Syncing {total} items")
 
         try:
             for i, item in enumerate(items):
@@ -298,17 +301,17 @@ class ExampleSyncJob(SyncJob):
                 ))
 
                 # Do the actual sync
-                self._log(context, LogLevel.FULL, f"Syncing item", item=item)
+                self._log(context, Host.TARGET, LogLevel.FULL, f"Syncing item", item=item)
                 result = await context.target.run_command(f"sync-item {item}")
 
                 if not result.success:
                     raise RuntimeError(f"Failed to sync {item}: {result.stderr}")
 
             self._report_progress(context, ProgressUpdate(percent=100))
-            self._log(context, LogLevel.INFO, f"Synced {total} items successfully")
+            self._log(context, Host.TARGET, LogLevel.INFO, f"Synced {total} items successfully")
 
         except asyncio.CancelledError:
-            self._log(context, LogLevel.WARNING, "Sync cancelled, cleaning up")
+            self._log(context, Host.SOURCE, LogLevel.WARNING, "Sync cancelled, cleaning up")
             # Cleanup logic here
             raise
 ```

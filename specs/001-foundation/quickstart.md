@@ -134,7 +134,7 @@ import asyncio
 from typing import ClassVar
 
 from pcswitcher.jobs.base import SyncJob
-from pcswitcher.models import JobContext, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.models import Host, JobContext, LogLevel, ProgressUpdate, ValidationError
 
 
 class DummySuccessJob(SyncJob):
@@ -156,25 +156,25 @@ class DummySuccessJob(SyncJob):
 
         try:
             # Source phase
-            await self._run_phase(context, "source", source_dur)
+            await self._run_phase(context, Host.SOURCE, "source", source_dur)
             # Target phase
-            await self._run_phase(context, "target", target_dur)
+            await self._run_phase(context, Host.TARGET, "target", target_dur)
         except asyncio.CancelledError:
-            self._log(context, LogLevel.WARNING, "Dummy job termination requested")
+            self._log(context, Host.SOURCE, LogLevel.WARNING, "Dummy job termination requested")
             raise
 
     async def _run_phase(
-        self, context: JobContext, phase: str, duration: int
+        self, context: JobContext, host: Host, phase: str, duration: int
     ) -> None:
         for i in range(duration):
             percent = int((i / duration) * 50) + (50 if phase == "target" else 0)
             self._report_progress(context, ProgressUpdate(percent=percent))
-            self._log(context, LogLevel.INFO, f"Phase {phase}: tick {i+1}/{duration}")
+            self._log(context, host, LogLevel.INFO, f"Phase {phase}: tick {i+1}/{duration}")
 
             if phase == "source" and i == 3:
-                self._log(context, LogLevel.WARNING, "Test warning at 6s")
+                self._log(context, host, LogLevel.WARNING, "Test warning at 6s")
             if phase == "target" and i == 4:
-                self._log(context, LogLevel.ERROR, "Test error at 8s")
+                self._log(context, host, LogLevel.ERROR, "Test error at 8s")
 
             await asyncio.sleep(1)
 ```

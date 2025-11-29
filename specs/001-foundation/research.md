@@ -472,6 +472,22 @@ async def get_target_lock_holder(executor: RemoteExecutor) -> str | None:
     return result.stdout.strip() if result.success and result.stdout else None
 ```
 
+### Target Lock Release
+
+The target lock uses `flock` via the SSH session. Lock release happens automatically in these scenarios:
+
+| Scenario | Release Mechanism |
+|----------|-------------------|
+| **Sync completes normally** | SSH session ends → file descriptor closes → `flock` releases |
+| **Sync aborts (error)** | SSH connection closes → same as above |
+| **Source crashes** | SSH keepalive timeout (45s max) → connection terminates → lock released |
+| **Network loss** | SSH keepalive detects → connection terminates → lock released |
+| **User Ctrl+C** | Orchestrator closes connection → lock released |
+
+**Key insight**: Because `flock` locks are tied to file descriptors, and our file descriptor lives within the SSH session, the lock is automatically released when the SSH connection terminates for any reason. This is a critical safety property—there are no stale target locks to worry about.
+
+**Caveat**: The lock file itself remains on disk (containing the last holder info). This is intentional—it provides diagnostic information and doesn't block future syncs since the `flock` lock is what matters, not file existence.
+
 ### Error Messages
 
 - Source lock held: `"Another sync is in progress (PID: 12345)"`
