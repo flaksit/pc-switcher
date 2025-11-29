@@ -22,7 +22,7 @@ The system defines a precise contract for how sync jobs integrate with the core 
    - Calls lifecycle methods in correct order (validate → execute)
    - Handles job logging at all six levels
    - Processes progress updates
-   - Handles job errors (SyncError exceptions)
+   - Handles job errors (exceptions)
    - Requests job termination on interrupts
 5. Demonstrating that a developer can implement a new job by only implementing the contract
 
@@ -45,7 +45,7 @@ This delivers immediate value by establishing the development pattern for all 6 
 
 5. **Given** a job's validate() method returns validation errors, **When** validation phase executes, **Then** the orchestrator collects all errors, displays them in terminal UI, and halts sync before any state changes occur (no termination request needed as jobs haven't started executing)
 
-6. **Given** a job is executing and raises SyncError exception, **When** the exception propagates, **Then** the orchestrator catches it, logs the error message at CRITICAL level, requests job termination with up to 5 seconds for cleanup, and halts the sync before any further jobs execute
+6. **Given** a job is executing and raises an exception, **When** the exception propagates, **Then** the orchestrator catches it, logs the error message at CRITICAL level, requests job termination with up to 5 seconds for cleanup, and halts the sync before any further jobs execute
 
 7. **Given** user presses Ctrl+C during job execution, **When** signal is caught, **Then** orchestrator requests termination of the currently-executing job with up to 5 seconds for cleanup, logs interruption at WARNING level, and exits gracefully with code 130
 
@@ -167,7 +167,7 @@ This delivers value by enabling developers to diagnose issues and providing audi
 - **INFO**: High-level operation reporting for normal user visibility (e.g., "Starting job X", "Job X completed successfully", "Connection established") and all messages from lower levels (WARNING, ERROR, CRITICAL).
 - **WARNING**: Unexpected conditions that should be reviewed but don't indicate failure (e.g., config value using deprecated format, unusually large transfer size) and all messages from lower levels (ERROR, CRITICAL).
 - **ERROR**: Recoverable errors that may impact sync quality but don't require abort (e.g., individual file copy failed, optional feature unavailable) and CRITICAL messages.
-- **CRITICAL**: Unrecoverable errors requiring immediate sync abort (e.g., snapshot creation failed, target unreachable mid-sync, data corruption detected). Triggered when jobs raise SyncError exception.
+- **CRITICAL**: Unrecoverable errors requiring immediate sync abort (e.g., snapshot creation failed, target unreachable mid-sync, data corruption detected). Triggered when jobs raise an unhandled exception.
 
 ---
 
@@ -314,7 +314,7 @@ Two dummy jobs exist for testing infrastructure: `dummy-success` (completes succ
 
 2. *(Removed)*
 
-3. **Given** `dummy-fail` job is enabled, **When** sync runs and job reaches 60% progress, **Then** the job raises an unhandled RuntimeError (not SyncError), the orchestrator catches the exception, wraps it as SyncError, logs it at CRITICAL level, requests job termination with up to 5 seconds for cleanup, and halts sync
+3. **Given** `dummy-fail` job is enabled, **When** sync runs and job reaches 60% progress, **Then** the job raises a RuntimeError, the orchestrator catches the exception, logs it at CRITICAL level, requests job termination with up to 5 seconds for cleanup, and halts sync
 
 4. **Given** any dummy job is running, **When** user presses Ctrl+C, **Then** the job receives termination request, it logs "Dummy job termination requested", stops its busy-wait loop within the grace period, and returns control to orchestrator
 
@@ -409,7 +409,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **FR-018** `[Up-to-date Documentation]`: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL, where DEBUG is the most verbose. DEBUG includes all messages (FULL, INFO, WARNING, ERROR, CRITICAL, plus internal diagnostics). FULL includes all messages from INFO and below plus operational details, but excludes DEBUG-level internal diagnostics.
 
-- **FR-019** `[Reliability Without Compromise]`: When a job raises SyncError exception, the orchestrator MUST log the error at CRITICAL level, request termination of the currently-executing job (queued jobs never execute and do not receive termination requests), and halt sync immediately
+- **FR-019** `[Reliability Without Compromise]`: When a job raises an exception, the orchestrator MUST log the error at CRITICAL level, request termination of the currently-executing job (queued jobs never execute and do not receive termination requests), and halt sync immediately
 
 - **FR-020** `[Frictionless Command UX]`: System MUST support independent log level configuration for file output (`log_file_level`) and terminal display (`log_cli_level`)
 

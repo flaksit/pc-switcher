@@ -607,7 +607,7 @@ sequenceDiagram
         Note over Job: continue execution
     else unrecoverable error
         Job->>Logger: log(CRITICAL, "apt failed fatally")
-        Job->>Job: raise SyncError
+        Job->>Job: raise RuntimeError
     end
 ```
 
@@ -899,7 +899,7 @@ async for line in process.stdout():
 
 result = await process.wait()
 if not result.success:
-    raise SyncError(f"snapshot failed: {result.stderr}")
+    raise RuntimeError(f"snapshot failed: {result.stderr}")
 ```
 
 **(e) File transfer + execution**:

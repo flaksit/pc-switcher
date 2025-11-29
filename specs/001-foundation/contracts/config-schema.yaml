@@ -1,0 +1,142 @@
+# PC-switcher Configuration Schema (JSON Schema draft-07)
+# This schema defines the structure of ~/.config/pc-switcher/config.yaml
+#
+# Reference: FR-029, FR-030
+
+$schema: "http://json-schema.org/draft-07/schema#"
+$id: "https://pc-switcher/config-schema.yaml"
+title: "PC-switcher Configuration"
+description: "Configuration file schema for pc-switcher sync operations"
+type: object
+
+definitions:
+  # Reusable threshold pattern for disk space
+  disk_threshold:
+    type: string
+    pattern: "^\\d+(%|GiB|MiB|GB|MB)$"
+    description: "Disk space threshold as percentage (e.g., '20%') or absolute (e.g., '50GiB')"
+
+  # Log level enum
+  log_level:
+    type: string
+    enum: ["DEBUG", "FULL", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    description: "Log verbosity level. DEBUG is most verbose, CRITICAL is least."
+
+  # Btrfs subvolume name pattern
+  subvolume_name:
+    type: string
+    pattern: "^@"
+    description: "Btrfs subvolume name (must start with @)"
+
+properties:
+  # Global logging configuration
+  log_file_level:
+    $ref: "#/definitions/log_level"
+    default: "FULL"
+    description: "Minimum log level written to log file"
+
+  log_cli_level:
+    $ref: "#/definitions/log_level"
+    default: "INFO"
+    description: "Minimum log level displayed in terminal"
+
+  # Job enable/disable flags
+  sync_jobs:
+    type: object
+    description: "Enable or disable optional sync jobs"
+    additionalProperties:
+      type: boolean
+    default: {}
+    examples:
+      - user_data: true
+        packages: true
+        docker: false
+        vms: false
+        k3s: false
+
+  # Disk space monitoring
+  disk:
+    type: object
+    description: "Disk space monitoring configuration"
+    properties:
+      preflight_minimum:
+        $ref: "#/definitions/disk_threshold"
+        default: "20%"
+        description: "Minimum free space required before sync starts"
+      runtime_minimum:
+        $ref: "#/definitions/disk_threshold"
+        default: "15%"
+        description: "Minimum free space required during sync"
+      check_interval:
+        type: integer
+        minimum: 5
+        maximum: 300
+        default: 30
+        description: "Seconds between disk space checks during sync"
+    additionalProperties: false
+
+  # Btrfs snapshot configuration
+  btrfs_snapshots:
+    type: object
+    description: "Btrfs snapshot management configuration"
+    required:
+      - subvolumes
+    properties:
+      subvolumes:
+        type: array
+        items:
+          $ref: "#/definitions/subvolume_name"
+        minItems: 1
+        description: "List of btrfs subvolumes to snapshot"
+        examples:
+          - ["@", "@home", "@root"]
+      keep_recent:
+        type: integer
+        minimum: 1
+        default: 3
+        description: "Number of recent sync sessions to retain snapshots for"
+      max_age_days:
+        type: integer
+        minimum: 1
+        description: "Maximum age in days for snapshot retention (optional)"
+    additionalProperties: false
+
+  # Dummy job configuration (testing)
+  dummy_success:
+    type: object
+    description: "Configuration for dummy-success test job"
+    properties:
+      source_duration:
+        type: integer
+        minimum: 1
+        default: 20
+        description: "Seconds to run on source machine"
+      target_duration:
+        type: integer
+        minimum: 1
+        default: 20
+        description: "Seconds to run on target machine"
+    additionalProperties: false
+
+  dummy_fail:
+    type: object
+    description: "Configuration for dummy-fail test job"
+    properties:
+      fail_at_percent:
+        type: integer
+        minimum: 1
+        maximum: 99
+        default: 60
+        description: "Progress percentage at which to fail"
+    additionalProperties: false
+
+# Future job configs will be added here as top-level keys:
+# user_data:
+#   exclude_patterns: [...]
+#   preserve_timestamps: true
+# packages:
+#   sync_ppa: true
+#   sync_flatpak: true
+# etc.
+
+additionalProperties: true  # Allow unknown job configs (forward compatibility)
