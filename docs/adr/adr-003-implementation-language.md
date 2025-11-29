@@ -9,7 +9,7 @@ Use Python as the primary orchestration language for PC-switcher CLI, with task-
 ## Implementation Rules
 
 **Required Patterns:**
-- **Python version**: Target Python 3.13
+- **Python version**: Target Python 3.14
 - **Package structure**: Build as an installable Python package using `uv`, distributable to both source and target machines
 - **Dependency management**: Use `uv` exclusively for all dependency management and running Python code (see `~/.claude/python.md` for details)
 - **Modern Python practices**: Follow conventions in `~/.claude/python_conventions.md` including:
@@ -85,12 +85,11 @@ See `docs/adr/considerations/adr-003-implementation-language-analysis.md` for de
   - CLI entry point configured in `pyproject.toml` as `pcsync` console script
   - Installable via `uv pip install .` or `uv tool install .`
 
-- **Python version selection (as of 2025-11-14):**
-  - Target: Python 3.13
-  - Target: Python 3.13
+- **Python version selection (as of 2025-11-29):**
+  - Target: Python 3.14
   - Python 3.14 support status for selected libraries:
-    - ✅ Rich 14.2.0+, Textual 6.3.0+, Typer 0.20.0+, Click 8.3.0+, structlog (latest)
-    - ✅ AsyncSSH (supports latest Python versions)
+    - ✅ Rich, Textual, Typer, Click, structlog
+    - ✅ AsyncSSH
 
 **Rationale:**
 - Aligns with **Reliability principle (#1)**: Python's exception handling, logging, and testability
@@ -108,7 +107,7 @@ See `docs/adr/considerations/adr-003-implementation-language-analysis.md` for de
 - Natural integration with SSH libraries (`asyncssh`)
 - Can evolve individual sync operations independently (bash scripts callable from Python)
 - Maintainable by someone who knows Python well
-- Standard dependency (Python 3.13 available on Ubuntu 24.04)
+- Standard dependency (Python 3.14 available on Ubuntu 24.04 via uv/deadsnakes or future release)
 - Modern dependency management with `uv` (fast, reliable, reproducible builds)
 - Modern type system enables better IDE support and early error detection
 - Clean distribution model: single installable package deployable to both source and target machines
