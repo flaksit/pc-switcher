@@ -92,7 +92,7 @@ SSH's native model is request-response (command sent, output received at complet
 **Solution: Streaming Output**
 - Target writes progress to stdout/stderr with explicit flush
 - SSH preserves line order and streams output in real-time
-- Libraries like Python's `paramiko` and Go's `golang.org/x/crypto/ssh` support reading stdout as stream
+- Libraries like Python's `asyncssh` support reading stdout as stream
 - This is the standard pattern for all remote automation tools
 
 **Implementation example (target script):**
@@ -114,22 +114,21 @@ log_progress("Docker sync complete")
 
 **Source-side handling (Python with paramiko):**
 ```python
-import paramiko
+import asyncio
+import asyncssh
 import sys
 
-ssh = paramiko.SSHClient()
-ssh.connect(target_host)
+async def run_client():
+    async with asyncssh.connect(target_host) as conn:
+        async with conn.create_process('pc-switcher-target sync-docker') as process:
+            async for line in process.stdout:
+                terminal_ui.update_progress(line.strip())
+            
+            if process.exit_status != 0:
+                print(f"Sync failed: {await process.stderr.read()}")
+                sys.exit(1)
 
-stdin, stdout, stderr = ssh.exec_command('pc-switcher-target sync-docker')
-
-# Streams lines in real-time as they're flushed by target
-for line in stdout:
-    terminal_ui.update_progress(line.strip())
-
-exit_code = stdout.channel.recv_exit_status()
-if exit_code != 0:
-    print(f"Sync failed: {stderr.read().decode()}")
-    sys.exit(1)
+asyncio.run(run_client())
 ```
 
 **Verdict**: SSH handles streaming output natively. This is not a real limitation—it's standard practice.
@@ -161,16 +160,13 @@ Host *
 **Usage:**
 ```python
 # First connection establishes physical TCP connection
-ssh.connect(target_host)
-stdin, stdout, _ = ssh.exec_command('phase 1 operation')
-output1 = stdout.read().decode()
+async with asyncssh.connect(target_host) as conn:
+    # Operations reuse the same connection
+    result1 = await conn.run('phase 1 operation')
+    output1 = result1.stdout
 
-# Subsequent operations reuse the same physical connection
-stdin, stdout, _ = ssh.exec_command('phase 2 operation')
-output2 = stdout.read().decode()
-
-# Connection persists for 10 minutes after last activity
-ssh.close()
+    result2 = await conn.run('phase 2 operation')
+    output2 = result2.stdout
 ```
 
 **Verdict**: SSH multiplexing is a proven pattern with zero complexity overhead.
@@ -222,16 +218,17 @@ flush "Sync complete"
 
 **Source-side handling:**
 ```python
-import paramiko
+import asyncssh
+import asyncio
 
-ssh = paramiko.SSHClient()
-ssh.connect(target_host)
+async def run_sync():
+    async with asyncssh.connect(target_host) as conn:
+        async with conn.create_process('python3 /opt/pc-switcher/sync.py') as process:
+            # Read lines as they're flushed (typically within 100ms)
+            async for line in process.stdout:
+                ui.update_progress(line.rstrip())
 
-stdin, stdout, stderr = ssh.exec_command('python3 /opt/pc-switcher/sync.py')
-
-# Read lines as they're flushed (typically within 100ms)
-for line in stdout:
-    ui.update_progress(line.rstrip())
+asyncio.run(run_sync())
 ```
 
 **Verdict**: Achievable with standard buffering practices. No new technology required.
@@ -246,44 +243,33 @@ Requirement: User presses Ctrl+C on source machine, operations on target must st
 
 **Source-side signal handling:**
 ```python
+import asyncio
+import asyncssh
 import signal
 import sys
-import paramiko
 
-ssh = None
-target_pid_file = "/tmp/pc-switcher-sync.pid"
+async def run_sync_safe():
+    async with asyncssh.connect(target_host) as conn:
+        try:
+            async with conn.create_process('pc-switcher-target sync') as process:
+                async for line in process.stdout:
+                    print(line.rstrip())
+        except asyncio.CancelledError:
+            print("\n[!] Sync interrupted. Cleaning up...")
+            # Send explicit cleanup command
+            await conn.run('pkill -f "pc-switcher-target"')
+            raise
 
 def signal_handler(sig, frame):
-    print("\n[!] Sync interrupted. Cleaning up...")
-    if ssh:
-        try:
-            # Send explicit cleanup command
-            stdin, stdout, stderr = ssh.exec_command(f'pkill -f "pc-switcher-target"')
-            stdout.channel.recv_exit_status()
-
-            # Alternative: send to cleanup script
-            stdin, stdout, _ = ssh.exec_command('pc-switcher-target cleanup')
-            stdout.channel.recv_exit_status()
-        except:
-            pass  # Connection may already be closed
-        finally:
-            ssh.close()
-    sys.exit(1)
+    # Cancel the main task
+    for task in asyncio.all_tasks():
+        task.cancel()
 
 signal.signal(signal.SIGINT, signal_handler)
-
-ssh = paramiko.SSHClient()
-ssh.connect(target_host)
-
 try:
-    stdin, stdout, stderr = ssh.exec_command('pc-switcher-target sync')
-    for line in stdout:
-        print(line.rstrip())
-except KeyboardInterrupt:
-    signal_handler(signal.SIGINT, None)
-finally:
-    if ssh:
-        ssh.close()
+    asyncio.run(run_sync_safe())
+except asyncio.CancelledError:
+    sys.exit(1)
 ```
 
 **Target-side cleanup support:**
@@ -306,8 +292,8 @@ exit 0
 
 ```python
 # Allocate PTY so Ctrl+C signal propagates to remote process
-stdin, stdout, stderr = ssh.exec_command('python3 /opt/pc-switcher/sync.py',
-                                         get_pty=True)
+# Allocate PTY so Ctrl+C signal propagates to remote process
+async with conn.create_process('python3 /opt/pc-switcher/sync.py', term_type='xterm') as process:
 ```
 
 **Verdict**: Standard pattern for SSH-based automation. Well-documented with multiple proven approaches.
@@ -453,67 +439,83 @@ Requirement: Connection within 5 seconds (SC-002).
 ### Pattern 1: Persistent Connection with Multiplexing
 
 ```python
-import paramiko
+import asyncio
+import asyncssh
 import signal
 import sys
 
 class SyncOrchestrator:
     def __init__(self, target_host):
-        self.ssh = paramiko.SSHClient()
-        self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self.ssh.connect(target_host)
-        signal.signal(signal.SIGINT, self._signal_handler)
+        self.target_host = target_host
+        self.conn = None
 
-    def execute_phase(self, phase_name, command):
+    async def connect(self):
+        self.conn = await asyncssh.connect(self.target_host)
+
+    async def execute_phase(self, phase_name, command):
         """Execute a sync phase and stream output in real-time"""
         print(f"[*] Starting {phase_name}...")
-        stdin, stdout, stderr = self.ssh.exec_command(command)
-
-        # Stream output in real-time
-        for line in stdout:
-            print(f"  {line.rstrip()}")
-
-        exit_code = stdout.channel.recv_exit_status()
-        if exit_code != 0:
-            error_output = stderr.read().decode()
-            print(f"[!] {phase_name} failed: {error_output}")
-            raise RuntimeError(f"{phase_name} failed with exit code {exit_code}")
+        
+        async with self.conn.create_process(command) as process:
+            async for line in process.stdout:
+                print(f"  {line.rstrip()}")
+            
+            if process.exit_status != 0:
+                error_output = await process.stderr.read()
+                print(f"[!] {phase_name} failed: {error_output}")
+                raise RuntimeError(f"{phase_name} failed with exit code {process.exit_status}")
 
         print(f"[✓] {phase_name} complete")
 
-    def run_sync(self):
+    async def run_sync(self):
         """Execute full multi-phase sync"""
         try:
-            self.execute_phase("Validation", "pc-switcher-target validate")
-            self.execute_phase("Docker", "pc-switcher-target sync-docker")
-            self.execute_phase("Packages", "pc-switcher-target sync-packages")
-            self.execute_phase("Home", "pc-switcher-target sync-home /home")
-        except RuntimeError as e:
+            await self.connect()
+            await self.execute_phase("Validation", "pc-switcher-target validate")
+            await self.execute_phase("Docker", "pc-switcher-target sync-docker")
+            await self.execute_phase("Packages", "pc-switcher-target sync-packages")
+            await self.execute_phase("Home", "pc-switcher-target sync-home /home")
+        except (RuntimeError, OSError, asyncssh.Error) as e:
             print(f"[!] Sync failed: {e}")
             return False
+        finally:
+            if self.conn:
+                self.conn.close()
         return True
 
-    def _signal_handler(self, sig, frame):
-        print("\n[!] Interrupt received. Cleaning up...")
-        self.cleanup()
-        sys.exit(1)
-
-    def cleanup(self):
+    async def cleanup(self):
         """Graceful cleanup on interrupt"""
-        try:
-            stdin, stdout, _ = self.ssh.exec_command('pc-switcher-target cleanup')
-            stdout.channel.recv_exit_status()
-        except:
-            pass
-        finally:
-            self.ssh.close()
+        if self.conn:
+            try:
+                await self.conn.run('pc-switcher-target cleanup')
+            except:
+                pass
+
+async def main():
+    orchestrator = SyncOrchestrator("my-target-machine")
+    
+    # Setup signal handling for graceful shutdown
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Future()
+    loop.add_signal_handler(signal.SIGINT, stop.set_result, None)
+    
+    sync_task = asyncio.create_task(orchestrator.run_sync())
+    
+    done, pending = await asyncio.wait(
+        [sync_task, stop], 
+        return_when=asyncio.FIRST_COMPLETED
+    )
+    
+    if stop in done:
+        print("\n[!] Interrupt received. Cleaning up...")
+        await orchestrator.cleanup()
+        sync_task.cancel()
+    
+    sys.exit(0 if await sync_task else 1)
 
 # Usage
 if __name__ == "__main__":
-    orchestrator = SyncOrchestrator("my-target-machine")
-    success = orchestrator.run_sync()
-    orchestrator.cleanup()
-    sys.exit(0 if success else 1)
+    asyncio.run(main())
 ```
 
 ### Pattern 2: Target-Side Script Structure

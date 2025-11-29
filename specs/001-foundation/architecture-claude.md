@@ -23,12 +23,11 @@ Throughout this document, two related but distinct concepts are used:
 
 **Resolution:**
 - Source hostname: obtained from local machine (e.g., `socket.gethostname()`)
-- Target hostname: provided via CLI argument `sync <target>`, resolved from config if alias
+- Target hostname: provided via CLI argument `sync <target>`, resolved from SSH config if alias
 
 **Usage:**
 - All internal code uses `host` (role enum) exclusively
 - Logger resolves `host` → `hostname` internally for output (UI and log files)
-- Only `DiskSpaceCriticalError` contains both (for error display without Logger access)
 
 ---
 
@@ -98,7 +97,67 @@ graph TD
 
 ---
 
+## Event Bus Architecture
+
+All logging and progress events flow through an event bus with per-consumer queues for guaranteed delivery. This decouples producers from consumers and ensures the UI never blocks job execution.
+
+```mermaid
+graph LR
+    subgraph Producers
+        Orch["Orchestrator"]
+        Jobs["Jobs"]
+        Conn["Connection"]
+    end
+
+    subgraph EventBus ["Event Bus"]
+        Publish["publish()"]
+        FLQ["FileLogger Queue"]
+        UIQ["TerminalUI Queue"]
+    end
+
+    subgraph Consumers
+        FL["FileLogger"]
+        UI["TerminalUI"]
+    end
+
+    Orch -->|LogEvent / ProgressEvent| Publish
+    Jobs -->|LogEvent / ProgressEvent| Publish
+    Conn -->|ConnectionEvent| Publish
+
+    Publish --> FLQ
+    Publish --> UIQ
+
+    FLQ --> FL
+    UIQ --> UI
+
+    FL -->|JSON lines| LogFile["sync-*.log"]
+    UI -->|Rich Live| Terminal["Terminal"]
+
+    style EventBus fill:#fff3e0
+    style Producers fill:#e8f5e9
+    style Consumers fill:#e1f5ff
+```
+
+### Event Types
+
+| Event | Fields | Description |
+|-------|--------|-------------|
+| `LogEvent` | level, job, host, message, context | Log message from any component |
+| `ProgressEvent` | job, percent, current, total, item, heartbeat | Job progress update |
+| `ConnectionEvent` | status, latency | SSH connection status change |
+
+### Properties
+
+- **Fan-out delivery**: Each event is copied to all consumer queues
+- **Non-blocking puts**: Producers use `put_nowait()`, never wait
+- **Guaranteed delivery**: Per-consumer queues ensure no event loss even if one consumer is slow
+- **Graceful shutdown**: `close()` signals consumers to drain queues and exit
+
+---
+
 ## Class Diagram
+
+### Job Classes
 
 ```mermaid
 classDiagram
@@ -210,23 +269,66 @@ classDiagram
         +success: bool
     }
 
+    class EventBus {
+        -_consumers: list~asyncio.Queue~
+        +subscribe() asyncio.Queue
+        +publish(event: Event) None
+        +close() None
+    }
+
+    class LogEvent {
+        +level: LogLevel
+        +job: str
+        +host: Host
+        +message: str
+        +context: dict
+    }
+
+    class ProgressEvent {
+        +job: str
+        +percent: int | None
+        +current: int | None
+        +total: int | None
+        +item: str | None
+        +heartbeat: bool = False
+    }
+
+    class ConnectionEvent {
+        +status: str
+        +latency: float | None
+    }
+
+    class FileLogger {
+        -_queue: asyncio.Queue
+        -_file_level: LogLevel
+        -_log_file: Path
+        +consume() None
+    }
+
     class Executor {
         <<interface>>
         +run_command(cmd, timeout) CommandResult
-        +run_command_stream(cmd, stdout_callback, stderr_callback, timeout) CommandResult
+        +start_process(cmd) Process
         +terminate_all_processes() None
+    }
+
+    class Process {
+        +stdout() AsyncIterator~str~
+        +stderr() AsyncIterator~str~
+        +wait() CommandResult
+        +terminate() None
     }
 
     class LocalExecutor {
         +run_command(cmd, timeout) CommandResult
-        +run_command_stream(cmd, stdout_callback, stderr_callback, timeout) CommandResult
+        +start_process(cmd) Process
         +terminate_all_processes() None
     }
 
     class RemoteExecutor {
         -_connection: Connection
         +run_command(cmd, timeout) CommandResult
-        +run_command_stream(cmd, stdout_callback, stderr_callback, timeout) CommandResult
+        +start_process(cmd) Process
         +terminate_all_processes() None
         +send_file(local, remote) None
         +get_file(remote, local) None
@@ -241,6 +343,9 @@ classDiagram
         -_session_semaphore: Semaphore
         -_target: str
         -_connected: bool
+        -_keepalive_interval: int = 15
+        -_keepalive_count_max: int = 3
+        -_event_bus: EventBus
         +connect() None
         +disconnect() None
         +create_process(cmd) SSHClientProcess
@@ -266,9 +371,7 @@ classDiagram
     class Logger {
         -_file_level: LogLevel
         -_cli_level: LogLevel
-        -_structlog_logger: BoundLogger
-        -_ui: TerminalUI
-        -_log_file: Path
+        -_event_bus: EventBus
         -_hostnames: dict~Host, str~
         +log(level, job, host, message, **ctx) None
         +get_job_logger(job_name, host) JobLogger
@@ -297,7 +400,6 @@ classDiagram
 
     class DiskSpaceCriticalError {
         +host: Host
-        +hostname: str
         +message: str
         +free_space: str
         +threshold: str
@@ -317,7 +419,10 @@ classDiagram
     Orchestrator --> Job : manages
     Logger --> JobLogger : creates
     JobLogger --> Logger : delegates to
-    Logger --> TerminalUI : sends messages
+    Logger --> EventBus : publishes events
+    EventBus --> TerminalUI : delivers to queue
+    EventBus --> FileLogger : delivers to queue
+    Connection --> EventBus : publishes status
     DiskSpaceMonitorJob --> DiskSpaceCriticalError : raises
 ```
 
@@ -328,6 +433,7 @@ classDiagram
 | Orchestrator → Connection | Owns and manages the SSH connection lifecycle |
 | Orchestrator → LocalExecutor | Creates for local command execution |
 | Orchestrator → Job[] | Creates, validates, and executes jobs; uses TaskGroup for background jobs |
+| Orchestrator → EventBus | Creates and owns the event bus for logging/progress |
 | Job → JobContext | Receives context at execution time (config, source, target, logger, ui, session_id) |
 | JobContext → LocalExecutor | `source` field - for running commands on source machine |
 | JobContext → RemoteExecutor | `target` field - for running commands on target machine + file transfers |
@@ -335,7 +441,10 @@ classDiagram
 | RemoteExecutor → Connection | Wraps Connection with job-friendly interface |
 | RemoteExecutor → CommandResult | Returns structured result; Job interprets and logs |
 | Logger → JobLogger | Creates bound logger instances for each job |
-| Logger → TerminalUI | Sends log messages for display (if level >= cli_level) |
+| Logger → EventBus | Publishes LogEvent for each log call |
+| EventBus → FileLogger | Delivers events to FileLogger's dedicated queue |
+| EventBus → TerminalUI | Delivers events to TerminalUI's dedicated queue |
+| Connection → EventBus | Publishes ConnectionEvent on status changes |
 | DiskSpaceMonitorJob → DiskSpaceCriticalError | Raises exception (with host and hostname) when space low; TaskGroup propagates |
 
 ---
@@ -512,36 +621,49 @@ sequenceDiagram
 
 ### 4. Job Logs a Message
 
-Jobs call the logger directly. The Logger routes to file (JSON) and terminal (if level >= cli_level).
+Jobs call the logger, which publishes events to the EventBus. Each consumer (FileLogger, TerminalUI) receives events in its own queue.
 
 ```mermaid
 sequenceDiagram
     participant Job
     participant Logger
+    participant EventBus
+    participant FileLoggerQueue as FileLogger Queue
+    participant TUIQueue as TerminalUI Queue
+    participant FileLogger
     participant TerminalUI
-    participant File
 
     Job->>Logger: log(INFO, "Installing package X")
+    Logger->>EventBus: publish(LogEvent(...))
 
-    Note over Logger: check file_level
-    alt file_level <= INFO
-        Logger->>File: write JSON line
-        Note over File: {"ts": "...", "level": "INFO",<br/>"job": "packages", "host": "source",<br/>"hostname": "laptop-work",<br/>"event": "Installing package X"}
+    par Fan-out to consumers
+        EventBus->>FileLoggerQueue: put(event)
+    and
+        EventBus->>TUIQueue: put(event)
     end
 
-    Note over Logger: check cli_level
-    alt cli_level <= INFO
-        Logger->>TerminalUI: add_log_message()
-        Note over TerminalUI: render in log panel
+    par Async consumption
+        FileLoggerQueue-->>FileLogger: get()
+        Note over FileLogger: check file_level
+        alt file_level <= INFO
+            FileLogger->>FileLogger: write JSON line
+        end
+    and
+        TUIQueue-->>TerminalUI: get()
+        Note over TerminalUI: check cli_level
+        alt cli_level <= INFO
+            TerminalUI->>TerminalUI: render in log panel
+        end
     end
 ```
 
 **Key points:**
-- Jobs call `self.log(level, message, **context)` directly
-- Logger applies two independent filters: `file_level` and `cli_level`
+- Jobs call `self.log(level, message, **context)` which publishes to EventBus
+- EventBus fans out to per-consumer queues (guaranteed delivery)
+- FileLogger and TerminalUI consume independently, never blocking each other
+- Each consumer applies its own level filter (`file_level` / `cli_level`)
 - File output uses structlog JSONRenderer (one JSON object per line)
 - Terminal output uses Rich formatting with color-coded levels
-- Job decides appropriate log level based on context
 
 ---
 
@@ -635,57 +757,64 @@ sequenceDiagram
 
 ## Streaming Output Architecture
 
-Multiple concurrent sources produce output that must be displayed coherently in the terminal.
+Multiple concurrent sources produce output that flows through the EventBus to consumers.
 
 ```mermaid
 graph TD
-    subgraph TerminalUI ["TerminalUI (Rich Live)"]
-        OverallProgress["<b>Overall Progress</b><br/>Step 3/5: Packages"]
-        JobProgress["<b>Job Progress</b><br/>[████░░] 45%<br/>or: 45/100 files<br/>or: spinner"]
-        LogPanel["<b>Log Panel</b><br/>[INFO] ...<br/>[WARN] ..."]
-    end
-
-    subgraph EventLoop ["asyncio Event Loop"]
-        OrchestratorTask["Orchestrator Task"]
-        JobTask["Current Job Task"]
+    subgraph Producers ["Producers (asyncio tasks)"]
+        OrchestratorTask["Orchestrator"]
+        JobTask["Current Job"]
         DiskMonSourceTask["DiskSpaceMonitor<br/>(source)"]
         DiskMonTargetTask["DiskSpaceMonitor<br/>(target)"]
-        UIRefreshTask["UI Refresh Task"]
+        ConnTask["Connection"]
     end
 
-    Orchestrator["<b>Orchestrator</b><br/>set_overall_progress()"]
-    Jobs["<b>Jobs</b><br/>report_progress()"]
-    Logger["<b>Logger</b><br/>route to UI if<br/>cli_level <= level"]
+    subgraph EventBus ["Event Bus"]
+        Publish["publish()"]
+        FLQ["FileLogger Queue"]
+        UIQ["TerminalUI Queue"]
+    end
 
-    Orchestrator --> OverallProgress
-    Jobs --> JobProgress
-    Logger --> LogPanel
+    subgraph Consumers ["Consumers (asyncio tasks)"]
+        FileLogger["FileLogger"]
+        TerminalUI["TerminalUI"]
+    end
 
-    OrchestratorTask --> Orchestrator
-    JobTask --> Jobs
-    JobTask --> Logger
-    DiskMonSourceTask -.-> Logger
-    DiskMonTargetTask -.-> Logger
-    UIRefreshTask --> TerminalUI
+    OrchestratorTask -->|LogEvent, ProgressEvent| Publish
+    JobTask -->|LogEvent, ProgressEvent| Publish
+    DiskMonSourceTask -->|LogEvent| Publish
+    DiskMonTargetTask -->|LogEvent| Publish
+    ConnTask -->|ConnectionEvent| Publish
 
-    style TerminalUI fill:#e1f5ff
-    style EventLoop fill:#f3e5f5
+    Publish --> FLQ
+    Publish --> UIQ
+
+    FLQ --> FileLogger
+    UIQ --> TerminalUI
+
+    FileLogger --> LogFile["sync-*.log"]
+    TerminalUI --> Terminal["Terminal Display"]
+
+    style EventBus fill:#fff3e0
+    style Producers fill:#e8f5e9
+    style Consumers fill:#e1f5ff
 ```
 
-### Data Flow
+### Data Flow via EventBus
 
-| Source | Data Type | Destination |
-|--------|-----------|-------------|
-| Orchestrator | Overall progress (step N/M) | TerminalUI.set_overall_progress() |
-| Jobs | ProgressUpdate (%, count, heartbeat) | TerminalUI.update_job_progress() |
-| Logger | Log messages (level >= cli_level) | TerminalUI.add_log_message() |
-| Connection | Health status | TerminalUI.set_connection_status() |
+| Producer | Event Type | Fields |
+|----------|------------|--------|
+| Orchestrator | ProgressEvent | Overall progress (step N/M) |
+| Jobs | LogEvent | Log messages at any level |
+| Jobs | ProgressEvent | Job progress (%, count, heartbeat) |
+| Connection | ConnectionEvent | Status changes, latency |
 
 ### Concurrency Model
 
-- **UI Refresh Task**: Runs at fixed interval (e.g., 100ms), renders current state
-- **No locks needed**: Each component updates its own state; UI reads atomically during render
-- **Backpressure**: Progress updates can be dropped if UI can't keep up (latest value wins)
+- **Per-consumer queues**: Each consumer has dedicated queue, no blocking between consumers
+- **Non-blocking puts**: Producers never wait; `put_nowait()` fans out to all consumer queues
+- **UI Refresh Task**: TerminalUI consumes from its queue, renders at fixed interval (e.g., 100ms)
+- **FileLogger Task**: FileLogger consumes from its queue, writes JSON lines to disk
 
 ---
 
@@ -702,27 +831,27 @@ class Executor(Protocol):
     async def run_command(self, cmd: str, timeout: float | None = None) -> CommandResult:
         """Run command, wait for completion, return result."""
 
-    async def run_command_stream(
-        self,
-        cmd: str,
-        stdout_callback: Callable[[str], None] | None = None,
-        stderr_callback: Callable[[str], None] | None = None,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        """Run command, invoke callbacks for each line, return result.
-
-        Args:
-            cmd: Command to execute.
-            stdout_callback: Optional callback invoked per stdout line.
-            stderr_callback: Optional callback invoked per stderr line.
-            timeout: Optional timeout in seconds. Omitted = no hard timeout (use asyncio cancellation).
-
-        Returns:
-            CommandResult with exit_code, stdout, stderr captured during execution.
-        """
+    async def start_process(self, cmd: str) -> Process:
+        """Start command and return Process handle for streaming output."""
 
     async def terminate_all_processes(self) -> None:
         """Kill all processes started by this executor."""
+
+
+class Process:
+    """Handle for a running process with streaming output."""
+
+    async def stdout(self) -> AsyncIterator[str]:
+        """Yield stdout lines as they arrive."""
+
+    async def stderr(self) -> AsyncIterator[str]:
+        """Yield stderr lines as they arrive."""
+
+    async def wait(self) -> CommandResult:
+        """Wait for completion and return result."""
+
+    async def terminate(self) -> None:
+        """Send termination signal to process."""
 ```
 
 ### Implementations
@@ -760,18 +889,15 @@ executor = self.source if self.host == Host.SOURCE else self.target
 result = await executor.run_command("df -h /")
 ```
 
-**(d) Streaming with callbacks**: Process output as it arrives
+**(d) Streaming with AsyncIterator**: Process output as it arrives
 ```python
+process = await self.target.start_process("btrfs subvolume snapshot ...")
 lines = []
-def collect_stdout(line: str) -> None:
+async for line in process.stdout():
     lines.append(line)
     self.report_progress(ProgressUpdate(current=len(lines), item=line))
 
-result = await self.target.run_command_stream(
-    "btrfs subvolume snapshot ...",
-    stdout_callback=collect_stdout,
-    timeout=3600,
-)
+result = await process.wait()
 if not result.success:
     raise SyncError(f"snapshot failed: {result.stderr}")
 ```
