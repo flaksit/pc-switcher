@@ -28,7 +28,8 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 **Storage**:
 - Config: `~/.config/pc-switcher/config.yaml`
 - Logs: `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
-- Lock: `~/.local/share/pc-switcher/sync.lock`
+- Lock (source): `~/.local/share/pc-switcher/sync.lock`
+- Lock (target): `~/.local/share/pc-switcher/target.lock`
 
 **Testing**: pytest with asyncio support (`pytest-asyncio`), mocking for SSH operations
 
@@ -58,7 +59,7 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 ### Reliability Without Compromise
 **Data integrity**: Btrfs snapshots created before any state modification (FR-008, FR-012). Pre-sync snapshots provide rollback points. Post-sync snapshots capture successful state (FR-009).
 
-**Conflict detection**: Subvolume existence validated before sync (FR-015). Lock file prevents concurrent executions (FR-047). Version mismatch detection prevents accidental downgrades (FR-006).
+**Conflict detection**: Subvolume existence validated before sync (FR-015). Lock files on both source and target prevent concurrent executions (FR-047), including A→B and C→B scenarios. Version mismatch detection prevents accidental downgrades (FR-006).
 
 **Rollback strategy**: Pre-sync snapshots enable manual rollback via `pc-switcher rollback` (FR-013). Snapshot naming includes session ID for clear identification (FR-010).
 

@@ -357,12 +357,36 @@ class Orchestrator:
 ## 7. Lock File for Concurrent Execution Prevention
 
 ### Decision
-Use fcntl file locking on `~/.local/share/pc-switcher/sync.lock` to prevent concurrent sync operations.
+Use fcntl file locking on both source and target machines to prevent concurrent sync operations.
 
 ### Rationale
-- fcntl locks are advisory but sufficient for same-user processes
-- Lock file contains PID for diagnostic messages
-- Lock is automatically released on process exit (including crashes)
+
+**Why fcntl.flock() instead of normal file operations?**
+
+A naive approach using file existence checking has critical flaws:
+```python
+# DON'T DO THIS - race condition and stale lock problems
+if lock_file.exists():
+    return False
+lock_file.write_text(str(os.getpid()))  # Another process can sneak in here!
+```
+
+1. **Race condition**: Between `exists()` and `write_text()`, another process can create the file. Both think they have the lock.
+2. **Stale locks**: If process crashes after creating the file, the lock file remains forever, blocking all future syncs.
+
+**fcntl.flock() solves both:**
+1. **Atomic operation**: Kernel guarantees "check and acquire" is indivisible. No race condition.
+2. **Auto-release on exit**: When process exits (normal, crash, or killed), kernel releases all its flock locks automatically. No stale locks.
+3. **Non-blocking mode**: `LOCK_NB` flag returns immediately if lock is held by another process.
+
+**Locking strategy:**
+- **Source lock**: Prevents same source from running multiple syncs simultaneously
+- **Target lock**: Prevents multiple sources from syncing to the same target (e.g., A→B and C→B)
+- Lock file contains PID (and source hostname for target lock) for diagnostic messages
+
+### Lock Locations
+- Source: `~/.local/share/pc-switcher/sync.lock`
+- Target: `~/.local/share/pc-switcher/target.lock`
 
 ### Implementation Pattern
 
@@ -374,39 +398,84 @@ import os
 from pathlib import Path
 
 class SyncLock:
+    """File-based lock using fcntl.
+
+    Note: os.open() is required for fcntl.flock() which needs a file descriptor.
+    Path is used for directory creation and reading lock contents.
+    """
+
     def __init__(self, lock_path: Path) -> None:
         self._lock_path = lock_path
-        self._lock_file: int | None = None
+        self._lock_fd: int | None = None
 
-    def acquire(self) -> bool:
-        """Acquire lock. Returns False if another sync is running."""
+    def acquire(self, holder_info: str | None = None) -> bool:
+        """Acquire lock. Returns False if already held.
+
+        Args:
+            holder_info: Info to write to lock file (e.g., PID, hostname)
+        """
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock_file = os.open(self._lock_path, os.O_CREAT | os.O_RDWR)
+        self._lock_fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR)
         try:
-            fcntl.flock(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            # Write PID for diagnostics
-            os.ftruncate(self._lock_file, 0)
-            os.write(self._lock_file, str(os.getpid()).encode())
+            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Write holder info for diagnostics
+            info = holder_info or str(os.getpid())
+            os.ftruncate(self._lock_fd, 0)
+            os.write(self._lock_fd, info.encode())
             return True
         except BlockingIOError:
-            # Lock held by another process
-            os.close(self._lock_file)
-            self._lock_file = None
+            os.close(self._lock_fd)
+            self._lock_fd = None
             return False
 
-    def get_holder_pid(self) -> int | None:
-        """Read PID of process holding the lock."""
+    def get_holder_info(self) -> str | None:
+        """Read info about process holding the lock."""
         try:
-            return int(self._lock_path.read_text().strip())
-        except (FileNotFoundError, ValueError):
+            return self._lock_path.read_text().strip() or None
+        except FileNotFoundError:
             return None
 
     def release(self) -> None:
-        if self._lock_file is not None:
-            fcntl.flock(self._lock_file, fcntl.LOCK_UN)
-            os.close(self._lock_file)
-            self._lock_file = None
+        if self._lock_fd is not None:
+            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            os.close(self._lock_fd)
+            self._lock_fd = None
 ```
+
+### Target Lock Acquisition
+
+Target lock is acquired via SSH after connection is established:
+
+```python
+async def acquire_target_lock(
+    executor: RemoteExecutor,
+    source_hostname: str,
+) -> bool:
+    """Acquire lock on target machine."""
+    lock_path = "~/.local/share/pc-switcher/target.lock"
+    holder_info = f"{source_hostname}:{os.getpid()}"
+
+    # Use flock command on target (simpler than transferring Python code)
+    result = await executor.run_command(
+        f'mkdir -p ~/.local/share/pc-switcher && '
+        f'exec 9>"{lock_path}" && '
+        f'flock -n 9 && '
+        f'echo "{holder_info}" > "{lock_path}"'
+    )
+    return result.success
+
+async def get_target_lock_holder(executor: RemoteExecutor) -> str | None:
+    """Get info about who holds the target lock."""
+    result = await executor.run_command(
+        'cat ~/.local/share/pc-switcher/target.lock 2>/dev/null'
+    )
+    return result.stdout.strip() if result.success and result.stdout else None
+```
+
+### Error Messages
+
+- Source lock held: `"Another sync is in progress (PID: 12345)"`
+- Target lock held: `"Target is being synced from another source (laptop-work:54321)"`
 
 ## 8. Disk Space Parsing
 
@@ -473,5 +542,5 @@ def parse_threshold(threshold: str) -> tuple[str, int]:
 | Snapshots | btrfs CLI | Standard tool, no extra dependencies |
 | Config validation | jsonschema | Standard schema language, clear errors |
 | Cancellation | asyncio.CancelledError | Native pattern, TaskGroup integration |
-| Locking | fcntl | Simple, automatic release on crash |
+| Locking | fcntl (source + target) | Simple, automatic release on crash, prevents A→B + C→B |
 | Disk space | df parsing | Universal availability, straightforward |
