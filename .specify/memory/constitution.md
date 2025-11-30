@@ -50,7 +50,6 @@ Follow-up TODOs:
 ### Minimize SSD Wear
 - Implementation MUST minimize write amplification on NVMe SSDs via incremental transfers, deduplication, and avoidance of unnecessary temporary copies.
 - Long-running sync stages MUST prefer RAM or ephemeral storage when staging data instead of repeated SSD writes.
-- Sync runs MUST measure or estimate write volumes; exceeding planned thresholds triggers remediation tasks.
 
 *Rationale: Preserving drive health sustains reliability and cost efficiency.*
 

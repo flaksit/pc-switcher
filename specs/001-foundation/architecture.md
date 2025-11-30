@@ -99,7 +99,7 @@ graph TD
 
 ## Event Bus Architecture
 
-All logging and progress events flow through an event bus with per-consumer queues for guaranteed delivery. This decouples producers from consumers and ensures the UI never blocks job execution.
+All logging and progress events flow through an event bus with per-consumer queues. This decouples producers from consumers and ensures the UI never blocks job execution.
 
 ```mermaid
 graph LR
@@ -150,8 +150,9 @@ graph LR
 
 - **Fan-out delivery**: Each event is copied to all consumer queues
 - **Non-blocking puts**: Producers use `put_nowait()`, never wait
-- **Guaranteed delivery**: Per-consumer queues ensure no event loss even if one consumer is slow
+- **Per-consumer queues**: Each consumer has a dedicated queue to prevent blocking between consumers
 - **Graceful shutdown**: `close()` signals consumers to drain queues and exit
+- **Consumer failure is critical**: If a consumer (FileLogger, TerminalUI) raises an exception, it propagates through the TaskGroup and causes sync abort—same behavior as when a SyncJob raises an exception. This ensures logging/UI failures are not silently ignored.
 
 ---
 
@@ -743,7 +744,7 @@ sequenceDiagram
 
 **Key points:**
 - Jobs call `self.log(level, message, **context)` which publishes to EventBus
-- EventBus fans out to per-consumer queues (guaranteed delivery)
+- EventBus fans out to per-consumer queues (independent consumption)
 - FileLogger and TerminalUI consume independently, never blocking each other
 - Each consumer applies its own level filter (`file_level` / `cli_level`)
 - File output uses structlog JSONRenderer (one JSON object per line)

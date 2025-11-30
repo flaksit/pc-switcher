@@ -134,7 +134,7 @@ properties:
         description: "Progress percentage at which to fail"
     additionalProperties: false
 
-# Future job configs will be added here as top-level keys:
+# Future job configs will be added here as top-level keys when features are implemented:
 # user_data:
 #   exclude_patterns: [...]
 #   preserve_timestamps: true
@@ -143,4 +143,4 @@ properties:
 #   sync_flatpak: true
 # etc.
 
-additionalProperties: true  # Allow unknown job configs (forward compatibility)
+additionalProperties: false  # Strict schema for current scope; evolves as features are added
