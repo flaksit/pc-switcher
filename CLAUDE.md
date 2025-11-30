@@ -141,8 +141,7 @@ This repository will NOT contain:
 - No implementation code exists yet - focus on specification and planning first using SpecKit workflow
 
 ## Active Technologies
-- Python 3.14 (per ADR-003) (001-foundation)
-- IMPORTANT: Read ~/.claude/python.md and refered files therein for python conventions. Follow them strictly.
 
-## Recent Changes
-- 001-foundation: Added Python 3.14 (per ADR-003)
+- **Python 3.14** (per ADR-003) via uv venv
+- Always use `uv run` for Python execution: `uv run python`, `uv run ruff`, `uv run basedpyright`, etc.
+- Never use the system Python directly

@@ -152,7 +152,7 @@ Notes:
 - The user should be able to interrupt the sync at any time (e.g. Ctrl-C) and the system should handle this gracefully.
 - Logging should contain six levels: DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL. CRITICAL errors should abort the sync (just like the user interrupt). The INFO log level should be used for high-level operation reporting (e.g. "Starting module X", "Module X completed successfully", etc.). DEBUG log level should be used for detailed operation reporting (e.g. command outputs, progress percentages, etc.). FULL log level shows the detail up to file level: each file copied, each snapshot created, etc. DEBUG adds more details about operations (like verbose command outputs).
 - For testing purposes, at least three dummy modules should be specified that simulate long-running operations with progress reporting and logging. They should run dummy operations (sleep/loop) on both source and target machine sequentially
-  - A successfull, only emitting INFO, WARNING and ERROR logs
+  - A successful, only emitting INFO, WARNING and ERROR logs
   - A module that runs into a CRITICAL error. The module itself would just go on running. This is to test that the overall sync aborts on CRITICAL errors.
   - A module that fails partway through (e.g. raising an exception), without properly logging a CRITICAL error.
 

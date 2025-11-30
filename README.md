@@ -24,10 +24,60 @@ Work on source machine → Trigger sync → Resume on target machine
 
 **Never synced**: SSH keys, Tailscale config, GPU/hardware caches, machine-specific packages
 
+## Installation
+
+Install via curl:
+```bash
+curl -fsSL https://github.com/yourusername/pc-switcher/releases/download/latest/install.sh | bash
+```
+
+Or install as a Python tool with uv:
+```bash
+uv tool install pc-switcher
+```
+
+## Quick Start
+
+Before syncing, ensure:
+- Target machine is powered on and reachable via SSH
+- Both machines are on the same LAN
+- You're logged out from the desktop (or close all apps)
+
+Trigger a sync:
+```bash
+pc-switcher sync <target-hostname>
+```
+
+Monitor sync progress with:
+```bash
+pc-switcher logs
+```
+
+After sync completes, power off the source machine and resume work on target.
+
+## Configuration
+
+Create `~/.config/pc-switcher/config.yaml`:
+```yaml
+source_user: your_username
+target_user: your_username
+btrfs_mount: /
+exclude_dirs:
+  - /var/cache
+  - /tmp
+```
+
+## Available Commands
+
+- `pc-switcher sync <target>` - Start sync to target machine
+- `pc-switcher logs` - View sync logs and status
+- `pc-switcher cleanup-snapshots` - Remove old btrfs snapshots
+
 ## Requirements
 
 - Ubuntu 24.04 LTS on all machines
 - Single btrfs filesystem (all synced data on one filesystem per machine)
+- SSH access between machines
 - Machines connected to same LAN (1Gb) during sync
 - Only one machine actively used at a time
 

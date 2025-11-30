@@ -21,7 +21,7 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ## Working Principles
 
-- When you have Open questions and some part of the remainder of your task depends on the answer, then stop, ask the question and wait for the answer before continuing. Try to group your open question and ask them together, so that your work is interupted less number of times.
+- When you have Open questions and some part of the remainder of your task depends on the answer, then stop, ask the question and wait for the answer before continuing. Try to group your open question and ask them together, so that your work is interrupted less number of times.
 
 ## Tools and commands
 
@@ -176,7 +176,7 @@ This repository will NOT contain:
 
 ## Active Technologies
 - Python 3.14 (per ADR-003) (001-foundation)
-- IMPORTANT: Read ~/.claude/python.md and refered files therein for python conventions. Follow them strictly.
+- IMPORTANT: Read ~/.claude/python.md and referred files therein for python conventions. Follow them strictly.
 
 ## Recent Changes
 - 001-foundation: Added Python 3.14 (per ADR-003)
