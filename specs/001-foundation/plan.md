@@ -147,11 +147,12 @@ src/
     ├── snapshots.py        # Btrfs snapshot management (pre/post/cleanup)
     ├── installation.py     # Target pc-switcher installation/upgrade
     ├── models.py           # Core types (Host, LogLevel, CommandResult, etc.)
+    ├── disk.py             # DiskSpace dataclass, parse_threshold, check_disk_space
     └── jobs/
         ├── __init__.py
         ├── base.py         # Job, SystemJob, SyncJob, BackgroundJob ABCs
         ├── context.py      # JobContext dataclass
-        ├── disk_monitor.py # DiskSpaceMonitorJob
+        ├── disk_space_monitor.py  # DiskSpaceMonitorJob
         ├── dummy.py        # DummySuccessJob, DummyFailJob
         └── btrfs.py        # BtrfsSnapshotJob (pre/post phases)
 

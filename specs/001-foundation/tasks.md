@@ -26,9 +26,10 @@
 - [ ] T001 Create project structure per plan.md layout in src/pcswitcher/
 - [ ] T002 Initialize Python 3.14 project with uv and add dependencies (asyncssh, rich, typer, structlog, pyyaml, jsonschema, packaging, pytimeparse2)
 - [ ] T003 [P] Add dev dependencies (pytest, pytest-asyncio, basedpyright, ruff, codespell)
-- [ ] T004 [P] Configure pyproject.toml with package metadata and entry points (pc-switcher CLI)
-- [ ] T005 [P] Create src/pcswitcher/__init__.py with package version export
+- [ ] T004 [P] Configure pyproject.toml with package metadata, entry points (pc-switcher CLI), and dynamic versioning (hatchling + uv-dynamic-versioning per ADR-004)
+- [ ] T005 [P] Create src/pcswitcher/__init__.py with dynamic version export from package metadata
 - [ ] T006 [P] Setup ruff.toml and basedpyright configuration
+- [ ] T007a [P] Create GitHub Actions workflow for release builds (.github/workflows/release.yml): trigger on release published, build package with uv build, attach wheel to release assets (no PyPI publish)
 
 ---
 
@@ -200,9 +201,9 @@
 - [ ] T073 [US3] Implement parse_threshold (percentage and absolute) in src/pcswitcher/disk.py
 - [ ] T074 [US3] Implement check_disk_space function for single host in src/pcswitcher/disk.py
 - [ ] T075 [US3] Implement DiskSpaceCriticalError exception in src/pcswitcher/models.py
-- [ ] T076 [US3] Implement DiskSpaceMonitorJob as BackgroundJob in src/pcswitcher/jobs/disk_monitor.py
+- [ ] T076 [US3] Implement DiskSpaceMonitorJob as BackgroundJob in src/pcswitcher/jobs/disk_space_monitor.py
 - [ ] T077 [US3] Implement preflight check in orchestrator (before snapshots) in src/pcswitcher/orchestrator.py
-- [ ] T078 [US3] Implement runtime monitoring with check_interval in src/pcswitcher/jobs/disk_monitor.py
+- [ ] T078 [US3] Implement runtime monitoring with check_interval in src/pcswitcher/jobs/disk_space_monitor.py
 - [ ] T079 [US3] Spawn two DiskSpaceMonitorJob instances (source, target) in orchestrator in src/pcswitcher/orchestrator.py
 
 **Checkpoint**: Disk space safety monitoring operational
@@ -220,7 +221,7 @@
 - [ ] T080 [US2] Implement get_current_version (read from package metadata) in src/pcswitcher/installation.py
 - [ ] T081 [US2] Implement get_target_version via RemoteExecutor in src/pcswitcher/installation.py
 - [ ] T082 [US2] Implement version comparison using packaging.version in src/pcswitcher/installation.py
-- [ ] T083 [US2] Implement install_on_target (curl install.sh | sh) in src/pcswitcher/installation.py
+- [ ] T083 [US2] Implement install_on_target (run install.sh on target via SSH; install.sh handles uv bootstrap and uv tool install) in src/pcswitcher/installation.py
 - [ ] T084 [US2] Implement version mismatch detection (abort if target newer) in src/pcswitcher/installation.py
 - [ ] T085 [US2] Integrate version check/install into orchestrator (before snapshots) in src/pcswitcher/orchestrator.py
 
@@ -238,7 +239,7 @@
 
 - [ ] T086 [US7] Create install.sh script (check/install uv, btrfs-progs, pc-switcher) in install.sh
 - [ ] T087 [US7] Implement --version parameter for specific version installation in install.sh
-- [ ] T088 [US7] Implement default config generation with inline comments in install.sh
+- [ ] T088 [US7] Implement default config generation with inline comments in install.sh; prompt before overwriting existing config
 - [ ] T089 [US7] Create ~/.config/pc-switcher/ and ~/.local/share/pc-switcher/logs/ directories in install.sh
 
 **Checkpoint**: Installation script fully functional
@@ -373,7 +374,7 @@ US6 (Config) ─┬─> US1 (Job Architecture) ─┬─> US4 (Logging) ─┬�
 ### Parallel Opportunities
 
 Within each phase, tasks marked [P] can run in parallel:
-- Phase 1: T003, T004, T005, T006
+- Phase 1: T003, T004, T005, T006, T007a
 - Phase 2: T008, T009, T010, T012
 - Phase 12: T097
 - Phase 16: T118, T119, T120, T121, T122

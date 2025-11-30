@@ -292,11 +292,13 @@ This delivers value by streamlining initial deployment.
 
 2. **Given** pc-switcher sync installs on target (InstallOnTargetJob), **When** the target is missing uv, **Then** the same installation logic installs uv first, then installs/upgrades pc-switcher
 
+3. **Given** `~/.config/pc-switcher/config.yaml` already exists, **When** user runs the installation script, **Then** the script prompts "Configuration file already exists. Overwrite? [y/N]" and preserves the existing file unless user confirms overwrite
+
 ---
 
 ### User Story 8 - Dummy Test Jobs (Priority: P1)
 
-Two dummy jobs exist for testing infrastructure: `dummy-success` (completes successfully with INFO/WARNING/ERROR logs) and `dummy-fail` (raises unhandled exception to test exception handling). Each simulates long-running operations on both source and target with progress reporting.
+Two dummy jobs exist for testing infrastructure: `dummy_success` (completes successfully with INFO/WARNING/ERROR logs) and `dummy_fail` (raises unhandled exception to test exception handling). Each simulates long-running operations on both source and target with progress reporting.
 
 **Why this priority**: This is P1 because these jobs are essential for testing the orchestrator, logging, progress UI, error handling, and interrupt handling during development. They serve as reference implementations of the job contract.
 
@@ -308,11 +310,11 @@ Two dummy jobs exist for testing infrastructure: `dummy-success` (completes succ
 
 **Acceptance Scenarios**:
 
-1. **Given** `dummy-success` job is enabled, **When** sync runs, **Then** the job performs 20-second busy-wait on source (logging INFO message every 2s), emits WARNING at 6s, performs 20-second busy-wait on target (logging INFO message every 2s), emits ERROR at 8s, reports progress updates (0%, 25%, 50%, 75%, 100%), and completes successfully
+1. **Given** `dummy_success` job is enabled, **When** sync runs, **Then** the job performs 20-second busy-wait on source (logging INFO message every 2s), emits WARNING at 6s, performs 20-second busy-wait on target (logging INFO message every 2s), emits ERROR at 8s, reports progress updates (0%, 25%, 50%, 75%, 100%), and completes successfully
 
 2. *(Removed)*
 
-3. **Given** `dummy-fail` job is enabled, **When** sync runs and job reaches 60% progress, **Then** the job raises a RuntimeError, the orchestrator catches the exception, logs it at CRITICAL level, requests job termination with up to 5 seconds for cleanup, and halts sync
+3. **Given** `dummy_fail` job is enabled, **When** sync runs and job reaches 60% progress, **Then** the job raises a RuntimeError, the orchestrator catches the exception, logs it at CRITICAL level, requests job termination with up to 5 seconds for cleanup, and halts sync
 
 4. **Given** any dummy job is running, **When** user presses Ctrl+C, **Then** the job receives termination request, it logs "Dummy job termination requested", stops its busy-wait loop within the grace period, and returns control to orchestrator
 
@@ -479,7 +481,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 ### Key Entities
 
-- **Job**: Represents a sync component implementing the job interface; has name, config schema, and lifecycle methods
+- **Job**: Abstract base class for all sync components implementing the job interface; has name, config schema, and lifecycle methods. Concrete subclasses: **SystemJob** (required, always runs), **SyncJob** (configurable via `sync_jobs`), **BackgroundJob** (runs concurrently)
 - **SyncSession**: Represents a single sync operation including session ID, timestamp, source/target machines, enabled jobs, and execution state
 - **Snapshot**: Represents a btrfs snapshot including subvolume name, timestamp, session ID, type (pre/post), and location (source/target)
 - **LogEntry**: Represents a logged event with timestamp, level, job name, message, and structured context data

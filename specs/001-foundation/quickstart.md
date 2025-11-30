@@ -65,11 +65,12 @@ src/pcswitcher/
 ├── snapshots.py         # btrfs snapshot operations
 ├── installation.py      # Target pc-switcher install
 ├── models.py            # Core types (enums, dataclasses)
+├── disk.py              # DiskSpace, parse_threshold, check_disk_space
 └── jobs/
     ├── __init__.py
     ├── base.py          # Job ABC hierarchy
     ├── context.py       # JobContext
-    ├── disk_monitor.py  # DiskSpaceMonitorJob
+    ├── disk_space_monitor.py  # DiskSpaceMonitorJob
     ├── dummy.py         # Test jobs
     └── btrfs.py         # BtrfsSnapshotJob
 ```
