@@ -272,7 +272,7 @@ This separation ensures that if installation fails, the system can be rolled bac
 Graceful shutdown on Ctrl+C (SIGINT):
 - **First SIGINT**: Cancel all tasks, cleanup resources (jobs clean their own processes)
 - **Second SIGINT**: Force terminate immediately (skip cleanup)
-- **Timeout**: 5 second cleanup deadline, then force terminate
+- **Timeout**: Cleanup deadline defined by `CLEANUP_TIMEOUT_SECONDS` in `src/pcswitcher/cli.py` (currently 30s), then force terminate
 - **Process cleanup**: Jobs terminate their own remote processes; orchestrator does safety sweep
 
 ## Cross-References

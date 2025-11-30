@@ -50,7 +50,7 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 
 **Performance Goals**:
 - Version check/install on target: < 30 seconds (SC-004)
-- Abort on CRITICAL within 5 seconds (SC-003)
+- Abort on CRITICAL within cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) (SC-003)
 - Graceful interrupt with no orphaned processes (SC-006)
 
 **Constraints**:

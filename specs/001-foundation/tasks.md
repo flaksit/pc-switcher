@@ -166,7 +166,7 @@
 
 - [X] T054 [US5] Implement SIGINT handler in orchestrator in src/pcswitcher/orchestrator.py
 - [X] T055 [US5] Implement task cancellation via asyncio.CancelledError in src/pcswitcher/orchestrator.py
-- [X] T056 [US5] Implement 5-second cleanup timeout in orchestrator in src/pcswitcher/orchestrator.py
+- [X] T056 [US5] Implement cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) in orchestrator in src/pcswitcher/orchestrator.py
 - [X] T057 [US5] Implement double-SIGINT force-terminate (cleanup_in_progress flag) in src/pcswitcher/orchestrator.py
 - [X] T058 [US5] Implement kill_all_remote_processes in Connection class in src/pcswitcher/connection.py
 - [X] T059 [US5] Implement exit code 130 for SIGINT termination in src/pcswitcher/cli.py

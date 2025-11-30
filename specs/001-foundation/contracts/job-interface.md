@@ -202,7 +202,7 @@ async def execute(self, context: JobContext) -> None:
 - Remove partial/temporary files created during execution
 - Release any locks or resources acquired
 - Log cleanup actions at WARNING level
-- Complete cleanup within 5 seconds (orchestrator timeout)
+- Complete cleanup within the timeout defined by `CLEANUP_TIMEOUT_SECONDS` in cli.py
 
 ## Error Handling
 

@@ -16,6 +16,11 @@ from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.snapshots import parse_older_than
 
+# Cleanup timeout for graceful shutdown after SIGINT.
+# After first SIGINT, cleanup has this many seconds to complete.
+# Second SIGINT or timeout expiry forces immediate termination.
+CLEANUP_TIMEOUT_SECONDS = 30
+
 # Create Typer app
 app = typer.Typer(
     name="pc-switcher",
@@ -66,7 +71,7 @@ def sync(
 
 
 def _run_sync(target: str, cfg: Configuration) -> int:
-    """Run the sync operation with asyncio.
+    """Run the sync operation with asyncio and graceful interrupt handling.
 
     Args:
         target: Target hostname
@@ -75,39 +80,74 @@ def _run_sync(target: str, cfg: Configuration) -> int:
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
     """
-    # Track if SIGINT was received
-    sigint_received = False
+    return asyncio.run(_async_run_sync(target, cfg))
 
-    def sigint_handler(sig: int, frame: object) -> None:
-        nonlocal sigint_received
-        sigint_received = True
+
+async def _async_run_sync(target: str, cfg: Configuration) -> int:
+    """Async implementation of sync with interrupt handling.
+
+    Interrupt behavior:
+    - First SIGINT: Cancel sync task, allow CLEANUP_TIMEOUT_SECONDS for cleanup
+    - Second SIGINT or timeout: Force terminate immediately
+    """
+    from pcswitcher.models import SyncSession
+
+    loop = asyncio.get_running_loop()
+    main_task: asyncio.Task[SyncSession] | None = None
+    sigint_count = [0]  # Use list to allow mutation in nested function
+
+    def sigint_handler() -> None:
+        sigint_count[0] += 1
+
+        if sigint_count[0] == 1:
+            console.print("\n[yellow]Interrupt received, cleaning up...[/yellow]")
+            console.print(
+                f"[dim](Press Ctrl+C again to force quit, "
+                f"or wait up to {CLEANUP_TIMEOUT_SECONDS}s for graceful cleanup)[/dim]"
+            )
+            if main_task is not None and not main_task.done():
+                main_task.cancel()
+        else:
+            console.print("\n[red]Force terminating![/red]")
+            # Cancel all tasks immediately
+            for task in asyncio.all_tasks(loop):
+                task.cancel()
 
     # Install SIGINT handler
-    signal.signal(signal.SIGINT, sigint_handler)
+    loop.add_signal_handler(signal.SIGINT, sigint_handler)
 
     try:
-        # Create and run orchestrator
         orchestrator = Orchestrator(target=target, config=cfg)
-        asyncio.run(orchestrator.run())
+        main_task = asyncio.create_task(orchestrator.run())
 
-        return 0
+        try:
+            await main_task
+            return 0
 
-    except asyncio.CancelledError:
-        # Sync was cancelled (likely by SIGINT)
-        if sigint_received:
-            console.print("\n[yellow]Sync interrupted by user[/yellow]")
+        except asyncio.CancelledError:
+            # First cancellation - wait for cleanup with timeout
+            if sigint_count[0] == 1:
+                try:
+                    # Give orchestrator time to clean up (it has a finally block)
+                    await asyncio.wait_for(
+                        asyncio.shield(asyncio.sleep(0)),  # Allow pending cleanup
+                        timeout=CLEANUP_TIMEOUT_SECONDS,
+                    )
+                except TimeoutError:
+                    console.print(
+                        f"[red]Cleanup timeout ({CLEANUP_TIMEOUT_SECONDS}s) exceeded, "
+                        "forcing termination[/red]"
+                    )
+
+            console.print("[yellow]Sync interrupted by user[/yellow]")
             return 130
-        console.print("\n[red]Sync cancelled[/red]")
-        return 1
-
-    except KeyboardInterrupt:
-        # Direct keyboard interrupt (should be caught by signal handler)
-        console.print("\n[yellow]Sync interrupted by user[/yellow]")
-        return 130
 
     except Exception as e:
         console.print(f"\n[bold red]Sync failed:[/bold red] {e}")
         return 1
+
+    finally:
+        loop.remove_signal_handler(signal.SIGINT)
 
 
 @app.command()

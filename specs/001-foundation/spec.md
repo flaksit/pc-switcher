@@ -56,9 +56,9 @@ This delivers immediate value by establishing the development pattern for all 6 
 
 5. **Given** a job's validate() method returns validation errors, **When** validation phase executes, **Then** the orchestrator collects all errors, displays them in terminal UI, and halts sync before any state changes occur (no termination request needed as jobs haven't started executing)
 
-6. **Given** a job is executing and raises an exception, **When** the exception propagates, **Then** the orchestrator catches it, logs the error message at CRITICAL level, requests job termination with up to 5 seconds for cleanup, and halts the sync before any further jobs execute
+6. **Given** a job is executing and raises an exception, **When** the exception propagates, **Then** the orchestrator catches it, logs the error message at CRITICAL level, requests job termination with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), and halts the sync before any further jobs execute
 
-7. **Given** user presses Ctrl+C during job execution, **When** signal is caught, **Then** orchestrator requests termination of the currently-executing job with up to 5 seconds for cleanup, logs interruption at WARNING level, and exits gracefully with code 130
+7. **Given** user presses Ctrl+C during job execution, **When** signal is caught, **Then** orchestrator requests termination of the currently-executing job with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), logs interruption at WARNING level, and exits gracefully with code 130
 
 ---
 
@@ -204,7 +204,7 @@ This delivers value by giving users confidence they can safely stop operations.
 
 **Acceptance Scenarios**:
 
-1. **Given** sync operation is in progress with a job executing on target machine, **When** user presses Ctrl+C, **Then** the orchestrator catches SIGINT, logs "Sync interrupted by user" at WARNING level, requests termination of the current job, sends termination signal to target-side processes, waits up to 5 seconds for graceful cleanup, then closes connection and exits with code 130
+1. **Given** sync operation is in progress with a job executing on target machine, **When** user presses Ctrl+C, **Then** the orchestrator catches SIGINT, logs "Sync interrupted by user" at WARNING level, requests termination of the current job, sends termination signal to target-side processes, waits up to the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful cleanup, then closes connection and exits with code 130
 
 2. **Given** sync is in the orchestrator phase between jobs (no job actively running), **When** user presses Ctrl+C, **Then** orchestrator logs interruption, skips remaining jobs, and exits cleanly
 
@@ -324,7 +324,7 @@ Two dummy jobs exist for testing infrastructure: `dummy_success` (completes succ
 
 2. *(Removed)*
 
-3. **Given** `dummy_fail` job is enabled, **When** sync runs and job reaches 60% progress, **Then** the job raises a RuntimeError, the orchestrator catches the exception, logs it at CRITICAL level, requests job termination with up to 5 seconds for cleanup, and halts sync
+3. **Given** `dummy_fail` job is enabled, **When** sync runs and job reaches 60% progress, **Then** the job raises a RuntimeError, the orchestrator catches the exception, logs it at CRITICAL level, requests job termination with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), and halts sync
 
 4. **Given** any dummy job is running, **When** user presses Ctrl+C, **Then** the job receives termination request, it logs "Dummy job termination requested", stops its busy-wait loop within the grace period, and returns control to orchestrator
 
@@ -381,7 +381,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **FR-002** `[Reliability Without Compromise]`: System MUST call job lifecycle methods in order: `validate()` (all jobs), then `execute()` for each job in the specified order; on shutdown, errors, or user interrupt the system requests termination of the currently-executing job
 
-- **FR-003** `[Reliability Without Compromise]`: System MUST request termination of currently-executing job when Ctrl+C is pressed, allowing up to 5 seconds for graceful cleanup; if job does not complete cleanup within timeout, orchestrator MUST force-terminate connections and the job, then proceed with exit
+- **FR-003** `[Reliability Without Compromise]`: System MUST request termination of currently-executing job when Ctrl+C is pressed, allowing cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful cleanup; if job does not complete cleanup within timeout, orchestrator MUST force-terminate connections and the job, then proceed with exit
 
 - **FR-004** `[Deliberate Simplicity]`: Jobs MUST be loaded from the configuration file section `sync_jobs` in the order they appear and instantiated by the orchestrator; job execution order is strictly sequential from config (no dependency resolution is provided—simplicity over flexibility)
 
@@ -433,9 +433,9 @@ The terminal displays real-time sync progress including current job, operation p
 
 #### Interrupt Handling
 
-- **FR-024** `[Reliability Without Compromise]`: System MUST install SIGINT handler that requests current job termination with up to 5 second grace period for cleanup, logs "Sync interrupted by user" at WARNING level, and exits with code 130
+- **FR-024** `[Reliability Without Compromise]`: System MUST install SIGINT handler that requests current job termination with cleanup timeout grace period (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), logs "Sync interrupted by user" at WARNING level, and exits with code 130
 
-- **FR-025** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to 5 seconds for graceful shutdown
+- **FR-025** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful shutdown
 
 - **FR-026** `[Reliability Without Compromise]`: If second SIGINT is received during cleanup, system MUST immediately force-terminate without waiting
 
@@ -508,7 +508,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **SC-002** `[Reliability Without Compromise]`: System creates snapshots before and after sync in 100% of successful sync runs
 
-- **SC-003** `[Reliability Without Compromise]`: System successfully aborts sync within 5 seconds when CRITICAL error occurs, with no state modifications after abort
+- **SC-003** `[Reliability Without Compromise]`: System successfully aborts sync within the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) when CRITICAL error occurs, with no state modifications after abort
 
 - **SC-004** `[Frictionless Command UX]`: System completes version check and installation/upgrade on target within 30 seconds
 
