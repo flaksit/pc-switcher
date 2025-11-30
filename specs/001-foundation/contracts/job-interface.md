@@ -29,7 +29,9 @@ Job (ABC)
 |-----------|------|-------------|
 | `name` | `ClassVar[str]` | Unique identifier (e.g., `"packages"`, `"docker"`) |
 | `required` | `ClassVar[bool]` | If `True`, cannot be disabled in config |
-| `CONFIG_SCHEMA` | `ClassVar[dict]` | JSON Schema (draft-07) for job-specific config |
+| `CONFIG_SCHEMA` | `ClassVar[dict[str, Any]]` | JSON Schema (draft-07) for job-specific config |
+
+**Note on CONFIG_SCHEMA**: The orchestrator accesses job configuration schemas via the `CONFIG_SCHEMA` class attribute directly (not via a method). This is the canonical API for schema access. Jobs may define an empty schema (`{}`) if they have no configuration options.
 
 ## Required Methods
 

@@ -127,9 +127,20 @@ class LogEvent:
     message: str
     context: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.now)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for JSON serialization via structlog."""
+        return {
+            "timestamp": self.timestamp.isoformat(),
+            "level": self.level.name,
+            "job": self.job,
+            "host": self.host.value,
+            "event": self.message,
+            **self.context,
+        }
 ```
 
-**JSON Serialization** (file output):
+**JSON Serialization** (file output via structlog JSONRenderer per FR-022):
 ```json
 {
   "timestamp": "2025-11-29T14:30:22.123456",
@@ -137,9 +148,11 @@ class LogEvent:
   "job": "packages",
   "host": "source",
   "event": "Starting package list comparison",
-  "context": {"package_count": 1523}
+  "package_count": 1523
 }
 ```
+
+**Note**: File logging uses structlog's `JSONRenderer` to produce one JSON object per line. The `to_dict()` method provides the data structure; structlog handles the actual JSON serialization. Context fields are merged into the top-level JSON object (not nested under "context").
 
 ---
 

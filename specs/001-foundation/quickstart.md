@@ -104,9 +104,15 @@ async def _sync(target: str) -> None:
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
+from pcswitcher.events import LogEvent
+from pcswitcher.models import LogLevel
+
 class FileLogger:
+    """Consumes LogEvents and writes JSON lines to file (FR-022)."""
+
     def __init__(self, log_file: Path, level: LogLevel, queue: asyncio.Queue) -> None:
         self._log_file = log_file
         self._level = level
@@ -120,7 +126,8 @@ class FileLogger:
                 if event is None:  # Shutdown sentinel
                     break
                 if isinstance(event, LogEvent) and event.level >= self._level:
-                    f.write(event.to_json() + "\n")
+                    # Use structlog-style JSON output (one object per line)
+                    f.write(json.dumps(event.to_dict()) + "\n")
                     f.flush()
 ```
 
@@ -131,52 +138,84 @@ class FileLogger:
 from __future__ import annotations
 
 import asyncio
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.models import Host, JobContext, LogLevel, ProgressUpdate, ValidationError
 
 
 class DummySuccessJob(SyncJob):
+    """Dummy job for testing infrastructure (FR-039).
+
+    Simulates 20s operation on source (log every 2s, WARNING at 6s)
+    and 20s on target (log every 2s, ERROR at 8s).
+    Progress: 0% → 25% → 50% → 75% → 100%
+    """
+
     name: ClassVar[str] = "dummy_success"
-    CONFIG_SCHEMA: ClassVar[dict] = {
+    CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {
         "type": "object",
-        "properties": {
-            "source_duration": {"type": "integer", "default": 20},
-            "target_duration": {"type": "integer", "default": 20},
-        },
+        "properties": {},
+        "additionalProperties": False,
     }
 
     async def validate(self, context: JobContext) -> list[ValidationError]:
         return []  # No prerequisites
 
     async def execute(self, context: JobContext) -> None:
-        source_dur = context.config.get("source_duration", 20)
-        target_dur = context.config.get("target_duration", 20)
-
         try:
-            # Source phase
-            await self._run_phase(context, Host.SOURCE, "source", source_dur)
-            # Target phase
-            await self._run_phase(context, Host.TARGET, "target", target_dur)
+            # Progress milestones: 0, 25, 50, 75, 100
+            self._report_progress(context, ProgressUpdate(percent=0))
+
+            # Source phase: 20s with 2s intervals (10 ticks)
+            await self._run_source_phase(context)
+            self._report_progress(context, ProgressUpdate(percent=50))
+
+            # Target phase: 20s with 2s intervals (10 ticks)
+            await self._run_target_phase(context)
+            self._report_progress(context, ProgressUpdate(percent=100))
+
         except asyncio.CancelledError:
             self._log(context, Host.SOURCE, LogLevel.WARNING, "Dummy job termination requested")
             raise
 
-    async def _run_phase(
-        self, context: JobContext, host: Host, phase: str, duration: int
-    ) -> None:
-        for i in range(duration):
-            percent = int((i / duration) * 50) + (50 if phase == "target" else 0)
-            self._report_progress(context, ProgressUpdate(percent=percent))
-            self._log(context, host, LogLevel.INFO, f"Phase {phase}: tick {i+1}/{duration}")
+    async def _run_source_phase(self, context: JobContext) -> None:
+        """Source phase: 20s, log every 2s, WARNING at 6s."""
+        for tick in range(10):  # 10 ticks × 2s = 20s
+            elapsed = tick * 2
+            self._log(
+                context, Host.SOURCE, LogLevel.INFO,
+                f"Source phase: {elapsed}s elapsed"
+            )
 
-            if phase == "source" and i == 3:
-                self._log(context, host, LogLevel.WARNING, "Test warning at 6s")
-            if phase == "target" and i == 4:
-                self._log(context, host, LogLevel.ERROR, "Test error at 8s")
+            # WARNING at 6s (tick 3)
+            if tick == 3:
+                self._log(context, Host.SOURCE, LogLevel.WARNING, "Test warning at 6s")
 
-            await asyncio.sleep(1)
+            # Progress: 25% at tick 5 (10s)
+            if tick == 5:
+                self._report_progress(context, ProgressUpdate(percent=25))
+
+            await asyncio.sleep(2)
+
+    async def _run_target_phase(self, context: JobContext) -> None:
+        """Target phase: 20s, log every 2s, ERROR at 8s."""
+        for tick in range(10):  # 10 ticks × 2s = 20s
+            elapsed = tick * 2
+            self._log(
+                context, Host.TARGET, LogLevel.INFO,
+                f"Target phase: {elapsed}s elapsed"
+            )
+
+            # ERROR at 8s (tick 4)
+            if tick == 4:
+                self._log(context, Host.TARGET, LogLevel.ERROR, "Test error at 8s")
+
+            # Progress: 75% at tick 5 (10s into target = 30s total)
+            if tick == 5:
+                self._report_progress(context, ProgressUpdate(percent=75))
+
+            await asyncio.sleep(2)
 ```
 
 ### 4. SSH Command Execution
@@ -315,10 +354,8 @@ btrfs_snapshots:
 ## Running pc-switcher
 
 ```bash
-# Install locally
-uv pip install -e .
-
-# Or run directly
+# Development: sync dependencies and run via uv
+uv sync
 uv run pc-switcher sync target-hostname
 
 # View recent logs
@@ -326,6 +363,10 @@ uv run pc-switcher logs --last
 
 # Cleanup old snapshots
 uv run pc-switcher cleanup-snapshots --older-than 7d
+
+# Production: install as a tool (globally available)
+uv tool install .
+pc-switcher sync target-hostname
 ```
 
 ## Debugging Tips

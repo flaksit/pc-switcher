@@ -1026,21 +1026,25 @@ graph TD
 
     Connect["<b>Establish SSH Connection</b>"]
 
-    SystemVal["<b>System State Validation</b><br/>Job.validate() for each job<br/>- Check subvolumes exist<br/>- Check connectivity"]
+    AcquireLocks["<b>Acquire Locks</b><br/>- Source: ~/.local/share/pc-switcher/sync.lock<br/>- Target: ~/.local/share/pc-switcher/target.lock"]
 
-    SnapPre["<b>BtrfsSnapshotJob pre</b><br/>Direct btrfs commands<br/>No pc-switcher needed"]
+    VersionCheck["<b>Version Check</b><br/>- Get target pc-switcher version<br/>- If target newer → CRITICAL abort<br/>- Record if install/upgrade needed"]
 
-    InstallTarget["<b>InstallOnTargetJob</b><br/>Check/install/upgrade<br/>pc-switcher on target"]
+    SubvolCheck["<b>Subvolume Validation</b><br/>- Verify all configured subvolumes<br/>  exist on source AND target"]
 
-    StartDiskMon["<b>Start background</b><br/>DiskSpaceMonitorJob x2<br/>(source + target)"]
+    DiskPreflight["<b>Disk Space Preflight</b><br/>- Check free space on source<br/>- Check free space on target<br/>- Abort if below preflight_minimum"]
+
+    SnapPre["<b>Pre-sync Snapshots</b><br/>- Create read-only snapshots<br/>  on both source and target"]
+
+    InstallTarget["<b>Install/Upgrade Target</b><br/>- Only if version check found<br/>  missing or outdated version<br/>- uv tool install from GitHub"]
+
+    StartDiskMon["<b>Start DiskSpaceMonitor</b><br/>- Background task for source<br/>- Background task for target"]
 
     SyncJobs["<b>Sequential job execution</b><br/>- SyncJob1.execute<br/>- SyncJob2.execute<br/>- ..."]
 
-    SnapPost["<b>BtrfsSnapshotJob post</b><br/>Create post-sync snapshots"]
+    SnapPost["<b>Post-sync Snapshots</b><br/>- Create read-only snapshots<br/>  on both source and target"]
 
-    CancelMon["<b>Cancel DiskSpaceMonitor</b>"]
-
-    Disconnect["<b>Disconnect SSH</b>"]
+    Cleanup["<b>Cleanup</b><br/>- Stop DiskSpaceMonitor tasks<br/>- Release locks (auto on disconnect)<br/>- Close SSH connection"]
 
     Result["<b>Return SyncResult</b><br/>success/failure,<br/>job summaries"]
 
@@ -1048,36 +1052,375 @@ graph TD
     CLI --> SchemaVal
     SchemaVal --> JobConfigVal
     JobConfigVal --> Connect
-    Connect --> SystemVal
-    SystemVal --> SnapPre
+    Connect --> AcquireLocks
+    AcquireLocks --> VersionCheck
+    VersionCheck --> SubvolCheck
+    SubvolCheck --> DiskPreflight
+    DiskPreflight --> SnapPre
     SnapPre --> InstallTarget
     InstallTarget --> StartDiskMon
     StartDiskMon --> SyncJobs
     SyncJobs --> SnapPost
-    SnapPost --> CancelMon
-    CancelMon --> Disconnect
-    Disconnect --> Result
+    SnapPost --> Cleanup
+    Cleanup --> Result
 
     style Start fill:#fff3e0
     style CLI fill:#e1f5ff
     style SchemaVal fill:#fff3e0
     style JobConfigVal fill:#fff3e0
     style Connect fill:#f3e5f5
-    style SystemVal fill:#e8f5e9
+    style AcquireLocks fill:#ffcdd2
+    style VersionCheck fill:#fff3e0
+    style SubvolCheck fill:#e8f5e9
+    style DiskPreflight fill:#e8f5e9
     style SnapPre fill:#e8f5e9
     style InstallTarget fill:#e8f5e9
     style StartDiskMon fill:#fce4ec
     style SyncJobs fill:#e8f5e9
     style SnapPost fill:#e8f5e9
-    style CancelMon fill:#fce4ec
-    style Disconnect fill:#f3e5f5
+    style Cleanup fill:#f3e5f5
     style Result fill:#fff3e0
 ```
 
 **Key ordering notes:**
-1. **Snapshots BEFORE InstallOnTargetJob**: BtrfsSnapshotJob runs direct `btrfs` commands via SSH, no pc-switcher dependency. This ensures we have a rollback point before ANY system modifications.
-2. **Three validation phases**: Schema → Job config → System state, with distinct error messages.
-3. **DiskSpaceMonitor as background tasks**: Two instances run throughout sync - one monitors source (local commands), one monitors target (via `RemoteExecutor`). Either can abort sync on low space.
+1. **All checks before snapshots**: Locks → Version check → Subvolume validation → Disk preflight. If any check fails, we abort cleanly with no state changes.
+2. **Version CHECK vs INSTALL separated**: Version is checked early (can abort if target is newer). Install/upgrade happens AFTER snapshots (safety rollback point exists).
+3. **Three validation phases**: Schema → Job config → System state, with distinct error messages.
+4. **DiskSpaceMonitor as background tasks**: Two instances run throughout sync - one monitors source (local commands), one monitors target (via `RemoteExecutor`). Either can abort sync on low space.
+5. **Lock acquisition**: Source lock prevents concurrent syncs from same machine. Target lock prevents A→B and C→B concurrent syncs.
+
+---
+
+## Self-Installation Flow
+
+Per FR-005, FR-006, and FR-007, the orchestrator ensures version consistency before any sync operations.
+
+### Version Check and Installation Sequence
+
+```mermaid
+sequenceDiagram
+    participant Orchestrator
+    participant Target as Target (via SSH)
+
+    Orchestrator->>Target: pc-switcher --version (or check if command exists)
+
+    alt pc-switcher not installed
+        Target-->>Orchestrator: command not found
+        Note over Orchestrator: Record: needs_install = True
+    else pc-switcher installed
+        Target-->>Orchestrator: version X.Y.Z
+
+        alt target version > source version
+            Orchestrator->>Orchestrator: Log CRITICAL "Target version X.Y.Z is newer than source A.B.C"
+            Note over Orchestrator: Abort sync immediately<br/>(no snapshots created)
+        else target version < source version
+            Note over Orchestrator: Record: needs_upgrade = True
+        else versions match
+            Note over Orchestrator: Record: needs_install = False
+        end
+    end
+
+    Note over Orchestrator: Continue to subvolume check,<br/>disk preflight, then snapshots...
+
+    alt needs_install or needs_upgrade (after snapshots)
+        Orchestrator->>Target: uv tool install git+https://github.com/[owner]/pc-switcher@v{source_version}
+        Target-->>Orchestrator: Installation output
+
+        alt installation failed
+            Orchestrator->>Orchestrator: Log CRITICAL "Installation failed: {error}"
+            Note over Orchestrator: Abort sync (snapshots exist for rollback)
+        else installation succeeded
+            Orchestrator->>Target: pc-switcher --version
+            Target-->>Orchestrator: version matches source
+            Orchestrator->>Orchestrator: Log INFO "Target pc-switcher upgraded to {version}"
+        end
+    end
+```
+
+### Version Detection
+
+```python
+async def get_target_version(executor: RemoteExecutor) -> str | None:
+    """Get pc-switcher version on target, or None if not installed."""
+    result = await executor.run_command("pc-switcher --version 2>/dev/null")
+    if result.success:
+        # Parse "pc-switcher X.Y.Z" output
+        match = re.search(r"(\d+\.\d+\.\d+)", result.stdout)
+        return match.group(1) if match else None
+    return None
+```
+
+### Installation Command
+
+Per FR-005, installation uses `uv tool install` with Git URL:
+
+```bash
+uv tool install git+https://github.com/[owner]/pc-switcher@v0.4.0
+```
+
+- Uses `uv tool` (not `uv pip`) to install as a globally available CLI tool
+- Git tag `v{version}` ensures exact version match
+- No authentication required (public repository)
+- Target timeout: 30 seconds (SC-004)
+
+### Log Messages
+
+| Scenario | Level | Message |
+|----------|-------|---------|
+| Not installed | INFO | "Target pc-switcher not found, will install version {version}" |
+| Version match | INFO | "Target pc-switcher version matches source ({version}), skipping installation" |
+| Outdated | INFO | "Target pc-switcher version {old} is outdated, will upgrade to {new}" |
+| Newer on target | CRITICAL | "Target version {target} is newer than source {source}, this is unusual" |
+| Install success | INFO | "Target pc-switcher installed/upgraded to {version}" |
+| Install failed | CRITICAL | "Failed to install pc-switcher on target: {error}" |
+
+---
+
+## Disk Space Preflight Check
+
+Per FR-016, the orchestrator checks free disk space on both source and target before creating snapshots.
+
+### Preflight Flow
+
+```mermaid
+sequenceDiagram
+    participant Orchestrator
+    participant Source as Source (local)
+    participant Target as Target (SSH)
+
+    par Check both hosts
+        Orchestrator->>Source: df -B1 /
+        Source-->>Orchestrator: disk stats
+    and
+        Orchestrator->>Target: df -B1 /
+        Target-->>Orchestrator: disk stats
+    end
+
+    Note over Orchestrator: Parse free space from df output
+
+    alt source free space < preflight_minimum
+        Orchestrator->>Orchestrator: Log CRITICAL "Source disk space {free} below threshold {threshold}"
+        Note over Orchestrator: Abort sync (no snapshots created)
+    end
+
+    alt target free space < preflight_minimum
+        Orchestrator->>Orchestrator: Log CRITICAL "Target disk space {free} below threshold {threshold}"
+        Note over Orchestrator: Abort sync (no snapshots created)
+    end
+
+    Note over Orchestrator: Both pass → proceed to snapshots
+```
+
+### Threshold Configuration
+
+From `config.yaml`:
+```yaml
+disk:
+  preflight_minimum: "20%"   # or "50GiB"
+  runtime_minimum: "15%"     # for DiskSpaceMonitorJob
+  check_interval: 30
+```
+
+### Threshold Parsing
+
+Supports percentage or absolute values (FR-016):
+
+| Format | Example | Interpretation |
+|--------|---------|----------------|
+| Percentage | `"20%"` | 20% of total disk must be free |
+| GiB | `"50GiB"` | 50 gibibytes must be free |
+| MiB | `"500MiB"` | 500 mebibytes must be free |
+| GB | `"50GB"` | 50 gigabytes must be free |
+| MB | `"500MB"` | 500 megabytes must be free |
+
+Values without units are **invalid** and will fail config validation.
+
+---
+
+## Snapshot Cleanup Algorithm
+
+Per FR-014, the system provides snapshot cleanup with configurable retention policy.
+
+### CLI Command
+
+```bash
+# Cleanup with default retention (from config)
+pc-switcher cleanup-snapshots
+
+# Cleanup snapshots older than 7 days
+pc-switcher cleanup-snapshots --older-than 7d
+
+# Dry run (show what would be deleted)
+pc-switcher cleanup-snapshots --dry-run
+```
+
+### Retention Policy
+
+From `config.yaml`:
+```yaml
+btrfs_snapshots:
+  keep_recent: 3           # Always keep N most recent sync sessions
+  max_age_days: null       # Delete snapshots older than N days (null = no age limit)
+```
+
+### Cleanup Algorithm
+
+```python
+def identify_snapshots_to_delete(
+    snapshots: list[Snapshot],
+    keep_recent: int,
+    max_age_days: int | None,
+    older_than_override: int | None = None,  # From --older-than flag
+) -> list[Snapshot]:
+    """Identify snapshots eligible for deletion.
+
+    Rules:
+    1. Group snapshots by session_id
+    2. Sort sessions by timestamp (newest first)
+    3. Always keep the `keep_recent` most recent sessions
+    4. From remaining sessions, delete if older than max_age_days (or older_than_override)
+
+    Returns list of snapshots to delete.
+    """
+    # Group by session
+    sessions: dict[str, list[Snapshot]] = {}
+    for snap in snapshots:
+        sessions.setdefault(snap.session_id, []).append(snap)
+
+    # Sort sessions by newest snapshot timestamp
+    sorted_sessions = sorted(
+        sessions.items(),
+        key=lambda x: max(s.timestamp for s in x[1]),
+        reverse=True,
+    )
+
+    # Always keep the most recent N sessions
+    protected_sessions = {sid for sid, _ in sorted_sessions[:keep_recent]}
+
+    # Determine age threshold
+    age_days = older_than_override or max_age_days
+    if age_days is None:
+        return []  # No age limit, only keep_recent applies
+
+    cutoff = datetime.now() - timedelta(days=age_days)
+
+    # Collect deletable snapshots
+    to_delete = []
+    for session_id, session_snaps in sorted_sessions:
+        if session_id in protected_sessions:
+            continue  # Protected by keep_recent
+
+        session_time = max(s.timestamp for s in session_snaps)
+        if session_time < cutoff:
+            to_delete.extend(session_snaps)
+
+    return to_delete
+```
+
+### Cleanup Output
+
+```
+Analyzing snapshots...
+Found 15 snapshots from 5 sync sessions.
+
+Protected (keep_recent=3):
+  - Session abc12345 (2025-11-28): 3 snapshots
+  - Session def67890 (2025-11-27): 3 snapshots
+  - Session ghi11111 (2025-11-26): 3 snapshots
+
+To delete (older than 7 days):
+  - Session jkl22222 (2025-11-20): 3 snapshots
+  - Session mno33333 (2025-11-15): 3 snapshots
+
+Delete 6 snapshots? [y/N]: y
+Deleting @-presync-20251120T100000-jkl22222... done
+Deleting @home-presync-20251120T100000-jkl22222... done
+...
+Cleanup complete. Deleted 6 snapshots.
+```
+
+---
+
+## Setup Script
+
+Per FR-035, FR-036, and FR-037, a setup script handles initial installation and configuration.
+
+### Setup Flow
+
+```mermaid
+graph TD
+    Start["setup.sh (or pc-switcher setup)"]
+
+    CheckBtrfs["Check filesystem is btrfs"]
+    BtrfsNo["CRITICAL: pc-switcher requires btrfs<br/>Exit without changes"]
+
+    CheckUV["Check if uv is installed"]
+    InstallUV["Install uv via installer script"]
+
+    CheckBtrfsProgs["Check if btrfs-progs installed"]
+    InstallBtrfsProgs["sudo apt-get install btrfs-progs"]
+
+    InstallPCSwitcher["uv tool install pc-switcher"]
+
+    CreateConfig["Create ~/.config/pc-switcher/config.yaml<br/>with defaults and comments"]
+
+    CreateDirs["Create ~/.local/share/pc-switcher/logs/"]
+
+    Success["Setup complete!<br/>Run: pc-switcher sync &lt;target&gt;"]
+
+    Start --> CheckBtrfs
+    CheckBtrfs -->|not btrfs| BtrfsNo
+    CheckBtrfs -->|is btrfs| CheckUV
+    CheckUV -->|not installed| InstallUV
+    CheckUV -->|installed| CheckBtrfsProgs
+    InstallUV --> CheckBtrfsProgs
+    CheckBtrfsProgs -->|not installed| InstallBtrfsProgs
+    CheckBtrfsProgs -->|installed| InstallPCSwitcher
+    InstallBtrfsProgs --> InstallPCSwitcher
+    InstallPCSwitcher --> CreateConfig
+    CreateConfig --> CreateDirs
+    CreateDirs --> Success
+
+    style BtrfsNo fill:#ffcdd2
+    style Success fill:#c8e6c9
+```
+
+### Filesystem Check
+
+```bash
+# Check if root filesystem is btrfs
+fs_type=$(stat -f -c %T /)
+if [ "$fs_type" != "btrfs" ]; then
+    echo "CRITICAL: pc-switcher requires btrfs filesystem for safety features"
+    echo "Current filesystem: $fs_type"
+    exit 1
+fi
+```
+
+### Dependency Installation
+
+| Dependency | Check Command | Install Command |
+|------------|---------------|-----------------|
+| uv | `command -v uv` | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| btrfs-progs | `command -v btrfs` | `sudo apt-get install -y btrfs-progs` |
+
+### Default Config Generation
+
+The setup script generates `~/.config/pc-switcher/config.yaml` with:
+- All settings at their default values
+- Inline comments explaining each setting (extracted from schema descriptions)
+
+See [Setup and Default Configuration](#setup-and-default-configuration-fr-037) section for the generated file content.
+
+### Usage
+
+```bash
+# Option 1: Run setup script directly (for fresh machines)
+curl -LsSf https://raw.githubusercontent.com/[owner]/pc-switcher/main/setup.sh | bash
+
+# Option 2: If pc-switcher is already installed
+pc-switcher setup
+```
 
 ---
 
