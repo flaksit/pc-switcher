@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PC-switcher installation script
-# Usage: curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/main/install.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash
 # Or with version: curl -sSL ... | bash -s -- --version 0.1.0
 
 set -euo pipefail

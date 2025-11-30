@@ -282,7 +282,7 @@ The system provides installation and setup tooling to deploy pc-switcher to new 
 **Why this priority**: This is P2 because while essential for new users, developers can manually install during early development. Once the core sync system works, this becomes P1 for usability.
 
 **Independent Test**: Can be fully tested by:
-1. Running `curl -LsSf https://raw.githubusercontent.com/[owner]/pc-switcher/main/install.sh | sh` on a fresh Ubuntu 24.04 machine (without uv installed)
+1. Running `curl -LsSf https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | sh` on a fresh Ubuntu 24.04 machine (without uv installed)
 2. Verifying uv is installed if it was missing
 3. Verifying all other dependencies are installed
 4. Confirming pc-switcher package is installed

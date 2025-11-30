@@ -1543,7 +1543,7 @@ Per FR-035 and FR-036, an installation script (`install.sh`) handles initial ins
 The primary entry point for fresh machines is a `curl | sh` command that works without any prerequisites:
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/[owner]/pc-switcher/main/install.sh | sh
+curl -LsSf https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | sh
 ```
 
 This script:
@@ -1663,7 +1663,7 @@ async def execute(self) -> None:
 
     # Run the same install.sh script used for initial installation
     # The script handles: uv bootstrap, dependencies, pc-switcher install
-    install_url = f"https://raw.githubusercontent.com/[owner]/pc-switcher/v{source_version}/install.sh"
+    install_url = f"https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/v{source_version}/install.sh"
     result = await self.target.run_command(
         f"curl -LsSf {install_url} | sh -s -- --version {source_version}"
     )

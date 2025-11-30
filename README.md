@@ -32,9 +32,9 @@ git clone git@github.com:yourusername/pc-switcher.git
 cd pc-switcher
 ```
 
-Install as a Python tool with uv:
+Install using the installation script:
 ```bash
-uv tool install .
+curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash
 ```
 
 Or run directly from source:
