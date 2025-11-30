@@ -145,7 +145,6 @@ This delivers value by enabling developers to diagnose issues and providing audi
 
 **Constitution Alignment**:
 - Reliability Without Compromise (detailed audit trail)
-- Up-to-date Documentation (logs document actual system behavior)
 
 **Acceptance Scenarios**:
 
@@ -407,15 +406,15 @@ The terminal displays real-time sync progress including current job, operation p
 
 #### Logging System
 
-- **FR-018** `[Up-to-date Documentation]`: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL, where DEBUG is the most verbose. DEBUG includes all messages (FULL, INFO, WARNING, ERROR, CRITICAL, plus internal diagnostics). FULL includes all messages from INFO and below plus operational details, but excludes DEBUG-level internal diagnostics.
+- **FR-018**: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL, where DEBUG is the most verbose. DEBUG includes all messages (FULL, INFO, WARNING, ERROR, CRITICAL, plus internal diagnostics). FULL includes all messages from INFO and below plus operational details, but excludes DEBUG-level internal diagnostics.
 
 - **FR-019** `[Reliability Without Compromise]`: When a job raises SyncError exception, the orchestrator MUST log the error at CRITICAL level, request termination of the currently-executing job (queued jobs never execute and do not receive termination requests), and halt sync immediately
 
 - **FR-020** `[Frictionless Command UX]`: System MUST support independent log level configuration for file output (`log_file_level`) and terminal display (`log_cli_level`)
 
-- **FR-021** `[Up-to-date Documentation]`: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
+- **FR-021**: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
 
-- **FR-022** `[Up-to-date Documentation]`: Log entries MUST use structlog's JSONRenderer for file output (one JSON object per line with keys: timestamp in ISO8601 format, level, job, hostname, event, plus any additional context fields) and ConsoleRenderer for terminal output (human-readable format with ISO8601 timestamp, level, job@hostname, and message)
+- **FR-022**: Log entries MUST use structlog's JSONRenderer for file output (one JSON object per line with keys: timestamp in ISO8601 format, level, job, hostname, event, plus any additional context fields) and ConsoleRenderer for terminal output (human-readable format with ISO8601 timestamp, level, job@hostname, and message)
 
 - **FR-023** `[Reliability Without Compromise]`: System MUST aggregate logs from both source-side orchestrator and target-side operations into unified log stream
 

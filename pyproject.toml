@@ -1,0 +1,18 @@
+[project]
+name = "pc-switcher"
+version = "0.1.0"
+description = "A synchronization system for seamless switching between Linux desktop machines"
+
+[project.scripts]
+pc-switcher = "pc_switcher.cli:app"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "asyncssh>=2.21.1",
+    "jsonschema>=4.25.1",
+    "pydantic>=2.12.5",
+    "pyyaml>=6.0.3",
+    "rich>=14.2.0",
+    "structlog>=25.5.0",
+    "typer>=0.20.0",
+]
