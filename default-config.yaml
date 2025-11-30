@@ -1,0 +1,35 @@
+# pc-switcher configuration
+
+global_settings:
+  # Logging level for file logs (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL)
+  log_file_level: FULL
+  # Logging level for CLI output
+  log_cli_level: INFO
+  
+  # Enable/disable specific sync jobs
+  sync_jobs:
+    user_data: true
+    packages: true
+
+# Job-specific configurations
+
+btrfs_snapshots:
+  # Subvolumes to snapshot
+  subvolumes:
+    - "@"
+    - "@home"
+  # Mount point for btrfs root (usually /mnt/btrfs_root or similar if mounted)
+  # If not specified, it will try to find where subvolumes are mounted.
+  # mount_point: /mnt/btrfs_root
+
+disk_monitor:
+  # Minimum free space required before starting sync
+  preflight_minimum: "20%"
+  # Minimum free space required during sync (aborts if drops below)
+  runtime_minimum: "15%"
+  # Check interval in seconds
+  check_interval: 30
+
+install_on_target:
+  # URL to install/update from (defaults to same as source)
+  # repo_url: https://github.com/your/repo.git

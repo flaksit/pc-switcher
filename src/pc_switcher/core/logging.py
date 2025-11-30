@@ -7,19 +7,20 @@ import asyncio
 from datetime import datetime
 
 from pc_switcher.core.events import EventBus, LogEvent
+from pc_switcher.config import LogLevel
 
 # Define log levels
 LOG_LEVELS = {
-    "DEBUG": 10,
-    "FULL": 15,  # Custom level between DEBUG and INFO
-    "INFO": 20,
-    "WARNING": 30,
-    "ERROR": 40,
-    "CRITICAL": 50,
+    LogLevel.DEBUG: 10,
+    LogLevel.FULL: 15,  # Custom level between DEBUG and INFO
+    LogLevel.INFO: 20,
+    LogLevel.WARNING: 30,
+    LogLevel.ERROR: 40,
+    LogLevel.CRITICAL: 50,
 }
 
 # Register custom level
-logging.addLevelName(LOG_LEVELS["FULL"], "FULL")
+logging.addLevelName(LOG_LEVELS[LogLevel.FULL], "FULL")
 
 
 class Logger:
@@ -41,10 +42,10 @@ class Logger:
             cache_logger_on_first_use=True,
         )
 
-    def log(self, level: str, job: str, host: str, message: str, **ctx) -> None:
+    def log(self, level: LogLevel | str, job: str, host: str, message: str, **ctx) -> None:
         """Log a message and publish to event bus."""
         # Publish to event bus
-        event = LogEvent(level=level, job=job, host=host, message=message, **ctx)
+        event = LogEvent(level=str(level), job=job, host=host, message=message, **ctx)
         self._event_bus.publish(event)
 
     def get_job_logger(self, job_name: str, host: str) -> "JobLogger":
@@ -58,22 +59,22 @@ class JobLogger:
         self._host = host
 
     def debug(self, message: str, **ctx) -> None:
-        self._logger.log("DEBUG", self._job_name, self._host, message, **ctx)
+        self._logger.log(LogLevel.DEBUG, self._job_name, self._host, message, **ctx)
 
     def full(self, message: str, **ctx) -> None:
-        self._logger.log("FULL", self._job_name, self._host, message, **ctx)
+        self._logger.log(LogLevel.FULL, self._job_name, self._host, message, **ctx)
 
     def info(self, message: str, **ctx) -> None:
-        self._logger.log("INFO", self._job_name, self._host, message, **ctx)
+        self._logger.log(LogLevel.INFO, self._job_name, self._host, message, **ctx)
 
     def warning(self, message: str, **ctx) -> None:
-        self._logger.log("WARNING", self._job_name, self._host, message, **ctx)
+        self._logger.log(LogLevel.WARNING, self._job_name, self._host, message, **ctx)
 
     def error(self, message: str, **ctx) -> None:
-        self._logger.log("ERROR", self._job_name, self._host, message, **ctx)
+        self._logger.log(LogLevel.ERROR, self._job_name, self._host, message, **ctx)
 
     def critical(self, message: str, **ctx) -> None:
-        self._logger.log("CRITICAL", self._job_name, self._host, message, **ctx)
+        self._logger.log(LogLevel.CRITICAL, self._job_name, self._host, message, **ctx)
 
 
 class FileLogger:

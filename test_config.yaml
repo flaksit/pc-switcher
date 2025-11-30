@@ -1,0 +1,15 @@
+global_settings:
+  log_file_level: FULL
+  log_cli_level: INFO
+  sync_jobs:
+    dummy_success: true
+    dummy_fail: false
+    btrfs_snapshots: false
+    disk_monitor: false
+    install_on_target: false
+
+dummy_success:
+  enabled: true
+
+dummy_fail:
+  enabled: false
