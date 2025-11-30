@@ -43,6 +43,7 @@ Follow-up TODOs:
 ### Well-supported tools and best practices
 - Dependencies MUST rely on actively maintained, well-supported tools
 - Best practices and standards MUST be followed in architecture, implementation and operations
+- DRY and YAGNI software design principles MUST be honored - Violations MUST be documented with a their motivation
 
 *Rationale: Stable foundations limit unexpected maintenance overhead and security risk.*
 
