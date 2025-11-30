@@ -641,11 +641,12 @@ async def run(self) -> SyncSession:
     # Phase 1: Acquire source lock
     # Phase 2: Establish SSH connection
     # Phase 3: Acquire target lock
-    # Phase 4: Version check and installation
+    # Phase 4: Version compatibility check (error if target > source)
     # Phase 5: Job discovery and validation
     # Phase 6: Pre-sync snapshots
-    # Phase 7: Execute sync jobs with background monitoring
-    # Phase 8: Post-sync snapshots
+    # Phase 7: Install/upgrade pc-switcher on target (if needed)
+    # Phase 8: Execute sync jobs with background monitoring
+    # Phase 9: Post-sync snapshots
     # Finally: Cleanup (connection, locks, executors)
 ```
 

@@ -60,11 +60,14 @@ Central coordinator managing the complete sync workflow:
 1. **Pre-sync validation**: Schema, config, and system state checks
 2. **Connection management**: SSH connection to target with keepalive
 3. **Lock acquisition**: Prevents concurrent syncs (source and target locks)
-4. **Version synchronization**: Ensures matching pc-switcher versions
-5. **Safety snapshots**: Creates btrfs snapshots before/after sync
-6. **Job execution**: Sequential execution of enabled sync jobs
-7. **Background monitoring**: Disk space monitoring during sync
-8. **Error handling**: SIGINT handling, graceful cleanup, abort on critical errors
+4. **Version compatibility check**: Ensures target version not newer than source
+5. **Job discovery and validation**: Load jobs, validate configs and system state
+6. **Safety snapshots (pre-sync)**: Creates btrfs snapshots before modifications
+7. **Version installation**: Install/upgrade pc-switcher on target if needed
+8. **Job execution**: Sequential execution of enabled sync jobs
+9. **Safety snapshots (post-sync)**: Creates btrfs snapshots after completion
+10. **Background monitoring**: Disk space monitoring during sync
+11. **Error handling**: SIGINT handling, graceful cleanup, abort on critical errors
 
 ### EventBus
 Publish/subscribe event system with per-consumer queues:
@@ -151,11 +154,12 @@ sequenceDiagram
     Connection-->>Orchestrator: SSH established
     Orchestrator->>Connection: Acquire target lock
 
-    Orchestrator->>Connection: Check/install pc-switcher version
+    Orchestrator->>Connection: Check pc-switcher version compatibility
     Orchestrator->>Jobs: validate_config() for each
     Orchestrator->>Jobs: validate() for each
 
     Orchestrator->>Jobs: Create pre-sync snapshots
+    Orchestrator->>Connection: Install/upgrade pc-switcher on target
     Orchestrator->>Jobs: Start background monitors
 
     loop For each enabled sync job
@@ -249,11 +253,20 @@ Continuous monitoring during sync via `DiskSpaceMonitorJob`:
 - **Dual monitoring**: Separate instances for source and target
 
 ### Version Consistency
-Ensures matching pc-switcher versions on source and target:
-- **Check**: Compare versions before any sync operations
-- **Install**: Auto-install/upgrade on target if missing or outdated
+Ensures matching pc-switcher versions on source and target with two-phase approach:
+
+**Phase 1 - Version Compatibility Check** (before job validation):
+- Compare versions on source and target
 - **Abort**: Refuse sync if target version is newer than source
-- **Verification**: Re-check version after installation
+- No installation occurs at this stage
+
+**Phase 2 - Installation** (after pre-sync snapshots):
+- Auto-install/upgrade on target if missing or outdated
+- Occurs AFTER pre-sync snapshots for rollback safety
+- Installation modifies target system, so snapshots protect against failed upgrades
+- **Verification**: Re-check version after installation to confirm success
+
+This separation ensures that if installation fails, the system can be rolled back to the pre-sync snapshot state.
 
 ### Interrupt Handling
 Graceful shutdown on Ctrl+C (SIGINT):

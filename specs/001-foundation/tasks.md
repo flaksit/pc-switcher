@@ -234,7 +234,7 @@
 - [X] T082 [US2] Implement version comparison using packaging.version in src/pcswitcher/installation.py
 - [X] T083 [US2] Implement install_on_target (run install.sh on target via SSH; install.sh handles uv bootstrap and uv tool install) in src/pcswitcher/installation.py
 - [X] T084 [US2] Implement version mismatch detection (abort if target newer) in src/pcswitcher/installation.py
-- [X] T085 [US2] Integrate version check/install into orchestrator (before snapshots) in src/pcswitcher/orchestrator.py
+- [X] T085 [US2] Integrate version check (Phase 4) and installation (Phase 7, after pre-sync snapshots) into orchestrator in src/pcswitcher/orchestrator.py
 
 **Checkpoint**: Self-installation works for fresh and outdated targets
 

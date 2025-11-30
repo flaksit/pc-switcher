@@ -1087,13 +1087,15 @@ graph TD
 
     AcquireLocks["<b>Acquire Locks</b><br/>- Source: ~/.local/share/pc-switcher/sync.lock<br/>- Target: ~/.local/share/pc-switcher/target.lock"]
 
-    VersionCheck["<b>Version Check & Install</b><br/>- Get target pc-switcher version<br/>- If target newer → CRITICAL abort<br/>- If missing/outdated → install/upgrade<br/>- uv tool install from GitHub"]
+    VersionCheck["<b>Version Compatibility Check</b><br/>- Get target pc-switcher version<br/>- If target newer → CRITICAL abort<br/>- No installation at this phase"]
 
     SubvolCheck["<b>Subvolume Validation</b><br/>- Verify all configured subvolumes<br/>  exist on source AND target"]
 
     DiskPreflight["<b>Disk Space Preflight</b><br/>- Check free space on source<br/>- Check free space on target<br/>- Abort if below preflight_minimum"]
 
-    SnapPre["<b>Pre-sync Snapshots</b><br/>- Create read-only snapshots<br/>  on both source and target<br/>- Captures state with matching pc-switcher"]
+    SnapPre["<b>Pre-sync Snapshots</b><br/>- Create read-only snapshots<br/>  on both source and target<br/>- Captures state BEFORE installation"]
+
+    InstallTarget["<b>Install/Upgrade on Target</b><br/>- If missing/outdated → install/upgrade<br/>- uv tool install from GitHub<br/>- Done AFTER pre-sync snapshots for rollback safety"]
 
     StartDiskMon["<b>Start DiskSpaceMonitor</b><br/>- Background task for source<br/>- Background task for target"]
 
@@ -1114,7 +1116,8 @@ graph TD
     VersionCheck --> SubvolCheck
     SubvolCheck --> DiskPreflight
     DiskPreflight --> SnapPre
-    SnapPre --> StartDiskMon
+    SnapPre --> InstallTarget
+    InstallTarget --> StartDiskMon
     StartDiskMon --> SyncJobs
     SyncJobs --> SnapPost
     SnapPost --> Cleanup
@@ -1130,6 +1133,7 @@ graph TD
     style SubvolCheck fill:#e8f5e9
     style DiskPreflight fill:#e8f5e9
     style SnapPre fill:#e8f5e9
+    style InstallTarget fill:#e8f5e9
     style StartDiskMon fill:#fce4ec
     style SyncJobs fill:#e8f5e9
     style SnapPost fill:#e8f5e9
@@ -1138,11 +1142,12 @@ graph TD
 ```
 
 **Key ordering notes:**
-1. **All checks before snapshots**: Locks → Version check/install → Subvolume validation → Disk preflight → Snapshots. If any check fails, we abort cleanly with no state changes (except version install which is idempotent).
-2. **Version check and install before snapshots**: Per spec, version consistency is established before any sync operations. Pre-sync snapshots then capture the state with matching pc-switcher versions on both machines.
-3. **Three validation phases**: Schema → Job config → System state, with distinct error messages.
-4. **DiskSpaceMonitor as background tasks**: Two instances run throughout sync - one monitors source (local commands), one monitors target (via `RemoteExecutor`). Either can abort sync on low space.
-5. **Lock acquisition**: Source lock prevents concurrent syncs from same machine. Target lock prevents A→B and C→B concurrent syncs.
+1. **Version check separated from installation**: Version compatibility check (phase 4) only checks if target > source (error condition). Installation/upgrade (phase 7) happens AFTER pre-sync snapshots for rollback safety.
+2. **All checks before snapshots**: Locks → Version check → Subvolume validation → Disk preflight → Snapshots. If any check fails, we abort cleanly with no state changes.
+3. **Installation after pre-sync snapshots**: Installation modifies the target system, so it must happen AFTER pre-sync snapshots to allow rollback if installation fails. Pre-sync snapshots capture the state BEFORE installation.
+4. **Three validation phases**: Schema → Job config → System state, with distinct error messages.
+5. **DiskSpaceMonitor as background tasks**: Two instances run throughout sync - one monitors source (local commands), one monitors target (via `RemoteExecutor`). Either can abort sync on low space.
+6. **Lock acquisition**: Source lock prevents concurrent syncs from same machine. Target lock prevents A→B and C→B concurrent syncs.
 
 ---
 

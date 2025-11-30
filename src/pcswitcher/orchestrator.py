@@ -73,6 +73,11 @@ class Orchestrator:
         self._local_executor: LocalExecutor | None = None
         self._remote_executor: RemoteExecutor | None = None
 
+        # Version info (populated during validation, used during install)
+        self._source_version: str | None = None
+        self._target_version: str | None = None
+        self._install_needed: bool = False
+
         # Locks
         self._source_lock: SyncLock | None = None
 
@@ -118,9 +123,9 @@ class Orchestrator:
             self._logger.log(LogLevel.INFO, Host.TARGET, "Acquiring target lock")
             await self._acquire_target_lock()
 
-            # Phase 4: Version check and installation
-            self._logger.log(LogLevel.INFO, Host.TARGET, "Checking pc-switcher version")
-            await self._check_and_install_version()
+            # Phase 4: Version compatibility check (error if target > source)
+            self._logger.log(LogLevel.INFO, Host.TARGET, "Checking pc-switcher version compatibility")
+            await self._check_version_compatibility()
 
             # Phase 5: Job discovery and validation
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Discovering and validating jobs")
@@ -130,12 +135,17 @@ class Orchestrator:
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Creating pre-sync snapshots")
             await self._create_snapshots(SnapshotPhase.PRE)
 
-            # Phase 7: Execute sync jobs with background monitoring
+            # Phase 7: Install/upgrade pc-switcher on target (after snapshots for rollback safety)
+            if self._install_needed:
+                self._logger.log(LogLevel.INFO, Host.TARGET, "Installing/upgrading pc-switcher on target")
+                await self._install_on_target()
+
+            # Phase 8: Execute sync jobs with background monitoring
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Starting sync operations")
             job_results = await self._execute_jobs(jobs)
             session.job_results = job_results
 
-            # Phase 8: Post-sync snapshots
+            # Phase 9: Post-sync snapshots
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Creating post-sync snapshots")
             await self._create_snapshots(SnapshotPhase.POST)
 
@@ -198,41 +208,69 @@ class Orchestrator:
         if not await acquire_target_lock(self._remote_executor, self._source_hostname):
             raise RuntimeError(f"Another sync is already in progress on target {self._target_hostname}")
 
-    async def _check_and_install_version(self) -> None:
-        """Check target version and install/upgrade if needed."""
+    async def _check_version_compatibility(self) -> None:
+        """Check version compatibility - error if target is newer than source.
+
+        Sets self._install_needed flag for later installation after snapshots.
+        This separation ensures we can rollback if installation fails.
+        """
         assert self._remote_executor is not None
 
-        source_version = get_current_version()
-        target_version = await get_target_version(self._remote_executor)
+        self._source_version = get_current_version()
+        self._target_version = await get_target_version(self._remote_executor)
 
-        if target_version is None:
+        if self._target_version is None:
             self._logger.log(
                 LogLevel.INFO,
                 Host.TARGET,
-                f"pc-switcher not found on target, installing version {source_version}",
+                f"pc-switcher not found on target, will install version {self._source_version}",
             )
-            await install_on_target(self._remote_executor, source_version)
+            self._install_needed = True
 
-        elif target_version > source_version:
+        elif self._target_version > self._source_version:
             raise InstallationError(
-                f"Target version {target_version} is newer than source {source_version}. "
+                f"Target version {self._target_version} is newer than source {self._source_version}. "
                 "This is unusual and may indicate a configuration issue."
             )
 
-        elif target_version < source_version:
+        elif self._target_version < self._source_version:
             self._logger.log(
                 LogLevel.INFO,
                 Host.TARGET,
-                f"Target version {target_version} is outdated, upgrading to {source_version}",
+                f"Target version {self._target_version} is outdated, will upgrade to {self._source_version}",
             )
-            await install_on_target(self._remote_executor, source_version)
+            self._install_needed = True
 
         else:
             self._logger.log(
                 LogLevel.INFO,
                 Host.TARGET,
-                f"Target version {target_version} matches source",
+                f"Target version {self._target_version} matches source",
             )
+            self._install_needed = False
+
+    async def _install_on_target(self) -> None:
+        """Install or upgrade pc-switcher on target machine.
+
+        Called after pre-sync snapshots to ensure rollback capability.
+        """
+        assert self._remote_executor is not None
+        assert self._source_version is not None
+
+        if self._target_version is None:
+            self._logger.log(
+                LogLevel.INFO,
+                Host.TARGET,
+                f"Installing pc-switcher version {self._source_version}",
+            )
+        else:
+            self._logger.log(
+                LogLevel.INFO,
+                Host.TARGET,
+                f"Upgrading pc-switcher from {self._target_version} to {self._source_version}",
+            )
+
+        await install_on_target(self._remote_executor, self._source_version)
 
     async def _discover_and_validate_jobs(self) -> list[Job]:
         """Discover enabled jobs from config and validate their configuration.
