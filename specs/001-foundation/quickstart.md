@@ -343,10 +343,11 @@ log_file_level: FULL
 log_cli_level: INFO
 
 sync_jobs:
-  dummy_success: true
-  dummy_fail: false
-  user_data: false
-  packages: false
+  dummy_success: true   # Test job that completes successfully
+  dummy_fail: false     # Test job that fails at configurable progress %
+  # Future sync jobs (not yet implemented - features 5-10):
+  # user_data: false
+  # packages: false
 
 disk:
   preflight_minimum: "20%"
@@ -354,9 +355,10 @@ disk:
   check_interval: 30
 
 btrfs_snapshots:
+  # Configure these to match YOUR system's btrfs subvolume layout
   subvolumes:
-    - "@"
-    - "@home"
+    - "@"       # Example: root filesystem
+    - "@home"   # Example: home directories
   keep_recent: 3
 ```
 

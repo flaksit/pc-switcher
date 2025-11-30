@@ -1674,11 +1674,15 @@ log_cli_level: INFO     # Displayed in terminal
 # Enable/disable sync jobs (true = enabled, false = skipped)
 # Required jobs (snapshots) cannot be disabled
 sync_jobs:
-  user_data: true       # Sync /home and /root
-  packages: true        # Sync apt, snap, flatpak packages
-  docker: false         # Sync Docker images, containers, volumes
-  vms: false            # Sync KVM/virt-manager VMs
-  k3s: false            # Sync k3s cluster state
+  # Jobs implemented in 001-foundation (for testing the sync infrastructure):
+  dummy_success: true   # Test job that completes successfully
+  dummy_fail: false     # Test job that fails at configurable progress %
+  # Future sync jobs (not yet implemented - add when features 5-10 are built):
+  # user_data: true     # Sync /home and /root
+  # packages: true      # Sync apt, snap, flatpak packages
+  # docker: false       # Sync Docker images, containers, volumes
+  # vms: false          # Sync KVM/virt-manager VMs
+  # k3s: false          # Sync k3s cluster state
 
 # Disk space safety thresholds
 disk:
@@ -1688,9 +1692,11 @@ disk:
 
 # Btrfs snapshot configuration (cannot be disabled)
 btrfs_snapshots:
-  subvolumes:           # Subvolume names to snapshot (must exist on both machines)
-    - "@"               # Root filesystem
-    - "@home"           # Home directories
+  # IMPORTANT: Configure these to match YOUR system's btrfs subvolume layout.
+  # These are examples - adjust based on your actual subvolume names.
+  subvolumes:
+    - "@"               # Example: root filesystem subvolume
+    - "@home"           # Example: home directories subvolume
   keep_recent: 3        # Always keep N most recent sync sessions
   max_age_days: null    # Delete snapshots older than N days (null = no age limit)
 ```

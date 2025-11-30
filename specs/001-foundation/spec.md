@@ -227,7 +227,7 @@ This delivers value by enabling user customization and job parameterization.
 
 2. **Given** config includes `log_file_level: DEBUG` and `log_cli_level: INFO`, **When** sync runs, **Then** file logging captures all events at DEBUG and above, while terminal UI shows only INFO and above
 
-3. **Given** config includes `sync_jobs: { user_data: true, k3s: false }`, **When** sync runs, **Then** user data job executes and k3s job is skipped (with INFO log: "k3s job disabled by configuration")
+3. **Given** config includes `sync_jobs: { dummy_success: true, dummy_fail: false }`, **When** sync runs, **Then** dummy_success job executes and dummy_fail job is skipped (with INFO log: "dummy_fail job disabled by configuration")
 
 4. **Given** a job declares required config parameters (e.g., Docker job requires `docker_preserve_cache: bool`), **When** config is missing this parameter and no default exists, **Then** orchestrator logs CRITICAL error during startup and refuses to run
 
@@ -239,30 +239,25 @@ This delivers value by enabling user customization and job parameterization.
 log_file_level: FULL
 log_cli_level: INFO
 
+# Jobs implemented in 001-foundation:
 sync_jobs:
-  user_data: true
-  packages: true
-  docker: false
-  vms: false
-  k3s: false
+  dummy_success: true   # Test job that completes successfully
+  dummy_fail: false     # Test job that fails at configurable progress %
 
 # Job-specific configuration
 btrfs_snapshots:
-  # These should be "flat" subvolume names, not full paths
+  # Configure these to match YOUR system's btrfs subvolume layout
   subvolumes:
-    - "@"
-    - "@home"
-    - "@root"
+    - "@"       # Example: root filesystem
+    - "@home"   # Example: home directories
 
-user_data:
-  exclude_patterns:
-    - "**/.cache/*"
-    - "**/node_modules/*"
-  preserve_timestamps: true
+# Dummy job configuration (optional - defaults shown)
+dummy_success:
+  source_duration: 20   # Seconds to run on source
+  target_duration: 20   # Seconds to run on target
 
-packages:
-  sync_ppa: true
-  sync_flatpak: true
+dummy_fail:
+  fail_at_percent: 60   # Progress % at which to fail
 ```
 
 **Configuration Schema**: The formal configuration schema structure (global settings, sync_jobs section, and per-job settings) is defined in `specs/001-foundation/contracts/config-schema.yaml`. Job-specific settings appear as top-level keys (e.g., `btrfs_snapshots`, `user_data`) outside of the `sync_jobs` section.

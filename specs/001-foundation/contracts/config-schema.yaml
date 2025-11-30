@@ -48,7 +48,10 @@ properties:
       type: boolean
     default: {}
     examples:
-      - user_data: true
+      - dummy_success: true
+        dummy_fail: false
+        # Future jobs (features 5-10, not yet implemented):
+        user_data: true
         packages: true
         docker: false
         vms: false
@@ -87,9 +90,10 @@ properties:
         items:
           $ref: "#/definitions/subvolume_name"
         minItems: 1
-        description: "List of btrfs subvolumes to snapshot"
+        description: "List of btrfs subvolumes to snapshot (must match YOUR system's layout)"
         examples:
-          - ["@", "@home", "@root"]
+          # These are examples - configure based on your actual subvolumes:
+          - ["@", "@home"]
       keep_recent:
         type: integer
         minimum: 1
