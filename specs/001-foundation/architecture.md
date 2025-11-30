@@ -85,7 +85,7 @@ graph TD
 
 | Component | Responsibility |
 |-----------|----------------|
-| **CLI** | Entry point. Parses commands (`sync`, `logs`, `cleanup-snapshots`, `rollback`), loads config file (YAML), instantiates and runs Orchestrator |
+| **CLI** | Entry point. Parses commands (`sync`, `logs`, `cleanup-snapshots`, `rollback` (later)), loads config file (YAML), instantiates and runs Orchestrator |
 | **Orchestrator** | Central coordinator. Validates config (schema + general config + (delegated) job configs), manages job lifecycle via TaskGroup, handles SIGINT via asyncio cancellation, produces final sync summary |
 | **Config** | Validated configuration dataclass. Holds global settings, job enable/disable flags, and per-job settings after validation |
 | **Connection** | Manages SSH connection via asyncssh. Provides multiplexed sessions (multiple concurrent commands over single connection) |
@@ -482,6 +482,29 @@ graph TD
 | 2. Job Config | Orchestrator | Job.validate_config() | Invalid config for 'job': ... |
 | 3. System State | Jobs | Job.validate() | Cannot sync: ... |
 
+### Required Job Protection (Phase 1 - FR-034)
+
+During Phase 1 schema validation, the Orchestrator MUST check that no job with `required=True` is set to `false` in the `sync_jobs` configuration:
+
+```python
+def _validate_required_jobs(self, config: dict) -> list[ConfigError]:
+    """Check that required jobs are not disabled in config."""
+    errors = []
+    sync_jobs = config.get("sync_jobs", {})
+
+    for job_class in self._get_all_job_classes():
+        if job_class.required and sync_jobs.get(job_class.name) is False:
+            errors.append(ConfigError(
+                path=f"sync_jobs.{job_class.name}",
+                message=f"Required job '{job_class.name}' cannot be disabled",
+                location=self._config_path,
+            ))
+
+    return errors
+```
+
+Error message format per FR-034: `"Required job 'MODULE_NAME' cannot be disabled" followed by config file location`
+
 ### BtrfsSnapshotJob Validation (Phase 3)
 
 Per FR-015, `BtrfsSnapshotJob.validate()` MUST verify subvolumes exist on **both** source and target:
@@ -598,7 +621,7 @@ sequenceDiagram
 
 ### 2. Job Raises Exception (Critical Failure)
 
-When a job raises an unhandled exception, the TaskGroup catches it and cancels other tasks. The Orchestrator logs at CRITICAL level and offers rollback.
+When a job raises an unhandled exception, the TaskGroup catches it and cancels other tasks. The Orchestrator logs at CRITICAL level and aborts the sync. (Rollback capability is a separate feature.)
 
 ```mermaid
 sequenceDiagram
@@ -624,9 +647,7 @@ sequenceDiagram
 
     Note over Orchestrator: skip remaining jobs
 
-    alt pre-sync snapshots exist
-        Orchestrator->>TerminalUI: offer rollback
-    end
+    Note over Orchestrator: Pre-sync snapshots available<br/>for manual recovery if needed
 
     Orchestrator->>Logger: log summary (FAILED)
 ```
@@ -635,7 +656,7 @@ sequenceDiagram
 - TaskGroup automatically cancels sibling tasks when one fails
 - No manual `request_termination()` needed
 - CRITICAL log entry written with full exception details
-- Rollback offered if pre-sync snapshots exist
+- Pre-sync snapshots remain available for manual recovery (rollback command is a separate feature)
 
 ---
 
@@ -1086,6 +1107,117 @@ graph TD
 
 ---
 
+## Lock Mechanism
+
+Per FR-047, the system implements locking to prevent concurrent sync executions.
+
+### Lock Files
+
+| Lock | Location | Purpose |
+|------|----------|---------|
+| Source lock | `~/.local/share/pc-switcher/sync.lock` | Prevents concurrent syncs from the same source machine |
+| Target lock | `~/.local/share/pc-switcher/target.lock` | Prevents concurrent syncs to the same target (A→B and C→B) |
+
+### Target Lock Acquisition via SSH
+
+The target lock must be held for the duration of the SSH connection. If the connection drops (crash, network issue), the lock must be automatically released to prevent stale locks requiring manual intervention.
+
+**Implementation**: Use `flock` with the SSH session. The lock holder is a `flock` process that dies when the SSH connection is lost:
+
+```mermaid
+sequenceDiagram
+    participant Orchestrator
+    participant SSH as SSH Connection
+    participant Target as Target Machine
+    participant FlockProcess as flock process
+
+    Orchestrator->>SSH: Establish connection
+    Orchestrator->>SSH: Start flock process
+    SSH->>Target: flock -n ~/.local/share/pc-switcher/target.lock -c "cat"
+    Note over Target: flock acquires lock and waits on stdin
+
+    alt Lock acquired
+        Target-->>Orchestrator: Process started (lock held)
+        Note over FlockProcess: Holds lock while stdin open<br/>(tied to SSH channel)
+
+        Note over Orchestrator: Proceed with sync...
+
+        alt Normal completion
+            Orchestrator->>SSH: Close flock stdin (send EOF)
+            Note over FlockProcess: cat exits → flock releases lock
+        else SSH connection lost (crash/network)
+            Note over SSH: Connection drops
+            Note over FlockProcess: stdin closed → cat exits<br/>→ flock releases lock automatically
+        end
+    else Lock already held
+        Target-->>Orchestrator: flock returns exit code 1 (would block)
+        Orchestrator->>Orchestrator: Log ERROR "Another sync is in progress on target"
+        Note over Orchestrator: Abort before any operations
+    end
+```
+
+**Key properties:**
+- Lock is tied to the SSH session lifetime, not a file on disk
+- Crash or network disconnect automatically releases the lock
+- No manual cleanup required for stale locks
+- Uses `flock -n` (non-blocking) to fail fast if lock is held
+
+**Implementation code:**
+```python
+async def acquire_target_lock(self) -> None:
+    """Acquire target lock tied to SSH session lifetime."""
+    lock_path = "~/.local/share/pc-switcher/target.lock"
+
+    # Start flock process that holds lock while stdin is open
+    # When SSH connection dies, stdin closes, cat exits, flock releases lock
+    self._lock_process = await self._connection.create_process(
+        f"mkdir -p ~/.local/share/pc-switcher && "
+        f"flock -n {lock_path} -c 'cat' || exit 1"
+    )
+
+    # Check if we got the lock (process should be running)
+    await asyncio.sleep(0.1)  # Brief wait for flock to acquire or fail
+    if self._lock_process.exit_status is not None:
+        raise LockError(
+            f"Another sync is in progress on target (lock held: {lock_path})"
+        )
+
+    self.log(INFO, "Target lock acquired")
+
+async def release_target_lock(self) -> None:
+    """Release target lock by closing the flock process stdin."""
+    if self._lock_process:
+        self._lock_process.stdin.write_eof()
+        await self._lock_process.wait()
+        self.log(DEBUG, "Target lock released")
+```
+
+### Source Lock
+
+Source lock uses standard file locking:
+
+```python
+async def acquire_source_lock(self) -> None:
+    """Acquire source lock using fcntl."""
+    lock_path = Path.home() / ".local/share/pc-switcher/sync.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    self._lock_file = lock_path.open("w")
+    try:
+        fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        # Read PID from lock file for error message
+        with lock_path.open() as f:
+            pid = f.read().strip()
+        raise LockError(f"Another sync is in progress (PID: {pid})")
+
+    # Write our PID to lock file
+    self._lock_file.write(str(os.getpid()))
+    self._lock_file.flush()
+```
+
+---
+
 ## Self-Installation Flow
 
 Per FR-005, FR-006, and FR-007, the orchestrator ensures version consistency before any sync operations.
@@ -1236,6 +1368,23 @@ Values without units are **invalid** and will fail config validation.
 
 Per FR-014, the system provides snapshot cleanup with configurable retention policy.
 
+**Note on separation of concerns**: The `cleanup-snapshots` CLI command is a **standalone operation** that directly uses the `snapshots.py` module. It is distinct from `BtrfsSnapshotJob`, which is used during sync for creating pre/post snapshots. The cleanup command does not use the Orchestrator or job infrastructure—it is a simple CLI → snapshots module flow.
+
+```mermaid
+graph LR
+    subgraph "During Sync"
+        Orchestrator --> BtrfsSnapshotJob
+        BtrfsSnapshotJob --> SnapshotsMod["snapshots.py<br/>create_snapshot()"]
+    end
+
+    subgraph "Standalone CLI"
+        CleanupCmd["pc-switcher cleanup-snapshots"] --> SnapshotsMod2["snapshots.py<br/>cleanup_snapshots()"]
+    end
+
+    style BtrfsSnapshotJob fill:#e8f5e9
+    style CleanupCmd fill:#e1f5ff
+```
+
 ### CLI Command
 
 ```bash
@@ -1314,7 +1463,7 @@ def identify_snapshots_to_delete(
 
 ### Cleanup Output
 
-```
+```text
 Analyzing snapshots...
 Found 15 snapshots from 5 sync sessions.
 
@@ -1336,21 +1485,68 @@ Cleanup complete. Deleted 6 snapshots.
 
 ---
 
-## Setup Script
+## Installation Script
 
-Per FR-035, FR-036, and FR-037, a setup script handles initial installation and configuration.
+Per FR-035, FR-036, and FR-037, an installation script (`install.sh`) handles initial installation and configuration. The installation logic is **shared with `InstallOnTargetJob`** to ensure DRY compliance.
 
-### Setup Flow
+### Installation Entry Point
+
+The primary entry point for fresh machines is a `curl | sh` command that works without any prerequisites:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/[owner]/pc-switcher/main/install.sh | sh
+```
+
+This script:
+1. Works on fresh Ubuntu 24.04 machines with no prerequisites
+2. Installs `uv` if not present (via the official uv installer)
+3. Checks filesystem is btrfs
+4. Installs required system packages (btrfs-progs)
+5. Installs pc-switcher via `uv tool install`
+6. Creates default configuration
+
+### Shared Installation Logic (DRY)
+
+Both initial installation and target deployment use the **same `install.sh` script**. The script accepts a version parameter to install a specific version:
 
 ```mermaid
 graph TD
-    Start["setup.sh (or pc-switcher setup)"]
+    subgraph "Initial Installation (user runs manually)"
+        UserCurl["curl ... install.sh | sh"]
+        Note1["Installs latest version"]
+    end
+
+    subgraph "Target Deployment (during sync)"
+        InstallJob["InstallOnTargetJob"]
+        SSHCurl["SSH: curl ... install.sh | sh -s -- --version 0.4.0"]
+        Note2["Installs same version as source"]
+    end
+
+    subgraph "Single Script"
+        InstallSh["install.sh<br/>- Bootstrap uv if missing<br/>- Check btrfs<br/>- Install btrfs-progs<br/>- Install pc-switcher@version<br/>- Create default config"]
+    end
+
+    UserCurl --> Note1
+    InstallJob --> SSHCurl
+    SSHCurl --> Note2
+
+    UserCurl --> InstallSh
+    SSHCurl --> InstallSh
+
+    style InstallSh fill:#e8f5e9
+```
+
+### Installation Flow
+
+```mermaid
+graph TD
+    Start["install.sh (curl | sh)"]
+
+    CheckUV["Check if uv is installed"]
+    InstallUV["Install uv via:<br/>curl -LsSf https://astral.sh/uv/install.sh | sh"]
 
     CheckBtrfs["Check filesystem is btrfs"]
     BtrfsNo["CRITICAL: pc-switcher requires btrfs<br/>Exit without changes"]
-
-    CheckUV["Check if uv is installed"]
-    InstallUV["Install uv via installer script"]
 
     CheckBtrfsProgs["Check if btrfs-progs installed"]
     InstallBtrfsProgs["sudo apt-get install btrfs-progs"]
@@ -1363,12 +1559,12 @@ graph TD
 
     Success["Setup complete!<br/>Run: pc-switcher sync &lt;target&gt;"]
 
-    Start --> CheckBtrfs
-    CheckBtrfs -->|not btrfs| BtrfsNo
-    CheckBtrfs -->|is btrfs| CheckUV
+    Start --> CheckUV
     CheckUV -->|not installed| InstallUV
-    CheckUV -->|installed| CheckBtrfsProgs
-    InstallUV --> CheckBtrfsProgs
+    CheckUV -->|installed| CheckBtrfs
+    InstallUV --> CheckBtrfs
+    CheckBtrfs -->|not btrfs| BtrfsNo
+    CheckBtrfs -->|is btrfs| CheckBtrfsProgs
     CheckBtrfsProgs -->|not installed| InstallBtrfsProgs
     CheckBtrfsProgs -->|installed| InstallPCSwitcher
     InstallBtrfsProgs --> InstallPCSwitcher
@@ -1401,88 +1597,62 @@ fi
 
 ### Default Config Generation
 
-The setup script generates `~/.config/pc-switcher/config.yaml` with:
+The installation script generates `~/.config/pc-switcher/config.yaml` with:
 - All settings at their default values
 - Inline comments explaining each setting (extracted from schema descriptions)
 
 See [Setup and Default Configuration](#setup-and-default-configuration-fr-037) section for the generated file content.
 
-### Usage
+### InstallOnTargetJob Implementation
 
-```bash
-# Option 1: Run setup script directly (for fresh machines)
-curl -LsSf https://raw.githubusercontent.com/[owner]/pc-switcher/main/setup.sh | bash
+`InstallOnTargetJob` simply runs the same `install.sh` script on the target, passing the source version:
 
-# Option 2: If pc-switcher is already installed
-pc-switcher setup
+```python
+async def execute(self) -> None:
+    source_version = get_current_version()  # e.g., "0.4.0"
+
+    # Check target version first
+    result = await self.target.run_command("pc-switcher --version 2>/dev/null")
+    if result.success:
+        target_version = parse_version(result.stdout)
+        if target_version == source_version:
+            self.log(INFO, f"Target pc-switcher version matches source ({source_version})")
+            return
+        if target_version > source_version:
+            raise RuntimeError(
+                f"Target version {target_version} is newer than source {source_version}"
+            )
+        self.log(INFO, f"Upgrading target from {target_version} to {source_version}")
+    else:
+        self.log(INFO, f"Installing pc-switcher {source_version} on target")
+
+    # Run the same install.sh script used for initial installation
+    # The script handles: uv bootstrap, btrfs check, dependencies, pc-switcher install
+    install_url = f"https://raw.githubusercontent.com/[owner]/pc-switcher/v{source_version}/install.sh"
+    result = await self.target.run_command(
+        f"curl -LsSf {install_url} | sh -s -- --version {source_version}"
+    )
+    if not result.success:
+        raise RuntimeError(f"Failed to install pc-switcher on target: {result.stderr}")
+
+    # Verify installation
+    result = await self.target.run_command("pc-switcher --version")
+    if not result.success or source_version not in result.stdout:
+        raise RuntimeError("Installation verification failed")
+
+    self.log(INFO, f"Target pc-switcher installed/upgraded to {source_version}")
 ```
+
+**Key points:**
+- Uses versioned URL to fetch the script matching the source version
+- Script handles all prerequisites (uv, btrfs-progs) internally
+- No separate Python installation module needed - single `install.sh` for everything
 
 ---
 
 ## Rollback Workflow
 
-Per FR-013, the system provides rollback capability to restore from pre-sync snapshots. Rollback requires explicit user confirmation.
-
-### CLI Command
-
-```bash
-# List available rollback points
-pc-switcher rollback --list
-
-# Rollback to most recent pre-sync snapshot
-pc-switcher rollback
-
-# Rollback to specific session
-pc-switcher rollback --session abc12345
-```
-
-### Rollback Process
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant CLI
-    participant Orchestrator
-    participant SourceBtrfs as Source btrfs
-    participant TargetBtrfs as Target btrfs
-
-    User->>CLI: pc-switcher rollback
-    CLI->>CLI: List available pre-sync snapshots
-    CLI->>User: Display snapshot options
-
-    User->>CLI: Confirm selection
-    Note over CLI: Requires explicit confirmation
-
-    CLI->>Orchestrator: Execute rollback
-
-    par Rollback source
-        Orchestrator->>SourceBtrfs: btrfs subvolume snapshot (restore)
-        Note over SourceBtrfs: For each subvolume:<br/>1. Rename current → .backup<br/>2. Snapshot presync → current<br/>3. Delete .backup
-    and Rollback target
-        Orchestrator->>TargetBtrfs: btrfs subvolume snapshot (restore)
-        Note over TargetBtrfs: Same process via SSH
-    end
-
-    Orchestrator->>CLI: Rollback complete
-    CLI->>User: "Rollback to session abc12345 complete"
-```
-
-### Rollback Steps (per subvolume)
-
-1. **Validate**: Verify pre-sync snapshot exists
-2. **Rename current**: `mv /btrfs-root/@home /btrfs-root/@home.rollback-backup`
-3. **Restore snapshot**: `btrfs subvolume snapshot /btrfs-root/@home-presync-... /btrfs-root/@home`
-4. **Delete backup**: `btrfs subvolume delete /btrfs-root/@home.rollback-backup`
-
-### Post-Sync Snapshots During Rollback
-
-Post-sync snapshots (if they exist from a successful sync) are **retained** during rollback. They can be manually deleted via `pc-switcher cleanup-snapshots` if no longer needed.
-
-### Error Handling
-
-- If rollback fails mid-process, the `.rollback-backup` subvolumes are preserved for manual recovery
-- Rollback logs all operations at INFO level for audit trail
-- User must have sudo privileges for btrfs operations
+**Note**: Rollback capability is deferred to a separate feature after foundation infrastructure. Pre-sync snapshots created during sync operations can be used for manual rollback if needed, and the full rollback command (`pc-switcher rollback`) will be implemented in a later feature.
 
 ---
 

@@ -57,11 +57,11 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
 ### Reliability Without Compromise
-**Data integrity**: Btrfs snapshots created before any state modification (FR-008, FR-012). Pre-sync snapshots provide rollback points. Post-sync snapshots capture successful state (FR-009).
+**Data integrity**: Btrfs snapshots created before any state modification (FR-008, FR-012). Pre-sync snapshots provide recovery points for manual rollback if needed. Post-sync snapshots capture successful state (FR-009).
 
 **Conflict detection**: Subvolume existence validated before sync (FR-015). Lock files on both source and target prevent concurrent executions (FR-047), including A→B and C→B scenarios. Version mismatch detection prevents accidental downgrades (FR-006).
 
-**Rollback strategy**: Pre-sync snapshots enable manual rollback via `pc-switcher rollback` (FR-013). Snapshot naming includes session ID for clear identification (FR-010).
+**Rollback strategy**: Rollback capability (`pc-switcher rollback`) is deferred to a separate feature after foundation infrastructure. Pre-sync snapshots with session ID naming (FR-010) can be used for manual rollback if needed.
 
 ### Frictionless Command UX
 **Single command**: `pc-switcher sync <target>` executes complete workflow (FR-046).

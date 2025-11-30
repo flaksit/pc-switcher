@@ -9,7 +9,7 @@
 
 ### User Story 1 - Job Architecture and Integration Contract (Priority: P1)
 
-The system defines a precise contract for how sync jobs integrate with the core orchestration system. Each job (representing a discrete sync capability like package sync, Docker sync, or user data sync) implements a standardized interface covering configuration, validation, execution, logging, progress reporting, error handling, and rollback. This contract is detailed enough that all feature jobs can be developed independently and concurrently once the core infrastructure exists.
+The system defines a precise contract for how sync jobs integrate with the core orchestration system. Each job (representing a discrete sync capability like package sync, Docker sync, or user data sync) implements a standardized interface covering configuration, validation, execution, logging, progress reporting, and error handling. This contract is detailed enough that all feature jobs can be developed independently and concurrently once the core infrastructure exists.
 
 **Why this priority**: This is P1 because it's the architectural foundation. Without a clear, detailed job contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future job developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as jobs. The btrfs snapshots safety infrastructure (User Story 3) is also a job (though required and non-disableable). Self-installation (User Story 2) is NOT a job—it is pre-job orchestrator logic that runs before any job execution.
 
@@ -86,7 +86,7 @@ This delivers value by enabling zero-touch target setup and ensuring version con
 
 ### User Story 3 - Safety Infrastructure with Btrfs Snapshots (Priority: P1)
 
-Before any sync operations modify state, the system creates read-only btrfs snapshots of critical subvolumes on both source and target machines. These "pre-sync" snapshots serve as rollback points. After all sync jobs complete successfully, the system creates "post-sync" snapshots capturing the final state. This safety mechanism is implemented as orchestrator-level infrastructure (not a SyncJob) that is always active and cannot be disabled by users.
+Before any sync operations modify state, the system creates read-only btrfs snapshots of critical subvolumes on both source and target machines. These "pre-sync" snapshots serve as recovery points. After all sync jobs complete successfully, the system creates "post-sync" snapshots capturing the final state. This safety mechanism is implemented as orchestrator-level infrastructure (not a SyncJob) that is always active and cannot be disabled by users.
 
 **Why this priority**: This is P1 because it's the primary safety mechanism protecting against data loss. Without snapshots, there's no reliable way to recover from failed sync operations. This directly enforces the top project principle: "Reliability Without Compromise".
 
@@ -96,11 +96,11 @@ Before any sync operations modify state, the system creates read-only btrfs snap
 3. Verifying snapshots are created before any SyncJob executes
 4. Confirming snapshot naming includes timestamp and sync session ID
 5. Checking that snapshots are read-only
-6. Simulating sync failure and verifying rollback can restore from pre-sync snapshot
+6. Simulating sync failure and verifying pre-sync snapshot can be used for manual recovery
 7. Confirming post-sync snapshots are created after successful completion of all SyncJobs
 8. Verifying that snapshot infrastructure is always active (no config option to disable)
 
-This delivers value by providing the foundation for all rollback and recovery operations.
+This delivers value by providing the foundation for all recovery operations.
 
 **Constitution Alignment**:
 - Reliability Without Compromise (transactional safety via snapshots)
@@ -118,7 +118,7 @@ This delivers value by providing the foundation for all rollback and recovery op
 
 5. **Given** snapshot creation fails on target (e.g., insufficient space), **When** the failure occurs, **Then** the orchestrator logs CRITICAL error and aborts sync before any state changes occur
 
-6. **Given** pre-sync snapshots exist and a sync job later fails with CRITICAL error, **When** the orchestrator detects the failure, **Then** it offers to rollback to the pre-sync snapshots (user confirmation required for rollback execution)
+6. *(Removed - rollback capability is deferred to a separate feature after foundation infrastructure)*
 
 7. **Given** snapshots accumulate over multiple sync runs, **When** user runs `pc-switcher cleanup-snapshots --older-than 7d`, **Then** the system deletes pre-sync and post-sync snapshots older than 7 days, retaining the most recent 3 (configurable) sync sessions regardless of age (`--older-than` is optional; default is configurable)
 
@@ -173,7 +173,7 @@ This delivers value by enabling developers to diagnose issues and providing audi
 
 ### User Story 5 - Graceful Interrupt Handling (Priority: P1)
 
-When the user presses Ctrl+C during sync, the system catches the SIGINT signal, notifies the currently-executing job, logs the interruption, sends cleanup commands to the target machine, closes the connection cleanly, and exits with appropriate status code. The system does not leave orphaned processes. This does not issue a rollback automatically; that is a separate user action. How rollback can be initiated after an interrupt is covered in User Story 3.
+When the user presses Ctrl+C during sync, the system catches the SIGINT signal, notifies the currently-executing job, logs the interruption, sends cleanup commands to the target machine, closes the connection cleanly, and exits with appropriate status code. The system does not leave orphaned processes. This does not issue a rollback automatically; rollback capability is a separate feature.
 
 **Why this priority**: This is P1 because users must be able to safely interrupt long-running operations. Without graceful handling, interrupts could leave systems in inconsistent states or with orphaned processes on target machines.
 
@@ -271,28 +271,34 @@ packages:
 
 ### User Story 7 - Installation and Setup Infrastructure (Priority: P2)
 
-The system provides installation and setup tooling to deploy pc-switcher to new machines and configure required infrastructure (packages, configuration). A setup script handles initial installation, dependency checking, and subvolume creation guidance.
+The system provides installation and setup tooling to deploy pc-switcher to new machines and configure required infrastructure (packages, configuration). A setup script handles initial installation, dependency checking (including `uv` and `btrfs-progs`), and subvolume creation guidance.
+
+**Installation Pattern**: Initial installation works without any prerequisites on the target machine. A simple `curl | sh` command (like many modern tools) downloads and runs the installation script, which installs prerequisites like `uv` if needed.
 
 **Why this priority**: This is P2 because while essential for new users, developers can manually install during early development. Once the core sync system works, this becomes P1 for usability.
 
 **Independent Test**: Can be fully tested by:
-1. Running setup script on a fresh Ubuntu 24.04 machine
-2. Verifying all dependencies are installed
-3. Confirming pc-switcher package is installed
-4. Checking that config directory is created with default config
-5. Validating btrfs subvolume structure guidance is provided
+1. Running `curl -LsSf https://raw.githubusercontent.com/[owner]/pc-switcher/main/install.sh | sh` on a fresh Ubuntu 24.04 machine (without uv installed)
+2. Verifying uv is installed if it was missing
+3. Verifying all other dependencies are installed
+4. Confirming pc-switcher package is installed
+5. Checking that config directory is created with default config
+6. Validating btrfs subvolume structure guidance is provided
 
 This delivers value by streamlining initial deployment.
 
 **Constitution Alignment**:
-- Frictionless Command UX (simple installation process)
+- Frictionless Command UX (simple installation process, no prerequisites)
 - Proven Tooling Only (uses standard package managers)
+- Deliberate Simplicity (shared installation logic between initial setup and target deployment)
 
 **Acceptance Scenarios**:
 
-1. **Given** a fresh Ubuntu 24.04 machine, **When** user runs the installation script, **Then** the script checks that the filesystem is btrfs, creates `~/.config/pc-switcher/` with default config, installs any software/packages and configuration necessary to run pc-switcher (if not installed/configured yet), and displays "pc-switcher installed successfully"
+1. **Given** a fresh Ubuntu 24.04 machine without uv installed, **When** user runs `curl -LsSf https://...install.sh | sh`, **Then** the script installs uv (if not present), checks that the filesystem is btrfs, installs btrfs-progs (if not present), installs pc-switcher via `uv tool install`, creates `~/.config/pc-switcher/` with default config, and displays "pc-switcher installed successfully"
 
 2. **Given** user runs setup on a non-btrfs filesystem, **When** the script detects this, **Then** it logs CRITICAL error "pc-switcher requires btrfs filesystem for safety features" and exits without making changes
+
+3. **Given** pc-switcher sync installs on target (InstallOnTargetJob), **When** the target is missing uv, **Then** the same installation logic installs uv first, then installs/upgrades pc-switcher
 
 ---
 
@@ -395,7 +401,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **FR-012** `[Frictionless Command UX]`: If pre-sync snapshot creation fails, system MUST log CRITICAL error and abort before any state modifications occur
 
-- **FR-013** `[Reliability Without Compromise]`: System MUST provide rollback capability to restore from pre-sync snapshots (requires user confirmation)
+- **FR-013** *(Removed - rollback capability is deferred to a separate feature after foundation infrastructure)*
 
 - **FR-014** `[Minimize SSD Wear]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs; default retention policy (keep_recent count and max_age_days) MUST be configurable in the btrfs_snapshots job section of config.yaml
 
@@ -447,7 +453,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 #### Installation & Setup
 
-- **FR-035** `[Frictionless Command UX]`: System MUST provide installation script that checks btrfs filesystem presence, installs/upgrades dependencies (uv via installation method if not present, btrfs-progs via apt-get if not present; list will be extended by future jobs), installs pc-switcher package, and creates default configuration
+- **FR-035** `[Frictionless Command UX]`: System MUST provide installation script (`install.sh`) that can be run via `curl | sh` without prerequisites; the script installs uv (if not present) via `curl -LsSf https://astral.sh/uv/install.sh | sh`, checks btrfs filesystem presence, installs btrfs-progs via apt-get (if not present), installs pc-switcher package via `uv tool install`, and creates default configuration; the installation logic MUST be shared with `InstallOnTargetJob` to ensure DRY compliance
 
 - **FR-036** `[Frictionless Command UX]`: Setup script MUST detect whether the host filesystem is btrfs and abort with a clear error if it is not
 
