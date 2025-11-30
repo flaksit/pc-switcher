@@ -18,6 +18,11 @@ First, critically read through their feedback. Come back to me and ask me clarif
 
 Then, when all your questions are answered, fix your implementation according to the feedback. Ensure all points raised in the feedback are addressed and that the implementation fully complies with the specifications outlined in "spec.md".
 
+### Output
+Write a report to a new file "implementation-review-N-resolved.md", where N is the same number as of the review file you read. The goal is to have a trace of any decisions we make while resolving the feedback. The report should contain the following:
+- $EXTRA_INSTRUCTIONS
+- A log of any further conversation we have while you are resolving the feedback. This will mainly be answers to your clarifying questions, but we could get into deeper conversation about some of the feedback given. Just literally capture your output to me and my prompts.
+
 
 ## Overriding remarks, feedback, instructions, if any
 
