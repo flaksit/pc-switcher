@@ -5,6 +5,17 @@
 
 This document defines the core entities, their relationships, and validation rules for the foundation infrastructure. Types are expressed in Python 3.14 syntax with modern annotations.
 
+## Navigation
+
+**Documentation Hierarchy:**
+- [High level requirements](../../docs/High%20level%20requirements.md) - Project vision and scope
+- [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
+- [Feature spec](spec.md) - Detailed requirements for this feature
+- [Architecture](architecture.md) - Component design and interactions
+- Data model (this document) - Data structures and schemas
+- [Implementation plan](plan.md) - Implementation approach and phases
+- [Tasks](tasks.md) - Actionable implementation tasks
+
 ## Entity Overview
 
 ```mermaid

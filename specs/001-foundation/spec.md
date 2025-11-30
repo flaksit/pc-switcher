@@ -5,6 +5,17 @@
 **Status**: Draft
 **Input**: User description: "Write specs for features 1, 2 and 3 of the Feature breakdown.md: (1) Basic CLI & Infrastructure - Command parser, config system, connection, logging, terminal UI skeleton, architecture for modular features; (2) Safety Infrastructure - Pre-sync validation framework, btrfs snapshot management, rollback capability; (3) Installation & Setup - Deploy to machines, dependency installation"
 
+## Navigation
+
+**Documentation Hierarchy:**
+- [High level requirements](../../docs/High%20level%20requirements.md) - Project vision and scope
+- [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
+- Specification (this document) - Detailed requirements for this feature
+- [Architecture](architecture.md) - Component design and interactions
+- [Data model](data-model.md) - Data structures and schemas
+- [Implementation plan](plan.md) - Implementation approach and phases
+- [Tasks](tasks.md) - Actionable implementation tasks
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Job Architecture and Integration Contract (Priority: P1)

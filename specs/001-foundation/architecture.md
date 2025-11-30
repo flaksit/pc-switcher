@@ -2,6 +2,17 @@
 
 This document describes the architecture for the pc-switcher foundation infrastructure, covering the core components, their relationships, and key interaction patterns.
 
+## Navigation
+
+**Documentation Hierarchy:**
+- [High level requirements](../../docs/High%20level%20requirements.md) - Project vision and scope
+- [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
+- [Feature spec](spec.md) - Detailed requirements for this feature
+- Architecture (this document) - Component design and interactions
+- [Data model](data-model.md) - Data structures and schemas
+- [Implementation plan](plan.md) - Implementation approach and phases
+- [Tasks](tasks.md) - Actionable implementation tasks
+
 ## Design Principles
 
 - **Asyncio-native**: All I/O operations are async; cancellation uses native `asyncio.CancelledError`

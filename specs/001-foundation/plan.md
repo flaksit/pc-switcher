@@ -3,6 +3,17 @@
 **Branch**: `001-foundation` | **Date**: 2025-11-29 | **Spec**: [spec.md](./spec.md)
 **Input**: Feature specification from `/specs/001-foundation/spec.md`
 
+## Navigation
+
+**Documentation Hierarchy:**
+- [High level requirements](../../docs/High%20level%20requirements.md) - Project vision and scope
+- [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
+- [Feature spec](spec.md) - Detailed requirements for this feature
+- [Architecture](architecture.md) - Component design and interactions
+- [Data model](data-model.md) - Data structures and schemas
+- Implementation plan (this document) - Implementation approach and phases
+- [Tasks](tasks.md) - Actionable implementation tasks
+
 ## Summary
 
 Implement the complete foundation infrastructure for pc-switcher, establishing the job architecture contract, self-installation mechanism, btrfs snapshot safety system, logging infrastructure, configuration system, terminal UI, and interrupt handling. This foundation enables all subsequent feature jobs to be developed independently against a well-defined interface.

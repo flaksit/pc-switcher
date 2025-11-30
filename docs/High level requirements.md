@@ -2,6 +2,13 @@
 
 A synchronization system for seamless switching between Linux desktop machines (laptops, workstations).
 
+## Navigation
+
+**Related Documentation:**
+- [Architecture Decision Records (ADRs)](adr/_index.md) - Architectural decisions with rationale
+- [Feature Specifications](../specs/) - Feature-level specs, plans, and implementation details
+  - [001-foundation](../specs/001-foundation/) - Core sync engine architecture
+
 ## Vision
 
 Keep pc's in sync with minimal friction. We aim at almost full system-state replication rather than as simple sync of user data.

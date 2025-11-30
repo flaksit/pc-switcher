@@ -10,7 +10,7 @@ PC-switcher enables a simple workflow: work on one machine, sync before switchin
 Work on source machine → Trigger sync → Resume on target machine
 ```
 
-**Status**: Early planning/design phase. No implementation code exists yet.
+**Status**: Foundation infrastructure complete. Core sync functionality in development.
 
 ## What Gets Synced
 
@@ -26,14 +26,21 @@ Work on source machine → Trigger sync → Resume on target machine
 
 ## Installation
 
-Install via curl:
+Clone the repository:
 ```bash
-curl -fsSL https://github.com/yourusername/pc-switcher/releases/download/latest/install.sh | bash
+git clone git@github.com:yourusername/pc-switcher.git
+cd pc-switcher
 ```
 
-Or install as a Python tool with uv:
+Install as a Python tool with uv:
 ```bash
-uv tool install pc-switcher
+uv tool install .
+```
+
+Or run directly from source:
+```bash
+uv sync
+uv run pc-switcher --help
 ```
 
 ## Quick Start
@@ -55,23 +62,52 @@ pc-switcher logs
 
 After sync completes, power off the source machine and resume work on target.
 
+**Note**: Sync jobs are currently placeholders for testing infrastructure. Real sync functionality is in development.
+
 ## Configuration
 
 Create `~/.config/pc-switcher/config.yaml`:
+
 ```yaml
-source_user: your_username
-target_user: your_username
-btrfs_mount: /
-exclude_dirs:
-  - /var/cache
-  - /tmp
+# Logging configuration
+log_file_level: FULL      # FULL | INFO | WARNING | ERROR
+log_cli_level: INFO       # FULL | INFO | WARNING | ERROR
+
+# Sync jobs (true = enabled, false = disabled)
+sync_jobs:
+  dummy_success: true
+  dummy_fail: false
+
+# Disk space monitoring
+disk_space_monitor:
+  preflight_minimum: "20%"  # Or absolute like "50GiB"
+  runtime_minimum: "15%"
+  check_interval: 30        # Seconds
+
+# Btrfs snapshots
+btrfs_snapshots:
+  subvolumes:
+    - "@"
+    - "@home"
+  keep_recent: 3
+  max_age_days: 30  # Optional
 ```
+
+See example configs in `config/` directory.
 
 ## Available Commands
 
-- `pc-switcher sync <target>` - Start sync to target machine
-- `pc-switcher logs` - View sync logs and status
-- `pc-switcher cleanup-snapshots` - Remove old btrfs snapshots
+```bash
+# Sync to target machine
+pc-switcher sync <target-hostname> [--config PATH]
+
+# View logs
+pc-switcher logs              # Show logs directory and list recent logs
+pc-switcher logs --last       # Show path to most recent log file
+
+# Clean up old snapshots
+pc-switcher cleanup-snapshots --older-than 7d [--dry-run]
+```
 
 ## Requirements
 
@@ -92,10 +128,25 @@ exclude_dirs:
 ## Documentation
 
 - **[High level requirements](docs/High%20level%20requirements.md)** - Project vision, scope, workflow
-- **[Feature breakdown](docs/Feature%20breakdown.md)** - Implementation phases from foundation to user features
+- **[Architecture](docs/architecture.md)** - High-level architecture and design
+- **[Implementation](docs/implementation.md)** - Implementation details and patterns
 - **[Architecture Decision Records](docs/adr/_index.md)** - Design decisions and rationale
+- **[Feature specifications](specs/001-foundation/)** - Detailed feature specs and plans
 
 ## Development
+
+Install dependencies:
+```bash
+uv sync
+```
+
+Run code quality checks:
+```bash
+uv run ruff format .    # Format code
+uv run ruff check .     # Lint
+uv run basedpyright     # Type check
+uv run pytest           # Run tests
+```
 
 This project uses **SpecKit**—a specification-driven workflow via custom slash commands:
 
@@ -106,4 +157,4 @@ This project uses **SpecKit**—a specification-driven workflow via custom slash
 /speckit.implement                      # Execute implementation
 ```
 
-See [CLAUDE.md](CLAUDE.md) for development workflow details.
+See [CLAUDE.md](CLAUDE.md) for complete development workflow details.

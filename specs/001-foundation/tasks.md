@@ -7,6 +7,17 @@
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
+## Navigation
+
+**Documentation Hierarchy:**
+- [High level requirements](../../docs/High%20level%20requirements.md) - Project vision and scope
+- [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
+- [Feature spec](spec.md) - Detailed requirements for this feature
+- [Architecture](architecture.md) - Component design and interactions
+- [Data model](data-model.md) - Data structures and schemas
+- [Implementation plan](plan.md) - Implementation approach and phases
+- Tasks (this document) - Actionable implementation tasks
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
