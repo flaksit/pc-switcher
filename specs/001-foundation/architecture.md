@@ -247,8 +247,7 @@ classDiagram
         +config: JobConfig
         +source: LocalExecutor
         +target: RemoteExecutor
-        +logger: JobLogger
-        +ui: TerminalUI
+        +event_bus: EventBus
         +session_id: str
         +source_hostname: str
         +target_hostname: str
@@ -404,7 +403,7 @@ classDiagram
 
     JobContext --> LocalExecutor : source
     JobContext --> RemoteExecutor : target
-    JobContext --> JobLogger : uses
+    JobContext --> EventBus : publishes to
     JobContext --> ProgressUpdate : creates
     LocalExecutor --> CommandResult : returns
     RemoteExecutor --> Connection : wraps
@@ -431,10 +430,10 @@ classDiagram
 | Orchestrator → LocalExecutor | Creates for local command execution |
 | Orchestrator → Job[] | Creates, validates, and executes jobs; uses TaskGroup for background jobs |
 | Orchestrator → EventBus | Creates and owns the event bus for logging/progress |
-| Job → JobContext | Receives context at execution time (config, source, target, logger, ui, session_id) |
+| Job → JobContext | Receives context at execution time (config, source, target, event_bus, session_id) |
 | JobContext → LocalExecutor | `source` field - for running commands on source machine |
 | JobContext → RemoteExecutor | `target` field - for running commands on target machine + file transfers |
-| JobContext → JobLogger | Jobs use this to log messages with pre-bound job name and host (role) |
+| JobContext → EventBus | Jobs use `_log()` helper to publish LogEvents; `_report_progress()` for ProgressEvents |
 | RemoteExecutor → Connection | Wraps Connection with job-friendly interface |
 | RemoteExecutor → CommandResult | Returns structured result; Job interprets and logs |
 | Logger → JobLogger | Creates bound logger instances for each job |
@@ -1028,15 +1027,13 @@ graph TD
 
     AcquireLocks["<b>Acquire Locks</b><br/>- Source: ~/.local/share/pc-switcher/sync.lock<br/>- Target: ~/.local/share/pc-switcher/target.lock"]
 
-    VersionCheck["<b>Version Check</b><br/>- Get target pc-switcher version<br/>- If target newer → CRITICAL abort<br/>- Record if install/upgrade needed"]
+    VersionCheck["<b>Version Check & Install</b><br/>- Get target pc-switcher version<br/>- If target newer → CRITICAL abort<br/>- If missing/outdated → install/upgrade<br/>- uv tool install from GitHub"]
 
     SubvolCheck["<b>Subvolume Validation</b><br/>- Verify all configured subvolumes<br/>  exist on source AND target"]
 
     DiskPreflight["<b>Disk Space Preflight</b><br/>- Check free space on source<br/>- Check free space on target<br/>- Abort if below preflight_minimum"]
 
-    SnapPre["<b>Pre-sync Snapshots</b><br/>- Create read-only snapshots<br/>  on both source and target"]
-
-    InstallTarget["<b>Install/Upgrade Target</b><br/>- Only if version check found<br/>  missing or outdated version<br/>- uv tool install from GitHub"]
+    SnapPre["<b>Pre-sync Snapshots</b><br/>- Create read-only snapshots<br/>  on both source and target<br/>- Captures state with matching pc-switcher"]
 
     StartDiskMon["<b>Start DiskSpaceMonitor</b><br/>- Background task for source<br/>- Background task for target"]
 
@@ -1057,8 +1054,7 @@ graph TD
     VersionCheck --> SubvolCheck
     SubvolCheck --> DiskPreflight
     DiskPreflight --> SnapPre
-    SnapPre --> InstallTarget
-    InstallTarget --> StartDiskMon
+    SnapPre --> StartDiskMon
     StartDiskMon --> SyncJobs
     SyncJobs --> SnapPost
     SnapPost --> Cleanup
@@ -1070,11 +1066,10 @@ graph TD
     style JobConfigVal fill:#fff3e0
     style Connect fill:#f3e5f5
     style AcquireLocks fill:#ffcdd2
-    style VersionCheck fill:#fff3e0
+    style VersionCheck fill:#e8f5e9
     style SubvolCheck fill:#e8f5e9
     style DiskPreflight fill:#e8f5e9
     style SnapPre fill:#e8f5e9
-    style InstallTarget fill:#e8f5e9
     style StartDiskMon fill:#fce4ec
     style SyncJobs fill:#e8f5e9
     style SnapPost fill:#e8f5e9
@@ -1083,8 +1078,8 @@ graph TD
 ```
 
 **Key ordering notes:**
-1. **All checks before snapshots**: Locks → Version check → Subvolume validation → Disk preflight. If any check fails, we abort cleanly with no state changes.
-2. **Version CHECK vs INSTALL separated**: Version is checked early (can abort if target is newer). Install/upgrade happens AFTER snapshots (safety rollback point exists).
+1. **All checks before snapshots**: Locks → Version check/install → Subvolume validation → Disk preflight → Snapshots. If any check fails, we abort cleanly with no state changes (except version install which is idempotent).
+2. **Version check and install before snapshots**: Per spec, version consistency is established before any sync operations. Pre-sync snapshots then capture the state with matching pc-switcher versions on both machines.
 3. **Three validation phases**: Schema → Job config → System state, with distinct error messages.
 4. **DiskSpaceMonitor as background tasks**: Two instances run throughout sync - one monitors source (local commands), one monitors target (via `RemoteExecutor`). Either can abort sync on low space.
 5. **Lock acquisition**: Source lock prevents concurrent syncs from same machine. Target lock prevents A→B and C→B concurrent syncs.
@@ -1120,21 +1115,21 @@ sequenceDiagram
         end
     end
 
-    Note over Orchestrator: Continue to subvolume check,<br/>disk preflight, then snapshots...
-
-    alt needs_install or needs_upgrade (after snapshots)
+    alt needs install or upgrade
         Orchestrator->>Target: uv tool install git+https://github.com/[owner]/pc-switcher@v{source_version}
         Target-->>Orchestrator: Installation output
 
         alt installation failed
             Orchestrator->>Orchestrator: Log CRITICAL "Installation failed: {error}"
-            Note over Orchestrator: Abort sync (snapshots exist for rollback)
+            Note over Orchestrator: Abort sync (no state changes yet)
         else installation succeeded
             Orchestrator->>Target: pc-switcher --version
             Target-->>Orchestrator: version matches source
-            Orchestrator->>Orchestrator: Log INFO "Target pc-switcher upgraded to {version}"
+            Orchestrator->>Orchestrator: Log INFO "Target pc-switcher installed/upgraded to {version}"
         end
     end
+
+    Note over Orchestrator: Continue to subvolume check,<br/>disk preflight, then snapshots...
 ```
 
 ### Version Detection

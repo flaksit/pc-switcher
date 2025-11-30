@@ -222,8 +222,7 @@ class JobContext:
     config: dict[str, Any]        # Validated job-specific config
     source: LocalExecutor         # Execute on source machine
     target: RemoteExecutor        # Execute on target machine
-    logger: JobLogger             # Pre-bound logger for this job
-    event_bus: EventBus           # For logging and progress
+    event_bus: EventBus           # For logging and progress (use _log() helper)
     session_id: str               # 8-char hex session ID
     source_hostname: str          # Actual source machine name
     target_hostname: str          # Actual target machine name

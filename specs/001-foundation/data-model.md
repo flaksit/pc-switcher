@@ -337,8 +337,7 @@ class JobContext:
     config: dict[str, Any]        # Job-specific config (validated)
     source: LocalExecutor
     target: RemoteExecutor
-    logger: JobLogger
-    event_bus: EventBus
+    event_bus: EventBus           # For logging and progress (jobs use _log() helper)
     session_id: str
     source_hostname: str
     target_hostname: str

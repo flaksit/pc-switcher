@@ -104,19 +104,25 @@ async def _sync(target: str) -> None:
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
+
+import structlog
 
 from pcswitcher.events import LogEvent
 from pcswitcher.models import LogLevel
 
 class FileLogger:
-    """Consumes LogEvents and writes JSON lines to file (FR-022)."""
+    """Consumes LogEvents and writes JSON lines to file (FR-022).
+
+    Uses structlog's JSONRenderer for consistent JSON output format.
+    """
 
     def __init__(self, log_file: Path, level: LogLevel, queue: asyncio.Queue) -> None:
         self._log_file = log_file
         self._level = level
         self._queue = queue
+        # Configure structlog processor chain for JSON output
+        self._processor = structlog.processors.JSONRenderer()
 
     async def consume(self) -> None:
         """Run as background task."""
@@ -126,8 +132,11 @@ class FileLogger:
                 if event is None:  # Shutdown sentinel
                     break
                 if isinstance(event, LogEvent) and event.level >= self._level:
-                    # Use structlog-style JSON output (one object per line)
-                    f.write(json.dumps(event.to_dict()) + "\n")
+                    # Convert LogEvent to structlog-compatible dict and serialize
+                    event_dict = event.to_dict()
+                    # JSONRenderer returns (str, str) tuple; we want the second element
+                    _, json_line = self._processor(None, None, event_dict)
+                    f.write(json_line + "\n")
                     f.flush()
 ```
 
@@ -149,7 +158,8 @@ class DummySuccessJob(SyncJob):
 
     Simulates 20s operation on source (log every 2s, WARNING at 6s)
     and 20s on target (log every 2s, ERROR at 8s).
-    Progress: 0% → 25% → 50% → 75% → 100%
+    Progress milestones: 0% (start) → 25% (10s source) → 50% (20s, end source)
+                       → 75% (30s, 10s target) → 100% (40s, end target)
     """
 
     name: ClassVar[str] = "dummy_success"
@@ -164,14 +174,13 @@ class DummySuccessJob(SyncJob):
 
     async def execute(self, context: JobContext) -> None:
         try:
-            # Progress milestones: 0, 25, 50, 75, 100
             self._report_progress(context, ProgressUpdate(percent=0))
 
-            # Source phase: 20s with 2s intervals (10 ticks)
+            # Source phase: 20s with 2s intervals (10 iterations)
             await self._run_source_phase(context)
             self._report_progress(context, ProgressUpdate(percent=50))
 
-            # Target phase: 20s with 2s intervals (10 ticks)
+            # Target phase: 20s with 2s intervals (10 iterations)
             await self._run_target_phase(context)
             self._report_progress(context, ProgressUpdate(percent=100))
 
@@ -180,39 +189,39 @@ class DummySuccessJob(SyncJob):
             raise
 
     async def _run_source_phase(self, context: JobContext) -> None:
-        """Source phase: 20s, log every 2s, WARNING at 6s."""
-        for tick in range(10):  # 10 ticks × 2s = 20s
-            elapsed = tick * 2
+        """Source phase: 20s total, log every 2s, WARNING at 6s."""
+        for tick in range(10):  # 10 iterations × 2s = 20s
+            elapsed = (tick + 1) * 2  # 2, 4, 6, ..., 20
             self._log(
                 context, Host.SOURCE, LogLevel.INFO,
                 f"Source phase: {elapsed}s elapsed"
             )
 
-            # WARNING at 6s (tick 3)
-            if tick == 3:
+            # WARNING at 6s (after tick 2, when elapsed=6)
+            if elapsed == 6:
                 self._log(context, Host.SOURCE, LogLevel.WARNING, "Test warning at 6s")
 
-            # Progress: 25% at tick 5 (10s)
-            if tick == 5:
+            # Progress: 25% at halfway (10s)
+            if elapsed == 10:
                 self._report_progress(context, ProgressUpdate(percent=25))
 
             await asyncio.sleep(2)
 
     async def _run_target_phase(self, context: JobContext) -> None:
-        """Target phase: 20s, log every 2s, ERROR at 8s."""
-        for tick in range(10):  # 10 ticks × 2s = 20s
-            elapsed = tick * 2
+        """Target phase: 20s total, log every 2s, ERROR at 8s."""
+        for tick in range(10):  # 10 iterations × 2s = 20s
+            elapsed = (tick + 1) * 2  # 2, 4, 6, ..., 20
             self._log(
                 context, Host.TARGET, LogLevel.INFO,
                 f"Target phase: {elapsed}s elapsed"
             )
 
-            # ERROR at 8s (tick 4)
-            if tick == 4:
+            # ERROR at 8s (after tick 3, when elapsed=8)
+            if elapsed == 8:
                 self._log(context, Host.TARGET, LogLevel.ERROR, "Test error at 8s")
 
-            # Progress: 75% at tick 5 (10s into target = 30s total)
-            if tick == 5:
+            # Progress: 75% at halfway (10s into target = 30s total)
+            if elapsed == 10:
                 self._report_progress(context, ProgressUpdate(percent=75))
 
             await asyncio.sleep(2)
