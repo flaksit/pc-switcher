@@ -39,7 +39,7 @@
 - Six-level logging system (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL) is clearly defined
 - CRITICAL error handling and sync abortion is well-specified
 - Three dummy test jobs provide comprehensive testing scenarios
-- Btrfs snapshot safety mechanism is clearly defined as required (non-disableable) job
+- Btrfs snapshot safety mechanism is clearly defined as orchestrator-level infrastructure
 - Self-installation/upgrade mechanism ensures version consistency
 - Graceful interrupt handling (Ctrl+C) is thoroughly specified
 - Configuration system supports job enable/disable and log level control

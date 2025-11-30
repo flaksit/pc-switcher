@@ -22,7 +22,7 @@ cd /home/janfr/dev/pc-switcher
 uv init --python 3.14
 
 # Add dependencies
-uv add asyncssh rich typer structlog pyyaml jsonschema
+uv add asyncssh rich typer structlog pyyaml jsonschema packaging pytimeparse2
 
 # Add dev dependencies
 uv add --dev pytest pytest-asyncio basedpyright ruff codespell
@@ -121,8 +121,8 @@ class FileLogger:
         self._log_file = log_file
         self._level = level
         self._queue = queue
-        # Configure structlog processor chain for JSON output
-        self._processor = structlog.processors.JSONRenderer()
+        # Configure structlog processor for JSON output
+        self._json_renderer = structlog.processors.JSONRenderer()
 
     async def consume(self) -> None:
         """Run as background task."""
@@ -132,10 +132,10 @@ class FileLogger:
                 if event is None:  # Shutdown sentinel
                     break
                 if isinstance(event, LogEvent) and event.level >= self._level:
-                    # Convert LogEvent to structlog-compatible dict and serialize
+                    # Convert LogEvent to dict and serialize to JSON via structlog
                     event_dict = event.to_dict()
-                    # JSONRenderer returns (str, str) tuple; we want the second element
-                    _, json_line = self._processor(None, None, event_dict)
+                    # JSONRenderer returns a JSON string when called as processor
+                    json_line = self._json_renderer(None, None, event_dict)
                     f.write(json_line + "\n")
                     f.flush()
 ```
@@ -227,7 +227,7 @@ class DummySuccessJob(SyncJob):
             await asyncio.sleep(2)
 ```
 
-### 4. SSH Command Execution
+### 4. Command Execution (Local and Remote)
 
 ```python
 # src/pcswitcher/executor.py
@@ -239,6 +239,45 @@ from pathlib import Path
 import asyncssh
 
 from pcswitcher.models import CommandResult
+
+
+class LocalExecutor:
+    """Executes commands on the source machine via async subprocess."""
+
+    def __init__(self) -> None:
+        self._processes: list[asyncio.subprocess.Process] = []
+
+    async def run_command(
+        self, cmd: str, timeout: float | None = None
+    ) -> CommandResult:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=timeout,
+        )
+        return CommandResult(
+            exit_code=proc.returncode or 0,
+            stdout=stdout.decode() if stdout else "",
+            stderr=stderr.decode() if stderr else "",
+        )
+
+    async def start_process(self, cmd: str) -> asyncio.subprocess.Process:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._processes.append(proc)
+        return proc
+
+    async def terminate_all_processes(self) -> None:
+        for proc in self._processes:
+            proc.terminate()
+        self._processes.clear()
 
 
 class RemoteExecutor:
@@ -349,7 +388,7 @@ sync_jobs:
   # user_data: false
   # packages: false
 
-disk:
+disk_space_monitor:
   preflight_minimum: "20%"
   runtime_minimum: "15%"
   check_interval: 30

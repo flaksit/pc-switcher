@@ -27,7 +27,7 @@ Work on source machine → Trigger sync → Resume on target machine
 ## Requirements
 
 - Ubuntu 24.04 LTS on all machines
-- btrfs filesystem
+- Single btrfs filesystem (all synced data on one filesystem per machine)
 - Machines connected to same LAN (1Gb) during sync
 - Only one machine actively used at a time
 

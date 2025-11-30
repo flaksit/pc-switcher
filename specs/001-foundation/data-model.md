@@ -179,7 +179,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ConnectionEvent:
-    status: str               # "connected", "disconnected", "reconnecting"
+    status: str               # "connected", "disconnected" (no reconnection attempt)
     latency: float | None     # Round-trip time in ms, None if disconnected
 ```
 
@@ -276,9 +276,9 @@ class Snapshot:
 
     @property
     def name(self) -> str:
-        """Snapshot name per FR-010: @home-presync-20251129T143022-abc12345"""
+        """Snapshot name per FR-010: pre-@home-20251129T143022"""
         ts = self.timestamp.strftime("%Y%m%dT%H%M%S")
-        return f"{self.subvolume}-{self.phase.value}-{ts}-{self.session_id}"
+        return f"{self.phase.value}-{self.subvolume}-{ts}"
 ```
 
 ---
@@ -579,6 +579,6 @@ stateDiagram-v2
 | ProgressUpdate | percent | 0-100 if set |
 | SyncSession | session_id | Exactly 8 hex characters |
 | Configuration | log_*_level | Valid LogLevel enum |
-| Configuration | disk.preflight_minimum | Pattern: `\d+%` or `\d+(GiB\|MiB\|GB\|MB)` |
+| Configuration | disk_space_monitor.preflight_minimum | Pattern: `\d+%` or `\d+(GiB\|MiB\|GB\|MB)` |
 | BtrfsConfig | subvolumes | Non-empty list, each starts with `@` |
 | Snapshot | name | Pattern: `<subvol>-<phase>-<timestamp>-<session_id>` |

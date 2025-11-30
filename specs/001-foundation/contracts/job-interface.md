@@ -18,9 +18,9 @@ A Job is a discrete sync operation (e.g., package sync, Docker sync, user data s
 
 ```text
 Job (ABC)
-├── SystemJob (required=True)   → Infrastructure jobs (snapshots, installation)
-├── SyncJob (required=False)    → User data sync jobs (configurable)
-└── BackgroundJob (required=True) → Concurrent monitoring jobs
+├── SystemJob   → Infrastructure jobs (snapshots, installation) - orchestrator-managed
+├── SyncJob     → User data sync jobs (configurable via sync_jobs)
+└── BackgroundJob → Concurrent monitoring jobs - orchestrator-managed
 ```
 
 ## Required Class Attributes
@@ -28,7 +28,6 @@ Job (ABC)
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `name` | `ClassVar[str]` | Unique identifier (e.g., `"packages"`, `"docker"`) |
-| `required` | `ClassVar[bool]` | If `True`, cannot be disabled in config |
 | `CONFIG_SCHEMA` | `ClassVar[dict[str, Any]]` | JSON Schema (draft-07) for job-specific config |
 
 **Note on CONFIG_SCHEMA**: The orchestrator accesses job configuration schemas via the `CONFIG_SCHEMA` class attribute directly (not via a method). This is the canonical API for schema access. Jobs may define an empty schema (`{}`) if they have no configuration options.

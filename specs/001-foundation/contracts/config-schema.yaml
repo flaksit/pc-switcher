@@ -41,26 +41,44 @@ properties:
     description: "Minimum log level displayed in terminal"
 
   # Job enable/disable flags
+  # NOTE: Only explicitly listed job names are valid. Unknown job names will cause validation to fail.
   sync_jobs:
     type: object
-    description: "Enable or disable optional sync jobs"
-    additionalProperties:
-      type: boolean
+    description: "Enable or disable optional sync jobs. Unknown job names are rejected."
+    properties:
+      # Jobs implemented in 001-foundation:
+      dummy_success:
+        type: boolean
+        default: true
+        description: "Test job that completes successfully"
+      dummy_fail:
+        type: boolean
+        default: false
+        description: "Test job that fails at configurable progress %"
+      # Future jobs (add when features 5-10 are implemented):
+      # user_data:
+      #   type: boolean
+      #   default: true
+      # packages:
+      #   type: boolean
+      #   default: true
+      # docker:
+      #   type: boolean
+      #   default: false
+      # vms:
+      #   type: boolean
+      #   default: false
+      # k3s:
+      #   type: boolean
+      #   default: false
+    additionalProperties: false  # Reject unknown job names (FR edge case)
     default: {}
-    examples:
-      - dummy_success: true
-        dummy_fail: false
-        # Future jobs (features 5-10, not yet implemented):
-        user_data: true
-        packages: true
-        docker: false
-        vms: false
-        k3s: false
 
-  # Disk space monitoring
-  disk:
+  # Disk space monitoring (DiskSpaceMonitorJob)
+  # NOTE: Config key matches job module name (disk_space_monitor.py -> disk_space_monitor)
+  disk_space_monitor:
     type: object
-    description: "Disk space monitoring configuration"
+    description: "Disk space monitoring configuration for DiskSpaceMonitorJob"
     properties:
       preflight_minimum:
         $ref: "#/definitions/disk_threshold"
@@ -134,6 +152,21 @@ properties:
         description: "Progress percentage at which to fail"
     additionalProperties: false
 
+# =============================================================================
+# DEVELOPER NOTE: Config Key Naming Convention
+# =============================================================================
+# All job configuration MUST use a top-level key that exactly matches the
+# job's module name (the `name` class attribute). This ensures:
+#   1. Predictable config location for any job
+#   2. Automatic config routing by orchestrator
+#   3. Clear correspondence between code and config
+#
+# Examples:
+#   - disk_space_monitor.py (DiskSpaceMonitorJob) -> disk_space_monitor:
+#   - btrfs_snapshots.py (BtrfsSnapshotJob) -> btrfs_snapshots:
+#   - dummy_success (DummySuccessJob) -> dummy_success:
+#   - user_data.py (UserDataJob) -> user_data:
+#
 # Future job configs will be added here as top-level keys when features are implemented:
 # user_data:
 #   exclude_patterns: [...]

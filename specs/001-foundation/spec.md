@@ -11,7 +11,7 @@
 
 The system defines a precise contract for how sync jobs integrate with the core orchestration system. Each job (representing a discrete sync capability like package sync, Docker sync, or user data sync) implements a standardized interface covering configuration, validation, execution, logging, progress reporting, and error handling. This contract is detailed enough that all feature jobs can be developed independently and concurrently once the core infrastructure exists.
 
-**Why this priority**: This is P1 because it's the architectural foundation. Without a clear, detailed job contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future job developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as jobs. The btrfs snapshots safety infrastructure (User Story 3) is also a job (though required and non-disableable). Self-installation (User Story 2) is NOT a job—it is pre-job orchestrator logic that runs before any job execution.
+**Why this priority**: This is P1 because it's the architectural foundation. Without a clear, detailed job contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future job developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as jobs. The btrfs snapshots safety infrastructure (User Story 3) is orchestrator-level infrastructure (not configurable via sync_jobs). Self-installation (User Story 2) is NOT a job—it is pre-job orchestrator logic that runs before any job execution.
 
 **Independent Test**: Can be fully tested by:
 1. Defining the job interface contract
@@ -53,7 +53,7 @@ This delivers immediate value by establishing the development pattern for all 6 
 
 ### User Story 2 - Self-Installing Sync Orchestrator (Priority: P1)
 
-When a user initiates sync from source to target, the very first operation the orchestrator performs (before any validation or snapshots) is to ensure the pc-switcher package on the target machine is at the same version as the source machine. If versions differ or pc-switcher is not installed on target, the system automatically installs or upgrades the target installation.
+When a user initiates sync from source to target, the very first operation the orchestrator performs (before any system validation or snapshots) is to ensure the pc-switcher package on the target machine is at the same version as the source machine. If versions differ or pc-switcher is not installed on target, the system automatically installs or upgrades the target installation.
 
 **Why this priority**: This is P1 because version consistency is required for reliable sync operations. Without matching versions, the target-side helper scripts may be incompatible with source-side orchestration logic, causing unpredictable failures. Self-installation also eliminates manual setup steps, aligning with "Frictionless Command UX".
 
@@ -110,21 +110,21 @@ This delivers value by providing the foundation for all recovery operations.
 
 1. **Given** a sync is requested with configured subvolumes, **When** orchestrator begins pre-sync checks, **Then** it MUST verify that all configured subvolumes exist on both source and target; if any configured subvolume is missing on either side the system MUST log a CRITICAL error and abort sync before creating snapshots
 
-2. **Given** user initiates sync, **When** the orchestrator begins the pre-sync phase (after version check and subvolume existence checks, before any SyncJobs execute), **Then** the system creates read-only btrfs snapshots on both source and target for all configured subvolumes (e.g., `@`, `@home`) with naming pattern `@<subvol>-presync-<timestamp>-<session-id>`
+2. **Given** user initiates sync, **When** the orchestrator begins the pre-sync phase (after version check and subvolume existence checks, before any SyncJobs execute), **Then** the system creates read-only btrfs snapshots in `/.snapshots/pc-switcher/<timestamp>-<session-id>/` on both source and target for all configured subvolumes (e.g., `@`, `@home`) with naming pattern `pre-<subvol>-<timestamp>` (e.g., `pre-@home-20251129T143022`)
 
-3. **Given** all sync jobs complete successfully, **When** the orchestrator begins the post-sync phase, **Then** the system creates read-only btrfs snapshots on both source and target with naming pattern `@<subvol>-postsync-<timestamp>-<session-id>`
+3. **Given** all sync jobs complete successfully, **When** the orchestrator begins the post-sync phase, **Then** the system creates read-only btrfs snapshots in the same session folder with naming pattern `post-<subvol>-<timestamp>`
 
-4. *(Removed - snapshot management is orchestrator-level infrastructure, not a SyncJob, so it cannot be disabled via sync_jobs)*
+4. **Given** `/.snapshots/` does not exist on source or target, **When** orchestrator validates snapshot infrastructure, **Then** it creates `/.snapshots/` as a btrfs subvolume and logs INFO to inform the user
 
-5. **Given** snapshot creation fails on target (e.g., insufficient space), **When** the failure occurs, **Then** the orchestrator logs CRITICAL error and aborts sync before any state changes occur
+5. **Given** `/.snapshots/` exists but is a regular directory (not a subvolume), **When** orchestrator validates snapshot infrastructure, **Then** it logs CRITICAL error explaining the problem (snapshots would be recursive) and aborts sync
 
-6. *(Removed - rollback capability is deferred to a separate feature after foundation infrastructure)*
+6. **Given** snapshot creation fails on target (e.g., insufficient space), **When** the failure occurs, **Then** the orchestrator logs CRITICAL error and aborts sync before any state changes occur
 
 7. **Given** snapshots accumulate over multiple sync runs, **When** user runs `pc-switcher cleanup-snapshots --older-than 7d`, **Then** the system deletes pre-sync and post-sync snapshots older than 7 days, retaining the most recent 3 (configurable) sync sessions regardless of age (`--older-than` is optional; default is configurable)
 
-8. **Given** orchestrator configuration includes `disk.preflight_minimum` (percentage like "20%" or absolute value like "50GiB", default: "20%") for source and target, **When** sync begins, **Then** orchestrator MUST check free disk space on both source and target and log CRITICAL and abort if free space is below configured threshold
+8. **Given** orchestrator configuration includes `disk_space_monitor.preflight_minimum` (percentage like "20%" or absolute value like "50GiB", default: "20%") for source and target, **When** sync begins, **Then** orchestrator MUST check free disk space on both source and target and log CRITICAL and abort if free space is below configured threshold
 
-9. **Given** orchestrator configuration includes `disk.check_interval` (seconds, default: 30) and `disk.runtime_minimum` (percentage like "15%" or absolute value like "40GiB", default: "15%"), **When** sync is running, **Then** orchestrator MUST periodically check free disk space at the configured interval and log CRITICAL and abort if available free space falls below the configured runtime minimum on either side
+9. **Given** orchestrator configuration includes `disk_space_monitor.check_interval` (seconds, default: 30) and `disk_space_monitor.runtime_minimum` (percentage like "15%" or absolute value like "40GiB", default: "15%"), **When** sync is running, **Then** orchestrator MUST periodically check free disk space at the configured interval and log CRITICAL and abort if available free space falls below the configured runtime minimum on either side
 
 ---
 
@@ -157,13 +157,13 @@ This delivers value by enabling developers to diagnose issues and providing audi
 
 4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`, **Then** the file contains structured log entries with format `[TIMESTAMP] [LEVEL] [MODULE] [HOSTNAME] message` for all operations from both source and target machines
 
-5. **Given** a target-side helper script emits log output to stdout, **When** the source orchestrator receives this output, **Then** it parses the log level prefix (if present) and routes the message through the unified logging system
+5. *(Removed - target-side logging is Job implementation detail, not a spec-level concern)*
 
 6. **Given** user runs `pc-switcher logs --last`, **When** command executes, **Then** the system displays the most recent sync log file in the terminal using rich console with syntax highlighting for improved readability
 
 **Log Level Definitions** (from most to least verbose):
 - **DEBUG**: Most verbose level for internal diagnostics, including command outputs, detailed timings, internal state transitions, and all messages from lower levels (FULL, INFO, WARNING, ERROR, CRITICAL). Intended for deep troubleshooting and development.
-- **FULL**: High-verbosity operational details including file-level operations (e.g., "Copying /home/user/document.txt", "Created snapshot @home-presync-20251115-abc123") and all messages from lower levels (INFO, WARNING, ERROR, CRITICAL). Excludes DEBUG-level internal diagnostics.
+- **FULL**: High-verbosity operational details including file-level operations (e.g., "Copying /home/user/document.txt", "Created snapshot pre-@home-20251115T143022") and all messages from lower levels (INFO, WARNING, ERROR, CRITICAL). Excludes DEBUG-level internal diagnostics.
 - **INFO**: High-level operation reporting for normal user visibility (e.g., "Starting job X", "Job X completed successfully", "Connection established") and all messages from lower levels (WARNING, ERROR, CRITICAL).
 - **WARNING**: Unexpected conditions that should be reviewed but don't indicate failure (e.g., config value using deprecated format, unusually large transfer size) and all messages from lower levels (ERROR, CRITICAL).
 - **ERROR**: Recoverable errors that may impact sync quality but don't require abort (e.g., individual file copy failed, optional feature unavailable) and CRITICAL messages.
@@ -213,7 +213,6 @@ The system loads configuration from `~/.config/pc-switcher/config.yaml` covering
 3. Testing invalid config triggers validation errors
 4. Confirming log levels are applied correctly
 5. Disabling an optional job and verifying it's skipped
-6. Attempting to disable a required job and verifying it remains active
 
 This delivers value by enabling user customization and job parameterization.
 
@@ -289,11 +288,9 @@ This delivers value by streamlining initial deployment.
 
 **Acceptance Scenarios**:
 
-1. **Given** a fresh Ubuntu 24.04 machine without uv installed, **When** user runs `curl -LsSf https://...install.sh | sh`, **Then** the script installs uv (if not present), checks that the filesystem is btrfs, installs btrfs-progs (if not present), installs pc-switcher via `uv tool install`, creates `~/.config/pc-switcher/` with default config, and displays "pc-switcher installed successfully"
+1. **Given** a fresh Ubuntu 24.04 machine without uv installed, **When** user runs `curl -LsSf https://...install.sh | sh`, **Then** the script installs uv (if not present), installs btrfs-progs (if not present), installs pc-switcher via `uv tool install`, creates `~/.config/pc-switcher/` with default config, and displays "pc-switcher installed successfully"
 
-2. **Given** user runs setup on a non-btrfs filesystem, **When** the script detects this, **Then** it logs CRITICAL error "pc-switcher requires btrfs filesystem for safety features" and exits without making changes
-
-3. **Given** pc-switcher sync installs on target (InstallOnTargetJob), **When** the target is missing uv, **Then** the same installation logic installs uv first, then installs/upgrades pc-switcher
+2. **Given** pc-switcher sync installs on target (InstallOnTargetJob), **When** the target is missing uv, **Then** the same installation logic installs uv first, then installs/upgrades pc-switcher
 
 ---
 
@@ -345,7 +342,7 @@ The terminal displays real-time sync progress including current job, operation p
 ### Edge Cases
 
 - What happens when target machine becomes unreachable mid-sync?
-  - Orchestrator detects connection loss, logs CRITICAL error, attempts to reconnect once, if reconnection fails logs diagnostic information and aborts
+  - Orchestrator detects connection loss, logs CRITICAL error with diagnostic information, and aborts sync (no reconnection attempt)
 - What happens when source machine crashes or powers off?
   - Target-side operations should timeout and cleanup after 5 minutes of no communication; next sync will detect inconsistent state via validation
 - What happens when btrfs snapshots cannot be created due to insufficient space?
@@ -367,7 +364,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 #### Job Architecture
 
-- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized Job interface specifying how the orchestrator interacts with jobs, including how logging is done, how a job reports progress to the user, methods, error handling, termination request handling, timeout handling; the interface MUST include at least `validate()` and `execute()` methods, a mechanism to declare configuration schema, and properties: `name: str`, `required: bool`
+- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized Job interface specifying how the orchestrator interacts with jobs, including how logging is done, how a job reports progress to the user, methods, error handling, termination request handling, timeout handling; the interface MUST include at least `validate()` and `execute()` methods, a mechanism to declare configuration schema, and property: `name: str`
 
 
 - **FR-002** `[Reliability Without Compromise]`: System MUST call job lifecycle methods in order: `validate()` (all jobs), then `execute()` for each job in the specified order; on shutdown, errors, or user interrupt the system requests termination of the currently-executing job
@@ -390,7 +387,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **FR-009** `[Reliability Without Compromise]`: System MUST create post-sync snapshots after all jobs complete successfully
 
-- **FR-010** `[Minimize SSD Wear]`: Snapshot naming MUST follow pattern `<subvolume>-{presync|postsync}-<ISO8601-timestamp>-<session-id>` for clear identification and cleanup (e.g., if subvolume is "@", snapshot is "@-presync-20251116T143022-abc12345", not "@@-presync-...")
+- **FR-010** `[Minimize SSD Wear]`: Snapshot naming MUST follow pattern `{pre|post}-<subvolume>-<timestamp>` for clear identification and cleanup (e.g., `pre-@home-20251116T143022`); session folder provides session context
 
 - **FR-011** `[Reliability Without Compromise]`: Snapshot management MUST be implemented as orchestrator-level infrastructure (not a SyncJob) that is always active; there is no configuration option to disable snapshot creation
 
@@ -402,9 +399,11 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **FR-015** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort
 
-- **FR-016** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold is configured via `disk.preflight_minimum` and MUST be specified as a percentage (e.g., "20%") or absolute value (e.g., "50GiB"); values without explicit units are invalid; default is "20%"
+- **FR-015b** `[Reliability Without Compromise]`: System MUST verify that `/.snapshots/` is a btrfs subvolume (not a regular directory); if it does not exist, system MUST create it as a subvolume and inform the user; if it exists but is not a subvolume, system MUST log CRITICAL error and abort (to prevent recursive snapshots)
 
-- **FR-017** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured runtime minimum via `disk.runtime_minimum` (e.g., "15%" or "40GiB"); values without explicit units are invalid; default is "15%"
+- **FR-016** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold is configured via `disk_space_monitor.preflight_minimum` and MUST be specified as a percentage (e.g., "20%") or absolute value (e.g., "50GiB"); values without explicit units are invalid; default is "20%"
+
+- **FR-017** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured runtime minimum via `disk_space_monitor.runtime_minimum` (e.g., "15%" or "40GiB"); values without explicit units are invalid; default is "15%"
 
 #### Logging System
 
@@ -444,15 +443,11 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **FR-033** `[Reliability Without Compromise]`: If configuration file has syntax errors or invalid values, system MUST display clear error message with location and exit before sync
 
-- **FR-034** `[Reliability Without Compromise]`: If configuration file contains a disable attempt for a required job, system MUST display error message in format "Required job 'MODULE_NAME' cannot be disabled" followed by config file location (e.g., "in /home/user/.config/pc-switcher/config.yaml"), and exit before sync
-
 #### Installation & Setup
 
-- **FR-035** `[Frictionless Command UX]`: System MUST provide installation script (`install.sh`) that can be run via `curl | sh` without prerequisites; the script installs uv (if not present) via `curl -LsSf https://astral.sh/uv/install.sh | sh`, checks btrfs filesystem presence, installs btrfs-progs via apt-get (if not present), installs pc-switcher package via `uv tool install`, and creates default configuration; the installation logic MUST be shared with `InstallOnTargetJob` to ensure DRY compliance
+- **FR-035** `[Frictionless Command UX]`: System MUST provide installation script (`install.sh`) that can be run via `curl | sh` without prerequisites; the script installs uv (if not present) via `curl -LsSf https://astral.sh/uv/install.sh | sh`, installs btrfs-progs via apt-get (if not present), installs pc-switcher package via `uv tool install`, and creates default configuration; the installation logic MUST be shared with `InstallOnTargetJob` to ensure DRY compliance (btrfs filesystem is a documented prerequisite checked at runtime, not during installation)
 
-- **FR-036** `[Frictionless Command UX]`: Setup script MUST detect whether the host filesystem is btrfs and abort with a clear error if it is not
-
-- **FR-037** `[Up-to-date Documentation]`: Setup script MUST create default config file with inline comments explaining each setting
+- **FR-036** `[Up-to-date Documentation]`: Setup script MUST create default config file with inline comments explaining each setting
 
 #### Testing Infrastructure
 

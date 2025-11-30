@@ -51,13 +51,13 @@ graph TD
 
     RemoteExecutor["<b>RemoteExecutor</b><br/>- Implements Executor<br/>- + send/get file<br/>- + get_hostname()"]
 
-    InstallOnTargetJob["<b>InstallOnTargetJob</b><br/>- Check version<br/>- Install/upgrade<br/>- Verify<br/>[required]"]
+    InstallOnTargetJob["<b>InstallOnTargetJob</b><br/>- Check version<br/>- Install/upgrade<br/>- Verify"]
 
-    BtrfsSnapshotJob["<b>BtrfsSnapshotJob</b><br/>- pre/post mode<br/>- One instance per host<br/>- Direct btrfs commands<br/>- No pc-switcher dependency<br/>[required]"]
+    BtrfsSnapshotJob["<b>BtrfsSnapshotJob</b><br/>- pre/post mode<br/>- One instance per host<br/>- Direct btrfs commands<br/>- No pc-switcher dependency"]
 
     SyncJobs["<b>SyncJobs</b><br/>- User data<br/>- Packages<br/>- Docker<br/>- VMs<br/>- k3s<br/>[configurable]"]
 
-    DiskSpaceMonitorJob["<b>DiskSpaceMonitorJob</b><br/>- Periodic check<br/>- One instance per host<br/>- Raises exception if low<br/>[required, background]"]
+    DiskSpaceMonitorJob["<b>DiskSpaceMonitorJob</b><br/>- Periodic check<br/>- One instance per host<br/>- Raises exception if low<br/>[background]"]
 
     CLI --> Orchestrator
     Orchestrator --> Config
@@ -165,7 +165,6 @@ classDiagram
     class Job {
         <<abstract>>
         +name: str
-        +required: bool = False
         +validate_config(config)$ list~ConfigError~
         +validate() list~ValidationError~
         +execute() None
@@ -175,17 +174,14 @@ classDiagram
 
     class SystemJob {
         <<abstract>>
-        required = True
     }
 
     class SyncJob {
         <<abstract>>
-        required = False
     }
 
     class BackgroundJob {
         <<abstract>>
-        required = True
     }
 
     class InstallOnTargetJob {
@@ -483,29 +479,6 @@ graph TD
 | 2. Job Config | Orchestrator | Job.validate_config() | Invalid config for 'job': ... |
 | 3. System State | Jobs | Job.validate() | Cannot sync: ... |
 
-### Required Job Protection (Phase 1 - FR-034)
-
-During Phase 1 schema validation, the Orchestrator MUST check that no job with `required=True` is set to `false` in the `sync_jobs` configuration:
-
-```python
-def _validate_required_jobs(self, config: dict) -> list[ConfigError]:
-    """Check that required jobs are not disabled in config."""
-    errors = []
-    sync_jobs = config.get("sync_jobs", {})
-
-    for job_class in self._get_all_job_classes():
-        if job_class.required and sync_jobs.get(job_class.name) is False:
-            errors.append(ConfigError(
-                path=f"sync_jobs.{job_class.name}",
-                message=f"Required job '{job_class.name}' cannot be disabled",
-                location=self._config_path,
-            ))
-
-    return errors
-```
-
-Error message format per FR-034: `"Required job 'MODULE_NAME' cannot be disabled" followed by config file location`
-
 ### BtrfsSnapshotJob Validation (Phase 3)
 
 Per FR-015, `BtrfsSnapshotJob.validate()` MUST verify subvolumes exist on **both** source and target:
@@ -542,6 +515,60 @@ async def validate(self, context: JobContext) -> list[ValidationError]:
 ```
 
 **Important**: The configuration assumes identical subvolume names on source and target. If target has different subvolume structure, validation will fail with clear error messages before any sync operations begin.
+
+### Snapshot Location
+
+Snapshots are stored in `/.snapshots/pc-switcher/<timestamp>-<session-id>/` on both source and target. Each sync session gets its own subfolder (named with timestamp for chronological sorting) to keep pre-sync and post-sync snapshots together:
+
+```text
+/.snapshots/
+└── pc-switcher/                              # pc-switcher managed snapshots
+    ├── 20251127T100000-def67890/             # Older session (sorted first)
+    │   ├── pre-@-20251127T100000
+    │   ├── pre-@home-20251127T100001
+    │   ├── post-@-20251127T101500
+    │   └── post-@home-20251127T101501
+    └── 20251129T143022-abc12345/             # Newer session (sorted last)
+        ├── pre-@-20251129T143022
+        ├── pre-@home-20251129T143023
+        ├── post-@-20251129T145510
+        └── post-@home-20251129T145511
+```
+
+**Key design choices:**
+- `pc-switcher/` subfolder distinguishes our snapshots from other tools' snapshots
+- Folder name uses `<timestamp>-<session-id>` format for chronological sorting
+- Snapshot name format: `<phase>-<subvolume>-<timestamp>` (e.g., `pre-@home-20251129T143022`)
+- Phase prefix ensures `pre-*` sorts before `post-*` within a session
+- Timestamp in filename allows quick inspection without checking btrfs metadata
+
+### Snapshot Directory Validation
+
+Before creating snapshots, the orchestrator MUST validate the `/.snapshots/` directory:
+
+1. **If `/.snapshots/` does not exist:**
+   - Create it as a btrfs subvolume: `sudo btrfs subvolume create /.snapshots`
+   - Create `/.snapshots/pc-switcher/` directory inside it
+   - Log INFO: "Created /.snapshots subvolume for snapshot storage"
+
+2. **If `/.snapshots/` exists:**
+   - Verify it is a btrfs subvolume (not a regular directory inside `/`)
+   - If it's NOT a subvolume: Log CRITICAL error and abort
+     - "/.snapshots exists but is not a btrfs subvolume. Snapshots would be included in / snapshots. Please convert it to a subvolume or remove it."
+   - If it IS a subvolume: Create `/.snapshots/pc-switcher/` if needed
+
+**Why this matters:** If `/.snapshots/` is a regular directory inside the `/` subvolume, then when we snapshot `/`, the snapshots themselves would be included - causing recursive snapshots and wasted space. The `/.snapshots/` directory MUST be a separate subvolume.
+
+**Validation command:**
+```bash
+# Check if /.snapshots is a subvolume (returns 0 if true)
+sudo btrfs subvolume show /.snapshots >/dev/null 2>&1
+```
+
+**Assumptions:**
+- A single btrfs filesystem is used for all configured subvolumes
+- The `/.snapshots/` subvolume is on the same btrfs filesystem
+- Snapshots are created using `btrfs subvolume snapshot -r <source> <dest>`
 
 ---
 
@@ -1343,7 +1370,7 @@ sequenceDiagram
 
 From `config.yaml`:
 ```yaml
-disk:
+disk_space_monitor:
   preflight_minimum: "20%"   # or "50GiB"
   runtime_minimum: "15%"     # for DiskSpaceMonitorJob
   check_interval: 30
@@ -1395,9 +1422,14 @@ pc-switcher cleanup-snapshots
 # Cleanup snapshots older than 7 days
 pc-switcher cleanup-snapshots --older-than 7d
 
+# Other human-readable formats supported: 2w (weeks), 1m (months)
+pc-switcher cleanup-snapshots --older-than 2w
+
 # Dry run (show what would be deleted)
 pc-switcher cleanup-snapshots --dry-run
 ```
+
+**Duration Parsing**: The `--older-than` flag accepts human-readable durations (e.g., `7d`, `2w`, `1m`). Use a duration parsing library (e.g., `pytimeparse2` or similar) rather than implementing custom parsing.
 
 ### Retention Policy
 
@@ -1478,8 +1510,8 @@ To delete (older than 7 days):
   - Session mno33333 (2025-11-15): 3 snapshots
 
 Delete 6 snapshots? [y/N]: y
-Deleting @-presync-20251120T100000-jkl22222... done
-Deleting @home-presync-20251120T100000-jkl22222... done
+Deleting pre-@-20251120T100000... done
+Deleting pre-@home-20251120T100001... done
 ...
 Cleanup complete. Deleted 6 snapshots.
 ```
@@ -1488,7 +1520,7 @@ Cleanup complete. Deleted 6 snapshots.
 
 ## Installation Script
 
-Per FR-035, FR-036, and FR-037, an installation script (`install.sh`) handles initial installation and configuration. The installation logic is **shared with `InstallOnTargetJob`** to ensure DRY compliance.
+Per FR-035 and FR-036, an installation script (`install.sh`) handles initial installation and configuration. The installation logic is **shared with `InstallOnTargetJob`** to ensure DRY compliance.
 
 ### Installation Entry Point
 
@@ -1501,10 +1533,11 @@ curl -LsSf https://raw.githubusercontent.com/[owner]/pc-switcher/main/install.sh
 This script:
 1. Works on fresh Ubuntu 24.04 machines with no prerequisites
 2. Installs `uv` if not present (via the official uv installer)
-3. Checks filesystem is btrfs
-4. Installs required system packages (btrfs-progs)
-5. Installs pc-switcher via `uv tool install`
-6. Creates default configuration
+3. Installs required system packages (btrfs-progs)
+4. Installs pc-switcher via `uv tool install`
+5. Creates default configuration
+
+**Note**: btrfs filesystem is a documented prerequisite (see README.md) and is checked at runtime by pc-switcher, not during installation. This avoids duplicate checks and allows installation on any system for development/testing purposes.
 
 ### Shared Installation Logic (DRY)
 
@@ -1524,7 +1557,7 @@ graph TD
     end
 
     subgraph "Single Script"
-        InstallSh["install.sh<br/>- Bootstrap uv if missing<br/>- Check btrfs<br/>- Install btrfs-progs<br/>- Install pc-switcher@version<br/>- Create default config"]
+        InstallSh["install.sh<br/>- Bootstrap uv if missing<br/>- Install btrfs-progs<br/>- Install pc-switcher@version<br/>- Create default config"]
     end
 
     UserCurl --> Note1
@@ -1546,9 +1579,6 @@ graph TD
     CheckUV["Check if uv is installed"]
     InstallUV["Install uv via:<br/>curl -LsSf https://astral.sh/uv/install.sh | sh"]
 
-    CheckBtrfs["Check filesystem is btrfs"]
-    BtrfsNo["CRITICAL: pc-switcher requires btrfs<br/>Exit without changes"]
-
     CheckBtrfsProgs["Check if btrfs-progs installed"]
     InstallBtrfsProgs["sudo apt-get install btrfs-progs"]
 
@@ -1562,10 +1592,8 @@ graph TD
 
     Start --> CheckUV
     CheckUV -->|not installed| InstallUV
-    CheckUV -->|installed| CheckBtrfs
-    InstallUV --> CheckBtrfs
-    CheckBtrfs -->|not btrfs| BtrfsNo
-    CheckBtrfs -->|is btrfs| CheckBtrfsProgs
+    CheckUV -->|installed| CheckBtrfsProgs
+    InstallUV --> CheckBtrfsProgs
     CheckBtrfsProgs -->|not installed| InstallBtrfsProgs
     CheckBtrfsProgs -->|installed| InstallPCSwitcher
     InstallBtrfsProgs --> InstallPCSwitcher
@@ -1573,20 +1601,7 @@ graph TD
     CreateConfig --> CreateDirs
     CreateDirs --> Success
 
-    style BtrfsNo fill:#ffcdd2
     style Success fill:#c8e6c9
-```
-
-### Filesystem Check
-
-```bash
-# Check if root filesystem is btrfs
-fs_type=$(stat -f -c %T /)
-if [ "$fs_type" != "btrfs" ]; then
-    echo "CRITICAL: pc-switcher requires btrfs filesystem for safety features"
-    echo "Current filesystem: $fs_type"
-    exit 1
-fi
 ```
 
 ### Dependency Installation
@@ -1602,20 +1617,23 @@ The installation script generates `~/.config/pc-switcher/config.yaml` with:
 - All settings at their default values
 - Inline comments explaining each setting (extracted from schema descriptions)
 
-See [Setup and Default Configuration](#setup-and-default-configuration-fr-037) section for the generated file content.
+See [Setup and Default Configuration](#setup-and-default-configuration-fr-036) section for the generated file content.
 
 ### InstallOnTargetJob Implementation
 
 `InstallOnTargetJob` simply runs the same `install.sh` script on the target, passing the source version:
 
 ```python
+from packaging.version import Version
+
 async def execute(self) -> None:
-    source_version = get_current_version()  # e.g., "0.4.0"
+    source_version = Version(get_current_version())  # e.g., "0.4.0"
 
     # Check target version first
     result = await self.target.run_command("pc-switcher --version 2>/dev/null")
     if result.success:
-        target_version = parse_version(result.stdout)
+        # Parse version string from output (e.g., "pc-switcher 0.4.0" -> "0.4.0")
+        target_version = Version(parse_version_string(result.stdout))
         if target_version == source_version:
             self.log(INFO, f"Target pc-switcher version matches source ({source_version})")
             return
@@ -1628,7 +1646,7 @@ async def execute(self) -> None:
         self.log(INFO, f"Installing pc-switcher {source_version} on target")
 
     # Run the same install.sh script used for initial installation
-    # The script handles: uv bootstrap, btrfs check, dependencies, pc-switcher install
+    # The script handles: uv bootstrap, dependencies, pc-switcher install
     install_url = f"https://raw.githubusercontent.com/[owner]/pc-switcher/v{source_version}/install.sh"
     result = await self.target.run_command(
         f"curl -LsSf {install_url} | sh -s -- --version {source_version}"
@@ -1657,7 +1675,7 @@ async def execute(self) -> None:
 
 ---
 
-## Setup and Default Configuration (FR-037)
+## Setup and Default Configuration (FR-036)
 
 The setup script creates a default configuration file with inline comments explaining each setting:
 
@@ -1673,7 +1691,6 @@ log_file_level: FULL    # Written to ~/.local/share/pc-switcher/logs/
 log_cli_level: INFO     # Displayed in terminal
 
 # Enable/disable sync jobs (true = enabled, false = skipped)
-# Required jobs (snapshots) cannot be disabled
 sync_jobs:
   # Jobs implemented in 001-foundation (for testing the sync infrastructure):
   dummy_success: true   # Test job that completes successfully
@@ -1685,8 +1702,8 @@ sync_jobs:
   # vms: false          # Sync KVM/virt-manager VMs
   # k3s: false          # Sync k3s cluster state
 
-# Disk space safety thresholds
-disk:
+# Disk space safety thresholds (DiskSpaceMonitorJob)
+disk_space_monitor:
   preflight_minimum: "20%"   # Minimum free space before sync starts
   runtime_minimum: "15%"     # Minimum during sync (abort if below)
   check_interval: 30         # Seconds between runtime checks
@@ -1707,3 +1724,22 @@ btrfs_snapshots:
 2. Extracting `description` fields from each property
 3. Generating YAML with descriptions as inline comments
 4. Writing to `~/.config/pc-switcher/config.yaml`
+
+### Config Key Naming Convention (Developer Note)
+
+**All job configuration MUST use a top-level key that exactly matches the job's `name` class attribute** (which should match the module filename). This ensures:
+
+1. **Predictable config location**: Developers know where to find/add config for any job
+2. **Automatic config routing**: Orchestrator can route config to jobs by name
+3. **Clear correspondence**: Easy to trace from config file to code module
+
+| Job Class | Module File | Job Name | Config Key |
+|-----------|-------------|----------|------------|
+| DiskSpaceMonitorJob | disk_space_monitor.py | `disk_space_monitor` | `disk_space_monitor:` |
+| BtrfsSnapshotJob | btrfs_snapshots.py | `btrfs_snapshots` | `btrfs_snapshots:` |
+| DummySuccessJob | dummy.py | `dummy_success` | `dummy_success:` |
+| UserDataJob (future) | user_data.py | `user_data` | `user_data:` |
+
+When implementing new jobs, follow this convention by:
+1. Setting `name: ClassVar[str] = "module_name"` in the job class
+2. Adding the corresponding config section to `config-schema.yaml` as a top-level key

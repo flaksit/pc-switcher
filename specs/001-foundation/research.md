@@ -209,13 +209,13 @@ class SnapshotConfig:
     subvolume: str  # e.g., "@home"
     mount_point: str  # e.g., "/home"
 
-def snapshot_name(subvolume: str, phase: str, session_id: str) -> str:
+def snapshot_name(subvolume: str, phase: str) -> str:
     """Generate snapshot name per FR-010.
 
-    Example: @home-presync-20251129T143022-abc12345
+    Example: pre-@home-20251129T143022
     """
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    return f"{subvolume}-{phase}-{timestamp}-{session_id}"
+    return f"{phase}-{subvolume}-{timestamp}"
 
 async def create_snapshot(
     executor: Executor,
@@ -228,9 +228,22 @@ async def create_snapshot(
 ```
 
 ### Snapshot Location
-Snapshots created in the btrfs root (alongside subvolumes), not inside the subvolume being snapshotted. This requires:
-1. Knowing the btrfs mount point (typically `/` for root filesystem)
-2. Creating snapshots at `/<btrfs-root>/<snapshot-name>`
+Snapshots are stored in `/.snapshots/pc-switcher/<timestamp>-<session-id>/` which MUST be a separate btrfs subvolume:
+
+1. **Path structure**: `/.snapshots/pc-switcher/20251129T143022-abc12345/pre-@home-20251129T143022`
+2. **`/.snapshots/` MUST be a subvolume** - prevents recursive snapshots when snapshotting `/`
+3. **Session folders** use `<timestamp>-<session-id>` format for chronological sorting
+4. **Snapshot names** use `{pre|post}-<subvolume>-<timestamp>` format
+5. **Auto-creation**: If `/.snapshots/` doesn't exist, create it as a subvolume
+
+```bash
+# Check if /.snapshots is a subvolume
+sudo btrfs subvolume show /.snapshots >/dev/null 2>&1
+
+# Create /.snapshots as subvolume if needed
+sudo btrfs subvolume create /.snapshots
+mkdir -p /.snapshots/pc-switcher
+```
 
 ### Error Conditions
 | Exit Code | Meaning | Action |
@@ -548,6 +561,75 @@ def parse_threshold(threshold: str) -> tuple[str, int]:
     raise ValueError(f"Invalid threshold format: {threshold}")
 ```
 
+## 9. Duration Parsing for Cleanup Command
+
+### Decision
+Use a duration parsing library (e.g., `pytimeparse2`) for the `--older-than` flag in `cleanup-snapshots`.
+
+### Rationale
+- Human-readable durations (`7d`, `2w`, `1m`) are more user-friendly than raw integers
+- Avoid writing custom parsing logic
+- Standard library format is well-tested and handles edge cases
+
+### Implementation Pattern
+
+```python
+from pytimeparse2 import parse as parse_duration
+
+def parse_older_than(value: str) -> int:
+    """Parse human-readable duration to days.
+
+    Examples: '7d' → 7, '2w' → 14, '1m' → 30
+    """
+    seconds = parse_duration(value)
+    if seconds is None:
+        raise ValueError(f"Invalid duration format: {value}")
+    return seconds // 86400  # Convert to days
+```
+
+### Alternatives Considered
+- **Custom regex parsing**: Error-prone, reinventing the wheel
+- **Integer days only**: Less user-friendly
+- **dateutil.relativedelta**: Overkill for simple duration parsing
+
+## 10. Version Comparison for Self-Installation
+
+### Decision
+Use `packaging.version` for comparing pc-switcher versions between source and target.
+
+### Rationale
+- PEP 440 compliant version parsing and comparison
+- Correctly handles pre-releases, dev versions, and post-releases
+- Standard Python packaging library (already a dependency of pip/uv ecosystem)
+- Avoids string comparison pitfalls (e.g., "0.10.0" > "0.9.0")
+
+### Implementation Pattern
+
+```python
+from packaging.version import Version
+
+def compare_versions(source: str, target: str) -> int:
+    """Compare semantic versions.
+
+    Returns:
+        -1 if source < target
+         0 if source == target
+         1 if source > target
+    """
+    src = Version(source)
+    tgt = Version(target)
+    if src < tgt:
+        return -1
+    elif src > tgt:
+        return 1
+    return 0
+```
+
+### Alternatives Considered
+- **String comparison**: Fails on multi-digit versions ("0.10.0" < "0.9.0" as strings)
+- **Custom parsing with split/int**: Doesn't handle pre-releases or edge cases
+- **semver library**: External dependency when `packaging` is already available
+
 ## Summary of Technology Decisions
 
 | Component | Technology | Rationale |
@@ -560,3 +642,5 @@ def parse_threshold(threshold: str) -> tuple[str, int]:
 | Cancellation | asyncio.CancelledError | Native pattern, TaskGroup integration |
 | Locking | fcntl (source + target) | Simple, automatic release on crash, prevents A→B + C→B |
 | Disk space | df parsing | Universal availability, straightforward |
+| Duration parsing | pytimeparse2 | Human-readable input, well-tested |
+| Version comparison | packaging.version | PEP 440 compliant, handles pre-releases correctly |

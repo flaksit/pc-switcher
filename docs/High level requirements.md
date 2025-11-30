@@ -45,7 +45,7 @@ The machines are used for development (coding, building, testing), general produ
 
 - All machines run Ubuntu 24.04 LTS
 - Machines are connected to same LAN (1Gb ethernet) during sync
-- All machines have a btrfs filesystem with a flat layout
+- All machines have a single btrfs filesystem with a flat layout (all synced data on one filesystem)
 
 ## Workflow
 Only one machine is actively used at a time.
