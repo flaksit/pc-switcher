@@ -1,53 +1,11 @@
 THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
 
-Background info about the project:
-- @docs/High level requirements.md
-- Focus only on features 1, 2 and 3 of the @"docs/Feature breakdown.md".
-- User specifications are in @specs/001-foundation/spec.md.
 
-We made the following tech decisions:
-1. See ADRs: @docs/adr/_index.md (follow links if needed)
-2. asyncio for handling concurrency between ui, orchestrator, jobs (parallel and sequential), logging, remote execution over SSH
-3. BTRFS Snapshots (pre and post) and the Disk Space Monitor will be all be implemented as Jobs, just like the SyncJobs that the user can configure. The main difference: BtrfsSnapshotsJob and DiskSpaceMonitor are "hardcoded" in the sense that the user cannot configure them: they cannot be disabled and their order in the execution flow is fixed.
+Find all dead code and remove it. E.g. unused imports, unused functions, unused variables, etc.
 
-You are a software architect. Ultrathink to come up with a clean architecture and design that fulfills the requirements defined in @specs/001-foundation/spec.md. It should be as simple as possible, but not simpler. Do not read other documents of this project! I want you to think this through from a clean slate without being influenced by old docs.
-Follow DRY and YAGNI principles and best practices for modern (Python 3.13) software architecture/design/engineering.
+---
 
-Execution flow:
-```
-1. Validate all jobs (disk_space_monitor, btrfs_snapshot, sync jobs)
-2. Start parallel: DiskSpaceMonitorJob.execute() (run until the end)
-3. Execute sequential: BtrfsSnapshotJob(phase="pre").execute()
-4. Execute sequential: SyncJob1.execute()
-5. Execute sequential: SyncJob2.execute()
-6. Execute sequential: BtrfsSnapshotJob(phase="post").execute()
-7. Stop parallel: DiskSpaceMonitorJob.cancel()
-```
-
-Create a markdown document "architecture-gemini-2.5.md" in folder @specs/001-foundation/ with at least the following contents:
-- A diagram of the components, with explanation of their scope/responsibilities and their relationships
-- A class diagram with explanation of the classes, their scope/responsibilities and their relationships
-- A sequence diagram when user aborts (Ctrl+C)
-- A sequence diagram when a Job raises an exception (= critical failure)
-- A sequence diagram when a Job has a command running on the target machine and that remote command fails somehow
-- A sequence diagram of a job that logs a message (should be written to file and filtered to be shown on the UI as well)
-- A sequence diagram of a job that logs progress (should be shown in UI)
-- A sequence diagram when the DiskSpaceMonitor detects a remote disk becoming too full
-- Something to illustrate the (streaming) output to the UI, from multiple sources that run in parallel (orchestrator, jobs, heath status of the SSH connection, etc.)
-
-For the diagrams, each time with a textual explanation of the concepts in the diagram and the links and interactions between them.
-
-Note: Jobs will run commands on the target machine as well and the job needs to get the commands output (e.g. to create log messages and to show progress) and needs to control them (e.g. to terminate them in a controlled manner, with timeouts).
-
-Ask clarifying questions when needed!
-
-
-
-
-
-
-
-
+Refactor: Give Context to constructor instead of to each method. This simplifies method signatures and shortens code. E.g. self._log() doesn't need to get the context anymore, as it is already stored in self.context.
 
 ---
 
@@ -155,5 +113,54 @@ Notes:
   - A successful, only emitting INFO, WARNING and ERROR logs
   - A module that runs into a CRITICAL error. The module itself would just go on running. This is to test that the overall sync aborts on CRITICAL errors.
   - A module that fails partway through (e.g. raising an exception), without properly logging a CRITICAL error.
+
+
+
+---
+
+
+Background info about the project:
+- @docs/High level requirements.md
+- Focus only on features 1, 2 and 3 of the @"docs/Feature breakdown.md".
+- User specifications are in @specs/001-foundation/spec.md.
+
+We made the following tech decisions:
+1. See ADRs: @docs/adr/_index.md (follow links if needed)
+2. asyncio for handling concurrency between ui, orchestrator, jobs (parallel and sequential), logging, remote execution over SSH
+3. BTRFS Snapshots (pre and post) and the Disk Space Monitor will be all be implemented as Jobs, just like the SyncJobs that the user can configure. The main difference: BtrfsSnapshotsJob and DiskSpaceMonitor are "hardcoded" in the sense that the user cannot configure them: they cannot be disabled and their order in the execution flow is fixed.
+
+You are a software architect. Ultrathink to come up with a clean architecture and design that fulfills the requirements defined in @specs/001-foundation/spec.md. It should be as simple as possible, but not simpler. Do not read other documents of this project! I want you to think this through from a clean slate without being influenced by old docs.
+Follow DRY and YAGNI principles and best practices for modern (Python 3.13) software architecture/design/engineering.
+
+Execution flow:
+```
+1. Validate all jobs (disk_space_monitor, btrfs_snapshot, sync jobs)
+2. Start parallel: DiskSpaceMonitorJob.execute() (run until the end)
+3. Execute sequential: BtrfsSnapshotJob(phase="pre").execute()
+4. Execute sequential: SyncJob1.execute()
+5. Execute sequential: SyncJob2.execute()
+6. Execute sequential: BtrfsSnapshotJob(phase="post").execute()
+7. Stop parallel: DiskSpaceMonitorJob.cancel()
+```
+
+Create a markdown document "architecture-gemini-2.5.md" in folder @specs/001-foundation/ with at least the following contents:
+- A diagram of the components, with explanation of their scope/responsibilities and their relationships
+- A class diagram with explanation of the classes, their scope/responsibilities and their relationships
+- A sequence diagram when user aborts (Ctrl+C)
+- A sequence diagram when a Job raises an exception (= critical failure)
+- A sequence diagram when a Job has a command running on the target machine and that remote command fails somehow
+- A sequence diagram of a job that logs a message (should be written to file and filtered to be shown on the UI as well)
+- A sequence diagram of a job that logs progress (should be shown in UI)
+- A sequence diagram when the DiskSpaceMonitor detects a remote disk becoming too full
+- Something to illustrate the (streaming) output to the UI, from multiple sources that run in parallel (orchestrator, jobs, heath status of the SSH connection, etc.)
+
+For the diagrams, each time with a textual explanation of the concepts in the diagram and the links and interactions between them.
+
+Note: Jobs will run commands on the target machine as well and the job needs to get the commands output (e.g. to create log messages and to show progress) and needs to control them (e.g. to terminate them in a controlled manner, with timeouts).
+
+Ask clarifying questions when needed!
+
+---
+
 
 

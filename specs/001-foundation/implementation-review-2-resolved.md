@@ -184,8 +184,16 @@ All 6 findings from the review have been addressed:
 1. `src/pcswitcher/orchestrator.py` - Logging wiring, session folder, preflight check, InstallOnTargetJob integration
 2. `src/pcswitcher/jobs/btrfs.py` - Config structure alignment, session folder from config
 3. `src/pcswitcher/cli.py` - Version flag, logs --last display, cleanup-snapshots command
-4. `src/pcswitcher/installation.py` - Utility functions (get_this_version, compare_versions)
+4. `src/pcswitcher/version.py` - Version utilities: `get_this_version()` and `parse_version_from_cli_output()`
 
 ## Files Created
 
-1. `src/pcswitcher/jobs/install_on_target.py` - InstallOnTargetJob SystemJob per architecture.md
+1. `src/pcswitcher/jobs/install_on_target.py` - InstallOnTargetJob SystemJob per architecture.md (contains all installation logic)
+
+## Code Consolidation
+
+After initial fixes, duplicated code was identified and refactored:
+- Created `version.py` with `get_this_version()` and `parse_version_from_cli_output()` utilities
+- All installation logic moved to `InstallOnTargetJob`
+- All installation/upgrade logic lives in `InstallOnTargetJob` (architecture-compliant)
+- Removed dead code: `get_target_version()`, `compare_versions()`, `install_on_target()`, `check_and_install()`, `InstallationError`

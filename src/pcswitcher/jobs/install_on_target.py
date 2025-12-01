@@ -6,30 +6,10 @@ from typing import ClassVar
 
 from packaging.version import Version
 
-from pcswitcher.installation import get_this_version
 from pcswitcher.jobs.base import SystemJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.models import Host, LogLevel, ValidationError
-
-
-def parse_version_string(output: str) -> str:
-    """Parse version string from pc-switcher --version output.
-
-    Args:
-        output: Command output (e.g., "pc-switcher 0.4.0" or "0.4.0")
-
-    Returns:
-        Version string (e.g., "0.4.0")
-
-    Raises:
-        ValueError: If version string cannot be parsed
-    """
-    import re
-
-    match = re.search(r"(\d+\.\d+\.\d+(?:\.\w+)?)", output)
-    if not match:
-        raise ValueError(f"Cannot parse version from output: {output}")
-    return match.group(1)
+from pcswitcher.version import get_this_version, parse_version_from_cli_output
 
 
 class InstallOnTargetJob(SystemJob):
@@ -61,7 +41,7 @@ class InstallOnTargetJob(SystemJob):
         result = await context.target.run_command("pc-switcher --version 2>/dev/null")
         if result.success:
             # Parse version string from output (e.g., "pc-switcher 0.4.0" -> "0.4.0")
-            target_version = Version(parse_version_string(result.stdout))
+            target_version = Version(parse_version_from_cli_output(result.stdout))
             if target_version == source_version:
                 self._log(
                     context,
@@ -76,7 +56,7 @@ class InstallOnTargetJob(SystemJob):
                 context,
                 Host.TARGET,
                 LogLevel.INFO,
-                f"Upgrading target from {target_version} to {source_version}",
+                f"Upgrading pc-switcher on target from {target_version} to {source_version}",
             )
         else:
             self._log(

@@ -18,7 +18,7 @@ All source code is located in `/home/janfr/dev/pc-switcher/src/pcswitcher/`.
 | `lock.py` | File-based locking using fcntl to prevent concurrent syncs |
 | `disk.py` | Disk space monitoring and threshold parsing utilities |
 | `snapshots.py` | Btrfs snapshot creation, validation, and cleanup operations |
-| `installation.py` | Version checking and self-installation on target machines |
+| `version.py` | Version checking and CLI output parsing utilities |
 | `ui.py` | Rich terminal UI with live progress bars and log panel |
 | `cli.py` | Typer-based CLI entry point and command parsing |
 | `jobs/` | Job system with base classes and concrete job implementations |
@@ -708,28 +708,22 @@ Design: Uses asyncssh with keepalive for connection health monitoring and a sema
 
 ## Version Management
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/installation.py`:
+From `/home/janfr/dev/pc-switcher/src/pcswitcher/version.py`:
 
 ### Version Functions
 
 ```python
 def get_this_version() -> str:
     # Get version from package metadata (source machine)
-    # Raises InstallationError if metadata not found
+    # Raises PackageNotFoundError if metadata not found
 
-async def get_target_version(executor: RemoteExecutor) -> str | None:
-    # Run `pc-switcher --version` on target
-    # Returns version string or None if not installed
-
-def compare_versions(source: str, target: str) -> int:
-    # Returns: -1 (source older), 0 (same), 1 (source newer)
-    # Uses packaging.version.Version for PEP 440 compliance
-
-async def install_on_target(executor: RemoteExecutor, version: str) -> None:
-    # Install using: uv tool install pcswitcher=={version}
-    # Timeout: 300 seconds
-    # Raises InstallationError on failure
+def parse_version_from_cli_output(output: str) -> str:
+    # Parse version string from `pc-switcher --version` output
+    # e.g., "pc-switcher 0.4.0" -> "0.4.0"
+    # Raises ValueError if version cannot be parsed
 ```
+
+Target installation/upgrade is handled by `InstallOnTargetJob` in `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/install_on_target.py`.
 
 ### Installation Policy
 
@@ -814,7 +808,7 @@ tests/
 uv run pytest
 
 # Run specific test file
-uv run pytest tests/test_installation.py
+uv run pytest tests/test_version.py
 
 # Run with coverage
 uv run pytest --cov=pcswitcher

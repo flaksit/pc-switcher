@@ -6,7 +6,7 @@ import asyncio
 import json
 import signal
 import sys
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from typing import Annotated
 
@@ -20,6 +20,7 @@ from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.snapshots import cleanup_snapshots as cleanup_snapshots_impl
 from pcswitcher.snapshots import parse_older_than
+from pcswitcher.version import get_this_version
 
 # Cleanup timeout for graceful shutdown after SIGINT.
 # After first SIGINT, cleanup has this many seconds to complete.
@@ -40,7 +41,8 @@ def _version_callback(value: bool) -> None:
     """Print version and exit if --version flag is provided."""
     if value:
         try:
-            pkg_version = version("pcswitcher")
+            pkg_version = get_this_version()
+            # If you change this format, also update the parsing in version.py:parse_version_from_cli_output()
             console.print(f"pc-switcher {pkg_version}")
         except PackageNotFoundError:
             console.print("[bold red]Error:[/bold red] Cannot determine pc-switcher version")
