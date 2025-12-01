@@ -713,7 +713,7 @@ From `/home/janfr/dev/pc-switcher/src/pcswitcher/installation.py`:
 ### Version Functions
 
 ```python
-def get_current_version() -> str:
+def get_this_version() -> str:
     # Get version from package metadata (source machine)
     # Raises InstallationError if metadata not found
 

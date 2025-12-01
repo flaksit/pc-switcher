@@ -1643,7 +1643,7 @@ See [Setup and Default Configuration](#setup-and-default-configuration-fr-036) s
 from packaging.version import Version
 
 async def execute(self) -> None:
-    source_version = Version(get_current_version())  # e.g., "0.4.0"
+    source_version = Version(get_this_version())  # e.g., "0.4.0"
 
     # Check target version first
     result = await self.target.run_command("pc-switcher --version 2>/dev/null")

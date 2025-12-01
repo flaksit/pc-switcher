@@ -229,7 +229,7 @@
 
 ### Implementation for User Story 2
 
-- [X] T080 [US2] Implement get_current_version (read from package metadata) in src/pcswitcher/installation.py
+- [X] T080 [US2] Implement get_this_version (read from package metadata) in src/pcswitcher/installation.py
 - [X] T081 [US2] Implement get_target_version via RemoteExecutor in src/pcswitcher/installation.py
 - [X] T082 [US2] Implement version comparison using packaging.version in src/pcswitcher/installation.py
 - [X] T083 [US2] Implement install_on_target (run install.sh on target via SSH; install.sh handles uv bootstrap and uv tool install) in src/pcswitcher/installation.py

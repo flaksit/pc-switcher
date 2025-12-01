@@ -184,7 +184,7 @@ All 6 findings from the review have been addressed:
 1. `src/pcswitcher/orchestrator.py` - Logging wiring, session folder, preflight check, InstallOnTargetJob integration
 2. `src/pcswitcher/jobs/btrfs.py` - Config structure alignment, session folder from config
 3. `src/pcswitcher/cli.py` - Version flag, logs --last display, cleanup-snapshots command
-4. `src/pcswitcher/installation.py` - Utility functions (get_current_version, compare_versions)
+4. `src/pcswitcher/installation.py` - Utility functions (get_this_version, compare_versions)
 
 ## Files Created
 

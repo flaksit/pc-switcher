@@ -6,7 +6,7 @@ from typing import ClassVar
 
 from packaging.version import Version
 
-from pcswitcher.installation import get_current_version
+from pcswitcher.installation import get_this_version
 from pcswitcher.jobs.base import SystemJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.models import Host, LogLevel, ValidationError
@@ -55,7 +55,7 @@ class InstallOnTargetJob(SystemJob):
 
     async def execute(self, context: JobContext) -> None:
         """Install or upgrade pc-switcher on target if needed."""
-        source_version = Version(get_current_version())  # e.g., "0.4.0"
+        source_version = Version(get_this_version())  # e.g., "0.4.0"
 
         # Check target version first
         result = await context.target.run_command("pc-switcher --version 2>/dev/null")

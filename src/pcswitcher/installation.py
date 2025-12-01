@@ -13,7 +13,7 @@ from pcswitcher.models import CommandResult
 __all__ = [
     "InstallationError",
     "compare_versions",
-    "get_current_version",
+    "get_this_version",
     "get_target_version",
     "install_on_target",
 ]
@@ -23,7 +23,7 @@ class InstallationError(Exception):
     """Error during installation or version checking."""
 
 
-def get_current_version() -> str:
+def get_this_version() -> str:
     """Get the version of pc-switcher currently running.
 
     Returns:
@@ -139,7 +139,7 @@ async def check_and_install(executor: RemoteExecutor) -> None:
     Raises:
         InstallationError: If version check or installation fails
     """
-    source_ver = get_current_version()
+    source_ver = get_this_version()
     target_ver = await get_target_version(executor)
 
     # Target has no pc-switcher installed
