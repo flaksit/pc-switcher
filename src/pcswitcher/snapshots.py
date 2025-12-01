@@ -6,13 +6,12 @@ for btrfs subvolumes during the sync process.
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from pytimeparse2 import parse as parse_duration_seconds
 
-from pcswitcher.models import CommandResult, Host, SnapshotPhase
+from pcswitcher.models import CommandResult, Host, Snapshot, SnapshotPhase
 
 if TYPE_CHECKING:
     from pcswitcher.executor import LocalExecutor, RemoteExecutor
@@ -20,6 +19,7 @@ if TYPE_CHECKING:
 __all__ = [
     "cleanup_snapshots",
     "create_snapshot",
+    "list_snapshots",
     "parse_older_than",
     "session_folder_name",
     "snapshot_name",
@@ -143,69 +143,132 @@ async def validate_subvolume_exists(
     return (True, None)
 
 
-async def cleanup_snapshots(
+async def list_snapshots(
     executor: LocalExecutor | RemoteExecutor,
-    session_folder: str,
-    keep_recent: int,
-    max_age_days: int | None = None,
-) -> list[str]:
-    """Clean up old snapshots based on retention policy.
+    host: Host,
+) -> list[Snapshot]:
+    """List all pc-switcher snapshots on a machine.
 
     Args:
         executor: Executor for the target machine
-        session_folder: Session folder path (e.g., "/.snapshots/pc-switcher/20251129T143022-abc12345")
-        keep_recent: Number of recent snapshots to keep
-        max_age_days: Delete snapshots older than this many days (optional)
+        host: Which machine is being queried (SOURCE or TARGET)
 
     Returns:
-        List of deleted snapshot paths
+        List of Snapshot objects, sorted by timestamp (newest first)
     """
-    # List all session folders in /.snapshots/pc-switcher/
-    list_result = await executor.run_command("ls -1t /.snapshots/pc-switcher/ 2>/dev/null || true")
+    snapshots: list[Snapshot] = []
 
+    # List all session folders
+    list_result = await executor.run_command("ls -1 /.snapshots/pc-switcher/ 2>/dev/null || true")
     if not list_result.stdout.strip():
         return []
 
-    # Parse session folders (sorted newest first due to -t flag)
-    session_folders = [
-        f"/.snapshots/pc-switcher/{name.strip()}" for name in list_result.stdout.strip().split("\n") if name.strip()
-    ]
+    session_folders = [name.strip() for name in list_result.stdout.strip().split("\n") if name.strip()]
 
-    deleted: list[str] = []
+    for folder_name in session_folders:
+        folder_path = f"/.snapshots/pc-switcher/{folder_name}"
 
-    # Apply keep_recent policy
-    folders_to_delete = session_folders[keep_recent:]
+        # List snapshots in this folder
+        snap_result = await executor.run_command(f"ls -1 {folder_path} 2>/dev/null || true")
+        if not snap_result.stdout.strip():
+            continue
 
-    # Apply max_age_days policy if specified
+        snap_names = [name.strip() for name in snap_result.stdout.strip().split("\n") if name.strip()]
+
+        for snap_name in snap_names:
+            snap_path = f"{folder_path}/{snap_name}"
+            try:
+                snapshot = Snapshot.from_path(snap_path, host)
+                snapshots.append(snapshot)
+            except ValueError:
+                # Skip snapshots that don't match our naming convention
+                continue
+
+    # Sort by timestamp, newest first
+    snapshots.sort(key=lambda s: s.timestamp, reverse=True)
+    return snapshots
+
+
+async def cleanup_snapshots(
+    executor: LocalExecutor | RemoteExecutor,
+    host: Host,
+    keep_recent: int,
+    max_age_days: int | None = None,
+) -> list[Snapshot]:
+    """Clean up old snapshots based on retention policy.
+
+    Applies two retention policies:
+    1. keep_recent: Always keep the N most recent sync sessions (by session_id)
+    2. max_age_days: Delete snapshots older than N days (optional)
+
+    A session is protected by keep_recent even if it's older than max_age_days.
+
+    Args:
+        executor: Executor for the target machine
+        host: Which machine to clean up (SOURCE or TARGET)
+        keep_recent: Number of recent sync sessions to keep
+        max_age_days: Delete snapshots older than this many days (optional)
+
+    Returns:
+        List of deleted Snapshot objects
+    """
+    # Get all snapshots using list_snapshots()
+    all_snapshots = await list_snapshots(executor, host)
+    if not all_snapshots:
+        return []
+
+    # Group snapshots by session_id
+    sessions: dict[str, list[Snapshot]] = {}
+    for snap in all_snapshots:
+        sessions.setdefault(snap.session_id, []).append(snap)
+
+    # Sort sessions by newest snapshot timestamp (newest first)
+    sorted_sessions = sorted(
+        sessions.items(),
+        key=lambda x: max(s.timestamp for s in x[1]),
+        reverse=True,
+    )
+
+    # Identify protected sessions (keep_recent most recent)
+    protected_session_ids = {sid for sid, _ in sorted_sessions[:keep_recent]}
+
+    # Determine which snapshots to delete
+    snapshots_to_delete: list[Snapshot] = []
+
     if max_age_days is not None:
         cutoff_date = datetime.now() - timedelta(days=max_age_days)
-        cutoff_timestamp = cutoff_date.strftime("%Y%m%dT%H%M%S")
 
-        for folder in session_folders:
-            # Extract timestamp from folder name (format: YYYYMMDDTHHMMSS-sessionid)
-            match = re.match(r".*/(\d{8}T\d{6})-", folder)
-            if match:
-                folder_timestamp = match.group(1)
-                if folder_timestamp < cutoff_timestamp and folder not in folders_to_delete:
-                    folders_to_delete.append(folder)
+        for session_id, session_snaps in sorted_sessions:
+            if session_id in protected_session_ids:
+                continue  # Protected by keep_recent
 
-    # Delete selected folders
-    for folder in folders_to_delete:
-        # List snapshots in this folder
-        snapshot_list = await executor.run_command(f"ls -1 {folder} 2>/dev/null || true")
-        if snapshot_list.stdout.strip():
-            snapshots = [
-                f"{folder}/{name.strip()}" for name in snapshot_list.stdout.strip().split("\n") if name.strip()
-            ]
+            # Check if session is older than max_age_days
+            newest_in_session = max(s.timestamp for s in session_snaps)
+            if newest_in_session < cutoff_date:
+                snapshots_to_delete.extend(session_snaps)
+    else:
+        # No age limit - just delete sessions beyond keep_recent
+        for _session_id, session_snaps in sorted_sessions[keep_recent:]:
+            snapshots_to_delete.extend(session_snaps)
 
-            # Delete each snapshot subvolume
-            for snapshot in snapshots:
-                delete_result = await executor.run_command(f"sudo btrfs subvolume delete {snapshot}")
-                if delete_result.exit_code == 0:
-                    deleted.append(snapshot)
+    # Delete the snapshots
+    deleted: list[Snapshot] = []
+    deleted_session_ids: set[str] = set()
 
-        # Delete the session folder itself
-        await executor.run_command(f"rmdir {folder} 2>/dev/null || true")
+    for snap in snapshots_to_delete:
+        delete_result = await executor.run_command(f"sudo btrfs subvolume delete {snap.path}")
+        if delete_result.exit_code == 0:
+            deleted.append(snap)
+            deleted_session_ids.add(snap.session_id)
+
+    # Clean up empty session folders
+    for session_id in deleted_session_ids:
+        # Check if all snapshots in session were deleted
+        session_snaps = sessions[session_id]
+        if all(s in deleted for s in session_snaps):
+            # Extract folder path from first snapshot path
+            folder_path = "/".join(session_snaps[0].path.split("/")[:-1])
+            await executor.run_command(f"rmdir {folder_path} 2>/dev/null || true")
 
     return deleted
 

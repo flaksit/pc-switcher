@@ -143,5 +143,5 @@ This repository will NOT contain:
 ## Active Technologies
 
 - **Python 3.14** (per ADR-003) via uv venv
-- Always use `uv run` for Python execution: `uv run python`, `uv run ruff`, `uv run basedpyright`, etc.
-- Never use the system Python directly
+- You MUST ALWAYS use `uv run` for running Python or python packages: `uv run python`, `uv run ruff`, `uv run basedpyright`, etc.
+- You MUST NEVER use the system Python directly. So DO NOT run `python3`, `python`, `pip`, etc. directly.

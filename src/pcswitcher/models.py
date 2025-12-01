@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from datetime import datetime
 from enum import IntEnum, StrEnum
 from typing import Any
 
@@ -126,12 +128,67 @@ class SnapshotPhase(StrEnum):
 
 @dataclass(frozen=True)
 class Snapshot:
-    """Metadata for a btrfs snapshot."""
+    """Metadata for a btrfs snapshot.
 
-    name: str  # e.g., "pre-@home-20251129T143022"
+    Represents a btrfs snapshot created during a sync session. The `name` property
+    is computed from the subvolume, phase, and timestamp per FR-010.
+    """
+
     subvolume: str  # e.g., "@home"
     phase: SnapshotPhase  # PRE or POST
-    timestamp: str  # ISO 8601 timestamp
+    timestamp: datetime  # When the snapshot was created
+    session_id: str  # 8-char hex session identifier
+    host: Host  # SOURCE or TARGET
+    path: str  # Full filesystem path
+
+    @property
+    def name(self) -> str:
+        """Snapshot name per FR-010: pre-@home-20251129T143022."""
+        ts = self.timestamp.strftime("%Y%m%dT%H%M%S")
+        return f"{self.phase.value}-{self.subvolume}-{ts}"
+
+    @classmethod
+    def from_path(cls, path: str, host: Host) -> Snapshot:
+        """Parse a Snapshot from its filesystem path.
+
+        Args:
+            path: Full path like "/.snapshots/pc-switcher/20251129T143022-abc12345/pre-@home-20251129T143022"
+            host: Which machine this snapshot is on
+
+        Returns:
+            Snapshot object with parsed metadata
+
+        Raises:
+            ValueError: If the path doesn't match expected format
+        """
+        # Extract session folder and snapshot name from path
+        # Pattern: /.snapshots/pc-switcher/<timestamp>-<session_id>/<phase>-<subvolume>-<timestamp>
+        match = re.match(
+            r".*/(\d{8}T\d{6})-([a-f0-9]{8})/(\w+)-(@\w*)-(\d{8}T\d{6})$",
+            path,
+        )
+        if not match:
+            raise ValueError(f"Cannot parse snapshot path: {path}")
+
+        _folder_ts, session_id, phase_str, subvolume, snap_ts = match.groups()
+
+        # Parse phase
+        try:
+            phase = SnapshotPhase(phase_str)
+        except ValueError as e:
+            raise ValueError(f"Invalid phase '{phase_str}' in path: {path}") from e
+
+        # Parse timestamp
+        timestamp = datetime.strptime(snap_ts, "%Y%m%dT%H%M%S")
+
+        return cls(
+            subvolume=subvolume,
+            phase=phase,
+            timestamp=timestamp,
+            session_id=session_id,
+            host=host,
+            path=path,
+        )
 
 
 class SessionStatus(StrEnum):

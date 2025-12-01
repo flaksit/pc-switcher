@@ -265,7 +265,7 @@ class JobResult:
 
 ### Snapshot
 
-Represents a btrfs snapshot.
+Represents a btrfs snapshot. The `name` property is computed from metadata per FR-010.
 
 ```python
 from dataclasses import dataclass
@@ -273,23 +273,34 @@ from datetime import datetime
 from enum import StrEnum
 
 class SnapshotPhase(StrEnum):
-    PRESYNC = "presync"
-    POSTSYNC = "postsync"
+    PRE = "pre"
+    POST = "post"
 
 @dataclass(frozen=True)
 class Snapshot:
     subvolume: str            # e.g., "@home"
     phase: SnapshotPhase
     timestamp: datetime
-    session_id: str
-    host: Host
-    path: str                 # Full path on filesystem
+    session_id: str           # 8-char hex session identifier
+    host: Host                # SOURCE or TARGET
+    path: str                 # Full filesystem path
 
     @property
     def name(self) -> str:
         """Snapshot name per FR-010: pre-@home-20251129T143022"""
         ts = self.timestamp.strftime("%Y%m%dT%H%M%S")
         return f"{self.phase.value}-{self.subvolume}-{ts}"
+
+    @classmethod
+    def from_path(cls, path: str, host: Host) -> "Snapshot":
+        """Parse a Snapshot from its filesystem path.
+
+        Path format: /.snapshots/pc-switcher/<timestamp>-<session_id>/<phase>-<subvolume>-<timestamp>
+        Example: /.snapshots/pc-switcher/20251129T143022-abc12345/pre-@home-20251129T143022
+
+        Raises ValueError if path doesn't match expected format.
+        """
+        ...
 ```
 
 ---

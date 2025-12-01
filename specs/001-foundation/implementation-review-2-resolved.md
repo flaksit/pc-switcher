@@ -197,3 +197,138 @@ After initial fixes, duplicated code was identified and refactored:
 - All installation logic moved to `InstallOnTargetJob`
 - All installation/upgrade logic lives in `InstallOnTargetJob` (architecture-compliant)
 - Removed dead code: `get_target_version()`, `compare_versions()`, `install_on_target()`, `check_and_install()`, `InstallationError`
+
+---
+
+## Follow-up: Dead Code Cleanup and Snapshot Refactoring
+
+**Date**: 2025-12-01 (continued session)
+
+### User Request
+
+> Find all dead code. E.g. unused imports, unused functions, unused variables, etc. First show me the list of dead code you found. Then, after I confirm, remove all dead code from the codebase.
+
+### Initial Analysis
+
+I identified the following potential dead code:
+
+| Item | Location | Type | Status |
+|------|----------|------|--------|
+| `TerminalUI` | `ui.py:22-316` | Class | Fully implemented but never wired to orchestrator |
+| `JobLogger` | `logger.py:61-84` | Class | Never instantiated - jobs use `Job._log()` directly |
+| `Snapshot` | `models.py:128-134` | Dataclass | Defined but never instantiated |
+| `get_target_lock_holder` | `lock.py:121-134` | Function | Defined but never called |
+| `parse_threshold` | `config.py:225-237` | Function | Duplicate of `disk.py` version, never used |
+
+### User Feedback on Analysis
+
+1. **TerminalUI**: User said "This must be a mistake! It is all over the place in architecture.md. Is the rich terminal implemented somewhere else maybe?" → After investigation, confirmed it's **NOT dead code** but incomplete integration - needs to be wired later in a separate task.
+
+2. **JobLogger**: User said "Could be ok. Verify that logging works without it." → Confirmed dead code, logging works via `Job._log()` method.
+
+3. **Snapshot**: User said "Snapshot is still documented in data-model.md... Either this class is not necessary anymore, in which case these two documents need to be updated. Or the class is needed but not wired to the rest of the code." → User decided: "Implement properly and ensure it is used by the current code."
+
+4. **get_target_lock_holder**: User confirmed "Ok" to remove.
+
+5. **parse_threshold (config.py)**: User confirmed "OK" to remove.
+
+### Snapshot Refactoring Decision
+
+User requested the Snapshot dataclass be properly implemented and used:
+
+> Implement properly and ensure it is used by the current code. It seems a useful class for all logic about the snapshots. Refactor existing code about btrfs snapshots that benefit from it, e.g. the btrfs snapshot cleanup. Tell me if you estimate that some parts of the code about snapshots would NOT benefit of this refactoring and why.
+
+### Analysis: What Benefits vs What Doesn't
+
+**Would BENEFIT from Snapshot dataclass:**
+1. `cleanup_snapshots()` - Currently parses folder names with regex, works with strings. Refactored to use `Snapshot.from_path()` and work with typed objects.
+2. New `list_snapshots()` function - Parse existing snapshots from filesystem into `list[Snapshot]`.
+
+**Would NOT benefit (kept as-is):**
+1. `snapshot_name()` - Generates a name string before we have all metadata. Keep as utility.
+2. `create_snapshot()` - Just runs btrfs command with two path strings. No benefit from Snapshot objects.
+3. `BtrfsSnapshotJob.execute()` - Creates snapshots, logs, moves on. Doesn't need to track metadata.
+4. Validation functions - Just check existence, don't need Snapshot objects.
+
+### Changes Made
+
+#### 1. Fixed Snapshot Dataclass (`models.py`)
+
+Updated to match spec with proper fields and methods:
+
+```python
+@dataclass(frozen=True)
+class Snapshot:
+    subvolume: str         # e.g., "@home"
+    phase: SnapshotPhase   # PRE or POST
+    timestamp: datetime    # When created
+    session_id: str        # 8-char hex session identifier
+    host: Host             # SOURCE or TARGET
+    path: str              # Full filesystem path
+
+    @property
+    def name(self) -> str:
+        """Snapshot name per FR-010: pre-@home-20251129T143022."""
+        ts = self.timestamp.strftime("%Y%m%dT%H%M%S")
+        return f"{self.phase.value}-{self.subvolume}-{ts}"
+
+    @classmethod
+    def from_path(cls, path: str, host: Host) -> "Snapshot":
+        """Parse a Snapshot from its filesystem path."""
+        ...
+```
+
+#### 2. Added `list_snapshots()` (`snapshots.py`)
+
+```python
+async def list_snapshots(
+    executor: LocalExecutor | RemoteExecutor,
+    host: Host,
+) -> list[Snapshot]:
+    """List all pc-switcher snapshots on a machine."""
+    ...
+```
+
+#### 3. Refactored `cleanup_snapshots()` (`snapshots.py`)
+
+- Changed signature: now takes `host: Host` instead of `session_folder: str`
+- Uses `list_snapshots()` internally
+- Returns `list[Snapshot]` instead of `list[str]`
+- Groups by session_id for proper retention policy
+
+#### 4. Updated CLI (`cli.py`)
+
+- Added `Host` import
+- Updated `cleanup_snapshots` call to use new signature
+- Updated output to use `snapshot.path`
+
+#### 5. Updated Data Model Doc (`data-model.md`)
+
+- Fixed `SnapshotPhase` values: `PRE`/`POST` (not `PRESYNC`/`POSTSYNC`)
+- Added `from_path()` classmethod documentation
+
+#### 6. Removed Dead Code
+
+- **`JobLogger`** class from `logger.py` + removed from `__all__`
+- **`get_target_lock_holder()`** function from `lock.py`
+- **`parse_threshold()`** function from `config.py` + removed from `__all__` + removed unused `re` import
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/ → 0 errors, 0 warnings, 0 notes
+```
+
+### Files Modified (This Session)
+
+1. `src/pcswitcher/models.py` - Snapshot dataclass with proper fields and `from_path()` classmethod
+2. `src/pcswitcher/snapshots.py` - Added `list_snapshots()`, refactored `cleanup_snapshots()`
+3. `src/pcswitcher/cli.py` - Updated cleanup command to use new signature
+4. `src/pcswitcher/logger.py` - Removed `JobLogger` class
+5. `src/pcswitcher/lock.py` - Removed `get_target_lock_holder()` function
+6. `src/pcswitcher/config.py` - Removed `parse_threshold()` function
+7. `specs/001-foundation/data-model.md` - Updated Snapshot documentation
+
+### Remaining Item (Deferred)
+
+**TerminalUI** - NOT dead code, just incomplete integration. User confirmed: "Ok, we'll tackle this later in a separate conversation."

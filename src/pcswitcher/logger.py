@@ -17,7 +17,6 @@ from pcswitcher.models import Host, LogLevel
 __all__ = [
     "ConsoleLogger",
     "FileLogger",
-    "JobLogger",
     "Logger",
     "generate_log_filename",
     "get_latest_log_file",
@@ -47,32 +46,6 @@ class Logger:
             message: Human-readable message
             **context: Additional structured context
         """
-        self._event_bus.publish(
-            LogEvent(
-                level=level,
-                job=self._job_name,
-                host=host,
-                message=message,
-                context=context,
-            )
-        )
-
-
-class JobLogger:
-    """Logger bound to a specific job name."""
-
-    def __init__(self, event_bus: EventBus, job_name: str) -> None:
-        self._event_bus = event_bus
-        self._job_name = job_name
-
-    def log(
-        self,
-        level: LogLevel,
-        host: Host,
-        message: str,
-        **context: Any,
-    ) -> None:
-        """Log a message for this job."""
         self._event_bus.publish(
             LogEvent(
                 level=level,

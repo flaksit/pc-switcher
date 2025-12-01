@@ -118,22 +118,6 @@ async def acquire_target_lock(
     return result.success
 
 
-async def get_target_lock_holder(executor: RemoteExecutor) -> str | None:
-    """Get info about who holds the target lock.
-
-    Args:
-        executor: Remote executor for running commands on target
-
-    Returns:
-        Holder info string (e.g., "laptop-work:12345") or None if not held
-    """
-    result = await executor.run_command("cat ~/.local/share/pc-switcher/target.lock 2>/dev/null")
-    if result.success and result.stdout:
-        content = result.stdout.strip()
-        return content if content else None
-    return None
-
-
 def get_local_hostname() -> str:
     """Get the hostname of the local machine.
 

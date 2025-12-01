@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,7 +16,6 @@ __all__ = [
     "Configuration",
     "ConfigurationError",
     "DiskConfig",
-    "parse_threshold",
 ]
 
 
@@ -220,18 +218,3 @@ def _parse_log_level(value: str) -> LogLevel:
     except KeyError as e:
         valid_levels = ", ".join(level.name for level in LogLevel)
         raise ValueError(f"Invalid log level: {value}. Valid levels: {valid_levels}") from e
-
-
-def parse_threshold(threshold: str) -> tuple[str, int]:
-    """Parse disk space threshold like '20%' or '50GiB'.
-
-    Returns: (type, value) where type is 'percent' or 'bytes'
-    """
-    if threshold.endswith("%"):
-        return ("percent", int(threshold[:-1]))
-    match = re.match(r"(\d+)(GiB|MiB|GB|MB)", threshold)
-    if match:
-        value, unit = match.groups()
-        multipliers = {"GiB": 2**30, "MiB": 2**20, "GB": 10**9, "MB": 10**6}
-        return ("bytes", int(value) * multipliers[unit])
-    raise ValueError(f"Invalid threshold format: {threshold}")

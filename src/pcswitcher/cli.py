@@ -17,6 +17,7 @@ from rich.text import Text
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.executor import LocalExecutor
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
+from pcswitcher.models import Host
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.snapshots import cleanup_snapshots as cleanup_snapshots_impl
 from pcswitcher.snapshots import parse_older_than
@@ -192,7 +193,7 @@ async def _async_run_sync(target: str, cfg: Configuration) -> int:
     - First SIGINT: Cancel sync task, allow CLEANUP_TIMEOUT_SECONDS for cleanup
     - Second SIGINT or timeout: Force terminate immediately
     """
-    from pcswitcher.models import SyncSession
+    from pcswitcher.models import SyncSession  # noqa: PLC0415
 
     loop = asyncio.get_running_loop()
     main_task: asyncio.Task[SyncSession] | None = None
@@ -289,21 +290,21 @@ async def _async_run_cleanup(keep_recent: int, max_age_days: int | None, dry_run
             console.print("\n[dim]Note: Actual deletion not implemented yet for dry-run mode[/dim]")
             return 0
 
-        console.print(f"Cleaning up snapshots (keeping {keep_recent} most recent)")
+        console.print(f"Cleaning up snapshots (keeping {keep_recent} most recent sessions)")
         if max_age_days is not None:
             console.print(f"Also deleting snapshots older than {max_age_days} days")
 
         deleted = await cleanup_snapshots_impl(
             executor=executor,
-            session_folder="/.snapshots/pc-switcher",
+            host=Host.SOURCE,
             keep_recent=keep_recent,
             max_age_days=max_age_days,
         )
 
         if deleted:
             console.print(f"\n[green]Successfully deleted {len(deleted)} snapshot(s):[/green]")
-            for snapshot_path in deleted:
-                console.print(f"  - {snapshot_path}")
+            for snapshot in deleted:
+                console.print(f"  - {snapshot.path}")
         else:
             console.print("\n[yellow]No snapshots were deleted[/yellow]")
 

@@ -1,15 +1,34 @@
 THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
 
 
-Find all dead code and remove it. E.g. unused imports, unused functions, unused variables, etc.
+ui.py and the TerminalUI class defined in this module are dead code: Rich terminal UI never integrated into CLI. This is a mistake! It is all over the place in the @specs/001-foundation/architecture.md .
+Finding: TerminalUI is fully implemented (316 lines) but never wired to the orchestrator. The architecture explicitly requires it, but integration was never completed.
+
+  Current state:
+  - ConsoleLogger is being used as a simple line-based fallback
+  - ProgressEvent is being published but has no consumer (vanishes into void)
+  - The rich progress bars, log panels, live updates specified in architecture are not working
+
+  Action: Wire this the EventBus and/or Orchestrator as per architecture.md.
+
+Ensure that the rich terminal UI is fully functional as per the architecture specifications in @specs/001-foundation/architecture.md and the specs.md.
+
+---
+It seems that all tasks in @specs/001-foundation/tasks.md are implemented, but that there is no final verification that everything is wired together correctly.
+Please do the following:
+- Review all tasks in @specs/001-foundation/tasks.md
+- For each task, verify that its deliverables are implemented in the codebase
+- Check that all deliverables of all tasks are wired together correctly to form a working system as specified in @specs/001-foundation/spec.md
 
 ---
 
 Refactor: Give Context to constructor instead of to each method. This simplifies method signatures and shortens code. E.g. self._log() doesn't need to get the context anymore, as it is already stored in self.context.
 
 ---
-
-
+default config.yaml is still hardcoded in install.sh. Put it somewhere as a file in the repo and have install.sh download it from there.
+Or the release process could integrate it in install.sh automatically, but this seems more complicated.
+I definitely want the default config.yaml to be a separate file in the repo for easy editing and documentation; both for developers and for users.
+---
 
 @docs/adr/considerations/async-vs-sync-concurrency-analysis.md explored and documented in DRAFT some ideas for concurrency.
 We chose to use asyncio for concurrency.
