@@ -6,6 +6,8 @@ import asyncio
 
 import asyncssh
 
+from pcswitcher.events import ConnectionEvent, EventBus
+
 __all__ = ["Connection"]
 
 
@@ -19,6 +21,7 @@ class Connection:
     def __init__(
         self,
         target: str,
+        event_bus: EventBus,
         max_sessions: int = 10,
         keepalive_interval: int = 15,
         keepalive_count_max: int = 3,
@@ -27,11 +30,13 @@ class Connection:
 
         Args:
             target: Hostname or SSH config alias for target machine
+            event_bus: EventBus for publishing connection events
             max_sessions: Maximum concurrent SSH sessions (default 10)
             keepalive_interval: Seconds between keepalive packets (default 15)
             keepalive_count_max: Max missed keepalives before disconnect (default 3)
         """
         self._target = target
+        self._event_bus = event_bus
         self._conn: asyncssh.SSHClientConnection | None = None
         self._session_semaphore = asyncio.Semaphore(max_sessions)
         self._keepalive_interval = keepalive_interval
@@ -67,6 +72,8 @@ class Connection:
             keepalive_interval=self._keepalive_interval,
             keepalive_count_max=self._keepalive_count_max,
         )
+        # Publish connected event with initial latency (0 for now, or could measure)
+        self._event_bus.publish(ConnectionEvent(status="connected", latency=0.0))
 
     async def disconnect(self) -> None:
         """Close the SSH connection gracefully."""
@@ -74,6 +81,7 @@ class Connection:
             self._conn.close()
             await self._conn.wait_closed()
             self._conn = None
+            self._event_bus.publish(ConnectionEvent(status="disconnected", latency=None))
 
     async def create_process(self, cmd: str) -> asyncssh.SSHClientProcess[str]:
         """Create a remote process for command execution.

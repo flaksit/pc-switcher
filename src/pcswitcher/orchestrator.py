@@ -22,7 +22,6 @@ from pcswitcher.jobs.dummy import DummyFailJob, DummySuccessJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.lock import SyncLock, acquire_target_lock, get_local_hostname
 from pcswitcher.logger import (
-    ConsoleLogger,
     FileLogger,
     Logger,
     generate_log_filename,
@@ -40,6 +39,7 @@ from pcswitcher.models import (
     ValidationError,
 )
 from pcswitcher.snapshots import session_folder_name
+from pcswitcher.ui import TerminalUI
 
 __all__ = ["Orchestrator"]
 
@@ -88,9 +88,9 @@ class Orchestrator:
 
         # Logging infrastructure (initialized in run())
         self._file_logger: FileLogger | None = None
-        self._console_logger: ConsoleLogger | None = None
+        self._ui: TerminalUI | None = None
         self._file_logger_task: asyncio.Task[None] | None = None
-        self._console_logger_task: asyncio.Task[None] | None = None
+        self._ui_task: asyncio.Task[None] | None = None
 
     async def run(self) -> SyncSession:  # noqa: PLR0915
         """Execute the complete sync workflow.
@@ -118,30 +118,37 @@ class Orchestrator:
 
         # Subscribe to event bus (creates consumer queues)
         file_queue = self._event_bus.subscribe()
-        console_queue = self._event_bus.subscribe()
+        ui_queue = self._event_bus.subscribe()
 
-        # Create hostname map for ConsoleLogger
+        # Create hostname map for UI
         hostname_map = {
             Host.SOURCE: self._source_hostname,
             Host.TARGET: self._target_hostname or "target",
         }
 
-        # Instantiate loggers
+        # Instantiate loggers and UI
         self._file_logger = FileLogger(
             log_file=log_file_path,
             level=self._config.log_file_level,
             queue=file_queue,
         )
-        self._console_logger = ConsoleLogger(
+        self._ui = TerminalUI(
             console=Console(),
-            level=self._config.log_cli_level,
-            queue=console_queue,
-            hostname_map=hostname_map,
+            total_steps=len(self._config.sync_jobs) + 2,  # +2 for pre/post snapshots
         )
 
-        # Start logger consumers as background tasks
+        # Start consumers as background tasks
         self._file_logger_task = asyncio.create_task(self._file_logger.consume())
-        self._console_logger_task = asyncio.create_task(self._console_logger.consume())
+        self._ui_task = asyncio.create_task(
+            self._ui.consume_events(
+                queue=ui_queue,
+                hostname_map=hostname_map,
+                log_level=self._config.log_cli_level,
+            )
+        )
+
+        # Start UI live display
+        self._ui.start()
 
         try:
             # Phase 1: Acquire source lock
@@ -222,7 +229,7 @@ class Orchestrator:
 
     async def _establish_connection(self) -> None:
         """Establish SSH connection to target machine."""
-        self._connection = Connection(self._target)
+        self._connection = Connection(self._target, event_bus=self._event_bus)
         await self._connection.connect()
 
         # Create executors
@@ -243,7 +250,6 @@ class Orchestrator:
 
         if not await acquire_target_lock(self._remote_executor, self._source_hostname):
             raise RuntimeError(f"Another sync is already in progress on target {self._target_hostname}")
-
 
     async def _install_on_target_job(self) -> None:
         """Execute InstallOnTargetJob to ensure pc-switcher is on target.
@@ -585,5 +591,9 @@ class Orchestrator:
         # Wait for logger tasks to finish draining their queues
         if self._file_logger_task is not None:
             await self._file_logger_task
-        if self._console_logger_task is not None:
-            await self._console_logger_task
+        if self._ui_task is not None:
+            await self._ui_task
+
+        # Stop UI live display
+        if self._ui is not None:
+            self._ui.stop()
