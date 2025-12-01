@@ -17,6 +17,7 @@ You just finished the implementation of the feature. My quality assurance analys
 First, critically read through their feedback. Come back to me and ask me clarifying questions if you think parts of the feedback are not relevant.
 
 Then, when all your questions are answered, fix your implementation according to the feedback. Ensure all points raised in the feedback are addressed and that the implementation fully complies with the specifications outlined in "spec.md".
+Use subagents for the implementation so your context does not fill up with tiny implementation details and you keep enough free context to focus on your task as project manager that oversees that everything gets fixed. Launch subagents in parallel if their tasks don't conflict.
 
 ### Output
 Write a report to a new file "implementation-review-N-resolved.md", where N is the same number as of the review file you read. The goal is to have a trace of any decisions we make while resolving the feedback. The report should contain the following:

@@ -93,19 +93,24 @@ def compare_versions(source: str, target: str) -> int:
 
 
 async def install_on_target(executor: RemoteExecutor, version: str) -> None:
-    """Install pc-switcher on target machine.
+    """Install pc-switcher on target machine using GitHub install.sh script.
 
-    Uses `uv tool install pcswitcher=={version}` to install the specific version.
+    Fetches install.sh from the versioned GitHub tag and runs it with --version parameter.
+    This handles uv bootstrap and all dependencies automatically.
 
     Args:
         executor: RemoteExecutor connected to target machine
-        version: Version string to install
+        version: Version string to install (e.g., "0.1.0")
 
     Raises:
         InstallationError: If installation fails
     """
-    # Install using uv tool install with specific version
-    cmd = f"uv tool install pcswitcher=={version}"
+    # Construct URL to versioned install.sh from GitHub
+    install_url = f"https://raw.githubusercontent.com/flaksit/pc-switcher/v{version}/install.sh"
+
+    # Run install.sh from GitHub with --version parameter
+    # Using curl -LsSf (Location, Silent, Show errors, Fail on error)
+    cmd = f"curl -LsSf {install_url} | sh -s -- --version {version}"
     result = await executor.run_command(cmd, timeout=300.0)
 
     if not result.success:

@@ -7,23 +7,27 @@ import secrets
 from datetime import datetime
 from pathlib import Path
 
+from rich.console import Console
+
 from pcswitcher.config import Configuration
 from pcswitcher.connection import Connection
+from pcswitcher.disk import DiskSpace, check_disk_space, parse_threshold
 from pcswitcher.events import EventBus
 from pcswitcher.executor import LocalExecutor, RemoteExecutor
-from pcswitcher.installation import (
-    InstallationError,
-    get_current_version,
-    get_target_version,
-    install_on_target,
-)
 from pcswitcher.jobs.base import Job, SyncJob
 from pcswitcher.jobs.btrfs import BtrfsSnapshotJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
 from pcswitcher.jobs.dummy import DummyFailJob, DummySuccessJob
+from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.lock import SyncLock, acquire_target_lock, get_local_hostname
-from pcswitcher.logger import Logger
+from pcswitcher.logger import (
+    ConsoleLogger,
+    FileLogger,
+    Logger,
+    generate_log_filename,
+    get_logs_directory,
+)
 from pcswitcher.models import (
     ConfigError,
     Host,
@@ -35,6 +39,7 @@ from pcswitcher.models import (
     SyncSession,
     ValidationError,
 )
+from pcswitcher.snapshots import session_folder_name
 
 __all__ = ["Orchestrator"]
 
@@ -63,6 +68,7 @@ class Orchestrator:
         self._target = target
         self._config = config
         self._session_id = secrets.token_hex(4)
+        self._session_folder = session_folder_name(self._session_id)
         self._source_hostname = get_local_hostname()
         self._target_hostname: str | None = None
 
@@ -73,11 +79,6 @@ class Orchestrator:
         self._local_executor: LocalExecutor | None = None
         self._remote_executor: RemoteExecutor | None = None
 
-        # Version info (populated during validation, used during install)
-        self._source_version: str | None = None
-        self._target_version: str | None = None
-        self._install_needed: bool = False
-
         # Locks
         self._source_lock: SyncLock | None = None
 
@@ -85,7 +86,13 @@ class Orchestrator:
         self._task_group: asyncio.TaskGroup | None = None
         self._cleanup_in_progress = False
 
-    async def run(self) -> SyncSession:
+        # Logging infrastructure (initialized in run())
+        self._file_logger: FileLogger | None = None
+        self._console_logger: ConsoleLogger | None = None
+        self._file_logger_task: asyncio.Task[None] | None = None
+        self._console_logger_task: asyncio.Task[None] | None = None
+
+    async def run(self) -> SyncSession:  # noqa: PLR0915
         """Execute the complete sync workflow.
 
         Returns:
@@ -105,6 +112,37 @@ class Orchestrator:
             job_results=[],
         )
 
+        # Initialize logging infrastructure BEFORE any logging happens
+        # Create log file path
+        log_file_path = get_logs_directory() / generate_log_filename(self._session_id)
+
+        # Subscribe to event bus (creates consumer queues)
+        file_queue = self._event_bus.subscribe()
+        console_queue = self._event_bus.subscribe()
+
+        # Create hostname map for ConsoleLogger
+        hostname_map = {
+            Host.SOURCE: self._source_hostname,
+            Host.TARGET: self._target_hostname or "target",
+        }
+
+        # Instantiate loggers
+        self._file_logger = FileLogger(
+            log_file=log_file_path,
+            level=self._config.log_file_level,
+            queue=file_queue,
+        )
+        self._console_logger = ConsoleLogger(
+            console=Console(),
+            level=self._config.log_cli_level,
+            queue=console_queue,
+            hostname_map=hostname_map,
+        )
+
+        # Start logger consumers as background tasks
+        self._file_logger_task = asyncio.create_task(self._file_logger.consume())
+        self._console_logger_task = asyncio.create_task(self._console_logger.consume())
+
         try:
             # Phase 1: Acquire source lock
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Acquiring source lock")
@@ -123,22 +161,20 @@ class Orchestrator:
             self._logger.log(LogLevel.INFO, Host.TARGET, "Acquiring target lock")
             await self._acquire_target_lock()
 
-            # Phase 4: Version compatibility check (error if target > source)
-            self._logger.log(LogLevel.INFO, Host.TARGET, "Checking pc-switcher version compatibility")
-            await self._check_version_compatibility()
-
-            # Phase 5: Job discovery and validation
+            # Phase 4: Job discovery and validation
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Discovering and validating jobs")
             jobs = await self._discover_and_validate_jobs()
+
+            # Phase 5: Disk space preflight check
+            await self._check_disk_space_preflight()
 
             # Phase 6: Pre-sync snapshots
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Creating pre-sync snapshots")
             await self._create_snapshots(SnapshotPhase.PRE)
 
             # Phase 7: Install/upgrade pc-switcher on target (after snapshots for rollback safety)
-            if self._install_needed:
-                self._logger.log(LogLevel.INFO, Host.TARGET, "Installing/upgrading pc-switcher on target")
-                await self._install_on_target()
+            self._logger.log(LogLevel.INFO, Host.TARGET, "Ensuring pc-switcher is installed on target")
+            await self._install_on_target_job()
 
             # Phase 8: Execute sync jobs with background monitoring
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Starting sync operations")
@@ -208,69 +244,35 @@ class Orchestrator:
         if not await acquire_target_lock(self._remote_executor, self._source_hostname):
             raise RuntimeError(f"Another sync is already in progress on target {self._target_hostname}")
 
-    async def _check_version_compatibility(self) -> None:
-        """Check version compatibility - error if target is newer than source.
 
-        Sets self._install_needed flag for later installation after snapshots.
-        This separation ensures we can rollback if installation fails.
+    async def _install_on_target_job(self) -> None:
+        """Execute InstallOnTargetJob to ensure pc-switcher is on target.
+
+        Runs AFTER pre-sync snapshots for rollback safety if installation fails.
         """
+        assert self._local_executor is not None
         assert self._remote_executor is not None
 
-        self._source_version = get_current_version()
-        self._target_version = await get_target_version(self._remote_executor)
+        install_job = InstallOnTargetJob()
 
-        if self._target_version is None:
-            self._logger.log(
-                LogLevel.INFO,
-                Host.TARGET,
-                f"pc-switcher not found on target, will install version {self._source_version}",
-            )
-            self._install_needed = True
+        context = JobContext(
+            config={},  # No config needed for this job
+            source=self._local_executor,
+            target=self._remote_executor,
+            event_bus=self._event_bus,
+            session_id=self._session_id,
+            source_hostname=self._source_hostname,
+            target_hostname=self._target_hostname or "",
+        )
 
-        elif self._target_version > self._source_version:
-            raise InstallationError(
-                f"Target version {self._target_version} is newer than source {self._source_version}. "
-                "This is unusual and may indicate a configuration issue."
-            )
+        # Validate first (though it just returns empty list)
+        errors = await install_job.validate(context)
+        if errors:
+            error_msgs = [f"  - {e.host.value}: {e.message}" for e in errors]
+            raise RuntimeError("Installation validation failed:\n" + "\n".join(error_msgs))
 
-        elif self._target_version < self._source_version:
-            self._logger.log(
-                LogLevel.INFO,
-                Host.TARGET,
-                f"Target version {self._target_version} is outdated, will upgrade to {self._source_version}",
-            )
-            self._install_needed = True
-
-        else:
-            self._logger.log(
-                LogLevel.INFO,
-                Host.TARGET,
-                f"Target version {self._target_version} matches source",
-            )
-            self._install_needed = False
-
-    async def _install_on_target(self) -> None:
-        """Install or upgrade pc-switcher on target machine.
-
-        Called after pre-sync snapshots to ensure rollback capability.
-        """
-        assert self._remote_executor is not None
-        assert self._source_version is not None
-
-        if self._target_version is None:
-            self._logger.log(
-                LogLevel.INFO,
-                Host.TARGET,
-                f"Installing pc-switcher version {self._source_version}",
-            )
-        else:
-            self._logger.log(
-                LogLevel.INFO,
-                Host.TARGET,
-                f"Upgrading pc-switcher from {self._target_version} to {self._source_version}",
-            )
-
-        await install_on_target(self._remote_executor, self._source_version)
+        # Execute
+        await install_job.execute(context)
 
     async def _discover_and_validate_jobs(self) -> list[Job]:
         """Discover enabled jobs from config and validate their configuration.
@@ -358,6 +360,81 @@ class Orchestrator:
 
         return jobs
 
+    async def _check_disk_space_preflight(self) -> None:
+        """Check disk space on both source and target before creating snapshots.
+
+        Per FR-016, verifies both hosts have sufficient free disk space
+        based on the configured preflight_minimum threshold.
+
+        Raises:
+            RuntimeError: If either host has insufficient disk space
+        """
+        assert self._local_executor is not None
+        assert self._remote_executor is not None
+
+        self._logger.log(LogLevel.INFO, Host.SOURCE, "Checking disk space on both hosts")
+
+        # Parse threshold once (same for both hosts)
+        threshold_type, threshold_value = parse_threshold(self._config.disk.preflight_minimum)
+
+        # Check both hosts in parallel
+        source_task = check_disk_space(self._local_executor, "/")
+        target_task = check_disk_space(self._remote_executor, "/")
+        source_disk, target_disk = await asyncio.gather(source_task, target_task)
+
+        # Helper to format bytes in human-readable form
+        def format_bytes(bytes_value: int) -> str:
+            value = float(bytes_value)
+            for unit in ["B", "KiB", "MiB", "GiB", "TiB"]:
+                if value < 1024:
+                    return f"{value:.1f}{unit}"
+                value /= 1024
+            return f"{value:.1f}PiB"
+
+        # Helper to check if disk space is sufficient
+        def is_sufficient(disk_space: DiskSpace, threshold_type: str, threshold_value: int) -> bool:
+            if threshold_type == "percent":
+                # Threshold is percentage of total disk that must be free
+                free_percent = (disk_space.available_bytes / disk_space.total_bytes) * 100
+                return free_percent >= threshold_value
+            else:  # bytes
+                return disk_space.available_bytes >= threshold_value
+
+        # Helper to format free space description
+        def format_free_space(disk_space: DiskSpace) -> str:
+            free_bytes = format_bytes(disk_space.available_bytes)
+            free_percent = (disk_space.available_bytes / disk_space.total_bytes) * 100
+            return f"{free_bytes} ({free_percent:.1f}%)"
+
+        # Helper to format threshold description
+        def format_threshold(threshold_type: str, threshold_value: int) -> str:
+            if threshold_type == "percent":
+                return f"{threshold_value}%"
+            else:  # bytes
+                return format_bytes(threshold_value)
+
+        # Check source
+        if not is_sufficient(source_disk, threshold_type, threshold_value):
+            free_space_desc = format_free_space(source_disk)
+            threshold_desc = format_threshold(threshold_type, threshold_value)
+            error_msg = f"Source disk space {free_space_desc} below threshold {threshold_desc}"
+            self._logger.log(LogLevel.CRITICAL, Host.SOURCE, error_msg)
+            raise RuntimeError(error_msg)
+
+        # Check target
+        if not is_sufficient(target_disk, threshold_type, threshold_value):
+            free_space_desc = format_free_space(target_disk)
+            threshold_desc = format_threshold(threshold_type, threshold_value)
+            error_msg = f"Target disk space {free_space_desc} below threshold {threshold_desc}"
+            self._logger.log(LogLevel.CRITICAL, Host.TARGET, error_msg)
+            raise RuntimeError(error_msg)
+
+        # Both checks passed - log success
+        source_free = format_free_space(source_disk)
+        target_free = format_free_space(target_disk)
+        self._logger.log(LogLevel.INFO, Host.SOURCE, f"Source disk space check passed: {source_free} free")
+        self._logger.log(LogLevel.INFO, Host.TARGET, f"Target disk space check passed: {target_free} free")
+
     async def _create_snapshots(self, phase: SnapshotPhase) -> None:
         """Create btrfs snapshots on both source and target.
 
@@ -371,6 +448,7 @@ class Orchestrator:
         snapshot_config = {
             "phase": phase.value,
             "subvolumes": self._config.btrfs_snapshots.subvolumes,
+            "session_folder": self._session_folder,
         }
 
         context = JobContext(
@@ -501,5 +579,11 @@ class Orchestrator:
         if self._source_lock is not None:
             self._source_lock.release()
 
-        # Close event bus
+        # Close event bus (sends None sentinel to all consumers)
         self._event_bus.close()
+
+        # Wait for logger tasks to finish draining their queues
+        if self._file_logger_task is not None:
+            await self._file_logger_task
+        if self._console_logger_task is not None:
+            await self._console_logger_task

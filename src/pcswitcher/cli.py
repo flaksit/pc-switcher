@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import signal
 import sys
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.text import Text
 
 from pcswitcher.config import Configuration, ConfigurationError
+from pcswitcher.executor import LocalExecutor
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.orchestrator import Orchestrator
+from pcswitcher.snapshots import cleanup_snapshots as cleanup_snapshots_impl
 from pcswitcher.snapshots import parse_older_than
 
 # Cleanup timeout for graceful shutdown after SIGINT.
@@ -29,6 +34,101 @@ app = typer.Typer(
 )
 
 console = Console()
+
+
+def _version_callback(value: bool) -> None:
+    """Print version and exit if --version flag is provided."""
+    if value:
+        try:
+            pkg_version = version("pcswitcher")
+            console.print(f"pc-switcher {pkg_version}")
+        except PackageNotFoundError:
+            console.print("[bold red]Error:[/bold red] Cannot determine pc-switcher version")
+            sys.exit(1)
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version_flag: Annotated[
+        bool,
+        typer.Option("--version", "-v", callback=_version_callback, is_eager=True, help="Show version and exit"),
+    ] = False,
+) -> None:
+    """PC-switcher synchronization system."""
+
+
+def _display_log_file(log_file: Path) -> None:
+    """Display log file content with Rich formatting.
+
+    Args:
+        log_file: Path to log file to display
+    """
+    # Color mapping for log levels (matches ConsoleLogger.LEVEL_COLORS)
+    level_colors = {
+        "DEBUG": "dim",
+        "FULL": "cyan",
+        "INFO": "green",
+        "WARNING": "yellow",
+        "ERROR": "red",
+        "CRITICAL": "bold red",
+    }
+
+    console.print(f"\n[bold]Log file:[/bold] {log_file}\n")
+
+    try:
+        with log_file.open("r", encoding="utf-8") as f:
+            for line_num, raw_line in enumerate(f, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                try:
+                    # Parse JSON log entry
+                    entry = json.loads(line)
+
+                    # Extract fields
+                    timestamp = entry.get("timestamp", "")
+                    level = entry.get("level", "INFO")
+                    job = entry.get("job", "")
+                    host = entry.get("host", "")
+                    message = entry.get("event", "")
+
+                    # Get color for level
+                    color = level_colors.get(level, "white")
+
+                    # Format timestamp (just time portion if full ISO format)
+                    time_part = (
+                        timestamp.split("T")[1].split(".")[0] if "T" in timestamp else timestamp
+                    )
+
+                    # Build formatted output
+                    text = Text()
+                    text.append(f"{time_part} ", style="dim")
+                    text.append(f"[{level:8}]", style=color)
+                    text.append(f" [{job}]", style="blue")
+                    text.append(f" ({host})", style="magenta")
+                    text.append(f" {message}")
+
+                    # Add context (all other fields besides the standard ones)
+                    context_fields = {
+                        k: v
+                        for k, v in entry.items()
+                        if k not in {"timestamp", "level", "job", "host", "event"}
+                    }
+                    if context_fields:
+                        ctx_str = " ".join(f"{k}={v}" for k, v in context_fields.items())
+                        text.append(f" {ctx_str}", style="dim")
+
+                    console.print(text)
+
+                except json.JSONDecodeError:
+                    # Handle malformed lines gracefully
+                    console.print(f"[dim]Line {line_num}:[/dim] {line}")
+
+    except OSError as e:
+        console.print(f"[bold red]Error reading log file:[/bold red] {e}")
+        sys.exit(1)
 
 
 @app.command()
@@ -150,16 +250,78 @@ async def _async_run_sync(target: str, cfg: Configuration) -> int:
         loop.remove_signal_handler(signal.SIGINT)
 
 
+def _run_cleanup(keep_recent: int, max_age_days: int | None, dry_run: bool) -> int:
+    """Run the cleanup operation with asyncio.
+
+    Args:
+        keep_recent: Number of recent session folders to keep
+        max_age_days: Maximum age in days for snapshots (optional)
+        dry_run: If True, show what would be deleted without deleting
+
+    Returns:
+        Exit code: 0=success, 1=error
+    """
+    return asyncio.run(_async_run_cleanup(keep_recent, max_age_days, dry_run))
+
+
+async def _async_run_cleanup(keep_recent: int, max_age_days: int | None, dry_run: bool) -> int:
+    """Async implementation of cleanup.
+
+    Args:
+        keep_recent: Number of recent session folders to keep
+        max_age_days: Maximum age in days for snapshots (optional)
+        dry_run: If True, show what would be deleted without deleting
+
+    Returns:
+        Exit code: 0=success, 1=error
+    """
+    try:
+        executor = LocalExecutor()
+
+        if dry_run:
+            console.print(
+                f"[yellow]DRY RUN:[/yellow] Would delete snapshots keeping {keep_recent} most recent"
+            )
+            if max_age_days is not None:
+                console.print(f"[yellow]DRY RUN:[/yellow] Would also delete snapshots older than {max_age_days} days")
+            console.print("\n[dim]Note: Actual deletion not implemented yet for dry-run mode[/dim]")
+            return 0
+
+        console.print(f"Cleaning up snapshots (keeping {keep_recent} most recent)")
+        if max_age_days is not None:
+            console.print(f"Also deleting snapshots older than {max_age_days} days")
+
+        deleted = await cleanup_snapshots_impl(
+            executor=executor,
+            session_folder="/.snapshots/pc-switcher",
+            keep_recent=keep_recent,
+            max_age_days=max_age_days,
+        )
+
+        if deleted:
+            console.print(f"\n[green]Successfully deleted {len(deleted)} snapshot(s):[/green]")
+            for snapshot_path in deleted:
+                console.print(f"  - {snapshot_path}")
+        else:
+            console.print("\n[yellow]No snapshots were deleted[/yellow]")
+
+        return 0
+
+    except Exception as e:
+        console.print(f"\n[bold red]Cleanup failed:[/bold red] {e}")
+        return 1
+
+
 @app.command()
 def logs(
     last: Annotated[
         bool,
-        typer.Option("--last", "-l", help="Show path to most recent log file"),
+        typer.Option("--last", "-l", help="Display the most recent log file"),
     ] = False,
 ) -> None:
     """View log files.
 
-    By default, shows the logs directory. Use --last to get the most recent log file path.
+    By default, shows the logs directory. Use --last to display the most recent log file.
     """
     if last:
         log_file = get_latest_log_file()
@@ -168,7 +330,7 @@ def logs(
             console.print(f"Logs directory: {get_logs_directory()}")
             sys.exit(1)
         else:
-            console.print(f"Latest log file: {log_file}")
+            _display_log_file(log_file)
     else:
         logs_dir = get_logs_directory()
         console.print(f"Logs directory: {logs_dir}")
@@ -201,36 +363,49 @@ def cleanup_snapshots(
         bool,
         typer.Option("--dry-run", help="Show what would be deleted without deleting"),
     ] = False,
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Path to config file (default: ~/.config/pc-switcher/config.yaml)",
+        ),
+    ] = None,
 ) -> None:
-    """Clean up old snapshots.
+    """Clean up old snapshots on the local machine.
 
     Uses --older-than to specify age threshold, or uses config default if not specified.
     Use --dry-run to preview what would be deleted.
     """
-    if older_than is None:
-        console.print(
-            "[bold red]Error:[/bold red] --older-than is required\n"
-            "Example: pc-switcher cleanup-snapshots --older-than 7d"
-        )
-        sys.exit(1)
-
-    # Parse duration
+    # Load configuration
+    config_path = config or Configuration.get_default_config_path()
     try:
-        days = parse_older_than(older_than)
-    except ValueError as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
+        cfg = Configuration.from_yaml(config_path)
+    except ConfigurationError as e:
+        console.print("[bold red]Configuration error:[/bold red]")
+        for error in e.errors:
+            if error.job:
+                console.print(f"  [yellow]{error.job}[/yellow].{error.path}: {error.message}")
+            else:
+                console.print(f"  {error.path}: {error.message}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Error loading configuration:[/bold red] {e}")
         sys.exit(1)
 
-    # For now, just show what would be done
-    # Actual implementation depends on orchestrator and executor infrastructure
-    if dry_run:
-        console.print(f"[yellow]DRY RUN:[/yellow] Would delete snapshots older than {days} days")
+    # Parse duration (use config default if not specified)
+    if older_than is not None:
+        try:
+            max_age_days = parse_older_than(older_than)
+        except ValueError as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            sys.exit(1)
     else:
-        console.print(
-            f"[yellow]Not yet implemented:[/yellow] "
-            f"Would delete snapshots older than {days} days\n"
-            "This command requires the orchestrator infrastructure (Phase 13)."
-        )
+        max_age_days = cfg.btrfs_snapshots.max_age_days
+
+    # Run cleanup
+    exit_code = _run_cleanup(cfg.btrfs_snapshots.keep_recent, max_age_days, dry_run)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

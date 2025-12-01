@@ -9,11 +9,35 @@ from pcswitcher.jobs.context import JobContext
 from pcswitcher.models import Host, LogLevel, SnapshotPhase, ValidationError
 from pcswitcher.snapshots import (
     create_snapshot,
-    session_folder_name,
     snapshot_name,
     validate_snapshots_directory,
     validate_subvolume_exists,
 )
+
+
+def subvolume_to_mount_point(subvol_name: str) -> str:
+    """Derive mount point from subvolume name using common btrfs conventions.
+
+    Common mapping:
+    - @ -> /
+    - @home -> /home
+    - @var -> /var
+    - @opt -> /opt
+    - @tmp -> /tmp
+    - @srv -> /srv
+    - etc.
+
+    Args:
+        subvol_name: Subvolume name (e.g., "@home")
+
+    Returns:
+        Mount point path (e.g., "/home")
+    """
+    if subvol_name == "@":
+        return "/"
+    if subvol_name.startswith("@"):
+        return "/" + subvol_name[1:]
+    raise ValueError(f"Invalid subvolume name: {subvol_name} (must start with @)")
 
 
 class BtrfsSnapshotJob(SystemJob):
@@ -36,31 +60,25 @@ class BtrfsSnapshotJob(SystemJob):
             "subvolumes": {
                 "type": "array",
                 "items": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                            "pattern": "^@",
-                            "description": "Subvolume name (e.g., '@home')",
-                        },
-                        "mount_point": {
-                            "type": "string",
-                            "description": "Mount point path (e.g., '/home')",
-                        },
-                    },
-                    "required": ["name", "mount_point"],
+                    "type": "string",
+                    "pattern": "^@",
+                    "description": "Subvolume name (e.g., '@home'). Mount point is derived automatically.",
                 },
                 "minItems": 1,
                 "description": "List of subvolumes to snapshot",
             },
+            "session_folder": {
+                "type": "string",
+                "description": "Session folder name for organizing PRE and POST snapshots together",
+            },
         },
-        "required": ["phase", "subvolumes"],
+        "required": ["phase", "subvolumes", "session_folder"],
     }
 
     async def validate(self, context: JobContext) -> list[ValidationError]:
         """Validate that snapshots directory exists and subvolumes are valid."""
         errors: list[ValidationError] = []
-        subvolumes = context.config["subvolumes"]
+        subvolumes: list[str] = context.config["subvolumes"]
 
         # Validate snapshots directory on source
         success, error_msg = await validate_snapshots_directory(context.source, Host.SOURCE)
@@ -73,17 +91,16 @@ class BtrfsSnapshotJob(SystemJob):
             errors.append(ValidationError(job=self.name, host=Host.TARGET, message=error_msg or "Unknown error"))
 
         # Validate each subvolume exists on both source and target
-        for subvol in subvolumes:
-            name = subvol["name"]
-            mount_point = subvol["mount_point"]
+        for subvol_name in subvolumes:
+            mount_point = subvolume_to_mount_point(subvol_name)
 
             # Check source
-            success, error_msg = await validate_subvolume_exists(context.source, name, mount_point, Host.SOURCE)
+            success, error_msg = await validate_subvolume_exists(context.source, subvol_name, mount_point, Host.SOURCE)
             if not success:
                 errors.append(ValidationError(job=self.name, host=Host.SOURCE, message=error_msg or "Unknown error"))
 
             # Check target
-            success, error_msg = await validate_subvolume_exists(context.target, name, mount_point, Host.TARGET)
+            success, error_msg = await validate_subvolume_exists(context.target, subvol_name, mount_point, Host.TARGET)
             if not success:
                 errors.append(ValidationError(job=self.name, host=Host.TARGET, message=error_msg or "Unknown error"))
 
@@ -92,10 +109,8 @@ class BtrfsSnapshotJob(SystemJob):
     async def execute(self, context: JobContext) -> None:
         """Create snapshots for all configured subvolumes."""
         phase = SnapshotPhase(context.config["phase"])
-        subvolumes = context.config["subvolumes"]
-
-        # Create session folder name
-        session_folder = session_folder_name(context.session_id)
+        subvolumes: list[str] = context.config["subvolumes"]
+        session_folder: str = context.config["session_folder"]
 
         self._log(
             context,
@@ -106,10 +121,9 @@ class BtrfsSnapshotJob(SystemJob):
         )
 
         # Create snapshots on source
-        for subvol in subvolumes:
-            name = subvol["name"]
-            mount_point = subvol["mount_point"]
-            snap_name = snapshot_name(name, phase)
+        for subvol_name in subvolumes:
+            mount_point = subvolume_to_mount_point(subvol_name)
+            snap_name = snapshot_name(subvol_name, phase)
             snap_path = f"/.snapshots/pc-switcher/{session_folder}/{snap_name}"
 
             # Create session folder if it doesn't exist
@@ -120,7 +134,7 @@ class BtrfsSnapshotJob(SystemJob):
                 Host.SOURCE,
                 LogLevel.FULL,
                 f"Creating snapshot {snap_name}",
-                subvolume=name,
+                subvolume=subvol_name,
                 mount_point=mount_point,
             )
 
@@ -144,10 +158,9 @@ class BtrfsSnapshotJob(SystemJob):
             )
 
         # Create snapshots on target
-        for subvol in subvolumes:
-            name = subvol["name"]
-            mount_point = subvol["mount_point"]
-            snap_name = snapshot_name(name, phase)
+        for subvol_name in subvolumes:
+            mount_point = subvolume_to_mount_point(subvol_name)
+            snap_name = snapshot_name(subvol_name, phase)
             snap_path = f"/.snapshots/pc-switcher/{session_folder}/{snap_name}"
 
             # Create session folder if it doesn't exist
@@ -158,7 +171,7 @@ class BtrfsSnapshotJob(SystemJob):
                 Host.TARGET,
                 LogLevel.FULL,
                 f"Creating snapshot {snap_name}",
-                subvolume=name,
+                subvolume=subvol_name,
                 mount_point=mount_point,
             )
 
