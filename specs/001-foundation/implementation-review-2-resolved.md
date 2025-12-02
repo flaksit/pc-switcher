@@ -495,3 +495,61 @@ uv run ruff check src/pcswitcher/orchestrator.py src/pcswitcher/executor.py → 
 
 1. `src/pcswitcher/orchestrator.py` - Unified hostname, added factory method, removed redundant code
 2. `src/pcswitcher/executor.py` - Removed `get_hostname()` method
+
+---
+
+## Follow-up: DateTime Fields with Timezone
+
+**Date**: 2025-12-02 (continued session)
+
+### User Request
+
+Change `started_at` and `ended_at` fields from ISO 8601 strings to `datetime` objects with UTC timezone.
+
+### Changes Made
+
+#### 1. Updated `JobResult` Dataclass
+
+```python
+# Before
+started_at: str  # ISO 8601 timestamp
+ended_at: str  # ISO 8601 timestamp
+
+# After
+started_at: datetime  # UTC timezone
+ended_at: datetime  # UTC timezone
+```
+
+#### 2. Updated `SyncSession` Dataclass
+
+```python
+# Before
+started_at: str  # ISO 8601 timestamp
+ended_at: str | None  # ISO 8601 timestamp
+
+# After
+started_at: datetime  # UTC timezone
+ended_at: datetime | None  # UTC timezone
+```
+
+#### 3. Updated All Datetime Creation
+
+Changed all `datetime.now().isoformat()` calls to `datetime.now(UTC)`:
+
+- `src/pcswitcher/orchestrator.py:124` - Session created with UTC timestamp
+- `src/pcswitcher/orchestrator.py:216, 223, 230` - Session ended_at set with UTC timestamp
+- `src/pcswitcher/orchestrator.py:484, 487, 503` - JobResult created with UTC timestamps
+
+Uses Python 3.11+ `datetime.UTC` alias (imported via ruff auto-fix).
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/ → 0 errors
+uv run ruff check src/pcswitcher/ → All checks passed
+```
+
+### Files Modified
+
+1. `src/pcswitcher/models.py` - Updated JobResult and SyncSession dataclasses
+2. `src/pcswitcher/orchestrator.py` - Updated all datetime creation to use UTC

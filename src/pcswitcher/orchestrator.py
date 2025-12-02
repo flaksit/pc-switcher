@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -119,10 +119,9 @@ class Orchestrator:
         Raises:
             Various exceptions for critical failures (connection, locks, validation, etc.)
         """
-        started_at = datetime.now().isoformat()
         session = SyncSession(
             session_id=self._session_id,
-            started_at=started_at,
+            started_at=datetime.now(UTC),
             source_hostname=self._source_hostname,
             target_hostname=self._target_hostname,
             config={},  # TODO: Add config snapshot
@@ -214,21 +213,21 @@ class Orchestrator:
 
             # Success
             session.status = SessionStatus.COMPLETED
-            session.ended_at = datetime.now().isoformat()
+            session.ended_at = datetime.now(UTC)
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Sync completed successfully")
 
             return session
 
         except asyncio.CancelledError:
             session.status = SessionStatus.INTERRUPTED
-            session.ended_at = datetime.now().isoformat()
+            session.ended_at = datetime.now(UTC)
             session.error_message = "Sync interrupted by user (SIGINT)"
             self._logger.log(LogLevel.WARNING, Host.SOURCE, "Sync interrupted by user")
             raise
 
         except Exception as e:
             session.status = SessionStatus.FAILED
-            session.ended_at = datetime.now().isoformat()
+            session.ended_at = datetime.now(UTC)
             session.error_message = str(e)
             self._logger.log(LogLevel.CRITICAL, Host.SOURCE, f"Sync failed: {e}")
             raise
@@ -482,10 +481,10 @@ class Orchestrator:
                 job_config = self._config.job_configs.get(job.name, {})
                 context = self._create_job_context(job_config)
 
-                started_at = datetime.now().isoformat()
+                started_at = datetime.now(UTC)
                 try:
                     await job.execute(context)
-                    ended_at = datetime.now().isoformat()
+                    ended_at = datetime.now(UTC)
                     results.append(
                         JobResult(
                             job_name=job.name,
@@ -501,7 +500,7 @@ class Orchestrator:
                     )
 
                 except Exception as e:
-                    ended_at = datetime.now().isoformat()
+                    ended_at = datetime.now(UTC)
                     results.append(
                         JobResult(
                             job_name=job.name,

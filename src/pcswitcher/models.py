@@ -214,8 +214,8 @@ class JobResult:
 
     job_name: str
     status: JobStatus
-    started_at: str  # ISO 8601 timestamp
-    ended_at: str  # ISO 8601 timestamp
+    started_at: datetime  # UTC timezone
+    ended_at: datetime  # UTC timezone
     error_message: str | None = None
 
 
@@ -224,12 +224,12 @@ class SyncSession:
     """Complete sync session state and results."""
 
     session_id: str
-    started_at: str  # ISO 8601 timestamp
+    started_at: datetime  # UTC timezone
     source_hostname: str
     target_hostname: str
     config: dict[str, Any]  # Configuration snapshot
     status: SessionStatus
-    ended_at: str | None = None  # ISO 8601 timestamp
+    ended_at: datetime | None = None  # UTC timezone
     job_results: list[JobResult] | None = None
     error_message: str | None = None
     log_file: str | None = None  # Path to log file
