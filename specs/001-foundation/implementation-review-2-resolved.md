@@ -638,3 +638,91 @@ uv run ruff check src/pcswitcher/jobs/install_on_target.py → All checks passed
 
 1. `src/pcswitcher/jobs/install_on_target.py` - Moved version check to validate(), simplified execute()
 2. `specs/001-foundation/architecture.md` - Removed Phase 4, updated flow diagram, updated ordering notes
+
+---
+
+## Follow-up: DRY Refactor for ValidationError Creation
+
+**Date**: 2025-12-02 (continued session)
+
+### User Request
+
+> We want life of developers of Jobs to be as easy as possible and follow DRY.
+> I see that currently, validate() should return a list of ValidationErrors. The implementer of this method needs to fill the field "job" in each ValidationError it creates. This should be done automatically by the base class, so the implementer of validate() only needs to set the host and the message.
+
+### Analysis
+
+Every job's `validate()` method was creating `ValidationError` with repetitive boilerplate:
+
+```python
+ValidationError(job=self.name, host=Host.SOURCE, message="...")
+```
+
+The `job=self.name` part is identical across all jobs - unnecessary repetition that violates DRY.
+
+### Solution
+
+Added a `_validation_error()` helper method to the `Job` base class, following the same pattern as `_log()`:
+
+```python
+def _validation_error(self, host: Host, message: str) -> ValidationError:
+    """Create a ValidationError with job name filled in automatically."""
+    return ValidationError(job=self.name, host=host, message=message)
+```
+
+### Changes Made
+
+#### 1. Added helper to base class (`jobs/base.py`)
+
+Added `_validation_error(host, message)` method that automatically fills in `job=self.name`.
+
+#### 2. Updated all job implementations
+
+**`jobs/install_on_target.py`**:
+```python
+# Before
+ValidationError(job=self.name, host=Host.TARGET, message=f"...")
+
+# After
+self._validation_error(Host.TARGET, f"...")
+```
+
+**`jobs/btrfs.py`**: Updated 6 usages
+
+**`jobs/disk_space_monitor.py`**: Updated 3 usages
+
+**`jobs/dummy.py`**: No changes needed (returns empty lists)
+
+#### 3. Import cleanup
+
+Since `ValidationError` is now only used for type annotations (return type `list[ValidationError]`), moved imports to `TYPE_CHECKING` block in all job files:
+
+```python
+from typing import TYPE_CHECKING
+...
+
+if TYPE_CHECKING:
+    from pcswitcher.models import ValidationError
+```
+
+### Benefits
+
+1. **DRY**: Job implementers no longer repeat `job=self.name`
+2. **Consistency**: Same pattern as `_log()` method
+3. **Cleaner imports**: `ValidationError` only imported for type checking
+4. **Less error-prone**: Impossible to accidentally use wrong job name
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/ → 0 errors, 0 warnings, 0 notes
+uv run ruff check src/pcswitcher/ → All checks passed!
+```
+
+### Files Modified
+
+1. `src/pcswitcher/jobs/base.py` - Added `_validation_error()` helper method
+2. `src/pcswitcher/jobs/install_on_target.py` - Use helper, TYPE_CHECKING import
+3. `src/pcswitcher/jobs/btrfs.py` - Use helper, TYPE_CHECKING import
+4. `src/pcswitcher/jobs/disk_space_monitor.py` - Use helper, TYPE_CHECKING import
+5. `src/pcswitcher/jobs/dummy.py` - TYPE_CHECKING import for consistency

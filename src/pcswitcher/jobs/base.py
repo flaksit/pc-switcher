@@ -127,6 +127,18 @@ class Job(ABC):
             )
         )
 
+    def _validation_error(self, host: Host, message: str) -> ValidationError:
+        """Create a ValidationError with job name filled in automatically.
+
+        Args:
+            host: Which machine the error relates to (SOURCE or TARGET)
+            message: Human-readable error message
+
+        Returns:
+            ValidationError with job=self.name
+        """
+        return ValidationError(job=self.name, host=host, message=message)
+
 
 class SystemJob(Job):
     """Required infrastructure jobs (snapshots, installation).

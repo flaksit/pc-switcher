@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pcswitcher.disk import check_disk_space, parse_threshold
 from pcswitcher.models import (
@@ -11,11 +11,13 @@ from pcswitcher.models import (
     Host,
     LogLevel,
     ProgressUpdate,
-    ValidationError,
 )
 
 from .base import BackgroundJob
 from .context import JobContext
+
+if TYPE_CHECKING:
+    from pcswitcher.models import ValidationError
 
 
 class DiskSpaceMonitorJob(BackgroundJob):
@@ -72,37 +74,19 @@ class DiskSpaceMonitorJob(BackgroundJob):
         try:
             parse_threshold(self._context.config["preflight_minimum"])
         except ValueError as e:
-            errors.append(
-                ValidationError(
-                    job=self.name,
-                    host=self.host,
-                    message=f"Invalid preflight_minimum: {e}",
-                )
-            )
+            errors.append(self._validation_error(self.host, f"Invalid preflight_minimum: {e}"))
 
         try:
             parse_threshold(self._context.config["runtime_minimum"])
         except ValueError as e:
-            errors.append(
-                ValidationError(
-                    job=self.name,
-                    host=self.host,
-                    message=f"Invalid runtime_minimum: {e}",
-                )
-            )
+            errors.append(self._validation_error(self.host, f"Invalid runtime_minimum: {e}"))
 
         # Validate that mount point exists
         executor = self._context.source if self.host == Host.SOURCE else self._context.target
         try:
             await check_disk_space(executor, self.mount_point)
         except RuntimeError as e:
-            errors.append(
-                ValidationError(
-                    job=self.name,
-                    host=self.host,
-                    message=f"Mount point validation failed: {e}",
-                )
-            )
+            errors.append(self._validation_error(self.host, f"Mount point validation failed: {e}"))
 
         return errors
 

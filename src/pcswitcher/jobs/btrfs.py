@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pcswitcher.jobs.base import SystemJob
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.models import Host, LogLevel, SnapshotPhase, ValidationError
+from pcswitcher.models import Host, LogLevel, SnapshotPhase
 from pcswitcher.snapshots import (
     create_snapshot,
     snapshot_name,
     validate_snapshots_directory,
     validate_subvolume_exists,
 )
+
+if TYPE_CHECKING:
+    from pcswitcher.models import ValidationError
 
 
 def subvolume_to_mount_point(subvol_name: str) -> str:
@@ -91,12 +94,12 @@ class BtrfsSnapshotJob(SystemJob):
         # Validate snapshots directory on source
         success, error_msg = await validate_snapshots_directory(self._context.source, Host.SOURCE)
         if not success:
-            errors.append(ValidationError(job=self.name, host=Host.SOURCE, message=error_msg or "Unknown error"))
+            errors.append(self._validation_error(Host.SOURCE, error_msg or "Unknown error"))
 
         # Validate snapshots directory on target
         success, error_msg = await validate_snapshots_directory(self._context.target, Host.TARGET)
         if not success:
-            errors.append(ValidationError(job=self.name, host=Host.TARGET, message=error_msg or "Unknown error"))
+            errors.append(self._validation_error(Host.TARGET, error_msg or "Unknown error"))
 
         # Validate each subvolume exists on both source and target
         for subvol_name in subvolumes:
@@ -107,22 +110,14 @@ class BtrfsSnapshotJob(SystemJob):
                 self._context.source, subvol_name, mount_point, Host.SOURCE
             )
             if not success:
-                errors.append(
-                    ValidationError(
-                        job=self.name, host=Host.SOURCE, message=error_msg or "Unknown error"
-                    )
-                )
+                errors.append(self._validation_error(Host.SOURCE, error_msg or "Unknown error"))
 
             # Check target
             success, error_msg = await validate_subvolume_exists(
                 self._context.target, subvol_name, mount_point, Host.TARGET
             )
             if not success:
-                errors.append(
-                    ValidationError(
-                        job=self.name, host=Host.TARGET, message=error_msg or "Unknown error"
-                    )
-                )
+                errors.append(self._validation_error(Host.TARGET, error_msg or "Unknown error"))
 
         return errors
 

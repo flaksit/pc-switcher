@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from packaging.version import Version
 
 from pcswitcher.jobs.base import SystemJob
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.models import Host, LogLevel, ValidationError
+from pcswitcher.models import Host, LogLevel
 from pcswitcher.version import get_this_version, parse_version_from_cli_output
+
+if TYPE_CHECKING:
+    from pcswitcher.models import ValidationError
 
 
 class InstallOnTargetJob(SystemJob):
@@ -49,10 +52,9 @@ class InstallOnTargetJob(SystemJob):
             target_version = Version(parse_version_from_cli_output(result.stdout))
             if target_version > source_version:
                 return [
-                    ValidationError(
-                        job=self.name,
-                        host=Host.TARGET,
-                        message=f"Target version {target_version} is newer than source {source_version}",
+                    self._validation_error(
+                        Host.TARGET,
+                        f"Target version {target_version} is newer than source {source_version}",
                     )
                 ]
 

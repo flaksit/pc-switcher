@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.models import Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.models import Host, LogLevel, ProgressUpdate
+
+if TYPE_CHECKING:
+    from pcswitcher.models import ValidationError
 
 
 class DummySuccessJob(SyncJob):
