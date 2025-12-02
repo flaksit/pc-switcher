@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import jsonschema
 
@@ -11,6 +11,9 @@ from pcswitcher.events import LogEvent, ProgressEvent
 from pcswitcher.models import ConfigError, Host, LogLevel, ProgressUpdate, ValidationError
 
 from .context import JobContext
+
+if TYPE_CHECKING:
+    from pcswitcher.executor import LocalExecutor, RemoteExecutor
 
 
 class Job(ABC):
@@ -33,7 +36,17 @@ class Job(ABC):
         Args:
             context: JobContext with executors, config, and event bus
         """
-        self._context = context
+        self.context = context
+
+    @property
+    def source(self) -> LocalExecutor:
+        """Shortcut to context.source executor."""
+        return self.context.source
+
+    @property
+    def target(self) -> RemoteExecutor:
+        """Shortcut to context.target executor."""
+        return self.context.target
 
     @classmethod
     def validate_config(cls, config: dict[str, Any]) -> list[ConfigError]:
@@ -101,7 +114,7 @@ class Job(ABC):
             message: Human-readable message
             **extra: Additional structured context
         """
-        self._context.event_bus.publish(
+        self.context.event_bus.publish(
             LogEvent(
                 level=level,
                 job=self.name,
@@ -120,7 +133,7 @@ class Job(ABC):
         Args:
             update: ProgressUpdate with percent/current/total/item
         """
-        self._context.event_bus.publish(
+        self.context.event_bus.publish(
             ProgressEvent(
                 job=self.name,
                 update=update,

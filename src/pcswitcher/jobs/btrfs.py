@@ -89,15 +89,15 @@ class BtrfsSnapshotJob(SystemJob):
     async def validate(self) -> list[ValidationError]:
         """Validate that snapshots directory exists and subvolumes are valid."""
         errors: list[ValidationError] = []
-        subvolumes: list[str] = self._context.config["subvolumes"]
+        subvolumes: list[str] = self.context.config["subvolumes"]
 
         # Validate snapshots directory on source
-        success, error_msg = await validate_snapshots_directory(self._context.source, Host.SOURCE)
+        success, error_msg = await validate_snapshots_directory(self.source, Host.SOURCE)
         if not success:
             errors.append(self._validation_error(Host.SOURCE, error_msg or "Unknown error"))
 
         # Validate snapshots directory on target
-        success, error_msg = await validate_snapshots_directory(self._context.target, Host.TARGET)
+        success, error_msg = await validate_snapshots_directory(self.target, Host.TARGET)
         if not success:
             errors.append(self._validation_error(Host.TARGET, error_msg or "Unknown error"))
 
@@ -107,14 +107,14 @@ class BtrfsSnapshotJob(SystemJob):
 
             # Check source
             success, error_msg = await validate_subvolume_exists(
-                self._context.source, subvol_name, mount_point, Host.SOURCE
+                self.source, subvol_name, mount_point, Host.SOURCE
             )
             if not success:
                 errors.append(self._validation_error(Host.SOURCE, error_msg or "Unknown error"))
 
             # Check target
             success, error_msg = await validate_subvolume_exists(
-                self._context.target, subvol_name, mount_point, Host.TARGET
+                self.target, subvol_name, mount_point, Host.TARGET
             )
             if not success:
                 errors.append(self._validation_error(Host.TARGET, error_msg or "Unknown error"))
@@ -123,15 +123,15 @@ class BtrfsSnapshotJob(SystemJob):
 
     async def execute(self) -> None:
         """Create snapshots for all configured subvolumes."""
-        phase = SnapshotPhase(self._context.config["phase"])
-        subvolumes: list[str] = self._context.config["subvolumes"]
-        session_folder: str = self._context.config["session_folder"]
+        phase = SnapshotPhase(self.context.config["phase"])
+        subvolumes: list[str] = self.context.config["subvolumes"]
+        session_folder: str = self.context.config["session_folder"]
 
         self._log(
             Host.SOURCE,
             LogLevel.INFO,
             f"Creating {phase.value}-sync snapshots",
-            session_id=self._context.session_id,
+            session_id=self.context.session_id,
         )
 
         # Create snapshots on source
@@ -141,7 +141,7 @@ class BtrfsSnapshotJob(SystemJob):
             snap_path = f"/.snapshots/pc-switcher/{session_folder}/{snap_name}"
 
             # Create session folder if it doesn't exist
-            await self._context.source.run_command(f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}")
+            await self.source.run_command(f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}")
 
             self._log(
                 Host.SOURCE,
@@ -151,7 +151,7 @@ class BtrfsSnapshotJob(SystemJob):
                 mount_point=mount_point,
             )
 
-            result = await create_snapshot(self._context.source, mount_point, snap_path)
+            result = await create_snapshot(self.source, mount_point, snap_path)
 
             if result.exit_code != 0:
                 self._log(
@@ -175,7 +175,7 @@ class BtrfsSnapshotJob(SystemJob):
             snap_path = f"/.snapshots/pc-switcher/{session_folder}/{snap_name}"
 
             # Create session folder if it doesn't exist
-            await self._context.target.run_command(f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}")
+            await self.target.run_command(f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}")
 
             self._log(
                 Host.TARGET,
@@ -185,7 +185,7 @@ class BtrfsSnapshotJob(SystemJob):
                 mount_point=mount_point,
             )
 
-            result = await create_snapshot(self._context.target, mount_point, snap_path)
+            result = await create_snapshot(self.target, mount_point, snap_path)
 
             if result.exit_code != 0:
                 self._log(
@@ -206,5 +206,5 @@ class BtrfsSnapshotJob(SystemJob):
             Host.SOURCE,
             LogLevel.INFO,
             f"Completed {phase.value}-sync snapshots",
-            session_id=self._context.session_id,
+            session_id=self.context.session_id,
         )

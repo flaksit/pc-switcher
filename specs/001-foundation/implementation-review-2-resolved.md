@@ -726,3 +726,85 @@ uv run ruff check src/pcswitcher/ → All checks passed!
 3. `src/pcswitcher/jobs/btrfs.py` - Use helper, TYPE_CHECKING import
 4. `src/pcswitcher/jobs/disk_space_monitor.py` - Use helper, TYPE_CHECKING import
 5. `src/pcswitcher/jobs/dummy.py` - TYPE_CHECKING import for consistency
+
+---
+
+## Follow-up: Job Shortcut Properties and Context Rename
+
+**Date**: 2025-12-02 (continued session)
+
+### User Request
+
+> Add shortcut fields source and target to Job, so that instead of writing self._context.source.run_command(...), the implementer can write self.source.run_command(...).
+> Rename _context to context for simplicity, even though it is supposed to be protected.
+
+### Changes Made
+
+#### 1. Updated Job base class (`jobs/base.py`)
+
+**Renamed `_context` to `context`:**
+```python
+# Before
+self._context = context
+
+# After
+self.context = context
+```
+
+**Added shortcut properties:**
+```python
+@property
+def source(self) -> LocalExecutor:
+    """Shortcut to context.source executor."""
+    return self.context.source
+
+@property
+def target(self) -> RemoteExecutor:
+    """Shortcut to context.target executor."""
+    return self.context.target
+```
+
+Added TYPE_CHECKING imports for `LocalExecutor` and `RemoteExecutor`.
+
+#### 2. Updated all job implementations
+
+**Before:**
+```python
+result = await self._context.target.run_command(...)
+subvolumes = self._context.config["subvolumes"]
+```
+
+**After:**
+```python
+result = await self.target.run_command(...)
+subvolumes = self.context.config["subvolumes"]
+```
+
+| File | Changes |
+|------|---------|
+| `jobs/btrfs.py` | `self.source`, `self.target`, `self.context.config`, `self.context.session_id` |
+| `jobs/install_on_target.py` | `self.target` (4 usages) |
+| `jobs/disk_space_monitor.py` | `self.source`, `self.target`, `self.context.config`, `self.context.source_hostname`, `self.context.target_hostname` |
+| `jobs/dummy.py` | `self.context.config` |
+
+### Benefits
+
+1. **Shorter code**: `self.target.run_command()` vs `self._context.target.run_command()`
+2. **Clearer intent**: Direct access to executors without intermediate object
+3. **Consistent with other helpers**: Same pattern as `_log()`, `_validation_error()`
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/ → 0 errors, 0 warnings, 0 notes
+uv run ruff check src/pcswitcher/ → All checks passed!
+uv run pytest -v → 14 passed
+```
+
+### Files Modified
+
+1. `src/pcswitcher/jobs/base.py` - Added properties, renamed context, TYPE_CHECKING imports
+2. `src/pcswitcher/jobs/btrfs.py` - Updated all usages
+3. `src/pcswitcher/jobs/install_on_target.py` - Updated all usages
+4. `src/pcswitcher/jobs/disk_space_monitor.py` - Updated all usages
+5. `src/pcswitcher/jobs/dummy.py` - Updated config usage

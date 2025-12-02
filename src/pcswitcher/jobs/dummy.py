@@ -133,7 +133,7 @@ class DummyFailJob(SyncJob):
 
     async def execute(self) -> None:
         """Execute until configured failure percentage, then raise exception."""
-        fail_at_percent = self._context.config.get("fail_at_percent", 60)
+        fail_at_percent = self.context.config.get("fail_at_percent", 60)
 
         try:
             self._report_progress(ProgressUpdate(percent=0))

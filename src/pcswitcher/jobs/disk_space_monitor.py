@@ -72,17 +72,17 @@ class DiskSpaceMonitorJob(BackgroundJob):
 
         # Validate threshold formats
         try:
-            parse_threshold(self._context.config["preflight_minimum"])
+            parse_threshold(self.context.config["preflight_minimum"])
         except ValueError as e:
             errors.append(self._validation_error(self.host, f"Invalid preflight_minimum: {e}"))
 
         try:
-            parse_threshold(self._context.config["runtime_minimum"])
+            parse_threshold(self.context.config["runtime_minimum"])
         except ValueError as e:
             errors.append(self._validation_error(self.host, f"Invalid runtime_minimum: {e}"))
 
         # Validate that mount point exists
-        executor = self._context.source if self.host == Host.SOURCE else self._context.target
+        executor = self.source if self.host == Host.SOURCE else self.target
         try:
             await check_disk_space(executor, self.mount_point)
         except RuntimeError as e:
@@ -100,10 +100,10 @@ class DiskSpaceMonitorJob(BackgroundJob):
             DiskSpaceCriticalError: When disk space falls below threshold
             asyncio.CancelledError: When monitoring is cancelled
         """
-        executor = self._context.source if self.host == Host.SOURCE else self._context.target
-        hostname = self._context.source_hostname if self.host == Host.SOURCE else self._context.target_hostname
-        check_interval: int = self._context.config["check_interval"]
-        runtime_minimum: str = self._context.config["runtime_minimum"]
+        executor = self.source if self.host == Host.SOURCE else self.target
+        hostname = self.context.source_hostname if self.host == Host.SOURCE else self.context.target_hostname
+        check_interval: int = self.context.config["check_interval"]
+        runtime_minimum: str = self.context.config["runtime_minimum"]
 
         threshold_type, threshold_value = parse_threshold(runtime_minimum)
 

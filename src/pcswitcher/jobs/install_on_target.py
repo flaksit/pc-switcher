@@ -46,7 +46,7 @@ class InstallOnTargetJob(SystemJob):
         source_version = Version(get_this_version())
 
         # Check target version
-        result = await self._context.target.run_command("pc-switcher --version 2>/dev/null")
+        result = await self.target.run_command("pc-switcher --version 2>/dev/null")
         if result.success:
             # Parse version string from output (e.g., "pc-switcher 0.4.0" -> "0.4.0")
             target_version = Version(parse_version_from_cli_output(result.stdout))
@@ -65,7 +65,7 @@ class InstallOnTargetJob(SystemJob):
         source_version = Version(get_this_version())  # e.g., "0.4.0"
 
         # Check target version (already validated in validate phase)
-        result = await self._context.target.run_command("pc-switcher --version 2>/dev/null")
+        result = await self.target.run_command("pc-switcher --version 2>/dev/null")
         if result.success:
             # Parse version string from output (e.g., "pc-switcher 0.4.0" -> "0.4.0")
             target_version = Version(parse_version_from_cli_output(result.stdout))
@@ -95,12 +95,12 @@ class InstallOnTargetJob(SystemJob):
             f"v{source_version}/install.sh"
         )
         cmd = f"curl -LsSf {install_url} | sh -s -- --version {source_version}"
-        result = await self._context.target.run_command(cmd)
+        result = await self.target.run_command(cmd)
         if not result.success:
             raise RuntimeError(f"Failed to install pc-switcher on target: {result.stderr}")
 
         # Verify installation
-        result = await self._context.target.run_command("pc-switcher --version")
+        result = await self.target.run_command("pc-switcher --version")
         if not result.success or str(source_version) not in result.stdout:
             raise RuntimeError("Installation verification failed")
 
