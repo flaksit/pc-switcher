@@ -1087,15 +1087,13 @@ graph TD
 
     AcquireLocks["<b>Acquire Locks</b><br/>- Source: ~/.local/share/pc-switcher/sync.lock<br/>- Target: ~/.local/share/pc-switcher/target.lock"]
 
-    VersionCheck["<b>Version Compatibility Check</b><br/>- Get target pc-switcher version<br/>- If target newer → CRITICAL abort<br/>- No installation at this phase"]
-
     SubvolCheck["<b>Subvolume Validation</b><br/>- Verify all configured subvolumes<br/>  exist on source AND target"]
 
     DiskPreflight["<b>Disk Space Preflight</b><br/>- Check free space on source<br/>- Check free space on target<br/>- Abort if below preflight_minimum"]
 
     SnapPre["<b>Pre-sync Snapshots</b><br/>- Create read-only snapshots<br/>  on both source and target<br/>- Captures state BEFORE installation"]
 
-    InstallTarget["<b>Install/Upgrade on Target</b><br/>- If missing/outdated → install/upgrade<br/>- uv tool install from GitHub<br/>- Done AFTER pre-sync snapshots for rollback safety"]
+    InstallTarget["<b>Install/Upgrade on Target</b><br/>- Validate version compatibility<br/>- If target version newer → CRITICAL abort<br/>- If missing/outdated → install/upgrade<br/>- Done AFTER pre-sync snapshots for rollback safety"]
 
     StartDiskMon["<b>Start DiskSpaceMonitor</b><br/>- Background task for source<br/>- Background task for target"]
 
@@ -1112,8 +1110,7 @@ graph TD
     SchemaVal --> JobConfigVal
     JobConfigVal --> Connect
     Connect --> AcquireLocks
-    AcquireLocks --> VersionCheck
-    VersionCheck --> SubvolCheck
+    AcquireLocks --> SubvolCheck
     SubvolCheck --> DiskPreflight
     DiskPreflight --> SnapPre
     SnapPre --> InstallTarget
@@ -1129,7 +1126,6 @@ graph TD
     style JobConfigVal fill:#fff3e0
     style Connect fill:#f3e5f5
     style AcquireLocks fill:#ffcdd2
-    style VersionCheck fill:#e8f5e9
     style SubvolCheck fill:#e8f5e9
     style DiskPreflight fill:#e8f5e9
     style SnapPre fill:#e8f5e9
@@ -1142,10 +1138,10 @@ graph TD
 ```
 
 **Key ordering notes:**
-1. **Version check separated from installation**: Version compatibility check (phase 4) only checks if target > source (error condition). Installation/upgrade (phase 7) happens AFTER pre-sync snapshots for rollback safety.
-2. **All checks before snapshots**: Locks → Version check → Subvolume validation → Disk preflight → Snapshots. If any check fails, we abort cleanly with no state changes.
+1. **Version check integrated into installation job**: Version compatibility validation occurs during InstallOnTargetJob's validate phase to detect incompatibilities early (fail-fast). Installation/upgrade happens AFTER pre-sync snapshots for rollback safety.
+2. **All checks before snapshots**: Locks → Subvolume validation → Disk preflight → Snapshots. Version compatibility is checked via InstallOnTargetJob validation. If any check fails, we abort cleanly with no state changes.
 3. **Installation after pre-sync snapshots**: Installation modifies the target system, so it must happen AFTER pre-sync snapshots to allow rollback if installation fails. Pre-sync snapshots capture the state BEFORE installation.
-4. **Three validation phases**: Schema → Job config → System state, with distinct error messages.
+4. **Three validation phases**: Schema → Job config → System state, with distinct error messages. Version compatibility is part of the System state validation phase.
 5. **DiskSpaceMonitor as background tasks**: Two instances run throughout sync - one monitors source (local commands), one monitors target (via `RemoteExecutor`). Either can abort sync on low space.
 6. **Lock acquisition**: Source lock prevents concurrent syncs from same machine. Target lock prevents A→B and C→B concurrent syncs.
 

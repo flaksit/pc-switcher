@@ -553,3 +553,88 @@ uv run ruff check src/pcswitcher/ → All checks passed
 
 1. `src/pcswitcher/models.py` - Updated JobResult and SyncSession dataclasses
 2. `src/pcswitcher/orchestrator.py` - Updated all datetime creation to use UTC
+
+---
+
+## Follow-up: Version Check Integration into InstallOnTargetJob
+
+**Date**: 2025-12-02 (continued session)
+
+### User Request
+
+Simplify the sync execution flow by consolidating version compatibility checking into the InstallOnTargetJob validation phase instead of as a separate execution phase.
+
+### Context
+
+The original architecture.md had a separate "Version Compatibility Check" phase (Phase 4) that only verified the target version wasn't newer than source, but performed no installation. Installation happened later in Phase 7 (Install/Upgrade on Target) after pre-sync snapshots.
+
+This was inefficient - two separate phases were checking the same information. The solution: integrate version checking into InstallOnTargetJob's validate phase for fail-fast detection.
+
+### Changes Made
+
+#### 1. Refactored InstallOnTargetJob (`jobs/install_on_target.py`)
+
+**Moved version check from execute() to validate():**
+
+```python
+async def validate(self, context: JobContext) -> list[ValidationError]:
+    """Validate version compatibility between source and target."""
+    source_version = Version(get_this_version())
+
+    # Check target version
+    result = await context.target.run_command("pc-switcher --version 2>/dev/null")
+    if result.success:
+        target_version = Version(parse_version_from_cli_output(result.stdout))
+        if target_version > source_version:
+            return [
+                ValidationError(
+                    job=self.name,
+                    host=Host.TARGET,
+                    message=f"Target version {target_version} is newer than source {source_version}",
+                )
+            ]
+
+    return []
+```
+
+**Simplified execute() method:**
+
+- No longer checks version compatibility (already validated)
+- Still checks for version match (for log clarity)
+- Removed the `raise RuntimeError` for newer target version (now returns ValidationError from validate phase)
+
+#### 2. Updated Architecture Documentation (`architecture.md`)
+
+**Removed "Version Compatibility Check" phase:**
+- Deleted VersionCheck node from execution flow diagram
+- Updated connection: `AcquireLocks → SubvolCheck` (was `AcquireLocks → VersionCheck → SubvolCheck`)
+- Removed VersionCheck style definition
+
+**Updated InstallTarget phase description:**
+- Now includes: "Validate version compatibility", "If target version newer → CRITICAL abort"
+- Clarified as integrated validation, not separate phase
+
+**Updated key ordering notes:**
+1. Changed from "Version check separated from installation" to "Version check integrated into installation job"
+2. Updated ordering: "Locks → Subvolume validation → Disk preflight → Snapshots" (removed version check as separate step)
+3. Clarified version compatibility is part of System state validation phase
+4. Removed references to phase numbers 4 and 7 (now consolidated into single InstallOnTargetJob phase)
+
+### Benefits
+
+1. **Fail-fast**: Version incompatibilities detected during validation phase, before any modifications
+2. **Simpler execution flow**: 11 phases instead of 12
+3. **Better separation of concerns**: Each job owns all its validation logic
+4. **Consistent error handling**: ValidationError objects returned from validate phase, not runtime exceptions
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/jobs/install_on_target.py → 0 errors
+uv run ruff check src/pcswitcher/jobs/install_on_target.py → All checks passed
+```
+
+### Files Modified
+
+1. `src/pcswitcher/jobs/install_on_target.py` - Moved version check to validate(), simplified execute()
+2. `specs/001-foundation/architecture.md` - Removed Phase 4, updated flow diagram, updated ordering notes

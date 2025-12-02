@@ -60,14 +60,13 @@ Central coordinator managing the complete sync workflow:
 1. **Pre-sync validation**: Schema, config, and system state checks
 2. **Connection management**: SSH connection to target with keepalive
 3. **Lock acquisition**: Prevents concurrent syncs (source and target locks)
-4. **Version compatibility check**: Ensures target version not newer than source
-5. **Job discovery and validation**: Load jobs, validate configs and system state
-6. **Safety snapshots (pre-sync)**: Creates btrfs snapshots before modifications
-7. **Version installation**: Install/upgrade pc-switcher on target if needed
-8. **Job execution**: Sequential execution of enabled sync jobs
-9. **Safety snapshots (post-sync)**: Creates btrfs snapshots after completion
-10. **Background monitoring**: Disk space monitoring during sync
-11. **Error handling**: SIGINT handling, graceful cleanup, abort on critical errors
+4. **Job discovery and validation**: Load jobs, validate configs and system state (includes version compatibility check)
+5. **Safety snapshots (pre-sync)**: Creates btrfs snapshots before modifications
+6. **Install/Upgrade on Target**: Version validation and pc-switcher installation/upgrade if needed
+7. **Job execution**: Sequential execution of enabled sync jobs
+8. **Safety snapshots (post-sync)**: Creates btrfs snapshots after completion
+9. **Background monitoring**: Disk space monitoring during sync
+10. **Error handling**: SIGINT handling, graceful cleanup, abort on critical errors
 
 ### EventBus
 Publish/subscribe event system with per-consumer queues:
@@ -253,20 +252,20 @@ Continuous monitoring during sync via `DiskSpaceMonitorJob`:
 - **Dual monitoring**: Separate instances for source and target
 
 ### Version Consistency
-Ensures matching pc-switcher versions on source and target with two-phase approach:
+Ensures matching pc-switcher versions on source and target through integrated validation in InstallOnTargetJob:
 
-**Phase 1 - Version Compatibility Check** (before job validation):
-- Compare versions on source and target
-- **Abort**: Refuse sync if target version is newer than source
-- No installation occurs at this stage
+**Version Compatibility Validation** (via InstallOnTargetJob.validate):
+- Compare versions on source and target during job validation phase
+- **Abort**: Return ValidationError if target version is newer than source (fail-fast)
+- This validation occurs before any state modifications
 
-**Phase 2 - Installation** (after pre-sync snapshots):
+**Installation/Upgrade** (via InstallOnTargetJob.execute):
 - Auto-install/upgrade on target if missing or outdated
 - Occurs AFTER pre-sync snapshots for rollback safety
 - Installation modifies target system, so snapshots protect against failed upgrades
 - **Verification**: Re-check version after installation to confirm success
 
-This separation ensures that if installation fails, the system can be rolled back to the pre-sync snapshot state.
+This integration ensures that version incompatibilities are detected early (validation phase) before any modifications, and installation happens safely after snapshots are created for potential rollback.
 
 ### Interrupt Handling
 Graceful shutdown on Ctrl+C (SIGINT):
