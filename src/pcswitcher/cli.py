@@ -7,6 +7,7 @@ import json
 import signal
 import sys
 from importlib.metadata import PackageNotFoundError
+from importlib.resources import files
 from pathlib import Path
 from typing import Annotated
 
@@ -409,6 +410,39 @@ def cleanup_snapshots(
     # Run cleanup
     exit_code = _run_cleanup(cfg.btrfs_snapshots.keep_recent, max_age_days, dry_run)
     sys.exit(exit_code)
+
+
+@app.command()
+def init(
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Overwrite existing configuration file"),
+    ] = False,
+) -> None:
+    """Initialize default configuration file.
+
+    Creates ~/.config/pc-switcher/config.yaml with default settings.
+    Use --force to overwrite an existing configuration.
+    """
+    config_path = Configuration.get_default_config_path()
+
+    if config_path.exists() and not force:
+        console.print(f"[yellow]Configuration file already exists:[/yellow] {config_path}")
+        console.print("Use --force to overwrite")
+        raise typer.Exit(1)
+
+    # Create parent directory if needed
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Read default config from package resources
+    default_config = files("pcswitcher").joinpath("default-config.yaml").read_text()
+
+    # Write to config file
+    config_path.write_text(default_config)
+
+    console.print(f"[green]Created configuration file:[/green] {config_path}")
+    console.print("\n[dim]Please review and customize the configuration, especially:[/dim]")
+    console.print("[dim]  - btrfs_snapshots.subvolumes (must match your system)[/dim]")
 
 
 if __name__ == "__main__":

@@ -89,32 +89,84 @@ class TestDiskSpaceMonitorConfigSchema:
         assert "warning_threshold" in errors[0].message
 
 
+class TestDiskSpaceMonitorValidateConfig:
+    """Test validate_config() method for semantic validation."""
+
+    def test_validate_config_rejects_invalid_preflight_format(self) -> None:
+        """validate_config() should reject invalid preflight_minimum format."""
+        config = {
+            "preflight_minimum": "invalid",
+            "runtime_minimum": "15%",
+            "warning_threshold": "25%",
+            "check_interval": 30,
+        }
+        errors = DiskSpaceMonitorJob.validate_config(config)
+        assert len(errors) == 1
+        assert errors[0].path == "preflight_minimum"
+
+    def test_validate_config_rejects_invalid_runtime_format(self) -> None:
+        """validate_config() should reject invalid runtime_minimum format."""
+        config = {
+            "preflight_minimum": "20%",
+            "runtime_minimum": "bad",
+            "warning_threshold": "25%",
+            "check_interval": 30,
+        }
+        errors = DiskSpaceMonitorJob.validate_config(config)
+        assert len(errors) == 1
+        assert errors[0].path == "runtime_minimum"
+
+    def test_validate_config_rejects_invalid_warning_format(self) -> None:
+        """validate_config() should reject invalid warning_threshold format."""
+        config = {
+            "preflight_minimum": "20%",
+            "runtime_minimum": "15%",
+            "warning_threshold": "invalid",
+            "check_interval": 30,
+        }
+        errors = DiskSpaceMonitorJob.validate_config(config)
+        assert len(errors) == 1
+        assert errors[0].path == "warning_threshold"
+
+    def test_validate_config_reports_all_threshold_errors(self) -> None:
+        """validate_config() should report all invalid thresholds."""
+        config = {
+            "preflight_minimum": "bad1",
+            "runtime_minimum": "bad2",
+            "warning_threshold": "bad3",
+            "check_interval": 30,
+        }
+        errors = DiskSpaceMonitorJob.validate_config(config)
+        assert len(errors) == 3
+        paths = {e.path for e in errors}
+        assert paths == {"preflight_minimum", "runtime_minimum", "warning_threshold"}
+
+
 class TestDiskSpaceMonitorValidation:
-    """Test validate() method handles warning_threshold."""
+    """Test validate() method for system state validation."""
 
     @pytest.mark.asyncio
-    async def test_validate_checks_warning_threshold_format(
+    async def test_validate_checks_mount_point_exists(
         self, mock_job_context: JobContext
     ) -> None:
-        """validate() should check warning_threshold format."""
-        # Valid config should pass - patch check_disk_space to avoid mount point check
-        mock_job_context.config["warning_threshold"] = "25%"
+        """validate() should check that mount point exists."""
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
         with patch("pcswitcher.jobs.disk_space_monitor.check_disk_space", new_callable=AsyncMock):
             errors = await job.validate()
-        # No error for warning_threshold format
-        warning_errors = [e for e in errors if "warning_threshold" in e.message]
-        assert warning_errors == []
+        # No errors when mount point check succeeds
+        assert errors == []
 
     @pytest.mark.asyncio
-    async def test_validate_rejects_invalid_warning_threshold_format(
+    async def test_validate_reports_mount_point_error(
         self, mock_job_context: JobContext
     ) -> None:
-        """validate() should reject invalid warning_threshold format."""
-        mock_job_context.config["warning_threshold"] = "invalid"
-        job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
-        with patch("pcswitcher.jobs.disk_space_monitor.check_disk_space", new_callable=AsyncMock):
+        """validate() should report error when mount point check fails."""
+        job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/nonexistent")
+        with patch(
+            "pcswitcher.jobs.disk_space_monitor.check_disk_space",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("Mount point not found"),
+        ):
             errors = await job.validate()
-        warning_errors = [e for e in errors if "warning_threshold" in e.message.lower()]
-        assert len(warning_errors) == 1
-        assert job.name in warning_errors[0].job
+        assert len(errors) == 1
+        assert "Mount point validation failed" in errors[0].message

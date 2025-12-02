@@ -1,34 +1,44 @@
 THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
 
+MAIN INSTRUCTION FOR THE COMING PROMPTS:
+You finished working on command "/speckit.implement.resolve-feedback" and we are continuing the review together. Continue to add our conversations (my questions and all text you output to me here) to @specs/001-foundation/implementation-review-2-resolved.md so we have it as reference for our decisions and their impact.
 
-ui.py and the TerminalUI class defined in this module are dead code: Rich terminal UI never integrated into CLI. This is a mistake! It is all over the place in the @specs/001-foundation/architecture.md .
-Finding: TerminalUI is fully implemented (316 lines) but never wired to the orchestrator. The architecture explicitly requires it, but integration was never completed.
+For each prompt, follow this workflow:
+0. Analyze the question and context. If anything is unclear, ask clarifying questions first and wait for my answers.
+1. Update/implement the tests (TDD)
+2. Refactor code
+3. Refactor docs. They are equally important as code. Ensure ALL docs are adapted accordingly so they reflect the current state of the codebase.
+4. Validate: type check, lint, run tests, ...
 
-  Current state:
-  - ConsoleLogger is being used as a simple line-based fallback
-  - ProgressEvent is being published but has no consumer (vanishes into void)
-  - The rich progress bars, log panels, live updates specified in architecture are not working
+Update implementation-review-2-resolved.md along the way with our conversation and all relevant info about your decisions and changes.
 
-  Action: Wire this the EventBus and/or Orchestrator as per architecture.md.
+Delegate as much as possible to subagents and run tasks in parallel if possible (so that you can keep your context clean so you can focus on your task as project manager and orchestrator), but ensure that the final output is a single coherent answer that follows the workflow above.
 
-Ensure that the rich terminal UI is fully functional as per the architecture specifications in @specs/001-foundation/architecture.md and the specs.md.
 
+
+ASKED CLAUDE
+I see you implemented a disk space WARNING check as well as required MINIMUM check that aborts.
+Make the warning level configurable, with the exact same logic as for the current disk_space_monitor.runtime_minimum config parameter.
+Ensure that all code, docs, config files, scripts, etc. are updated accordingly.
+
+
+ASKED 3 TO CLAUDE
 ---
-It seems that all tasks in @specs/001-foundation/tasks.md are implemented, but that there is no final verification that everything is wired together correctly.
-Please do the following:
-- Review all tasks in @specs/001-foundation/tasks.md
-- For each task, verify that its deliverables are implemented in the codebase
-- Check that all deliverables of all tasks are wired together correctly to form a working system as specified in @specs/001-foundation/spec.md
-
+The Execution Flow Summary has a "Job Config Validation" phase (see @specs/001-foundation/architecture.md ). There is a class method validate_config(). However, this is never overriden by any Job subclass. E.g. disk_space_monitor.py does the validation of the thresholds in its validate() method, which is for SYSTEM validation, not for config validation. We want to catch all config errors early.
+So refactor all Jobs to implement validate_config() if they need any further config validation than what is already specified in the JSON schema. Ensure they call the super().validate_config() as well to get the JSON schema validation from the base class.
+Refactor so that the parsing of the config values is only done once. I see it is done multiple times in disk_space_monitor.py: both in validate() and in execute().
+---
+orchestrator.py has a **hardcoded** job_registry in method _discover_and_validate_jobs().
+Only load the modules that are enabled in the config file. Load them dynamically. Auto-discover the corresponding Job classes that are in those modules.
+Of course, always load the system Jobs (disk_space_monitor, btrfs_snapshots, install_on_target). These can be hardcoded/imported.
+Ensure the entire config file is logged to DEBUG at the start.
+---
+The default config.yaml is hardcoded in install.sh. Put it somewhere as a separate file in the repo, so that it is easier to edit and so that it can server as documentation for both developers and users. Let install.sh download the file from the github repo (consistent version with the version we are installing!). Or the release process could integrate it in install.sh automatically, but this seems more complicated.
 ---
 
-Refactor: Give Context to constructor instead of to each method. This simplifies method signatures and shortens code. E.g. self._log() doesn't need to get the context anymore, as it is already stored in self.context.
 
----
-default config.yaml is still hardcoded in install.sh. Put it somewhere as a file in the repo and have install.sh download it from there.
-Or the release process could integrate it in install.sh automatically, but this seems more complicated.
-I definitely want the default config.yaml to be a separate file in the repo for easy editing and documentation; both for developers and for users.
----
+
+
 
 @docs/adr/considerations/async-vs-sync-concurrency-analysis.md explored and documented in DRAFT some ideas for concurrency.
 We chose to use asyncio for concurrency.
@@ -182,4 +192,42 @@ Ask clarifying questions when needed!
 ---
 
 
+
+GIVEN TO ANTIGRAVITY:
+
+ui.py and the TerminalUI class defined in this module are dead code: Rich terminal UI never integrated into CLI. This is a mistake! It is all over the place in the @specs/001-foundation/architecture.md .
+Finding: TerminalUI is fully implemented (316 lines) but never wired to the orchestrator. The architecture explicitly requires it, but integration was never completed.
+
+  Current state:
+  - ConsoleLogger is being used as a simple line-based fallback
+  - ProgressEvent is being published but has no consumer (vanishes into void)
+  - The rich progress bars, log panels, live updates specified in architecture are not working
+
+  Action: Wire this the EventBus and/or Orchestrator as per architecture.md.
+
+Ensure that the rich terminal UI is fully functional as per the architecture specifications in @specs/001-foundation/architecture.md and the specs.md.
+
+---
+
+GIVEN TO CLAUDE:
+
+Orchestrator gives hostname_map to new task self._ui.consume_events().
+However, it is not given to the FileLogger consumer. How does the FileLogger know the hostnames of the remote machines? They should be in the log file as well for clarity.
+
+---
+
+GIVEN TO CODEX:
+
+It seems that all tasks in @specs/001-foundation/tasks.md are implemented, but that there is no final verification that everything is wired together correctly.
+Please do the following:
+- Review all tasks in @specs/001-foundation/tasks.md
+- For each task, verify that its deliverables are implemented in the codebase
+- Check that all deliverables of all tasks are wired together correctly to form a working system as specified in @specs/001-foundation/spec.md
+
+Output: A report of findings in a new file specs/001-foundation/task-integration-review-codex.md, including
+- Missing deliverables (if any)
+- Missing wiring/integration (if any)
+- Suggestions for improvements (if any)
+
+---
 

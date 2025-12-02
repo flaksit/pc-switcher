@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from pcswitcher.disk import check_disk_space, parse_threshold
 from pcswitcher.models import (
+    ConfigError,
     DiskSpaceCriticalError,
     Host,
     LogLevel,
@@ -18,6 +19,9 @@ from .context import JobContext
 
 if TYPE_CHECKING:
     from pcswitcher.models import ValidationError
+
+# Type alias for parsed thresholds
+ThresholdType = tuple[str, int | float]  # ("percent", 20.0) or ("absolute", bytes)
 
 
 class DiskSpaceMonitorJob(BackgroundJob):
@@ -54,6 +58,32 @@ class DiskSpaceMonitorJob(BackgroundJob):
         "additionalProperties": False,
     }
 
+    @classmethod
+    def validate_config(cls, config: dict[str, Any]) -> list[ConfigError]:
+        """Validate config schema and threshold formats.
+
+        Performs JSON schema validation first, then validates that threshold
+        values are in valid format (percentage like "20%" or absolute like "50GiB").
+
+        Args:
+            config: Job configuration from config.yaml
+
+        Returns:
+            List of ConfigError for any validation failures.
+        """
+        errors = super().validate_config(config)
+        if errors:
+            return errors  # Don't continue if schema is invalid
+
+        # Validate threshold formats (semantic validation)
+        for key in ["preflight_minimum", "runtime_minimum", "warning_threshold"]:
+            try:
+                parse_threshold(config[key])
+            except ValueError as e:
+                errors.append(ConfigError(job=cls.name, path=key, message=str(e)))
+
+        return errors
+
     def __init__(self, context: JobContext, host: Host, mount_point: str) -> None:
         """Initialize disk space monitor for a specific host.
 
@@ -66,31 +96,27 @@ class DiskSpaceMonitorJob(BackgroundJob):
         self.host = host
         self.mount_point = mount_point
 
+        # Parse thresholds once (validation already done in validate_config)
+        self._preflight_threshold: ThresholdType = parse_threshold(
+            context.config["preflight_minimum"]
+        )
+        self._runtime_threshold: ThresholdType = parse_threshold(
+            context.config["runtime_minimum"]
+        )
+        self._warning_threshold: ThresholdType = parse_threshold(
+            context.config["warning_threshold"]
+        )
+        self._check_interval: int = context.config["check_interval"]
+
     async def validate(self) -> list[ValidationError]:
-        """Validate that mount point exists and threshold format is valid.
+        """Validate that mount point exists and is accessible.
 
         Returns:
             List of ValidationError if validation fails, empty list otherwise
         """
         errors: list[ValidationError] = []
 
-        # Validate threshold formats
-        try:
-            parse_threshold(self.context.config["preflight_minimum"])
-        except ValueError as e:
-            errors.append(self._validation_error(self.host, f"Invalid preflight_minimum: {e}"))
-
-        try:
-            parse_threshold(self.context.config["runtime_minimum"])
-        except ValueError as e:
-            errors.append(self._validation_error(self.host, f"Invalid runtime_minimum: {e}"))
-
-        try:
-            parse_threshold(self.context.config["warning_threshold"])
-        except ValueError as e:
-            errors.append(self._validation_error(self.host, f"Invalid warning_threshold: {e}"))
-
-        # Validate that mount point exists
+        # Validate that mount point exists (threshold formats already validated in validate_config)
         executor = self.source if self.host == Host.SOURCE else self.target
         try:
             await check_disk_space(executor, self.mount_point)
@@ -111,19 +137,18 @@ class DiskSpaceMonitorJob(BackgroundJob):
         """
         executor = self.source if self.host == Host.SOURCE else self.target
         hostname = self.context.source_hostname if self.host == Host.SOURCE else self.context.target_hostname
-        check_interval: int = self.context.config["check_interval"]
-        runtime_minimum: str = self.context.config["runtime_minimum"]
-        warning_threshold: str = self.context.config["warning_threshold"]
 
-        critical_type, critical_value = parse_threshold(runtime_minimum)
-        warning_type, warning_value = parse_threshold(warning_threshold)
+        # Use pre-parsed thresholds from __init__
+        critical_type, critical_value = self._runtime_threshold
+        warning_type, warning_value = self._warning_threshold
+        runtime_minimum_str = self.context.config["runtime_minimum"]  # For error messages
 
         self._log(
             self.host,
             LogLevel.DEBUG,
             f"Starting disk space monitoring for {self.mount_point}",
-            interval=check_interval,
-            threshold=runtime_minimum,
+            interval=self._check_interval,
+            threshold=runtime_minimum_str,
         )
 
         try:
@@ -157,13 +182,13 @@ class DiskSpaceMonitorJob(BackgroundJob):
                         f"Disk space critically low on {hostname}",
                         mount_point=self.mount_point,
                         available_bytes=disk_space.available_bytes,
-                        threshold=runtime_minimum,
+                        threshold=runtime_minimum_str,
                     )
                     raise DiskSpaceCriticalError(
                         host=self.host,
                         hostname=hostname,
                         free_space=free_space_str,
-                        threshold=runtime_minimum,
+                        threshold=runtime_minimum_str,
                     )
 
                 # Check against warning threshold
@@ -183,11 +208,11 @@ class DiskSpaceMonitorJob(BackgroundJob):
                         mount_point=self.mount_point,
                         available_bytes=disk_space.available_bytes,
                         available_formatted=self._format_bytes(disk_space.available_bytes),
-                        warning_threshold=warning_threshold,
+                        warning_threshold=self.context.config["warning_threshold"],
                     )
 
                 # Wait before next check
-                await asyncio.sleep(check_interval)
+                await asyncio.sleep(self._check_interval)
 
         except asyncio.CancelledError:
             self._log(

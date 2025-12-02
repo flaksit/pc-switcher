@@ -25,6 +25,7 @@ class DiskConfig:
 
     preflight_minimum: str = "20%"  # Percentage or absolute (e.g., "50GiB")
     runtime_minimum: str = "15%"
+    warning_threshold: str = "25%"  # Warning log if below
     check_interval: int = 30  # Seconds
 
 
@@ -154,6 +155,7 @@ class Configuration:
         disk_config = DiskConfig(
             preflight_minimum=disk_data.get("preflight_minimum", "20%"),
             runtime_minimum=disk_data.get("runtime_minimum", "15%"),
+            warning_threshold=disk_data.get("warning_threshold", "25%"),
             check_interval=disk_data.get("check_interval", 30),
         )
 

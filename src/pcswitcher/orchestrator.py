@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import secrets
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,7 +20,6 @@ from pcswitcher.jobs.base import Job, SyncJob
 from pcswitcher.jobs.btrfs import BtrfsSnapshotJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
-from pcswitcher.jobs.dummy import DummyFailJob, DummySuccessJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.lock import SyncLock, acquire_target_lock, get_local_hostname
 from pcswitcher.logger import (
@@ -288,6 +288,9 @@ class Orchestrator:
     async def _discover_and_validate_jobs(self) -> list[Job]:
         """Discover enabled jobs from config and validate their configuration.
 
+        Dynamically imports job modules based on enabled jobs in config.
+        Convention: job_name == module_name (e.g., "dummy_success" → pcswitcher.jobs.dummy_success)
+
         Returns:
             List of job instances ready for execution
 
@@ -297,13 +300,24 @@ class Orchestrator:
         jobs: list[Job] = []
         config_errors: list[ConfigError] = []
 
-        # Build registry of available sync jobs
-        job_registry: dict[str, type[SyncJob]] = {
-            "dummy_success": DummySuccessJob,
-            "dummy_fail": DummyFailJob,
-        }
+        # Log entire config at DEBUG level
+        self._logger.log(
+            LogLevel.DEBUG,
+            Host.SOURCE,
+            "Configuration loaded",
+            log_file_level=self._config.log_file_level.name,
+            log_cli_level=self._config.log_cli_level.name,
+            sync_jobs=self._config.sync_jobs,
+            disk_preflight_minimum=self._config.disk.preflight_minimum,
+            disk_runtime_minimum=self._config.disk.runtime_minimum,
+            disk_warning_threshold=self._config.disk.warning_threshold,
+            disk_check_interval=self._config.disk.check_interval,
+            btrfs_subvolumes=self._config.btrfs_snapshots.subvolumes,
+            btrfs_keep_recent=self._config.btrfs_snapshots.keep_recent,
+            btrfs_max_age_days=self._config.btrfs_snapshots.max_age_days,
+        )
 
-        # Discover enabled jobs from sync_jobs config
+        # Lazy load only enabled jobs (job_name == module_name)
         for job_name, enabled in self._config.sync_jobs.items():
             if not enabled:
                 self._logger.log(
@@ -313,12 +327,35 @@ class Orchestrator:
                 )
                 continue
 
-            job_class = job_registry.get(job_name)
+            # Dynamic import: pcswitcher.jobs.{job_name}
+            try:
+                module = importlib.import_module(f"pcswitcher.jobs.{job_name}")
+            except ModuleNotFoundError:
+                self._logger.log(
+                    LogLevel.WARNING,
+                    Host.SOURCE,
+                    f"Job module pcswitcher.jobs.{job_name} not found",
+                )
+                continue
+
+            # Find the SyncJob class in the module with matching name
+            job_class: type[SyncJob] | None = None
+            for attr_name in dir(module):
+                attr = getattr(module, attr_name)
+                if (
+                    isinstance(attr, type)
+                    and issubclass(attr, SyncJob)
+                    and attr is not SyncJob
+                    and getattr(attr, "name", None) == job_name
+                ):
+                    job_class = attr
+                    break
+
             if job_class is None:
                 self._logger.log(
                     LogLevel.WARNING,
                     Host.SOURCE,
-                    f"Job {job_name} is enabled but not found in registry",
+                    f"No SyncJob with name={job_name} found in module pcswitcher.jobs.{job_name}",
                 )
                 continue
 
@@ -465,6 +502,7 @@ class Orchestrator:
             monitor_config = {
                 "preflight_minimum": self._config.disk.preflight_minimum,
                 "runtime_minimum": self._config.disk.runtime_minimum,
+                "warning_threshold": self._config.disk.warning_threshold,
                 "check_interval": self._config.disk.check_interval,
             }
             monitor_context = self._create_job_context(monitor_config)

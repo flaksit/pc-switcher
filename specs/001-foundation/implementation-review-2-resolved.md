@@ -919,3 +919,212 @@ uv run pytest -v → 21 passed (7 new tests)
 8. `specs/001-foundation/architecture.md` - Updated config examples (2 occurrences)
 9. `specs/001-foundation/quickstart.md` - Updated config example
 10. `specs/001-foundation/data-model.md` - Updated DiskConfig
+
+---
+
+## Follow-up: Job Config Validation, Dynamic Loading, and Default Config File
+
+**Date**: 2025-12-02 (continued session)
+
+### User Request
+
+The Execution Flow Summary has a "Job Config Validation" phase (see @specs/001-foundation/architecture.md ). There is a class method validate_config(). However, this is never overriden by any Job subclass. E.g. disk_space_monitor.py does the validation of the thresholds in its validate() method, which is for SYSTEM validation, not for config validation. We want to catch all config errors early.
+So refactor all Jobs to implement validate_config() if they need any further config validation than what is already specified in the JSON schema. Ensure they call the super().validate_config() as well to get the JSON schema validation from the base class.
+Refactor so that the parsing of the config values is only done once. I see it is done multiple times in disk_space_monitor.py: both in validate() and in execute().
+
+orchestrator.py has a **hardcoded** job_registry in method _discover_and_validate_jobs().
+Only load the modules that are enabled in the config file. Load them dynamically. Auto-discover the corresponding Job classes that are in those modules.
+Of course, always load the system Jobs (disk_space_monitor, btrfs_snapshots, install_on_target). These can be hardcoded/imported.
+Ensure the entire config file is logged to DEBUG at the start.
+
+The default config.yaml is hardcoded in install.sh. Put it somewhere as a separate file in the repo, so that it is easier to edit and so that it can server as documentation for both developers and users. Let install.sh download the file from the github repo (consistent version with the version we are installing!). Or the release process could integrate it in install.sh automatically, but this seems more complicated.
+
+### Summary of user request
+Three related refactoring tasks to improve the job system architecture:
+
+1. **Job Config Validation** - Move config validation from `validate()` (Phase 3 - system validation) to `validate_config()` (Phase 2 - config validation), parse config values only once
+2. **Dynamic Job Loading** - Replace hardcoded `job_registry` in orchestrator with dynamic module loading
+3. **Default Config File** - Extract hardcoded config from `install.sh` to separate versioned file
+
+### Task 1: Job Config Validation Refactoring
+
+#### Problem
+
+`DiskSpaceMonitorJob.validate()` was validating threshold formats (a config problem) in Phase 3 (system validation). This should be in `validate_config()` (Phase 2) for fail-fast behavior. Additionally, `parse_threshold()` was called twice: once in `validate()` and again in `execute()`, violating DRY.
+
+#### Solution
+
+**Added `validate_config()` classmethod to DiskSpaceMonitorJob:**
+```python
+@classmethod
+def validate_config(cls, config: dict[str, Any]) -> list[ConfigError]:
+    errors = super().validate_config(config)  # JSON schema validation first
+    if errors:
+        return errors
+
+    # Validate threshold formats (semantic validation)
+    for key in ["preflight_minimum", "runtime_minimum", "warning_threshold"]:
+        try:
+            parse_threshold(config[key])
+        except ValueError as e:
+            errors.append(ConfigError(job=cls.name, path=key, message=str(e)))
+
+    return errors
+```
+
+**Stored parsed values in `__init__()`:**
+```python
+def __init__(self, context: JobContext, host: Host, mount_point: str) -> None:
+    super().__init__(context)
+    self.host = host
+    self.mount_point = mount_point
+
+    # Parse thresholds once (validation already done in validate_config)
+    self._preflight_threshold = parse_threshold(context.config["preflight_minimum"])
+    self._runtime_threshold = parse_threshold(context.config["runtime_minimum"])
+    self._warning_threshold = parse_threshold(context.config["warning_threshold"])
+    self._check_interval = context.config["check_interval"]
+```
+
+**Simplified `validate()`:**
+- Removed all threshold format parsing (now in `validate_config`)
+- Only checks mount point exists (true system validation)
+
+**Simplified `execute()`:**
+- Uses pre-parsed instance attributes instead of re-parsing config values
+
+**Updated tests:**
+- Added new `TestDiskSpaceMonitorValidateConfig` class testing `validate_config()` for invalid formats
+- Simplified `TestDiskSpaceMonitorValidation` to only test mount point validation
+
+### Task 2: Dynamic Job Loading
+
+#### Problem
+
+Hardcoded `job_registry` with only 2 jobs, no config logging at startup.
+
+#### Solution
+
+**User Decisions:**
+- True lazy loading: only import modules for jobs enabled in config
+- Convention: `job_name == module_name` (no mapping needed)
+- Split `dummy.py` into separate modules
+
+**Split dummy.py:**
+- Created `src/pcswitcher/jobs/dummy_success.py` with `DummySuccessJob` (name="dummy_success")
+- Created `src/pcswitcher/jobs/dummy_fail.py` with `DummyFailJob` (name="dummy_fail")
+- Deleted `src/pcswitcher/jobs/dummy.py`
+
+**Updated orchestrator for lazy loading:**
+```python
+# Log entire config at DEBUG level
+self._logger.log(
+    LogLevel.DEBUG, Host.SOURCE, "Configuration loaded",
+    log_file_level=self._config.log_file_level.name,
+    sync_jobs=self._config.sync_jobs,
+    # ... other config fields
+)
+
+# Lazy load only enabled jobs (job_name == module_name)
+for job_name, enabled in self._config.sync_jobs.items():
+    if not enabled:
+        self._logger.log(LogLevel.DEBUG, Host.SOURCE, f"Job {job_name} is disabled")
+        continue
+
+    # Dynamic import: pcswitcher.jobs.{job_name}
+    try:
+        module = importlib.import_module(f"pcswitcher.jobs.{job_name}")
+    except ModuleNotFoundError:
+        self._logger.log(LogLevel.WARNING, Host.SOURCE, f"Job module not found")
+        continue
+
+    # Find SyncJob class with matching name attribute
+    # ... class discovery and validation
+```
+
+**Removed hardcoded imports** from orchestrator (no longer imports dummy jobs directly).
+
+### Task 3: Default Config File
+
+#### Problem
+
+Default config was hardcoded in `install.sh` as a ~115 line heredoc - difficult to maintain and not versioned with package.
+
+#### Solution
+
+**User Decision:** Add `pc-switcher init` CLI command; `install.sh` tells user to run it (not automatic).
+
+**Created `src/pcswitcher/default-config.yaml`:**
+- Standalone config file bundled with Python package
+- Contains full comments explaining each option
+- Accessible via `importlib.resources` for programmatic use
+
+**Added `pc-switcher init` command:**
+```python
+@app.command()
+def init(
+    force: Annotated[bool, typer.Option("--force", "-f", ...)] = False,
+) -> None:
+    """Initialize default configuration file."""
+    config_path = Configuration.get_default_config_path()
+
+    if config_path.exists() and not force:
+        console.print(f"Config already exists: {config_path}")
+        raise typer.Exit(1)
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    default_config = files("pcswitcher").joinpath("default-config.yaml").read_text()
+    config_path.write_text(default_config)
+```
+
+**Updated `install.sh`:**
+- Removed 115-line heredoc
+- Added instruction: "Run 'pc-switcher init' to create default configuration"
+
+**Updated `README.md`:**
+- Added `pc-switcher init` step after installation
+- Added `init` command to Available Commands section
+
+### Additional Fix: warning_threshold in DiskConfig
+
+During type checking, discovered `DiskConfig` dataclass was missing `warning_threshold` field. Added:
+
+```python
+@dataclass
+class DiskConfig:
+    preflight_minimum: str = "20%"
+    runtime_minimum: str = "15%"
+    warning_threshold: str = "25%"  # Added
+    check_interval: int = 30
+```
+
+Also updated the parsing logic in `Configuration.from_yaml()`.
+
+### Verification
+
+```
+uv run basedpyright → 0 errors, 0 warnings, 0 notes
+uv run ruff check src/ → All checks passed!
+uv run pytest → 25 passed
+```
+
+### Files Created
+
+1. `src/pcswitcher/default-config.yaml` - Standalone default config file
+2. `src/pcswitcher/jobs/dummy_success.py` - DummySuccessJob (split from dummy.py)
+3. `src/pcswitcher/jobs/dummy_fail.py` - DummyFailJob (split from dummy.py)
+
+### Files Modified
+
+1. `src/pcswitcher/jobs/disk_space_monitor.py` - Added validate_config(), stored parsed thresholds, simplified validate()/execute()
+2. `src/pcswitcher/orchestrator.py` - Added config logging, lazy import for enabled jobs
+3. `src/pcswitcher/jobs/__init__.py` - Updated exports for split dummy modules
+4. `src/pcswitcher/cli.py` - Added `init` command
+5. `src/pcswitcher/config.py` - Added warning_threshold to DiskConfig
+6. `install.sh` - Removed heredoc, added init instruction
+7. `README.md` - Added init instructions
+8. `tests/unit/test_jobs/test_disk_space_monitor.py` - Updated tests for validate_config()
+
+### Files Deleted
+
+1. `src/pcswitcher/jobs/dummy.py` - Split into dummy_success.py and dummy_fail.py

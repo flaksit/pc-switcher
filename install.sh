@@ -178,153 +178,7 @@ fi
 PC_SWITCHER_VERSION=$(pc-switcher --version 2>/dev/null || echo "unknown")
 success "pc-switcher command is available: ${PC_SWITCHER_VERSION}"
 
-# Step 4: Create configuration directory
-CONFIG_DIR="$HOME/.config/pc-switcher"
-info "Setting up configuration directory: ${CONFIG_DIR}"
-
-if [[ ! -d "${CONFIG_DIR}" ]]; then
-    mkdir -p "${CONFIG_DIR}"
-    success "Created configuration directory"
-else
-    info "Configuration directory already exists"
-fi
-
-# Step 5: Create default config if it doesn't exist
-CONFIG_FILE="${CONFIG_DIR}/config.yaml"
-
-if [[ -f "${CONFIG_FILE}" ]]; then
-    warn "Configuration file already exists: ${CONFIG_FILE}"
-    read -p "Overwrite with default configuration? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        info "Keeping existing configuration"
-        SKIP_CONFIG=true
-    else
-        SKIP_CONFIG=false
-    fi
-else
-    SKIP_CONFIG=false
-fi
-
-if [[ "${SKIP_CONFIG}" != "true" ]]; then
-    info "Creating default configuration file..."
-    cat > "${CONFIG_FILE}" << 'EOF'
-# PC-switcher configuration file
-# Location: ~/.config/pc-switcher/config.yaml
-# Documentation: https://github.com/flaksit/pc-switcher
-
-# =============================================================================
-# Logging Configuration
-# =============================================================================
-# Log levels: DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL
-# - DEBUG: Most verbose, includes all operations and decisions
-# - FULL: Detailed execution logs including all job operations
-# - INFO: High-level progress and status updates
-# - WARNING: Warnings and recoverable issues
-# - ERROR: Errors that may cause job failures
-# - CRITICAL: Critical failures that halt sync operations
-
-# Minimum log level written to log file (~/.local/share/pc-switcher/logs/)
-log_file_level: FULL
-
-# Minimum log level displayed in terminal during sync
-log_cli_level: INFO
-
-# =============================================================================
-# Sync Jobs Configuration
-# =============================================================================
-# Enable or disable optional sync jobs
-# Note: Jobs not listed here will use their default enabled state
-
-sync_jobs:
-  # Test jobs (for development/testing)
-  dummy_success: true    # Test job that completes successfully
-  dummy_fail: false      # Test job that fails at configurable progress
-
-  # Future jobs (uncomment when available):
-  # user_data: true       # Sync /home and /root directories
-  # packages: true        # Sync apt, snap, flatpak packages
-  # docker: false         # Sync Docker images, containers, volumes
-  # vms: false            # Sync KVM/virt-manager VMs
-  # k3s: false            # Sync k3s cluster state
-
-# =============================================================================
-# Disk Space Monitoring
-# =============================================================================
-# Configuration for disk space checks before and during sync
-# Threshold format: percentage (e.g., "20%") or absolute (e.g., "50GiB")
-
-disk_space_monitor:
-  # Minimum free space required before sync starts
-  preflight_minimum: "20%"
-
-  # Minimum free space required during sync (CRITICAL - abort if below)
-  runtime_minimum: "15%"
-
-  # Free space threshold for warnings during sync
-  warning_threshold: "25%"
-
-  # Seconds between disk space checks during sync
-  check_interval: 30
-
-# =============================================================================
-# Btrfs Snapshot Management
-# =============================================================================
-# Configuration for automatic btrfs snapshots before and after sync
-# IMPORTANT: Subvolumes must match YOUR system's btrfs layout
-
-btrfs_snapshots:
-  # List of btrfs subvolumes to snapshot
-  # Check your system: sudo btrfs subvolume list /
-  # Common layouts:
-  #   - Ubuntu default: ["@", "@home"]
-  #   - Single root: ["@"]
-  subvolumes:
-    - "@"
-    - "@home"
-
-  # Number of recent sync sessions to retain snapshots for
-  keep_recent: 3
-
-  # Maximum age in days for snapshot retention (optional)
-  # Uncomment to enable age-based cleanup:
-  # max_age_days: 7
-
-# =============================================================================
-# Job-Specific Configuration
-# =============================================================================
-# Each sync job can have its own configuration section
-# Configuration keys must match the job name
-
-# Test job configurations (examples)
-dummy_success:
-  source_duration: 20    # Seconds to run on source machine
-  target_duration: 20    # Seconds to run on target machine
-
-dummy_fail:
-  fail_at_percent: 60    # Progress percentage at which to fail (1-99)
-
-# Future job configurations will be added here when features are implemented:
-#
-# user_data:
-#   exclude_patterns:
-#     - "**/.cache/*"
-#     - "**/node_modules/*"
-#   preserve_timestamps: true
-#
-# packages:
-#   sync_ppa: true
-#   sync_flatpak: true
-#
-# docker:
-#   exclude_images: []
-#   sync_volumes: true
-EOF
-    success "Created default configuration: ${CONFIG_FILE}"
-    info "Please review and customize the configuration, especially btrfs_snapshots.subvolumes"
-fi
-
-# Step 6: Create log directory
+# Step 4: Create log directory
 LOG_DIR="$HOME/.local/share/pc-switcher/logs"
 info "Setting up log directory: ${LOG_DIR}"
 
@@ -343,16 +197,19 @@ echo "================================================================"
 echo ""
 echo "Next steps:"
 echo ""
-echo "1. Review and customize your configuration:"
-echo "   ${CONFIG_FILE}"
+echo "1. Create the default configuration file:"
+echo "   pc-switcher init"
 echo ""
-echo "2. Ensure your system uses a btrfs filesystem"
+echo "2. Review and customize your configuration:"
+echo "   ~/.config/pc-switcher/config.yaml"
+echo ""
+echo "3. Ensure your system uses a btrfs filesystem"
 echo "   Check with: df -T /"
 echo ""
-echo "3. Verify btrfs subvolumes match your config:"
+echo "4. Verify btrfs subvolumes match your config:"
 echo "   sudo btrfs subvolume list /"
 echo ""
-echo "4. Run your first sync:"
+echo "5. Run your first sync:"
 echo "   pc-switcher sync <target-hostname>"
 echo ""
 echo "For help and documentation:"

@@ -6,7 +6,8 @@ from .base import BackgroundJob, Job, SyncJob, SystemJob
 from .btrfs import BtrfsSnapshotJob
 from .context import JobContext
 from .disk_space_monitor import DiskSpaceMonitorJob
-from .dummy import DummyFailJob, DummySuccessJob
+from .dummy_fail import DummyFailJob
+from .dummy_success import DummySuccessJob
 from .install_on_target import InstallOnTargetJob
 
 __all__ = [

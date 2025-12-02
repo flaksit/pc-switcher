@@ -37,6 +37,11 @@ Install using the installation script:
 curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash
 ```
 
+After installation, create the default configuration:
+```bash
+pc-switcher init
+```
+
 Or run directly from source:
 ```bash
 uv sync
@@ -66,7 +71,7 @@ After sync completes, power off the source machine and resume work on target.
 
 ## Configuration
 
-Create `~/.config/pc-switcher/config.yaml`:
+Run `pc-switcher init` to create the default configuration file at `~/.config/pc-switcher/config.yaml`, or create it manually:
 
 ```yaml
 # Logging configuration
@@ -99,6 +104,9 @@ See example configs in `config/` directory.
 ## Available Commands
 
 ```bash
+# Initialize configuration file
+pc-switcher init [--force]    # Create default config at ~/.config/pc-switcher/config.yaml
+
 # Sync to target machine
 pc-switcher sync <target-hostname> [--config PATH]
 
