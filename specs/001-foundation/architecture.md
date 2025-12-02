@@ -1385,7 +1385,8 @@ From `config.yaml`:
 ```yaml
 disk_space_monitor:
   preflight_minimum: "20%"   # or "50GiB"
-  runtime_minimum: "15%"     # for DiskSpaceMonitorJob
+  runtime_minimum: "15%"     # CRITICAL abort if below
+  warning_threshold: "25%"   # WARNING log if below
   check_interval: 30
 ```
 
@@ -1718,7 +1719,8 @@ sync_jobs:
 # Disk space safety thresholds (DiskSpaceMonitorJob)
 disk_space_monitor:
   preflight_minimum: "20%"   # Minimum free space before sync starts
-  runtime_minimum: "15%"     # Minimum during sync (abort if below)
+  runtime_minimum: "15%"     # Minimum during sync (CRITICAL abort if below)
+  warning_threshold: "25%"   # WARNING log if below
   check_interval: 30         # Seconds between runtime checks
 
 # Btrfs snapshot configuration (cannot be disabled)

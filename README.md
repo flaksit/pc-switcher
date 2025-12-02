@@ -81,7 +81,8 @@ sync_jobs:
 # Disk space monitoring
 disk_space_monitor:
   preflight_minimum: "20%"  # Or absolute like "50GiB"
-  runtime_minimum: "15%"
+  runtime_minimum: "15%"    # CRITICAL abort if below
+  warning_threshold: "25%"  # WARNING log if below
   check_interval: 30        # Seconds
 
 # Btrfs snapshots

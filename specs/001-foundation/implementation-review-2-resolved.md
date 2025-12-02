@@ -808,3 +808,114 @@ uv run pytest -v → 14 passed
 3. `src/pcswitcher/jobs/install_on_target.py` - Updated all usages
 4. `src/pcswitcher/jobs/disk_space_monitor.py` - Updated all usages
 5. `src/pcswitcher/jobs/dummy.py` - Updated config usage
+
+---
+
+## Follow-up: Configurable Disk Space Warning Threshold
+
+**Date**: 2025-12-02 (continued session)
+
+### User Request
+
+> I see you implemented a disk space WARNING check as well as required MINIMUM check that aborts.
+> Make the warning level configurable, with the exact same logic as for the current disk_space_monitor.runtime_minimum config parameter.
+> Ensure that all code, docs, config files, scripts, etc. are updated accordingly.
+
+### Problem
+
+The warning check was hardcoded at +5% or +10GiB above the `runtime_minimum` threshold:
+
+```python
+# Log warning if getting close (within 5% or 10GiB of threshold)
+if threshold_type == "percent":
+    if free_percent < threshold_value + 5:  # Hardcoded +5%
+        warning_triggered = True
+elif disk_space.available_bytes < threshold_value + (10 * 2**30):  # Hardcoded +10GiB
+    warning_triggered = True
+```
+
+### Solution
+
+Added configurable `warning_threshold` parameter that uses the same format as `runtime_minimum` (e.g., "25%" or "50GiB").
+
+### Changes Made
+
+#### 1. Tests First (TDD)
+
+Created `tests/unit/test_jobs/test_disk_space_monitor.py` with 7 tests:
+- `test_schema_has_warning_threshold_property`
+- `test_schema_requires_warning_threshold`
+- `test_validate_config_accepts_percentage_warning_threshold`
+- `test_validate_config_accepts_absolute_warning_threshold`
+- `test_validate_config_rejects_missing_warning_threshold`
+- `test_validate_checks_warning_threshold_format`
+- `test_validate_rejects_invalid_warning_threshold_format`
+
+#### 2. Updated DiskSpaceMonitorJob (`jobs/disk_space_monitor.py`)
+
+**CONFIG_SCHEMA**: Added `warning_threshold` property and to `required` list.
+
+**validate()**: Added format validation for `warning_threshold`.
+
+**execute()**: Replaced hardcoded warning logic with configurable threshold:
+```python
+warning_threshold: str = self.context.config["warning_threshold"]
+warning_type, warning_value = parse_threshold(warning_threshold)
+
+# Check against warning threshold
+is_warning = False
+if warning_type == "percent":
+    free_percent = 100 - disk_space.use_percent
+    if free_percent < warning_value:
+        is_warning = True
+elif disk_space.available_bytes < warning_value:
+    is_warning = True
+```
+
+#### 3. Updated Config Schema YAML Files
+
+Both files updated with `warning_threshold`:
+- `src/pcswitcher/schemas/config-schema.yaml`
+- `specs/001-foundation/contracts/config-schema.yaml`
+
+```yaml
+warning_threshold:
+  $ref: "#/definitions/disk_threshold"
+  default: "25%"
+  description: "Free space threshold for warnings during sync"
+```
+
+#### 4. Updated Documentation
+
+All config examples updated to include `warning_threshold`:
+- `README.md`
+- `docs/architecture.md`
+- `docs/implementation.md`
+- `specs/001-foundation/architecture.md` (2 occurrences)
+- `specs/001-foundation/quickstart.md`
+- `specs/001-foundation/data-model.md`
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/ → 0 errors, 0 warnings, 0 notes
+uv run ruff check src/pcswitcher/ → All checks passed!
+uv run pytest -v → 21 passed (7 new tests)
+```
+
+### Files Created
+
+1. `tests/unit/test_jobs/test_disk_space_monitor.py` - New test file for DiskSpaceMonitorJob
+
+### Files Modified
+
+1. `src/pcswitcher/jobs/disk_space_monitor.py` - Added warning_threshold config, validation, and logic
+2. `src/pcswitcher/schemas/config-schema.yaml` - Added warning_threshold
+3. `specs/001-foundation/contracts/config-schema.yaml` - Added warning_threshold
+4. `install.sh` - Added warning_threshold to default config template
+5. `README.md` - Updated config example
+6. `docs/architecture.md` - Updated config example
+7. `docs/implementation.md` - Updated DiskConfig
+8. `specs/001-foundation/architecture.md` - Updated config examples (2 occurrences)
+9. `specs/001-foundation/quickstart.md` - Updated config example
+10. `specs/001-foundation/data-model.md` - Updated DiskConfig

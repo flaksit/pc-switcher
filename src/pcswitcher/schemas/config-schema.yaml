@@ -87,7 +87,11 @@ properties:
       runtime_minimum:
         $ref: "#/definitions/disk_threshold"
         default: "15%"
-        description: "Minimum free space required during sync"
+        description: "Minimum free space required during sync (CRITICAL - abort if below)"
+      warning_threshold:
+        $ref: "#/definitions/disk_threshold"
+        default: "25%"
+        description: "Free space threshold for warnings during sync"
       check_interval:
         type: integer
         minimum: 5

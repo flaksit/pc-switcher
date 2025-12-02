@@ -40,13 +40,17 @@ class DiskSpaceMonitorJob(BackgroundJob):
                 "type": "string",
                 "description": "Minimum free space during sync (e.g., '15%' or '40GiB')",
             },
+            "warning_threshold": {
+                "type": "string",
+                "description": "Free space threshold for warnings (e.g., '25%' or '50GiB')",
+            },
             "check_interval": {
                 "type": "integer",
                 "minimum": 1,
                 "description": "Seconds between disk space checks",
             },
         },
-        "required": ["preflight_minimum", "runtime_minimum", "check_interval"],
+        "required": ["preflight_minimum", "runtime_minimum", "warning_threshold", "check_interval"],
         "additionalProperties": False,
     }
 
@@ -81,6 +85,11 @@ class DiskSpaceMonitorJob(BackgroundJob):
         except ValueError as e:
             errors.append(self._validation_error(self.host, f"Invalid runtime_minimum: {e}"))
 
+        try:
+            parse_threshold(self.context.config["warning_threshold"])
+        except ValueError as e:
+            errors.append(self._validation_error(self.host, f"Invalid warning_threshold: {e}"))
+
         # Validate that mount point exists
         executor = self.source if self.host == Host.SOURCE else self.target
         try:
@@ -104,8 +113,10 @@ class DiskSpaceMonitorJob(BackgroundJob):
         hostname = self.context.source_hostname if self.host == Host.SOURCE else self.context.target_hostname
         check_interval: int = self.context.config["check_interval"]
         runtime_minimum: str = self.context.config["runtime_minimum"]
+        warning_threshold: str = self.context.config["warning_threshold"]
 
-        threshold_type, threshold_value = parse_threshold(runtime_minimum)
+        critical_type, critical_value = parse_threshold(runtime_minimum)
+        warning_type, warning_value = parse_threshold(warning_threshold)
 
         self._log(
             self.host,
@@ -125,17 +136,17 @@ class DiskSpaceMonitorJob(BackgroundJob):
                     ProgressUpdate(heartbeat=True),
                 )
 
-                # Check against threshold
+                # Check against critical threshold
                 is_critical = False
                 free_space_str = ""
-                if threshold_type == "percent":
-                    # threshold_value is percentage of total to keep free
+                if critical_type == "percent":
+                    # critical_value is percentage of total to keep free
                     # use_percent is percentage used
                     free_percent = 100 - disk_space.use_percent
-                    if free_percent < threshold_value:
+                    if free_percent < critical_value:
                         is_critical = True
-                        free_space_str = f"{free_percent}%"
-                elif disk_space.available_bytes < threshold_value:
+                        free_space_str = f"{free_percent:.1f}%"
+                elif disk_space.available_bytes < critical_value:
                     is_critical = True
                     free_space_str = self._format_bytes(disk_space.available_bytes)
 
@@ -155,16 +166,16 @@ class DiskSpaceMonitorJob(BackgroundJob):
                         threshold=runtime_minimum,
                     )
 
-                # Log warning if getting close (within 5% or 10GiB of threshold)
-                warning_triggered = False
-                if threshold_type == "percent":
+                # Check against warning threshold
+                is_warning = False
+                if warning_type == "percent":
                     free_percent = 100 - disk_space.use_percent
-                    if free_percent < threshold_value + 5:
-                        warning_triggered = True
-                elif disk_space.available_bytes < threshold_value + (10 * 2**30):  # +10GiB
-                    warning_triggered = True
+                    if free_percent < warning_value:
+                        is_warning = True
+                elif disk_space.available_bytes < warning_value:
+                    is_warning = True
 
-                if warning_triggered:
+                if is_warning:
                     self._log(
                         self.host,
                         LogLevel.WARNING,
@@ -172,7 +183,7 @@ class DiskSpaceMonitorJob(BackgroundJob):
                         mount_point=self.mount_point,
                         available_bytes=disk_space.available_bytes,
                         available_formatted=self._format_bytes(disk_space.available_bytes),
-                        threshold=runtime_minimum,
+                        warning_threshold=warning_threshold,
                     )
 
                 # Wait before next check

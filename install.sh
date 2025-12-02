@@ -258,8 +258,11 @@ disk_space_monitor:
   # Minimum free space required before sync starts
   preflight_minimum: "20%"
 
-  # Minimum free space required during sync (halt if falls below)
+  # Minimum free space required during sync (CRITICAL - abort if below)
   runtime_minimum: "15%"
+
+  # Free space threshold for warnings during sync
+  warning_threshold: "25%"
 
   # Seconds between disk space checks during sync
   check_interval: 30

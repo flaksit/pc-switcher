@@ -584,7 +584,8 @@ From `/home/janfr/dev/pc-switcher/src/pcswitcher/config.py`:
 **DiskConfig**:
 ```python
 preflight_minimum: str = "20%"    # Percentage or absolute (e.g., "50GiB")
-runtime_minimum: str = "15%"
+runtime_minimum: str = "15%"      # CRITICAL abort if below
+warning_threshold: str = "25%"    # WARNING log if below
 check_interval: int = 30          # Seconds
 ```
 
