@@ -69,10 +69,12 @@ class FileLogger:
         log_file: Path,
         level: LogLevel,
         queue: asyncio.Queue[Any],
+        hostname_map: dict[Host, str],
     ) -> None:
         self._log_file = log_file
         self._level = level
         self._queue = queue
+        self._hostname_map = hostname_map
         # Ensure log directory exists
         self._log_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -84,8 +86,11 @@ class FileLogger:
                 if event is None:  # Shutdown sentinel
                     break
                 if isinstance(event, LogEvent) and event.level >= self._level:
-                    # Convert to dict and serialize to JSON
+                    # Convert to dict and add resolved hostname
                     event_dict = event.to_dict()
+                    event_dict["hostname"] = self._hostname_map.get(
+                        event.host, event.host.value
+                    )
                     json_line = json.dumps(event_dict, default=str)
                     f.write(json_line + "\n")
                     f.flush()

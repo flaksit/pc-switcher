@@ -261,8 +261,3 @@ class RemoteExecutor:
         """
         async with self._conn.start_sftp_client() as sftp:
             await sftp.get(remote, str(local))
-
-    async def get_hostname(self) -> str:
-        """Get the hostname of the remote machine."""
-        result = await self.run_command("hostname")
-        return result.stdout.strip()

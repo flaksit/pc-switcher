@@ -6,6 +6,7 @@ import asyncio
 import secrets
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
@@ -65,12 +66,11 @@ class Orchestrator:
             target: Target hostname or SSH alias
             config: Validated configuration from YAML file
         """
-        self._target = target
         self._config = config
         self._session_id = secrets.token_hex(4)
         self._session_folder = session_folder_name(self._session_id)
         self._source_hostname = get_local_hostname()
-        self._target_hostname: str | None = None
+        self._target_hostname = target
 
         # Core components
         self._event_bus = EventBus()
@@ -92,6 +92,24 @@ class Orchestrator:
         self._file_logger_task: asyncio.Task[None] | None = None
         self._ui_task: asyncio.Task[None] | None = None
 
+    def _create_job_context(self, config: dict[str, Any]) -> JobContext:
+        """Create JobContext with current orchestrator state.
+
+        Must only be called after SSH connection is established (Phase 2+).
+        """
+        assert self._local_executor is not None
+        assert self._remote_executor is not None
+
+        return JobContext(
+            config=config,
+            source=self._local_executor,
+            target=self._remote_executor,
+            event_bus=self._event_bus,
+            session_id=self._session_id,
+            source_hostname=self._source_hostname,
+            target_hostname=self._target_hostname,
+        )
+
     async def run(self) -> SyncSession:  # noqa: PLR0915
         """Execute the complete sync workflow.
 
@@ -106,31 +124,37 @@ class Orchestrator:
             session_id=self._session_id,
             started_at=started_at,
             source_hostname=self._source_hostname,
-            target_hostname="",  # Will be filled in after connection
+            target_hostname=self._target_hostname,
             config={},  # TODO: Add config snapshot
             status=SessionStatus.RUNNING,
             job_results=[],
         )
 
-        # Initialize logging infrastructure BEFORE any logging happens
+        # Initialize logging infrastructure BEFORE any operations
+        # Both hostnames are known: source from local hostname, target from CLI argument
+        if not self._source_hostname:
+            raise RuntimeError("Source hostname is not set")
+        if not self._target_hostname:
+            raise RuntimeError("Target hostname is not set")
+
+        hostname_map = {
+            Host.SOURCE: self._source_hostname,
+            Host.TARGET: self._target_hostname,
+        }
+
         # Create log file path
         log_file_path = get_logs_directory() / generate_log_filename(self._session_id)
 
-        # Subscribe to event bus (creates consumer queues)
+        # Subscribe to event bus
         file_queue = self._event_bus.subscribe()
         ui_queue = self._event_bus.subscribe()
-
-        # Create hostname map for UI
-        hostname_map = {
-            Host.SOURCE: self._source_hostname,
-            Host.TARGET: self._target_hostname or "target",
-        }
 
         # Instantiate loggers and UI
         self._file_logger = FileLogger(
             log_file=log_file_path,
             level=self._config.log_file_level,
             queue=file_queue,
+            hostname_map=hostname_map,
         )
         self._ui = TerminalUI(
             console=Console(),
@@ -156,13 +180,9 @@ class Orchestrator:
             await self._acquire_source_lock()
 
             # Phase 2: Establish SSH connection
-            self._logger.log(LogLevel.INFO, Host.SOURCE, f"Connecting to target: {self._target}")
+            self._logger.log(LogLevel.INFO, Host.SOURCE, f"Connecting to target: {self._target_hostname}")
             await self._establish_connection()
             assert self._remote_executor is not None
-            assert self._target_hostname is not None
-
-            # Update session with target hostname
-            session.target_hostname = self._target_hostname
 
             # Phase 3: Acquire target lock
             self._logger.log(LogLevel.INFO, Host.TARGET, "Acquiring target lock")
@@ -229,15 +249,13 @@ class Orchestrator:
 
     async def _establish_connection(self) -> None:
         """Establish SSH connection to target machine."""
-        self._connection = Connection(self._target, event_bus=self._event_bus)
+        self._connection = Connection(self._target_hostname, event_bus=self._event_bus)
         await self._connection.connect()
 
         # Create executors
         self._local_executor = LocalExecutor()
         self._remote_executor = RemoteExecutor(self._connection.ssh_connection)
 
-        # Get target hostname
-        self._target_hostname = await self._remote_executor.get_hostname()
         self._logger.log(
             LogLevel.INFO,
             Host.TARGET,
@@ -256,20 +274,8 @@ class Orchestrator:
 
         Runs AFTER pre-sync snapshots for rollback safety if installation fails.
         """
-        assert self._local_executor is not None
-        assert self._remote_executor is not None
-
         install_job = InstallOnTargetJob()
-
-        context = JobContext(
-            config={},  # No config needed for this job
-            source=self._local_executor,
-            target=self._remote_executor,
-            event_bus=self._event_bus,
-            session_id=self._session_id,
-            source_hostname=self._source_hostname,
-            target_hostname=self._target_hostname or "",
-        )
+        context = self._create_job_context({})
 
         # Validate first (though it just returns empty list)
         errors = await install_job.validate(context)
@@ -331,32 +337,11 @@ class Orchestrator:
             raise RuntimeError("Job configuration validation failed:\n" + "\n".join(error_msgs))
 
         # Validate system state for all jobs (Phase 3)
-        assert self._local_executor is not None
-        assert self._remote_executor is not None
-
-        context = JobContext(
-            config={},  # Will be filled per job
-            source=self._local_executor,
-            target=self._remote_executor,
-            event_bus=self._event_bus,
-            session_id=self._session_id,
-            source_hostname=self._source_hostname,
-            target_hostname=self._target_hostname or "",
-        )
-
         validation_errors: list[ValidationError] = []
         for job in jobs:
             job_config = self._config.job_configs.get(job.name, {})
-            job_context = JobContext(
-                config=job_config,
-                source=context.source,
-                target=context.target,
-                event_bus=context.event_bus,
-                session_id=context.session_id,
-                source_hostname=context.source_hostname,
-                target_hostname=context.target_hostname,
-            )
-            errors = await job.validate(job_context)
+            context = self._create_job_context(job_config)
+            errors = await job.validate(context)
             if errors:
                 validation_errors.extend(errors)
 
@@ -447,25 +432,13 @@ class Orchestrator:
         Args:
             phase: PRE or POST snapshot phase
         """
-        assert self._local_executor is not None
-        assert self._remote_executor is not None
-
         snapshot_job = BtrfsSnapshotJob()
         snapshot_config = {
             "phase": phase.value,
             "subvolumes": self._config.btrfs_snapshots.subvolumes,
             "session_folder": self._session_folder,
         }
-
-        context = JobContext(
-            config=snapshot_config,
-            source=self._local_executor,
-            target=self._remote_executor,
-            event_bus=self._event_bus,
-            session_id=self._session_id,
-            source_hostname=self._source_hostname,
-            target_hostname=self._target_hostname or "",
-        )
+        context = self._create_job_context(snapshot_config)
 
         # Validate first
         errors = await snapshot_job.validate(context)
@@ -485,9 +458,6 @@ class Orchestrator:
         Returns:
             List of JobResult for each executed job
         """
-        assert self._local_executor is not None
-        assert self._remote_executor is not None
-
         results: list[JobResult] = []
 
         async with asyncio.TaskGroup() as tg:
@@ -502,16 +472,7 @@ class Orchestrator:
                 "runtime_minimum": self._config.disk.runtime_minimum,
                 "check_interval": self._config.disk.check_interval,
             }
-
-            monitor_context = JobContext(
-                config=monitor_config,
-                source=self._local_executor,
-                target=self._remote_executor,
-                event_bus=self._event_bus,
-                session_id=self._session_id,
-                source_hostname=self._source_hostname,
-                target_hostname=self._target_hostname or "",
-            )
+            monitor_context = self._create_job_context(monitor_config)
 
             tg.create_task(source_monitor.execute(monitor_context))
             tg.create_task(target_monitor.execute(monitor_context))
@@ -519,15 +480,7 @@ class Orchestrator:
             # Execute sync jobs sequentially
             for job in jobs:
                 job_config = self._config.job_configs.get(job.name, {})
-                context = JobContext(
-                    config=job_config,
-                    source=self._local_executor,
-                    target=self._remote_executor,
-                    event_bus=self._event_bus,
-                    session_id=self._session_id,
-                    source_hostname=self._source_hostname,
-                    target_hostname=self._target_hostname or "",
-                )
+                context = self._create_job_context(job_config)
 
                 started_at = datetime.now().isoformat()
                 try:

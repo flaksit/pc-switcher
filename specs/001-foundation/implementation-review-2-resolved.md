@@ -332,3 +332,166 @@ uv run basedpyright src/pcswitcher/ → 0 errors, 0 warnings, 0 notes
 ### Remaining Item (Deferred)
 
 **TerminalUI** - NOT dead code, just incomplete integration. User confirmed: "Ok, we'll tackle this later in a separate conversation."
+
+---
+
+## Follow-up: FileLogger Hostname Fix
+
+**Date**: 2025-12-01 (continued session)
+
+### User Observation
+
+> Orchestrator gives hostname_map to new task self._ui.consume_events().
+> However, it is not given to the FileLogger consumer. How does the FileLogger know the hostnames of the remote machines? They should be in the log file as well for clarity.
+
+### Analysis
+
+Two issues were identified:
+
+1. **FileLogger didn't receive hostname_map**: It used `LogEvent.to_dict()` which outputs `"host": "source"` or `"host": "target"` instead of actual hostnames like `"laptop"` or `"workstation"`.
+
+2. **hostname_map created too early**: Created before SSH connection (Phase 2), so `self._target_hostname` was None, causing fallback to `"target"`.
+
+### User Decision
+
+> 1+2
+> And verify upon creation of hostname_map that both hostnames are set. Do not use fallback values. An error should be raised if local (source) or remote (target) hostname are not known.
+
+### Initial Implementation (Corrected)
+
+Initial implementation moved consumer creation to after Phase 2 (SSH connection), but user pointed out:
+
+> If FileLogger and UI consumers are only wired after SSH connection, this means the user doesn't get any feedback (not in UI, not in log file) during the first phase of the pc-switcher. This is not acceptable.
+> We already know the target hostname at the very start of the program: it is given as command line argument! So there is no need to wait for the SSH connection.
+
+### Final Changes Made
+
+#### 1. Updated FileLogger (`logger.py`)
+
+- Added `hostname_map: dict[Host, str]` parameter (required, no default)
+- Added `hostname` field to JSON output in `consume()`:
+
+```python
+event_dict = event.to_dict()
+event_dict["hostname"] = self._hostname_map.get(
+    event.host, event.host.value
+)
+```
+
+#### 2. Restructured Orchestrator (`orchestrator.py`)
+
+- **Create hostname_map immediately** using `self._target` (CLI argument), not `self._target_hostname` (resolved after SSH):
+
+```python
+hostname_map = {
+    Host.SOURCE: self._source_hostname,
+    Host.TARGET: self._target,  # CLI argument, known from start
+}
+```
+
+- **Added hostname validation** (no fallbacks allowed):
+
+```python
+if not self._source_hostname:
+    raise RuntimeError("Source hostname is not set")
+if not self._target:
+    raise RuntimeError("Target hostname is not set")
+```
+
+- **Start consumers BEFORE Phase 1** so user gets immediate feedback
+- **Pass hostname_map to FileLogger**
+
+### Result
+
+- User gets immediate feedback from Phase 1 onwards (UI and log file)
+- Log files include actual hostnames:
+```json
+{"timestamp": "...", "level": "INFO", "job": "orchestrator", "host": "source", "hostname": "laptop", "event": "..."}
+```
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/orchestrator.py → 0 errors, 0 warnings
+```
+
+### Files Modified
+
+1. `src/pcswitcher/logger.py` - Added hostname_map to FileLogger, include hostname in JSON
+2. `src/pcswitcher/orchestrator.py` - Create hostname_map at start using CLI target, validate hostnames
+
+---
+
+## Follow-up: Hostname & JobContext Cleanup
+
+**Date**: 2025-12-02 (continued session)
+
+### User Observations
+
+1. Why is there both `self._target` and `self._target_hostname`? They seem redundant.
+2. Line 277: `target_hostname=self._target_hostname or ""` - fallback not allowed, we always have a target hostname.
+3. JobContext is created 6 times with identical boilerplate - violates DRY.
+
+### Changes Made
+
+#### 1. Unified Hostname Variables
+
+Eliminated `self._target` and kept only `self._target_hostname` (set from CLI argument in constructor):
+
+```python
+# Before
+self._target = target
+self._target_hostname: str | None = None  # Set later via SSH
+
+# After
+self._target_hostname = target  # Known from CLI argument
+```
+
+Removed SSH hostname resolution (`get_hostname()` call) - the CLI argument is sufficient.
+
+#### 2. Removed `get_hostname()` from RemoteExecutor
+
+Per YAGNI principle, removed the now-unused method from `executor.py`.
+
+#### 3. Created `_create_job_context()` Factory Method
+
+Added factory method to eliminate 6 duplicated JobContext creations:
+
+```python
+def _create_job_context(self, config: dict[str, Any]) -> JobContext:
+    """Create JobContext with current orchestrator state."""
+    assert self._local_executor is not None
+    assert self._remote_executor is not None
+
+    return JobContext(
+        config=config,
+        source=self._local_executor,
+        target=self._remote_executor,
+        event_bus=self._event_bus,
+        session_id=self._session_id,
+        source_hostname=self._source_hostname,
+        target_hostname=self._target_hostname,
+    )
+```
+
+All JobContext creations now use: `self._create_job_context(config)`
+
+#### 4. Removed Scattered Assertions
+
+Assertions before JobContext creation moved into the factory method. Remaining assertions (lines 185, 267, 363-364) are legitimate for direct executor usage.
+
+#### 5. Removed Unused JobContext
+
+Removed the intermediate context created at line 343 with comment "Will be filled per job" - it was only used to copy fields into per-job contexts. Now each job gets context directly from factory.
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/orchestrator.py src/pcswitcher/executor.py → 0 errors
+uv run ruff check src/pcswitcher/orchestrator.py src/pcswitcher/executor.py → All checks passed
+```
+
+### Files Modified
+
+1. `src/pcswitcher/orchestrator.py` - Unified hostname, added factory method, removed redundant code
+2. `src/pcswitcher/executor.py` - Removed `get_hostname()` method
