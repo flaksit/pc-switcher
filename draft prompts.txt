@@ -1,7 +1,7 @@
 THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
 
 MAIN INSTRUCTION FOR THE COMING PROMPTS:
-You finished working on command "/speckit.implement.resolve-feedback" and we are continuing the review together. Continue to add our conversations (my questions and all text you output to me here) to @specs/001-foundation/implementation-review-2-resolved.md so we have it as reference for our decisions and their impact.
+You finished working on command "/speckit.implement.resolve-feedback" and we are continuing the review together. Continue to add our conversations to @specs/001-foundation/implementation-review-2-resolved.md so we have it as reference for our decisions and their impact.
 
 For each prompt, follow this workflow:
 0. Analyze the question and context. If anything is unclear, ask clarifying questions first and wait for my answers.
@@ -10,39 +10,9 @@ For each prompt, follow this workflow:
 3. Refactor docs. They are equally important as code. Ensure ALL docs are adapted accordingly so they reflect the current state of the codebase.
 4. Validate: type check, lint, run tests, ...
 
-Update implementation-review-2-resolved.md along the way with our conversation and all relevant info about your decisions and changes.
+Update implementation-review-2-resolved.md along the way with our conversation and all relevant info about your decisions and changes. Include ALL my prompts and your output LITERALY, e.g. your clarifying questions and my answers as well.
 
-Delegate as much as possible to subagents and run tasks in parallel if possible (so that you can keep your context clean so you can focus on your task as project manager and orchestrator), but ensure that the final output is a single coherent answer that follows the workflow above.
-
-
-
-ASKED CLAUDE
-I see you implemented a disk space WARNING check as well as required MINIMUM check that aborts.
-Make the warning level configurable, with the exact same logic as for the current disk_space_monitor.runtime_minimum config parameter.
-Ensure that all code, docs, config files, scripts, etc. are updated accordingly.
-
-
-ASKED 3 TO CLAUDE
----
-The Execution Flow Summary has a "Job Config Validation" phase (see @specs/001-foundation/architecture.md ). There is a class method validate_config(). However, this is never overriden by any Job subclass. E.g. disk_space_monitor.py does the validation of the thresholds in its validate() method, which is for SYSTEM validation, not for config validation. We want to catch all config errors early.
-So refactor all Jobs to implement validate_config() if they need any further config validation than what is already specified in the JSON schema. Ensure they call the super().validate_config() as well to get the JSON schema validation from the base class.
-Refactor so that the parsing of the config values is only done once. I see it is done multiple times in disk_space_monitor.py: both in validate() and in execute().
----
-orchestrator.py has a **hardcoded** job_registry in method _discover_and_validate_jobs().
-Only load the modules that are enabled in the config file. Load them dynamically. Auto-discover the corresponding Job classes that are in those modules.
-Of course, always load the system Jobs (disk_space_monitor, btrfs_snapshots, install_on_target). These can be hardcoded/imported.
-Ensure the entire config file is logged to DEBUG at the start.
----
-The default config.yaml is hardcoded in install.sh. Put it somewhere as a separate file in the repo, so that it is easier to edit and so that it can server as documentation for both developers and users. Let install.sh download the file from the github repo (consistent version with the version we are installing!). Or the release process could integrate it in install.sh automatically, but this seems more complicated.
----
-
-
-
-
-
-@docs/adr/considerations/async-vs-sync-concurrency-analysis.md explored and documented in DRAFT some ideas for concurrency.
-We chose to use asyncio for concurrency.
-Now, I want this decision to be clearly documented, including diagrams. However, what is documented there is not the cleanest, most simple design and possibly doesn't correspond at 100% with the specs from @specs/001-foundation/spec.md .
+Delegate as much as possible to subagents (even analysis), so that you can keep your context clean and you can focus on your task as project manager and orchestrator, but ensure that the final result is a coherent, working solution. Launch subagents in parallel if their tasks don't conflict.
 
 
 ---
@@ -231,3 +201,33 @@ Output: A report of findings in a new file specs/001-foundation/task-integration
 
 ---
 
+GIVEN TO CLAUDE:
+We use speckit as workflow to implement features in this project. The feature we are currently working has a specific feature folder under specs/ with the same name as the current branch. In the feature folder, there is a spec.md file that contains the specification of the feature.
+
+You finished the implementation of the feature.
+
+I gave the following task to Codex:
+```md
+It seems that all tasks in @specs/001-foundation/tasks.md are implemented, but that there is no final verification that everything is wired together correctly.
+Please do the following:
+- Review all tasks in @specs/001-foundation/tasks.md
+- For each task, verify that its deliverables are implemented in the codebase
+- Check that all deliverables of all tasks are wired together correctly to form a working system as specified in @specs/001-foundation/spec.md
+
+Output: A report of findings, including
+- Missing deliverables (if any)
+- Missing wiring/integration (if any)
+- Suggestions for improvements (if any)
+```
+
+You find Codex' feedback in @specs/001-foundation/task-integration-review-codex.md . For some of the remarks in the two "Missing" chapters, I already added my comments (each time on a new line that starts with '  --> '). Only consider the remarks where I didn't put "IGNORE". Only consider the Suggestions in the last chapter that are not purely to resolve the remarks that I told you to ignore.
+
+First, critically read through their feedback. Come back to me and ask me clarifying questions if you assess that parts of the feedback are not relevant.
+
+Then, when all your questions are answered, fix your implementation according to the feedback. Ensure all points raised in the feedback are addressed and that the implementation fully complies with the specifications outlined in "spec.md".
+Delegate as much as possible to subagents, so that you can keep your context clean and you can focus on your task as project manager and orchestrator. But ensure that the final output is a coherent, working solution. Launch subagents in parallel if their tasks don't conflict (e.g. change the same files).
+
+### Output
+Write a report to a new file "task-integration-review-resolution.md". The goal is to have a trace of any decisions we make while resolving the feedback. The report should contain the following:
+- $EXTRA_INSTRUCTIONS
+- A log of any further conversation we have while you are resolving the feedback. This will mainly be answers to your clarifying questions, but we could get into deeper conversation about some of the feedback given. Capture my prompts, your output and questions, my responses, ... literally.
