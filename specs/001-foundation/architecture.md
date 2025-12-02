@@ -176,11 +176,12 @@ classDiagram
     class Job {
         <<abstract>>
         +name: str
+        +__init__(context: JobContext)
         +validate_config(config)$ list~ConfigError~
         +validate() list~ValidationError~
         +execute() None
-        #log(level, message, **context) None
-        #report_progress(progress: ProgressUpdate) None
+        #_log(host, level, message, **extra) None
+        #_report_progress(update: ProgressUpdate) None
     }
 
     class SystemJob {
@@ -438,7 +439,7 @@ classDiagram
 | Orchestrator → LocalExecutor | Creates for local command execution |
 | Orchestrator → Job[] | Creates, validates, and executes jobs; uses TaskGroup for background jobs |
 | Orchestrator → EventBus | Creates and owns the event bus for logging/progress |
-| Job → JobContext | Receives context at execution time (config, source, target, event_bus, session_id) |
+| Job → JobContext | Receives context at instantiation via constructor (config, source, target, event_bus, session_id) |
 | JobContext → LocalExecutor | `source` field - for running commands on source machine |
 | JobContext → RemoteExecutor | `target` field - for running commands on target machine + file transfers |
 | JobContext → EventBus | Jobs use `_log()` helper to publish LogEvents; `_report_progress()` for ProgressEvents |
@@ -495,13 +496,13 @@ graph TD
 Per FR-015, `BtrfsSnapshotJob.validate()` MUST verify subvolumes exist on **both** source and target:
 
 ```python
-async def validate(self, context: JobContext) -> list[ValidationError]:
+async def validate(self) -> list[ValidationError]:
     errors = []
-    subvolumes = context.config.get("subvolumes", ["@", "@home"])
+    subvolumes = self._context.config.get("subvolumes", ["@", "@home"])
 
     for subvol in subvolumes:
         # Check source
-        result = await context.source.run_command(
+        result = await self._context.source.run_command(
             f"sudo btrfs subvolume show /{subvol} 2>/dev/null"
         )
         if not result.success:
@@ -512,7 +513,7 @@ async def validate(self, context: JobContext) -> list[ValidationError]:
             ))
 
         # Check target (identical subvolume structure assumed)
-        result = await context.target.run_command(
+        result = await self._context.target.run_command(
             f"sudo btrfs subvolume show /{subvol} 2>/dev/null"
         )
         if not result.success:

@@ -469,6 +469,11 @@ class Job(ABC):
     name: ClassVar[str]
     required: ClassVar[bool] = False
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {}
+    _context: JobContext  # Set by constructor
+
+    def __init__(self, context: JobContext) -> None:
+        """Initialize job with context."""
+        self._context = context
 
     @classmethod
     def validate_config(cls, config: dict[str, Any]) -> list[ConfigError]:
@@ -476,18 +481,17 @@ class Job(ABC):
         ...
 
     @abstractmethod
-    async def validate(self, context: JobContext) -> list[ValidationError]:
+    async def validate(self) -> list[ValidationError]:
         """Validate system state before execution."""
         ...
 
     @abstractmethod
-    async def execute(self, context: JobContext) -> None:
+    async def execute(self) -> None:
         """Execute job logic. Raises exception on failure."""
         ...
 
     def _log(
         self,
-        context: JobContext,
         host: Host,
         level: LogLevel,
         message: str,
@@ -502,7 +506,6 @@ class Job(ABC):
 
     def _report_progress(
         self,
-        context: JobContext,
         update: ProgressUpdate,
     ) -> None:
         """Report progress through EventBus."""
@@ -580,7 +583,7 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Instantiated: orchestrator creates job
+    [*] --> Instantiated: orchestrator creates job with context
     Instantiated --> ConfigValidated: validate_config()
     ConfigValidated --> SystemValidated: validate()
     SystemValidated --> Executing: execute()

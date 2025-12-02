@@ -273,17 +273,17 @@ class Orchestrator:
 
         Runs AFTER pre-sync snapshots for rollback safety if installation fails.
         """
-        install_job = InstallOnTargetJob()
         context = self._create_job_context({})
+        install_job = InstallOnTargetJob(context)
 
         # Validate first (though it just returns empty list)
-        errors = await install_job.validate(context)
+        errors = await install_job.validate()
         if errors:
             error_msgs = [f"  - {e.host.value}: {e.message}" for e in errors]
             raise RuntimeError("Installation validation failed:\n" + "\n".join(error_msgs))
 
         # Execute
-        await install_job.execute(context)
+        await install_job.execute()
 
     async def _discover_and_validate_jobs(self) -> list[Job]:
         """Discover enabled jobs from config and validate their configuration.
@@ -328,7 +328,8 @@ class Orchestrator:
             if errors:
                 config_errors.extend(errors)
             else:
-                jobs.append(job_class())
+                context = self._create_job_context(job_config)
+                jobs.append(job_class(context))
 
         # Check for config errors
         if config_errors:
@@ -338,9 +339,7 @@ class Orchestrator:
         # Validate system state for all jobs (Phase 3)
         validation_errors: list[ValidationError] = []
         for job in jobs:
-            job_config = self._config.job_configs.get(job.name, {})
-            context = self._create_job_context(job_config)
-            errors = await job.validate(context)
+            errors = await job.validate()
             if errors:
                 validation_errors.extend(errors)
 
@@ -431,22 +430,22 @@ class Orchestrator:
         Args:
             phase: PRE or POST snapshot phase
         """
-        snapshot_job = BtrfsSnapshotJob()
         snapshot_config = {
             "phase": phase.value,
             "subvolumes": self._config.btrfs_snapshots.subvolumes,
             "session_folder": self._session_folder,
         }
         context = self._create_job_context(snapshot_config)
+        snapshot_job = BtrfsSnapshotJob(context)
 
         # Validate first
-        errors = await snapshot_job.validate(context)
+        errors = await snapshot_job.validate()
         if errors:
             error_msgs = [f"  - {e.host.value}: {e.message}" for e in errors]
             raise RuntimeError("Snapshot validation failed:\n" + "\n".join(error_msgs))
 
         # Execute
-        await snapshot_job.execute(context)
+        await snapshot_job.execute()
 
     async def _execute_jobs(self, jobs: list[Job]) -> list[JobResult]:
         """Execute sync jobs sequentially with background disk monitoring.
@@ -463,27 +462,23 @@ class Orchestrator:
             self._task_group = tg
 
             # Start background disk space monitors for root filesystem
-            source_monitor = DiskSpaceMonitorJob(host=Host.SOURCE, mount_point="/")
-            target_monitor = DiskSpaceMonitorJob(host=Host.TARGET, mount_point="/")
-
             monitor_config = {
                 "preflight_minimum": self._config.disk.preflight_minimum,
                 "runtime_minimum": self._config.disk.runtime_minimum,
                 "check_interval": self._config.disk.check_interval,
             }
             monitor_context = self._create_job_context(monitor_config)
+            source_monitor = DiskSpaceMonitorJob(monitor_context, host=Host.SOURCE, mount_point="/")
+            target_monitor = DiskSpaceMonitorJob(monitor_context, host=Host.TARGET, mount_point="/")
 
-            tg.create_task(source_monitor.execute(monitor_context))
-            tg.create_task(target_monitor.execute(monitor_context))
+            tg.create_task(source_monitor.execute())
+            tg.create_task(target_monitor.execute())
 
             # Execute sync jobs sequentially
             for job in jobs:
-                job_config = self._config.job_configs.get(job.name, {})
-                context = self._create_job_context(job_config)
-
                 started_at = datetime.now(UTC)
                 try:
-                    await job.execute(context)
+                    await job.execute()
                     ended_at = datetime.now(UTC)
                     results.append(
                         JobResult(

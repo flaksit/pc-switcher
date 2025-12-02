@@ -23,7 +23,15 @@ class InstallOnTargetJob(SystemJob):
 
     name: ClassVar[str] = "install_on_target"
 
-    async def validate(self, context: JobContext) -> list[ValidationError]:
+    def __init__(self, context: JobContext) -> None:
+        """Initialize install job with context.
+
+        Args:
+            context: JobContext with executors, config, and event bus
+        """
+        super().__init__(context)
+
+    async def validate(self) -> list[ValidationError]:
         """Validate version compatibility between source and target.
 
         Checks that target pc-switcher version is not newer than source,
@@ -35,7 +43,7 @@ class InstallOnTargetJob(SystemJob):
         source_version = Version(get_this_version())
 
         # Check target version
-        result = await context.target.run_command("pc-switcher --version 2>/dev/null")
+        result = await self._context.target.run_command("pc-switcher --version 2>/dev/null")
         if result.success:
             # Parse version string from output (e.g., "pc-switcher 0.4.0" -> "0.4.0")
             target_version = Version(parse_version_from_cli_output(result.stdout))
@@ -50,32 +58,29 @@ class InstallOnTargetJob(SystemJob):
 
         return []
 
-    async def execute(self, context: JobContext) -> None:
+    async def execute(self) -> None:
         """Install or upgrade pc-switcher on target if needed."""
         source_version = Version(get_this_version())  # e.g., "0.4.0"
 
         # Check target version (already validated in validate phase)
-        result = await context.target.run_command("pc-switcher --version 2>/dev/null")
+        result = await self._context.target.run_command("pc-switcher --version 2>/dev/null")
         if result.success:
             # Parse version string from output (e.g., "pc-switcher 0.4.0" -> "0.4.0")
             target_version = Version(parse_version_from_cli_output(result.stdout))
             if target_version == source_version:
                 self._log(
-                    context,
                     Host.TARGET,
                     LogLevel.INFO,
                     f"Target pc-switcher version matches source ({source_version})",
                 )
                 return
             self._log(
-                context,
                 Host.TARGET,
                 LogLevel.INFO,
                 f"Upgrading pc-switcher on target from {target_version} to {source_version}",
             )
         else:
             self._log(
-                context,
                 Host.TARGET,
                 LogLevel.INFO,
                 f"Installing pc-switcher {source_version} on target",
@@ -83,18 +88,21 @@ class InstallOnTargetJob(SystemJob):
 
         # Run the same install.sh script used for initial installation
         # The script handles: uv bootstrap, dependencies, pc-switcher install
-        install_url = f"https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/v{source_version}/install.sh"
-        result = await context.target.run_command(f"curl -LsSf {install_url} | sh -s -- --version {source_version}")
+        install_url = (
+            f"https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/"
+            f"v{source_version}/install.sh"
+        )
+        cmd = f"curl -LsSf {install_url} | sh -s -- --version {source_version}"
+        result = await self._context.target.run_command(cmd)
         if not result.success:
             raise RuntimeError(f"Failed to install pc-switcher on target: {result.stderr}")
 
         # Verify installation
-        result = await context.target.run_command("pc-switcher --version")
+        result = await self._context.target.run_command("pc-switcher --version")
         if not result.success or str(source_version) not in result.stdout:
             raise RuntimeError("Installation verification failed")
 
         self._log(
-            context,
             Host.TARGET,
             LogLevel.INFO,
             f"Target pc-switcher installed/upgraded to {source_version}",

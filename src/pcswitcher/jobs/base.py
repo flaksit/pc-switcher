@@ -27,6 +27,14 @@ class Job(ABC):
     required: ClassVar[bool] = False
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {}
 
+    def __init__(self, context: JobContext) -> None:
+        """Initialize job with context.
+
+        Args:
+            context: JobContext with executors, config, and event bus
+        """
+        self._context = context
+
     @classmethod
     def validate_config(cls, config: dict[str, Any]) -> list[ConfigError]:
         """Validate job-specific configuration against CONFIG_SCHEMA.
@@ -57,13 +65,10 @@ class Job(ABC):
         return errors
 
     @abstractmethod
-    async def validate(self, context: JobContext) -> list[ValidationError]:
+    async def validate(self) -> list[ValidationError]:
         """Validate system state before execution.
 
         Called after SSH connection established, before any state modifications.
-
-        Args:
-            context: JobContext with executors and config
 
         Returns:
             List of ValidationError for any issues found.
@@ -72,11 +77,8 @@ class Job(ABC):
         ...
 
     @abstractmethod
-    async def execute(self, context: JobContext) -> None:
+    async def execute(self) -> None:
         """Execute job logic.
-
-        Args:
-            context: JobContext with executors and config
 
         Raises:
             Exception: Any exception halts sync with CRITICAL log
@@ -86,7 +88,6 @@ class Job(ABC):
 
     def _log(
         self,
-        context: JobContext,
         host: Host,
         level: LogLevel,
         message: str,
@@ -95,13 +96,12 @@ class Job(ABC):
         """Log a message through EventBus.
 
         Args:
-            context: JobContext for EventBus access
             host: Which machine this log relates to (SOURCE or TARGET)
             level: Log level
             message: Human-readable message
             **extra: Additional structured context
         """
-        context.event_bus.publish(
+        self._context.event_bus.publish(
             LogEvent(
                 level=level,
                 job=self.name,
@@ -113,16 +113,14 @@ class Job(ABC):
 
     def _report_progress(
         self,
-        context: JobContext,
         update: ProgressUpdate,
     ) -> None:
         """Report progress through EventBus.
 
         Args:
-            context: JobContext for EventBus access
             update: ProgressUpdate with percent/current/total/item
         """
-        context.event_bus.publish(
+        self._context.event_bus.publish(
             ProgressEvent(
                 job=self.name,
                 update=update,

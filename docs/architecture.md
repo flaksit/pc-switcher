@@ -122,11 +122,12 @@ Pluggable sync operations implementing standard interface:
 - **BackgroundJob**: Concurrent monitoring tasks (disk space)
 
 **Job Lifecycle**:
-1. `validate_config(config)`: Schema validation (static method)
-2. `validate(context)`: System state validation (instance method)
-3. `execute(context)`: Perform sync operation
+1. Orchestrator instantiates job with `Job(context)` - JobContext passed to constructor
+2. `validate_config(config)`: Schema validation (static method)
+3. `validate()`: System state validation (instance method, uses context from constructor)
+4. `execute()`: Perform sync operation (instance method, uses context from constructor)
 
-Jobs receive `JobContext` with executors, config, event bus, and session metadata.
+Jobs receive `JobContext` at instantiation time with executors, config, event bus, and session metadata.
 
 ## Data Flow
 

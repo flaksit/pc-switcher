@@ -503,6 +503,10 @@ class Job(ABC):
     name: ClassVar[str]                    # Job identifier
     required: ClassVar[bool] = False       # Whether job is required
     CONFIG_SCHEMA: ClassVar[dict] = {}     # JSON Schema for job config
+    context: JobContext                    # Set by constructor
+
+    def __init__(self, context: JobContext) -> None:
+        # Initialize job with context
 
     @classmethod
     def validate_config(cls, config: dict) -> list[ConfigError]:
@@ -510,21 +514,23 @@ class Job(ABC):
         # Returns list of ConfigError (empty if valid)
 
     @abstractmethod
-    async def validate(self, context: JobContext) -> list[ValidationError]:
+    async def validate(self) -> list[ValidationError]:
         # Phase 3 validation: Check system state before execution
         # Called after SSH connection, before state modifications
+        # Accesses self._context for executors and config
         # Returns list of ValidationError (empty if valid)
 
     @abstractmethod
-    async def execute(self, context: JobContext) -> None:
+    async def execute(self) -> None:
         # Execute job logic
+        # Accesses self._context for executors and config
         # May raise Exception to halt sync
         # Must handle asyncio.CancelledError for cleanup
 
-    def _log(context: JobContext, host: Host, level: LogLevel, message: str, **extra: Any):
+    def _log(host: Host, level: LogLevel, message: str, **extra: Any):
         # Log message through EventBus
 
-    def _report_progress(context: JobContext, update: ProgressUpdate):
+    def _report_progress(update: ProgressUpdate):
         # Report progress through EventBus
 ```
 
@@ -563,10 +569,11 @@ class JobContext:
 ### Job Lifecycle
 
 1. **Discovery**: Orchestrator scans enabled jobs from config
-2. **Phase 2 Validation**: `validate_config()` checks job-specific config against schema
-3. **Phase 3 Validation**: `validate()` checks system state (SSH must be connected)
-4. **Execution**: `execute()` performs sync operations
-5. **Cleanup**: Jobs must handle `asyncio.CancelledError` for graceful shutdown
+2. **Instantiation**: Orchestrator creates job with `Job(context)` - JobContext passed to constructor
+3. **Phase 2 Validation**: `validate_config()` checks job-specific config against schema
+4. **Phase 3 Validation**: `validate()` checks system state (SSH must be connected, accesses self._context)
+5. **Execution**: `execute()` performs sync operations (accesses self._context)
+6. **Cleanup**: Jobs must handle `asyncio.CancelledError` for graceful shutdown
 
 ## Configuration System
 
@@ -657,12 +664,12 @@ Jobs execute sequentially within an `asyncio.TaskGroup` that also runs backgroun
 ```python
 async with asyncio.TaskGroup() as tg:
     # Start background disk monitors
-    tg.create_task(source_monitor.execute(context))
-    tg.create_task(target_monitor.execute(context))
+    tg.create_task(source_monitor.execute())
+    tg.create_task(target_monitor.execute())
 
     # Execute sync jobs sequentially
     for job in jobs:
-        await job.execute(context)
+        await job.execute()
 ```
 
 If any job raises an exception, the TaskGroup cancels all other tasks and propagates the exception.

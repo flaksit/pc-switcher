@@ -48,21 +48,20 @@ class DiskSpaceMonitorJob(BackgroundJob):
         "additionalProperties": False,
     }
 
-    def __init__(self, host: Host, mount_point: str) -> None:
+    def __init__(self, context: JobContext, host: Host, mount_point: str) -> None:
         """Initialize disk space monitor for a specific host.
 
         Args:
+            context: JobContext with executors, config, and event bus
             host: Which machine to monitor (SOURCE or TARGET)
             mount_point: Mount point to monitor (e.g., "/home")
         """
+        super().__init__(context)
         self.host = host
         self.mount_point = mount_point
 
-    async def validate(self, context: JobContext) -> list[ValidationError]:
+    async def validate(self) -> list[ValidationError]:
         """Validate that mount point exists and threshold format is valid.
-
-        Args:
-            context: JobContext with executors and config
 
         Returns:
             List of ValidationError if validation fails, empty list otherwise
@@ -71,7 +70,7 @@ class DiskSpaceMonitorJob(BackgroundJob):
 
         # Validate threshold formats
         try:
-            parse_threshold(context.config["preflight_minimum"])
+            parse_threshold(self._context.config["preflight_minimum"])
         except ValueError as e:
             errors.append(
                 ValidationError(
@@ -82,7 +81,7 @@ class DiskSpaceMonitorJob(BackgroundJob):
             )
 
         try:
-            parse_threshold(context.config["runtime_minimum"])
+            parse_threshold(self._context.config["runtime_minimum"])
         except ValueError as e:
             errors.append(
                 ValidationError(
@@ -93,7 +92,7 @@ class DiskSpaceMonitorJob(BackgroundJob):
             )
 
         # Validate that mount point exists
-        executor = context.source if self.host == Host.SOURCE else context.target
+        executor = self._context.source if self.host == Host.SOURCE else self._context.target
         try:
             await check_disk_space(executor, self.mount_point)
         except RuntimeError as e:
@@ -107,28 +106,24 @@ class DiskSpaceMonitorJob(BackgroundJob):
 
         return errors
 
-    async def execute(self, context: JobContext) -> None:
+    async def execute(self) -> None:
         """Run continuous disk space monitoring.
 
         Checks disk space at configured interval and raises DiskSpaceCriticalError
         if available space drops below runtime_minimum threshold.
 
-        Args:
-            context: JobContext with executors and config
-
         Raises:
             DiskSpaceCriticalError: When disk space falls below threshold
             asyncio.CancelledError: When monitoring is cancelled
         """
-        executor = context.source if self.host == Host.SOURCE else context.target
-        hostname = context.source_hostname if self.host == Host.SOURCE else context.target_hostname
-        check_interval: int = context.config["check_interval"]
-        runtime_minimum: str = context.config["runtime_minimum"]
+        executor = self._context.source if self.host == Host.SOURCE else self._context.target
+        hostname = self._context.source_hostname if self.host == Host.SOURCE else self._context.target_hostname
+        check_interval: int = self._context.config["check_interval"]
+        runtime_minimum: str = self._context.config["runtime_minimum"]
 
         threshold_type, threshold_value = parse_threshold(runtime_minimum)
 
         self._log(
-            context,
             self.host,
             LogLevel.DEBUG,
             f"Starting disk space monitoring for {self.mount_point}",
@@ -143,7 +138,6 @@ class DiskSpaceMonitorJob(BackgroundJob):
 
                 # Report heartbeat
                 self._report_progress(
-                    context,
                     ProgressUpdate(heartbeat=True),
                 )
 
@@ -163,7 +157,6 @@ class DiskSpaceMonitorJob(BackgroundJob):
 
                 if is_critical:
                     self._log(
-                        context,
                         self.host,
                         LogLevel.CRITICAL,
                         f"Disk space critically low on {hostname}",
@@ -189,7 +182,6 @@ class DiskSpaceMonitorJob(BackgroundJob):
 
                 if warning_triggered:
                     self._log(
-                        context,
                         self.host,
                         LogLevel.WARNING,
                         f"Disk space getting low on {hostname}",
@@ -204,7 +196,6 @@ class DiskSpaceMonitorJob(BackgroundJob):
 
         except asyncio.CancelledError:
             self._log(
-                context,
                 self.host,
                 LogLevel.DEBUG,
                 f"Disk space monitoring cancelled for {self.mount_point}",

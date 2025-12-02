@@ -170,60 +170,64 @@ class DummySuccessJob(SyncJob):
         "additionalProperties": False,
     }
 
-    async def validate(self, context: JobContext) -> list[ValidationError]:
+    def __init__(self, context: JobContext) -> None:
+        super().__init__(context)
+        # Context stored as self._context by base class
+
+    async def validate(self) -> list[ValidationError]:
         return []  # No prerequisites
 
-    async def execute(self, context: JobContext) -> None:
+    async def execute(self) -> None:
         try:
-            self._report_progress(context, ProgressUpdate(percent=0))
+            self._report_progress(ProgressUpdate(percent=0))
 
             # Source phase: 20s with 2s intervals (10 iterations)
-            await self._run_source_phase(context)
-            self._report_progress(context, ProgressUpdate(percent=50))
+            await self._run_source_phase()
+            self._report_progress(ProgressUpdate(percent=50))
 
             # Target phase: 20s with 2s intervals (10 iterations)
-            await self._run_target_phase(context)
-            self._report_progress(context, ProgressUpdate(percent=100))
+            await self._run_target_phase()
+            self._report_progress(ProgressUpdate(percent=100))
 
         except asyncio.CancelledError:
-            self._log(context, Host.SOURCE, LogLevel.WARNING, "Dummy job termination requested")
+            self._log(Host.SOURCE, LogLevel.WARNING, "Dummy job termination requested")
             raise
 
-    async def _run_source_phase(self, context: JobContext) -> None:
+    async def _run_source_phase(self) -> None:
         """Source phase: 20s total, log every 2s, WARNING at 6s."""
         for tick in range(10):  # 10 iterations × 2s = 20s
             elapsed = (tick + 1) * 2  # 2, 4, 6, ..., 20
             self._log(
-                context, Host.SOURCE, LogLevel.INFO,
+                Host.SOURCE, LogLevel.INFO,
                 f"Source phase: {elapsed}s elapsed"
             )
 
             # WARNING at 6s (after tick 2, when elapsed=6)
             if elapsed == 6:
-                self._log(context, Host.SOURCE, LogLevel.WARNING, "Test warning at 6s")
+                self._log(Host.SOURCE, LogLevel.WARNING, "Test warning at 6s")
 
             # Progress: 25% at halfway (10s)
             if elapsed == 10:
-                self._report_progress(context, ProgressUpdate(percent=25))
+                self._report_progress(ProgressUpdate(percent=25))
 
             await asyncio.sleep(2)
 
-    async def _run_target_phase(self, context: JobContext) -> None:
+    async def _run_target_phase(self) -> None:
         """Target phase: 20s total, log every 2s, ERROR at 8s."""
         for tick in range(10):  # 10 iterations × 2s = 20s
             elapsed = (tick + 1) * 2  # 2, 4, 6, ..., 20
             self._log(
-                context, Host.TARGET, LogLevel.INFO,
+                Host.TARGET, LogLevel.INFO,
                 f"Target phase: {elapsed}s elapsed"
             )
 
             # ERROR at 8s (after tick 3, when elapsed=8)
             if elapsed == 8:
-                self._log(context, Host.TARGET, LogLevel.ERROR, "Test error at 8s")
+                self._log(Host.TARGET, LogLevel.ERROR, "Test error at 8s")
 
             # Progress: 75% at halfway (10s into target = 30s total)
             if elapsed == 10:
-                self._report_progress(context, ProgressUpdate(percent=75))
+                self._report_progress(ProgressUpdate(percent=75))
 
             await asyncio.sleep(2)
 ```
@@ -369,8 +373,8 @@ def job_context(mock_executor):
 
 @pytest.mark.asyncio
 async def test_dummy_success_completes(job_context):
-    job = DummySuccessJob()
-    errors = await job.validate(job_context)
+    job = DummySuccessJob(job_context)
+    errors = await job.validate()
     assert errors == []
     # Execute would take 40s, mock time or reduce durations
 ```

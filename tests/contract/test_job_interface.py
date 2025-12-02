@@ -22,12 +22,15 @@ class ExampleTestJob(SyncJob):
         },
     }
 
-    async def validate(self, context: JobContext) -> list[ValidationError]:
+    def __init__(self, context: JobContext) -> None:
+        super().__init__(context)
+
+    async def validate(self) -> list[ValidationError]:
         return []
 
-    async def execute(self, context: JobContext) -> None:
-        self._log(context, Host.SOURCE, LogLevel.INFO, "Test execution")
-        self._report_progress(context, ProgressUpdate(percent=100))
+    async def execute(self) -> None:
+        self._log(Host.SOURCE, LogLevel.INFO, "Test execution")
+        self._report_progress(ProgressUpdate(percent=100))
 
 
 class InvalidSchemaJob(SyncJob):
@@ -42,10 +45,13 @@ class InvalidSchemaJob(SyncJob):
         "required": ["required_field"],
     }
 
-    async def validate(self, context: JobContext) -> list[ValidationError]:
+    def __init__(self, context: JobContext) -> None:
+        super().__init__(context)
+
+    async def validate(self) -> list[ValidationError]:
         return []
 
-    async def execute(self, context: JobContext) -> None:
+    async def execute(self) -> None:
         pass
 
 
@@ -98,29 +104,29 @@ class TestJobContract:
     @pytest.mark.asyncio
     async def test_validate_returns_validation_error_list(self, mock_job_context: JobContext) -> None:
         """validate() must return a list of ValidationError."""
-        job = ExampleTestJob()
-        errors = await job.validate(mock_job_context)
+        job = ExampleTestJob(mock_job_context)
+        errors = await job.validate()
         assert isinstance(errors, list)
 
     @pytest.mark.asyncio
     async def test_execute_completes_without_error(self, mock_job_context: JobContext) -> None:
         """execute() should complete without raising."""
-        job = ExampleTestJob()
-        await job.execute(mock_job_context)
+        job = ExampleTestJob(mock_job_context)
+        await job.execute()
 
     @pytest.mark.asyncio
     async def test_log_helper_publishes_event(self, mock_job_context: JobContext) -> None:
         """_log() should publish LogEvent to EventBus."""
-        job = ExampleTestJob()
-        job._log(mock_job_context, Host.SOURCE, LogLevel.INFO, "Test message")
-        mock_job_context.event_bus.publish.assert_called_once()
+        job = ExampleTestJob(mock_job_context)
+        job._log(Host.SOURCE, LogLevel.INFO, "Test message")  # pyright: ignore[reportPrivateUsage]
+        mock_job_context.event_bus.publish.assert_called_once()  # type: ignore[union-attr]
 
     @pytest.mark.asyncio
     async def test_progress_helper_publishes_event(self, mock_job_context: JobContext) -> None:
         """_report_progress() should publish ProgressEvent to EventBus."""
-        job = ExampleTestJob()
-        job._report_progress(mock_job_context, ProgressUpdate(percent=50))
-        mock_job_context.event_bus.publish.assert_called_once()
+        job = ExampleTestJob(mock_job_context)
+        job._report_progress(ProgressUpdate(percent=50))  # pyright: ignore[reportPrivateUsage]
+        mock_job_context.event_bus.publish.assert_called_once()  # type: ignore[union-attr]
 
 
 class TestJobHierarchy:

@@ -59,7 +59,7 @@ def validate_config(cls, config: dict[str, Any]) -> list[ConfigError]:
 - Base class provides default implementation using `jsonschema`
 - Override only if additional validation logic needed beyond schema
 
-### `validate(context: JobContext) -> list[ValidationError]` (async)
+### `validate() -> list[ValidationError]` (async)
 
 **Phase**: 3 (System State Validation)
 **Called**: After SSH connection established, before any state modifications
@@ -67,11 +67,8 @@ def validate_config(cls, config: dict[str, Any]) -> list[ConfigError]:
 Validates that system state allows job execution.
 
 ```python
-async def validate(self, context: JobContext) -> list[ValidationError]:
+async def validate(self) -> list[ValidationError]:
     """Validate system state before execution.
-
-    Args:
-        context: JobContext with executors and config
 
     Returns:
         List of ValidationError for any issues found.
@@ -85,11 +82,11 @@ async def validate(self, context: JobContext) -> list[ValidationError]:
 ```
 
 **Implementation Notes**:
-- Use `context.source` for local checks, `context.target` for remote
+- Access executors via `self._context.source` for local checks, `self._context.target` for remote
 - Do NOT modify system state in validate()
 - Return all errors found (don't short-circuit)
 
-### `execute(context: JobContext) -> None` (async)
+### `execute() -> None` (async)
 
 **Phase**: Execution
 **Called**: After all validation passes, in config order
@@ -97,11 +94,8 @@ async def validate(self, context: JobContext) -> list[ValidationError]:
 Performs the actual sync operation.
 
 ```python
-async def execute(self, context: JobContext) -> None:
+async def execute(self) -> None:
     """Execute sync operation.
-
-    Args:
-        context: JobContext with executors and config
 
     Raises:
         Exception: Any exception halts sync with CRITICAL log
@@ -117,14 +111,13 @@ async def execute(self, context: JobContext) -> None:
 
 ## Helper Methods (Provided by Base Class)
 
-### `_log(context, host, level, message, **extra)`
+### `_log(host, level, message, **extra)`
 
 Log a message through EventBus.
 
 ```python
 def _log(
     self,
-    context: JobContext,
     host: Host,
     level: LogLevel,
     message: str,
@@ -133,7 +126,6 @@ def _log(
     """Emit LogEvent to EventBus.
 
     Args:
-        context: JobContext for EventBus access
         host: Which machine this log relates to (SOURCE or TARGET)
         level: Log level (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL)
         message: Human-readable message
@@ -143,25 +135,23 @@ def _log(
 
 **Usage**:
 ```python
-self._log(context, Host.SOURCE, LogLevel.INFO, "Starting package comparison")
-self._log(context, Host.TARGET, LogLevel.FULL, "Comparing package", package="nginx")
-self._log(context, Host.TARGET, LogLevel.ERROR, "Package installation failed", error=str(e))
+self._log(Host.SOURCE, LogLevel.INFO, "Starting package comparison")
+self._log(Host.TARGET, LogLevel.FULL, "Comparing package", package="nginx")
+self._log(Host.TARGET, LogLevel.ERROR, "Package installation failed", error=str(e))
 ```
 
-### `_report_progress(context, update)`
+### `_report_progress(update)`
 
 Report progress through EventBus.
 
 ```python
 def _report_progress(
     self,
-    context: JobContext,
     update: ProgressUpdate,
 ) -> None:
     """Emit ProgressEvent to EventBus.
 
     Args:
-        context: JobContext for EventBus access
         update: ProgressUpdate with percent/current/total/item
     """
 ```
@@ -169,16 +159,16 @@ def _report_progress(
 **Usage**:
 ```python
 # Percentage-based
-self._report_progress(context, ProgressUpdate(percent=45, item="nginx:latest"))
+self._report_progress(ProgressUpdate(percent=45, item="nginx:latest"))
 
 # Count-based with total
-self._report_progress(context, ProgressUpdate(current=45, total=100, item="packages"))
+self._report_progress(ProgressUpdate(current=45, total=100, item="packages"))
 
 # Count-based without total
-self._report_progress(context, ProgressUpdate(current=45, item="files synced"))
+self._report_progress(ProgressUpdate(current=45, item="files synced"))
 
 # Heartbeat only
-self._report_progress(context, ProgressUpdate(heartbeat=True))
+self._report_progress(ProgressUpdate(heartbeat=True))
 ```
 
 ## Cancellation Handling
@@ -186,14 +176,14 @@ self._report_progress(context, ProgressUpdate(heartbeat=True))
 Jobs MUST handle `asyncio.CancelledError` to clean up resources:
 
 ```python
-async def execute(self, context: JobContext) -> None:
+async def execute(self) -> None:
     try:
         # Main execution logic
-        await self._do_work(context)
+        await self._do_work()
     except asyncio.CancelledError:
         # Cleanup: terminate remote processes, remove temp files
-        self._log(context, Host.SOURCE, LogLevel.WARNING, f"{self.name} cancelled, cleaning up")
-        await self._cleanup(context)
+        self._log(Host.SOURCE, LogLevel.WARNING, f"{self.name} cancelled, cleaning up")
+        await self._cleanup()
         raise  # MUST re-raise
 ```
 
@@ -261,11 +251,15 @@ class ExampleSyncJob(SyncJob):
         },
     }
 
-    async def validate(self, context: JobContext) -> list[ValidationError]:
+    def __init__(self, context: JobContext) -> None:
+        super().__init__()
+        self.context = context
+
+    async def validate(self) -> list[ValidationError]:
         errors = []
 
         # Check source directory exists
-        result = await context.source.run_command("test -d /data/example")
+        result = await self._context.source.run_command("test -d /data/example")
         if not result.success:
             errors.append(ValidationError(
                 job=self.name,
@@ -274,7 +268,7 @@ class ExampleSyncJob(SyncJob):
             ))
 
         # Check target directory exists
-        result = await context.target.run_command("test -d /data/example")
+        result = await self._context.target.run_command("test -d /data/example")
         if not result.success:
             errors.append(ValidationError(
                 job=self.name,
@@ -284,16 +278,16 @@ class ExampleSyncJob(SyncJob):
 
         return errors
 
-    async def execute(self, context: JobContext) -> None:
-        items = context.config.get("items_to_sync", [])
+    async def execute(self) -> None:
+        items = self._context.config.get("items_to_sync", [])
         total = len(items)
 
-        self._log(context, Host.SOURCE, LogLevel.INFO, f"Syncing {total} items")
+        self._log(Host.SOURCE, LogLevel.INFO, f"Syncing {total} items")
 
         try:
             for i, item in enumerate(items):
                 # Report progress
-                self._report_progress(context, ProgressUpdate(
+                self._report_progress(ProgressUpdate(
                     percent=int((i / total) * 100),
                     current=i,
                     total=total,
@@ -301,17 +295,17 @@ class ExampleSyncJob(SyncJob):
                 ))
 
                 # Do the actual sync
-                self._log(context, Host.TARGET, LogLevel.FULL, f"Syncing item", item=item)
-                result = await context.target.run_command(f"sync-item {item}")
+                self._log(Host.TARGET, LogLevel.FULL, f"Syncing item", item=item)
+                result = await self._context.target.run_command(f"sync-item {item}")
 
                 if not result.success:
                     raise RuntimeError(f"Failed to sync {item}: {result.stderr}")
 
-            self._report_progress(context, ProgressUpdate(percent=100))
-            self._log(context, Host.TARGET, LogLevel.INFO, f"Synced {total} items successfully")
+            self._report_progress(ProgressUpdate(percent=100))
+            self._log(Host.TARGET, LogLevel.INFO, f"Synced {total} items successfully")
 
         except asyncio.CancelledError:
-            self._log(context, Host.SOURCE, LogLevel.WARNING, "Sync cancelled, cleaning up")
+            self._log(Host.SOURCE, LogLevel.WARNING, "Sync cancelled, cleaning up")
             # Cleanup logic here
             raise
 ```
