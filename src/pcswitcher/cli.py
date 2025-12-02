@@ -213,7 +213,7 @@ async def _async_run_sync(target: str, cfg: Configuration) -> int:
                 main_task.cancel()
         else:
             console.print("\n[red]Force terminating![/red]")
-            # Cancel all tasks immediately
+            # Cancel all tasks immediately (no cleanup, force quit)
             for task in asyncio.all_tasks(loop):
                 task.cancel()
 

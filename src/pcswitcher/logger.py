@@ -11,7 +11,7 @@ from typing import Any, ClassVar
 from rich.console import Console
 from rich.text import Text
 
-from pcswitcher.events import EventBus, LogEvent
+from pcswitcher.events import EventBus, LogEvent, ProgressEvent
 from pcswitcher.models import Host, LogLevel
 
 __all__ = [
@@ -92,6 +92,22 @@ class FileLogger:
                         event.host, event.host.value
                     )
                     json_line = json.dumps(event_dict, default=str)
+                    f.write(json_line + "\n")
+                    f.flush()
+                elif isinstance(event, ProgressEvent) and self._level >= LogLevel.FULL:
+                    # Write progress updates at FULL level (FR-045)
+                    progress_dict = {
+                        "timestamp": event.timestamp.isoformat(),
+                        "level": "FULL",
+                        "job": event.job,
+                        "event": "progress_update",
+                        "percent": event.update.percent,
+                        "current": event.update.current,
+                        "total": event.update.total,
+                        "item": event.update.item,
+                        "heartbeat": event.update.heartbeat,
+                    }
+                    json_line = json.dumps(progress_dict, default=str)
                     f.write(json_line + "\n")
                     f.flush()
 

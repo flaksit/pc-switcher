@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -151,10 +151,12 @@ class TestDiskSpaceMonitorValidation:
     ) -> None:
         """validate() should check that mount point exists."""
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
-        with patch("pcswitcher.jobs.disk_space_monitor.check_disk_space", new_callable=AsyncMock):
-            errors = await job.validate()
+        # Mock executor already returns successful command result
+        errors = await job.validate()
         # No errors when mount point check succeeds
         assert errors == []
+        # Verify test -d command was called
+        mock_job_context.source.run_command.assert_called_once_with("test -d /")
 
     @pytest.mark.asyncio
     async def test_validate_reports_mount_point_error(
@@ -162,11 +164,11 @@ class TestDiskSpaceMonitorValidation:
     ) -> None:
         """validate() should report error when mount point check fails."""
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/nonexistent")
-        with patch(
-            "pcswitcher.jobs.disk_space_monitor.check_disk_space",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("Mount point not found"),
-        ):
-            errors = await job.validate()
+        # Mock test -d command failure (exit code 1)
+        mock_job_context.source.run_command.return_value = CommandResult(
+            exit_code=1, stdout="", stderr=""
+        )
+        errors = await job.validate()
         assert len(errors) == 1
-        assert "Mount point validation failed" in errors[0].message
+        assert "Mount point does not exist or is not accessible" in errors[0].message
+        assert "/nonexistent" in errors[0].message

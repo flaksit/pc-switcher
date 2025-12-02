@@ -118,10 +118,15 @@ class DiskSpaceMonitorJob(BackgroundJob):
 
         # Validate that mount point exists (threshold formats already validated in validate_config)
         executor = self.source if self.host == Host.SOURCE else self.target
-        try:
-            await check_disk_space(executor, self.mount_point)
-        except RuntimeError as e:
-            errors.append(self._validation_error(self.host, f"Mount point validation failed: {e}"))
+        result = await executor.run_command(f"test -d {self.mount_point}")
+
+        if not result.success:
+            errors.append(
+                self._validation_error(
+                    self.host,
+                    f"Mount point does not exist or is not accessible: {self.mount_point}"
+                )
+            )
 
         return errors
 

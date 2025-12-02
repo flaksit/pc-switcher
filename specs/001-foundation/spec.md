@@ -64,7 +64,7 @@ This delivers immediate value by establishing the development pattern for all 6 
 
 ### User Story 2 - Self-Installing Sync Orchestrator (Priority: P1)
 
-When a user initiates sync from source to target, the very first operation the orchestrator performs (before any system validation or snapshots) is to ensure the pc-switcher package on the target machine is at the same version as the source machine. If versions differ or pc-switcher is not installed on target, the system automatically installs or upgrades the target installation.
+When a user initiates sync from source to target, the orchestrator ensures the pc-switcher package on the target machine is at the same version as the source machine. If versions differ or pc-switcher is not installed on target, the system automatically installs or upgrades the target installation. This installation/upgrade happens after pre-sync snapshots are created, providing rollback capability if installation fails.
 
 **Why this priority**: This is P1 because version consistency is required for reliable sync operations. Without matching versions, the target-side helper scripts may be incompatible with source-side orchestration logic, causing unpredictable failures. Self-installation also eliminates manual setup steps, aligning with "Frictionless Command UX".
 
@@ -131,7 +131,7 @@ This delivers value by providing the foundation for all recovery operations.
 
 6. **Given** snapshot creation fails on target (e.g., insufficient space), **When** the failure occurs, **Then** the orchestrator logs CRITICAL error and aborts sync before any state changes occur
 
-7. **Given** snapshots accumulate over multiple sync runs, **When** user runs `pc-switcher cleanup-snapshots --older-than 7d`, **Then** the system deletes pre-sync and post-sync snapshots older than 7 days, retaining the most recent 3 (configurable) sync sessions regardless of age (`--older-than` is optional; default is configurable)
+7. **Given** snapshots accumulate over multiple sync runs, **When** user runs `pc-switcher cleanup-snapshots --older-than 7d`, **Then** the system deletes pre-sync and post-sync snapshots older than 7 days on that machine only, retaining the most recent 3 (configurable) sync sessions regardless of age (`--older-than` is optional; default is configurable); this command operates locally and does not affect snapshots on the remote machine
 
 8. **Given** orchestrator configuration includes `disk_space_monitor.preflight_minimum` (percentage like "20%" or absolute value like "50GiB", default: "20%") for source and target, **When** sync begins, **Then** orchestrator MUST check free disk space on both source and target and log CRITICAL and abort if free space is below configured threshold
 
@@ -165,7 +165,7 @@ This delivers value by enabling developers to diagnose issues and providing audi
 
 3. *(Removed)*
 
-4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`, **Then** the file contains structured log entries with format `[TIMESTAMP] [LEVEL] [MODULE] [HOSTNAME] message` for all operations from both source and target machines
+4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`, **Then** the file contains structured log entries in JSON Lines format (one JSON object per line) with fields: timestamp (ISO8601), level, job, host (enum: "source"/"target"), hostname (resolved machine name), event, plus additional context fields as needed, for all operations from both source and target machines
 
 5. *(Removed - target-side logging is Job implementation detail, not a spec-level concern)*
 
@@ -427,7 +427,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **FR-021**: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
 
-- **FR-022**: Log entries MUST use structlog's JSONRenderer for file output (one JSON object per line with keys: timestamp in ISO8601 format, level, job, hostname, event, plus any additional context fields) and ConsoleRenderer for terminal output (human-readable format with ISO8601 timestamp, level, job@hostname, and message)
+- **FR-022**: Log entries MUST use structlog's JSONRenderer for file output in JSON Lines format (one JSON object per line with keys: timestamp in ISO8601 format, level, job, host, hostname, event, plus any additional context fields) and ConsoleRenderer for terminal output (human-readable format with ISO8601 timestamp, level, job@hostname, and message)
 
 - **FR-023** `[Reliability Without Compromise]`: System MUST aggregate logs from both source-side orchestrator and target-side operations into unified log stream
 

@@ -94,17 +94,3 @@ dummy_fail:
   fail_at_percent: 60    # Progress percentage at which to fail (1-99)
 
 # Future job configurations will be added here when features are implemented:
-#
-# user_data:
-#   exclude_patterns:
-#     - "**/.cache/*"
-#     - "**/node_modules/*"
-#   preserve_timestamps: true
-#
-# packages:
-#   sync_ppa: true
-#   sync_flatpak: true
-#
-# docker:
-#   exclude_images: []
-#   sync_volumes: true

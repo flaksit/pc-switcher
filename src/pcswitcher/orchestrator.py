@@ -15,13 +15,18 @@ from pcswitcher.config import Configuration
 from pcswitcher.connection import Connection
 from pcswitcher.disk import DiskSpace, check_disk_space, parse_threshold
 from pcswitcher.events import EventBus
-from pcswitcher.executor import LocalExecutor, RemoteExecutor
+from pcswitcher.executor import LocalExecutor, RemoteExecutor, RemoteProcess
 from pcswitcher.jobs.base import Job, SyncJob
 from pcswitcher.jobs.btrfs import BtrfsSnapshotJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
-from pcswitcher.lock import SyncLock, acquire_target_lock, get_local_hostname
+from pcswitcher.lock import (
+    SyncLock,
+    get_local_hostname,
+    release_target_lock,
+    start_persistent_target_lock,
+)
 from pcswitcher.logger import (
     FileLogger,
     Logger,
@@ -81,6 +86,7 @@ class Orchestrator:
 
         # Locks
         self._source_lock: SyncLock | None = None
+        self._target_lock_process: RemoteProcess | None = None
 
         # Background tasks
         self._task_group: asyncio.TaskGroup | None = None
@@ -155,9 +161,13 @@ class Orchestrator:
             queue=file_queue,
             hostname_map=hostname_map,
         )
+        # Calculate total steps: 7 system phases + sync jobs + 1 post-snapshot
+        # System phases: 1=source lock, 2=SSH, 3=target lock, 4=validation,
+        # 5=disk check, 6=pre-snapshots, 7=install on target
+        total_steps = 7 + len(self._config.sync_jobs) + 1
         self._ui = TerminalUI(
             console=Console(),
-            total_steps=len(self._config.sync_jobs) + 2,  # +2 for pre/post snapshots
+            total_steps=total_steps,
         )
 
         # Start consumers as background tasks
@@ -177,30 +187,37 @@ class Orchestrator:
             # Phase 1: Acquire source lock
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Acquiring source lock")
             await self._acquire_source_lock()
+            self._ui.set_current_step(1)
 
             # Phase 2: Establish SSH connection
             self._logger.log(LogLevel.INFO, Host.SOURCE, f"Connecting to target: {self._target_hostname}")
             await self._establish_connection()
             assert self._remote_executor is not None
+            self._ui.set_current_step(2)
 
             # Phase 3: Acquire target lock
             self._logger.log(LogLevel.INFO, Host.TARGET, "Acquiring target lock")
             await self._acquire_target_lock()
+            self._ui.set_current_step(3)
 
             # Phase 4: Job discovery and validation
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Discovering and validating jobs")
             jobs = await self._discover_and_validate_jobs()
+            self._ui.set_current_step(4)
 
             # Phase 5: Disk space preflight check
             await self._check_disk_space_preflight()
+            self._ui.set_current_step(5)
 
             # Phase 6: Pre-sync snapshots
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Creating pre-sync snapshots")
             await self._create_snapshots(SnapshotPhase.PRE)
+            self._ui.set_current_step(6)
 
             # Phase 7: Install/upgrade pc-switcher on target (after snapshots for rollback safety)
             self._logger.log(LogLevel.INFO, Host.TARGET, "Ensuring pc-switcher is installed on target")
             await self._install_on_target_job()
+            self._ui.set_current_step(7)
 
             # Phase 8: Execute sync jobs with background monitoring
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Starting sync operations")
@@ -210,6 +227,7 @@ class Orchestrator:
             # Phase 9: Post-sync snapshots
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Creating post-sync snapshots")
             await self._create_snapshots(SnapshotPhase.POST)
+            self._ui.set_current_step(7 + len(jobs) + 1)
 
             # Success
             session.status = SessionStatus.COMPLETED
@@ -265,7 +283,10 @@ class Orchestrator:
         """Acquire exclusive lock on target machine via SSH."""
         assert self._remote_executor is not None
 
-        if not await acquire_target_lock(self._remote_executor, self._source_hostname):
+        self._target_lock_process = await start_persistent_target_lock(
+            self._remote_executor, self._source_hostname
+        )
+        if self._target_lock_process is None:
             raise RuntimeError(f"Another sync is already in progress on target {self._target_hostname}")
 
     async def _install_on_target_job(self) -> None:
@@ -493,6 +514,8 @@ class Orchestrator:
         Returns:
             List of JobResult for each executed job
         """
+        assert self._ui is not None
+
         results: list[JobResult] = []
 
         async with asyncio.TaskGroup() as tg:
@@ -509,46 +532,55 @@ class Orchestrator:
             source_monitor = DiskSpaceMonitorJob(monitor_context, host=Host.SOURCE, mount_point="/")
             target_monitor = DiskSpaceMonitorJob(monitor_context, host=Host.TARGET, mount_point="/")
 
-            tg.create_task(source_monitor.execute())
-            tg.create_task(target_monitor.execute())
+            # Start monitors and save tasks for later cancellation
+            source_monitor_task = tg.create_task(source_monitor.execute())
+            target_monitor_task = tg.create_task(target_monitor.execute())
 
-            # Execute sync jobs sequentially
-            for job in jobs:
-                started_at = datetime.now(UTC)
-                try:
-                    await job.execute()
-                    ended_at = datetime.now(UTC)
-                    results.append(
-                        JobResult(
-                            job_name=job.name,
-                            status=JobStatus.SUCCESS,
-                            started_at=started_at,
-                            ended_at=ended_at,
+            try:
+                # Execute sync jobs sequentially
+                for job_index, job in enumerate(jobs):
+                    # Update step counter (base 7 system steps + current job index)
+                    self._ui.set_current_step(7 + job_index + 1)
+                    started_at = datetime.now(UTC)
+                    try:
+                        await job.execute()
+                        ended_at = datetime.now(UTC)
+                        results.append(
+                            JobResult(
+                                job_name=job.name,
+                                status=JobStatus.SUCCESS,
+                                started_at=started_at,
+                                ended_at=ended_at,
+                            )
                         )
-                    )
-                    self._logger.log(
-                        LogLevel.INFO,
-                        Host.SOURCE,
-                        f"Job {job.name} completed successfully",
-                    )
+                        self._logger.log(
+                            LogLevel.INFO,
+                            Host.SOURCE,
+                            f"Job {job.name} completed successfully",
+                        )
 
-                except Exception as e:
-                    ended_at = datetime.now(UTC)
-                    results.append(
-                        JobResult(
-                            job_name=job.name,
-                            status=JobStatus.FAILED,
-                            started_at=started_at,
-                            ended_at=ended_at,
-                            error_message=str(e),
+                    except Exception as e:
+                        ended_at = datetime.now(UTC)
+                        results.append(
+                            JobResult(
+                                job_name=job.name,
+                                status=JobStatus.FAILED,
+                                started_at=started_at,
+                                ended_at=ended_at,
+                                error_message=str(e),
+                            )
                         )
-                    )
-                    self._logger.log(
-                        LogLevel.CRITICAL,
-                        Host.SOURCE,
-                        f"Job {job.name} failed: {e}",
-                    )
-                    raise
+                        self._logger.log(
+                            LogLevel.CRITICAL,
+                            Host.SOURCE,
+                            f"Job {job.name} failed: {e}",
+                        )
+                        raise
+            finally:
+                # Cancel monitor tasks so TaskGroup can exit
+                # Monitors run forever (while True loop), so they must be cancelled
+                source_monitor_task.cancel()
+                target_monitor_task.cancel()
 
         return results
 
@@ -556,13 +588,21 @@ class Orchestrator:
         """Clean up resources (connection, locks, executors)."""
         self._cleanup_in_progress = True
 
+        # Release target lock first (before terminating other processes)
+        if self._target_lock_process is not None:
+            await release_target_lock(self._target_lock_process)
+
         # Terminate all processes
         if self._local_executor is not None:
             await self._local_executor.terminate_all_processes()
         if self._remote_executor is not None:
             await self._remote_executor.terminate_all_processes()
 
-        # Close connection (also releases target lock automatically)
+        # Kill remote processes (critical for SIGINT handling)
+        if self._connection is not None:
+            await self._connection.kill_all_remote_processes()
+
+        # Close connection
         if self._connection is not None:
             await self._connection.disconnect()
 
