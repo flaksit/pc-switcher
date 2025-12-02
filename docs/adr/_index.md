@@ -6,6 +6,7 @@
 - [ADR-002](adr-002-ssh-communication-channel.md): SSH as communication channel between source and target
 - [ADR-003](adr-003-implementation-language.md): Python orchestrator with task-specific languages
 - [ADR-004](adr-004-dynamic-versioning-github-releases.md): Dynamic package versioning from GitHub Releases
+- [ADR-005](adr-005-asyncio-concurrency.md): Use Asyncio for Concurrency
 
 ## Superseded
 
@@ -13,7 +14,3 @@
 
 Example:
 - ADR-005: Direct IBKR Gateway → Superseded by ADR-017
-
-## Key Constraints
-
-- Machines run Ubuntu 24.04 LTS
