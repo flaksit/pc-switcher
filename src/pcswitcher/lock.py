@@ -1,4 +1,12 @@
-"""File-based locking to prevent concurrent sync operations."""
+"""File-based locking to prevent concurrent sync operations.
+
+Uses a single unified lock file (~/.local/share/pc-switcher/pc-switcher.lock)
+to ensure a machine can only participate in one sync at a time, either as
+source or target. This prevents:
+- A machine from being targeted while it's acting as source
+- A machine from acting as source while it's a target
+- Self-sync (A→A)
+"""
 
 from __future__ import annotations
 
@@ -11,12 +19,25 @@ from pathlib import Path
 from pcswitcher.executor import RemoteExecutor, RemoteProcess
 
 __all__ = [
+    "LOCK_FILE_NAME",
     "SyncLock",
-    "acquire_target_lock",
     "get_local_hostname",
-    "release_target_lock",
-    "start_persistent_target_lock",
+    "get_lock_path",
+    "release_remote_lock",
+    "start_persistent_remote_lock",
 ]
+
+# Single unified lock file name used for both source and target roles
+LOCK_FILE_NAME = "pc-switcher.lock"
+
+
+def get_lock_path() -> Path:
+    """Get the path to the unified lock file.
+
+    Returns:
+        Path to ~/.local/share/pc-switcher/pc-switcher.lock
+    """
+    return Path.home() / ".local/share/pc-switcher" / LOCK_FILE_NAME
 
 
 class SyncLock:
@@ -34,7 +55,7 @@ class SyncLock:
         """Initialize lock with path.
 
         Args:
-            lock_path: Path to lock file (e.g., ~/.local/share/pc-switcher/sync.lock)
+            lock_path: Path to lock file (e.g., ~/.local/share/pc-switcher/pc-switcher.lock)
         """
         self._lock_path = lock_path
         self._lock_fd: int | None = None
@@ -43,7 +64,7 @@ class SyncLock:
         """Acquire exclusive lock non-blocking.
 
         Args:
-            holder_info: Info to write to lock file for diagnostics (e.g., PID, hostname:PID)
+            holder_info: Info to write to lock file for diagnostics (e.g., "source:hostname:session_id")
 
         Returns:
             True if lock acquired, False if already held by another process
@@ -87,25 +108,30 @@ class SyncLock:
             self._lock_fd = None
 
 
-async def start_persistent_target_lock(
+async def start_persistent_remote_lock(
     executor: RemoteExecutor,
     source_hostname: str,
+    session_id: str,
 ) -> RemoteProcess | None:
-    """Start a persistent lock on target machine via SSH.
+    """Start a persistent lock on remote machine via SSH.
+
+    Uses the same lock file as the local source lock, ensuring a machine
+    can only participate in one sync at a time (as source or target).
 
     Starts a long-running background process that holds the flock for the
     entire sync session. The lock is released when the process is terminated
-    (via release_target_lock()) or when the SSH connection closes.
+    (via release_remote_lock()) or when the SSH connection closes.
 
     Args:
         executor: Remote executor for running commands on target
         source_hostname: Hostname of source machine (for diagnostics)
+        session_id: Session ID (for diagnostics)
 
     Returns:
         RemoteProcess object holding the lock, or None if lock is already held
     """
-    lock_path = "~/.local/share/pc-switcher/target.lock"
-    holder_info = f"{source_hostname}:{os.getpid()}"
+    lock_path = f"~/.local/share/pc-switcher/{LOCK_FILE_NAME}"
+    holder_info = f"target:{source_hostname}:{session_id}"
 
     # First create directory and write holder info to lock file
     setup_result = await executor.run_command(
@@ -130,53 +156,15 @@ async def start_persistent_target_lock(
         return None
 
 
-async def release_target_lock(process: RemoteProcess) -> None:
-    """Release the persistent target lock.
+async def release_remote_lock(process: RemoteProcess) -> None:
+    """Release the persistent remote lock.
 
     Terminates the lock-holding process, which releases the flock.
 
     Args:
-        process: RemoteProcess object returned by start_persistent_target_lock()
+        process: RemoteProcess object returned by start_persistent_remote_lock()
     """
     await process.terminate()
-
-
-async def acquire_target_lock(
-    executor: RemoteExecutor,
-    source_hostname: str,
-) -> bool:
-    """Acquire lock on target machine via SSH.
-
-    DEPRECATED: This function has a critical bug - it releases the lock
-    immediately after acquiring it. Use start_persistent_target_lock() instead.
-
-    Uses flock command on target machine. Lock is automatically released when
-    SSH connection closes (normal exit, crash, or network loss).
-
-    Args:
-        executor: Remote executor for running commands on target
-        source_hostname: Hostname of source machine (for diagnostics)
-
-    Returns:
-        True if lock acquired, False if already held
-    """
-    lock_path = "~/.local/share/pc-switcher/target.lock"
-    holder_info = f"{source_hostname}:{os.getpid()}"
-
-    # BUG: This command acquires the lock but releases it immediately when the shell exits
-    # Create directory and acquire lock in single command
-    # File descriptor 9 is arbitrary, just needs to not conflict with stdio
-    # exec 9> opens FD 9 for writing, creating file if needed
-    # flock -n 9 tries non-blocking lock on FD 9
-    # && echo writes holder info on success
-    result = await executor.run_command(
-        f"mkdir -p ~/.local/share/pc-switcher && "
-        f'exec 9>>"{lock_path}" && '
-        f"flock -n 9 && "
-        f'truncate -s 0 "{lock_path}" && '
-        f'echo "{holder_info}" > "{lock_path}"'
-    )
-    return result.success
 
 
 def get_local_hostname() -> str:

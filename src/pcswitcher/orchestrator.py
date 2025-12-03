@@ -6,7 +6,6 @@ import asyncio
 import importlib
 import secrets
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -25,8 +24,9 @@ from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.lock import (
     SyncLock,
     get_local_hostname,
-    release_target_lock,
-    start_persistent_target_lock,
+    get_lock_path,
+    release_remote_lock,
+    start_persistent_remote_lock,
 )
 from pcswitcher.logger import (
     FileLogger,
@@ -255,14 +255,17 @@ class Orchestrator:
             await self._cleanup()
 
     async def _acquire_source_lock(self) -> None:
-        """Acquire exclusive lock on source machine."""
-        lock_path = Path.home() / ".local/share/pc-switcher/sync.lock"
-        self._source_lock = SyncLock(lock_path)
+        """Acquire exclusive lock on source machine.
 
-        holder_info = f"{self._source_hostname}:{self._session_id}"
+        Uses unified lock file that prevents this machine from participating
+        in any other sync (as source or target) while this sync is running.
+        """
+        self._source_lock = SyncLock(get_lock_path())
+
+        holder_info = f"source:{self._source_hostname}:{self._session_id}"
         if not self._source_lock.acquire(holder_info):
             existing_holder = self._source_lock.get_holder_info()
-            raise RuntimeError(f"Another sync is already in progress on source (held by: {existing_holder})")
+            raise RuntimeError(f"This machine is already involved in a sync (held by: {existing_holder})")
 
     async def _establish_connection(self) -> None:
         """Establish SSH connection to target machine."""
@@ -280,14 +283,18 @@ class Orchestrator:
         )
 
     async def _acquire_target_lock(self) -> None:
-        """Acquire exclusive lock on target machine via SSH."""
+        """Acquire exclusive lock on target machine via SSH.
+
+        Uses the same unified lock file as the source, ensuring the target
+        machine cannot participate in any other sync while this one runs.
+        """
         assert self._remote_executor is not None
 
-        self._target_lock_process = await start_persistent_target_lock(
-            self._remote_executor, self._source_hostname
+        self._target_lock_process = await start_persistent_remote_lock(
+            self._remote_executor, self._source_hostname, self._session_id
         )
         if self._target_lock_process is None:
-            raise RuntimeError(f"Another sync is already in progress on target {self._target_hostname}")
+            raise RuntimeError(f"Target {self._target_hostname} is already involved in a sync")
 
     async def _install_on_target_job(self) -> None:
         """Execute InstallOnTargetJob to ensure pc-switcher is on target.
@@ -590,7 +597,7 @@ class Orchestrator:
 
         # Release target lock first (before terminating other processes)
         if self._target_lock_process is not None:
-            await release_target_lock(self._target_lock_process)
+            await release_remote_lock(self._target_lock_process)
 
         # Terminate all processes
         if self._local_executor is not None:
