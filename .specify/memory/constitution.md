@@ -1,13 +1,13 @@
 <!-- Sync Impact Report
 Version change: template -> 1.0.0
-Modified principles:
-- Template principle slot 1 -> Reliability Without Compromise
-- Template principle slot 2 -> Frictionless Command UX
-- Template principle slot 3 -> Proven Tooling Only
-- Template principle slot 4 -> Minimize SSD Wear
-- Template principle slot 5 -> Throughput-Focused Syncing
-- (new) Deliberate Simplicity
-- (new) Up-to-date Documentation
+New principles:
+- Reliability Without Compromise
+- Frictionless Command UX
+- Proven Tooling Only
+- Minimize SSD Wear
+- Throughput-Focused Syncing
+- Deliberate Simplicity
+- Up-to-date Documentation
 Added sections:
 - Core Principles (populated)
 - Operational Constraints
