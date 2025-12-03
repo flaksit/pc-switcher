@@ -13,6 +13,8 @@ $ARGUMENTS
 
 ## Workflow
 
+If one or more github issues are referenced in the feedback, make sure to read them first: title, description and all the comments.
+
 For each point in the feedback, follow a structured workflow to resolve it:
 0. Analyze the feedback and context. If anything is unclear, ask clarifying questions first and wait for my answers.
 1. Update/implement the tests (TDD)
@@ -24,6 +26,5 @@ Delegate as much as possible to subagents (even analysis), so that you can keep 
 
 ## Output
 Append a report of this "follow-up session" to the existing file "implementation-review-N-resolution.md" that has the highest number N. The goal is to have a trace of any decisions we make while resolving the feedback. The report should contain the following:
-- $ARGUMENTS
+- The literal ARGUMENTS text passed to you when invoking this command.
 - A log of any further conversation we have while you are resolving the feedback. Include ALL my prompts and your output LITERALY, e.g. your clarifying questions and my answers as well.
-
