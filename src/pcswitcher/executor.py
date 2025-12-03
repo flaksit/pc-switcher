@@ -12,12 +12,33 @@ import asyncssh
 from pcswitcher.models import CommandResult
 
 __all__ = [
+    "Executor",
     "LocalExecutor",
     "LocalProcess",
     "Process",
     "RemoteExecutor",
     "RemoteProcess",
 ]
+
+
+class Executor(Protocol):
+    """Protocol for command execution on local or remote machines.
+
+    Both LocalExecutor and RemoteExecutor implement this protocol,
+    allowing code to work with either without knowing which one it is.
+    """
+
+    async def run_command(
+        self,
+        cmd: str,
+        timeout: float | None = None,
+    ) -> CommandResult:
+        """Run a command and wait for completion."""
+        ...
+
+    async def terminate_all_processes(self) -> None:
+        """Terminate all tracked processes."""
+        ...
 
 
 class Process(Protocol):

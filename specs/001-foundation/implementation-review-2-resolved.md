@@ -1128,3 +1128,290 @@ uv run pytest → 25 passed
 ### Files Deleted
 
 1. `src/pcswitcher/jobs/dummy.py` - Split into dummy_success.py and dummy_fail.py
+
+---
+
+## Follow-up: Move Btrfs Snapshot Cleanup Logic from CLI to Snapshots Module
+
+**Date**: 2025-12-02 (continued session)
+**GitHub Issue**: #25
+
+### Feedback
+
+> cli.py contains code for btrfs snapshot cleanup
+> This logic should be in a separate module that provides the BtrfsSnapshotJob, because it is tightly linked with this. Moreover, the current names `_run_cleanup()` and `_async_run_cleanup()` are not explicit enough: the names should clearly state that it is about cleanup of btrfs snapshots.
+
+### Conversation Log
+
+No clarifying questions needed - the issue was clear.
+
+### Changes Made
+
+#### 1. Moved Functions to `snapshots.py`
+
+Moved `_run_cleanup()` and `_async_run_cleanup()` from `cli.py` to `snapshots.py` with renamed functions:
+
+- `_run_cleanup()` → `run_btrfs_snapshot_cleanup()`
+- `_async_run_cleanup()` → `_async_btrfs_snapshot_cleanup()`
+
+The new names clearly indicate these are specifically for btrfs snapshot cleanup operations.
+
+#### 2. Added Console Print Callback
+
+Since the moved functions need to print output to console, added a `console_print: PrintFunction` parameter to decouple the module from Rich console:
+
+```python
+type PrintFunction = Callable[[str], None]
+
+def run_btrfs_snapshot_cleanup(
+    keep_recent: int,
+    max_age_days: int | None,
+    dry_run: bool,
+    console_print: PrintFunction,
+) -> int:
+    """Run the btrfs snapshot cleanup operation with asyncio."""
+    return asyncio.run(_async_btrfs_snapshot_cleanup(keep_recent, max_age_days, dry_run, console_print))
+```
+
+#### 3. Updated CLI
+
+Updated `cli.py` to use the new function:
+
+```python
+from pcswitcher.snapshots import parse_older_than, run_btrfs_snapshot_cleanup
+
+# In cleanup_snapshots command:
+exit_code = run_btrfs_snapshot_cleanup(
+    cfg.btrfs_snapshots.keep_recent,
+    max_age_days,
+    dry_run,
+    console.print,
+)
+```
+
+Removed unused imports: `LocalExecutor`, `Host`, `cleanup_snapshots as cleanup_snapshots_impl`.
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/snapshots.py src/pcswitcher/cli.py → 0 errors
+uv run ruff check src/pcswitcher/snapshots.py src/pcswitcher/cli.py → All checks passed!
+uv run pytest -v → 25 passed
+```
+
+### Files Modified
+
+1. `src/pcswitcher/snapshots.py` - Added `run_btrfs_snapshot_cleanup()` and `_async_btrfs_snapshot_cleanup()`
+2. `src/pcswitcher/cli.py` - Removed old functions, updated imports and call site
+
+### GitHub Issue
+
+Issue #25 closed with comment explaining the fix.
+
+---
+
+## Follow-up: Rename Module from snapshots to btrfs_snapshots
+
+**Date**: 2025-12-02 (continued session)
+
+### Feedback
+
+> Rename the module "snapshots" to "btrfs_snapshots" for clarity. Now we moved the cli functions to this module, the function names do not need to contain "btrfs": this is already clear from the module name.
+
+### Conversation Log
+
+No clarifying questions needed - the feedback was clear.
+
+### Changes Made
+
+#### 1. Renamed Module
+
+Renamed `src/pcswitcher/snapshots.py` to `src/pcswitcher/btrfs_snapshots.py`.
+
+#### 2. Renamed Functions (removed redundant "btrfs" prefix)
+
+Since the module name now explicitly indicates "btrfs_snapshots", the function names no longer need the redundant prefix:
+
+- `run_btrfs_snapshot_cleanup()` → `run_snapshot_cleanup()`
+- `_async_btrfs_snapshot_cleanup()` → `_async_snapshot_cleanup()`
+
+Updated `__all__` list accordingly.
+
+#### 3. Updated All Imports
+
+Updated imports in all files that reference the module:
+
+| File | Import Change |
+|------|---------------|
+| `cli.py` | `from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup` |
+| `orchestrator.py` | `from pcswitcher.btrfs_snapshots import session_folder_name` |
+| `jobs/btrfs.py` | `from pcswitcher.btrfs_snapshots import create_snapshot, snapshot_name, ...` |
+
+#### 4. Updated Call Site
+
+Updated the call in `cli.py` from `run_btrfs_snapshot_cleanup(...)` to `run_snapshot_cleanup(...)`.
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/ → 0 errors, 0 warnings, 0 notes
+uv run ruff check src/pcswitcher/ --fix → 3 import sorting fixes applied
+uv run pytest tests/ -v → 25 passed
+```
+
+### Files Modified
+
+1. `src/pcswitcher/snapshots.py` → `src/pcswitcher/btrfs_snapshots.py` (renamed + function renames)
+2. `src/pcswitcher/cli.py` - Updated import and function call
+3. `src/pcswitcher/orchestrator.py` - Updated import
+4. `src/pcswitcher/jobs/btrfs.py` - Updated import
+
+---
+
+## Follow-up: Async vs Sync for CLI Cleanup Command
+
+**Date**: 2025-12-02 (continued session)
+
+### Feedback
+
+> Does this cleanup cli command benefit from async? If not, make it simple sync.
+
+### Conversation Log
+
+**My clarifying question:**
+
+> Should I create sync versions of cleanup_snapshots() and list_snapshots() for the CLI, or just simplify run_snapshot_cleanup() to use subprocess.run() directly without reusing those functions?
+
+Options presented:
+1. **Sync CLI only**: Create a simple sync `run_snapshot_cleanup()` using `subprocess.run()` directly, without reusing the async `cleanup_snapshots()` function
+2. **Dual sync/async**: Keep async functions for orchestrator use, add sync wrappers or separate sync implementations for CLI use
+
+**User's answer:**
+
+> Keep as it is now, but document why (use of an async function deeper)
+
+### Analysis
+
+The CLI cleanup command does **NOT** benefit from async because:
+1. It only runs on the **local machine** (no remote operations)
+2. Operations are **sequential** - list snapshots, then delete one by one
+3. There's **no parallelism** - we're just awaiting each command one after another
+4. The async machinery (`asyncio.run`, `async def`, `await`) is just overhead
+
+However, the async implementation is kept because `cleanup_snapshots()` is an async function that's reused by other parts of the codebase (orchestrator) that run in an async context. Creating a separate sync implementation would mean code duplication.
+
+### Changes Made
+
+Added documentation to `run_snapshot_cleanup()` explaining why async is used despite not benefiting the CLI:
+
+```python
+def run_snapshot_cleanup(...) -> int:
+    """Run the snapshot cleanup operation.
+
+    Note: Uses asyncio.run() because cleanup_snapshots() is async. The async
+    implementation is required for reuse by the orchestrator which runs in an
+    async context. The CLI cleanup command itself doesn't benefit from async
+    (all operations are local and sequential), but we use the shared async
+    implementation to avoid code duplication.
+    ...
+    """
+```
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/btrfs_snapshots.py → 0 errors
+uv run ruff check src/pcswitcher/btrfs_snapshots.py → All checks passed
+```
+
+### Files Modified
+
+1. `src/pcswitcher/btrfs_snapshots.py` - Added documentation explaining async usage
+
+---
+
+## Follow-up: Executor Protocol for LocalExecutor | RemoteExecutor
+
+**Date**: 2025-12-02 (continued session)
+
+### Feedback
+
+> I see "LocalExecutor | RemoteExecutor" in many places (e.g. in btrfs_snapshots.py). These classes have the same signature, on purpose. I think they should either derive from an ABC Executor or at least we should have a protocol Executor. This would clarify the intent and give simpler code.
+
+### Conversation Log
+
+**My clarifying question:**
+
+> Should the Executor protocol include only the common methods (run_command, start_process, terminate_all_processes) or also keep send_file/get_file as RemoteExecutor-specific?
+
+Options presented:
+1. **Common only**: Protocol includes only run_command, start_process, terminate_all_processes (the methods both executors share)
+2. **All methods**: Protocol includes all methods, with send_file/get_file raising NotImplementedError on LocalExecutor
+
+**User's answer:**
+
+> Common only. Look further for other possible variants of the pattern we want to avoid, e.g. "RemoteExecutor | LocalExecutor" or similar: we want to replace any usage of RemoteExecutor or LocalExecutor by just Executor in all cases where we don't need to explicitly know which one it is. In summary: use the new abstraction as much as possible, but not more.
+
+### Analysis
+
+Found 6 usages of `LocalExecutor | RemoteExecutor` union type:
+- `btrfs_snapshots.py`: 5 occurrences (create_snapshot, validate_snapshots_directory, validate_subvolume_exists, list_snapshots, cleanup_snapshots)
+- `disk.py`: 1 occurrence (check_disk_space)
+
+The following should **NOT** use Executor (explicitly need specific type):
+- `jobs/base.py`: `source` property returns `LocalExecutor`, `target` returns `RemoteExecutor` (intentionally specific)
+- `jobs/context.py`: `source: LocalExecutor`, `target: RemoteExecutor` (intentionally specific)
+- `orchestrator.py`: stores `_local_executor: LocalExecutor | None` and `_remote_executor: RemoteExecutor | None` (intentionally specific)
+- `lock.py`: uses `RemoteExecutor` specifically (only operates on remote)
+
+### Changes Made
+
+#### 1. Created Executor Protocol (`executor.py`)
+
+```python
+class Executor(Protocol):
+    """Protocol for command execution on local or remote machines.
+
+    Both LocalExecutor and RemoteExecutor implement this protocol,
+    allowing code to work with either without knowing which one it is.
+    """
+
+    async def run_command(
+        self,
+        cmd: str,
+        timeout: float | None = None,
+    ) -> CommandResult:
+        """Run a command and wait for completion."""
+        ...
+
+    async def terminate_all_processes(self) -> None:
+        """Terminate all tracked processes."""
+        ...
+```
+
+Note: `start_process` was NOT included because it returns different concrete types (`LocalProcess` vs `RemoteProcess`), which would break protocol compatibility.
+
+#### 2. Updated btrfs_snapshots.py
+
+- Changed import from `LocalExecutor` + `RemoteExecutor` (TYPE_CHECKING) to `Executor, LocalExecutor`
+- Replaced all 5 `LocalExecutor | RemoteExecutor` with `Executor`
+
+#### 3. Updated disk.py
+
+- Changed import from `LocalExecutor, RemoteExecutor` to `Executor`
+- Replaced `LocalExecutor | RemoteExecutor` with `Executor` in `check_disk_space()`
+- Updated docstring: "LocalExecutor or RemoteExecutor to run df command" → "Executor to run df command"
+
+### Verification
+
+```
+uv run basedpyright src/pcswitcher/ → 0 errors, 0 warnings, 0 notes
+uv run ruff check src/pcswitcher/ → All checks passed!
+uv run pytest tests/ -v → 25 passed
+```
+
+### Files Modified
+
+1. `src/pcswitcher/executor.py` - Added `Executor` protocol, exported in `__all__`
+2. `src/pcswitcher/btrfs_snapshots.py` - Updated imports, replaced 5 union types with `Executor`
+3. `src/pcswitcher/disk.py` - Updated import, replaced 1 union type with `Executor`

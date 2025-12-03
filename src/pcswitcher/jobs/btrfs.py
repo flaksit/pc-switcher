@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from pcswitcher.jobs.base import SystemJob
-from pcswitcher.jobs.context import JobContext
-from pcswitcher.models import Host, LogLevel, SnapshotPhase
-from pcswitcher.snapshots import (
+from pcswitcher.btrfs_snapshots import (
     create_snapshot,
     snapshot_name,
     validate_snapshots_directory,
     validate_subvolume_exists,
 )
+from pcswitcher.jobs.base import SystemJob
+from pcswitcher.jobs.context import JobContext
+from pcswitcher.models import Host, LogLevel, SnapshotPhase
 
 if TYPE_CHECKING:
     from pcswitcher.models import ValidationError

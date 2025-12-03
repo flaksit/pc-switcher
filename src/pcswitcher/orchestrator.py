@@ -11,6 +11,7 @@ from typing import Any
 
 from rich.console import Console
 
+from pcswitcher.btrfs_snapshots import session_folder_name
 from pcswitcher.config import Configuration
 from pcswitcher.connection import Connection
 from pcswitcher.disk import DiskSpace, check_disk_space, parse_threshold
@@ -44,7 +45,6 @@ from pcswitcher.models import (
     SyncSession,
     ValidationError,
 )
-from pcswitcher.snapshots import session_folder_name
 from pcswitcher.ui import TerminalUI
 
 __all__ = ["Orchestrator"]

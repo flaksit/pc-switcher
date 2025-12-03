@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from pcswitcher.executor import LocalExecutor, RemoteExecutor
+from pcswitcher.executor import Executor
 from pcswitcher.models import CommandResult
 
 __all__ = [
@@ -81,13 +81,13 @@ def parse_threshold(threshold: str) -> tuple[str, int]:
 
 
 async def check_disk_space(
-    executor: LocalExecutor | RemoteExecutor,
+    executor: Executor,
     mount_point: str,
 ) -> DiskSpace:
     """Check disk space for a mount point.
 
     Args:
-        executor: LocalExecutor or RemoteExecutor to run df command
+        executor: Executor to run df command
         mount_point: Mount point to check (e.g., "/home")
 
     Returns:

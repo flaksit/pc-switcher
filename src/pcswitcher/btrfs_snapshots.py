@@ -6,21 +6,27 @@ for btrfs subvolumes during the sync process.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from pytimeparse2 import parse as parse_duration_seconds
 
+from pcswitcher.executor import Executor, LocalExecutor
 from pcswitcher.models import CommandResult, Host, Snapshot, SnapshotPhase
 
 if TYPE_CHECKING:
-    from pcswitcher.executor import LocalExecutor, RemoteExecutor
+    from collections.abc import Callable
+
+# Type alias for the console print function
+type PrintFunction = Callable[[str], None]
 
 __all__ = [
     "cleanup_snapshots",
     "create_snapshot",
     "list_snapshots",
     "parse_older_than",
+    "run_snapshot_cleanup",
     "session_folder_name",
     "snapshot_name",
     "validate_snapshots_directory",
@@ -56,7 +62,7 @@ def session_folder_name(session_id: str) -> str:
 
 
 async def create_snapshot(
-    executor: LocalExecutor | RemoteExecutor,
+    executor: Executor,
     source_path: str,
     snapshot_path: str,
 ) -> CommandResult:
@@ -75,7 +81,7 @@ async def create_snapshot(
 
 
 async def validate_snapshots_directory(
-    executor: LocalExecutor | RemoteExecutor,
+    executor: Executor,
     host: Host,
 ) -> tuple[bool, str | None]:
     """Check if /.snapshots exists and is a subvolume, create if missing.
@@ -109,7 +115,7 @@ async def validate_snapshots_directory(
 
 
 async def validate_subvolume_exists(
-    executor: LocalExecutor | RemoteExecutor,
+    executor: Executor,
     subvolume: str,
     mount_point: str,
     host: Host,
@@ -144,7 +150,7 @@ async def validate_subvolume_exists(
 
 
 async def list_snapshots(
-    executor: LocalExecutor | RemoteExecutor,
+    executor: Executor,
     host: Host,
 ) -> list[Snapshot]:
     """List all pc-switcher snapshots on a machine.
@@ -190,7 +196,7 @@ async def list_snapshots(
 
 
 async def cleanup_snapshots(
-    executor: LocalExecutor | RemoteExecutor,
+    executor: Executor,
     host: Host,
     keep_recent: int,
     max_age_days: int | None = None,
@@ -299,3 +305,81 @@ def parse_older_than(value: str) -> int:
     # pytimeparse2 returns int, float, or timedelta - convert to total seconds first
     total_seconds = seconds.total_seconds() if isinstance(seconds, timedelta) else float(seconds)
     return int(total_seconds // 86400)  # Convert to days
+
+
+def run_snapshot_cleanup(
+    keep_recent: int,
+    max_age_days: int | None,
+    dry_run: bool,
+    console_print: PrintFunction,
+) -> int:
+    """Run the snapshot cleanup operation.
+
+    Note: Uses asyncio.run() because cleanup_snapshots() is async. The async
+    implementation is required for reuse by the orchestrator which runs in an
+    async context. The CLI cleanup command itself doesn't benefit from async
+    (all operations are local and sequential), but we use the shared async
+    implementation to avoid code duplication.
+
+    Args:
+        keep_recent: Number of recent session folders to keep
+        max_age_days: Maximum age in days for snapshots (optional)
+        dry_run: If True, show what would be deleted without deleting
+        console_print: Function to print to the console
+
+    Returns:
+        Exit code: 0=success, 1=error
+    """
+    return asyncio.run(_async_snapshot_cleanup(keep_recent, max_age_days, dry_run, console_print))
+
+
+async def _async_snapshot_cleanup(
+    keep_recent: int,
+    max_age_days: int | None,
+    dry_run: bool,
+    console_print: PrintFunction,
+) -> int:
+    """Async implementation of snapshot cleanup.
+
+    Args:
+        keep_recent: Number of recent session folders to keep
+        max_age_days: Maximum age in days for snapshots (optional)
+        dry_run: If True, show what would be deleted without deleting
+        console_print: Function to print to the console
+
+    Returns:
+        Exit code: 0=success, 1=error
+    """
+    try:
+        executor = LocalExecutor()
+
+        if dry_run:
+            console_print(f"[yellow]DRY RUN:[/yellow] Would delete snapshots keeping {keep_recent} most recent")
+            if max_age_days is not None:
+                console_print(f"[yellow]DRY RUN:[/yellow] Would also delete snapshots older than {max_age_days} days")
+            console_print("\n[dim]Note: Actual deletion not implemented yet for dry-run mode[/dim]")
+            return 0
+
+        console_print(f"Cleaning up snapshots (keeping {keep_recent} most recent sessions)")
+        if max_age_days is not None:
+            console_print(f"Also deleting snapshots older than {max_age_days} days")
+
+        deleted = await cleanup_snapshots(
+            executor=executor,
+            host=Host.SOURCE,
+            keep_recent=keep_recent,
+            max_age_days=max_age_days,
+        )
+
+        if deleted:
+            console_print(f"\n[green]Successfully deleted {len(deleted)} snapshot(s):[/green]")
+            for snapshot in deleted:
+                console_print(f"  - {snapshot.path}")
+        else:
+            console_print("\n[yellow]No snapshots were deleted[/yellow]")
+
+        return 0
+
+    except Exception as e:
+        console_print(f"\n[bold red]Cleanup failed:[/bold red] {e}")
+        return 1

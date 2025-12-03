@@ -48,7 +48,7 @@ class LogLevel(IntEnum):
 
 @dataclass(frozen=True)
 class CommandResult:
-    """Result of executing a command via LocalExecutor or RemoteExecutor."""
+    """Result of executing a command via Executor."""
 
     exit_code: int
     stdout: str

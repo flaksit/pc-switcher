@@ -15,13 +15,10 @@ import typer
 from rich.console import Console
 from rich.text import Text
 
+from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
-from pcswitcher.executor import LocalExecutor
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
-from pcswitcher.models import Host
 from pcswitcher.orchestrator import Orchestrator
-from pcswitcher.snapshots import cleanup_snapshots as cleanup_snapshots_impl
-from pcswitcher.snapshots import parse_older_than
 from pcswitcher.version import get_this_version
 
 # Cleanup timeout for graceful shutdown after SIGINT.
@@ -254,68 +251,6 @@ async def _async_run_sync(target: str, cfg: Configuration) -> int:
         loop.remove_signal_handler(signal.SIGINT)
 
 
-def _run_cleanup(keep_recent: int, max_age_days: int | None, dry_run: bool) -> int:
-    """Run the cleanup operation with asyncio.
-
-    Args:
-        keep_recent: Number of recent session folders to keep
-        max_age_days: Maximum age in days for snapshots (optional)
-        dry_run: If True, show what would be deleted without deleting
-
-    Returns:
-        Exit code: 0=success, 1=error
-    """
-    return asyncio.run(_async_run_cleanup(keep_recent, max_age_days, dry_run))
-
-
-async def _async_run_cleanup(keep_recent: int, max_age_days: int | None, dry_run: bool) -> int:
-    """Async implementation of cleanup.
-
-    Args:
-        keep_recent: Number of recent session folders to keep
-        max_age_days: Maximum age in days for snapshots (optional)
-        dry_run: If True, show what would be deleted without deleting
-
-    Returns:
-        Exit code: 0=success, 1=error
-    """
-    try:
-        executor = LocalExecutor()
-
-        if dry_run:
-            console.print(
-                f"[yellow]DRY RUN:[/yellow] Would delete snapshots keeping {keep_recent} most recent"
-            )
-            if max_age_days is not None:
-                console.print(f"[yellow]DRY RUN:[/yellow] Would also delete snapshots older than {max_age_days} days")
-            console.print("\n[dim]Note: Actual deletion not implemented yet for dry-run mode[/dim]")
-            return 0
-
-        console.print(f"Cleaning up snapshots (keeping {keep_recent} most recent sessions)")
-        if max_age_days is not None:
-            console.print(f"Also deleting snapshots older than {max_age_days} days")
-
-        deleted = await cleanup_snapshots_impl(
-            executor=executor,
-            host=Host.SOURCE,
-            keep_recent=keep_recent,
-            max_age_days=max_age_days,
-        )
-
-        if deleted:
-            console.print(f"\n[green]Successfully deleted {len(deleted)} snapshot(s):[/green]")
-            for snapshot in deleted:
-                console.print(f"  - {snapshot.path}")
-        else:
-            console.print("\n[yellow]No snapshots were deleted[/yellow]")
-
-        return 0
-
-    except Exception as e:
-        console.print(f"\n[bold red]Cleanup failed:[/bold red] {e}")
-        return 1
-
-
 @app.command()
 def logs(
     last: Annotated[
@@ -408,7 +343,12 @@ def cleanup_snapshots(
         max_age_days = cfg.btrfs_snapshots.max_age_days
 
     # Run cleanup
-    exit_code = _run_cleanup(cfg.btrfs_snapshots.keep_recent, max_age_days, dry_run)
+    exit_code = run_snapshot_cleanup(
+        cfg.btrfs_snapshots.keep_recent,
+        max_age_days,
+        dry_run,
+        console.print,
+    )
     sys.exit(exit_code)
 
 
