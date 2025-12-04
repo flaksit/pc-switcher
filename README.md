@@ -26,26 +26,25 @@ Work on source machine → Trigger sync → Resume on target machine
 
 ## Installation
 
-Clone the repository:
-```bash
-git clone git@github.com:yourusername/pc-switcher.git
-cd pc-switcher
-```
-
 Install using the installation script:
 ```bash
 curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash
 ```
 
+To install a specific version:
+```bash
+curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.2.0 bash
+```
+
+Test installation:
+```bash
+pc-switcher --help
+pc-switcher --version
+```
+
 After installation, create the default configuration:
 ```bash
 pc-switcher init
-```
-
-Or run directly from source:
-```bash
-uv sync
-uv run pc-switcher --help
 ```
 
 ## Quick Start
@@ -144,10 +143,33 @@ pc-switcher cleanup-snapshots --older-than 7d [--dry-run]
 
 ## Development
 
+Clone the repository:
+```bash
+git clone git@github.com:flaksit/pc-switcher.git
+cd pc-switcher
+```
+
 Install dependencies:
 ```bash
 uv sync
 ```
+
+Install the tool from your local checkout (for testing):
+```bash
+./install.sh
+```
+This auto-detects the git workspace and runs `uv tool install .` from your local code.
+
+If you want to install a specific version from GitHub, use one of the following commands:
+```bash
+# use the local script to install a specific package version from GitHub
+VERSION=0.2.0 ./install.sh
+./install.sh --ref abcd0123
+./install.sh --ref my_feature_branch
+# Use the install script from GitHub to install a specific package version
+curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --ref my_feature_branch
+```
+
 
 Run code quality checks:
 ```bash

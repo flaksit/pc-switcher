@@ -1476,18 +1476,18 @@ This script:
 
 ### Shared Installation Logic (DRY)
 
-Both initial installation and target deployment use the **same `install.sh` script**. The script accepts a version parameter to install a specific version:
+Both initial installation and target deployment use the **same `install.sh` script**. The script accepts a `VERSION` environment variable to install a specific version:
 
 ```mermaid
 graph TD
     subgraph "Initial Installation (user runs manually)"
-        UserCurl["curl ... install.sh | sh"]
+        UserCurl["curl ... install.sh | bash"]
         Note1["Installs latest version"]
     end
 
     subgraph "Target Deployment (during sync)"
         InstallJob["InstallOnTargetJob"]
-        SSHCurl["SSH: curl ... install.sh | sh -s -- --version 0.4.0"]
+        SSHCurl["SSH: curl ... install.sh | VERSION=0.4.0 bash"]
         Note2["Installs same version as source"]
     end
 
@@ -1582,9 +1582,10 @@ async def execute(self) -> None:
 
     # Run the same install.sh script used for initial installation
     # The script handles: uv bootstrap, dependencies, pc-switcher install
+    # Use VERSION env var to specify the version to install
     install_url = f"https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/v{source_version}/install.sh"
     result = await self.target.run_command(
-        f"curl -LsSf {install_url} | sh -s -- --version {source_version}"
+        f"curl -LsSf {install_url} | VERSION={source_version} bash"
     )
     if not result.success:
         raise RuntimeError(f"Failed to install pc-switcher on target: {result.stderr}")

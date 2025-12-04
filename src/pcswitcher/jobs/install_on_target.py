@@ -90,11 +90,12 @@ class InstallOnTargetJob(SystemJob):
 
         # Run the same install.sh script used for initial installation
         # The script handles: uv bootstrap, dependencies, pc-switcher install
+        # Use VERSION env var to specify the version to install
         install_url = (
             f"https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/"
             f"v{source_version}/install.sh"
         )
-        cmd = f"curl -LsSf {install_url} | sh -s -- --version {source_version}"
+        cmd = f"curl -LsSf {install_url} | VERSION={source_version} bash"
         result = await self.target.run_command(cmd)
         if not result.success:
             raise RuntimeError(f"Failed to install pc-switcher on target: {result.stderr}")

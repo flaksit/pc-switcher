@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # PC-switcher installation script
-# Usage: curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash
-# Or with version: curl -sSL ... | bash -s -- --version 0.1.0
+#
+# User installation (via curl):
+#   curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash
+#   curl -sSL ... | VERSION=0.2.0 bash    # Install specific release
+#
+# Developer installation (from git checkout):
+#   ./install.sh                          # Install from local checkout
+#   ./install.sh --ref main               # Install from specific ref
 
 set -euo pipefail
 
@@ -29,23 +35,36 @@ warn() {
 }
 
 # Parse command line arguments
-INSTALL_VERSION=""
+INSTALL_REF=""
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --ref)
+            INSTALL_REF="$2"
+            shift 2
+            ;;
         --version)
-            INSTALL_VERSION="$2"
+            # Deprecated: use VERSION env var instead
+            warn "--version is deprecated. Use: curl ... | VERSION=$2 bash"
+            INSTALL_REF="v$2"
             shift 2
             ;;
         -h|--help)
             echo "PC-switcher installation script"
             echo ""
-            echo "Usage: $0 [--version VERSION]"
+            echo "User installation (via curl):"
+            echo "  curl -sSL .../install.sh | bash              # Latest from main"
+            echo "  curl -sSL .../install.sh | VERSION=0.2.0 bash  # Specific version"
+            echo ""
+            echo "Developer installation (from git checkout):"
+            echo "  ./install.sh                # Install from local checkout"
+            echo "  ./install.sh --ref main     # Install from specific ref"
             echo ""
             echo "Options:"
-            echo "  --version VERSION    Install specific version (e.g., 0.1.0)"
-            echo "  -h, --help          Show this help message"
+            echo "  --ref REF      Install from specific git ref (branch, tag, or commit)"
+            echo "  -h, --help     Show this help message"
             echo ""
-            echo "Without --version, installs the latest version from the main branch."
+            echo "Environment variables:"
+            echo "  VERSION        Install specific release version (e.g., VERSION=0.2.0)"
             exit 0
             ;;
         *)
@@ -140,14 +159,36 @@ fi
 # Step 3: Install pc-switcher
 info "Installing pc-switcher..."
 
-# Determine install source
-if [[ -n "${INSTALL_VERSION}" ]]; then
-    INSTALL_SOURCE="git+https://github.com/flaksit/pc-switcher@v${INSTALL_VERSION}"
-    info "Installing version ${INSTALL_VERSION} from GitHub..."
+# Determine install source with priority:
+# 1. Explicit --ref argument
+# 2. VERSION env var (for curl installations)
+# 3. Git workspace detection (for developer installations)
+# 4. Default to main branch
+
+INSTALL_SOURCE=""
+INSTALL_MODE=""
+
+if [[ -n "${INSTALL_REF}" ]]; then
+    # Priority 1: Explicit --ref argument
+    INSTALL_SOURCE="git+https://github.com/flaksit/pc-switcher@${INSTALL_REF}"
+    INSTALL_MODE="ref '${INSTALL_REF}' from GitHub"
+elif [[ -n "${VERSION:-}" ]]; then
+    # Priority 2: VERSION env var (for curl | VERSION=x.y.z bash)
+    INSTALL_SOURCE="git+https://github.com/flaksit/pc-switcher@v${VERSION}"
+    INSTALL_MODE="version ${VERSION} from GitHub"
+elif git rev-parse --is-inside-work-tree &>/dev/null; then
+    # Priority 3: Running from git workspace - install local checkout
+    GIT_ROOT=$(git rev-parse --show-toplevel)
+    INSTALL_SOURCE="${GIT_ROOT}"
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "detached")
+    INSTALL_MODE="local checkout (${CURRENT_BRANCH})"
 else
+    # Priority 4: Default to main branch
     INSTALL_SOURCE="git+https://github.com/flaksit/pc-switcher@main"
-    info "Installing latest version from main branch..."
+    INSTALL_MODE="main branch from GitHub"
 fi
+
+info "Installing from ${INSTALL_MODE}..."
 
 # Install or upgrade using uv tool
 if uv tool list | grep -q "^pc-switcher "; then

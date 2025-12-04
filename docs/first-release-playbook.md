@@ -225,7 +225,7 @@ Test on a VM or second machine:
 
 ```bash
 # Test installing specific version
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --version 0.1.0-alpha.1
+curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.1 bash
 
 # Verify
 pc-switcher --version  # Should show 0.1.0-alpha.1
