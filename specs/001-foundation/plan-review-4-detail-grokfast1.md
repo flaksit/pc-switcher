@@ -211,4 +211,4 @@ The plan is **conditionally ready** for implementation. The identified gaps and 
 
 **Spec Updates Needed**:
 - Clarify CONFIG_SCHEMA access in FR-001</content>
-<parameter name="filePath">/home/janfr/dev/pc-switcher/specs/001-foundation/plan-review-4-detail.md
+<parameter name="filePath">specs/001-foundation/plan-review-4-detail.md

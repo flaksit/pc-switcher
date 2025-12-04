@@ -27,18 +27,18 @@ The architecture document describes:
 
 ### Actual Implementation
 
-**Orchestrator (`/home/janfr/dev/pc-switcher/src/pcswitcher/core/orchestrator.py`):**
+**Orchestrator (`src/pcswitcher/core/orchestrator.py`):**
 - Uses Python's `signal.signal()` to catch SIGINT
 - Handler sets `session.abort_requested = True` and raises `KeyboardInterrupt`
 - `KeyboardInterrupt` caught in `run()` method which calls `cleanup_current_job()`
 - Jobs run synchronously in main thread
 
-**Job Interface (`/home/janfr/dev/pc-switcher/src/pcswitcher/core/job.py`):**
+**Job Interface (`src/pcswitcher/core/job.py`):**
 - `abort(timeout: float)` is a synchronous method
 - No threading primitives in base interface
 - Jobs track `_aborted` flag internally
 
-**Dummy Success Job (`/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/dummy_success.py`):**
+**Dummy Success Job (`src/pcswitcher/jobs/dummy_success.py`):**
 - Uses `time.sleep(1)` in loops (blocking!)
 - Checks `self._aborted` flag between sleep iterations
 - Cooperative abort: only responds when loop iteration completes
@@ -114,7 +114,7 @@ Based on similar tools (rsync, borg backup, duplicity, lsyncd):
 
 ### Disk Monitor Low Space Detection
 
-**Current Implementation** (`/home/janfr/dev/pc-switcher/src/pcswitcher/utils/disk.py`):
+**Current Implementation** (`src/pcswitcher/utils/disk.py`):
 - Runs in daemon thread (`threading.Thread(daemon=True)`)
 - Checks disk space at configurable interval (default 30s)
 - Calls callback on low space

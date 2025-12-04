@@ -16,7 +16,7 @@ This guide provides the essential commands and patterns for developing the found
 
 ```bash
 # Clone and setup
-cd /home/janfr/dev/pc-switcher
+cd pc-switcher
 
 # Initialize Python project (if not exists)
 uv init --python 3.14

@@ -1,10 +1,10 @@
 # Implementation Documentation
 
-This document provides detailed implementation-level documentation for the pc-switcher codebase. For architectural overview, see `/home/janfr/dev/pc-switcher/docs/High level requirements.md`.
+This document provides detailed implementation-level documentation for the pc-switcher codebase. For architectural overview, see `docs/High level requirements.md`.
 
 ## Module Overview
 
-All source code is located in `/home/janfr/dev/pc-switcher/src/pcswitcher/`.
+All source code is located in `src/pcswitcher/`.
 
 | Module | Description |
 |--------|-------------|
@@ -35,7 +35,7 @@ All source code is located in `/home/janfr/dev/pc-switcher/src/pcswitcher/`.
 
 ## Key Data Types
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/models.py`:
+From `src/pcswitcher/models.py`:
 
 ### Enums
 
@@ -152,7 +152,7 @@ threshold: str
 
 ## Command Execution
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/executor.py`:
+From `src/pcswitcher/executor.py`:
 
 ### Process Protocol
 
@@ -220,7 +220,7 @@ Both LocalProcess and RemoteProcess implement the Process protocol for uniform h
 
 ## Event System
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/events.py`:
+From `src/pcswitcher/events.py`:
 
 ### EventBus
 
@@ -271,7 +271,7 @@ latency: float | None         # Round-trip time in ms
 
 ## Logging System
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/logger.py`:
+From `src/pcswitcher/logger.py`:
 
 Architecture: EventBus-based decoupling allows multiple consumers (file logger, console logger, UI) to subscribe independently without coupling jobs to output formats.
 
@@ -349,7 +349,7 @@ def get_latest_log_file() -> Path | None:
 
 ### Locking
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/lock.py`:
+From `src/pcswitcher/lock.py`:
 
 **SyncLock** - File-based lock using `fcntl.flock()`:
 
@@ -384,7 +384,7 @@ The same lock file (`pc-switcher.lock`) is used on target, acquired via a persis
 
 ### Btrfs Snapshots
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/snapshots.py`:
+From `src/pcswitcher/snapshots.py`:
 
 **Snapshot Creation**:
 
@@ -460,7 +460,7 @@ async def cleanup_snapshots(
 
 ### Disk Space Monitoring
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/disk.py`:
+From `src/pcswitcher/disk.py`:
 
 **DiskSpace** dataclass:
 ```python
@@ -490,7 +490,7 @@ def parse_threshold(threshold: str) -> tuple[str, int]:
 
 ## Job System
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/base.py`:
+From `src/pcswitcher/jobs/base.py`:
 
 ### Job Base Class
 
@@ -550,7 +550,7 @@ class Job(ABC):
 
 ### JobContext
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/context.py`:
+From `src/pcswitcher/jobs/context.py`:
 
 ```python
 @dataclass(frozen=True)
@@ -575,7 +575,7 @@ class JobContext:
 
 ## Configuration System
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/config.py`:
+From `src/pcswitcher/config.py`:
 
 ### Configuration Dataclasses
 
@@ -625,7 +625,7 @@ Error handling: All errors collected as `ConfigError` objects and raised togethe
 
 ## Orchestrator
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/orchestrator.py`:
+From `src/pcswitcher/orchestrator.py`:
 
 Main workflow coordinator executing the complete sync pipeline.
 
@@ -681,7 +681,7 @@ If any job raises an exception, the TaskGroup cancels all other tasks and propag
 
 ## SSH Connection Management
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/connection.py`:
+From `src/pcswitcher/connection.py`:
 
 ### Connection Class
 
@@ -714,7 +714,7 @@ Design: Uses asyncssh with keepalive for connection health monitoring and a sema
 
 ## Version Management
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/version.py`:
+From `src/pcswitcher/version.py`:
 
 ### Version Functions
 
@@ -729,7 +729,7 @@ def parse_version_from_cli_output(output: str) -> str:
     # Raises ValueError if version cannot be parsed
 ```
 
-Target installation/upgrade is handled by `InstallOnTargetJob` in `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/install_on_target.py`.
+Target installation/upgrade is handled by `InstallOnTargetJob` in `src/pcswitcher/jobs/install_on_target.py`.
 
 ### Installation Policy
 
@@ -740,7 +740,7 @@ Orchestrator enforces these rules:
 
 ## Terminal UI
 
-From `/home/janfr/dev/pc-switcher/src/pcswitcher/ui.py`:
+From `src/pcswitcher/ui.py`:
 
 ### TerminalUI Class
 
@@ -797,7 +797,7 @@ UI Layout:
 
 ## Testing
 
-Tests are organized in `/home/janfr/dev/pc-switcher/tests/`:
+Tests are organized in `tests/`:
 
 ```
 tests/
@@ -822,7 +822,7 @@ uv run pytest --cov=pcswitcher
 
 ### Common Fixtures
 
-From `/home/janfr/dev/pc-switcher/tests/conftest.py`:
+From `tests/conftest.py`:
 
 ```python
 @pytest.fixture
@@ -848,7 +848,7 @@ def failed_command_result() -> CommandResult:
 
 ## Development Tools
 
-From `/home/janfr/dev/pc-switcher/pyproject.toml`:
+From `pyproject.toml`:
 
 All commands must use `uv run` prefix (never use system Python directly):
 
@@ -933,8 +933,8 @@ Benefits:
 ## Cross-References
 
 For architectural context and high-level design decisions, see:
-- `/home/janfr/dev/pc-switcher/docs/High level requirements.md` - Project vision, scope, workflow
-- `/home/janfr/dev/pc-switcher/docs/adr/_index.md` - Architectural decision records
+- `docs/High level requirements.md` - Project vision, scope, workflow
+- `docs/adr/_index.md` - Architectural decision records
 
 For user-facing documentation (when available):
 - User manual
