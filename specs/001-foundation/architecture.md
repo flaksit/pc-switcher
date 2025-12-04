@@ -1086,7 +1086,7 @@ graph TD
 
     Connect["<b>Establish SSH Connection</b>"]
 
-    AcquireLocks["<b>Acquire Locks</b><br/>- Source: ~/.local/share/pc-switcher/sync.lock<br/>- Target: ~/.local/share/pc-switcher/target.lock"]
+    AcquireLocks["<b>Acquire Locks</b><br/>- Unified lock: ~/.local/share/pc-switcher/pc-switcher.lock<br/>- Acquired locally (source) and remotely (target)"]
 
     SubvolCheck["<b>Subvolume Validation</b><br/>- Verify all configured subvolumes<br/>  exist on source AND target"]
 
@@ -1144,118 +1144,39 @@ graph TD
 3. **Installation after pre-sync snapshots**: Installation modifies the target system, so it must happen AFTER pre-sync snapshots to allow rollback if installation fails. Pre-sync snapshots capture the state BEFORE installation.
 4. **Three validation phases**: Schema → Job config → System state, with distinct error messages. Version compatibility is part of the System state validation phase.
 5. **DiskSpaceMonitor as background tasks**: Two instances run throughout sync - one monitors source (local commands), one monitors target (via `RemoteExecutor`). Either can abort sync on low space.
-6. **Lock acquisition**: Source lock prevents concurrent syncs from same machine. Target lock prevents A→B and C→B concurrent syncs.
+6. **Lock acquisition**: Unified lock prevents any machine from participating in multiple syncs simultaneously (in any role: as source or target).
 
 ---
 
 ## Lock Mechanism
 
-Per FR-047, the system implements locking to prevent concurrent sync executions.
+Per FR-047, the system implements locking to prevent concurrent sync participation.
 
-### Lock Files
+### Unified Lock Design
 
-| Lock | Location | Purpose |
-|------|----------|---------|
-| Source lock | `~/.local/share/pc-switcher/sync.lock` | Prevents concurrent syncs from the same source machine |
-| Target lock | `~/.local/share/pc-switcher/target.lock` | Prevents concurrent syncs to the same target (A→B and C→B) |
+A single lock file `~/.local/share/pc-switcher/pc-switcher.lock` is used on every machine. This ensures a machine can only participate in one sync at a time, regardless of role (source or target).
 
-### Target Lock Acquisition via SSH
+| Acquisition | Method | Purpose |
+|-------------|--------|---------|
+| Source (local) | `fcntl.flock()` | Acquired when starting as sync source |
+| Target (remote) | `flock` via SSH | Acquired on target machine via persistent SSH process |
 
-The target lock must be held for the duration of the SSH connection. If the connection drops (crash, network issue), the lock must be automatically released to prevent stale locks requiring manual intervention.
+### Invariant
 
-**Implementation**: Use `flock` with the SSH session. The lock holder is a `flock` process that dies when the SSH connection is lost:
+**A machine can only participate in one sync at a time.** This single rule prevents all problematic scenarios:
 
-```mermaid
-sequenceDiagram
-    participant Orchestrator
-    participant SSH as SSH Connection
-    participant Target as Target Machine
-    participant FlockProcess as flock process
+- A→B running, A→C attempted: A cannot acquire its local lock (held by A's own process)
+- A→B running, C→B attempted: B cannot acquire its local lock (held by A's remote process)
+- A→B running, B→C attempted: B cannot acquire its local lock (held by A's remote process)
+- A→B running, C→A attempted: C cannot acquire A's lock remotely (A holds it locally)
+- A→A (self-sync): A cannot acquire the same lock twice
 
-    Orchestrator->>SSH: Establish connection
-    Orchestrator->>SSH: Start flock process
-    SSH->>Target: flock -n ~/.local/share/pc-switcher/target.lock -c "cat"
-    Note over Target: flock acquires lock and waits on stdin
+### Key Properties
 
-    alt Lock acquired
-        Target-->>Orchestrator: Process started (lock held)
-        Note over FlockProcess: Holds lock while stdin open<br/>(tied to SSH channel)
-
-        Note over Orchestrator: Proceed with sync...
-
-        alt Normal completion
-            Orchestrator->>SSH: Close flock stdin (send EOF)
-            Note over FlockProcess: cat exits → flock releases lock
-        else SSH connection lost (crash/network)
-            Note over SSH: Connection drops
-            Note over FlockProcess: stdin closed → cat exits<br/>→ flock releases lock automatically
-        end
-    else Lock already held
-        Target-->>Orchestrator: flock returns exit code 1 (would block)
-        Orchestrator->>Orchestrator: Log ERROR "Another sync is in progress on target"
-        Note over Orchestrator: Abort before any operations
-    end
-```
-
-**Key properties:**
-- Lock is tied to the SSH session lifetime, not a file on disk
-- Crash or network disconnect automatically releases the lock
-- No manual cleanup required for stale locks
+- Remote lock is tied to SSH session lifetime (auto-release on disconnect)
+- Crash or network disconnect automatically releases the remote lock
 - Uses `flock -n` (non-blocking) to fail fast if lock is held
-
-**Implementation code:**
-```python
-async def acquire_target_lock(self) -> None:
-    """Acquire target lock tied to SSH session lifetime."""
-    lock_path = "~/.local/share/pc-switcher/target.lock"
-
-    # Start flock process that holds lock while stdin is open
-    # When SSH connection dies, stdin closes, cat exits, flock releases lock
-    self._lock_process = await self._connection.create_process(
-        f"mkdir -p ~/.local/share/pc-switcher && "
-        f"flock -n {lock_path} -c 'cat' || exit 1"
-    )
-
-    # Check if we got the lock (process should be running)
-    await asyncio.sleep(0.1)  # Brief wait for flock to acquire or fail
-    if self._lock_process.exit_status is not None:
-        raise LockError(
-            f"Another sync is in progress on target (lock held: {lock_path})"
-        )
-
-    self.log(INFO, "Target lock acquired")
-
-async def release_target_lock(self) -> None:
-    """Release target lock by closing the flock process stdin."""
-    if self._lock_process:
-        self._lock_process.stdin.write_eof()
-        await self._lock_process.wait()
-        self.log(DEBUG, "Target lock released")
-```
-
-### Source Lock
-
-Source lock uses standard file locking:
-
-```python
-async def acquire_source_lock(self) -> None:
-    """Acquire source lock using fcntl."""
-    lock_path = Path.home() / ".local/share/pc-switcher/sync.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-
-    self._lock_file = lock_path.open("w")
-    try:
-        fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        # Read PID from lock file for error message
-        with lock_path.open() as f:
-            pid = f.read().strip()
-        raise LockError(f"Another sync is in progress (PID: {pid})")
-
-    # Write our PID to lock file
-    self._lock_file.write(str(os.getpid()))
-    self._lock_file.flush()
-```
+- Lock file contains holder info for diagnostics (e.g., `source:hostname:session_id` or `target:hostname:session_id`)
 
 ---
 

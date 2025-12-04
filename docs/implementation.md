@@ -367,22 +367,20 @@ def release(self) -> None:
     # Explicitly release lock (safe to call multiple times)
 ```
 
-Lock file location: `~/.local/share/pc-switcher/sync.lock`
+Lock file location: `~/.local/share/pc-switcher/pc-switcher.lock`
 
-Design: Uses `fcntl.flock()` for atomic lock acquisition with automatic release. File contents contain holder info (PID/hostname) for diagnostic error messages, but the actual lock is the fcntl lock, not file existence. This prevents race conditions and stale locks.
+Design: Uses a single unified lock file on every machine. This ensures a machine can only participate in one sync at a time (in any role: as source or target). Uses `fcntl.flock()` for atomic lock acquisition with automatic release. File contents contain holder info for diagnostic error messages.
 
 **Remote Lock Acquisition**:
 
 ```python
-async def acquire_target_lock(executor: RemoteExecutor, source_hostname: str) -> bool:
+async def start_persistent_remote_lock(executor: RemoteExecutor, source_hostname: str, session_id: str) -> RemoteProcess | None:
     # Acquire lock on target machine via SSH using flock command
     # Lock automatically released when SSH connection closes
-    # Returns True if acquired, False if already held
+    # Returns RemoteProcess if acquired, None if already held
 ```
 
-Lock file location on target: `~/.local/share/pc-switcher/target.lock`
-
-Implementation: Uses shell file descriptor 9 with `flock -n 9` for non-blocking acquisition.
+The same lock file (`pc-switcher.lock`) is used on target, acquired via a persistent SSH flock process.
 
 ### Btrfs Snapshots
 

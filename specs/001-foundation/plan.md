@@ -39,8 +39,7 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 **Storage**:
 - Config: `~/.config/pc-switcher/config.yaml`
 - Logs: `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
-- Lock (source): `~/.local/share/pc-switcher/sync.lock`
-- Lock (target): `~/.local/share/pc-switcher/target.lock`
+- Lock: `~/.local/share/pc-switcher/pc-switcher.lock` (unified lock on every machine)
 
 **Testing**: pytest with asyncio support (`pytest-asyncio`), mocking for SSH operations
 

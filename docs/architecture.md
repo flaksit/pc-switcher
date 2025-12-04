@@ -59,7 +59,7 @@ Loads configuration from `~/.config/pc-switcher/config.yaml` and creates the orc
 Central coordinator managing the complete sync workflow:
 1. **Pre-sync validation**: Schema, config, and system state checks
 2. **Connection management**: SSH connection to target with keepalive
-3. **Lock acquisition**: Prevents concurrent syncs (source and target locks)
+3. **Lock acquisition**: Prevents concurrent sync participation (unified lock)
 4. **Job discovery and validation**: Load jobs, validate configs and system state (includes version compatibility check)
 5. **Safety snapshots (pre-sync)**: Creates btrfs snapshots before modifications
 6. **Install/Upgrade on Target**: Version validation and pc-switcher installation/upgrade if needed
@@ -241,10 +241,12 @@ Read-only snapshots created before and after sync operations:
 - **Naming**: `<phase>-<subvolume>-<timestamp>` (e.g., `pre-@home-20251129T143022`)
 
 ### Locking
-Prevents concurrent sync operations:
-- **Source lock**: `~/.local/share/pc-switcher/sync.lock` - prevents concurrent syncs from same source
-- **Target lock**: `~/.local/share/pc-switcher/target.lock` - prevents A→B and C→B concurrent scenarios
-- **Mechanism**: Target lock uses `flock` tied to SSH session (auto-release on disconnect)
+Prevents concurrent sync participation using a single unified lock file:
+- **Lock file**: `~/.local/share/pc-switcher/pc-switcher.lock`
+- **Invariant**: A machine can only participate in one sync at a time (in any role:as source or target)
+- **Source acquisition**: Local `flock` when starting as source
+- **Target acquisition**: Remote `flock` via SSH (auto-release on disconnect)
+- This prevents all concurrent scenarios: A→B while A→C, A→B while C→B, A→B while B→C, A→B while C→A, and self-sync A→A
 
 ### Disk Space Monitoring
 Continuous monitoring during sync via `DiskSpaceMonitorJob`:
