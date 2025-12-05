@@ -10,6 +10,19 @@ Review the architecture and design from the helicopter view of an architect. Is 
 Don't change any existing files. Write your feedback to a new file "plan-review-N-architecture.md" in the feature folder so I can feed it to the architect for them to fix/improve the plan. Replace N in the filename with the next available number starting from 1 (because there could be multiple reviews).
 Example: If there is already a file "plan-review-1.md", create a new file "plan-review-2-architecture.md", and so on.
 
+**Materiality guidance:** Only raise issues that affect architectural integrity:
+- Patterns that will cause scaling, maintainability, or extensibility problems
+- Over-engineering (unnecessary abstraction, premature optimization)
+- Under-engineering (missing critical components, tight coupling that blocks future work)
+- Violations of constitution principles or established project patterns
+
+Do NOT raise issues about:
+- Minor naming preferences
+- Implementation details that don't affect the architecture
+- Alternative approaches that are roughly equivalent in quality
+
+**If the architecture is sound and appropriately simple:** Say so. Confirming "the design is clean, follows project patterns, and is appropriately scoped" is valuable feedback.
+
 
 ## Overriding remarks, feedback, instructions, if any
 The following instructions override any conflicting instructions above. If there are no overriding instructions, this section is empty.
