@@ -140,6 +140,8 @@ As a pc-switcher developer, I can trace each test back to the specific requireme
 
 - **SC-007**: Unit test suite executes completely in under 30 seconds on a standard development machine
 
+- **SC-008**: Integration tests complete full VM-based testing in under 15 minutes
+
 ## Assumptions
 
 - Testing framework infrastructure from [spec.md](./spec.md) is implemented and operational
