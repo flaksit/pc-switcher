@@ -9,7 +9,7 @@ This file provides guidance to AI agents when working with code in this reposito
 
 **Project Stage**: Early planning/design phase. No implementation code exists yet.
 
-**Target Environment**: Ubuntu 24.04 LTS, btrfs filesystem, machines connected via 1Gb LAN during sync.
+**Target Environment**: Ubuntu 24.04 LTS, btrfs filesystem, machines connected via SSH (LAN, VPN, etc.).
 
 ## Critical Context Files
 
@@ -143,5 +143,7 @@ This repository will NOT contain:
 ## Active Technologies
 
 - **Python 3.14** (per ADR-003) via uv venv
+
+## Remember!
 - You MUST ALWAYS use `uv run` for running Python or python packages: `uv run python`, `uv run ruff`, `uv run basedpyright`, etc.
 - You MUST NEVER use the system Python directly. So DO NOT run `python3`, `python`, `pip`, etc. directly.

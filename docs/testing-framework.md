@@ -107,10 +107,13 @@ Before each test run, VMs are reset to a clean baseline state using btrfs snapsh
 1. Create read-only baseline snapshots of `@` and `@home` during initial provisioning
 2. Before each test run:
    a. Delete any test artifacts in `/.snapshots/pc-switcher/` (preserving baseline snapshots)
-   b. Create read-write snapshots from the baseline snapshots for both `@` and `@home`
-   c. Set the new `@` snapshot as default using `btrfs set-default`
-   d. Update `/home` mount to use the new `@home` snapshot
-   e. Reboot VM (~10-20 seconds)
+   b. Mount the top-level filesystem as /mnt/btrfs
+   c. mv /mnt/btrfs/@ /mnt/btrfs/@_old
+   d. btrfs subvolume snapshot /mnt/btrfs/.snapshots/pc-switcher/baseline/@ /mnt/btrfs/@
+   e. mv /mnt/btrfs/@home /mnt/btrfs/@home_old
+   f. btrfs subvolume snapshot /mnt/btrfs/.snapshots/pc-switcher/baseline/@home /mnt/btrfs/@home
+   g. Reboot VM (~10-20 seconds)
+   h. Remove old subvolumes `/mnt/btrfs/@_old` and `/mnt/btrfs/@home_old`
 3. Clean state ready for tests
 
 This ensures test isolation without recreating VMs. The btrfs rollback is much faster than Hetzner's VM snapshot restore.

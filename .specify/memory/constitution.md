@@ -75,7 +75,7 @@ Follow-up TODOs:
 ## Operational Constraints
 
 - PC-switcher targets one active user context at a time; true concurrent edit scenarios remain out of scope except for conflict detection.
-- Supported environments MUST run Ubuntu 24.04 LTS on Btrfs with a flat subvolume layout and 1+ Gb LAN connectivity during sync.
+- Supported environments MUST run Ubuntu 24.04 LTS on Btrfs with a flat subvolume layout and SSH connectivity (LAN, VPN such as Tailscale, or other network) during sync.
 - Sync scope MUST include user and system state enumerated in `High level requirements.md` while explicitly excluding machine-specific secrets and caches.
 - Acceptable workflow constraints (logouts, VM suspension, etc.) MUST be automated where possible and documented before enforcement.
 - Configuration management stays external to this repository; solutions MUST be parameterized for multiple personal deployments.
