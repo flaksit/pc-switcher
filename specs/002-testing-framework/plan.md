@@ -16,11 +16,9 @@ Implement the **testing framework infrastructure** for pc-switcher: VM provision
 - pytest >= 9.0.1 (existing)
 - pytest-asyncio >= 1.3.0 (existing)
 - asyncssh >= 2.21.1 (existing, for SSH connections)
-- OpenTofu (Terraform-compatible, for Hetzner VM provisioning)
-- hcloud CLI (Hetzner Cloud command-line tool)
+- hcloud CLI (Hetzner Cloud command-line tool, for VM provisioning)
 **Storage**:
-- OpenTofu state: Hetzner Storage Box (SSH/SCP access, synced via wrapper script)
-- Test VM state: btrfs snapshots on VMs
+- Test VM state: btrfs snapshots on VMs (no external state storage needed)
 **Testing**: pytest with asyncio mode, markers for integration tests
 **Target Platform**: Ubuntu 24.04 LTS (both dev machines and test VMs), btrfs filesystem
 **Project Type**: Single project (CLI tool with async operations)
@@ -124,12 +122,9 @@ tests/
 │   ├── conftest.py      # Integration-specific fixtures (VM connections)
 │   └── test_*.py        # Future integration test files (out of scope for this feature)
 └── infrastructure/      # VM infrastructure (extend)
-    ├── main.tf          # OpenTofu configuration for Hetzner VMs
-    ├── variables.tf     # OpenTofu variables
-    ├── outputs.tf       # OpenTofu outputs (VM IPs)
     └── scripts/
-        ├── tofu-wrapper.sh   # State sync wrapper (create)
-        ├── provision.sh      # VM provisioning (exists)
+        ├── provision-vms.sh  # Create VMs via hcloud CLI (create)
+        ├── provision.sh      # VM OS install with btrfs (exists)
         ├── configure-vm.sh   # VM configuration (create)
         ├── configure-hosts.sh # /etc/hosts and SSH keys setup (create)
         ├── reset-vm.sh       # Btrfs snapshot reset (create)
@@ -156,8 +151,8 @@ docs/
 | Aspect | Decision | Rationale |
 |--------|----------|-----------|
 | VM isolation | Hetzner Cloud VMs | Safety requirement; can't test destructive btrfs ops locally |
+| VM provisioning | hcloud CLI (no Terraform/OpenTofu) | Simple; only 2 VMs; no state management needed |
 | Snapshot reset | Btrfs snapshots at `/.snapshots/baseline/@` | Fast (< 30s) vs VM reprovisioning (minutes); matches docs/testing-framework.md |
 | Lock mechanism | File-based on pc1 | Simple; matches existing lock module patterns |
 | Lock scope | Test execution only | Provisioning is rare; protected by CI concurrency groups |
 | CI concurrency | GitHub Actions concurrency group | Built-in feature; no external dependencies |
-| State backend | Hetzner Storage Box | Cost-effective; avoids state drift between dev/CI |

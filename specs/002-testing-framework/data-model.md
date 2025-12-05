@@ -154,9 +154,6 @@ Represents a GitHub Actions workflow configuration.
 |----------|-------------|---------|
 | HCLOUD_TOKEN | Hetzner Cloud API token | - |
 | SSH_PUBLIC_KEY | Path to SSH public key | ~/.ssh/id_ed25519.pub |
-| STORAGE_BOX_HOST | Hetzner Storage Box hostname | - |
-| STORAGE_BOX_USER | Storage Box SSH user (sub-account) | - |
-| STORAGE_BOX_PATH | Path to tfstate on Storage Box | pc-switcher/test-infrastructure |
 
 ### CI-Specific
 
@@ -168,13 +165,6 @@ Represents a GitHub Actions workflow configuration.
 ---
 
 ## File Artifacts
-
-### Infrastructure State
-
-| File | Location | Purpose |
-|------|----------|---------|
-| terraform.tfstate | tests/infrastructure/ | OpenTofu state (gitignored) |
-| terraform.tfvars | tests/infrastructure/ | Variable overrides (gitignored) |
 
 ### Test Artifacts
 

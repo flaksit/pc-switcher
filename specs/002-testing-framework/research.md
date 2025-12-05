@@ -84,64 +84,64 @@ def pytest_collection_modifyitems(config, items):
 
 ---
 
-## 3. OpenTofu/Hetzner Cloud Configuration
+## 3. Hetzner Cloud VM Provisioning
 
-### Decision: Use OpenTofu with Hetzner Storage Box for state persistence
+### Decision: Use hcloud CLI for VM provisioning (no OpenTofu/Terraform)
 
 ### Rationale
-- OpenTofu is actively maintained Terraform fork (per constitution: well-supported tools)
-- Local state alone would be ephemeral in CI runners; remote state needed for shared access
-- Hetzner Storage Box (existing infrastructure) provides cost-effective SSH/SCP-accessible storage
+- OpenTofu would only create 2 VMs and 1 SSH key - overkill for this simple use case
+- All real configuration (btrfs install, user setup, etc.) already uses bash scripts with hcloud CLI
+- No state management needed - simply check if VM exists: `hcloud server describe <name>`
+- Eliminates complexity of remote state storage and syncing
+- hcloud CLI is already required for other operations (rescue mode, SSH key management)
 - Hetzner CX23 VMs meet cost constraint (< EUR 10/month)
 
-### Configuration Structure
+### Provisioning Script
 
-```hcl
-# tests/infrastructure/main.tf
-terraform {
-  required_version = ">= 1.6"
-  required_providers {
-    hcloud = {
-      source  = "hetznercloud/hcloud"
-      version = "~> 1.45.0"
-    }
-  }
-  # Local backend - state synced to/from Storage Box via wrapper script
-}
+```bash
+#!/usr/bin/env bash
+# tests/infrastructure/scripts/provision-vms.sh
 
-provider "hcloud" {
-  token = var.hcloud_token
-}
+set -euo pipefail
 
-resource "hcloud_server" "pc1" {
-  name        = "pc-switcher-pc1"
-  server_type = "cx23"  # 2 vCPU, 4GB RAM, ~EUR 3.50/month
-  image       = "ubuntu-24.04"
-  location    = "fsn1"
-  ssh_keys    = [hcloud_ssh_key.test_key.id]
-}
+: "${HCLOUD_TOKEN:?HCLOUD_TOKEN must be set}"
 
-resource "hcloud_server" "pc2" {
-  name        = "pc-switcher-pc2"
-  server_type = "cx23"
-  image       = "ubuntu-24.04"
-  location    = "fsn1"
-  ssh_keys    = [hcloud_ssh_key.test_key.id]
-}
+# Create SSH key if needed
+if ! hcloud ssh-key describe pc-switcher-test-key &>/dev/null; then
+    echo "Creating SSH key..."
+    hcloud ssh-key create --name pc-switcher-test-key \
+        --public-key-from-file "${SSH_PUBLIC_KEY:-$HOME/.ssh/id_ed25519.pub}"
+fi
+
+# Create VMs if needed
+for VM in pc-switcher-pc1 pc-switcher-pc2; do
+    if hcloud server describe "$VM" &>/dev/null; then
+        echo "VM $VM already exists, skipping creation"
+    else
+        echo "Creating VM $VM..."
+        hcloud server create \
+            --name "$VM" \
+            --type cx23 \
+            --image ubuntu-24.04 \
+            --location fsn1 \
+            --ssh-key pc-switcher-test-key
+    fi
+done
+
+echo "VMs created. Run provision.sh for each VM to install btrfs and configure."
 ```
 
-### State Management
-- State file: `tests/infrastructure/terraform.tfstate` (gitignored locally)
-- Remote storage: Hetzner Storage Box at `pc-switcher/test-infrastructure/terraform.tfstate`
-- Wrapper script `tofu-wrapper.sh` syncs state before/after tofu operations:
-  1. Pull state from Storage Box via SCP
-  2. Run tofu command
-  3. Push updated state back to Storage Box
-- Single source of truth prevents CI/developer state drift
+### VM Destruction
+
+```bash
+# Destroy VMs when not needed
+hcloud server delete pc-switcher-pc1
+hcloud server delete pc-switcher-pc2
+hcloud ssh-key delete pc-switcher-test-key  # optional
+```
 
 ### Alternatives Considered
-- **Pure local state**: Would be lost in CI runners; causes drift between dev/CI
-- **Hetzner Object Storage (S3)**: More expensive than existing Storage Box
+- **OpenTofu/Terraform**: Adds state management complexity without benefit for 2 VMs
 - **Smaller VM types**: CX11 (2GB RAM) may be insufficient for btrfs operations
 
 ---

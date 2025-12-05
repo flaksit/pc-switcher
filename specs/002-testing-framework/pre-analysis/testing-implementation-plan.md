@@ -26,18 +26,13 @@ tests/
 │
 ├── infrastructure/                  # VM provisioning
 │   ├── README.md
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   ├── versions.tf
-│   ├── cloud-config.yaml
 │   └── scripts/
-│       ├── tofu-wrapper.sh          # State sync to/from Storage Box
-│       ├── provision.sh
-│       ├── configure-vm.sh
-│       ├── configure-hosts.sh
-│       ├── reset-vm.sh
-│       └── lock.sh
+│       ├── provision-vms.sh         # Create VMs via hcloud CLI
+│       ├── provision.sh             # Install btrfs OS on VM
+│       ├── configure-vm.sh          # Configure VM (user, SSH, etc.)
+│       ├── configure-hosts.sh       # Setup /etc/hosts and SSH keys
+│       ├── reset-vm.sh              # Reset VM to baseline snapshot
+│       └── lock.sh                  # Lock management
 │
 └── playbook/
     └── visual-verification.md
@@ -88,125 +83,88 @@ Unit-specific fixtures:
 
 ## Infrastructure Configuration
 
-### tests/infrastructure/main.tf
+### tests/infrastructure/scripts/provision-vms.sh
 
-```hcl
-terraform {
-  required_providers {
-    hcloud = {
-      source  = "hetznercloud/hcloud"
-      version = ">= 1.57.0"
-    }
-  }
-  # Local backend - state synced to/from Storage Box via tofu-wrapper.sh
-}
-
-provider "hcloud" {
-  token = var.hcloud_token
-}
-
-resource "hcloud_ssh_key" "test_key" {
-  name       = "pc-switcher-test-key"
-  public_key = file(var.ssh_public_key_path)
-}
-
-resource "hcloud_server" "pc1" {
-  name        = "pc-switcher-pc1"
-  server_type = "cx23"
-  image       = "ubuntu-24.04"
-  location    = "fsn1"
-  ssh_keys    = [hcloud_ssh_key.test_key.id]
-  user_data   = file("${path.module}/cloud-config.yaml")
-
-  labels = {
-    project = "pc-switcher"
-    role    = "pc1"
-  }
-}
-
-resource "hcloud_server" "pc2" {
-  name        = "pc-switcher-pc2"
-  server_type = "cx23"
-  image       = "ubuntu-24.04"
-  location    = "fsn1"
-  ssh_keys    = [hcloud_ssh_key.test_key.id]
-  user_data   = file("${path.module}/cloud-config.yaml")
-
-  labels = {
-    project = "pc-switcher"
-    role    = "pc2"
-  }
-}
-
-output "pc1_ip" {
-  value = hcloud_server.pc1.ipv4_address
-}
-
-output "pc2_ip" {
-  value = hcloud_server.pc2.ipv4_address
-}
-```
-
-### tests/infrastructure/cloud-config.yaml
-
-Minimal cloud-config for initial SSH access. The actual btrfs and user configuration is done by `provision.sh` using Hetzner's installimage.
-
-```yaml
-#cloud-config
-# Minimal config for initial boot - provision.sh does the real setup
-
-# Disable password authentication for security
-ssh_pwauth: false
-```
-
-Note: This cloud-config is intentionally minimal because `provision.sh` will reinstall the OS with btrfs using installimage, which wipes everything.
-
-### tests/infrastructure/scripts/tofu-wrapper.sh
-
-Wrapper script to sync OpenTofu state to/from Hetzner Storage Box:
+Creates VMs via hcloud CLI if they don't exist, then runs full provisioning:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$(dirname "$SCRIPT_DIR")"
-STATE_FILE="$INFRA_DIR/terraform.tfstate"
-REMOTE_PATH="${STORAGE_BOX_PATH:-pc-switcher/test-infrastructure}/terraform.tfstate"
 
-# Validate required environment variables
-: "${STORAGE_BOX_HOST:?STORAGE_BOX_HOST must be set}"
-: "${STORAGE_BOX_USER:?STORAGE_BOX_USER must be set}"
+show_help() {
+    cat << EOF
+Usage: $SCRIPT_NAME
 
-pull_state() {
-    echo "Pulling state from Storage Box..."
-    scp -q "${STORAGE_BOX_USER}@${STORAGE_BOX_HOST}:${REMOTE_PATH}" "$STATE_FILE" 2>/dev/null || true
+Create and provision test VMs if they don't exist.
+
+This script:
+  1. Creates SSH key in Hetzner Cloud (if needed)
+  2. Creates pc-switcher-pc1 and pc-switcher-pc2 VMs (if needed)
+  3. Runs provision.sh on each VM to install btrfs
+  4. Runs configure-hosts.sh to setup inter-VM networking
+
+Environment:
+  HCLOUD_TOKEN     Hetzner Cloud API token (required)
+  SSH_PUBLIC_KEY   Path to SSH public key (default: ~/.ssh/id_ed25519.pub)
+
+Examples:
+  $SCRIPT_NAME
+EOF
 }
 
-push_state() {
-    if [[ -f "$STATE_FILE" ]]; then
-        echo "Pushing state to Storage Box..."
-        ssh "${STORAGE_BOX_USER}@${STORAGE_BOX_HOST}" "mkdir -p $(dirname "$REMOTE_PATH")"
-        scp -q "$STATE_FILE" "${STORAGE_BOX_USER}@${STORAGE_BOX_HOST}:${REMOTE_PATH}"
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+: "${HCLOUD_TOKEN:?HCLOUD_TOKEN must be set}"
+SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-$HOME/.ssh/id_ed25519.pub}"
+
+# Create SSH key if needed
+if ! hcloud ssh-key describe pc-switcher-test-key &>/dev/null; then
+    echo "Creating SSH key..."
+    hcloud ssh-key create --name pc-switcher-test-key \
+        --public-key-from-file "$SSH_PUBLIC_KEY"
+fi
+
+# Track which VMs need provisioning
+VMS_TO_PROVISION=()
+
+# Create VMs if needed
+for VM in pc-switcher-pc1 pc-switcher-pc2; do
+    if hcloud server describe "$VM" &>/dev/null; then
+        echo "VM $VM already exists, skipping creation"
+    else
+        echo "Creating VM $VM..."
+        hcloud server create \
+            --name "$VM" \
+            --type cx23 \
+            --image ubuntu-24.04 \
+            --location fsn1 \
+            --ssh-key pc-switcher-test-key
+        VMS_TO_PROVISION+=("$VM")
     fi
-}
+done
 
-# Pull state before running tofu
-pull_state
+# Run provisioning for newly created VMs
+for VM in "${VMS_TO_PROVISION[@]}"; do
+    echo "Provisioning $VM..."
+    "$SCRIPT_DIR/provision.sh" "$VM"
+done
 
-# Run tofu with all arguments
-cd "$INFRA_DIR"
-tofu "$@"
-EXIT_CODE=$?
+# Configure inter-VM networking (if any VMs were provisioned)
+if [[ ${#VMS_TO_PROVISION[@]} -gt 0 ]]; then
+    echo "Configuring inter-VM networking..."
+    "$SCRIPT_DIR/configure-hosts.sh"
+fi
 
-# Push state after running tofu (if state-modifying command)
-case "${1:-}" in
-    apply|destroy|import|state)
-        push_state
-        ;;
-esac
-
-exit $EXIT_CODE
+echo ""
+echo "VMs ready:"
+echo "  pc1: $(hcloud server ip pc-switcher-pc1)"
+echo "  pc2: $(hcloud server ip pc-switcher-pc2)"
 ```
 
 ### tests/infrastructure/scripts/lock.sh
@@ -762,29 +720,23 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
 
-      - uses: opentofu/setup-opentofu@v1
-        with:
-          tofu_version: "1.10.7"
+      - name: Install hcloud CLI
+        run: |
+          curl -fsSL https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz | tar -xz
+          sudo mv hcloud /usr/local/bin/
 
-      - name: Setup SSH keys
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          echo "${{ secrets.STORAGE_BOX_SSH_KEY }}" > ~/.ssh/storagebox
-          chmod 600 ~/.ssh/storagebox
           ssh-keyscan -H ${{ secrets.PC1_TEST_HOST }} >> ~/.ssh/known_hosts
           ssh-keyscan -H ${{ secrets.PC2_TEST_HOST }} >> ~/.ssh/known_hosts
 
       - name: Provision VMs (if needed)
-        working-directory: tests/infrastructure
-        run: |
-          ./scripts/tofu-wrapper.sh init
-          ./scripts/tofu-wrapper.sh apply -auto-approve
+        run: ./tests/infrastructure/scripts/provision-vms.sh
         env:
-          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
-          STORAGE_BOX_HOST: ${{ secrets.STORAGE_BOX_HOST }}
-          STORAGE_BOX_USER: ${{ secrets.STORAGE_BOX_USER }}
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Reset VMs
         run: |
@@ -806,9 +758,6 @@ jobs:
 |--------|-------------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
 | `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access |
-| `STORAGE_BOX_HOST` | Hetzner Storage Box hostname |
-| `STORAGE_BOX_USER` | Storage Box SSH user (sub-account) |
-| `STORAGE_BOX_SSH_KEY` | SSH private key for Storage Box access |
 | `PC1_TEST_HOST` | IP/hostname of pc1 test VM |
 | `PC2_TEST_HOST` | IP/hostname of pc2 test VM |
 
@@ -819,39 +768,30 @@ Tasks can be implemented in parallel where noted.
 ### Phase 1: Infrastructure Scripts
 
 **Can run in parallel:**
-1. Create `tests/infrastructure/scripts/tofu-wrapper.sh`
-2. Create `tests/infrastructure/scripts/lock.sh`
-3. Create `tests/infrastructure/scripts/reset-vm.sh`
-4. Create `tests/infrastructure/scripts/provision.sh`
-5. Create `tests/infrastructure/scripts/configure-vm.sh`
-6. Create `tests/infrastructure/scripts/configure-hosts.sh`
+1. Create `tests/infrastructure/scripts/provision-vms.sh`
+2. Create `tests/infrastructure/scripts/provision.sh`
+3. Create `tests/infrastructure/scripts/configure-vm.sh`
+4. Create `tests/infrastructure/scripts/configure-hosts.sh`
+5. Create `tests/infrastructure/scripts/reset-vm.sh`
+6. Create `tests/infrastructure/scripts/lock.sh`
+7. Create `tests/infrastructure/README.md`
 
-### Phase 2: OpenTofu Configuration
-
-**Can run in parallel:**
-7. Create `tests/infrastructure/main.tf`
-8. Create `tests/infrastructure/variables.tf`
-9. Create `tests/infrastructure/outputs.tf`
-10. Create `tests/infrastructure/versions.tf`
-11. Create `tests/infrastructure/cloud-config.yaml`
-12. Create `tests/infrastructure/README.md`
-
-### Phase 3: Test Fixtures
+### Phase 2: Test Fixtures
 
 **Sequential (shared conftest first):**
-13. Update `tests/conftest.py` with shared fixtures
+8. Update `tests/conftest.py` with shared fixtures
 
 **Then in parallel:**
-14. Create `tests/unit/conftest.py`
-15. Create `tests/integration/conftest.py`
-16. Create `tests/integration/__init__.py`
+9. Create `tests/unit/conftest.py`
+10. Create `tests/integration/conftest.py`
+11. Create `tests/integration/__init__.py`
 
-### Phase 4: CI/CD & Documentation
+### Phase 3: CI/CD & Documentation
 
 **Can run in parallel:**
-17. Create `.github/workflows/test.yml`
-18. Update `pyproject.toml` with pytest configuration
-19. Create `tests/playbook/visual-verification.md`
-20. Update `docs/testing-developer-guide.md`
-21. Update `docs/testing-ops-guide.md`
-22. Update `docs/testing-framework.md`
+12. Create `.github/workflows/test.yml`
+13. Update `pyproject.toml` with pytest configuration
+14. Create `tests/playbook/visual-verification.md`
+15. Update `docs/testing-developer-guide.md`
+16. Update `docs/testing-ops-guide.md`
+17. Update `docs/testing-framework.md`

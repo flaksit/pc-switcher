@@ -29,34 +29,23 @@ Unit tests execute in < 30 seconds and use mocked executors.
 1. **Hetzner Cloud Account**: Required for test VM infrastructure
 2. **SSH Key**: ed25519 key at `~/.ssh/id_ed25519` (or set `SSH_PUBLIC_KEY`)
 3. **hcloud CLI**: Install via `brew install hcloud` or from [releases](https://github.com/hetznercloud/cli/releases)
-4. **OpenTofu**: Install via `brew install opentofu` or from [releases](https://github.com/opentofu/opentofu/releases)
 
 ### First-Time Setup
 
 ```bash
-# 1. Export required environment variables
+# 1. Export Hetzner API token
 export HCLOUD_TOKEN="your-api-token"
-export STORAGE_BOX_HOST="uXXXXXX.your-storagebox.de"
-export STORAGE_BOX_USER="uXXXXXX-sub1"  # Sub-account for pc-switcher
 
-# 2. Provision test VMs (one-time, ~10 minutes)
+# 2. Create VMs and provision with btrfs (one-time, ~15 minutes total)
 cd tests/infrastructure
-./scripts/tofu-wrapper.sh init
-./scripts/tofu-wrapper.sh apply
+./scripts/provision-vms.sh
 
-# 3. Convert to btrfs and configure (one-time, ~5 minutes each)
-./scripts/provision.sh pc-switcher-pc1
-./scripts/provision.sh pc-switcher-pc2
-
-# 4. Configure /etc/hosts and SSH keys for inter-VM communication
-./scripts/configure-hosts.sh
-
-# 5. Note the VM IPs from tofu output
-export PC_SWITCHER_TEST_PC1_HOST=$(./scripts/tofu-wrapper.sh output -raw pc1_ip)
-export PC_SWITCHER_TEST_PC2_HOST=$(./scripts/tofu-wrapper.sh output -raw pc2_ip)
+# 3. Note the VM IPs
+export PC_SWITCHER_TEST_PC1_HOST=$(hcloud server ip pc-switcher-pc1)
+export PC_SWITCHER_TEST_PC2_HOST=$(hcloud server ip pc-switcher-pc2)
 ```
 
-The `tofu-wrapper.sh` script syncs OpenTofu state to/from the Hetzner Storage Box before and after each operation, ensuring CI and developers share the same state.
+The `provision-vms.sh` script creates VMs if they don't exist, installs Ubuntu with btrfs using Hetzner's installimage, configures the test user, and sets up inter-VM SSH access.
 
 ### Running Integration Tests
 
@@ -95,9 +84,8 @@ The reset script restores VMs to their baseline snapshots (`/.snapshots/baseline
 |--------|-------------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
 | `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519) |
-| `STORAGE_BOX_HOST` | Hetzner Storage Box hostname |
-| `STORAGE_BOX_USER` | Storage Box SSH user (sub-account) |
-| `STORAGE_BOX_SSH_KEY` | SSH private key for Storage Box access |
+| `PC1_TEST_HOST` | IP/hostname of pc1 test VM |
+| `PC2_TEST_HOST` | IP/hostname of pc2 test VM |
 
 ### Workflow Triggers
 
@@ -166,8 +154,8 @@ Test VMs cost ~EUR 7/month total when running continuously. To reduce costs:
 
 ```bash
 # Destroy VMs when not needed
-cd tests/infrastructure
-./scripts/tofu-wrapper.sh destroy
+hcloud server delete pc-switcher-pc1
+hcloud server delete pc-switcher-pc2
 
 # VMs will be reprovisioned automatically on next integration test run
 ```

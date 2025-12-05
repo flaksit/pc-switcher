@@ -113,3 +113,110 @@ Files updated:
 ## Outstanding Action Items
 
 1. **Create branch `003-foundation-tests`**: Move the test specifications (Unit Test Specifications, Integration Test Specifications) to `specs/003-foundation-tests/pre-analysis/implementation-plan.md`. This is outside the scope of this review resolution and should be done as a separate task.
+
+---
+
+## Follow-up Change: Replace OpenTofu with hcloud CLI
+
+**Date**: 2025-12-06
+
+### Conversation Log
+
+**User prompt:**
+> Is tf really the way to go? We're not using it for very much else than spinning up VMs. And we have a lot of scripting around it to setup and configure and reinstall ... Maybe just use bash/python scripts with hcloud cli? Tofu state not really needed then. Just checking if the VMs exist or not should be sufficient. What do you think?
+
+**Claude response:**
+
+You raise an excellent point. Let me analyze the trade-offs:
+
+## Current OpenTofu Approach
+
+**What it does:**
+- Creates 2 VMs
+- Creates 1 SSH key
+
+**What it requires:**
+- OpenTofu installed
+- State file synced to/from Storage Box (tofu-wrapper.sh)
+- Storage Box credentials in CI secrets
+
+**Everything else** (OS reinstall with btrfs, user setup, SSH hardening, baseline snapshots, reset) is already done via bash scripts with `hcloud` CLI.
+
+## Alternative: Pure hcloud CLI
+
+```bash
+# Create VM if it doesn't exist
+if ! hcloud server describe pc-switcher-pc1 &>/dev/null; then
+    hcloud server create \
+        --name pc-switcher-pc1 \
+        --type cx23 \
+        --image ubuntu-24.04 \
+        --location fsn1 \
+        --ssh-key pc-switcher-test-key
+fi
+```
+
+**Pros:**
+- No state file needed - just check if VM exists
+- hcloud CLI already required for provision.sh (rescue mode)
+- Eliminates Storage Box complexity for state
+- Fewer CI secrets (no STORAGE_BOX_*)
+- Simpler to understand and maintain
+
+**Cons:**
+- Less "standard" IaC pattern
+- Slightly more imperative code
+
+## My Assessment
+
+I agree with your thinking. OpenTofu is overkill here:
+- We're only creating 2 VMs with trivial config
+- The real work (btrfs install, configuration) happens in scripts anyway
+- State management adds complexity that outweighs benefits
+- Idempotency is trivial: "if VM exists, skip create"
+
+**Recommendation:** Switch to pure hcloud CLI scripts. This eliminates:
+- tofu-wrapper.sh
+- Storage Box for state
+- 3 CI secrets (STORAGE_BOX_*)
+- OpenTofu installation step in CI
+
+Would you like me to update the plan documents to use hcloud CLI instead of OpenTofu?
+
+---
+
+**User prompt:**
+> Yes. Update @docs/testing-framework.md as well. And check if @specs/002-testing-framework/spec.md needs updating (it shouldn't, but you never know).
+
+---
+
+### Decision
+
+Replace OpenTofu with pure hcloud CLI scripts.
+
+### Rationale
+- OpenTofu only creates 2 VMs and 1 SSH key - overkill for this use case
+- No state management needed - simply check if VM exists: `hcloud server describe <name>`
+- Eliminates Storage Box complexity and 3 CI secrets
+- hcloud CLI is already required for other operations (rescue mode, SSH key management)
+
+### Files Updated
+- `specs/002-testing-framework/research.md` - Section 3 rewritten for hcloud CLI
+- `specs/002-testing-framework/data-model.md` - Removed Storage Box env vars and terraform artifacts
+- `specs/002-testing-framework/quickstart.md` - Updated setup instructions
+- `specs/002-testing-framework/plan.md` - Updated dependencies and project structure
+- `specs/002-testing-framework/pre-analysis/testing-implementation-plan.md` - Replaced infrastructure config
+- `docs/testing-framework.md` - Updated provisioning section
+- `specs/002-testing-framework/spec.md` - Verified no changes needed (no tooling references)
+
+### Removed from Plan
+- `tests/infrastructure/main.tf`
+- `tests/infrastructure/variables.tf`
+- `tests/infrastructure/outputs.tf`
+- `tests/infrastructure/versions.tf`
+- `tests/infrastructure/cloud-config.yaml`
+- `tests/infrastructure/scripts/tofu-wrapper.sh`
+- STORAGE_BOX_HOST, STORAGE_BOX_USER, STORAGE_BOX_SSH_KEY secrets
+
+### Added to Plan
+- `tests/infrastructure/scripts/provision-vms.sh` - Creates VMs via hcloud CLI if they don't exist
