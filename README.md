@@ -42,6 +42,12 @@ pc-switcher --help
 pc-switcher --version
 ```
 
+**Uninstalling**:
+```bash
+uv tool uninstall pcswitcher
+```
+(Note: Use the package name `pcswitcher`, not the command name `pc-switcher`)
+
 After installation, create the default configuration:
 ```bash
 pc-switcher init
@@ -132,6 +138,26 @@ pc-switcher cleanup-snapshots --older-than 7d [--dry-run]
 3. **Use standard tools**: Well-supported, maintainable approach
 4. **Minimize disk wear**: NVMe SSDs—avoid unnecessary writes
 5. **Simplicity**: Easy to understand, modify, and maintain
+
+## Naming Convention
+
+This project uses two different names depending on context:
+
+- **Package name**: `pcswitcher` (no dash)
+  - Used for: `uv tool install/uninstall`, Python imports (`from pcswitcher...`)
+  - Why: Python package names cannot contain dashes (PEP 8 convention)
+
+- **Command name**: `pc-switcher` (with dash)
+  - Used for: Running commands in your terminal
+  - Why: CLI tools commonly use dashes for readability (like `docker-compose`, `git-lfs`)
+
+When you run `uv tool list`, you'll see:
+```
+pcswitcher v0.0.0.post159.dev0+3825b99
+- pc-switcher
+```
+
+This shows the package name provides the `pc-switcher` executable.
 
 ## Documentation
 
