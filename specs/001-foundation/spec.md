@@ -2,8 +2,8 @@
 
 **Feature Branch**: `001-foundation`
 **Created**: 2025-11-15
-**Status**: Draft
-**Input**: User description: "Write specs for features 1, 2 and 3 of the Feature breakdown.md: (1) Basic CLI & Infrastructure - Command parser, config system, connection, logging, terminal UI skeleton, architecture for modular features; (2) Safety Infrastructure - Pre-sync validation framework, btrfs snapshot management, rollback capability; (3) Installation & Setup - Deploy to machines, dependency installation"
+**Status**: Final
+**Input**: User description: "(1) Basic CLI & Infrastructure - Command parser, config system, connection, logging, terminal UI skeleton, architecture for modular features; (2) Safety Infrastructure - Pre-sync validation framework, btrfs snapshot management, rollback capability; (3) Installation & Setup - Deploy to machines, dependency installation"
 
 ## Navigation
 
