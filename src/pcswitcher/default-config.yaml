@@ -72,10 +72,12 @@ btrfs_snapshots:
     - "@"
     - "@home"
 
-  # Number of recent sync sessions to retain snapshots for
+  # Number of recent sync sessions to always retain snapshots for,
+  # irrespective of age (max_age_days below)
   keep_recent: 3
 
   # Maximum age in days for snapshot retention (optional)
+  # Note that always keeping 'keep_recent' snapshots takes precedence.
   # Uncomment to enable age-based cleanup:
   # max_age_days: 7
 
