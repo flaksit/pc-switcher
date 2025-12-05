@@ -31,8 +31,6 @@ All checks pass:
 
 **Current state:**
 - Branch: `001-foundation`
-- HEAD: `8098b46 - simplify the use of ARGUMENTS`
-- Uncommitted: `draft prompts.txt` (working notes)
 - No existing git tags (first release)
 
 ---
@@ -142,7 +140,7 @@ git push origin main
 
 ### Step 3: Create GitHub Release (with new tag)
 
-Go to: https://github.com/flaksit/pc-switcher/releases/new
+Go to: <https://github.com/flaksit/pc-switcher/releases/new>
 
 **GitHub UI Steps:**
 
@@ -207,7 +205,6 @@ pc-switcher --help
 ---
 
 [Generated release notes will appear below this summary]
-```
 
 6. Check **"Set as a pre-release"** ✅ (because this is alpha)
 
