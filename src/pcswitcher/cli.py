@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import signal
+import subprocess
 import sys
+import urllib.request
 from importlib.metadata import PackageNotFoundError
 from importlib.resources import files
 from pathlib import Path
 from typing import Annotated
 
 import typer
+from packaging.version import Version
 from rich.console import Console
 from rich.text import Text
 
@@ -19,7 +22,7 @@ from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.orchestrator import Orchestrator
-from pcswitcher.version import get_this_version
+from pcswitcher.version import get_this_version, parse_version_from_cli_output
 
 # Cleanup timeout for graceful shutdown after SIGINT.
 # After first SIGINT, cleanup has this many seconds to complete.
@@ -32,6 +35,14 @@ app = typer.Typer(
     help="Synchronization system for seamless switching between Linux desktop machines",
     no_args_is_help=True,
 )
+
+# Create "self" subcommand group for self-management commands
+self_app = typer.Typer(
+    name="self",
+    help="Manage the pc-switcher installation itself",
+    no_args_is_help=True,
+)
+app.add_typer(self_app, name="self")
 
 console = Console()
 
@@ -395,6 +406,170 @@ def init(
     console.print(f"[green]Created configuration file:[/green] {config_path}")
     console.print("\n[dim]Please review and customize the configuration, especially:[/dim]")
     console.print("[dim]  - btrfs_snapshots.subvolumes (must match your system)[/dim]")
+
+
+GITHUB_RELEASES_URL = "https://api.github.com/repos/flaksit/pc-switcher/releases"
+GITHUB_REPO_URL = "https://github.com/flaksit/pc-switcher"
+
+
+def _get_latest_github_version(*, include_prerelease: bool = False) -> str:
+    """Fetch the latest release version from GitHub.
+
+    Args:
+        include_prerelease: If True, include pre-release versions. If False (default),
+            only return stable releases.
+
+    Returns:
+        Version string (e.g., "0.4.0" or "0.5.0-alpha.1" if prerelease included)
+
+    Raises:
+        RuntimeError: If unable to fetch releases or no matching release found
+    """
+    try:
+        req = urllib.request.Request(
+            GITHUB_RELEASES_URL,
+            headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "pc-switcher"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            releases = json.loads(response.read().decode("utf-8"))
+
+            for release in releases:
+                if release.get("draft", False):
+                    continue
+                if not include_prerelease and release.get("prerelease", False):
+                    continue
+
+                tag_name = release.get("tag_name", "")
+                # Tags are in format "v0.4.0", strip the leading "v"
+                if tag_name.startswith("v"):
+                    return tag_name[1:]
+                return tag_name
+
+            if include_prerelease:
+                raise RuntimeError("No releases found on GitHub")
+            else:
+                raise RuntimeError(
+                    "No stable releases found on GitHub. Use --prerelease to install a pre-release version."
+                )
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Failed to fetch releases from GitHub: {e}") from e
+
+
+def _run_uv_tool_install(version: str) -> subprocess.CompletedProcess[str]:
+    """Run uv tool install to install/upgrade pc-switcher.
+
+    Args:
+        version: Version to install (e.g., "0.4.0")
+
+    Returns:
+        CompletedProcess with stdout/stderr
+    """
+    install_source = f"git+{GITHUB_REPO_URL}@v{version}"
+    return subprocess.run(
+        ["uv", "tool", "install", "--force", install_source],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _verify_installed_version() -> str | None:
+    """Get the currently installed pc-switcher version.
+
+    Returns:
+        Version string if pc-switcher is installed and working, None otherwise
+    """
+    result = subprocess.run(
+        ["pc-switcher", "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        try:
+            return parse_version_from_cli_output(result.stdout)
+        except ValueError:
+            return None
+    return None
+
+
+@self_app.command()
+def update(
+    version: Annotated[
+        str | None,
+        typer.Argument(help="Version to install (e.g., '0.4.0'). If not specified, installs latest stable release."),
+    ] = None,
+    prerelease: Annotated[
+        bool,
+        typer.Option("--prerelease", "-p", help="Include pre-release versions when finding latest."),
+    ] = False,
+) -> None:
+    """Update pc-switcher to a specific version or latest.
+
+    Downloads and installs the specified version from GitHub using uv tool.
+    If no version is specified, fetches and installs the latest stable release.
+    Use --prerelease to include alpha/beta/rc versions.
+    """
+    # Get current version
+    try:
+        current_version = get_this_version()
+        current = Version(current_version)
+    except PackageNotFoundError:
+        console.print("[bold red]Error:[/bold red] Cannot determine current pc-switcher version")
+        sys.exit(1)
+
+    # Determine target version
+    if version is None:
+        console.print("[dim]Checking for latest version...[/dim]")
+        try:
+            target_version = _get_latest_github_version(include_prerelease=prerelease)
+        except RuntimeError as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            sys.exit(1)
+    else:
+        target_version = version
+
+    # Validate target version format
+    try:
+        target = Version(target_version)
+    except Exception:
+        console.print(f"[bold red]Error:[/bold red] Invalid version format: {target_version}")
+        sys.exit(1)
+
+    # Check if update is needed
+    if target == current:
+        console.print(f"[green]Already at version {current_version}[/green]")
+        sys.exit(0)
+
+    if target < current:
+        console.print(f"[yellow]Warning:[/yellow] Downgrading from {current_version} to {target_version}")
+
+    # Perform the update
+    console.print(f"Updating pc-switcher from {current_version} to {target_version}...")
+    result = _run_uv_tool_install(target_version)
+
+    if result.returncode != 0:
+        console.print("[bold red]Error:[/bold red] Update failed")
+        if result.stderr:
+            console.print(f"[dim]{result.stderr.strip()}[/dim]")
+        sys.exit(1)
+
+    # Verify installation
+    installed_version = _verify_installed_version()
+    if installed_version is None:
+        console.print("[bold red]Error:[/bold red] Verification failed - pc-switcher not working after update")
+        sys.exit(1)
+
+    if installed_version != target_version:
+        console.print(
+            f"[bold red]Error:[/bold red] Version mismatch after update. "
+            f"Expected {target_version}, got {installed_version}"
+        )
+        sys.exit(1)
+
+    console.print(f"[green]Successfully updated to version {target_version}[/green]")
 
 
 if __name__ == "__main__":
