@@ -1,19 +1,31 @@
 THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
 
-MAIN INSTRUCTION FOR THE COMING PROMPTS:
-You finished working on command "/speckit.implement.resolve-feedback" and we are continuing the review together. Continue to add our conversations to @specs/001-foundation/implementation-review-2-resolved.md so we have it as reference for our decisions and their impact.
+Convert to btrfs with "installimage": you included this in initial setup. Did you add this to the github workflow? Is it best to have these as separate script calls? Or call them with local_exec from a terraform_data resource? But how to wait for the reboot that is specified in the cloud-init? Maybe best to leave out the reboot from the cloud-init and do it in terraform after calling provision.sh? Actually, as provision.sh reinstalls completely, can't we just create the VM without cloud-init? We'll overwrite everything anyway. Then there is no automatic reboot.
+The INSTALLCONFIG creates two btrfs filesystems: one for / and one for /home. This is not what we want.
 
-For each prompt, follow this workflow:
-0. Analyze the question and context. If anything is unclear, ask clarifying questions first and wait for my answers.
-1. Update/implement the tests (TDD)
-2. Refactor code
-3. Refactor docs. They are equally important as code. Ensure ALL docs are adapted accordingly so they reflect the current state of the codebase.
-4. Validate: type check, lint, run tests, ...
 
-Update implementation-review-2-resolved.md along the way with our conversation and all relevant info about your decisions and changes. Include ALL my prompts and your output LITERALY, e.g. your clarifying questions and my answers as well.
+---
 
-Delegate as much as possible to subagents (even analysis), so that you can keep your context clean and you can focus on your task as project manager and orchestrator, but ensure that the final result is a coherent, working solution. Launch subagents in parallel if their tasks don't conflict.
+We use speckit as workflow to implement features in this project. The feature we are currently working has a specific feature folder under specs/ with the same name as the current git branch. The scope of this feature is actually the features 1+2+3 of @"docs/Feature breakdown.md" . This was detailed in @specs/001-foundation/spec.md .
 
+My developer implemented the feature and already implemented a few tests. Alas, they didn't follow TDD. The tests are very incomplete and they use a lot of mock-ups, which could easily hide possible issues with the mocked-up service.
+
+To honour principle "Reliability Without Compromise" from our constitution, we need to have full testing for the entire scope, for all optimistic and pessimistic scenarios. Unit tests and integration tests. The tests should be automated as much as possible. Given the nature of the project and the need for a remote system (the "target"), some manual testing will be needed.
+Please implement comprehensive testing for the full scope, including:
+- Automated Unit tests
+- Automated Integration tests
+- A playbook for manual tests that are needed to fully cover the scope. Write it to a new file "testing-playbook.md" in the feature folder
+Pay special attention to edge cases and error handling. Ensure that the implementation is robust and reliable.
+
+Create an overview report of the testing you implemented, including:
+- What parts of the scope are covered by which tests
+- How to run the tests
+- Any limitations, assumptions, etc.
+- Specific "Risk" chapter that highlights tests that could possibly be dangerous to execute blindly if there would be bugs in the implementation of the feature or in the implementation of the test itself (e.g. deleting files, overwriting files, removing btrfs snapshots, etc.)
+
+DO NOT EXECUTE THE TEST SUITE YOURSELF! Just implement it. I will first review your implementation and the report before executing it.
+
+BEFORE STARTING THE IMPLEMENTATION, come back to me with any clarifying questions you have about the feature, the scope, the implementation, the testing, etc. And I want to spar with you about the best approach to automate the tests as much as possible, given the need for a remote system (the "target"). Come with some ideas about how to do this in a reliable and repeatable manner.
 
 ---
 
@@ -231,3 +243,56 @@ Delegate as much as possible to subagents, so that you can keep your context cle
 Write a report to a new file "task-integration-review-resolution.md". The goal is to have a trace of any decisions we make while resolving the feedback. The report should contain the following:
 - $EXTRA_INSTRUCTIONS
 - A log of any further conversation we have while you are resolving the feedback. This will mainly be answers to your clarifying questions, but we could get into deeper conversation about some of the feedback given. Capture my prompts, your output and questions, my responses, ... literally.
+
+
+
+---
+
+
+
+DONE WITH CLAUDE:
+
+I gave you the wrong Hetzner VM size. We want CX23: their smallest and cheapest VM. I suppose 2 vCPUs and 4GB RAM is sufficient for our integration tests. Cost is only 3.5€/month. Update all generated docs and your plan accordingly.
+
+Good docs!
+
+Feedback about @docs/testing-framework.md:
+- Snapshot-Based Reset
+  - only talks about resetting `/` (`@`). We need to reset `@home` to an r/w copy of the original `@home`-snapshot as well and cleanup /.snapshots of anything that might linger (keeping of course our base snapshots of `@` and `@home`
+  - for clarity (be consistent with flat layout), the snapshots subvolume is called `@snapshots` and it is **mounted** at /.snapshot
+- Runing Tests > Prerequisites
+  - `uv sync --dev` does not exist. The dev dependencies are installed by default. Running `sync` is not necessary at all, if I understand well: locking and syncing is done automatically when running `uv run` (which we do right after)
+
+Feedback about specs/001-foundation/testing-report.md:
+- Clarifying question for me (and clarify in the document): Do the automated tests check that the UI shows progress updates, messages and logs? Testing the layout and colors is not needed; just testing that all updates come through would be sufficient. Because Coverage for US-9 shows only Manual. If not, consider adding automated tests for that.
+- For the Time-dependent tests, can't we just mock time? There exist libraries for this like freezegun, pytest-mock, testfixtures. If not, clarify in the document why not.
+- In "Integration Test Limitations" you write "Reset time: VM snapshot reset requires reboot (~30-60 seconds)." This is misleading. We won't use Hetzner VM snapshots because they are slow. Instead, we will just use "rollback" of btrfs snapshots. This requires rebooting the VM, but it will be much faster than Hetzner VM snapshots. Please clarify in the document.
+- "Not Covered by Automated Tests" - "Real network failures": small intermittent package drops are difficult to simulate, but we can simulate a complete network outage by just disconnecting the VM from the network for a (short) time (e.g. via firewall rules inside the VM or in Hetzner firewall). Consider adding automated tests for this.
+- "Not Covered by Automated Tests" - "Disk space exhaustion": we can just set the threshold very high for testing purposes, no?
+- Assumptions 2, 3, 4 and 5 are all under the control of the test framework, right? This should be setup like this automatically by the terraform scripts. If so, clarify that in the document.
+- Cleanup by individual integration tests is maybe not necessary for all of them, because we reset the VM to a clean snapshot before each test run anyway. E.g. the install of packages via apt in `test_cleanup_snapshots.py`
+
+Feedback about specs/001-foundation/testing-implementation-plan.md:
+- In `tests/integration/test_executor.py`, why is there no `test_run_command_real_failure` and 
+`test_run_command_with_timeout` for RemoteExecutor? I think it is important to test because getting this return from a remote SSH command is different from local execution from a subprocess.
+- `tests/integration/test_lock.py` should check for the following scenario as well: while sync a A>B is running, sync B>C is not allowed.
+- `tests/integration/test_logger.py`: is this an integration test that needs VM? If not, classify as unit test or split the "integration test" category into two categories: integration tests that need VM and integration tests that don't need VM.
+- `tests/integration/test_jobs/test_install_on_target.py`: is the case of target version higher than source version tested (should give error)? Should be tested.
+- `tests/integration/test_orchestrator.py`: `test_cleanup_on_failure`: is the flow tested where the sync is interrupted but the Jobs don't cleanup in time, so we timeout and the Orchestrator needs to kill stuff themselves? Should be tested.
+- `tests/infrastructure/main.tf`: Current terraform provider for Hetzner is version 1.57.0. Use that as lowest version.
+- `tests/infrastructure/cloud-init/ubuntu-btrfs.yaml`:
+  - Rather call it cloud-config.yaml to be clear.
+  - No need for a subfolder cloud-init for just a single file cloud-config.yaml
+  - Use the base given in Hetzner docs: https://community.hetzner.com/tutorials/basic-cloud-config and adapt it with your content. You can leave SSH on port 22.
+  - Shouldn't we create a /home/testuser/.ssh/config file that defines at least the hostnames of source and target?
+  - Is the filesystem already btrfs from the start? How? In our explorative conversation you mentioned "Hetzner installimage: Use their rescue mode + installimage (can configure btrfs)".
+- `tests/infrastructure/scripts`: ensure the scripts will contain a help output when called with `-h` or `--help` or wrong command line arguments.
+- `.github/workflows/test.yml`:
+  - should be triggered on all branches. Don't hardcode `001-foundation`.
+  - use opentofu version 1.10.7
+  - I think `uv python install` and `uv sync` are not necessary: `uv run` will do that automatically. `uv sync --dev` is invalid anyway.
+  - Where is the terraform state stored? Without state, it will create new VMs on each run. Hetzner Object Storage is expensive. Can we avoid this? Could we use a folder in my Hetzner Storage Box? Then I should create a subaccount for that with scp/sftp access.
+
+In the plan, is it not useful to indicate what can be implemented in parallel? Probably most of it. So you can efficiently assign tasks to multiple subagents.
+
+
