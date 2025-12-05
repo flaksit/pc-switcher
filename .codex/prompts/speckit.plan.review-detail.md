@@ -6,7 +6,7 @@ We use speckit as workflow to implement features in this project. The feature we
 
 My architect just made a detailed plan for the feature. The plan consists of all the contents of the feature folder (including subfolders), except for spec.md and except for the subfolder "checklists".
 Review their plan on completeness, correctness, consistency. Be exhaustive, so that after the remarks have been implemented, a second review won't raise any remarks anymore. Give any other valuable feedback you might have. Don't change any existing files. Write your feedback to a new file "plan-review-N-detail.md" in the feature folder so I can feed it to the architect for them to fix/improve the plan. Replace N in the filename with the next available number starting from 1 (because there could be multiple reviews).
-Example: If there is already a file "plan-review-1.md", create a new file "plan-review-2-detail.md", and so on.
+Example: If there is already a file "plan-review-1.md", create a new file "plan-review-2-detail.md", and so on. Number all feedback points in the file so it is easy to reference them.
 
 
 ## Overriding remarks, feedback, instructions, if any
