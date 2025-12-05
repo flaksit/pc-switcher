@@ -15,7 +15,7 @@ Documentation Hierarchy:
 
 Pre-analysis References:
 - [Testing Framework Documentation](../../docs/testing-framework.md) - Architecture and Implementation details
-- [Testing Implementation Plan](../../docs/adr/considerations/testing-implementation-plan.md) - Detailed implementation plan  
+- [Testing Implementation Plan](pre-analysis/testing-implementation-plan.md) - Detailed implementation plan  
   This document covers both the testing framework and retroactive tests for existing functionality. This feature is only about the framework itself.
 
 ## Clarifications
