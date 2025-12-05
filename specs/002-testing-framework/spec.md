@@ -49,7 +49,7 @@ As a pc-switcher developer, I can run unit tests locally to verify my changes be
 
 ### User Story 2 - Integration Test Suite with VM Isolation (Priority: P1)
 
-As a pc-switcher developer, I can run integration tests that exercise real system operations (btrfs snapshots, SSH connections, full workflows) on isolated test VMs. The VMs are automatically provisioned when needed and reset to a clean baseline before each test session, ensuring tests cannot damage my machine and each run starts fresh.
+As a pc-switcher developer, I can run integration tests that exercise real system operations (btrfs snapshots, SSH connections, full workflows) on isolated test VMs. The VMs are automatically provisioned when needed (including OS installation with btrfs filesystem) and reset to a clean baseline before each test session, ensuring tests cannot damage my machine and each run starts fresh.
 
 **Why this priority**: P1 because pc-switcher performs destructive system operations. Testing with mocks would hide real-world issues. VM isolation provides safety while enabling realistic testing.
 
@@ -57,9 +57,9 @@ As a pc-switcher developer, I can run integration tests that exercise real syste
 
 **Acceptance Scenarios**:
 
-1. **Given** I want to run integration tests, **When** I execute the integration test command, **Then** test VMs are automatically provisioned if not already available, and tests execute real system operations on the VMs
+1. **Given** I want to run integration tests, **When** I execute the integration test command, **Then** test VMs are automatically provisioned if not already available (including OS installation with btrfs filesystem), and tests execute real system operations on the VMs
 
-2. **Given** I start an integration test session, **When** the test framework initializes, **Then** all test VMs are reset to a clean baseline state, removing any artifacts from previous sessions
+2. **Given** I start an integration test session, **When** the test framework initializes, **Then** all test VMs are reset to a clean baseline state, removing any artifacts from previous sessions; if baseline snapshots are missing or invalid, the reset fails with an actionable error message
 
 3. **Given** I start integration tests while another run is in progress, **When** I attempt to run, **Then** the framework either waits for the lock or fails with a clear message identifying the current holder
 
@@ -170,15 +170,24 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 ### Edge Cases
 
 - What happens when test VMs are not provisioned?
-  - Framework automatically provisions VMs before running integration tests; developer does not need to manually set up infrastructure
+  - Framework automatically provisions VMs before running integration tests (including OS installation with btrfs filesystem); developer does not need to manually set up infrastructure
+- What happens when baseline snapshots are missing or invalid?
+  - Reset process fails immediately with actionable error: "Baseline snapshot missing. Run provisioning to create baseline snapshots."; tests do not proceed
 - What happens when VMs are unreachable during integration tests?
   - Tests fail with clear SSH connection error; lock is released; framework suggests checking VM status or re-provisioning (framework provides instructions to destroy VMs; re-provisioning will be automatic)
 - What happens when VM reset fails?
   - Reset process exits with error; tests do not proceed on dirty state; framework provides instructions to destroy VMs (re-provisioning will be automatic)
 - What happens when lock cannot be acquired after timeout?
-  - Test run fails with "Failed to acquire lock" error showing current holder identity
-- What happens when CI secrets are misconfigured?
-  - Integration test job fails early with authentication error; unit tests still pass
+  - Test run fails with "Failed to acquire lock" error showing current holder identity; stuck locks require manual cleanup
+- What happens when a test run crashes without releasing the lock?
+  - Lock remains held; subsequent runs fail after timeout; manual cleanup is required (documented in operational guide)
+- What happens when CI secrets are misconfigured or missing?
+  - Integration tests are skipped with clear notice; unit tests still run and pass
+- What happens when a PR is from a forked repository?
+  - Integration tests are skipped with clear notice (secrets are not available to forks); unit tests still run
+- What happens when VM environment variables are not set locally?
+  - If integration tests are explicitly requested (`-m integration`), they are skipped with clear message: "Skipping integration tests: VM environment not configured"
+  - If running `uv run pytest` without markers, integration tests are never run regardless of env var state
 
 ## Requirements
 
@@ -192,17 +201,25 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **FR-003**: Integration tests MUST run on isolated test infrastructure that is separate from developer machines and CI runners, preventing any possibility of damaging production systems
 
-- **FR-004**: Test VMs MUST be reset to a clean baseline state before each integration test session, ensuring test isolation and reproducibility
+- **FR-003a**: Contract tests MUST verify that MockExecutor and real executor implementations (LocalExecutor, RemoteExecutor) adhere to the same behavioral interface, ensuring mocks remain reliable representations of production behavior
 
-- **FR-005**: Concurrent test runs MUST be prevented via a locking mechanism to avoid interference between parallel executions
+- **FR-004**: Test VMs MUST be reset to a clean baseline state before each integration test session, ensuring test isolation and reproducibility; reset MUST fail with an actionable error if baseline snapshots are missing or invalid
 
-- **FR-006**: Test VMs MUST be automatically provisioned when a developer runs integration tests for the first time or when VMs do not exist
+- **FR-005**: Concurrent test runs MUST be prevented via a locking mechanism that stores holder identity and acquisition time; stuck locks require manual cleanup (documented in operational guide)
+
+- **FR-006**: Test VMs MUST be automatically provisioned when integration tests are run and VMs do not exist; provisioning includes cloud VM creation and OS installation with btrfs filesystem; baseline snapshots MUST be created at provisioning time; concurrent provisioning is prevented by CI concurrency controls (local concurrent provisioning is not supported and not checked)
+
+- **FR-006a**: During auto-provisioning, SSH keys MUST be injected from CI secrets; the test user accounts on both VMs MUST have the public key in authorized_keys to enable CI access. Keys for inter-VM communication can be generated during provisioning because not needed by anyone.
 
 #### Unit Test Requirements
 
 - **FR-007**: Unit tests MUST be runnable with single command `uv run pytest tests/unit tests/contract -v`
 
-- **FR-008**: Integration tests MUST be selectable via pytest marker for running separately from unit tests
+- **FR-008**: Integration tests MUST be selectable via pytest marker (`-m integration`) for running separately from unit tests
+
+- **FR-008a**: Integration tests MUST NOT run by default; `uv run pytest` (without explicit `-m integration` marker) MUST NOT run integration tests even if VM environment variables are configured
+
+- **FR-008b**: When integration tests are explicitly requested (`-m integration`) but VM environment variables are not configured, tests MUST be skipped (not failed) with a clear message
 
 #### Test VM Requirements
 
@@ -212,19 +229,27 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **FR-011**: Test VMs MUST be able to communicate with each other via SSH to simulate source-to-target sync scenarios
 
-- **FR-012**: VMs and related test infrastructure costs MUST remain under EUR 10/month on continuous run basis
+- **FR-011a**: Test infrastructure MUST consist of exactly two VMs (pc1 and pc2) to mirror the real pc-switcher sync architecture; each VM MUST have btrfs root filesystem with `@` and `@home` subvolumes
+
+- **FR-012**: VMs and related test infrastructure costs MUST remain under EUR 10/month on continuous run basis; VMs are expected to remain running persistently (reset via btrfs snapshots, not reprovisioning); manual destruction is acceptable when extended downtime is expected
 
 #### CI/CD Requirements
 
-- **FR-013**: CI MUST run type checks, lint checks and unit tests on every push to any branch
+- **FR-013**: CI MUST run type checks (basedpyright), lint checks (ruff), and unit tests (pytest) on every push to any branch
 
-- **FR-014**: CI MUST run integration tests on PRs to main branch
+- **FR-014**: CI MUST run integration tests on PRs to main branch (from the main repository only)
 
 - **FR-015**: CI MUST support manual trigger for running integration tests on any branch
 
 - **FR-016**: CI MUST prevent parallel integration test runs through concurrency control
 
 - **FR-017**: CI MUST reset test VMs before running integration tests
+
+- **FR-017a**: CI MUST skip integration tests with a clear notice when secrets are unavailable (e.g., forked PRs); unit tests MUST still run in this case
+
+- **FR-017b**: Integration tests on forked PRs are NOT supported; CI MUST skip (not fail) integration tests and clearly indicate this when a fork PR is detected
+
+- **FR-017c**: CI MUST preserve test logs and artifacts (pytest output, provisioning logs, reset logs) to enable debugging of failed runs
 
 #### Manual Playbook Requirements
 
@@ -244,7 +269,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **FR-024**: Developer guide MUST include troubleshooting section for common integration test failures
 
-- **FR-025**: Operational guide MUST document all required CI secrets, their purposes, and how to obtain/generate them
+- **FR-025**: Operational guide MUST document all required CI secrets, their purposes, and how to obtain/generate them; Developer guide MUST document how to configure equivalent secrets for local integration test runs (e.g., environment variables or config file)
 
 - **FR-026**: Operational guide MUST provide step-by-step VM provisioning instructions including cloud provider configuration and SSH key management
 
@@ -254,13 +279,17 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **FR-029**: Operational guide MUST include runbooks for common infrastructure failure scenarios
 
-- **FR-030**: Architecture documentation MUST include diagrams describing the three-tier test structure and component interactions
+- **FR-030**: Architecture documentation MUST include diagrams describing the three-tier test structure and component interactions; all diagrams MUST be in Mermaid format (per repository documentation standards)
 
 - **FR-031**: Architecture documentation MUST explain rationale for key design decisions (VM isolation, locking, baseline reset)
 
 - **FR-032**: Architecture documentation MUST provide links to ADR-006 and related decision records
 
-- **FR-033**: Documentation MUST be organized as separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md` (developer guide), `docs/testing-ops-guide.md` (operational guide)
+- **FR-033**: Documentation MUST be organized as separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md` (developer guide), `docs/testing-ops-guide.md` (operational guide), `docs/testing-playbook.md` (manual playbook)
+
+#### Test Fixture Requirements
+
+- **FR-034**: Testing framework MUST provide minimal pytest fixtures for VM command execution, enabling integration tests to run commands on test VMs via a RemoteExecutor-like interface
 
 ### Key Entities
 
@@ -269,20 +298,21 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - **TestSession**: Represents a single test run; has session ID, lock holder, VM reset status, and test results
 - **MockExecutor**: Represents a mocked executor for unit tests; provides predictable command responses without real execution
 - **TestFixture**: Represents a pytest fixture providing test resources; includes VM connections, event buses, temporary files, and cleanup logic
+- **VMExecutor**: Represents a fixture for executing commands on test VMs; provides a RemoteExecutor-like interface for integration tests to run commands on source/target VMs
 
 ## Success Criteria
 
 ### Measurable Outcomes
 
-- **SC-001**: VM reset to clean baseline completes in under 30 seconds for all VMs
+- **SC-001**: VM reset to clean baseline is fast due to btrfs snapshot rollback (no cloud VM snapshot restore or reprovisioning required)
 
-- **SC-002**: CI pipeline executes unit tests on 100% of pushes and integration tests on 100% of PRs to main
+- **SC-002**: CI pipeline executes unit tests on 100% of pushes and integration tests on 100% of PRs to main (from main repository)
 
 - **SC-003**: Lock mechanism successfully prevents concurrent test runs in 100% of contention scenarios
 
 - **SC-004**: Manual playbook covers all visual elements for release verification
 
-- **SC-005**: Test infrastructure costs remain under EUR 10/month
+- **SC-005**: Test infrastructure costs remain under EUR 10/month; cost is constrained by infrastructure choices (VM type, provider) rather than active monitoring
 
 - **SC-006**: Developer guide enables a new developer to write a working integration test without additional guidance
 
@@ -296,6 +326,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - GitHub repository has GitHub Actions enabled
 - Developers have SSH key pairs for VM access
 - Network connectivity allows SSH to cloud provider IPs
+- Python 3.14 is used (per ADR-003)
 
 ## Out of Scope
 
@@ -305,3 +336,4 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - Security penetration testing
 - Automated VM cost optimization (manual destruction when not needed)
 - Test coverage for third-party libraries (only test project code)
+- Test data generation fixtures (helpers for creating specific file patterns, permissions, etc. for sync tests) - to be added when actual tests are written; note: minimal fixtures for VM command execution ARE in scope (see FR-034)
