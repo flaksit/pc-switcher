@@ -18,6 +18,13 @@ Pre-analysis References:
 - [Testing Implementation Plan](../../docs/adr/considerations/testing-implementation-plan.md) - Detailed implementation plan
 - [Testing Report](../../docs/adr/considerations/testing-report.md) - Coverage analysis
 
+## Clarifications
+
+### Session 2025-12-05
+
+- Q: Which documentation deliverables should be in scope? → A: Developer guide + operational guide + architecture/design documentation
+- Q: Where should documentation files live? → A: Separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md`, `docs/testing-ops-guide.md`
+
 ## User Scenarios & Testing
 
 ### User Story 1 - Unit Test Suite for Fast Feedback (Priority: P1)
@@ -120,6 +127,68 @@ As a pc-switcher developer, I have comprehensive tests that verify 100% of the s
 
 ---
 
+### User Story 6 - Developer Guide for Integration Testing (Priority: P2)
+
+As a pc-switcher developer writing tests, I have comprehensive documentation that explains how to write integration tests, work with test VMs, use fixtures, handle test isolation, and follow established patterns. This enables me to contribute tests without reverse-engineering existing code.
+
+**Why this priority**: P2 because developers can initially learn from existing test examples, but formal documentation prevents knowledge silos and reduces onboarding friction.
+
+**Independent Test**: Can be verified by having a new developer follow the guide to write a new integration test without additional guidance.
+
+**Acceptance Scenarios**:
+
+1. **Given** I want to write an integration test, **When** I read the developer guide, **Then** I find step-by-step instructions for creating a new test file, using VM fixtures, and asserting outcomes
+
+2. **Given** I need to understand VM interaction patterns, **When** I consult the guide, **Then** I find documented patterns for SSH execution, file transfers, btrfs operations, and snapshot management on test VMs
+
+3. **Given** I want to understand test organization, **When** I read the guide, **Then** I find clear explanations of the test directory structure, naming conventions, and pytest markers
+
+4. **Given** I need to debug a failing integration test, **When** I consult the troubleshooting section, **Then** I find guidance on common failure modes, how to inspect VM state, and how to manually reproduce issues
+
+---
+
+### User Story 7 - Operational Guide for Test Infrastructure (Priority: P2)
+
+As a sysadmin/maintainer/devops engineer, I have comprehensive documentation for configuring and maintaining the test framework infrastructure. This includes secrets management, environment variables, VM provisioning configuration, and CI pipeline setup, and cost monitoring.
+
+**Why this priority**: P2 because initial setup can be done with direct guidance, but documented procedures ensure maintainability and disaster recovery capability.
+
+**Independent Test**: Can be verified by having someone set up the test infrastructure from scratch using only the documentation.
+
+**Acceptance Scenarios**:
+
+1. **Given** I need to configure CI secrets, **When** I read the operational guide, **Then** I find a complete list of required secrets, their purposes, and where to obtain/generate them
+
+2. **Given** I need to set up test VM infrastructure, **When** I follow the guide, **Then** I find step-by-step provisioning instructions including cloud provider configuration, network setup, and SSH key management
+
+3. **Given** I need to understand environment variables, **When** I consult the guide, **Then** I find documentation of all environment variables, their defaults, and their effects on test behavior
+
+4. **Given** I need to monitor infrastructure costs, **When** I read the guide, **Then** I find instructions for tracking VM costs and procedures for destroying/reprovisioning infrastructure
+
+5. **Given** test infrastructure fails, **When** I consult the troubleshooting section, **Then** I find runbooks for common failure scenarios (VM unreachable, provisioning failures, lock stuck)
+
+---
+
+### User Story 8 - Architecture Documentation for Testing Framework (Priority: P2)
+
+As a pc-switcher developer or maintainer, I have architecture documentation that explains the testing framework design decisions, component interactions, and rationale. This enables me to understand why the system is structured as it is and make informed decisions when extending or modifying it.
+
+**Why this priority**: P2 because the codebase can initially be understood through reading, but architecture documentation accelerates comprehension and ensures design intent is preserved across changes.
+
+**Independent Test**: Can be verified by having someone unfamiliar with the testing framework explain its architecture after reading only the documentation.
+
+**Acceptance Scenarios**:
+
+1. **Given** I want to understand the testing architecture, **When** I read the architecture documentation, **Then** I find diagrams and descriptions of the three-tier test structure and how components interact
+
+2. **Given** I want to understand design decisions, **When** I consult the documentation, **Then** I find rationale for key choices (VM isolation, locking mechanism, baseline reset strategy)
+
+3. **Given** I want to extend the testing framework, **When** I read the documentation, **Then** I find guidance on extension points and architectural constraints to respect
+
+4. **Given** the testing framework references ADR-006, **When** I navigate from architecture docs, **Then** I find clear links to the ADR and related decision records
+
+---
+
 ### Edge Cases
 
 - What happens when test VMs are not provisioned?
@@ -199,6 +268,34 @@ As a pc-switcher developer, I have comprehensive tests that verify 100% of the s
 
 - **FR-025**: Manual playbook MUST be usable for both release verification and developer onboarding
 
+#### Documentation Requirements
+
+- **FR-026**: Developer guide MUST document how to write integration tests including test file creation, VM fixture usage, and assertion patterns
+
+- **FR-027**: Developer guide MUST document VM interaction patterns for SSH execution, file transfers, btrfs operations, and snapshot management
+
+- **FR-028**: Developer guide MUST document test organization including directory structure, naming conventions, and pytest markers
+
+- **FR-029**: Developer guide MUST include troubleshooting section for common integration test failures
+
+- **FR-030**: Operational guide MUST document all required CI secrets, their purposes, and how to obtain/generate them
+
+- **FR-031**: Operational guide MUST provide step-by-step VM provisioning instructions including cloud provider configuration and SSH key management
+
+- **FR-032**: Operational guide MUST document all environment variables, their defaults, and effects on test behavior
+
+- **FR-033**: Operational guide MUST document cost monitoring procedures and infrastructure destruction/reprovisioning
+
+- **FR-034**: Operational guide MUST include runbooks for common infrastructure failure scenarios
+
+- **FR-035**: Architecture documentation MUST include diagrams describing the three-tier test structure and component interactions
+
+- **FR-036**: Architecture documentation MUST explain rationale for key design decisions (VM isolation, locking, baseline reset)
+
+- **FR-037**: Architecture documentation MUST provide links to ADR-006 and related decision records
+
+- **FR-038**: Documentation MUST be organized as separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md` (developer guide), `docs/testing-ops-guide.md` (operational guide)
+
 ### Key Entities
 
 - **TestVM**: Represents an isolated VM for integration testing; has network identity, SSH access, required filesystem and subvolume configuration, and baseline state for reset
@@ -232,6 +329,12 @@ As a pc-switcher developer, I have comprehensive tests that verify 100% of the s
 - **SC-010**: Manual playbook covers all visual elements for release verification
 
 - **SC-011**: Test infrastructure costs remain under EUR 10/month
+
+- **SC-012**: Developer guide enables a new developer to write a working integration test without additional guidance
+
+- **SC-013**: Operational guide enables infrastructure setup from scratch without additional guidance
+
+- **SC-014**: Architecture documentation enables someone unfamiliar with the testing framework to explain its structure after reading
 
 ## Assumptions
 
