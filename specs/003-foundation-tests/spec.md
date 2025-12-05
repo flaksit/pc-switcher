@@ -112,6 +112,10 @@ As a pc-switcher developer, I can trace each test back to the specific requireme
 
 - **FR-012**: Integration tests MUST execute real operations on test VMs
 
+#### Test Performance Requirements
+
+- **FR-013**: Unit tests MUST complete full suite execution in under 30 seconds
+
 ### Key Entities
 
 - **SpecRequirement**: Represents a requirement from 001-foundation spec; has ID (FR-xxx, US-xxx, AS-xxx), description, and test status
@@ -133,6 +137,8 @@ As a pc-switcher developer, I can trace each test back to the specific requireme
 - **SC-005**: All test files include traceability references to spec requirements
 
 - **SC-006**: Running the test suite surfaces any gaps between spec and implementation through failing tests
+
+- **SC-007**: Unit test suite executes completely in under 30 seconds on a standard development machine
 
 ## Assumptions
 
