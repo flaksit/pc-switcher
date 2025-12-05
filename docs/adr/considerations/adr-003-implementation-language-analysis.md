@@ -36,7 +36,7 @@ Based on the requirements, the implementation needs to:
 ### 2. Python
 
 **Pros:**
-- **Excellent SSH libraries**: `paramiko`, `fabric` for remote execution
+- **Excellent SSH libraries**: `asyncssh` for remote execution
 - **Rich ecosystem**: `rich`/`textual` for TUI, `click`/`typer` for CLI, `structlog` for logging
 - **Robust error handling**: Try/except, proper exception types
 - **Data structures**: Easy to model sync state, conflicts, file metadata
@@ -155,7 +155,7 @@ pc-switcher
    - `click`/`typer`: Excellent CLI frameworks
 
 4. **Orchestration Fit**: PC-switcher needs:
-   - SSH execution → `fabric` or `paramiko`
+   - SSH execution → `asyncssh`
    - State management → Python data structures + JSON/YAML
    - Conflict detection → Custom logic (easier in Python than Bash)
    - Multi-step workflows → Python's control flow
@@ -175,7 +175,7 @@ pc-switcher
 ```
 Phase 1: Pure Python orchestrator
 - Main CLI with Click/Typer
-- SSH orchestration with Fabric
+- SSH orchestration with AsyncSSH
 - Progress display with Rich
 - Logging with structlog
 

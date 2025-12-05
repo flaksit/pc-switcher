@@ -10,7 +10,7 @@ PC-switcher enables a simple workflow: work on one machine, sync before switchin
 Work on source machine → Trigger sync → Resume on target machine
 ```
 
-**Status**: Early planning/design phase. No implementation code exists yet.
+**Status**: Foundation infrastructure complete. Core sync functionality in development.
 
 ## What Gets Synced
 
@@ -24,10 +24,104 @@ Work on source machine → Trigger sync → Resume on target machine
 
 **Never synced**: SSH keys, Tailscale config, GPU/hardware caches, machine-specific packages
 
+## Installation
+
+Install using the installation script:
+```bash
+curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash
+```
+
+To install a specific version:
+```bash
+curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.2.0 bash
+```
+
+Test installation:
+```bash
+pc-switcher --help
+pc-switcher --version
+```
+
+After installation, create the default configuration:
+```bash
+pc-switcher init
+```
+
+## Quick Start
+
+Before syncing, ensure:
+- Target machine is powered on and reachable via SSH
+- Both machines are on the same LAN
+- You're logged out from the desktop (or close all apps)
+
+Trigger a sync:
+```bash
+pc-switcher sync <target-hostname>
+```
+
+Monitor sync progress with:
+```bash
+pc-switcher logs
+```
+
+After sync completes, power off the source machine and resume work on target.
+
+**Note**: Sync jobs are currently placeholders for testing infrastructure. Real sync functionality is in development.
+
+## Configuration
+
+Run `pc-switcher init` to create the default configuration file at `~/.config/pc-switcher/config.yaml`, or create it manually:
+
+```yaml
+# Logging configuration
+log_file_level: FULL      # DEBUG | FULL | INFO | WARNING | ERROR | CRITICAL
+log_cli_level: INFO       # DEBUG | FULL | INFO | WARNING | ERROR | CRITICAL
+
+# Sync jobs (true = enabled, false = disabled)
+sync_jobs:
+  dummy_success: true
+  dummy_fail: false
+
+# Disk space monitoring
+disk_space_monitor:
+  preflight_minimum: "20%"  # Or absolute like "50GiB"
+  runtime_minimum: "15%"    # CRITICAL abort if below
+  warning_threshold: "25%"  # WARNING log if below
+  check_interval: 30        # Seconds
+
+# Btrfs snapshots
+btrfs_snapshots:
+  subvolumes:
+    - "@"
+    - "@home"
+  keep_recent: 3
+  # max_age_days: 30  # Optional - enables age-based cleanup
+```
+
+See default configuration in `src/pcswitcher/default-config.yaml`.
+
+## Available Commands
+
+```bash
+# Initialize configuration file
+pc-switcher init [--force]    # Create default config at ~/.config/pc-switcher/config.yaml
+
+# Sync to target machine
+pc-switcher sync <target-hostname> [--config PATH]
+
+# View logs
+pc-switcher logs              # Show logs directory and list recent logs
+pc-switcher logs --last       # Show path to most recent log file
+
+# Clean up old snapshots
+pc-switcher cleanup-snapshots --older-than 7d [--dry-run]
+```
+
 ## Requirements
 
 - Ubuntu 24.04 LTS on all machines
-- btrfs filesystem
+- Single btrfs filesystem (all synced data on one filesystem per machine)
+- SSH access between machines
 - Machines connected to same LAN (1Gb) during sync
 - Only one machine actively used at a time
 
@@ -42,10 +136,48 @@ Work on source machine → Trigger sync → Resume on target machine
 ## Documentation
 
 - **[High level requirements](docs/High%20level%20requirements.md)** - Project vision, scope, workflow
-- **[Feature breakdown](docs/Feature%20breakdown.md)** - Implementation phases from foundation to user features
+- **[Architecture](docs/architecture.md)** - High-level architecture and design
+- **[Implementation](docs/implementation.md)** - Implementation details and patterns
 - **[Architecture Decision Records](docs/adr/_index.md)** - Design decisions and rationale
+- **[Feature specifications](specs/001-foundation/)** - Detailed feature specs and plans
 
 ## Development
+
+Clone the repository:
+```bash
+git clone git@github.com:flaksit/pc-switcher.git
+cd pc-switcher
+```
+
+Install dependencies:
+```bash
+uv sync
+```
+
+Install the tool from your local checkout (for testing):
+```bash
+./install.sh
+```
+This auto-detects the git workspace and runs `uv tool install .` from your local code.
+
+If you want to install a specific version from GitHub, use one of the following commands:
+```bash
+# use the local script to install a specific package version from GitHub
+VERSION=0.2.0 ./install.sh
+./install.sh --ref abcd0123
+./install.sh --ref my_feature_branch
+# Use the install script from GitHub to install a specific package version
+curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --ref my_feature_branch
+```
+
+
+Run code quality checks:
+```bash
+uv run ruff format .    # Format code
+uv run ruff check .     # Lint
+uv run basedpyright     # Type check
+uv run pytest           # Run tests
+```
 
 This project uses **SpecKit**—a specification-driven workflow via custom slash commands:
 
@@ -56,4 +188,4 @@ This project uses **SpecKit**—a specification-driven workflow via custom slash
 /speckit.implement                      # Execute implementation
 ```
 
-See [CLAUDE.md](CLAUDE.md) for development workflow details.
+See [CLAUDE.md](CLAUDE.md) for complete development workflow details.

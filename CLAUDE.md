@@ -1,6 +1,7 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI agents when working with code in this repository.
+
 
 ## Project Overview
 
@@ -13,6 +14,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Critical Context Files
 
 **ALWAYS READ FIRST**:
+- `~/.claude/CLAUDE.md` - General agent instructions for all projects
+- `~/.claude/python_conventions.md` and `~/.claude/python_tools.md` - Python coding conventions for this project. Read all referenced files therein as well!
 - `High level requirements.md` - Complete project vision, scope, workflow, and constraints
 - `docs/adr/_index.md` - Summary of all architectural decisions
 
@@ -136,3 +139,9 @@ This repository will NOT contain:
 
 - UX: Terminal-based UI, single command to launch entire sync process
 - No implementation code exists yet - focus on specification and planning first using SpecKit workflow
+
+## Active Technologies
+
+- **Python 3.14** (per ADR-003) via uv venv
+- You MUST ALWAYS use `uv run` for running Python or python packages: `uv run python`, `uv run ruff`, `uv run basedpyright`, etc.
+- You MUST NEVER use the system Python directly. So DO NOT run `python3`, `python`, `pip`, etc. directly.

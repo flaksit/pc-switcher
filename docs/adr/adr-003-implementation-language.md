@@ -9,7 +9,7 @@ Use Python as the primary orchestration language for PC-switcher CLI, with task-
 ## Implementation Rules
 
 **Required Patterns:**
-- **Python version**: Target Python 3.13 (maximum version supported by all selected libraries; Paramiko does not support 3.14 yet)
+- **Python version**: Target Python 3.14
 - **Package structure**: Build as an installable Python package using `uv`, distributable to both source and target machines
 - **Dependency management**: Use `uv` exclusively for all dependency management and running Python code (see `~/.claude/python.md` for details)
 - **Modern Python practices**: Follow conventions in `~/.claude/python_conventions.md` including:
@@ -19,7 +19,7 @@ Use Python as the primary orchestration language for PC-switcher CLI, with task-
   - Use `Path` from pathlib for all file operations
   - Use `ruff` for linting/formatting, `basedpyright` for type checking, `pytest` for testing
 - Python for main orchestrator, CLI, SSH coordination, state management, and conflict detection
-- Use proven libraries: `fabric`/`paramiko` for SSH, `rich` for TUI, `click`/`typer` for CLI, `structlog` for logging
+- Use proven libraries: `asyncssh` for SSH, `rich` for TUI, `click`/`typer` for CLI, `structlog` for logging
 - Delegate to bash scripts (or other languages) for specific sync operations when appropriate
 - All orchestration logic (command sequencing, error handling, phase management) in Python
 - Comprehensive error handling using Python's exception system
@@ -30,7 +30,7 @@ Use Python as the primary orchestration language for PC-switcher CLI, with task-
 - Do not use languages unfamiliar to the maintainer for core functionality
 - Do not mix orchestration concerns into task-specific scripts
 - Do not use `pip` or direct `python` commands; always use `uv` for dependency management and running code
-- Do not use Python 3.14 until Paramiko adds support
+
 
 ## Context
 
@@ -51,7 +51,7 @@ See `docs/adr/considerations/adr-003-implementation-language-analysis.md` for de
 - **Python** as the primary implementation language for:
   - Main CLI entry point
   - Orchestration logic across source and target machines
-  - SSH communication layer
+  - SSH communication layer (`asyncssh`)
   - State management and conflict detection
   - Terminal UI (using `rich` or `textual`)
   - Logging and audit trails
@@ -85,12 +85,11 @@ See `docs/adr/considerations/adr-003-implementation-language-analysis.md` for de
   - CLI entry point configured in `pyproject.toml` as `pcsync` console script
   - Installable via `uv pip install .` or `uv tool install .`
 
-- **Python version selection (as of 2025-11-14):**
-  - Target: Python 3.13
+- **Python version selection (as of 2025-11-29):**
+  - Target: Python 3.14
   - Python 3.14 support status for selected libraries:
-    - ✅ Rich 14.2.0+, Textual 6.3.0+, Typer 0.20.0+, Click 8.3.0+, structlog (latest)
-    - ❌ Paramiko (3.9-3.13 only), Fabric (depends on Paramiko)
-  - Future: Monitor Paramiko releases for Python 3.14 support; upgrade when available
+    - ✅ Rich, Textual, Typer, Click, structlog
+    - ✅ AsyncSSH
 
 **Rationale:**
 - Aligns with **Reliability principle (#1)**: Python's exception handling, logging, and testability
@@ -105,10 +104,10 @@ See `docs/adr/considerations/adr-003-implementation-language-analysis.md` for de
 - Robust error handling and recovery using Python's exception system
 - Rich terminal UI capabilities for progress reporting and user interaction
 - Easy to test orchestration logic with mocking and fixtures
-- Natural integration with SSH libraries (`fabric`, `paramiko`)
+- Natural integration with SSH libraries (`asyncssh`)
 - Can evolve individual sync operations independently (bash scripts callable from Python)
 - Maintainable by someone who knows Python well
-- Standard dependency (Python 3.13 available on Ubuntu 24.04)
+- Standard dependency (Python 3.14 available on Ubuntu 24.04 via uv/deadsnakes or future release)
 - Modern dependency management with `uv` (fast, reliable, reproducible builds)
 - Modern type system enables better IDE support and early error detection
 - Clean distribution model: single installable package deployable to both source and target machines
@@ -117,7 +116,7 @@ See `docs/adr/considerations/adr-003-implementation-language-analysis.md` for de
 **Negative:**
 - Not a single static binary (though could use `pyinstaller` if needed)
 - Requires discipline to maintain clean separation between orchestration (Python) and task execution (scripts)
-- Limited to Python 3.13 until Paramiko adds Python 3.14 support (not critical; 3.13 is modern and stable)
+
 - Additional tooling dependency (`uv`) though it's becoming standard in modern Python development
 
 ## References

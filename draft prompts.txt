@@ -1,6 +1,22 @@
 THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
 
+MAIN INSTRUCTION FOR THE COMING PROMPTS:
+You finished working on command "/speckit.implement.resolve-feedback" and we are continuing the review together. Continue to add our conversations to @specs/001-foundation/implementation-review-2-resolved.md so we have it as reference for our decisions and their impact.
+
+For each prompt, follow this workflow:
+0. Analyze the question and context. If anything is unclear, ask clarifying questions first and wait for my answers.
+1. Update/implement the tests (TDD)
+2. Refactor code
+3. Refactor docs. They are equally important as code. Ensure ALL docs are adapted accordingly so they reflect the current state of the codebase.
+4. Validate: type check, lint, run tests, ...
+
+Update implementation-review-2-resolved.md along the way with our conversation and all relevant info about your decisions and changes. Include ALL my prompts and your output LITERALY, e.g. your clarifying questions and my answers as well.
+
+Delegate as much as possible to subagents (even analysis), so that you can keep your context clean and you can focus on your task as project manager and orchestrator, but ensure that the final result is a coherent, working solution. Launch subagents in parallel if their tasks don't conflict.
+
+
 ---
+
 
 
 Need to execute package removal as well. Need to be able to select packages that are only on a single host (e.g. nvidia drivers on P17, not on XPS).
@@ -71,3 +87,147 @@ Workflow should be
 
 So 7>8 can run in parallel as from 2.
 5 and 6 can run in parallel as well.
+
+
+
+--- DONE ---
+
+
+
+/speckit.specify Write specs for features 1, 2 and 3 of the @"docs/Feature breakdown.md". This is only a part of the full project requirements as written in @"docs/High level requirement.md".
+
+Notes:
+- A first User Story is a specification of what a "module" is and how it integrates into the overall sync process. This specification will need to be so detailed that it can be used to implement all other modules concurrently. It will cover things like configuration, logging, error handling, progress reporting, etc.
+- For feature 1, the first thing the sync script should do, is install/upgrade the pc-switcher package on the target machine to the same version as on the source machine.
+- For feature 2, a btrfs snapshot should be created on both the source and the target machine before starting the sync and after completing the sync.
+- Instead of starting "bare" commands on the target, it is of course possible to wrap them in scripts (that are part of the pc-switcher package) if that makes communication between source and target easier (e.g. progress, status, error reporting, logging). This is no requirement, just a suggestion.
+- Configuration is about
+  - enabling/disabling the modules
+  - module-specific configuration
+  - setting log levels for file and cli separately
+- Where possible, implement (parts of) feature 2 as a required module/plugin (that can NOT be disabled).
+- The user should be able to interrupt the sync at any time (e.g. Ctrl-C) and the system should handle this gracefully.
+- Logging should contain six levels: DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL. CRITICAL errors should abort the sync (just like the user interrupt). The INFO log level should be used for high-level operation reporting (e.g. "Starting module X", "Module X completed successfully", etc.). DEBUG log level should be used for detailed operation reporting (e.g. command outputs, progress percentages, etc.). FULL log level shows the detail up to file level: each file copied, each snapshot created, etc. DEBUG adds more details about operations (like verbose command outputs).
+- For testing purposes, at least three dummy modules should be specified that simulate long-running operations with progress reporting and logging. They should run dummy operations (sleep/loop) on both source and target machine sequentially
+  - A successful, only emitting INFO, WARNING and ERROR logs
+  - A module that runs into a CRITICAL error. The module itself would just go on running. This is to test that the overall sync aborts on CRITICAL errors.
+  - A module that fails partway through (e.g. raising an exception), without properly logging a CRITICAL error.
+
+
+
+---
+
+
+Background info about the project:
+- @docs/High level requirements.md
+- Focus only on features 1, 2 and 3 of the @"docs/Feature breakdown.md".
+- User specifications are in @specs/001-foundation/spec.md.
+
+We made the following tech decisions:
+1. See ADRs: @docs/adr/_index.md (follow links if needed)
+2. asyncio for handling concurrency between ui, orchestrator, jobs (parallel and sequential), logging, remote execution over SSH
+3. BTRFS Snapshots (pre and post) and the Disk Space Monitor will be all be implemented as Jobs, just like the SyncJobs that the user can configure. The main difference: BtrfsSnapshotsJob and DiskSpaceMonitor are "hardcoded" in the sense that the user cannot configure them: they cannot be disabled and their order in the execution flow is fixed.
+
+You are a software architect. Ultrathink to come up with a clean architecture and design that fulfills the requirements defined in @specs/001-foundation/spec.md. It should be as simple as possible, but not simpler. Do not read other documents of this project! I want you to think this through from a clean slate without being influenced by old docs.
+Follow DRY and YAGNI principles and best practices for modern (Python 3.13) software architecture/design/engineering.
+
+Execution flow:
+```
+1. Validate all jobs (disk_space_monitor, btrfs_snapshot, sync jobs)
+2. Start parallel: DiskSpaceMonitorJob.execute() (run until the end)
+3. Execute sequential: BtrfsSnapshotJob(phase="pre").execute()
+4. Execute sequential: SyncJob1.execute()
+5. Execute sequential: SyncJob2.execute()
+6. Execute sequential: BtrfsSnapshotJob(phase="post").execute()
+7. Stop parallel: DiskSpaceMonitorJob.cancel()
+```
+
+Create a markdown document "architecture-gemini-2.5.md" in folder @specs/001-foundation/ with at least the following contents:
+- A diagram of the components, with explanation of their scope/responsibilities and their relationships
+- A class diagram with explanation of the classes, their scope/responsibilities and their relationships
+- A sequence diagram when user aborts (Ctrl+C)
+- A sequence diagram when a Job raises an exception (= critical failure)
+- A sequence diagram when a Job has a command running on the target machine and that remote command fails somehow
+- A sequence diagram of a job that logs a message (should be written to file and filtered to be shown on the UI as well)
+- A sequence diagram of a job that logs progress (should be shown in UI)
+- A sequence diagram when the DiskSpaceMonitor detects a remote disk becoming too full
+- Something to illustrate the (streaming) output to the UI, from multiple sources that run in parallel (orchestrator, jobs, heath status of the SSH connection, etc.)
+
+For the diagrams, each time with a textual explanation of the concepts in the diagram and the links and interactions between them.
+
+Note: Jobs will run commands on the target machine as well and the job needs to get the commands output (e.g. to create log messages and to show progress) and needs to control them (e.g. to terminate them in a controlled manner, with timeouts).
+
+Ask clarifying questions when needed!
+
+---
+
+
+
+GIVEN TO ANTIGRAVITY:
+
+ui.py and the TerminalUI class defined in this module are dead code: Rich terminal UI never integrated into CLI. This is a mistake! It is all over the place in the @specs/001-foundation/architecture.md .
+Finding: TerminalUI is fully implemented (316 lines) but never wired to the orchestrator. The architecture explicitly requires it, but integration was never completed.
+
+  Current state:
+  - ConsoleLogger is being used as a simple line-based fallback
+  - ProgressEvent is being published but has no consumer (vanishes into void)
+  - The rich progress bars, log panels, live updates specified in architecture are not working
+
+  Action: Wire this the EventBus and/or Orchestrator as per architecture.md.
+
+Ensure that the rich terminal UI is fully functional as per the architecture specifications in @specs/001-foundation/architecture.md and the specs.md.
+
+---
+
+GIVEN TO CLAUDE:
+
+Orchestrator gives hostname_map to new task self._ui.consume_events().
+However, it is not given to the FileLogger consumer. How does the FileLogger know the hostnames of the remote machines? They should be in the log file as well for clarity.
+
+---
+
+GIVEN TO CODEX:
+
+It seems that all tasks in @specs/001-foundation/tasks.md are implemented, but that there is no final verification that everything is wired together correctly.
+Please do the following:
+- Review all tasks in @specs/001-foundation/tasks.md
+- For each task, verify that its deliverables are implemented in the codebase
+- Check that all deliverables of all tasks are wired together correctly to form a working system as specified in @specs/001-foundation/spec.md
+
+Output: A report of findings in a new file specs/001-foundation/task-integration-review-codex.md, including
+- Missing deliverables (if any)
+- Missing wiring/integration (if any)
+- Suggestions for improvements (if any)
+
+---
+
+GIVEN TO CLAUDE:
+We use speckit as workflow to implement features in this project. The feature we are currently working has a specific feature folder under specs/ with the same name as the current branch. In the feature folder, there is a spec.md file that contains the specification of the feature.
+
+You finished the implementation of the feature.
+
+I gave the following task to Codex:
+```md
+It seems that all tasks in @specs/001-foundation/tasks.md are implemented, but that there is no final verification that everything is wired together correctly.
+Please do the following:
+- Review all tasks in @specs/001-foundation/tasks.md
+- For each task, verify that its deliverables are implemented in the codebase
+- Check that all deliverables of all tasks are wired together correctly to form a working system as specified in @specs/001-foundation/spec.md
+
+Output: A report of findings, including
+- Missing deliverables (if any)
+- Missing wiring/integration (if any)
+- Suggestions for improvements (if any)
+```
+
+You find Codex' feedback in @specs/001-foundation/task-integration-review-codex.md . For some of the remarks in the two "Missing" chapters, I already added my comments (each time on a new line that starts with '  --> '). Only consider the remarks where I didn't put "IGNORE". Only consider the Suggestions in the last chapter that are not purely to resolve the remarks that I told you to ignore.
+
+First, critically read through their feedback. Come back to me and ask me clarifying questions if you assess that parts of the feedback are not relevant.
+
+Then, when all your questions are answered, fix your implementation according to the feedback. Ensure all points raised in the feedback are addressed and that the implementation fully complies with the specifications outlined in "spec.md".
+Delegate as much as possible to subagents, so that you can keep your context clean and you can focus on your task as project manager and orchestrator. But ensure that the final output is a coherent, working solution. Launch subagents in parallel if their tasks don't conflict (e.g. change the same files).
+
+### Output
+Write a report to a new file "task-integration-review-resolution.md". The goal is to have a trace of any decisions we make while resolving the feedback. The report should contain the following:
+- $EXTRA_INSTRUCTIONS
+- A log of any further conversation we have while you are resolving the feedback. This will mainly be answers to your clarifying questions, but we could get into deeper conversation about some of the feedback given. Capture my prompts, your output and questions, my responses, ... literally.

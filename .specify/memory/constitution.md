@@ -1,13 +1,13 @@
 <!-- Sync Impact Report
 Version change: template -> 1.0.0
-Modified principles:
-- Template principle slot 1 -> Reliability Without Compromise
-- Template principle slot 2 -> Frictionless Command UX
-- Template principle slot 3 -> Proven Tooling Only
-- Template principle slot 4 -> Solid-State Stewardship
-- Template principle slot 5 -> Throughput-Focused Syncing
-- (new) Deliberate Simplicity
-- (new) Documentation As Runtime Contract
+New principles:
+- Reliability Without Compromise
+- Frictionless Command UX
+- Proven Tooling Only
+- Minimize SSD Wear
+- Throughput-Focused Syncing
+- Deliberate Simplicity
+- Up-to-date Documentation
 Added sections:
 - Core Principles (populated)
 - Operational Constraints
@@ -43,13 +43,13 @@ Follow-up TODOs:
 ### Well-supported tools and best practices
 - Dependencies MUST rely on actively maintained, well-supported tools
 - Best practices and standards MUST be followed in architecture, implementation and operations
+- DRY and YAGNI software design principles MUST be honored - Violations MUST be documented with a their motivation
 
 *Rationale: Stable foundations limit unexpected maintenance overhead and security risk.*
 
-### Solid-State Stewardship
+### Minimize SSD Wear
 - Implementation MUST minimize write amplification on NVMe SSDs via incremental transfers, deduplication, and avoidance of unnecessary temporary copies.
 - Long-running sync stages MUST prefer RAM or ephemeral storage when staging data instead of repeated SSD writes.
-- Sync runs MUST measure or estimate write volumes; exceeding planned thresholds triggers remediation tasks.
 
 *Rationale: Preserving drive health sustains reliability and cost efficiency.*
 
@@ -65,7 +65,7 @@ Follow-up TODOs:
 
 *Rationale: Simple systems are easier to reason about, maintain, and keep reliable.*
 
-### Documentation As Runtime Contract
+### Up-to-date Documentation
 - Behavioral changes MUST update rationale, architecture, implementation, and user guides within the same change set.
 - Documentation MUST remain navigable from high-level intent down to scripts, keeping references synchronized.
 - Out-of-date documentation identified during reviews MUST block release until corrected.

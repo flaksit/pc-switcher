@@ -1,0 +1,631 @@
+"""Core orchestrator coordinating the complete sync workflow."""
+
+from __future__ import annotations
+
+import asyncio
+import importlib
+import secrets
+from datetime import UTC, datetime
+from typing import Any
+
+from rich.console import Console
+
+from pcswitcher.btrfs_snapshots import session_folder_name
+from pcswitcher.config import Configuration
+from pcswitcher.connection import Connection
+from pcswitcher.disk import DiskSpace, check_disk_space, parse_threshold
+from pcswitcher.events import EventBus
+from pcswitcher.executor import LocalExecutor, RemoteExecutor, RemoteProcess
+from pcswitcher.jobs.base import Job, SyncJob
+from pcswitcher.jobs.btrfs import BtrfsSnapshotJob
+from pcswitcher.jobs.context import JobContext
+from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
+from pcswitcher.jobs.install_on_target import InstallOnTargetJob
+from pcswitcher.lock import (
+    SyncLock,
+    get_local_hostname,
+    get_lock_path,
+    release_remote_lock,
+    start_persistent_remote_lock,
+)
+from pcswitcher.logger import (
+    FileLogger,
+    Logger,
+    generate_log_filename,
+    get_logs_directory,
+)
+from pcswitcher.models import (
+    ConfigError,
+    Host,
+    JobResult,
+    JobStatus,
+    LogLevel,
+    SessionStatus,
+    SnapshotPhase,
+    SyncSession,
+    ValidationError,
+)
+from pcswitcher.ui import TerminalUI
+
+__all__ = ["Orchestrator"]
+
+
+class Orchestrator:
+    """Main orchestrator coordinating the complete sync workflow.
+
+    Responsibilities:
+    - Schema and job config validation
+    - SSH connection management
+    - Lock acquisition (source and target)
+    - Version check and self-installation
+    - System state validation (delegated to jobs)
+    - Sequential job execution
+    - Background job management (DiskSpaceMonitor)
+    - Sync summary and session tracking
+    """
+
+    def __init__(self, target: str, config: Configuration) -> None:
+        """Initialize orchestrator with target and validated configuration.
+
+        Args:
+            target: Target hostname or SSH alias
+            config: Validated configuration from YAML file
+        """
+        self._config = config
+        self._session_id = secrets.token_hex(4)
+        self._session_folder = session_folder_name(self._session_id)
+        self._source_hostname = get_local_hostname()
+        self._target_hostname = target
+
+        # Core components
+        self._event_bus = EventBus()
+        self._logger = Logger(self._event_bus, job_name="orchestrator")
+        self._connection: Connection | None = None
+        self._local_executor: LocalExecutor | None = None
+        self._remote_executor: RemoteExecutor | None = None
+
+        # Locks
+        self._source_lock: SyncLock | None = None
+        self._target_lock_process: RemoteProcess | None = None
+
+        # Background tasks
+        self._task_group: asyncio.TaskGroup | None = None
+        self._cleanup_in_progress = False
+
+        # Logging infrastructure (initialized in run())
+        self._file_logger: FileLogger | None = None
+        self._ui: TerminalUI | None = None
+        self._file_logger_task: asyncio.Task[None] | None = None
+        self._ui_task: asyncio.Task[None] | None = None
+
+    def _create_job_context(self, config: dict[str, Any]) -> JobContext:
+        """Create JobContext with current orchestrator state.
+
+        Must only be called after SSH connection is established (Phase 2+).
+        """
+        assert self._local_executor is not None
+        assert self._remote_executor is not None
+
+        return JobContext(
+            config=config,
+            source=self._local_executor,
+            target=self._remote_executor,
+            event_bus=self._event_bus,
+            session_id=self._session_id,
+            source_hostname=self._source_hostname,
+            target_hostname=self._target_hostname,
+        )
+
+    async def run(self) -> SyncSession:  # noqa: PLR0915
+        """Execute the complete sync workflow.
+
+        Returns:
+            SyncSession with results and status
+
+        Raises:
+            Various exceptions for critical failures (connection, locks, validation, etc.)
+        """
+        session = SyncSession(
+            session_id=self._session_id,
+            started_at=datetime.now(UTC),
+            source_hostname=self._source_hostname,
+            target_hostname=self._target_hostname,
+            config={},  # TODO: Add config snapshot
+            status=SessionStatus.RUNNING,
+            job_results=[],
+        )
+
+        # Initialize logging infrastructure BEFORE any operations
+        # Both hostnames are known: source from local hostname, target from CLI argument
+        if not self._source_hostname:
+            raise RuntimeError("Source hostname is not set")
+        if not self._target_hostname:
+            raise RuntimeError("Target hostname is not set")
+
+        hostname_map = {
+            Host.SOURCE: self._source_hostname,
+            Host.TARGET: self._target_hostname,
+        }
+
+        # Create log file path
+        log_file_path = get_logs_directory() / generate_log_filename(self._session_id)
+
+        # Subscribe to event bus
+        file_queue = self._event_bus.subscribe()
+        ui_queue = self._event_bus.subscribe()
+
+        # Instantiate loggers and UI
+        self._file_logger = FileLogger(
+            log_file=log_file_path,
+            level=self._config.log_file_level,
+            queue=file_queue,
+            hostname_map=hostname_map,
+        )
+        # Calculate total steps: 7 system phases + sync jobs + 1 post-snapshot
+        # System phases: 1=source lock, 2=SSH, 3=target lock, 4=validation,
+        # 5=disk check, 6=pre-snapshots, 7=install on target
+        total_steps = 7 + len(self._config.sync_jobs) + 1
+        self._ui = TerminalUI(
+            console=Console(),
+            total_steps=total_steps,
+        )
+
+        # Start consumers as background tasks
+        self._file_logger_task = asyncio.create_task(self._file_logger.consume())
+        self._ui_task = asyncio.create_task(
+            self._ui.consume_events(
+                queue=ui_queue,
+                hostname_map=hostname_map,
+                log_level=self._config.log_cli_level,
+            )
+        )
+
+        # Start UI live display
+        self._ui.start()
+
+        try:
+            # Phase 1: Acquire source lock
+            self._logger.log(LogLevel.INFO, Host.SOURCE, "Acquiring source lock")
+            await self._acquire_source_lock()
+            self._ui.set_current_step(1)
+
+            # Phase 2: Establish SSH connection
+            self._logger.log(LogLevel.INFO, Host.SOURCE, f"Connecting to target: {self._target_hostname}")
+            await self._establish_connection()
+            assert self._remote_executor is not None
+            self._ui.set_current_step(2)
+
+            # Phase 3: Acquire target lock
+            self._logger.log(LogLevel.INFO, Host.TARGET, "Acquiring target lock")
+            await self._acquire_target_lock()
+            self._ui.set_current_step(3)
+
+            # Phase 4: Job discovery and validation
+            self._logger.log(LogLevel.INFO, Host.SOURCE, "Discovering and validating jobs")
+            jobs = await self._discover_and_validate_jobs()
+            self._ui.set_current_step(4)
+
+            # Phase 5: Disk space preflight check
+            await self._check_disk_space_preflight()
+            self._ui.set_current_step(5)
+
+            # Phase 6: Pre-sync snapshots
+            self._logger.log(LogLevel.INFO, Host.SOURCE, "Creating pre-sync snapshots")
+            await self._create_snapshots(SnapshotPhase.PRE)
+            self._ui.set_current_step(6)
+
+            # Phase 7: Install/upgrade pc-switcher on target (after snapshots for rollback safety)
+            self._logger.log(LogLevel.INFO, Host.TARGET, "Ensuring pc-switcher is installed on target")
+            await self._install_on_target_job()
+            self._ui.set_current_step(7)
+
+            # Phase 8: Execute sync jobs with background monitoring
+            self._logger.log(LogLevel.INFO, Host.SOURCE, "Starting sync operations")
+            job_results = await self._execute_jobs(jobs)
+            session.job_results = job_results
+
+            # Phase 9: Post-sync snapshots
+            self._logger.log(LogLevel.INFO, Host.SOURCE, "Creating post-sync snapshots")
+            await self._create_snapshots(SnapshotPhase.POST)
+            self._ui.set_current_step(7 + len(jobs) + 1)
+
+            # Success
+            session.status = SessionStatus.COMPLETED
+            session.ended_at = datetime.now(UTC)
+            self._logger.log(LogLevel.INFO, Host.SOURCE, "Sync completed successfully")
+
+            return session
+
+        except asyncio.CancelledError:
+            session.status = SessionStatus.INTERRUPTED
+            session.ended_at = datetime.now(UTC)
+            session.error_message = "Sync interrupted by user (SIGINT)"
+            self._logger.log(LogLevel.WARNING, Host.SOURCE, "Sync interrupted by user")
+            raise
+
+        except Exception as e:
+            session.status = SessionStatus.FAILED
+            session.ended_at = datetime.now(UTC)
+            session.error_message = str(e)
+            self._logger.log(LogLevel.CRITICAL, Host.SOURCE, f"Sync failed: {e}")
+            raise
+
+        finally:
+            # Cleanup
+            await self._cleanup()
+
+    async def _acquire_source_lock(self) -> None:
+        """Acquire exclusive lock on source machine.
+
+        Uses unified lock file that prevents this machine from participating
+        in any other sync (as source or target) while this sync is running.
+        """
+        self._source_lock = SyncLock(get_lock_path())
+
+        holder_info = f"source:{self._source_hostname}:{self._session_id}"
+        if not self._source_lock.acquire(holder_info):
+            existing_holder = self._source_lock.get_holder_info()
+            raise RuntimeError(f"This machine is already involved in a sync (held by: {existing_holder})")
+
+    async def _establish_connection(self) -> None:
+        """Establish SSH connection to target machine."""
+        self._connection = Connection(self._target_hostname, event_bus=self._event_bus)
+        await self._connection.connect()
+
+        # Create executors
+        self._local_executor = LocalExecutor()
+        self._remote_executor = RemoteExecutor(self._connection.ssh_connection)
+
+        self._logger.log(
+            LogLevel.INFO,
+            Host.TARGET,
+            f"Connected to {self._target_hostname}",
+        )
+
+    async def _acquire_target_lock(self) -> None:
+        """Acquire exclusive lock on target machine via SSH.
+
+        Uses the same unified lock file as the source, ensuring the target
+        machine cannot participate in any other sync while this one runs.
+        """
+        assert self._remote_executor is not None
+
+        self._target_lock_process = await start_persistent_remote_lock(
+            self._remote_executor, self._source_hostname, self._session_id
+        )
+        if self._target_lock_process is None:
+            raise RuntimeError(f"Target {self._target_hostname} is already involved in a sync")
+
+    async def _install_on_target_job(self) -> None:
+        """Execute InstallOnTargetJob to ensure pc-switcher is on target.
+
+        Runs AFTER pre-sync snapshots for rollback safety if installation fails.
+        """
+        context = self._create_job_context({})
+        install_job = InstallOnTargetJob(context)
+
+        # Validate first (though it just returns empty list)
+        errors = await install_job.validate()
+        if errors:
+            error_msgs = [f"  - {e.host.value}: {e.message}" for e in errors]
+            raise RuntimeError("Installation validation failed:\n" + "\n".join(error_msgs))
+
+        # Execute
+        await install_job.execute()
+
+    async def _discover_and_validate_jobs(self) -> list[Job]:
+        """Discover enabled jobs from config and validate their configuration.
+
+        Dynamically imports job modules based on enabled jobs in config.
+        Convention: job_name == module_name (e.g., "dummy_success" → pcswitcher.jobs.dummy_success)
+
+        Returns:
+            List of job instances ready for execution
+
+        Raises:
+            RuntimeError: If any job config validation fails
+        """
+        jobs: list[Job] = []
+        config_errors: list[ConfigError] = []
+
+        # Log entire config at DEBUG level
+        self._logger.log(
+            LogLevel.DEBUG,
+            Host.SOURCE,
+            "Configuration loaded",
+            log_file_level=self._config.log_file_level.name,
+            log_cli_level=self._config.log_cli_level.name,
+            sync_jobs=self._config.sync_jobs,
+            disk_preflight_minimum=self._config.disk.preflight_minimum,
+            disk_runtime_minimum=self._config.disk.runtime_minimum,
+            disk_warning_threshold=self._config.disk.warning_threshold,
+            disk_check_interval=self._config.disk.check_interval,
+            btrfs_subvolumes=self._config.btrfs_snapshots.subvolumes,
+            btrfs_keep_recent=self._config.btrfs_snapshots.keep_recent,
+            btrfs_max_age_days=self._config.btrfs_snapshots.max_age_days,
+        )
+
+        # Lazy load only enabled jobs (job_name == module_name)
+        for job_name, enabled in self._config.sync_jobs.items():
+            if not enabled:
+                self._logger.log(
+                    LogLevel.DEBUG,
+                    Host.SOURCE,
+                    f"Job {job_name} is disabled in config",
+                )
+                continue
+
+            # Dynamic import: pcswitcher.jobs.{job_name}
+            try:
+                module = importlib.import_module(f"pcswitcher.jobs.{job_name}")
+            except ModuleNotFoundError:
+                self._logger.log(
+                    LogLevel.WARNING,
+                    Host.SOURCE,
+                    f"Job module pcswitcher.jobs.{job_name} not found",
+                )
+                continue
+
+            # Find the SyncJob class in the module with matching name
+            job_class: type[SyncJob] | None = None
+            for attr_name in dir(module):
+                attr = getattr(module, attr_name)
+                if (
+                    isinstance(attr, type)
+                    and issubclass(attr, SyncJob)
+                    and attr is not SyncJob
+                    and getattr(attr, "name", None) == job_name
+                ):
+                    job_class = attr
+                    break
+
+            if job_class is None:
+                self._logger.log(
+                    LogLevel.WARNING,
+                    Host.SOURCE,
+                    f"No SyncJob with name={job_name} found in module pcswitcher.jobs.{job_name}",
+                )
+                continue
+
+            # Validate job config (Phase 2)
+            job_config = self._config.job_configs.get(job_name, {})
+            errors = job_class.validate_config(job_config)
+            if errors:
+                config_errors.extend(errors)
+            else:
+                context = self._create_job_context(job_config)
+                jobs.append(job_class(context))
+
+        # Check for config errors
+        if config_errors:
+            error_msgs = [f"  - {e.job}: {e.path} - {e.message}" for e in config_errors]
+            raise RuntimeError("Job configuration validation failed:\n" + "\n".join(error_msgs))
+
+        # Validate system state for all jobs (Phase 3)
+        validation_errors: list[ValidationError] = []
+        for job in jobs:
+            errors = await job.validate()
+            if errors:
+                validation_errors.extend(errors)
+
+        if validation_errors:
+            error_msgs = [f"  - {e.job} ({e.host.value}): {e.message}" for e in validation_errors]
+            raise RuntimeError("System state validation failed:\n" + "\n".join(error_msgs))
+
+        return jobs
+
+    async def _check_disk_space_preflight(self) -> None:
+        """Check disk space on both source and target before creating snapshots.
+
+        Per FR-016, verifies both hosts have sufficient free disk space
+        based on the configured preflight_minimum threshold.
+
+        Raises:
+            RuntimeError: If either host has insufficient disk space
+        """
+        assert self._local_executor is not None
+        assert self._remote_executor is not None
+
+        self._logger.log(LogLevel.INFO, Host.SOURCE, "Checking disk space on both hosts")
+
+        # Parse threshold once (same for both hosts)
+        threshold_type, threshold_value = parse_threshold(self._config.disk.preflight_minimum)
+
+        # Check both hosts in parallel
+        source_task = check_disk_space(self._local_executor, "/")
+        target_task = check_disk_space(self._remote_executor, "/")
+        source_disk, target_disk = await asyncio.gather(source_task, target_task)
+
+        # Helper to format bytes in human-readable form
+        def format_bytes(bytes_value: int) -> str:
+            value = float(bytes_value)
+            for unit in ["B", "KiB", "MiB", "GiB", "TiB"]:
+                if value < 1024:
+                    return f"{value:.1f}{unit}"
+                value /= 1024
+            return f"{value:.1f}PiB"
+
+        # Helper to check if disk space is sufficient
+        def is_sufficient(disk_space: DiskSpace, threshold_type: str, threshold_value: int) -> bool:
+            if threshold_type == "percent":
+                # Threshold is percentage of total disk that must be free
+                free_percent = (disk_space.available_bytes / disk_space.total_bytes) * 100
+                return free_percent >= threshold_value
+            else:  # bytes
+                return disk_space.available_bytes >= threshold_value
+
+        # Helper to format free space description
+        def format_free_space(disk_space: DiskSpace) -> str:
+            free_bytes = format_bytes(disk_space.available_bytes)
+            free_percent = (disk_space.available_bytes / disk_space.total_bytes) * 100
+            return f"{free_bytes} ({free_percent:.1f}%)"
+
+        # Helper to format threshold description
+        def format_threshold(threshold_type: str, threshold_value: int) -> str:
+            if threshold_type == "percent":
+                return f"{threshold_value}%"
+            else:  # bytes
+                return format_bytes(threshold_value)
+
+        # Check source
+        if not is_sufficient(source_disk, threshold_type, threshold_value):
+            free_space_desc = format_free_space(source_disk)
+            threshold_desc = format_threshold(threshold_type, threshold_value)
+            error_msg = f"Source disk space {free_space_desc} below threshold {threshold_desc}"
+            self._logger.log(LogLevel.CRITICAL, Host.SOURCE, error_msg)
+            raise RuntimeError(error_msg)
+
+        # Check target
+        if not is_sufficient(target_disk, threshold_type, threshold_value):
+            free_space_desc = format_free_space(target_disk)
+            threshold_desc = format_threshold(threshold_type, threshold_value)
+            error_msg = f"Target disk space {free_space_desc} below threshold {threshold_desc}"
+            self._logger.log(LogLevel.CRITICAL, Host.TARGET, error_msg)
+            raise RuntimeError(error_msg)
+
+        # Both checks passed - log success
+        source_free = format_free_space(source_disk)
+        target_free = format_free_space(target_disk)
+        self._logger.log(LogLevel.INFO, Host.SOURCE, f"Source disk space check passed: {source_free} free")
+        self._logger.log(LogLevel.INFO, Host.TARGET, f"Target disk space check passed: {target_free} free")
+
+    async def _create_snapshots(self, phase: SnapshotPhase) -> None:
+        """Create btrfs snapshots on both source and target.
+
+        Args:
+            phase: PRE or POST snapshot phase
+        """
+        snapshot_config = {
+            "phase": phase.value,
+            "subvolumes": self._config.btrfs_snapshots.subvolumes,
+            "session_folder": self._session_folder,
+        }
+        context = self._create_job_context(snapshot_config)
+        snapshot_job = BtrfsSnapshotJob(context)
+
+        # Validate first
+        errors = await snapshot_job.validate()
+        if errors:
+            error_msgs = [f"  - {e.host.value}: {e.message}" for e in errors]
+            raise RuntimeError("Snapshot validation failed:\n" + "\n".join(error_msgs))
+
+        # Execute
+        await snapshot_job.execute()
+
+    async def _execute_jobs(self, jobs: list[Job]) -> list[JobResult]:
+        """Execute sync jobs sequentially with background disk monitoring.
+
+        Args:
+            jobs: List of validated jobs to execute
+
+        Returns:
+            List of JobResult for each executed job
+        """
+        assert self._ui is not None
+
+        results: list[JobResult] = []
+
+        async with asyncio.TaskGroup() as tg:
+            self._task_group = tg
+
+            # Start background disk space monitors for root filesystem
+            monitor_config = {
+                "preflight_minimum": self._config.disk.preflight_minimum,
+                "runtime_minimum": self._config.disk.runtime_minimum,
+                "warning_threshold": self._config.disk.warning_threshold,
+                "check_interval": self._config.disk.check_interval,
+            }
+            monitor_context = self._create_job_context(monitor_config)
+            source_monitor = DiskSpaceMonitorJob(monitor_context, host=Host.SOURCE, mount_point="/")
+            target_monitor = DiskSpaceMonitorJob(monitor_context, host=Host.TARGET, mount_point="/")
+
+            # Start monitors and save tasks for later cancellation
+            source_monitor_task = tg.create_task(source_monitor.execute())
+            target_monitor_task = tg.create_task(target_monitor.execute())
+
+            try:
+                # Execute sync jobs sequentially
+                for job_index, job in enumerate(jobs):
+                    # Update step counter (base 7 system steps + current job index)
+                    self._ui.set_current_step(7 + job_index + 1)
+                    started_at = datetime.now(UTC)
+                    try:
+                        await job.execute()
+                        ended_at = datetime.now(UTC)
+                        results.append(
+                            JobResult(
+                                job_name=job.name,
+                                status=JobStatus.SUCCESS,
+                                started_at=started_at,
+                                ended_at=ended_at,
+                            )
+                        )
+                        self._logger.log(
+                            LogLevel.INFO,
+                            Host.SOURCE,
+                            f"Job {job.name} completed successfully",
+                        )
+
+                    except Exception as e:
+                        ended_at = datetime.now(UTC)
+                        results.append(
+                            JobResult(
+                                job_name=job.name,
+                                status=JobStatus.FAILED,
+                                started_at=started_at,
+                                ended_at=ended_at,
+                                error_message=str(e),
+                            )
+                        )
+                        self._logger.log(
+                            LogLevel.CRITICAL,
+                            Host.SOURCE,
+                            f"Job {job.name} failed: {e}",
+                        )
+                        raise
+            finally:
+                # Cancel monitor tasks so TaskGroup can exit
+                # Monitors run forever (while True loop), so they must be cancelled
+                source_monitor_task.cancel()
+                target_monitor_task.cancel()
+
+        return results
+
+    async def _cleanup(self) -> None:
+        """Clean up resources (connection, locks, executors)."""
+        self._cleanup_in_progress = True
+
+        # Release target lock first (before terminating other processes)
+        if self._target_lock_process is not None:
+            await release_remote_lock(self._target_lock_process)
+
+        # Terminate all processes
+        if self._local_executor is not None:
+            await self._local_executor.terminate_all_processes()
+        if self._remote_executor is not None:
+            await self._remote_executor.terminate_all_processes()
+
+        # Kill remote processes (critical for SIGINT handling)
+        if self._connection is not None:
+            await self._connection.kill_all_remote_processes()
+
+        # Close connection
+        if self._connection is not None:
+            await self._connection.disconnect()
+
+        # Release source lock
+        if self._source_lock is not None:
+            self._source_lock.release()
+
+        # Close event bus (sends None sentinel to all consumers)
+        self._event_bus.close()
+
+        # Wait for logger tasks to finish draining their queues
+        if self._file_logger_task is not None:
+            await self._file_logger_task
+        if self._ui_task is not None:
+            await self._ui_task
+
+        # Stop UI live display
+        if self._ui is not None:
+            self._ui.stop()

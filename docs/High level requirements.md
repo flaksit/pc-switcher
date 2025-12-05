@@ -2,6 +2,13 @@
 
 A synchronization system for seamless switching between Linux desktop machines (laptops, workstations).
 
+## Navigation
+
+**Related Documentation:**
+- [Architecture Decision Records (ADRs)](adr/_index.md) - Architectural decisions with rationale
+- [Feature Specifications](../specs/) - Feature-level specs, plans, and implementation details
+  - [001-foundation](../specs/001-foundation/) - Core sync engine architecture
+
 ## Vision
 
 Keep pc's in sync with minimal friction. We aim at almost full system-state replication rather than as simple sync of user data.
@@ -41,11 +48,11 @@ The machines are used for development (coding, building, testing), general produ
 - Machine hardware cache (GPU shaders, fontconfig)
 - Machine-specific packages and configuration
 
-## Enviromnent
+## Environment
 
 - All machines run Ubuntu 24.04 LTS
 - Machines are connected to same LAN (1Gb ethernet) during sync
-- All machines have a btrfs filesystem with a flat layout
+- All machines have a single btrfs filesystem with a flat layout (all synced data on one filesystem)
 
 ## Workflow
 Only one machine is actively used at a time.
@@ -118,6 +125,7 @@ This repository will NOT serve for configuration management. It should be possib
 
 ## Ideas for later
 
+- Parallel run of sync jobs (e.g. user data and system state in parallel)
 - Partial sync (e.g. only user data, no system state, skip docker/k3s/VMs)
 - Machines can be in use in parallel, but only by different users. E.g. User A works on P17, User B on XPS13. Changes will be mainly in user data. For user data, uni-directional sync from one machine to the other is still possible. System state changes on the target machine must be avoided in this mode.
 - Bi-directional sync with conflict resolution for user data
