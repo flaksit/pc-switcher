@@ -200,69 +200,67 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 #### Unit Test Requirements
 
-- **FR-007**: Unit tests MUST complete full suite execution in under 30 seconds
+- **FR-007**: Unit tests MUST be runnable with single command `uv run pytest tests/unit tests/contract -v`
 
-- **FR-008**: Unit tests MUST be runnable with single command `uv run pytest tests/unit tests/contract -v`
-
-- **FR-009**: Integration tests MUST be selectable via pytest marker for running separately from unit tests
+- **FR-008**: Integration tests MUST be selectable via pytest marker for running separately from unit tests
 
 #### Test VM Requirements
 
-- **FR-010**: Test VMs MUST be configured with the same OS and filesystem type that pc-switcher targets (Ubuntu 24.04 LTS, btrfs)
+- **FR-009**: Test VMs MUST be configured with the same OS and filesystem type that pc-switcher targets (Ubuntu 24.04 LTS, btrfs)
 
-- **FR-011**: Test VMs MUST have a test user account with sudo access for running privileged operations during tests
+- **FR-010**: Test VMs MUST have a test user account with sudo access for running privileged operations during tests
 
-- **FR-012**: Test VMs MUST be able to communicate with each other via SSH to simulate source-to-target sync scenarios
+- **FR-011**: Test VMs MUST be able to communicate with each other via SSH to simulate source-to-target sync scenarios
 
-- **FR-013**: VMs and related test infrastructure costs MUST remain under EUR 10/month on continuous run basis
+- **FR-012**: VMs and related test infrastructure costs MUST remain under EUR 10/month on continuous run basis
 
 #### CI/CD Requirements
 
-- **FR-014**: CI MUST run type checks, lint checks and unit tests on every push to any branch
+- **FR-013**: CI MUST run type checks, lint checks and unit tests on every push to any branch
 
-- **FR-015**: CI MUST run integration tests on PRs to main branch
+- **FR-014**: CI MUST run integration tests on PRs to main branch
 
-- **FR-016**: CI MUST support manual trigger for running integration tests on any branch
+- **FR-015**: CI MUST support manual trigger for running integration tests on any branch
 
-- **FR-017**: CI MUST prevent parallel integration test runs through concurrency control
+- **FR-016**: CI MUST prevent parallel integration test runs through concurrency control
 
-- **FR-018**: CI MUST reset test VMs before running integration tests
+- **FR-017**: CI MUST reset test VMs before running integration tests
 
 #### Manual Playbook Requirements
 
-- **FR-019**: Manual playbook MUST document steps to verify all visual UI elements (progress bars, colors, formatting)
+- **FR-018**: Manual playbook MUST document steps to verify all visual UI elements (progress bars, colors, formatting)
 
-- **FR-020**: Manual playbook MUST provide a guided tour of all major pc-switcher features with expected behavior explanations
+- **FR-019**: Manual playbook MUST provide a guided tour of all major pc-switcher features with expected behavior explanations
 
-- **FR-021**: Manual playbook MUST be usable for both release verification and developer onboarding
+- **FR-020**: Manual playbook MUST be usable for both release verification and developer onboarding
 
 #### Documentation Requirements
 
-- **FR-022**: Developer guide MUST document how to write integration tests including test file creation, VM fixture usage, and assertion patterns
+- **FR-021**: Developer guide MUST document how to write integration tests including test file creation, VM fixture usage, and assertion patterns
 
-- **FR-023**: Developer guide MUST document VM interaction patterns for SSH execution, file transfers, btrfs operations, and snapshot management
+- **FR-022**: Developer guide MUST document VM interaction patterns for SSH execution, file transfers, btrfs operations, and snapshot management
 
-- **FR-024**: Developer guide MUST document test organization including directory structure, naming conventions, and pytest markers
+- **FR-023**: Developer guide MUST document test organization including directory structure, naming conventions, and pytest markers
 
-- **FR-025**: Developer guide MUST include troubleshooting section for common integration test failures
+- **FR-024**: Developer guide MUST include troubleshooting section for common integration test failures
 
-- **FR-026**: Operational guide MUST document all required CI secrets, their purposes, and how to obtain/generate them
+- **FR-025**: Operational guide MUST document all required CI secrets, their purposes, and how to obtain/generate them
 
-- **FR-027**: Operational guide MUST provide step-by-step VM provisioning instructions including cloud provider configuration and SSH key management
+- **FR-026**: Operational guide MUST provide step-by-step VM provisioning instructions including cloud provider configuration and SSH key management
 
-- **FR-028**: Operational guide MUST document all environment variables, their defaults, and effects on test behavior
+- **FR-027**: Operational guide MUST document all environment variables, their defaults, and effects on test behavior
 
-- **FR-029**: Operational guide MUST document cost monitoring procedures and infrastructure destruction/reprovisioning
+- **FR-028**: Operational guide MUST document cost monitoring procedures and infrastructure destruction/reprovisioning
 
-- **FR-030**: Operational guide MUST include runbooks for common infrastructure failure scenarios
+- **FR-029**: Operational guide MUST include runbooks for common infrastructure failure scenarios
 
-- **FR-031**: Architecture documentation MUST include diagrams describing the three-tier test structure and component interactions
+- **FR-030**: Architecture documentation MUST include diagrams describing the three-tier test structure and component interactions
 
-- **FR-032**: Architecture documentation MUST explain rationale for key design decisions (VM isolation, locking, baseline reset)
+- **FR-031**: Architecture documentation MUST explain rationale for key design decisions (VM isolation, locking, baseline reset)
 
-- **FR-033**: Architecture documentation MUST provide links to ADR-006 and related decision records
+- **FR-032**: Architecture documentation MUST provide links to ADR-006 and related decision records
 
-- **FR-034**: Documentation MUST be organized as separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md` (developer guide), `docs/testing-ops-guide.md` (operational guide)
+- **FR-033**: Documentation MUST be organized as separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md` (developer guide), `docs/testing-ops-guide.md` (operational guide)
 
 ### Key Entities
 
@@ -276,25 +274,21 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 ### Measurable Outcomes
 
-- **SC-001**: Unit test suite executes completely in under 30 seconds on a standard development machine
+- **SC-001**: VM reset to clean baseline completes in under 30 seconds for all VMs
 
-- **SC-002**: Integration tests complete full VM-based testing in under 15 minutes
+- **SC-002**: CI pipeline executes unit tests on 100% of pushes and integration tests on 100% of PRs to main
 
-- **SC-003**: VM reset to clean baseline completes in under 30 seconds for all VMs
+- **SC-003**: Lock mechanism successfully prevents concurrent test runs in 100% of contention scenarios
 
-- **SC-004**: CI pipeline executes unit tests on 100% of pushes and integration tests on 100% of PRs to main
+- **SC-004**: Manual playbook covers all visual elements for release verification
 
-- **SC-005**: Lock mechanism successfully prevents concurrent test runs in 100% of contention scenarios
+- **SC-005**: Test infrastructure costs remain under EUR 10/month
 
-- **SC-006**: Manual playbook covers all visual elements for release verification
+- **SC-006**: Developer guide enables a new developer to write a working integration test without additional guidance
 
-- **SC-007**: Test infrastructure costs remain under EUR 10/month
+- **SC-007**: Operational guide enables infrastructure setup from scratch without additional guidance
 
-- **SC-008**: Developer guide enables a new developer to write a working integration test without additional guidance
-
-- **SC-009**: Operational guide enables infrastructure setup from scratch without additional guidance
-
-- **SC-010**: Architecture documentation enables someone unfamiliar with the testing framework to explain its structure after reading
+- **SC-008**: Architecture documentation enables someone unfamiliar with the testing framework to explain its structure after reading
 
 ## Assumptions
 
