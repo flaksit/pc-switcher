@@ -205,7 +205,9 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **FR-005**: Concurrent test runs MUST be prevented via a locking mechanism that stores holder identity and acquisition time; stuck locks require manual cleanup (documented in operational guide)
 
-- **FR-006**: Test VMs MUST be automatically provisioned when integration tests are run and VMs do not exist; provisioning includes cloud VM creation and OS installation with btrfs filesystem via rescue mode; baseline snapshots MUST be created at provisioning time
+- **FR-006**: Test VMs MUST be automatically provisioned when integration tests are run and VMs do not exist; provisioning includes cloud VM creation and OS installation with btrfs filesystem; baseline snapshots MUST be created at provisioning time; concurrent provisioning is prevented by CI concurrency controls (local concurrent provisioning is not supported and not checked)
+
+- **FR-006a**: During auto-provisioning, SSH keys MUST be injected from CI secrets; the test user accounts on both VMs MUST have the public key in authorized_keys to enable CI access. Keys for inter-VM communication can be generated during provisioning because not needed by anyone.
 
 #### Unit Test Requirements
 
@@ -322,3 +324,4 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - Security penetration testing
 - Automated VM cost optimization (manual destruction when not needed)
 - Test coverage for third-party libraries (only test project code)
+- Test data generation fixtures (helpers for creating specific file patterns, permissions, etc. for sync tests) - to be added when actual tests are written
