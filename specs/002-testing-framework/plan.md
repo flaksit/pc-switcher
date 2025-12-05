@@ -5,7 +5,9 @@
 
 ## Summary
 
-Implement a three-tier testing framework for pc-switcher: (1) fast unit tests safe for any machine, (2) VM-isolated integration tests for destructive btrfs/SSH operations, and (3) a manual playbook for visual verification. The framework uses Hetzner Cloud VMs with btrfs snapshot-based reset for fast test isolation, lock-based concurrency control, and GitHub Actions CI/CD integration.
+Implement the **testing framework infrastructure** for pc-switcher: VM provisioning and reset scripts, locking mechanism, CI/CD workflows, pytest fixtures, and documentation structure. The framework supports three tiers of testing: (1) fast unit tests safe for any machine, (2) VM-isolated integration tests for destructive btrfs/SSH operations, and (3) a manual playbook for visual verification.
+
+**Scope Note**: This feature covers only the framework infrastructure and documentation. Writing actual tests for specific features (e.g., 001-foundation tests) is out of scope and tracked separately in feature `003-foundation-tests`.
 
 ## Technical Context
 
@@ -16,7 +18,9 @@ Implement a three-tier testing framework for pc-switcher: (1) fast unit tests sa
 - asyncssh >= 2.21.1 (existing, for SSH connections)
 - OpenTofu (Terraform-compatible, for Hetzner VM provisioning)
 - hcloud CLI (Hetzner Cloud command-line tool)
-**Storage**: N/A (test state managed via btrfs snapshots on VMs)
+**Storage**:
+- OpenTofu state: Hetzner Storage Box (SSH/SCP access, synced via wrapper script)
+- Test VM state: btrfs snapshots on VMs
 **Testing**: pytest with asyncio mode, markers for integration tests
 **Target Platform**: Ubuntu 24.04 LTS (both dev machines and test VMs), btrfs filesystem
 **Project Type**: Single project (CLI tool with async operations)
@@ -118,15 +122,16 @@ tests/
 ├── integration/         # Integration tests (create structure)
 │   ├── __init__.py
 │   ├── conftest.py      # Integration-specific fixtures (VM connections)
-│   └── test_*.py        # Future integration test files
+│   └── test_*.py        # Future integration test files (out of scope for this feature)
 └── infrastructure/      # VM infrastructure (extend)
     ├── main.tf          # OpenTofu configuration for Hetzner VMs
     ├── variables.tf     # OpenTofu variables
     ├── outputs.tf       # OpenTofu outputs (VM IPs)
     └── scripts/
+        ├── tofu-wrapper.sh   # State sync wrapper (create)
         ├── provision.sh      # VM provisioning (exists)
         ├── configure-vm.sh   # VM configuration (create)
-        ├── configure-hosts.sh # /etc/hosts setup (create)
+        ├── configure-hosts.sh # /etc/hosts and SSH keys setup (create)
         ├── reset-vm.sh       # Btrfs snapshot reset (create)
         └── lock.sh           # Lock management (create)
 
@@ -151,6 +156,8 @@ docs/
 | Aspect | Decision | Rationale |
 |--------|----------|-----------|
 | VM isolation | Hetzner Cloud VMs | Safety requirement; can't test destructive btrfs ops locally |
-| Snapshot reset | Btrfs snapshots | Fast (< 30s) vs VM reprovisioning (minutes) |
+| Snapshot reset | Btrfs snapshots at `/.snapshots/baseline/@` | Fast (< 30s) vs VM reprovisioning (minutes); matches docs/testing-framework.md |
 | Lock mechanism | File-based on pc1 | Simple; matches existing lock module patterns |
+| Lock scope | Test execution only | Provisioning is rare; protected by CI concurrency groups |
 | CI concurrency | GitHub Actions concurrency group | Built-in feature; no external dependencies |
+| State backend | Hetzner Storage Box | Cost-effective; avoids state drift between dev/CI |

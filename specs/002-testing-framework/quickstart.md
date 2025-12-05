@@ -34,25 +34,29 @@ Unit tests execute in < 30 seconds and use mocked executors.
 ### First-Time Setup
 
 ```bash
-# 1. Export Hetzner API token
+# 1. Export required environment variables
 export HCLOUD_TOKEN="your-api-token"
+export STORAGE_BOX_HOST="uXXXXXX.your-storagebox.de"
+export STORAGE_BOX_USER="uXXXXXX-sub1"  # Sub-account for pc-switcher
 
 # 2. Provision test VMs (one-time, ~10 minutes)
 cd tests/infrastructure
-tofu init
-tofu apply
+./scripts/tofu-wrapper.sh init
+./scripts/tofu-wrapper.sh apply
 
 # 3. Convert to btrfs and configure (one-time, ~5 minutes each)
 ./scripts/provision.sh pc-switcher-pc1
 ./scripts/provision.sh pc-switcher-pc2
 
-# 4. Configure /etc/hosts for inter-VM communication
+# 4. Configure /etc/hosts and SSH keys for inter-VM communication
 ./scripts/configure-hosts.sh
 
 # 5. Note the VM IPs from tofu output
-export PC_SWITCHER_TEST_PC1_HOST=$(tofu output -raw pc1_ip)
-export PC_SWITCHER_TEST_PC2_HOST=$(tofu output -raw pc2_ip)
+export PC_SWITCHER_TEST_PC1_HOST=$(./scripts/tofu-wrapper.sh output -raw pc1_ip)
+export PC_SWITCHER_TEST_PC2_HOST=$(./scripts/tofu-wrapper.sh output -raw pc2_ip)
 ```
+
+The `tofu-wrapper.sh` script syncs OpenTofu state to/from the Hetzner Storage Box before and after each operation, ensuring CI and developers share the same state.
 
 ### Running Integration Tests
 
@@ -75,8 +79,11 @@ VMs are automatically reset before CI test runs. For local development:
 
 ```bash
 cd tests/infrastructure
-./scripts/reset-vm.sh  # Resets both VMs to baseline state
+./scripts/reset-vm.sh pc1  # Reset pc1 to baseline
+./scripts/reset-vm.sh pc2  # Reset pc2 to baseline
 ```
+
+The reset script restores VMs to their baseline snapshots (`/.snapshots/baseline/@` and `/.snapshots/baseline/@home`) using btrfs snapshot operations. This is much faster than reprovisioning (~20-30 seconds vs ~10 minutes).
 
 ---
 
@@ -88,6 +95,9 @@ cd tests/infrastructure
 |--------|-------------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
 | `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519) |
+| `STORAGE_BOX_HOST` | Hetzner Storage Box hostname |
+| `STORAGE_BOX_USER` | Storage Box SSH user (sub-account) |
+| `STORAGE_BOX_SSH_KEY` | SSH private key for Storage Box access |
 
 ### Workflow Triggers
 
@@ -128,7 +138,7 @@ ssh testuser@$PC_SWITCHER_TEST_PC1_HOST "rm -rf /tmp/pc-switcher-integration-tes
 
 ### "Baseline snapshot missing"
 
-Reprovision the VMs:
+This means `/.snapshots/baseline/@` or `/.snapshots/baseline/@home` doesn't exist. Reprovision the VMs:
 ```bash
 cd tests/infrastructure
 ./scripts/provision.sh pc-switcher-pc1
@@ -157,7 +167,7 @@ Test VMs cost ~EUR 7/month total when running continuously. To reduce costs:
 ```bash
 # Destroy VMs when not needed
 cd tests/infrastructure
-tofu destroy
+./scripts/tofu-wrapper.sh destroy
 
 # VMs will be reprovisioned automatically on next integration test run
 ```

@@ -86,11 +86,12 @@ def pytest_collection_modifyitems(config, items):
 
 ## 3. OpenTofu/Hetzner Cloud Configuration
 
-### Decision: Use OpenTofu with local state for test infrastructure
+### Decision: Use OpenTofu with Hetzner Storage Box for state persistence
 
 ### Rationale
 - OpenTofu is actively maintained Terraform fork (per constitution: well-supported tools)
-- Local state sufficient for single-developer project; remote state adds complexity
+- Local state alone would be ephemeral in CI runners; remote state needed for shared access
+- Hetzner Storage Box (existing infrastructure) provides cost-effective SSH/SCP-accessible storage
 - Hetzner CX23 VMs meet cost constraint (< EUR 10/month)
 
 ### Configuration Structure
@@ -105,6 +106,7 @@ terraform {
       version = "~> 1.45.0"
     }
   }
+  # Local backend - state synced to/from Storage Box via wrapper script
 }
 
 provider "hcloud" {
@@ -129,62 +131,79 @@ resource "hcloud_server" "pc2" {
 ```
 
 ### State Management
-- State file: `tests/infrastructure/terraform.tfstate` (gitignored)
-- No remote backend needed for single-developer project
-- State can be regenerated via `tofu import` if lost
+- State file: `tests/infrastructure/terraform.tfstate` (gitignored locally)
+- Remote storage: Hetzner Storage Box at `pc-switcher/test-infrastructure/terraform.tfstate`
+- Wrapper script `tofu-wrapper.sh` syncs state before/after tofu operations:
+  1. Pull state from Storage Box via SCP
+  2. Run tofu command
+  3. Push updated state back to Storage Box
+- Single source of truth prevents CI/developer state drift
 
 ### Alternatives Considered
-- **Hetzner Object Storage backend**: Adds complexity without benefit for single developer
+- **Pure local state**: Would be lost in CI runners; causes drift between dev/CI
+- **Hetzner Object Storage (S3)**: More expensive than existing Storage Box
 - **Smaller VM types**: CX11 (2GB RAM) may be insufficient for btrfs operations
 
 ---
 
 ## 4. btrfs Snapshot Management
 
-### Decision: Baseline snapshots created at provisioning; reset via snapshot + set-default + reboot
+### Decision: Baseline snapshots created at provisioning; reset via mv + snapshot + reboot
 
 ### Rationale
 - Read-only baseline snapshots preserve known-good state
-- `btrfs set-default` allows atomic switch without modifying fstab
-- Reboot required to activate new default subvolume (~10-20 seconds)
+- mv + snapshot approach is simpler and avoids set-default complexity
+- Reboot required to activate new root subvolume (~10-20 seconds)
 
 ### Reset Flow
+
+Per docs/testing-framework.md, the reset procedure is:
 
 ```bash
 #!/bin/bash
 # tests/infrastructure/scripts/reset-vm.sh
 
-# 1. Delete test artifacts (preserving baseline)
-ssh root@$VM "btrfs subvolume delete /.snapshots/pc-switcher/* 2>/dev/null || true"
+# 1. Delete test artifacts (preserving baseline snapshots)
+ssh root@$VM "rm -rf /.snapshots/pc-switcher/test-* 2>/dev/null || true"
 
-# 2. Create writable snapshot from baseline
-ssh root@$VM "btrfs subvolume snapshot /.snapshots/baseline-@ /.snapshots/active-@"
-ssh root@$VM "btrfs subvolume snapshot /.snapshots/baseline-@home /.snapshots/active-@home"
+# 2. Mount top-level btrfs filesystem
+ssh root@$VM "mount -o subvolid=5 /dev/sda2 /mnt/btrfs"
 
-# 3. Get new subvolume ID and set as default
-SUBVOL_ID=$(ssh root@$VM "btrfs subvolume list / | grep 'active-@$' | awk '{print \$2}'")
-ssh root@$VM "btrfs subvolume set-default $SUBVOL_ID /"
+# 3. Replace active subvolumes with fresh snapshots from baseline
+ssh root@$VM "mv /mnt/btrfs/@ /mnt/btrfs/@_old"
+ssh root@$VM "btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@ /mnt/btrfs/@"
+ssh root@$VM "mv /mnt/btrfs/@home /mnt/btrfs/@home_old"
+ssh root@$VM "btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@home /mnt/btrfs/@home"
 
-# 4. Reboot to activate
+# 4. Unmount and reboot
+ssh root@$VM "umount /mnt/btrfs"
 ssh root@$VM "reboot" || true
 sleep 20
 # Wait for VM to come back online
+
+# 5. Clean up old subvolumes after reboot
+ssh root@$VM "mount -o subvolid=5 /dev/sda2 /mnt/btrfs"
+ssh root@$VM "btrfs subvolume delete /mnt/btrfs/@_old"
+ssh root@$VM "btrfs subvolume delete /mnt/btrfs/@home_old"
+ssh root@$VM "umount /mnt/btrfs"
 ```
 
 ### Snapshot Layout
 
 ```text
 /.snapshots/
-├── baseline-@      # Read-only baseline of root (created at provisioning)
-├── baseline-@home  # Read-only baseline of home (created at provisioning)
-├── active-@        # Current writable root (recreated on reset)
-├── active-@home    # Current writable home (recreated on reset)
-└── pc-switcher/    # Test artifacts (deleted on reset)
+├── baseline/
+│   ├── @           # Read-only baseline of root (created at provisioning)
+│   └── @home       # Read-only baseline of home (created at provisioning)
+└── pc-switcher/
+    └── test-*      # Test artifacts (deleted on reset)
 ```
+
+Active subvolumes (`@` and `@home`) are at the btrfs top level, not under `/.snapshots/`.
 
 ### Alternatives Considered
 - **Hetzner VM snapshots**: Slow restore (minutes); rejected for fast iteration
-- **chroot-based isolation**: Complex; doesn't test real boot behavior
+- **btrfs set-default approach**: More complex; mv + snapshot is simpler
 - **LVM snapshots**: Would require different filesystem; rejected for btrfs consistency
 
 ---
@@ -197,6 +216,16 @@ sleep 20
 - Simple implementation matching existing lock module patterns
 - Lock file contains holder identity and timestamp for debugging
 - `/tmp` location cleared on reboot (automatic cleanup)
+
+### Lock Scope
+
+The lock protects **integration test execution only**, not provisioning:
+
+- **Integration tests**: Must acquire lock before reset and release after tests complete
+- **Provisioning**: Protected by CI concurrency groups for CI runs; local concurrent provisioning is explicitly unsupported (documented constraint)
+- **VM reset**: Part of test session lifecycle, covered by the test execution lock
+
+This avoids over-complicating the provisioning workflow while ensuring test isolation.
 
 ### Lock File Format
 
@@ -247,6 +276,7 @@ esac
 - **Database-based lock**: Over-engineering for two users (dev + CI)
 - **GitHub Actions artifact lock**: Doesn't prevent local dev conflicts
 - **Flock-based lock**: Requires persistent SSH connection
+- **Lock for all operations**: Adds complexity to provisioning without significant benefit (provisioning is rare)
 
 ---
 

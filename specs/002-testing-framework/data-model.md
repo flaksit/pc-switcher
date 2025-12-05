@@ -22,8 +22,8 @@ Represents a Hetzner Cloud VM used for integration testing.
 | server_type | string | Hetzner server type (e.g., "cx23") |
 | location | string | Datacenter location (e.g., "fsn1") |
 | ssh_user | string | SSH user for test access ("testuser") |
-| baseline_snapshot_root | string | Path to baseline @ snapshot |
-| baseline_snapshot_home | string | Path to baseline @home snapshot |
+| baseline_snapshot_root | string | Path to baseline @ snapshot (`/.snapshots/baseline/@`) |
+| baseline_snapshot_home | string | Path to baseline @home snapshot (`/.snapshots/baseline/@home`) |
 
 **State Transitions**:
 ```mermaid
@@ -107,16 +107,16 @@ Represents a btrfs subvolume snapshot on a test VM.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| path | string | Absolute path (e.g., "/.snapshots/baseline-@") |
+| path | string | Absolute path (e.g., `/.snapshots/baseline/@`) |
 | subvol_id | integer | btrfs subvolume ID |
 | readonly | boolean | Whether snapshot is read-only |
 | created | datetime | Creation timestamp |
 | parent | string | Parent subvolume path (for derived snapshots) |
 
 **Types**:
-- **Baseline**: Read-only, created at provisioning, never deleted
-- **Active**: Writable, created from baseline on reset
-- **Test artifact**: Created by tests in `/.snapshots/pc-switcher/`
+- **Baseline**: Read-only, created at provisioning, never deleted. Located at `/.snapshots/baseline/@` and `/.snapshots/baseline/@home`
+- **Active**: Writable root subvolumes `@` and `@home` at btrfs top level. Replaced from baseline on reset.
+- **Test artifact**: Created by tests in `/.snapshots/pc-switcher/test-*`
 
 ---
 
@@ -154,6 +154,9 @@ Represents a GitHub Actions workflow configuration.
 |----------|-------------|---------|
 | HCLOUD_TOKEN | Hetzner Cloud API token | - |
 | SSH_PUBLIC_KEY | Path to SSH public key | ~/.ssh/id_ed25519.pub |
+| STORAGE_BOX_HOST | Hetzner Storage Box hostname | - |
+| STORAGE_BOX_USER | Storage Box SSH user (sub-account) | - |
+| STORAGE_BOX_PATH | Path to tfstate on Storage Box | pc-switcher/test-infrastructure |
 
 ### CI-Specific
 
@@ -197,4 +200,4 @@ Represents a GitHub Actions workflow configuration.
 ### Baseline Snapshot Invariants
 1. Baseline snapshots are never modified after creation
 2. Baseline snapshots contain clean OS + testuser + SSH keys
-3. Baseline paths are consistent: `/.snapshots/baseline-@` and `/.snapshots/baseline-@home`
+3. Baseline paths are consistent: `/.snapshots/baseline/@` and `/.snapshots/baseline/@home`
