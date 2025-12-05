@@ -66,7 +66,7 @@ Follow-up TODOs:
 *Rationale: Simple systems are easier to reason about, maintain, and keep reliable.*
 
 ### Up-to-date Documentation
-- Behavioral changes MUST update rationale, architecture, implementation, and user guides within the same change set.
+- Behavioral changes MUST update or create rationale, architecture, implementation, and user guides within the same change set.
 - Documentation MUST remain navigable from high-level intent down to scripts, keeping references synchronized.
 - Out-of-date documentation identified during reviews MUST block release until corrected.
 
