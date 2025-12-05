@@ -138,6 +138,11 @@ git merge 001-foundation --no-ff
 git push origin main
 ```
 
+Or just
+```bash
+gh pr merge <pr-number-or-url> --merge
+```
+
 ### Step 3: Create GitHub Release (with new tag)
 
 Go to: <https://github.com/flaksit/pc-switcher/releases/new>
@@ -154,7 +159,7 @@ Go to: <https://github.com/flaksit/pc-switcher/releases/new>
 
 5. **Edit the generated notes** - add this summary at the top:
 
-```markdown
+````markdown
 # PC-switcher v0.1.0-alpha.1 - Foundation Infrastructure (Alpha)
 
 🎉 First release! Complete foundation infrastructure for synchronizing Linux desktop machines.
@@ -201,6 +206,8 @@ pc-switcher --help
 - [README](https://github.com/flaksit/pc-switcher/blob/main/README.md)
 - [Architecture](https://github.com/flaksit/pc-switcher/blob/main/docs/architecture.md)
 - [High-level Requirements](https://github.com/flaksit/pc-switcher/blob/main/docs/High%20level%20requirements.md)
+
+````
 
 ---
 
