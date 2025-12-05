@@ -1,7 +1,6 @@
 THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
 
-Convert to btrfs with "installimage": you included this in initial setup. Did you add this to the github workflow? Is it best to have these as separate script calls? Or call them with local_exec from a terraform_data resource? But how to wait for the reboot that is specified in the cloud-init? Maybe best to leave out the reboot from the cloud-init and do it in terraform after calling provision.sh? Actually, as provision.sh reinstalls completely, can't we just create the VM without cloud-init? We'll overwrite everything anyway. Then there is no automatic reboot.
-The INSTALLCONFIG creates two btrfs filesystems: one for / and one for /home. This is not what we want.
+
 
 
 ---
