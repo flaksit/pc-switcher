@@ -23,7 +23,8 @@ log_cli_level: INFO
 # Sync Jobs Configuration
 # =============================================================================
 # Enable or disable optional sync jobs
-# Note: Jobs not listed here will use their default enabled state
+# Note: Only jobs explicitly listed here will be discovered and run
+# Set to false to disable a job (e.g., dummy_fail: false)
 
 sync_jobs:
   # Test jobs (for development/testing)
