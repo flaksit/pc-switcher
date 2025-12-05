@@ -1,4 +1,4 @@
-# Architecture Decisions Summary (Last updated: 2025-11-15)
+# Architecture Decisions Summary (Last updated: 2025-12-05)
 
 ## Active Decisions
 
@@ -7,6 +7,7 @@
 - [ADR-003](adr-003-implementation-language.md): Python orchestrator with task-specific languages
 - [ADR-004](adr-004-dynamic-versioning-github-releases.md): Dynamic package versioning from GitHub Releases
 - [ADR-005](adr-005-asyncio-concurrency.md): Use Asyncio for Concurrency
+- [ADR-006](adr-006-testing-framework.md): VM-Based Testing Framework
 
 ## Superseded
 

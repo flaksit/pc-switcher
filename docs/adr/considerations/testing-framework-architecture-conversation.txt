@@ -1,0 +1,1127 @@
+
+ ▐▛███▜▌   Claude Code v2.0.56
+▝▜█████▛▘  Opus 4.5 · Claude API
+  ▘▘ ▝▝    ~/dev/pc-switcher
+
+> We use speckit as workflow to implement features in this project. The 
+feature we are currently working has a specific feature folder under specs/
+with the same name as the current git branch. The scope of this feature is
+actually the features 1+2+3 of @"docs/Feature breakdown.md" . This was
+detailed in @specs/001-foundation/spec.md .
+
+My developer implemented the feature and already implemented a few tests. 
+Alas, they didn't follow TDD. The tests are very incomplete and they use a
+lot of mock-ups, which could easily hide possible issues with the mocked-up
+service.
+
+To honour principle "Reliability Without Compromise" from our constitution, 
+we need to have full testing for the entire scope, for all optimistic and
+pessimistic scenarios. Unit tests and integration tests. The tests should be
+ automated as much as possible. Given the nature of the project and the need
+ for a remote system (the "target"), some manual testing will be needed.
+Please implement comprehensive testing for the full scope, including:
+- Automated Unit tests
+- Automated Integration tests
+- A playbook for manual tests that are needed to fully cover the scope. 
+Write it to a new file "testing-playbook.md" in the feature folder
+Pay special attention to edge cases and error handling. Ensure that the 
+implementation is robust and reliable.
+
+Create an overview report of the testing you implemented, including:
+- What parts of the scope are covered by which tests
+- How to run the tests
+- Any limitations, assumptions, etc.
+- Specific "Risk" chapter that highlights tests that could possibly be 
+dangerous to execute blindly if there would be bugs in the implementation of
+ the feature or in the implementation of the test itself (e.g. deleting
+files, overwriting files, removing btrfs snapshots, etc.)
+
+DO NOT EXECUTE THE TEST SUITE YOURSELF! Just implement it. I will first 
+review your implementation and the report before executing it.
+
+BEFORE STARTING THE IMPLEMENTATION, come back to me with any clarifying 
+questions you have about the feature, the scope, the implementation, the
+testing, etc. And I want to spar with you about the best approach to
+automate the tests as much as possible, given the need for a remote system
+(the "target"). Come with some ideas about how to do this in a reliable and
+repeatable manner.
+  ⎿  Read docs/Feature breakdown.md (25 lines)
+  ⎿  Read specs/001-foundation/spec.md (548 lines)
+
+● I'll explore the codebase first to understand the current implementation
+  and existing tests before asking clarifying questions and discussing
+  testing strategies.
+
+● Explore(Explore codebase structure)
+  ⎿  Done (29 tool uses · 70.1k tokens · 1m 20s)                           
+
+● Let me also look at the existing test files in detail:
+
+● Read(tests/conftest.py)
+  ⎿  Read 70 lines
+
+● Read(tests/contract/test_job_interface.py)
+  ⎿  Read 146 lines
+
+● Read(tests/unit/test_jobs/test_disk_space_monitor.py)
+  ⎿  Read 175 lines
+
+● Read(tests/test_version.py)
+  ⎿  Read 34 lines
+
+● Let me also examine a few key implementation files to better understand
+  what needs testing:
+
+● Read(src/pcswitcher/orchestrator.py)
+  ⎿  Read 625 lines
+
+● Read(src/pcswitcher/jobs/btrfs.py)
+  ⎿  Read 211 lines
+
+● Read(src/pcswitcher/jobs/install_on_target.py)
+  ⎿  Read 112 lines
+
+● Now I have a comprehensive understanding of the codebase. Let me come back
+   with clarifying questions and discuss the testing strategy.
+
+  ---
+  Current State Analysis
+
+  Existing Tests (very limited):
+  1. test_job_interface.py - Contract tests for job interface (mock-based)
+  2. test_disk_space_monitor.py - Config schema and validation tests
+  (mock-based)
+  3. test_version.py - Version parsing (mock-based)
+
+  Test Coverage Gaps:
+  Almost everything - the existing tests are surface-level and rely heavily
+  on mocks that could easily hide bugs.
+
+  ---
+  Clarifying Questions
+
+  1. Test Environment Infrastructure
+
+  Q1a: Do you have access to VMs or containers that can serve as test 
+  targets?
+  Options:
+  - Dedicated test VMs (e.g., Vagrant, libvirt)
+  - Docker containers (limited - no real btrfs support)
+  - Physical spare machine
+  - Cloud VMs (e.g., Hetzner, DO)
+
+  Q1b: Can integration tests make real btrfs operations on the test 
+  machines?
+  The btrfs snapshot tests need actual btrfs filesystems. Options:
+  - Use loopback-mounted btrfs filesystems (works in VMs/containers)
+  - Require actual btrfs root filesystem
+  - Mock btrfs for unit tests, real btrfs for integration/manual only
+
+  2. Safety Boundaries
+
+  Q2a: For destructive tests (snapshot creation/deletion, file operations), 
+  should I:
+  - Create a dedicated test subvolume (e.g., @test) that can be safely used
+  - Use tmpfs/loopback btrfs images that are isolated
+  - Only test these in the manual playbook
+
+  Q2b: What's the acceptable blast radius for automated tests?
+  - Should automated tests ever touch /.snapshots/pc-switcher/?
+  - Should they ever run sudo commands?
+
+  3. SSH/Connection Testing
+
+  Q3: For testing SSH connections and remote execution:
+  - Should I use localhost with SSH to itself (requires key setup)?
+  - A fixed test hostname (e.g., pc-switcher-test-target)?
+  - Skip real SSH in automated tests and only cover in manual playbook?
+
+  4. Locking Tests
+
+  Q4: The locking mechanism uses ~/.local/share/pc-switcher/sync.lock. 
+  Should tests:
+  - Use a different lock path for isolation (e.g., in /tmp)?
+  - Require exclusive test execution?
+
+  5. Installation Tests
+
+  Q5: The InstallOnTargetJob downloads from GitHub. For tests:
+  - Should I mock the network call entirely?
+  - Use a local test server?
+  - Only test install.sh in manual playbook?
+
+  ---
+  Testing Strategy Discussion
+
+  Approach A: Layered Testing with Real Components
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  Manual Testing (testing-playbook.md)                           │
+  │  - Full end-to-end with real target machine                     │
+  │  - Destructive operations (real snapshots, real installs)       │
+  │  - Network failure simulation                                   │
+  └─────────────────────────────────────────────────────────────────┘
+                                ↓
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  Integration Tests (requires: btrfs loopback, SSH to localhost) │
+  │  - Real btrfs operations on isolated loopback images            │
+  │  - Real SSH to localhost or test container                      │
+  │  - Real file operations in temp directories                     │
+  │  - Real locking (isolated paths)                                │
+  └─────────────────────────────────────────────────────────────────┘
+                                ↓
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  Unit Tests (no external dependencies, fast)                    │
+  │  - Business logic in isolation                                  │
+  │  - Config parsing and validation                                │
+  │  - Error handling paths                                         │
+  │  - Mock executors for predictable responses                     │
+  └─────────────────────────────────────────────────────────────────┘
+
+  Approach B: Container-Based Integration Tests
+
+  Use a Docker Compose setup with:
+  - Source container (Ubuntu 24.04 with pc-switcher)
+  - Target container (Ubuntu 24.04 for SSH target)
+  - Shared btrfs loopback volume
+
+  Pros: Reproducible, isolated, CI-friendly
+  Cons: No real btrfs root filesystem, container networking overhead
+
+  Approach C: Vagrant-Based Integration Tests
+
+  Use Vagrant with libvirt/VirtualBox:
+  - Two Ubuntu 24.04 VMs with real btrfs filesystems
+  - Full system simulation
+
+  Pros: Most realistic, can test real btrfs root
+  Cons: Slow, resource-intensive, harder to set up in CI
+
+  ---
+  My Recommendation
+
+  Given "Reliability Without Compromise", I suggest:
+
+  1. Unit Tests: Comprehensive tests with mocks, but structured so the mocks
+   are thin and focused. Test all error paths, edge cases, config
+  validation.
+  2. Integration Tests: Use btrfs loopback images for snapshot tests. Use
+  SSH to localhost for connection tests. Use isolated directories for all
+  file operations.
+  3. Manual Playbook: Comprehensive checklist for testing with a real target
+   machine, including all destructive operations.
+  4. Test Fixtures: Create reusable fixtures that can:
+    - Create/destroy btrfs loopback images
+    - Set up SSH keys for localhost testing
+    - Create isolated config/lock directories
+
+  ---
+  Before I proceed, I need your input on:
+
+  1. Infrastructure: What test infrastructure do you have available (VMs,
+  containers)?
+  2. SSH Setup: Is SSH to localhost already configured on your dev machine?
+  3. Sudo Access: Can automated tests run sudo for btrfs operations?
+  4. Safety Preference: How conservative should I be with tests that touch
+  the real filesystem?
+  5. CI Consideration: Should these tests be runnable in a CI environment
+  eventually?
+
+> Q1a: We could use VMs.
+- I have libvirt and virt-manager installed on my development Linux machine.
+ You could fully automate the creation and management of VMs (installing a
+fresh OS with the right btrfs layout). However, then the tests that need the
+ VMs can't be part of hosted CI/CD (github).
+- For full CI/CD automation, we could spin up Hetzner cloud VMs. Cost is 
+negligible. Not too slow?
+- You suggested to use Vagrant. I have no experience with that. Is that a 
+good idea? Still relevant if using Hetzner cloud VMs? I have experience with
+ teraform (tofu), if that would do the job equally well. Hetzner has a
+terraform provider.
+
+Q1b: For good testing, we need root btrfs filesystem. No mockery. With 
+Hetzner cloud VMs, we can run fully automated tests, even in hosted CI/CD
+(github).
+
+Q2a: If we use VMs, I think there is no danger for anything anymore. Or am I
+ wrong? Could something leak from the VM to the host system?
+
+Q2b: Yes, we need to touch /.snapshots/pc-switcher and sudo. Otherwise, 
+there is a lot of functionality that we can't test properly (btrfs, install
+script, ...).
+
+Q3, Q4: With VMs for source and target, we can test everything properly, no?
+
+Q5: Local testing of any installation code becomes difficult, I think. 
+However, with CI on github using Hetzner cloud VMs, we can test fully. Only
+the url should be tweaked to download files from a specific commit. The
+CI/CD script can do that, no?
+
+So I think using VMs for testing is the way to go. This simplifies testing a
+ lot (no mocking, no loopback images, no deviation to temp folders, ...) and
+ makes it more reliable.
+
+In general, I think we will need to structure the tests as follows:
+- Unit tests vs Integration tests
+- A) Fully automated tests that can run safely during development and CI/CD 
+without need for isolation in a VM. Probably many unit tests and some
+integration tests.
+  B) Fully automated tests that can run safely during development and CI/CD 
+but that need VMs: when a target host is needed or for safety isolation.
+  - These tests would run in Hetzner VMs that we spin up and destroy 
+automatically. Or, if that would simplify things a lot, we could leave the
+VMs running on Hetzner (cost is negligible) and just reset them to a clean
+snapshot before each test run.
+  - I suppose this will take a long time to run. So they should not run on 
+each commit to a feature branch, but only on demand or on PR/merges to main
+branch.
+  - And maybe run conditionally, only if relevant files were changed. Is 
+that possible in github actions?
+  C) Still a playbook with a manual test scenario for the developer/user, so
+ that they can see with their own eyes that things work as expected.
+
+What do you think? 
+
+● Your analysis is excellent. I agree with the VM-based approach - it
+  dramatically simplifies testing while providing much more reliable
+  results. Let me build on your structure and address a few remaining
+  questions.
+
+  ---
+  Analysis of Your Proposed Structure
+
+  A) Fast Tests (No VMs)
+
+  - Unit tests with focused mocks
+  - Config parsing, validation, business logic
+  - Error handling paths
+  - Run on: Every commit
+
+  B) VM-Based Tests
+
+  - Real btrfs, real SSH, real sudo
+  - Full integration scenarios
+  - Run on: PRs to main, on-demand, or when relevant paths change
+
+  C) Manual Playbook
+
+  - Developer verification
+  - Visual confirmation
+  - Edge cases that are hard to automate
+
+  I fully agree with this structure.
+
+  ---
+  Technical Decisions to Make
+
+  1. VM Strategy: Ephemeral vs Persistent
+
+  | Approach                                | Pros
+     | Cons                                                              |
+  |-----------------------------------------|-------------------------------
+  ---|-------------------------------------------------------------------|
+  | Ephemeral (create/destroy per test run) | Clean state guaranteed, no
+  drift | Slow (3-5 min VM creation), more complex Tofu
+  |
+  | Persistent with snapshot reset          | Fast reset (~30s), simpler
+     | Small cost (~€6/month for 2 tiny VMs), need to maintain snapshots |
+
+  My recommendation: Persistent with snapshot reset. The speed advantage is
+  significant for developer experience, and the cost is negligible.
+
+  2. Number of VMs Needed
+
+  For proper testing of the source→target sync:
+
+  | Setup                   | Coverage                             |
+  Complexity                            |
+  |-------------------------|--------------------------------------|--------
+  -------------------------------|
+  | 1 VM (SSH to localhost) | ~70% - can test most flows           | Simple,
+   cheap                         |
+  | 2 VMs (source + target) | ~95% - real network, real separation | More
+  realistic, slightly more complex |
+
+  My recommendation: 2 VMs. The source→target architecture is fundamental to
+   pc-switcher, and testing with localhost SSH would miss real-world issues.
+
+  3. OpenTofu vs Other Options
+
+  Since you have Terraform/OpenTofu experience, using OpenTofu with hcloud 
+  provider is the right choice. Vagrant would add unnecessary learning curve
+   and doesn't work with Hetzner directly.
+
+  4. GitHub Actions Conditional Execution
+
+  Yes, this is straightforward:
+
+  on:
+    pull_request:
+      paths:
+        - 'src/**'
+        - 'tests/**'
+        - 'install.sh'
+        - 'pyproject.toml'
+
+  Or using dorny/paths-filter for more complex logic:
+
+  - uses: dorny/paths-filter@v3
+    id: changes
+    with:
+      filters: |
+        vm_tests:
+          - 'src/pcswitcher/jobs/btrfs.py'
+          - 'src/pcswitcher/btrfs_snapshots.py'
+          - 'src/pcswitcher/connection.py'
+          - 'install.sh'
+
+  ---
+  Remaining Questions Before Implementation
+
+  Q1: VM Specifications
+
+  What Hetzner VM type should we use? Suggestions:
+  - CX22 (2 vCPU, 4GB RAM, €4.35/month) - probably sufficient
+  - CAX11 (2 ARM vCPU, 4GB RAM, €3.79/month) - cheaper but ARM
+
+  Do you care about testing on ARM, or is x86 sufficient?
+
+  Q2: Btrfs Layout for Test VMs
+
+  The test VMs need a btrfs root filesystem with subvolumes. Options:
+  - Custom image: Pre-build an image with btrfs layout, upload to Hetzner
+  - Cloud-init script: Start with standard Ubuntu, run script to convert to
+  btrfs (complex, slow)
+  - Hetzner installimage: Use their rescue mode + installimage (can
+  configure btrfs)
+
+  What's your preference? I'm leaning toward using Hetzner's installimage
+  with a config file that sets up btrfs with @ and @home subvolumes.
+
+  Q3: Test Isolation Within VM Tests
+
+  Should each test function get a fresh VM snapshot reset, or should tests
+  be designed to be independent within a single test run?
+
+  - Per-test reset: Maximum isolation, very slow
+  - Per-run reset: Reset once at start, tests clean up after themselves
+
+  My recommendation: Per-run reset with careful test design. Tests that
+  modify shared state (like creating snapshots in /.snapshots/) should clean
+   up after themselves.
+
+  Q4: Local Development Testing
+
+  For local development (not CI), should developers:
+  - Run only the fast tests locally, rely on CI for VM tests?
+  - Be able to spin up local libvirt VMs with the same Tofu config?
+  - Have a different local setup?
+
+  My recommendation: Same Tofu config should work for both local libvirt and
+   Hetzner (with different provider config). But local VM testing should be
+  optional - developers can rely on CI.
+
+  Q5: Installation Testing
+
+  For InstallOnTargetJob and install.sh, the script downloads from GitHub.
+  In CI:
+  - Should we test against a specific commit/branch?
+  - Should we upload the install.sh to a test location first?
+
+  My recommendation: In CI, we should modify the install URL to point to the
+   branch/commit being tested. This can be done via environment variable or
+  test fixture.
+
+  ---
+  Proposed Test File Structure
+
+  tests/
+  ├── conftest.py                    # Shared fixtures
+  ├── unit/                          # Fast tests, no external deps
+  │   ├── test_config.py
+  │   ├── test_models.py
+  │   ├── test_events.py
+  │   ├── test_disk.py
+  │   ├── test_btrfs_snapshots.py    # Logic tests, not actual btrfs
+  │   ├── test_version.py
+  │   ├── test_lock.py
+  │   └── jobs/
+  │       ├── test_base.py
+  │       ├── test_btrfs_job.py      # With mocked executor
+  │       ├── test_install_job.py
+  │       ├── test_disk_monitor.py
+  │       └── test_dummy_jobs.py
+  ├── integration/                   # May need VMs
+  │   ├── conftest.py                # VM fixtures
+  │   ├── test_orchestrator.py       # Full workflow tests
+  │   ├── test_connection.py         # Real SSH tests
+  │   ├── test_executor.py           # Real command execution
+  │   ├── test_btrfs_real.py         # Real btrfs operations
+  │   └── test_locking.py            # Real locking tests
+  ├── contract/                      # Interface compliance
+  │   └── test_job_interface.py
+  └── infrastructure/                # Tofu configs
+      ├── main.tf
+      ├── variables.tf
+      ├── outputs.tf
+      └── cloud-init/
+          └── setup-btrfs.sh
+
+  ---
+  My Questions Summarized
+
+  1. VM type: CX22 (x86) or CAX11 (ARM)?
+  2. Btrfs setup method: Custom image, cloud-init, or installimage?
+  3. Test isolation: Per-test reset or per-run reset?
+  4. Local dev: Should local VM testing be supported?
+  5. Install testing: How to handle GitHub URL in tests?
+
+  Once you answer these, I can proceed with implementation.
+
+> For B), omit "when relevant paths change". The developer knows and should 
+run on-demand when they want.
+
+For 1.
+- "snapshot reset" can be just mounting a r/w snapshots of a set of base r/o
+ snapshots for all the relevant subvolumes (root, home, ...). For root, this
+ needs a reboot. Use `btrfs set-default` to set the default subvolume for
+next boot. But that's probably what you were thinking already.
+- We'll need some script to create, tear down, setup and configure the VMs 
+anyway, in whatever technology (bash script, teraform, ...)
+
+For 2.: 2 VMs
+
+For 3.: tofu it is
+
+For 4.: Thanks for the info. We'll skip this for now. See my first remark.
+
+Q1: CX22 doesn't exist anymore. XC32 it is. No arm. My machines are all 
+x86_64.
+
+Q2: I follow your recommendation
+
+Q3: I follow your recommendation because otherwise we need reboot between 
+each test. Note that for the future rollback feature (out of scope now, but
+let's not ignore it), we'll need to reboot into an r/w copy of a previous
+snapshot.
+
+Q4: I follow your recommendation if local libvirt setup is not too hard to 
+do if we already do setup of Hetzner VMs. If it's too much hassle, we can
+skip local testing in VM for now. If the Hetzner VMs are available anyway,
+why not use them for dev tests too? Of course, we need to ensure that the
+local dev tests don't interfere with the github CI tests.
+
+Q5: I follow your recommendation.
+However, what about dev test runs? There is no commit and there is no 
+download-url. Hmm, oh yes, we could require the dev to commit and push
+before running the dev tests. That would work: urls should be the same as
+when github runs the CI. In that case, I wonder if running the VMs locally
+would add much value. If the dev has to push anyway, they can launch the CI
+tests on github.
+
+In your Proposed Test File Structure, I see "test_install_job.py" under the 
+fast unit tests that have no external deps. I don't understand this is
+possible: Don't e need a target system?
+Moreover, (just based on the filenames), it seems a lot of functionality is 
+not tested:
+- first install on the source (install.sh)
+- dummy_success and dummy_fail jobs
+Ensure in your final output that all functionality is covered, as asked in 
+the very beginning of this conversation.
+
+● You're right on both points. Let me address them:
+
+  Clarification: test_install_job.py
+
+  You're correct - test_install_job.py under unit tests was a mistake. The
+  only thing we could unit test for InstallOnTargetJob is:
+  - Version comparison logic (but that's in version.py)
+  - URL generation (trivial string formatting)
+
+  The actual installation must be tested in integration tests with a real
+  target VM.
+
+  Complete Coverage Matrix
+
+  Let me provide a comprehensive mapping of all functionality to tests:
+
+  Unit Tests (Fast, No VMs)
+
+  | Component            | File(s)            | What We Test
+                                                  |
+  |----------------------|--------------------|-----------------------------
+  ------------------------------------------------|
+  | Config System        | config.py          | YAML parsing, schema
+  validation, defaults, error messages with line numbers |
+  | Models               | models.py          | Dataclass creation, enum
+  values, JobResult/SyncSession serialization        |
+  | Events               | events.py          | EventBus
+  subscribe/publish/close, queue isolation, None sentinel            |
+  | Disk Utils           | disk.py            | parse_threshold() for %,
+  GiB, invalid formats; DiskSpace calculations       |
+  | Btrfs Utils          | btrfs_snapshots.py | snapshot_name(),
+  session_folder_name(), path generation (pure functions)    |
+  | Version              | version.py         |
+  parse_version_from_cli_output(), version comparison edge cases
+    |
+  | Lock Utils           | lock.py            | get_local_hostname(), holder
+   info formatting (pure functions)               |
+  | Logger Formatting    | logger.py          | JSON line formatting, level
+  filtering logic                                 |
+  | Job Base             | jobs/base.py       | validate_config() schema
+  validation, _validation_error() helper             |
+  | Job Schemas          | All jobs           | CONFIG_SCHEMA validation for
+   valid/invalid configs                          |
+  | CLI Argument Parsing | cli.py             | Argument validation (not
+  execution)                                         |
+
+  Integration Tests (Need VMs - Category B)
+
+  | Component           | File(s)                    | What We Test
+                                                            |
+  |---------------------|----------------------------|----------------------
+  ----------------------------------------------------------|
+  | SSH Connection      | connection.py              | Connect, disconnect,
+  keepalive, connection loss detection                      |
+  | Local Executor      | executor.py                | run_command(),
+  process tracking, terminate_all_processes()                     |
+  | Remote Executor     | executor.py                | run_command(),
+  send_file(), get_file(), process cleanup                        |
+  | Real Locking        | lock.py                    | Acquire, release,
+  concurrent access detection, stale lock handling             |
+  | Real Disk Space     | disk.py                    | check_disk_space() on
+   real filesystem                                          |
+  | Real Btrfs          | btrfs_snapshots.py         | create_snapshot(),
+  validate_snapshots_directory(), validate_subvolume_exists() |
+  | BtrfsSnapshotJob    | jobs/btrfs.py              | Full validate +
+  execute on source and target                                   |
+  | InstallOnTargetJob  | jobs/install_on_target.py  | Version check,
+  install, upgrade, version mismatch handling                     |
+  | DiskSpaceMonitorJob | jobs/disk_space_monitor.py | Real monitoring loop,
+   threshold warnings, critical errors                      |
+  | DummySuccessJob     | jobs/dummy_success.py      | Full execution with
+  logging at INFO/WARNING/ERROR, progress reporting          |
+  | DummyFailJob        | jobs/dummy_fail.py         | Exception at 60%,
+  orchestrator CRITICAL handling                               |
+  | Full Orchestrator   | orchestrator.py            | Complete 9-phase
+  workflow, job discovery, error propagation                    |
+  | SIGINT Handling     | cli.py, orchestrator.py    | Single Ctrl+C
+  graceful, double Ctrl+C force, no orphans                        |
+  | File Logger         | logger.py                  | Real JSON log file
+  creation, level filtering                                   |
+  | Snapshot Cleanup    | cli.py                     | cleanup-snapshots
+  command with real snapshots                                  |
+  | install.sh          | install.sh                 | Fresh install,
+  upgrade, existing config preservation                           |
+
+  Manual Playbook (Category C)
+
+  | Scenario              | What We Verify
+               |
+  |-----------------------|-------------------------------------------------
+  -------------|
+  | Visual UI             | Progress bars render correctly, colors work,
+  resize handling |
+  | Network Failures      | Target unreachable mid-sync, slow connection,
+  packet loss    |
+  | Disk Full             | Disk fills during sync, monitor detects and
+  aborts           |
+  | Concurrent Sync       | Second sync attempt shows correct error message
+               |
+  | Log Inspection        | pc-switcher logs --last shows formatted output
+               |
+  | Real Machine Sync     | Full sync between two physical/VM machines
+               |
+  | Post-Failure State    | Verify no orphaned processes after various
+  failure modes     |
+  | Snapshot Verification | Manually inspect created snapshots are read-only
+   and correct |
+
+  ---
+  Final Questions Before Implementation
+
+  Q1: Dev vs CI VM Isolation
+
+  You mentioned ensuring dev tests don't interfere with CI tests. Options:
+
+  A) Time-based isolation: Dev tests only run during business hours, CI runs
+   at night/weekends
+  B) Lock-based isolation: A lock file on the VMs prevents concurrent runs
+  C) Separate VM sets: Dev uses one pair of VMs, CI uses another (doubles
+  cost but simple)
+
+  Which do you prefer? I lean toward B as it's cheap and simple.
+
+  Q2: Test Data Location
+
+  Where should test infrastructure code live?
+  - tests/infrastructure/ (alongside tests)
+  - infrastructure/test/ (separate top-level)
+  - Something else?
+
+  Q3: Proceed with Implementation?
+
+  I now have a clear picture. Should I proceed with implementing:
+  1. The complete unit test suite
+  2. The integration test suite (with VM fixtures via OpenTofu)
+  3. The manual testing playbook
+  4. The comprehensive report
+
+  This will be a substantial implementation. Want me to start, or do you
+  have any adjustments to the coverage matrix?
+
+> Real Disk Space can be tested as unit test with a LocalExecutor. No need 
+for target, no need for isolation. We only need VM if you say we need to
+test it with RemoteExecutor as well. Could be a separate test.
+
+I see you put a lot in the Manual Playbook.
+The Manual Playbook actually servers more as walkaround for the user/dev to 
+show the system works. It is NOT meant as comprehensive testing. All testing
+ should be done automatically, if at all possible. So everything you listed
+for the Manual Playbook, should be covered by unit or integration tests as
+well. Except for the pure visual stuff (entire scenario Visual UI, verify
+colors in scenario Log Inspection).
+
+Q1: B
+Q2: tests/infrastructure. Ensure that the CI sets up the VMs if they don't 
+exist yet.
+Q3: First, document this entire test framework, with all our decisions, to 
+an .md in docs/ and write your implementation plan for all this in another
+.md in specs/001-foundation/
+
+● Let me explore the docs structure and then design the implementation
+  approach.
+
+● Search(pattern: "docs/**/*.md")
+  ⎿  Found 22 files (ctrl+o to expand)
+
+● Search(pattern: "specs/001-foundation/**/*.md")
+  ⎿  Found 22 files (ctrl+o to expand)
+
+● Now let me launch a Plan agent to design the comprehensive testing
+  implementation:
+
+● Plan(Design test framework)
+  ⎿  Done (43 tool uses · 114.0k tokens · 6m 41s)                          
+
+● Let me review a few critical files to ensure the plan is accurate, then
+  write the final plan:
+
+● Read(src/pcswitcher/disk.py)
+  ⎿  Read 109 lines
+
+● Read(src/pcswitcher/btrfs_snapshots.py)
+  ⎿  Read 386 lines
+
+● Read(pyproject.toml)
+  ⎿  Read 51 lines
+
+● Now I'll write the final plan to the plan file:
+
+● Updated plan
+  ⎿  /plan to preview · ~/.claude/plans/giggly-squishing-pnueli.md
+
+● The plan is complete. Let me summarize what will be implemented:
+
+  Summary
+
+  Deliverables:
+  1. docs/testing-framework.md - Framework documentation with all decisions
+  2. specs/001-foundation/testing-implementation-plan.md - Detailed
+  implementation plan
+  3. specs/001-foundation/testing-playbook.md - Visual verification only
+  4. specs/001-foundation/testing-report.md - Coverage summary + risk
+  chapter
+  5. Complete unit test suite (15+ test files)
+  6. Complete integration test suite (12+ test files)
+  7. VM infrastructure via OpenTofu (2 Hetzner CX32 VMs)
+  8. GitHub Actions workflow
+
+  Key Coverage:
+  - All modules in src/pcswitcher/ tested
+  - All jobs tested (btrfs, install, disk monitor, dummy_success,
+  dummy_fail)
+  - Full orchestrator workflow
+  - SIGINT handling
+  - install.sh (fresh install, upgrade, config preservation)
+  - Snapshot cleanup
+
+  Test Categories:
+  - Unit tests: Fast, no VMs, run on every commit
+  - Integration tests: Need VMs, run on-demand or PRs to main
+  - Manual playbook: Visual verification only (colors, progress bars)
+  ⎿  User rejected Claude's plan:
+     ╭─────────────────────────────────────────────────────────────────────────╮
+     │ PC-Switcher Testing Framework Implementation Plan                       │
+     │                                                                         │
+     │ Overview                                                                │
+     │                                                                         │
+     │ Implement comprehensive testing for the 001-foundation feature, covering│
+     │  all functionality with unit tests, VM-based integration tests, and a   │
+     │ visual verification playbook.                                           │
+     │                                                                         │
+     │ Key Decisions (From Discussion)                                         │
+     │                                                                         │
+     │ | Decision         | Choice                         | Rationale         │
+     │                                |                                        │
+     │ |------------------|--------------------------------|-------------------│
+     │ -------------------------------|                                        │
+     │ | VM Provider      | Hetzner Cloud (CX32)           | CI-compatible,    │
+     │ real btrfs root                   |                                     │
+     │ | Provisioning     | OpenTofu                       | User has          │
+     │ experience, works for both CI and local |                               │
+     │ | VM Strategy      | Persistent with snapshot reset | Fast reset (~30s),│
+     │  negligible cost               |                                        │
+     │ | Number of VMs    | 2 (source + target)            | Realistic         │
+     │ source→target testing                  |                                │
+     │ | Dev/CI Isolation | Lock-based                     | Simple, cheap     │
+     │                                |                                        │
+     │ | Test Isolation   | Per-run reset                  | Per-test would    │
+     │ require reboot                    |                                     │
+     │ | Dev Testing      | Push first, then test          | URLs must be valid│
+     │  for install.sh                |                                        │
+     │                                                                         │
+     │ Deliverables                                                            │
+     │                                                                         │
+     │ 1. Documentation Files                                                  │
+     │                                                                         │
+     │ docs/testing-framework.md - Framework documentation:                    │
+     │ - Test categories (unit vs integration)                                 │
+     │ - VM infrastructure setup                                               │
+     │ - How to run tests (local, CI)                                          │
+     │ - Lock-based isolation mechanism                                        │
+     │ - Snapshot reset procedure                                              │
+     │                                                                         │
+     │ specs/001-foundation/testing-implementation-plan.md - Detailed          │
+     │ implementation plan:                                                    │
+     │ - Complete test file structure                                          │
+     │ - Fixtures needed                                                       │
+     │ - OpenTofu configuration                                                │
+     │ - GitHub Actions workflow                                               │
+     │                                                                         │
+     │ specs/001-foundation/testing-playbook.md - Manual playbook:             │
+     │ - Visual verification only (colors, progress bars)                      │
+     │                                                                         │
+     │ 2. Test Implementation                                                  │
+     │                                                                         │
+     │ Unit Tests (tests/unit/)                                                │
+     │                                                                         │
+     │ | File                                 | Tests                          │
+     │                                              |                          │
+     │ |--------------------------------------|--------------------------------│
+     │ ---------------------------------------------|                          │
+     │ | test_config.py                       | YAML parsing, schema           │
+     │ validation, defaults, error messages                   |                │
+     │ | test_models.py                       | Dataclasses, enums,            │
+     │ CommandResult.success                                   |               │
+     │ | test_events.py                       | EventBus                       │
+     │ subscribe/publish/close, queue isolation                           |    │
+     │ | test_disk.py                         | parse_threshold(),             │
+     │ parse_df_output(), check_disk_space() with LocalExecutor |              │
+     │ | test_btrfs_snapshots.py              | snapshot_name(),               │
+     │ session_folder_name(), parse_older_than()                  |            │
+     │ | test_version.py                      | Extend existing with edge cases│
+     │                                              |                          │
+     │ | test_lock.py                         | get_local_hostname(), holder   │
+     │ formatting                                     |                        │
+     │ | test_logger.py                       | JSON formatting, log level     │
+     │ filtering                                        |                      │
+     │ | test_executor.py                     | LocalExecutor with mocked      │
+     │ subprocess                                        |                     │
+     │ | test_jobs/test_base.py               | validate_config() schema       │
+     │ validation                                         |                    │
+     │ | test_jobs/test_btrfs.py              | subvolume_to_mount_point(),    │
+     │ CONFIG_SCHEMA                                   |                       │
+     │ | test_jobs/test_disk_space_monitor.py | Extend existing                │
+     │                                              |                          │
+     │ | test_jobs/test_install_on_target.py  | CONFIG_SCHEMA, version         │
+     │ comparison logic                                     |                  │
+     │ | test_jobs/test_dummy_success.py      | CONFIG_SCHEMA validation       │
+     │                                              |                          │
+     │ | test_jobs/test_dummy_fail.py         | CONFIG_SCHEMA validation       │
+     │                                              |                          │
+     │                                                                         │
+     │ Integration Tests (tests/integration/) - Requires VMs                   │
+     │                                                                         │
+     │ | File                                 | Tests                          │
+     │                      |                                                  │
+     │ |--------------------------------------|--------------------------------│
+     │ ---------------------|                                                  │
+     │ | test_connection.py                   | SSH connect/disconnect,        │
+     │ keepalive, connection loss  |                                           │
+     │ | test_executor.py                     | LocalExecutor and              │
+     │ RemoteExecutor with real commands |                                     │
+     │ | test_lock.py                         | Real fcntl locking, concurrent │
+     │ access detection     |                                                  │
+     │ | test_disk.py                         | check_disk_space() with        │
+     │ RemoteExecutor              |                                           │
+     │ | test_btrfs_snapshots.py              | Real snapshot                  │
+     │ create/list/cleanup                   |                                 │
+     │ | test_logger.py                       | Real log file creation         │
+     │                      |                                                  │
+     │ | test_jobs/test_btrfs.py              | Full validate + execute on     │
+     │ source and target        |                                              │
+     │ | test_jobs/test_install_on_target.py  | Version check, install, upgrade│
+     │                      |                                                  │
+     │ | test_jobs/test_disk_space_monitor.py | Real monitoring loop           │
+     │                      |                                                  │
+     │ | test_jobs/test_dummy_success.py      | Full execution with            │
+     │ logging/progress                |                                       │
+     │ | test_jobs/test_dummy_fail.py         | Exception at 60%, CRITICAL     │
+     │ handling                 |                                              │
+     │ | test_orchestrator.py                 | Complete 9-phase workflow      │
+     │                      |                                                  │
+     │ | test_cli.py                          | SIGINT handling (single/double │
+     │ Ctrl+C)              |                                                  │
+     │ | test_cleanup_snapshots.py            | Real snapshot cleanup          │
+     │                      |                                                  │
+     │ | test_install_script.py               | install.sh                     │
+     │ fresh/upgrade/preserve config            |                              │
+     │                                                                         │
+     │ 3. Infrastructure (tests/infrastructure/)                               │
+     │                                                                         │
+     │ tests/infrastructure/                                                   │
+     │ ├── README.md               # Documentation                             │
+     │ ├── main.tf                 # OpenTofu - 2 Hetzner CX32 VMs             │
+     │ ├── variables.tf            # Variables (token, SSH key path)           │
+     │ ├── outputs.tf              # VM IPs                                    │
+     │ ├── versions.tf             # Provider versions                         │
+     │ ├── cloud-init/                                                         │
+     │ │   └── ubuntu-btrfs.yaml   # Cloud-init for btrfs setup                │
+     │ └── scripts/                                                            │
+     │     ├── provision.sh        # Post-provision setup                      │
+     │     ├── reset-vm.sh         # Snapshot-based reset (btrfs set-default)  │
+     │     └── lock.sh             # Lock acquisition/release                  │
+     │                                                                         │
+     │ 4. GitHub Actions (.github/workflows/test.yml)                          │
+     │                                                                         │
+     │ - On every push: Unit tests + lint                                      │
+     │ - On PR to main: Unit tests + integration tests (Hetzner VMs)           │
+     │ - On-demand: workflow_dispatch for integration tests                    │
+     │ - Uses concurrency.group to prevent parallel integration runs           │
+     │                                                                         │
+     │ 5. Test Report                                                          │
+     │                                                                         │
+     │ Final report in specs/001-foundation/testing-report.md:                 │
+     │ - Coverage summary (what tests cover what functionality)                │
+     │ - How to run tests                                                      │
+     │ - Limitations and assumptions                                           │
+     │ - Risk chapter: Tests that could be dangerous if buggy                  │
+     │                                                                         │
+     │ Implementation Order                                                    │
+     │                                                                         │
+     │ Phase 1: Documentation & Unit Tests                                     │
+     │                                                                         │
+     │ 1. Create docs/testing-framework.md                                     │
+     │ 2. Create specs/001-foundation/testing-implementation-plan.md           │
+     │ 3. Create tests/unit/conftest.py (fixtures)                             │
+     │ 4. Implement unit tests in order:                                       │
+     │   - test_config.py (highest priority)                                   │
+     │   - test_models.py                                                      │
+     │   - test_events.py                                                      │
+     │   - test_disk.py                                                        │
+     │   - test_btrfs_snapshots.py                                             │
+     │   - test_version.py (extend)                                            │
+     │   - test_lock.py                                                        │
+     │   - test_logger.py                                                      │
+     │   - test_executor.py                                                    │
+     │   - All test_jobs/*.py                                                  │
+     │                                                                         │
+     │ Phase 2: Infrastructure Setup                                           │
+     │                                                                         │
+     │ 1. Create OpenTofu configuration                                        │
+     │ 2. Create cloud-init for btrfs VMs                                      │
+     │ 3. Create lock and reset scripts                                        │
+     │ 4. Create tests/infrastructure/README.md                                │
+     │                                                                         │
+     │ Phase 3: Integration Tests                                              │
+     │                                                                         │
+     │ 1. Create tests/integration/conftest.py                                 │
+     │ 2. Implement integration tests:                                         │
+     │   - test_connection.py                                                  │
+     │   - test_executor.py                                                    │
+     │   - test_lock.py                                                        │
+     │   - test_disk.py                                                        │
+     │   - test_btrfs_snapshots.py                                             │
+     │   - test_logger.py                                                      │
+     │   - All test_jobs/*.py                                                  │
+     │   - test_orchestrator.py                                                │
+     │   - test_cli.py                                                         │
+     │   - test_cleanup_snapshots.py                                           │
+     │   - test_install_script.py                                              │
+     │                                                                         │
+     │ Phase 4: CI/CD & Finalization                                           │
+     │                                                                         │
+     │ 1. Create .github/workflows/test.yml                                    │
+     │ 2. Create specs/001-foundation/testing-playbook.md                      │
+     │ 3. Create specs/001-foundation/testing-report.md                        │
+     │                                                                         │
+     │ Critical Files to Modify                                                │
+     │                                                                         │
+     │ | File              | Purpose                        |                  │
+     │ |-------------------|--------------------------------|                  │
+     │ | tests/conftest.py | Update with shared fixtures    |                  │
+     │ | pyproject.toml    | Add pytest-cov, pytest markers |                  │
+     │                                                                         │
+     │ Critical Files to Create                                                │
+     │                                                                         │
+     │ | File                                                | Purpose         │
+     │         |                                                               │
+     │ |-----------------------------------------------------|-----------------│
+     │ --------|                                                               │
+     │ | docs/testing-framework.md                           | Framework       │
+     │ documentation |                                                         │
+     │ | specs/001-foundation/testing-implementation-plan.md | Detailed plan   │
+     │         |                                                               │
+     │ | specs/001-foundation/testing-playbook.md            | Visual          │
+     │ verification     |                                                      │
+     │ | specs/001-foundation/testing-report.md              | Final report    │
+     │         |                                                               │
+     │ | tests/unit/conftest.py                              | Unit test       │
+     │ fixtures      |                                                         │
+     │ | tests/integration/conftest.py                       | Integration     │
+     │ fixtures    |                                                           │
+     │ | tests/infrastructure/main.tf                        | OpenTofu config │
+     │         |                                                               │
+     │ | .github/workflows/test.yml                          | CI workflow     │
+     │         |                                                               │
+     │                                                                         │
+     │ Risk Assessment                                                         │
+     │                                                                         │
+     │ High-Risk Tests (VM Isolation Required)                                 │
+     │                                                                         │
+     │ | Test                                  | Risk                      |   │
+     │ Mitigation                        |                                     │
+     │ |---------------------------------------|---------------------------|---│
+     │ --------------------------------|                                       │
+     │ | test_btrfs_snapshots.py (integration) | Could corrupt filesystem  |   │
+     │ Run only on test VMs, reset after |                                     │
+     │ | test_install_script.py                | Modifies system packages  |   │
+     │ Test VMs only, verify cleanup     |                                     │
+     │ | test_cleanup_snapshots.py             | Deletes snapshots         |   │
+     │ Use test snapshots only           |                                     │
+     │ | test_cli.py SIGINT tests              | Process may not terminate |   │
+     │ Hard timeout, kill fallback       |                                     │
+     │                                                                         │
+     │ Low-Risk Tests (Local Safe)                                             │
+     │                                                                         │
+     │ | Test                | Why Safe                       |                │
+     │ |---------------------|--------------------------------|                │
+     │ | All unit tests      | Mocked I/O, pure logic         |                │
+     │ | test_disk.py (unit) | Uses LocalExecutor, only reads |                │
+     │ | Config/model tests  | No external effects            |                │
+     │                                                                         │
+     │ Commands                                                                │
+     │                                                                         │
+     │ # Run unit tests only (fast, safe)                                      │
+     │ uv run pytest tests/unit tests/contract -v                              │
+     │                                                                         │
+     │ # Run integration tests (needs VMs)                                     │
+     │ uv run pytest tests/integration -v -m integration                       │
+     │                                                                         │
+     │ # Run all tests                                                         │
+     │ uv run pytest -v                                                        │
+     │                                                                         │
+     │ # Run with coverage                                                     │
+     │ uv run pytest --cov=src/pcswitcher --cov-report=html                    │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     │                                                                         │
+     ╰─────────────────────────────────────────────────────────────────────────╯
+
+> First, create docs/testing-framework.md and 
+specs/001-foundation/testing-implementation-plan.md.
+Couldn't you create specs/001-foundation/testing-report.md now as well? The 
+contents are "Coverage summary + risk chapter", so you can know all this
+up-front no?
+I would like to review these documents before giving the final go for 
+implementation.
+
+● I'll create all three documentation files now. You're right - the testing
+  report content (coverage mapping and risk assessment) is based on the
+  planned tests, not execution results.
+
+● Write(docs/testing-framework.md)
+  ⎿  Wrote 235 lines to docs/testing-framework.md                          
+     # PC-Switcher Testing Framework
+     This document describes the testing framework for pc-switcher,
+     including test categories, infrastructure setup, and how to run tests.
+     ## Test Categories
+     ### A) Unit Tests (Fast, No VMs)
+     **Purpose:** Test pure logic, business rules, and mocked I/O
+     operations.
+     … +225 lines (ctrl+o to expand)
+
+● Write(specs/001-foundation/testing-implementation-plan.md)
+  ⎿  Wrote 694 lines to specs/001-foundation/testing-implementation-plan.md
+     # Testing Implementation Plan for 001-Foundation
+     This document provides the detailed implementation plan for
+     comprehensive testing of the foundation feature.
+     ## Test Directory Structure
+     ```
+     tests/
+     ├── conftest.py                      # Shared fixtures
+     ├── pytest.ini                       # Pytest configuration
+     … +684 lines (ctrl+o to expand)
+
+● Write(specs/001-foundation/testing-report.md)
+  ⎿  Wrote 263 lines to specs/001-foundation/testing-report.md             
+     # Testing Report for 001-Foundation
+     This report provides a comprehensive overview of testing coverage for
+     the foundation feature, including coverage mapping, how to run tests,
+     limitations, and risk assessment.
+     ## Coverage Summary
+     ### Coverage by Module
+     | Module | Unit Tests | Integration Tests | Coverage |
+     |--------|------------|-------------------|----------|
+     … +253 lines (ctrl+o to expand)
+
+● I've created all three documentation files:
+
+  1. docs/testing-framework.md - Framework overview including:
+    - Test categories (unit, integration, manual)
+    - VM infrastructure architecture
+    - Provisioning with OpenTofu
+    - Snapshot-based reset procedure
+    - Lock-based isolation
+    - How to run tests locally and in CI
+  2. specs/001-foundation/testing-implementation-plan.md - Detailed
+  implementation plan including:
+    - Complete test directory structure
+    - All test classes and methods for each file
+    - OpenTofu configuration
+    - Cloud-init script
+    - Lock and reset scripts
+    - GitHub Actions workflow
+    - Implementation order (45 steps across 7 phases)
+  3. specs/001-foundation/testing-report.md - Coverage and risk assessment
+  including:
+    - Coverage by module (all modules mapped to tests)
+    - Coverage by spec requirement (all FR-xxx mapped)
+    - Coverage by user story (all US-x mapped)
+    - How to run tests
+    - Limitations and assumptions
+    - Risk chapter with high/medium/low risk categorization
+    - Safety measures and recommendations
+
+  Please review these documents. Once you're satisfied, I'll proceed with
+  the actual test implementation.
+
+
+
