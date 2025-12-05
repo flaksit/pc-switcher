@@ -66,10 +66,10 @@ def _load_configuration(config_path: Path) -> Configuration:
                 else:
                     console.print(f"  {error.path}: {error.message}")
 
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         console.print(f"[bold red]Error loading configuration:[/bold red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 def _version_callback(value: bool) -> None:
