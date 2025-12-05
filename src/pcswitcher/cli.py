@@ -36,6 +36,42 @@ app = typer.Typer(
 console = Console()
 
 
+def _load_configuration(config_path: Path) -> Configuration:
+    """Load configuration with helpful error messages.
+
+    Args:
+        config_path: Path to config file
+
+    Returns:
+        Loaded Configuration
+
+    Raises:
+        typer.Exit: On configuration error
+    """
+    try:
+        return Configuration.from_yaml(config_path)
+    except ConfigurationError as e:
+        console.print("[bold red]Configuration error:[/bold red]")
+
+        # Check if this is a missing config file error
+        config_missing = any("not found" in error.message.lower() for error in e.errors)
+        if config_missing:
+            console.print(f"  {config_path}: Configuration file not found")
+            console.print("\nTo initialize configuration, run:")
+            console.print("  [cyan]pc-switcher init[/cyan]")
+        else:
+            for error in e.errors:
+                if error.job:
+                    console.print(f"  [yellow]{error.job}[/yellow].{error.path}: {error.message}")
+                else:
+                    console.print(f"  {error.path}: {error.message}")
+
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Error loading configuration:[/bold red] {e}")
+        raise typer.Exit(1)
+
+
 def _version_callback(value: bool) -> None:
     """Print version and exit if --version flag is provided."""
     if value:
@@ -152,19 +188,7 @@ def sync(
     config_path = config or Configuration.get_default_config_path()
 
     # Load configuration
-    try:
-        cfg = Configuration.from_yaml(config_path)
-    except ConfigurationError as e:
-        console.print("[bold red]Configuration error:[/bold red]")
-        for error in e.errors:
-            if error.job:
-                console.print(f"  [yellow]{error.job}[/yellow].{error.path}: {error.message}")
-            else:
-                console.print(f"  {error.path}: {error.message}")
-        sys.exit(1)
-    except Exception as e:
-        console.print(f"[bold red]Error loading configuration:[/bold red] {e}")
-        sys.exit(1)
+    cfg = _load_configuration(config_path)
 
     # Run the sync operation
     exit_code = _run_sync(target, cfg)
@@ -318,19 +342,7 @@ def cleanup_snapshots(
     """
     # Load configuration
     config_path = config or Configuration.get_default_config_path()
-    try:
-        cfg = Configuration.from_yaml(config_path)
-    except ConfigurationError as e:
-        console.print("[bold red]Configuration error:[/bold red]")
-        for error in e.errors:
-            if error.job:
-                console.print(f"  [yellow]{error.job}[/yellow].{error.path}: {error.message}")
-            else:
-                console.print(f"  {error.path}: {error.message}")
-        sys.exit(1)
-    except Exception as e:
-        console.print(f"[bold red]Error loading configuration:[/bold red] {e}")
-        sys.exit(1)
+    cfg = _load_configuration(config_path)
 
     # Parse duration (use config default if not specified)
     if older_than is not None:
