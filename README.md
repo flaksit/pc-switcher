@@ -74,8 +74,8 @@ Run `pc-switcher init` to create the default configuration file at `~/.config/pc
 
 ```yaml
 # Logging configuration
-log_file_level: FULL      # FULL | INFO | WARNING | ERROR
-log_cli_level: INFO       # FULL | INFO | WARNING | ERROR
+log_file_level: FULL      # DEBUG | FULL | INFO | WARNING | ERROR | CRITICAL
+log_cli_level: INFO       # DEBUG | FULL | INFO | WARNING | ERROR | CRITICAL
 
 # Sync jobs (true = enabled, false = disabled)
 sync_jobs:
@@ -95,10 +95,10 @@ btrfs_snapshots:
     - "@"
     - "@home"
   keep_recent: 3
-  max_age_days: 30  # Optional
+  # max_age_days: 30  # Optional - enables age-based cleanup
 ```
 
-See example configs in `config/` directory.
+See default configuration in `src/pcswitcher/default-config.yaml`.
 
 ## Available Commands
 
