@@ -51,8 +51,8 @@ This document describes the testing framework for pc-switcher, including test ca
 
 ```mermaid
 graph LR
-    A["pc1-test<br/>(CX23 VM)<br/><br/>- btrfs root<br/>- @ subvol<br/>- @home subvol<br/>- /.snapshots"]
-    B["pc2-test<br/>(CX23 VM)<br/><br/>- btrfs root<br/>- @ subvol<br/>- @home subvol<br/>- /.snapshots"]
+    A["pc1<br/>(CX23 VM)<br/><br/>- btrfs root<br/>- @ subvol<br/>- @home subvol<br/>- /.snapshots"]
+    B["pc2<br/>(CX23 VM)<br/><br/>- btrfs root<br/>- @ subvol<br/>- @home subvol<br/>- /.snapshots"]
     
     A -->|SSH| B
 ```
@@ -81,8 +81,8 @@ tofu init
 tofu apply
 
 # 2. Convert to btrfs using Hetzner's installimage (runs in rescue mode)
-./scripts/provision.sh pc-switcher-pc1-test
-./scripts/provision.sh pc-switcher-pc2-test
+./scripts/provision.sh pc-switcher-pc1
+./scripts/provision.sh pc-switcher-pc2
 
 # 3. Configure /etc/hosts so VMs can reach each other
 ./scripts/configure-hosts.sh
@@ -216,8 +216,8 @@ testpaths = tests
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM hostname/IP | `pc1-test` |
-| `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM hostname/IP | `pc2-test` |
+| `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM hostname/IP | `pc1` |
+| `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM hostname/IP | `pc2` |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
 | `CI_JOB_ID` | CI job ID for lock identification | `$USER` |
 

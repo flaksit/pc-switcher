@@ -372,7 +372,7 @@ resource "hcloud_ssh_key" "test_key" {
 }
 
 resource "hcloud_server" "pc1" {
-  name        = "pc-switcher-pc1-test"
+  name        = "pc-switcher-pc1"
   server_type = "cx23"
   image       = "ubuntu-24.04"
   location    = "fsn1"
@@ -386,7 +386,7 @@ resource "hcloud_server" "pc1" {
 }
 
 resource "hcloud_server" "pc2" {
-  name        = "pc-switcher-pc2-test"
+  name        = "pc-switcher-pc2"
   server_type = "cx23"
   image       = "ubuntu-24.04"
   location    = "fsn1"
@@ -522,14 +522,14 @@ This script:
   4. Reboots the VM and waits for it to come back online
 
 Arguments:
-  hostname    SSH hostname of the VM to reset (e.g., pc1-test, pc2-test)
+  hostname    SSH hostname of the VM to reset (e.g., pc1, pc2)
 
 Environment:
   PC_SWITCHER_TEST_USER    SSH user (default: testuser)
 
 Examples:
-  $SCRIPT_NAME pc1-test
-  $SCRIPT_NAME pc2-test
+  $SCRIPT_NAME pc1
+  $SCRIPT_NAME pc2
 EOF
 }
 
@@ -620,15 +620,15 @@ This script:
   7. Creates baseline snapshots for test reset
 
 Arguments:
-  server-name    Name of the Hetzner server (e.g., pc-switcher-pc1-test)
+  server-name    Name of the Hetzner server (e.g., pc-switcher-pc1)
 
 Environment:
   HCLOUD_TOKEN   Hetzner Cloud API token (required)
   SSH_PUBLIC_KEY Path to SSH public key (default: ~/.ssh/id_ed25519.pub)
 
 Examples:
-  $SCRIPT_NAME pc-switcher-pc1-test
-  $SCRIPT_NAME pc-switcher-pc2-test
+  $SCRIPT_NAME pc-switcher-pc1
+  $SCRIPT_NAME pc-switcher-pc2
 
 Note: This is a one-time operation. After provisioning, use reset-vm.sh
       for subsequent test runs.
@@ -844,7 +844,7 @@ Configure networking and SSH keys on both test VMs.
 
 This script:
   1. Gets the IPs of both VMs from Hetzner
-  2. Updates /etc/hosts on both VMs with pc1-test/pc2-test entries
+  2. Updates /etc/hosts on both VMs with pc1/pc2 entries
   3. Generates SSH keys for testuser on each VM (if not present)
   4. Exchanges SSH public keys so testuser can SSH between VMs
 
@@ -865,8 +865,8 @@ if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
     exit 1
 fi
 
-PC1_IP=$(hcloud server ip pc-switcher-pc1-test)
-PC2_IP=$(hcloud server ip pc-switcher-pc2-test)
+PC1_IP=$(hcloud server ip pc-switcher-pc1)
+PC2_IP=$(hcloud server ip pc-switcher-pc2)
 
 echo "PC1 IP: $PC1_IP"
 echo "PC2 IP: $PC2_IP"
@@ -876,12 +876,12 @@ for HOST in "$PC1_IP" "$PC2_IP"; do
     echo "Configuring /etc/hosts on $HOST..."
     ssh testuser@"$HOST" << EOF
 # Remove old entries
-sudo sed -i '/pc1-test/d' /etc/hosts
-sudo sed -i '/pc2-test/d' /etc/hosts
+sudo sed -i '/pc1/d' /etc/hosts
+sudo sed -i '/pc2/d' /etc/hosts
 
 # Add new entries
-echo "$PC1_IP pc1-test" | sudo tee -a /etc/hosts > /dev/null
-echo "$PC2_IP pc2-test" | sudo tee -a /etc/hosts > /dev/null
+echo "$PC1_IP pc1" | sudo tee -a /etc/hosts > /dev/null
+echo "$PC2_IP pc2" | sudo tee -a /etc/hosts > /dev/null
 EOF
 done
 
@@ -937,8 +937,8 @@ EOF
 
 echo ""
 echo "Done! testuser can now:"
-echo "  - SSH from pc1 to pc2: ssh pc2-test"
-echo "  - SSH from pc2 to pc1: ssh pc1-test"
+echo "  - SSH from pc1 to pc2: ssh pc2"
+echo "  - SSH from pc2 to pc1: ssh pc1"
 ```
 
 ## GitHub Actions Workflow
