@@ -227,11 +227,13 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **FR-011**: Test VMs MUST be able to communicate with each other via SSH to simulate source-to-target sync scenarios
 
+- **FR-011a**: Test infrastructure MUST consist of exactly two VMs (pc1 and pc2) to mirror the real pc-switcher sync architecture; each VM MUST have btrfs root filesystem with `@` and `@home` subvolumes
+
 - **FR-012**: VMs and related test infrastructure costs MUST remain under EUR 10/month on continuous run basis
 
 #### CI/CD Requirements
 
-- **FR-013**: CI MUST run type checks, lint checks and unit tests on every push to any branch
+- **FR-013**: CI MUST run type checks (basedpyright), lint checks (ruff), and unit tests (pytest) on every push to any branch
 
 - **FR-014**: CI MUST run integration tests on PRs to main branch (from the main repository only)
 
@@ -244,6 +246,8 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - **FR-017a**: CI MUST skip integration tests with a clear notice when secrets are unavailable (e.g., forked PRs); unit tests MUST still run in this case
 
 - **FR-017b**: Integration tests on forked PRs are NOT supported; CI MUST clearly indicate this when a fork PR is detected
+
+- **FR-017c**: CI MUST preserve test logs and artifacts (pytest output, provisioning logs, reset logs) to enable debugging of failed runs
 
 #### Manual Playbook Requirements
 
@@ -288,6 +292,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - **TestSession**: Represents a single test run; has session ID, lock holder, VM reset status, and test results
 - **MockExecutor**: Represents a mocked executor for unit tests; provides predictable command responses without real execution
 - **TestFixture**: Represents a pytest fixture providing test resources; includes VM connections, event buses, temporary files, and cleanup logic
+- **VMExecutor**: Represents a fixture for executing commands on test VMs; provides a RemoteExecutor-like interface for integration tests to run commands on source/target VMs
 
 ## Success Criteria
 
@@ -324,4 +329,4 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - Security penetration testing
 - Automated VM cost optimization (manual destruction when not needed)
 - Test coverage for third-party libraries (only test project code)
-- Test data generation fixtures (helpers for creating specific file patterns, permissions, etc. for sync tests) - to be added when actual tests are written
+- Test data generation fixtures (helpers for creating specific file patterns, permissions, etc. for sync tests) - to be added when actual tests are written; note: minimal fixtures for VM command execution ARE in scope (see FR-034)
