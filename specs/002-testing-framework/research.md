@@ -270,7 +270,7 @@ concurrency:
 
 ### Secret Handling
 - `HCLOUD_TOKEN`: Hetzner API token (repository secret)
-- `SSH_PRIVATE_KEY`: SSH key for VM access (repository secret)
+- `HETZNER_SSH_PRIVATE_KEY`: SSH key for VM access (repository secret)
 - Secrets not available to forked PRs (FR-017b compliance)
 
 ### Workflow Structure

@@ -87,7 +87,7 @@ cd tests/infrastructure
 | Secret | Description |
 |--------|-------------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
-| `SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519) |
+| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519) |
 
 ### Workflow Triggers
 
