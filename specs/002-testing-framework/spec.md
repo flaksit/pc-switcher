@@ -3,7 +3,7 @@
 **Feature Branch**: `002-testing-framework`  
 **Created**: 2025-12-05  
 **Status**: Draft  
-**Input**: User description: "Implement testing framework with three-tier testing (unit, integration, manual) and create retroactive tests for all existing 001-foundation functionality"
+**Input**: User description: "Implement testing framework with three-tier testing (unit, integration, manual)"
 
 ## Navigation
 
@@ -15,8 +15,8 @@ Documentation Hierarchy:
 
 Pre-analysis References:
 - [Testing Framework Documentation](../../docs/testing-framework.md) - Architecture and Implementation details
-- [Testing Implementation Plan](../../docs/adr/considerations/testing-implementation-plan.md) - Detailed implementation plan
-- [Testing Report](../../docs/adr/considerations/testing-report.md) - Coverage analysis
+- [Testing Implementation Plan](../../docs/adr/considerations/testing-implementation-plan.md) - Detailed implementation plan  
+  This document covers both the testing framework and retroactive tests for existing functionality. This feature is only about the framework itself.
 
 ## Clarifications
 
@@ -105,29 +105,7 @@ As a pc-switcher developer, I have a documented playbook that serves two purpose
 
 ---
 
-### User Story 5 - Spec-Driven Test Coverage for 001-Foundation (Priority: P1)
-
-As a pc-switcher developer, I have comprehensive tests that verify 100% of the specifications defined in specs/001-foundation/spec.md. Tests are written based on the spec (user stories, acceptance scenarios, functional requirements), not the implementation code. If any part of the spec was not implemented or implemented incorrectly, the tests fail.
-
-**Why this priority**: P1 because the existing foundation code is critical infrastructure. Bugs could break entire systems. Spec-driven tests ensure the implementation matches the documented requirements and catch gaps or deviations.
-
-**Independent Test**: Can be verified by running the full test suite and confirming tests exist for every user story, acceptance scenario, and functional requirement in the 001-foundation spec.
-
-**Acceptance Scenarios**:
-
-1. **Given** tests are implemented based on specs/001-foundation/spec.md, **When** I run the full test suite, **Then** 100% of user stories have corresponding test coverage
-
-2. **Given** tests are implemented based on specs/001-foundation/spec.md, **When** I run the full test suite, **Then** 100% of acceptance scenarios have corresponding test cases
-
-3. **Given** tests are implemented based on specs/001-foundation/spec.md, **When** I run the full test suite, **Then** 100% of functional requirements have corresponding test assertions
-
-4. **Given** a part of the spec was not implemented or implemented incorrectly, **When** I run the tests, **Then** the relevant tests fail, exposing the gap or bug
-
-5. **Given** tests cover both success and failure paths, **When** I run the full test suite, **Then** error handling, edge cases, and boundary conditions from the spec are all verified
-
----
-
-### User Story 6 - Developer Guide for Integration Testing (Priority: P2)
+### User Story 5 - Developer Guide for Integration Testing (Priority: P2)
 
 As a pc-switcher developer writing tests, I have comprehensive documentation that explains how to write integration tests, work with test VMs, use fixtures, handle test isolation, and follow established patterns. This enables me to contribute tests without reverse-engineering existing code.
 
@@ -147,7 +125,7 @@ As a pc-switcher developer writing tests, I have comprehensive documentation tha
 
 ---
 
-### User Story 7 - Operational Guide for Test Infrastructure (Priority: P2)
+### User Story 6 - Operational Guide for Test Infrastructure (Priority: P2)
 
 As a sysadmin/maintainer/devops engineer, I have comprehensive documentation for configuring and maintaining the test framework infrastructure. This includes secrets management, environment variables, VM provisioning configuration, and CI pipeline setup, and cost monitoring.
 
@@ -169,7 +147,7 @@ As a sysadmin/maintainer/devops engineer, I have comprehensive documentation for
 
 ---
 
-### User Story 8 - Architecture Documentation for Testing Framework (Priority: P2)
+### User Story 7 - Architecture Documentation for Testing Framework (Priority: P2)
 
 As a pc-switcher developer or maintainer, I have architecture documentation that explains the testing framework design decisions, component interactions, and rationale. This enables me to understand why the system is structured as it is and make informed decisions when extending or modifying it.
 
@@ -201,8 +179,6 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
   - Test run fails with "Failed to acquire lock" error showing current holder identity
 - What happens when CI secrets are misconfigured?
   - Integration test job fails early with authentication error; unit tests still pass
-- What happens when tests find a gap between spec and implementation?
-  - Tests fail with clear assertion messages indicating which spec requirement is not met
 
 ## Requirements
 
@@ -222,79 +198,71 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **FR-006**: Test VMs MUST be automatically provisioned when a developer runs integration tests for the first time or when VMs do not exist
 
-#### Test Coverage Requirements
+#### Unit Test Requirements
 
-- **FR-007**: Tests MUST cover 100% of user stories defined in specs/001-foundation/spec.md
+- **FR-007**: Unit tests MUST complete full suite execution in under 30 seconds
 
-- **FR-008**: Tests MUST cover 100% of acceptance scenarios defined in specs/001-foundation/spec.md
+- **FR-008**: Unit tests MUST be runnable with single command `uv run pytest tests/unit tests/contract -v`
 
-- **FR-009**: Tests MUST cover 100% of functional requirements defined in specs/001-foundation/spec.md
-
-- **FR-010**: Tests MUST verify both success paths and failure paths (error handling, edge cases, boundary conditions) for each requirement
-
-- **FR-011**: Unit tests MUST complete full suite execution in under 30 seconds
-
-- **FR-012**: Unit tests MUST be runnable with single command `uv run pytest tests/unit tests/contract -v`
-
-- **FR-013**: Integration tests MUST be selectable via pytest marker for running separately from unit tests
+- **FR-009**: Integration tests MUST be selectable via pytest marker for running separately from unit tests
 
 #### Test VM Requirements
 
-- **FR-014**: Test VMs MUST be configured with the same OS and filesystem type that pc-switcher targets (Ubuntu 24.04 LTS, btrfs)
+- **FR-010**: Test VMs MUST be configured with the same OS and filesystem type that pc-switcher targets (Ubuntu 24.04 LTS, btrfs)
 
-- **FR-015**: Test VMs MUST have a test user account with sudo access for running privileged operations during tests
+- **FR-011**: Test VMs MUST have a test user account with sudo access for running privileged operations during tests
 
-- **FR-016**: Test VMs MUST be able to communicate with each other via SSH to simulate source-to-target sync scenarios
+- **FR-012**: Test VMs MUST be able to communicate with each other via SSH to simulate source-to-target sync scenarios
 
-- **FR-017**: VMs and related test infrastructure costs MUST remain under EUR 10/month on continuous run basis
+- **FR-013**: VMs and related test infrastructure costs MUST remain under EUR 10/month on continuous run basis
 
 #### CI/CD Requirements
 
-- **FR-018**: CI MUST run type checks, lint checks and unit tests on every push to any branch
+- **FR-014**: CI MUST run type checks, lint checks and unit tests on every push to any branch
 
-- **FR-019**: CI MUST run integration tests on PRs to main branch
+- **FR-015**: CI MUST run integration tests on PRs to main branch
 
-- **FR-020**: CI MUST support manual trigger for running integration tests on any branch
+- **FR-016**: CI MUST support manual trigger for running integration tests on any branch
 
-- **FR-021**: CI MUST prevent parallel integration test runs through concurrency control
+- **FR-017**: CI MUST prevent parallel integration test runs through concurrency control
 
-- **FR-022**: CI MUST reset test VMs before running integration tests
+- **FR-018**: CI MUST reset test VMs before running integration tests
 
 #### Manual Playbook Requirements
 
-- **FR-023**: Manual playbook MUST document steps to verify all visual UI elements (progress bars, colors, formatting)
+- **FR-019**: Manual playbook MUST document steps to verify all visual UI elements (progress bars, colors, formatting)
 
-- **FR-024**: Manual playbook MUST provide a guided tour of all major pc-switcher features with expected behavior explanations
+- **FR-020**: Manual playbook MUST provide a guided tour of all major pc-switcher features with expected behavior explanations
 
-- **FR-025**: Manual playbook MUST be usable for both release verification and developer onboarding
+- **FR-021**: Manual playbook MUST be usable for both release verification and developer onboarding
 
 #### Documentation Requirements
 
-- **FR-026**: Developer guide MUST document how to write integration tests including test file creation, VM fixture usage, and assertion patterns
+- **FR-022**: Developer guide MUST document how to write integration tests including test file creation, VM fixture usage, and assertion patterns
 
-- **FR-027**: Developer guide MUST document VM interaction patterns for SSH execution, file transfers, btrfs operations, and snapshot management
+- **FR-023**: Developer guide MUST document VM interaction patterns for SSH execution, file transfers, btrfs operations, and snapshot management
 
-- **FR-028**: Developer guide MUST document test organization including directory structure, naming conventions, and pytest markers
+- **FR-024**: Developer guide MUST document test organization including directory structure, naming conventions, and pytest markers
 
-- **FR-029**: Developer guide MUST include troubleshooting section for common integration test failures
+- **FR-025**: Developer guide MUST include troubleshooting section for common integration test failures
 
-- **FR-030**: Operational guide MUST document all required CI secrets, their purposes, and how to obtain/generate them
+- **FR-026**: Operational guide MUST document all required CI secrets, their purposes, and how to obtain/generate them
 
-- **FR-031**: Operational guide MUST provide step-by-step VM provisioning instructions including cloud provider configuration and SSH key management
+- **FR-027**: Operational guide MUST provide step-by-step VM provisioning instructions including cloud provider configuration and SSH key management
 
-- **FR-032**: Operational guide MUST document all environment variables, their defaults, and effects on test behavior
+- **FR-028**: Operational guide MUST document all environment variables, their defaults, and effects on test behavior
 
-- **FR-033**: Operational guide MUST document cost monitoring procedures and infrastructure destruction/reprovisioning
+- **FR-029**: Operational guide MUST document cost monitoring procedures and infrastructure destruction/reprovisioning
 
-- **FR-034**: Operational guide MUST include runbooks for common infrastructure failure scenarios
+- **FR-030**: Operational guide MUST include runbooks for common infrastructure failure scenarios
 
-- **FR-035**: Architecture documentation MUST include diagrams describing the three-tier test structure and component interactions
+- **FR-031**: Architecture documentation MUST include diagrams describing the three-tier test structure and component interactions
 
-- **FR-036**: Architecture documentation MUST explain rationale for key design decisions (VM isolation, locking, baseline reset)
+- **FR-032**: Architecture documentation MUST explain rationale for key design decisions (VM isolation, locking, baseline reset)
 
-- **FR-037**: Architecture documentation MUST provide links to ADR-006 and related decision records
+- **FR-033**: Architecture documentation MUST provide links to ADR-006 and related decision records
 
-- **FR-038**: Documentation MUST be organized as separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md` (developer guide), `docs/testing-ops-guide.md` (operational guide)
+- **FR-034**: Documentation MUST be organized as separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md` (developer guide), `docs/testing-ops-guide.md` (operational guide)
 
 ### Key Entities
 
@@ -314,27 +282,19 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **SC-003**: VM reset to clean baseline completes in under 30 seconds for all VMs
 
-- **SC-004**: 100% of user stories in specs/001-foundation/spec.md have corresponding test coverage
+- **SC-004**: CI pipeline executes unit tests on 100% of pushes and integration tests on 100% of PRs to main
 
-- **SC-005**: 100% of acceptance scenarios in specs/001-foundation/spec.md have corresponding test cases
+- **SC-005**: Lock mechanism successfully prevents concurrent test runs in 100% of contention scenarios
 
-- **SC-006**: 100% of functional requirements in specs/001-foundation/spec.md have corresponding test assertions
+- **SC-006**: Manual playbook covers all visual elements for release verification
 
-- **SC-007**: All tests verify both success and failure paths as specified in the requirements
+- **SC-007**: Test infrastructure costs remain under EUR 10/month
 
-- **SC-008**: CI pipeline executes unit tests on 100% of pushes and integration tests on 100% of PRs to main
+- **SC-008**: Developer guide enables a new developer to write a working integration test without additional guidance
 
-- **SC-009**: Lock mechanism successfully prevents concurrent test runs in 100% of contention scenarios
+- **SC-009**: Operational guide enables infrastructure setup from scratch without additional guidance
 
-- **SC-010**: Manual playbook covers all visual elements for release verification
-
-- **SC-011**: Test infrastructure costs remain under EUR 10/month
-
-- **SC-012**: Developer guide enables a new developer to write a working integration test without additional guidance
-
-- **SC-013**: Operational guide enables infrastructure setup from scratch without additional guidance
-
-- **SC-014**: Architecture documentation enables someone unfamiliar with the testing framework to explain its structure after reading
+- **SC-010**: Architecture documentation enables someone unfamiliar with the testing framework to explain its structure after reading
 
 ## Assumptions
 
@@ -345,7 +305,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 ## Out of Scope
 
-- Testing of features beyond 001-foundation (those features don't exist yet)
+- Writing actual tests for specific features
 - Automated visual testing (terminal colors, progress bars require manual verification)
 - Load testing or performance benchmarking
 - Security penetration testing

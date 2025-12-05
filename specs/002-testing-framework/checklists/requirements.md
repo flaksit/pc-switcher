@@ -40,8 +40,4 @@
   - Removed US3 (VM provisioning) - merged into US2 as auto-provisioning requirement
   - Added manual trigger for feature branch integration tests (US3 AS3)
   - US4 (Manual Playbook) now includes dual purpose: visual verification AND guided tour
-  - US5 (renamed from US6) focuses on 100% spec coverage with tests that fail when spec not implemented
   - Removed implementation-specific FRs (Hetzner, tofu, installimage, lock file path, pytest config, freezegun)
-  - Added FRs for spec coverage (FR-007 through FR-010)
-  - Updated SCs to focus on spec coverage rather than module coverage
-  - Added SC-011 for guided tour effectiveness
