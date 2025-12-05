@@ -8,7 +8,7 @@ My architect just made a detailed plan for the feature. The plan consists of all
 Review the architecture and design from the helicopter view of an architect. Is the architecture simple and clear, but not too simple? Does it follow best practices and common patterns? Is the architecture sound and is it easy to modify or extend to accomodate future features or change requests? Check if the solution isn't over-engineered. Check if the @.specify/memory/constitution.md is honoured.
 
 Don't change any existing files. Write your feedback to a new file "plan-review-N-architecture.md" in the feature folder so I can feed it to the architect for them to fix/improve the plan. Replace N in the filename with the next available number starting from 1 (because there could be multiple reviews).
-Example: If there is already a file "plan-review-1.md", create a new file "plan-review-2-architecture.md", and so on.
+Example: If there is already a file "plan-review-1.md", create a new file "plan-review-2-architecture.md", and so on. Number all feedback points in the file so it is easy to reference them.
 
 
 ## Overriding remarks, feedback, instructions, if any

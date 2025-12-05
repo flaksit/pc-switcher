@@ -6,7 +6,7 @@ We use speckit as workflow to implement features in this project. The feature we
 
 My developer just implemented the feature.
 Review the implementation. Verify if the current state of the project implements the spec completely and correctly. Write your feedback to a new file named "implementation-review-N.md" in the feature folder so I can feed it back to my developer so they can fix their work. Replace N in the filename with the next available number starting from 1 (because there could be multiple reviews).
-If there is already a file "implementation-review.md", create a new file "implementation-review-2.md", and so on.
+If there is already a file "implementation-review.md", create a new file "implementation-review-2.md", and so on. Number all feedback points in the file so it is easy to reference them.
 
 
 ## Overriding remarks, feedback, instructions, if any
