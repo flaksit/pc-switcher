@@ -29,11 +29,11 @@ Represents a Hetzner Cloud VM used for integration testing.
 ```mermaid
 stateDiagram-v2
     [*] --> NotProvisioned
-    NotProvisioned --> Provisioning: tofu apply
+    NotProvisioned --> Provisioning: provision-vms.sh
     Provisioning --> Ready: provision.sh complete
     Ready --> Resetting: reset-vm.sh
     Resetting --> Ready: reboot complete
-    Ready --> Destroyed: tofu destroy
+    Ready --> Destroyed: hcloud server delete
     Destroyed --> [*]
 ```
 

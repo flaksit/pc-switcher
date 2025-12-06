@@ -83,22 +83,26 @@ The reset script restores VMs to their baseline snapshots (`/.snapshots/baseline
 | Secret | Description |
 |--------|-------------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
-| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519) |
-| `PC1_TEST_HOST` | IP/hostname of pc1 test VM |
-| `PC2_TEST_HOST` | IP/hostname of pc2 test VM |
+| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519 format) |
+
+Note: VM IP addresses are retrieved dynamically via `hcloud server ip` after auto-provisioning. No need to store VM IPs as secrets.
 
 ### Workflow Triggers
 
 - **Unit tests**: Every push to any branch
-- **Integration tests**: PRs to `main` branch only
+- **Integration tests**: PRs to `main` branch (from main repository only - forks are skipped with notice)
 - **Manual integration tests**: Via workflow dispatch on any branch
+
+### Fork PRs
+
+Integration tests are automatically skipped for PRs from forked repositories because GitHub does not expose secrets to forks. Unit tests still run normally. A notice is displayed explaining the skip.
 
 ### Viewing Test Results
 
 1. Go to Actions tab in GitHub
 2. Select the workflow run
 3. Expand the test job to see pytest output
-4. Download artifacts for detailed logs
+4. Download artifacts for detailed logs (pytest output, provisioning logs)
 
 ---
 

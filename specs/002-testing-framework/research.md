@@ -67,12 +67,17 @@ markers = [
 import os
 import pytest
 
+REQUIRED_ENV_VARS = [
+    "PC_SWITCHER_TEST_PC1_HOST",
+    "PC_SWITCHER_TEST_PC2_HOST",
+]
+
 def pytest_collection_modifyitems(config, items):
     """Skip integration tests if VM environment not configured."""
-    vm_host = os.getenv("PC_SWITCHER_TEST_PC1_HOST")
+    missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
 
-    if not vm_host:
-        skip_msg = "Skipping integration tests: VM environment not configured"
+    if missing_vars:
+        skip_msg = f"Skipping integration tests: VM environment not configured (missing: {', '.join(missing_vars)})"
         for item in items:
             if "integration" in item.keywords:
                 item.add_marker(pytest.mark.skip(reason=skip_msg))

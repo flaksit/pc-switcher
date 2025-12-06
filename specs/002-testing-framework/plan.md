@@ -54,7 +54,7 @@ Implement the **testing framework infrastructure** for pc-switcher: VM provision
 *Post-design validation*: Quickstart.md provides copy-paste commands for all scenarios.
 
 ### Well-supported tools and best practices ✅
-- **Tools**: pytest (well-established), OpenTofu (actively maintained Terraform fork), Hetzner Cloud (reliable provider), GitHub Actions (standard CI)
+- **Tools**: pytest (well-established), hcloud CLI (Hetzner's official command-line tool), GitHub Actions (standard CI)
 - **Best practices**: Three-tier testing (unit/integration/e2e), contract tests for mock validation, infrastructure as code
 - **DRY/YAGNI**: Minimal fixtures for VM command execution only; no test data generation fixtures until needed
 
@@ -132,8 +132,7 @@ tests/
 
 .github/
 └── workflows/
-    ├── ci.yml           # Unit tests on every push
-    └── integration.yml  # Integration tests on PR to main + manual trigger
+    └── test.yml         # All tests: unit on every push, integration on PR to main + manual trigger
 
 docs/
 ├── testing-framework.md       # Architecture (update)
