@@ -39,7 +39,7 @@ readonly NC='\033[0m' # No Color
 LOG_PREFIX=""
 
 log_step() { echo -e "${GREEN}==>${NC}${LOG_PREFIX} $*"; }
-log_info() { echo "   ${LOG_PREFIX} $*"; }
+log_info() { echo -e "   ${LOG_PREFIX} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC}${LOG_PREFIX} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC}${LOG_PREFIX} $*" >&2; }
 
@@ -164,7 +164,7 @@ wait_for_ssh() {
     local elapsed=0
     local attempt=0
     while ((elapsed < timeout)); do
-        ((attempt++))
+        ((++attempt))  # pre-increment to avoid exit code 1 when attempt=0
         # shellcheck disable=SC2086
         if ssh $SSH_OPTS "root@$vm_ip" "echo SSH ready" &> /dev/null; then
             log_info "SSH is ready on $vm_ip (after ${elapsed}s, attempt $attempt)"

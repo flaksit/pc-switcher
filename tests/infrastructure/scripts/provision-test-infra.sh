@@ -28,9 +28,9 @@ readonly DEFAULT_SSH_PUBLIC_KEY="${HOME}/.ssh/id_ed25519.pub"
 ensure_ssh_key() {
     log_step "Ensuring SSH key '$SSH_KEY_NAME' exists in Hetzner Cloud..."
 
-    # Get the fingerprint of our local public key
+    # Get the fingerprint of our local public key in MD5 format (Hetzner uses MD5)
     local local_fingerprint
-    local_fingerprint=$(ssh-keygen -lf "$SSH_PUBLIC_KEY" | awk '{print $2}')
+    local_fingerprint=$(ssh-keygen -lf "$SSH_PUBLIC_KEY" -E md5 | awk '{print $2}' | sed 's/^MD5://')
     log_info "Local key fingerprint: $local_fingerprint"
 
     if hcloud ssh-key describe "$SSH_KEY_NAME" &> /dev/null; then
