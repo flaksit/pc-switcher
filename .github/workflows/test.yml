@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
@@ -18,12 +22,6 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           version: "latest"
-
-      - name: Set up Python
-        run: uv python install 3.14
-
-      - name: Install dependencies
-        run: uv sync --dev
 
       - name: Run basedpyright
         run: uv run basedpyright
@@ -47,12 +45,6 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           version: "latest"
-
-      - name: Set up Python
-        run: uv python install 3.14
-
-      - name: Install dependencies
-        run: uv sync --dev
 
       - name: Run unit and contract tests
         run: uv run pytest tests/unit tests/contract -v
@@ -101,14 +93,6 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           version: "latest"
-
-      - name: Set up Python
-        if: steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'true'
-        run: uv python install 3.14
-
-      - name: Install dependencies
-        if: steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'true'
-        run: uv sync --dev
 
       - name: Install hcloud CLI
         if: steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'true'
