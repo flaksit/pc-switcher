@@ -84,7 +84,7 @@ Follow-up TODOs:
 
 - Specs and plans MUST annotate the primary principles they satisfy and call out trade-offs when principles compete.
 - Research and design deliverables MUST describe reliability mechanisms, disk-wear mitigation, and UX considerations before implementation begins.
-- Performance budgets, conflict detection strategies, and documentation updates MUST appear as tracked tasks with owners.
+- Performance budgets, conflict detection strategies, and documentation updates MUST appear as tracked todos by the agents or analysts that write specifications and plans.
 - Every change set MUST include verification evidence (tests, measurements, or checklists) proving adherence to the seven principles.
 
 ## Governance
