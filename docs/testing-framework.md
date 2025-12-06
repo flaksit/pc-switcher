@@ -205,13 +205,13 @@ Each VM has the following btrfs subvolume layout (flat layout):
 Before each test run, VMs are reset to a clean baseline state using btrfs snapshot rollback (not Hetzner VM snapshots, which are slow):
 
 1. Create read-only baseline snapshots of `@` and `@home` during initial provisioning
-2. Before each test run:
-   a. Delete any test artifacts in `/.snapshots/pc-switcher/` (preserving baseline snapshots)
+2. Before each test run (via `reset-vm.sh`):
+   a. Delete any test artifacts in `/.snapshots/pc-switcher/test-*`
    b. Mount the top-level filesystem as /mnt/btrfs
    c. mv /mnt/btrfs/@ /mnt/btrfs/@_old
-   d. btrfs subvolume snapshot /mnt/btrfs/.snapshots/pc-switcher/baseline/@ /mnt/btrfs/@
+   d. btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@ /mnt/btrfs/@
    e. mv /mnt/btrfs/@home /mnt/btrfs/@home_old
-   f. btrfs subvolume snapshot /mnt/btrfs/.snapshots/pc-switcher/baseline/@home /mnt/btrfs/@home
+   f. btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@home /mnt/btrfs/@home
    g. Reboot VM (~10-20 seconds)
    h. Remove old subvolumes `/mnt/btrfs/@_old` and `/mnt/btrfs/@home_old`
 3. Clean state ready for tests
@@ -230,11 +230,13 @@ tests/infrastructure/scripts/lock.sh $HOLDER acquire
 tests/infrastructure/scripts/lock.sh $HOLDER release
 ```
 
-The lock file is stored on pc1 VM at `/tmp/pc-switcher-integration-test.lock`.
+The lock is stored as **Hetzner Server Labels** on the `pc-switcher-pc1` server (not as a file on the VM). This approach survives VM reboots and snapshot rollbacks:
 
-- Lock holder info includes: CI job ID or username
-- Maximum wait time: 5 minutes
-- If lock cannot be acquired, tests fail with clear error
+- **Lock labels**: `lock_holder` (identifier) and `lock_acquired` (ISO8601 timestamp)
+- **Lock holder format**: `ci-<run_id>` for CI jobs, `local-<username>` for local runs
+- **Maximum wait time**: 5 minutes with 10-second retry intervals
+- **Atomic acquisition**: Uses Hetzner API with 1-second verification to detect race conditions
+- If lock cannot be acquired, tests fail with clear error showing current holder
 
 ## Running Tests
 
@@ -360,6 +362,6 @@ The CI workflow automatically handles this by using the PR branch.
 
 ### Additional Guides
 
-- `docs/testing-developer-guide.md` - Guide for writing integration tests (to be created)
-- `docs/testing-ops-guide.md` - Operational guide for test infrastructure (to be created)
-- `specs/001-foundation/testing-playbook.md` - Manual verification playbook
+- [Testing Developer Guide](testing-developer-guide.md) - Guide for writing integration tests
+- [Testing Ops Guide](testing-ops-guide.md) - Operational guide for test infrastructure
+- [Testing Playbook](testing-playbook.md) - Manual verification playbook

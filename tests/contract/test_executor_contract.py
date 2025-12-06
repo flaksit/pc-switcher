@@ -107,9 +107,7 @@ class TestMockExecutorContract(ExecutorContractBase):
     def executor(self) -> MagicMock:
         """Create a mock executor matching the contract."""
         mock = MagicMock()
-        mock.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="hello\n", stderr="")
-        )
+        mock.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="hello\n", stderr=""))
         mock.terminate_all_processes = AsyncMock()
         return mock
 
@@ -117,9 +115,7 @@ class TestMockExecutorContract(ExecutorContractBase):
 class TestMockExecutorFixtureContract:
     """Verify the mock_executor fixture from conftest.py matches contract."""
 
-    async def test_mock_executor_run_command_returns_command_result(
-        self, mock_executor: MagicMock
-    ) -> None:
+    async def test_mock_executor_run_command_returns_command_result(self, mock_executor: MagicMock) -> None:
         """mock_executor.run_command must return CommandResult."""
         result = await mock_executor.run_command("echo hello")
         assert isinstance(result, CommandResult)
@@ -129,9 +125,7 @@ class TestMockExecutorFixtureContract:
         assert hasattr(mock_executor, "run_command")
         assert hasattr(mock_executor, "terminate_all_processes")
 
-    async def test_mock_executor_result_has_required_attributes(
-        self, mock_executor: MagicMock
-    ) -> None:
+    async def test_mock_executor_result_has_required_attributes(self, mock_executor: MagicMock) -> None:
         """mock_executor result must have exit_code, stdout, stderr."""
         result = await mock_executor.run_command("test")
         assert hasattr(result, "exit_code")

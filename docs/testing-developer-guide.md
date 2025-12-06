@@ -583,10 +583,13 @@ Before running integration tests, reset VMs to clean state:
 
 ```bash
 cd tests/infrastructure
-./scripts/restore-baseline-snapshots.sh
+
+# Reset both VMs (requires HCLOUD_TOKEN for hcloud CLI)
+./scripts/reset-vm.sh $PC_SWITCHER_TEST_PC1_HOST
+./scripts/reset-vm.sh $PC_SWITCHER_TEST_PC2_HOST
 ```
 
-This uses btrfs snapshot rollback and takes about 30 seconds.
+The `reset-vm.sh` script uses btrfs snapshot rollback and takes about 30 seconds per VM.
 
 ## Troubleshooting
 
@@ -652,14 +655,16 @@ source ~/.pc-switcher-test-env
 
 **Solution:**
 
-1. Check if lock file exists:
+1. Check lock status (requires `HCLOUD_TOKEN`):
    ```bash
-   ssh root@$PC_SWITCHER_TEST_PC1_HOST "cat /tmp/pc-switcher-integration-test.lock"
+   tests/infrastructure/scripts/lock.sh "" status
    ```
 
-2. If lock is stale, remove it:
+2. If lock is stale (holder is no longer running), manually remove it:
    ```bash
-   ssh root@$PC_SWITCHER_TEST_PC1_HOST "rm -f /tmp/pc-switcher-integration-test.lock"
+   # Remove lock labels from the server
+   hcloud server remove-label pc-switcher-pc1 lock_holder
+   hcloud server remove-label pc-switcher-pc1 lock_acquired
    ```
 
 3. Wait for other test runs to complete (check CI pipeline).
@@ -674,14 +679,17 @@ source ~/.pc-switcher-test-env
 
 1. Check if baseline snapshots exist:
    ```bash
-   ssh root@$PC_SWITCHER_TEST_PC1_HOST "sudo btrfs subvolume list /.snapshots/pc-switcher/baseline"
+   ssh testuser@$PC_SWITCHER_TEST_PC1_HOST "sudo btrfs subvolume show /.snapshots/baseline/@"
+   ssh testuser@$PC_SWITCHER_TEST_PC1_HOST "sudo btrfs subvolume show /.snapshots/baseline/@home"
    ```
 
-2. Recreate baseline snapshots:
+2. Recreate baseline snapshots by re-provisioning the VMs:
    ```bash
    cd tests/infrastructure
-   ./scripts/create-baseline-snapshots.sh
+   ./scripts/provision-test-infra.sh
    ```
+
+   This will recreate the baseline snapshots at `/.snapshots/baseline/` on both VMs.
 
 ### Tests pass locally but fail in CI
 
@@ -735,7 +743,7 @@ source ~/.pc-switcher-test-env
 3. Reset VM to clean state:
    ```bash
    cd tests/infrastructure
-   ./scripts/restore-baseline-snapshots.sh
+   ./scripts/reset-vm.sh $PC_SWITCHER_TEST_PC1_HOST
    ```
 
 ### "No module named 'pcswitcher'" errors

@@ -38,10 +38,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
 
     if missing_vars:
-        skip_msg = (
-            f"Skipping integration tests: VM environment not configured "
-            f"(missing: {', '.join(missing_vars)})"
-        )
+        skip_msg = f"Skipping integration tests: VM environment not configured (missing: {', '.join(missing_vars)})"
         for item in items:
             if "integration" in item.keywords:
                 item.add_marker(pytest.mark.skip(reason=skip_msg))
@@ -78,6 +75,7 @@ def _check_vms_exist() -> bool:
     try:
         result = subprocess.run(
             ["hcloud", "server", "describe", "pc-switcher-pc1"],
+            check=False,
             capture_output=True,
             text=True,
             env={**os.environ, "HCLOUD_TOKEN": hcloud_token},
