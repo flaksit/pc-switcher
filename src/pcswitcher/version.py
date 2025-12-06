@@ -16,6 +16,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING
 
 import semver
+from packaging.version import Version as PkgVersion
 
 if TYPE_CHECKING:
     from typing import Self
@@ -58,6 +59,8 @@ class Pep440Version:
     def parse(cls, version_str: str) -> Self:
         """Parse a PEP 440 version string into components.
 
+        Uses packaging.version.Version for robust PEP 440 parsing.
+
         Args:
             version_str: PEP 440 version string
 
@@ -67,49 +70,30 @@ class Pep440Version:
         Raises:
             ValueError: If version string is invalid or uses epoch
         """
-        # Check for epoch (not supported)
-        if "!" in version_str:
+        try:
+            parsed = PkgVersion(version_str)
+        except Exception as e:
+            raise ValueError(f"Invalid PEP 440 version: {version_str}") from e
+
+        # Check for epoch (not supported for SemVer conversion)
+        if parsed.epoch != 0:
             raise ValueError(f"PEP 440 epoch is not supported: {version_str}")
 
-        # Split off local version
-        local = None
-        if "+" in version_str:
-            version_str, local = version_str.split("+", 1)
+        # Extract pre-release: packaging returns (type, number) or None
+        # Type is normalized to 'a', 'b', or 'rc'
+        pre: tuple[str, int] | None = None
+        if parsed.pre is not None:
+            pre_type, pre_num = parsed.pre
+            # packaging normalizes alpha->a, beta->b, c/preview/pre->rc
+            pre = (pre_type, pre_num)
 
-        # Full PEP 440 regex (without epoch)
-        # Release: N(.N)*
-        # Pre: (a|b|rc)N (number optional, defaults to 0)
-        # Post: .post[N] (number optional, defaults to 0)
-        # Dev: .dev[N] (number optional, defaults to 0)
-        pattern = r"""
-            ^
-            (\d+(?:\.\d+)*)           # Release segment (group 1)
-            (?:(a|b|rc)(\d+)?)?       # Pre-release (groups 2, 3) - number optional
-            (?:\.post(\d+)?)?         # Post-release (group 4) - number optional
-            (?:\.dev(\d+)?)?          # Dev release (group 5) - number optional
-            $
-        """
-        match = re.match(pattern, version_str, re.VERBOSE)
-        if not match:
-            raise ValueError(f"Invalid PEP 440 version: {version_str}")
-
-        release = tuple(int(x) for x in match.group(1).split("."))
-        pre = None
-        if match.group(2):
-            pre_num = int(match.group(3)) if match.group(3) else 0
-            pre = (match.group(2), pre_num)
-        post = int(match.group(4)) if match.group(4) is not None else (0 if match.group(4) == "" else None)
-        dev = int(match.group(5)) if match.group(5) is not None else (0 if match.group(5) == "" else None)
-
-        # Handle implicit 0 for post and dev when present without number
-        # The regex captures "" for .post without number, None for no .post at all
-        # We need to check if the original string contained .post or .dev
-        if ".post" in version_str.split("+")[0]:
-            post = int(match.group(4)) if match.group(4) else 0
-        if ".dev" in version_str.split("+")[0]:
-            dev = int(match.group(5)) if match.group(5) else 0
-
-        return cls(release=release, pre=pre, post=post, dev=dev, local=local)
+        return cls(
+            release=parsed.release,
+            pre=pre,
+            post=parsed.post,
+            dev=parsed.dev,
+            local=parsed.local,
+        )
 
     def __str__(self) -> str:
         """Return the PEP 440 string representation."""
