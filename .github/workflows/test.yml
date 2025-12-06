@@ -15,44 +15,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check fork status
-        id: check_fork
+      - name: Check fork status and secrets
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]] && \
              [[ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
-            echo "is_fork=true" >> $GITHUB_OUTPUT
             echo "::notice::Integration tests skipped: Fork PRs do not have access to secrets"
-          else
-            echo "is_fork=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
-
-      - name: Exit if fork
-        if: steps.check_fork.outputs.is_fork == 'true'
-        run: exit 0
-
-      - name: Check secrets availability
-        if: steps.check_fork.outputs.is_fork == 'false'
-        run: |
           if [[ -z "${{ secrets.HCLOUD_TOKEN }}" ]] || [[ -z "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" ]]; then
             echo "::error::Integration tests cannot run: Required secrets (HCLOUD_TOKEN, HETZNER_SSH_PRIVATE_KEY) are not available"
             exit 1
           fi
 
       - name: Install uv
-        if: steps.check_fork.outputs.is_fork == 'false'
         uses: astral-sh/setup-uv@v6
         with:
           version: "latest"
 
       - name: Install hcloud CLI
-        if: steps.check_fork.outputs.is_fork == 'false'
         run: |
           curl -L https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz | tar xz
           sudo mv hcloud /usr/local/bin/
           hcloud version
 
       - name: Setup SSH key
-        if: steps.check_fork.outputs.is_fork == 'false'
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
@@ -63,7 +49,6 @@ jobs:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Provision test infrastructure
-        if: steps.check_fork.outputs.is_fork == 'false'
         run: |
           export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
           export SSH_PUBLIC_KEY="$HOME/.ssh/id_ed25519.pub"
@@ -72,7 +57,6 @@ jobs:
         timeout-minutes: 30
 
       - name: Reset VMs to baseline state
-        if: steps.check_fork.outputs.is_fork == 'false'
         run: |
           export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
           export PC_SWITCHER_TEST_USER=testuser
@@ -85,7 +69,6 @@ jobs:
         timeout-minutes: 10
 
       - name: Get VM IPs
-        if: steps.check_fork.outputs.is_fork == 'false'
         id: vm_ips
         run: |
           PC1_IP=$(hcloud server ip pc-switcher-pc1)
@@ -96,7 +79,6 @@ jobs:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Run integration tests
-        if: steps.check_fork.outputs.is_fork == 'false'
         run: uv run pytest -m integration -v 2>&1 | tee pytest-output.log
         env:
           PC_SWITCHER_TEST_PC1_HOST: ${{ steps.vm_ips.outputs.pc1_ip }}
@@ -106,7 +88,7 @@ jobs:
         timeout-minutes: 30
 
       - name: Upload test logs
-        if: always() && steps.check_fork.outputs.is_fork == 'false'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-logs
