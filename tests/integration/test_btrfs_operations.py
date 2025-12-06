@@ -27,7 +27,7 @@ async def test_volume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     await pc1_executor.run_command(
         "sudo sh -c '"
         "btrfs subvolume list -o /test-vol 2>/dev/null | "
-        "awk \"{print \\$NF}\" | "
+        'awk "{print \\$NF}" | '
         "xargs -r -I {} btrfs subvolume delete /{}"
         "'",
     )
@@ -43,7 +43,7 @@ async def test_volume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     await pc1_executor.run_command(
         "sudo sh -c '"
         "btrfs subvolume list -o /test-vol 2>/dev/null | "
-        "awk \"{print \\$NF}\" | "
+        'awk "{print \\$NF}" | '
         "xargs -r -I {} btrfs subvolume delete /{}"
         "'",
     )
