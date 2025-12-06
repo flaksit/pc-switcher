@@ -147,7 +147,7 @@ hcloud ssh-key delete pc-switcher-test-key  # optional
 
 ### Alternatives Considered
 - **OpenTofu/Terraform**: Adds state management complexity without benefit for 2 VMs
-- **Smaller VM types**: CX11 (2GB RAM) may be insufficient for btrfs operations
+- **Smaller VM types**: CX11 (2GB RAM) may be insufficient for btrfs operations (Note: doesn't exist anymore)
 
 ---
 

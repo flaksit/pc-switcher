@@ -48,7 +48,7 @@ Implement the **testing framework infrastructure** for pc-switcher: VM provision
 
 ### Frictionless Command UX ✅
 - **Single command**: `uv run pytest tests/unit tests/contract -v` for unit tests; `uv run pytest -m integration` for integration tests
-- **Minimal intervention**: VM provisioning is automatic when VMs don't exist; reset is automatic before integration tests
+- **Minimal intervention**: Session-scoped fixtures handle everything automatically: lock acquisition, VM existence check, auto-provisioning if needed, and baseline reset. Developer/CI just runs pytest.
 - **Progressive feedback**: pytest provides test progress; CI preserves logs and artifacts for debugging
 
 *Post-design validation*: Quickstart.md provides copy-paste commands for all scenarios.
@@ -154,4 +154,5 @@ docs/
 | Snapshot reset | Btrfs snapshots at `/.snapshots/baseline/@` | Fast (< 30s) vs VM reprovisioning (minutes); matches docs/testing-framework.md |
 | Lock mechanism | Hetzner Server Labels | External to VM state; survives reboots and snapshot rollbacks |
 | Lock scope | Test execution only | Provisioning is rare; protected by CI concurrency groups |
+| Provisioning integration | Fixture-integrated | Session fixture checks VM existence and auto-provisions if needed; VMs may be destroyed regularly during idle periods |
 | CI concurrency | GitHub Actions concurrency group | Built-in feature; no external dependencies |

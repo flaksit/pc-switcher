@@ -56,7 +56,7 @@ This is the same pattern used in `provision.sh` as the user noted.
 
 **Issue**: `cx23` instance type may not exist or be a typo. Standard types are `cx22`, `cx32`, etc.
 
-**User Decision**: Ignore
+**User Decision**: Ignore: cx23 exists.
 
 **Resolution**: No changes made. The user has decided to keep `cx23` as-is. This can be corrected during actual implementation if the instance type doesn't exist.
 

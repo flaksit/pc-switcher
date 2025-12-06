@@ -31,8 +31,10 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T004 Create tests/infrastructure/scripts/provision-vms.sh to create VMs via hcloud CLI per research.md §3
-- [ ] T005 [P] Create tests/infrastructure/scripts/configure-vm.sh for testuser setup, SSH keys, and baseline services
+> **Reference**: Complete script implementations are available in `specs/002-testing-framework/pre-analysis/testing-implementation-plan.md`. Use these as starting point and verify they work correctly with the current environment.
+
+- [ ] T004 Create tests/infrastructure/scripts/provision-vms.sh to create VMs via hcloud CLI per research.md §3; use CX23 instances (2 shared vCPUs, 4GB RAM) to stay within EUR 10/month cost cap (FR-012)
+- [ ] T005 [P] Create tests/infrastructure/scripts/configure-vm.sh for testuser setup, SSH keys (including CI-provided public key injection per FR-006a), and baseline services
 - [ ] T006 [P] Create tests/infrastructure/scripts/configure-hosts.sh to configure /etc/hosts and inter-VM SSH access
 - [ ] T007 Create tests/infrastructure/scripts/reset-vm.sh implementing btrfs snapshot reset flow per research.md §4
 - [ ] T008 Create tests/infrastructure/scripts/lock.sh for Hetzner Server Labels lock operations per research.md §5
@@ -51,8 +53,8 @@
 
 > **Note**: US1 tasks are verification-only because unit test infrastructure already exists. The framework feature ensures existing tests work with new pytest configuration; no new test code is written here.
 
-- [ ] T009 [US1] Verify existing tests in tests/unit/ and tests/contract/ work with new pytest configuration
-- [ ] T010 [US1] Verify existing fixtures in tests/conftest.py are sufficient for unit test isolation (no changes to root conftest.py needed)
+- [ ] T009 [US1] Verify existing tests in tests/unit/ and tests/contract/ work with new pytest configuration; confirm tests contain no real btrfs operations, no network calls to external services, and no filesystem-type dependencies (FR-002 safety)
+- [ ] T010 [US1] Verify existing fixtures in tests/conftest.py are sufficient for unit test isolation; confirm mocks are used for all external system interactions (FR-002 safety)
 - [ ] T011 [US1] Implement contract tests for MockExecutor vs RemoteExecutor interface parity in tests/contract/test_executor_contract.py per FR-003a
 
 **Checkpoint**: User Story 1 complete - unit tests run fast and safe on any machine
@@ -72,7 +74,7 @@
 - [ ] T012 [P] [US2] Create VM connection fixtures (pc1_connection, pc2_connection) in tests/integration/conftest.py per research.md §7
 - [ ] T013 [P] [US2] Create VM executor fixtures (pc1_executor, pc2_executor) wrapping RemoteExecutor in tests/integration/conftest.py
 - [ ] T014 [US2] Add session-scoped fixture for lock acquisition and release in tests/integration/conftest.py
-- [ ] T015 [US2] Add session-scoped fixture for VM reset before test session in tests/integration/conftest.py
+- [ ] T015 [US2] Add session-scoped fixture that handles: (1) lock acquisition, (2) VM existence check with auto-provisioning if VMs don't exist (or skip with clear message if secrets unavailable), (3) VM reset to baseline before test session in tests/integration/conftest.py
 
 **Checkpoint**: User Story 2 complete - integration test fixtures ready for use
 
@@ -87,7 +89,7 @@
 ### Implementation for User Story 3
 
 - [ ] T016 [US3] Create .github/workflows/test.yml with lint-and-unit job running on every push per research.md §6
-- [ ] T017 [US3] Add integration job to .github/workflows/test.yml with fork detection and concurrency group per research.md §6
+- [ ] T017 [US3] Add integration job to .github/workflows/test.yml with: fork detection, secret availability check (skip with clear notice per FR-017a when HCLOUD_TOKEN or SSH key unavailable), and concurrency group per research.md §6; job runs `uv run pytest -m integration` (fixtures handle provisioning/reset automatically)
 - [ ] T018 [US3] Configure artifact upload for pytest output and provisioning logs in .github/workflows/test.yml
 - [ ] T019 [US3] Add workflow_dispatch trigger for manual integration test runs in .github/workflows/test.yml
 
@@ -122,6 +124,7 @@
 - [ ] T023 [P] [US5] Add VM interaction patterns section (SSH, file transfer, btrfs, snapshots) to docs/testing-developer-guide.md
 - [ ] T024 [US5] Add test organization section (directory structure, naming, markers) to docs/testing-developer-guide.md
 - [ ] T025 [US5] Add troubleshooting section for common integration test failures to docs/testing-developer-guide.md
+- [ ] T025a [US5] Add local development setup section documenting how to configure secrets for local integration test runs (environment variables mirroring CI secrets per FR-025) to docs/testing-developer-guide.md
 
 **Checkpoint**: User Story 5 complete - developer documentation ready
 
@@ -154,7 +157,7 @@
 ### Implementation for User Story 7
 
 - [ ] T031 [US7] Update docs/testing-framework.md with three-tier test structure diagram (Mermaid)
-- [ ] T032 [US7] Add component interaction diagram showing VM, lock, and CI relationships in docs/testing-framework.md
+- [ ] T032 [US7] Add component interaction diagram (Mermaid format per FR-030) showing VM, lock, and CI relationships in docs/testing-framework.md
 - [ ] T033 [US7] Add design decision rationale (VM isolation, Hetzner labels lock, btrfs reset) to docs/testing-framework.md
 - [ ] T034 [US7] Add links to ADR-006 and related decision records in docs/testing-framework.md
 
@@ -258,14 +261,14 @@ With multiple developers:
 
 | Metric | Value |
 |--------|-------|
-| Total tasks | 38 |
+| Total tasks | 39 |
 | Phase 1 (Setup) | 3 tasks |
 | Phase 2 (Foundational) | 5 tasks |
 | User Story 1 (P1) | 3 tasks |
 | User Story 2 (P1) | 4 tasks |
 | User Story 3 (P2) | 4 tasks |
 | User Story 4 (P3) | 2 tasks |
-| User Story 5 (P2) | 4 tasks |
+| User Story 5 (P2) | 5 tasks |
 | User Story 6 (P2) | 5 tasks |
 | User Story 7 (P2) | 4 tasks |
 | Phase 10 (Polish) | 4 tasks |
