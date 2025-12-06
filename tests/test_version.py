@@ -34,7 +34,7 @@ class TestGetCurrentVersion:
 
 
 class TestParseVersionFromCliOutput:
-    """Tests for parse_version_from_cli_output() with SemVer support."""
+    """Tests for parse_version_from_cli_output() with SemVer and PEP 440 support."""
 
     def test_parse_base_version(self) -> None:
         """Should parse base version without pre-release."""
@@ -42,23 +42,41 @@ class TestParseVersionFromCliOutput:
         assert parse_version_from_cli_output("pc-switcher 1.2.3") == "1.2.3"
         assert parse_version_from_cli_output("0.1.0") == "0.1.0"
 
-    def test_parse_alpha_version(self) -> None:
-        """Should parse alpha pre-release versions."""
+    def test_parse_semver_alpha_version(self) -> None:
+        """Should parse SemVer-style alpha pre-release versions."""
         assert parse_version_from_cli_output("pc-switcher 0.1.0-alpha") == "0.1.0-alpha"
         assert parse_version_from_cli_output("pc-switcher 0.1.0-alpha.1") == "0.1.0-alpha.1"
         assert parse_version_from_cli_output("0.1.0-alpha.2") == "0.1.0-alpha.2"
 
-    def test_parse_beta_version(self) -> None:
-        """Should parse beta pre-release versions."""
+    def test_parse_semver_beta_version(self) -> None:
+        """Should parse SemVer-style beta pre-release versions."""
         assert parse_version_from_cli_output("pc-switcher 0.1.0-beta") == "0.1.0-beta"
         assert parse_version_from_cli_output("pc-switcher 0.1.0-beta.1") == "0.1.0-beta.1"
         assert parse_version_from_cli_output("0.2.0-beta.3") == "0.2.0-beta.3"
 
-    def test_parse_rc_version(self) -> None:
-        """Should parse release candidate versions."""
+    def test_parse_semver_rc_version(self) -> None:
+        """Should parse SemVer-style release candidate versions."""
         assert parse_version_from_cli_output("pc-switcher 0.1.0-rc") == "0.1.0-rc"
         assert parse_version_from_cli_output("pc-switcher 0.1.0-rc.1") == "0.1.0-rc.1"
         assert parse_version_from_cli_output("1.0.0-rc.2") == "1.0.0-rc.2"
+
+    def test_parse_pep440_alpha_version(self) -> None:
+        """Should parse PEP 440-style alpha pre-release versions."""
+        assert parse_version_from_cli_output("pc-switcher 0.1.0a1") == "0.1.0a1"
+        assert parse_version_from_cli_output("pc-switcher 0.1.0a2") == "0.1.0a2"
+        assert parse_version_from_cli_output("0.2.0a1") == "0.2.0a1"
+
+    def test_parse_pep440_beta_version(self) -> None:
+        """Should parse PEP 440-style beta pre-release versions."""
+        assert parse_version_from_cli_output("pc-switcher 0.1.0b1") == "0.1.0b1"
+        assert parse_version_from_cli_output("pc-switcher 0.2.0b2") == "0.2.0b2"
+        assert parse_version_from_cli_output("1.0.0b3") == "1.0.0b3"
+
+    def test_parse_pep440_rc_version(self) -> None:
+        """Should parse PEP 440-style release candidate versions."""
+        assert parse_version_from_cli_output("pc-switcher 0.1.0rc1") == "0.1.0rc1"
+        assert parse_version_from_cli_output("pc-switcher 1.0.0rc2") == "1.0.0rc2"
+        assert parse_version_from_cli_output("2.0.0rc1") == "2.0.0rc1"
 
     def test_parse_with_extra_text(self) -> None:
         """Should extract version from output with extra text."""
@@ -66,9 +84,13 @@ class TestParseVersionFromCliOutput:
         assert parse_version_from_cli_output(output) == "0.1.0-alpha.1"
 
     def test_parse_dev_version(self) -> None:
-        """Should parse development versions from git."""
-        # uv-dynamic-versioning can create versions like 0.0.0.post125.dev0+09ab5f5
-        # Our regex only captures the base version part (0.0.0)
+        """Should parse development versions from git, extracting base+prerelease."""
+        # uv-dynamic-versioning creates versions like 0.1.0a1.post20.dev0+4e7b776
+        # Our regex captures the base version + prerelease part (0.1.0a1)
+        output = "pc-switcher 0.1.0a1.post20.dev0+4e7b776"
+        assert parse_version_from_cli_output(output) == "0.1.0a1"
+
+        # For base versions without prerelease, only captures the base
         output = "pc-switcher 0.0.0.post125.dev0+09ab5f5"
         assert parse_version_from_cli_output(output) == "0.0.0"
 

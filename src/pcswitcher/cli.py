@@ -503,7 +503,7 @@ def update(
     ] = None,
     prerelease: Annotated[
         bool,
-        typer.Option("--prerelease", "-p", help="Include pre-release versions when finding latest."),
+        typer.Option("--prerelease", help="Include pre-release versions when finding latest."),
     ] = False,
 ) -> None:
     """Update pc-switcher to a specific version or latest.
