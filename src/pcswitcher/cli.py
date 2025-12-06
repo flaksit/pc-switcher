@@ -557,19 +557,28 @@ def update(
         sys.exit(1)
 
     # Verify installation
-    installed_version = _verify_installed_version()
-    if installed_version is None:
+    installed_version_str = _verify_installed_version()
+    if installed_version_str is None:
         console.print("[bold red]Error:[/bold red] Verification failed - pc-switcher not working after update")
         sys.exit(1)
 
-    if installed_version != target_version:
+    # Compare using Version objects to handle format differences (e.g., "0.1.0-alpha.1" vs "0.1.0a1")
+    try:
+        installed_version = Version(installed_version_str)
+    except Exception:
         console.print(
-            f"[bold red]Error:[/bold red] Version mismatch after update. "
-            f"Expected {target_version}, got {installed_version}"
+            f"[bold red]Error:[/bold red] Cannot parse installed version: {installed_version_str}"
         )
         sys.exit(1)
 
-    console.print(f"[green]Successfully updated to version {target_version}[/green]")
+    if installed_version != target:
+        console.print(
+            f"[bold red]Error:[/bold red] Version mismatch after update. "
+            f"Expected {target_version}, got {installed_version_str}"
+        )
+        sys.exit(1)
+
+    console.print(f"[green]Successfully updated to version {installed_version_str}[/green]")
 
 
 if __name__ == "__main__":
