@@ -171,22 +171,20 @@ Alternative approaches and their drawbacks:
 
 ### Provisioning
 
-VMs are provisioned using the hcloud CLI (no Terraform/OpenTofu needed).
+VMs are provisioned exclusively by GitHub CI (no local provisioning). This ensures all authorized SSH keys are properly configured from secrets.
 
-**Initial Setup (one-time):**
+**Triggering Provisioning:**
 ```bash
-export HCLOUD_TOKEN="your-api-token"
-cd tests/infrastructure
-
-# Single command creates VMs and provisions them with btrfs
-./scripts/provision-vms.sh
+# Trigger CI workflow (VMs are created automatically if they don't exist)
+gh workflow run test.yml
 ```
 
-The `provision-vms.sh` script:
-1. Creates SSH key in Hetzner Cloud (if needed)
-2. Creates pc1 and pc2 VMs (if they don't exist)
-3. Runs `provision.sh` on each VM to install Ubuntu with btrfs using Hetzner's `installimage`
+The `provision-test-infra.sh` script (run by CI):
+1. Creates pc1 and pc2 VMs (if they don't exist)
+2. Installs Ubuntu with btrfs using Hetzner's `installimage`
+3. Injects all `SSH_AUTHORIZED_KEY_*` secrets into VMs
 4. Runs `configure-hosts.sh` to setup inter-VM networking
+5. Creates baseline snapshots
 
 This is a one-time operation; after provisioning, VMs persist and are reset using btrfs snapshot rollback.
 
@@ -230,7 +228,7 @@ tests/infrastructure/scripts/lock.sh $HOLDER acquire
 tests/infrastructure/scripts/lock.sh $HOLDER release
 ```
 
-The lock is stored as **Hetzner Server Labels** on the `pc-switcher-pc1` server (not as a file on the VM). This approach survives VM reboots and snapshot rollbacks:
+The lock is stored as **Hetzner Server Labels** on the `pc1` server (not as a file on the VM). This approach survives VM reboots and snapshot rollbacks:
 
 - **Lock labels**: `lock_holder` (identifier) and `lock_acquired` (ISO8601 timestamp)
 - **Lock holder format**: `ci-<run_id>` for CI jobs, `local-<username>` for local runs
@@ -293,7 +291,9 @@ The CI pipeline runs:
 | Secret | Description |
 |--------|-------------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
-| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access |
+| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for CI VM access |
+| `SSH_AUTHORIZED_KEY_CI` | CI public key for VM access |
+| `SSH_AUTHORIZED_KEY_*` | Developer public keys (one per developer/machine) |
 
 ### Concurrency Control
 
@@ -337,10 +337,11 @@ testpaths = tests
 
 ### For Integration Test Development
 
-1. Ensure VMs are provisioned: `cd tests/infrastructure && ./scripts/provision-vms.sh`
-2. Reset VMs to baseline: `./scripts/reset-vm.sh pc1 && ./scripts/reset-vm.sh pc2`
-3. Run integration tests with env vars set
-4. Tests clean up after themselves
+1. Ensure your SSH public key is registered as a `SSH_AUTHORIZED_KEY_*` secret
+2. Ensure VMs exist (trigger CI if needed: `gh workflow run test.yml`)
+3. Reset VMs to baseline: `./scripts/reset-vm.sh $PC1_IP && ./scripts/reset-vm.sh $PC2_IP`
+4. Run integration tests with env vars set
+5. Tests clean up after themselves
 
 ### For Testing install.sh
 

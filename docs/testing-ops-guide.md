@@ -38,6 +38,28 @@ VMs are expected to run persistently. Reset is performed via btrfs snapshot roll
 
 ## CI Secrets Configuration
 
+### About security of secrets in public GitHub repositories
+
+#### Who Can See Secrets
+
+GitHub Secrets in public repositories are **never visible to anyone** - not even repository administrators or collaborators. The secret values themselves are encrypted and hidden from all users through the GitHub interface and API.
+
+#### Access During Workflow Execution
+
+While secret values remain hidden, they can be accessed during GitHub Actions workflow execution with specific restrictions for public repositories:
+
+- **Repository collaborators**: Can create and use secrets in workflows they author
+- **Pull requests from forks**: Do **not** have access to secrets (except the read-only `GITHUB_TOKEN`), preventing attackers from exfiltrating secrets via malicious pull requests
+- **Workflow logs**: Automatically mask all secret values, preventing accidental exposure in build output
+
+#### Management Permissions
+
+Only users with **admin access** to a repository can create, update, or view the list of secret names (though not their values) in the Settings interface. For organization-level secrets, admin access at the organization level is required.
+
+#### Security Considerations
+
+When using secrets in public repositories, be cautious about the `pull_request_target` event, which does provide access to secrets for fork pull requests. Additionally, avoid using third-party GitHub Actions directly by their tags or branches - fork them and use your own fork to prevent modified actions from capturing secrets.
+
 ### Required Secrets
 
 GitHub repository requires these secrets for integration test automation:
@@ -46,6 +68,10 @@ GitHub repository requires these secrets for integration test automation:
 |-------------|---------|--------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API access | API token string |
 | `HETZNER_SSH_PRIVATE_KEY` | SSH access to test VMs | ed25519 private key (PEM format) |
+| `SSH_AUTHORIZED_KEY_CI` | CI public key for VM access | ed25519 public key |
+| `SSH_AUTHORIZED_KEY_*` | Developer public keys (one per developer/machine) | ed25519 public key |
+
+**Note**: All `SSH_AUTHORIZED_KEY_*` secrets are automatically collected and injected into VMs during provisioning. This allows both CI and authorized developers to access the VMs.
 
 ### Creating HCLOUD_TOKEN
 
@@ -57,7 +83,7 @@ GitHub repository requires these secrets for integration test automation:
 6. Permissions: **Read & Write**
 7. Copy the token (shown only once)
 
-### Creating HETZNER_SSH_PRIVATE_KEY
+### Creating SSH Key Secrets
 
 Generate an ed25519 SSH key pair specifically for CI:
 
@@ -66,13 +92,33 @@ ssh-keygen -t ed25519 -C "pc-switcher-ci@github" -f ~/.ssh/pc-switcher-ci -N ""
 ```
 
 This creates:
-- **Private key**: `~/.ssh/pc-switcher-ci` (add to GitHub secrets)
-- **Public key**: `~/.ssh/pc-switcher-ci.pub` (used by provisioning script)
+- **Private key**: `~/.ssh/pc-switcher-ci` → add as `HETZNER_SSH_PRIVATE_KEY` secret
+- **Public key**: `~/.ssh/pc-switcher-ci.pub` → add as `SSH_AUTHORIZED_KEY_CI` secret
 
 **Format requirements**:
 - Key type: ed25519 (required)
 - Format: PEM (default for OpenSSH)
 - No passphrase (CI cannot handle interactive prompts)
+
+Remove the keys from your local machine after adding them as secrets:
+```bash
+rm ~/.ssh/pc-switcher-ci ~/.ssh/pc-switcher-ci.pub
+```
+
+### Adding Developer SSH Keys
+
+For each developer who needs VM access, add their public key as a secret:
+
+1. Get the developer's public key:
+   ```bash
+   cat ~/.ssh/id_ed25519.pub
+   ```
+
+2. Add as GitHub secret with name `SSH_AUTHORIZED_KEY_<NAME>`:
+   - Example: `SSH_AUTHORIZED_KEY_JANFR_LAPTOP`
+   - Example: `SSH_AUTHORIZED_KEY_JANFR_WORKSTATION`
+
+The provisioning script automatically collects all `SSH_AUTHORIZED_KEY_*` secrets and injects them into the VMs' `authorized_keys` file.
 
 ### Adding Secrets to GitHub Repository
 
@@ -85,23 +131,55 @@ This creates:
 5. Add `HETZNER_SSH_PRIVATE_KEY`:
    - Name: `HETZNER_SSH_PRIVATE_KEY`
    - Value: Paste the **entire private key file** including header/footer:
-     ```
+     ```text
      -----BEGIN OPENSSH PRIVATE KEY-----
      ... (key content) ...
      -----END OPENSSH PRIVATE KEY-----
      ```
+6. Add `SSH_AUTHORIZED_KEY_CI`:
+   - Name: `SSH_AUTHORIZED_KEY_CI`
+   - Value: Paste the CI public key (single line starting with `ssh-ed25519`)
+7. Add developer public keys:
+   - Name: `SSH_AUTHORIZED_KEY_<DEVELOPER_NAME>`
+   - Value: Developer's public key (single line starting with `ssh-ed25519`)
 
-**Verification**: After adding secrets, push a PR to main branch. The integration test job should run (or skip with clear message if additional setup is needed).
+**Verification**: After adding secrets, trigger the integration test workflow. VMs will be provisioned with all authorized keys.
+
+### Adding a New Developer
+
+To grant VM access to a new developer:
+
+1. Get their public key: `cat ~/.ssh/id_ed25519.pub`
+2. Add as GitHub secret: `SSH_AUTHORIZED_KEY_<NAME>`
+3. Delete existing VMs to force reprovisioning:
+   ```bash
+   hcloud server delete pc1
+   hcloud server delete pc2
+   ```
+4. Trigger CI workflow: `gh workflow run test.yml`
+
+No workflow file changes are needed - secrets are enumerated dynamically.
 
 ---
 
 ## VM Provisioning
 
-### Prerequisites
+**Important**: VM provisioning can only be performed by GitHub CI. This ensures all authorized SSH keys are properly configured from secrets. Local provisioning is blocked.
+
+### CI-Only Provisioning Model
+
+VMs are provisioned exclusively by GitHub Actions CI:
+
+1. **First-time setup**: Trigger the integration test workflow manually or via a PR
+2. **Reprovisioning**: Delete VMs via hcloud CLI, then trigger CI
+3. **Adding developers**: Add their public key as a secret, delete VMs, trigger CI
+
+Local developers use the VMs via SSH but cannot provision them. If VMs don't exist when running local tests, you'll see a clear error with instructions to trigger CI.
+
+### Prerequisites (for managing infrastructure)
 
 1. Hetzner Cloud account with API token
-2. SSH key pair for VM access
-3. `hcloud` CLI installed locally
+2. `hcloud` CLI installed locally (for VM management, not provisioning)
 
 ### Installing hcloud CLI
 
@@ -143,52 +221,37 @@ If you don't have a project yet:
 
 ### SSH Key Setup
 
-The provisioning script uses your SSH public key for VM access.
+SSH keys are managed via GitHub Secrets (see "CI Secrets Configuration" section above).
 
-**Default location**: `~/.ssh/id_ed25519.pub`
+All `SSH_AUTHORIZED_KEY_*` secrets are:
+1. Collected by the CI workflow during provisioning
+2. Injected into `testuser` account on both VMs
+3. Included in the baseline snapshot for persistent access
 
-**Custom location**: Set `SSH_PUBLIC_KEY` environment variable:
-```bash
-export SSH_PUBLIC_KEY="$HOME/.ssh/pc-switcher-ci.pub"
-```
+### How Provisioning Works
 
-The public key is:
-1. Added to Hetzner Cloud SSH keys (visible in console)
-2. Injected into `testuser` account on both VMs during provisioning
-3. Used by CI for SSH access
+Provisioning is triggered automatically by the CI workflow when VMs don't exist. The script:
 
-### Running provision-test-infra.sh
-
-**One-time provisioning**:
-
-```bash
-cd tests/infrastructure
-
-# Set environment variables
-export HCLOUD_TOKEN="your-hetzner-api-token"
-export SSH_PUBLIC_KEY="$HOME/.ssh/id_ed25519.pub"  # Optional, defaults to this path
-
-# Run provisioning script
-./scripts/provision-test-infra.sh
-```
-
-**What the script does**:
-
-1. Creates SSH key in Hetzner Cloud (if not exists)
-2. Creates pc1 and pc2 VMs (CX23, Ubuntu 24.04, location: fsn1)
-3. Runs OS installation with btrfs on each VM via Hetzner's `installimage`
-4. Configures VMs:
+1. Creates pc1 and pc2 VMs (CX23, Ubuntu 24.04, location: fsn1)
+2. Runs OS installation with btrfs on each VM via Hetzner's `installimage`
+3. Configures VMs:
    - Creates `testuser` account with sudo access
-   - Injects SSH public key for access
+   - Injects all `SSH_AUTHORIZED_KEY_*` secrets for access
    - Sets up `/etc/hosts` entries for inter-VM communication
    - Generates and exchanges SSH keys for pc1↔pc2 communication
-5. Creates baseline btrfs snapshots (`/.snapshots/baseline/@` and `/.snapshots/baseline/@home`)
+4. Creates baseline btrfs snapshots (`/.snapshots/baseline/@` and `/.snapshots/baseline/@home`)
 
-**Duration**: Approximately 10-15 minutes for full provisioning (including VM creation, OS installation, and configuration).
+**Duration**: Approximately 10-15 minutes for full provisioning.
 
-**Idempotency**: The script is safe to run multiple times. It skips creation if VMs already exist.
+**Idempotency**: The script skips provisioning if VMs already exist and are configured.
 
-**Output**: VM IP addresses and connection info are displayed at completion.
+**Triggering provisioning**:
+```bash
+# Via GitHub CLI
+gh workflow run test.yml
+
+# Or push a PR to main branch
+```
 
 ---
 
@@ -225,7 +288,8 @@ Output shows IP addresses for pc1 and pc2.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API token | - |
-| `SSH_PUBLIC_KEY` | Path to SSH public key | `~/.ssh/id_ed25519.pub` |
+
+**Note**: `SSH_PUBLIC_KEY` is no longer used. SSH keys are now managed via GitHub Secrets (`SSH_AUTHORIZED_KEY_*`).
 
 ### CI-Specific Variables
 
@@ -303,14 +367,13 @@ hcloud server list
 
 ### Reprovisioning After Destruction
 
-Simply run `provision-test-infra.sh` again:
+Trigger the CI workflow to reprovision:
 
 ```bash
-cd tests/infrastructure
-./scripts/provision-test-infra.sh
+gh workflow run test.yml
 ```
 
-The script detects missing VMs and provisions them from scratch (including OS installation and baseline snapshot creation).
+The CI workflow detects missing VMs and provisions them from scratch (including OS installation and baseline snapshot creation).
 
 ---
 
@@ -347,16 +410,16 @@ The script detects missing VMs and provisions them from scratch (including OS in
    hcloud server delete pc2
    ```
 
-2. Re-run provisioning:
+2. Trigger CI workflow to reprovision:
    ```bash
-   ./scripts/provision-test-infra.sh
+   gh workflow run test.yml
    ```
 
 3. If provisioning fails again:
-   - Verify `HCLOUD_TOKEN` is valid
-   - Verify SSH public key exists at `$SSH_PUBLIC_KEY`
+   - Verify `HCLOUD_TOKEN` secret is valid
+   - Verify `SSH_AUTHORIZED_KEY_*` secrets are configured
    - Check Hetzner Cloud status page for service issues
-   - Review error messages in script output
+   - Review CI workflow logs in GitHub Actions
 
 ---
 
@@ -445,10 +508,9 @@ If baseline snapshots are missing or corrupted:
    hcloud server delete pc2
    ```
 
-2. Re-provision from scratch:
+2. Trigger CI to reprovision:
    ```bash
-   cd tests/infrastructure
-   ./scripts/provision-test-infra.sh
+   gh workflow run test.yml
    ```
 
 This recreates VMs with fresh baseline snapshots.
@@ -520,9 +582,8 @@ hcloud server poweron pc2
 
 2. If hard reset fails, destroy and reprovision:
    ```bash
-   hcloud server delete pc1
-   cd tests/infrastructure
-   ./scripts/provision-test-infra.sh
+   hcloud server delete pc1 pc2
+   gh workflow run test.yml
    ```
 
 **Option 4: Network configuration issue**
@@ -556,12 +617,11 @@ hcloud server poweron pc2
 
 #### VMs Not Provisioned
 
-**Error**: "VMs do not exist and cannot be provisioned (missing secrets)"
+**Error**: "VMs don't exist and provisioning is only allowed from GitHub CI"
 
 **Resolution**:
-1. Ensure secrets are configured (see above)
-2. Manually trigger provisioning via workflow_dispatch
-3. Or provision manually then push code
+1. Ensure all secrets are configured (`HCLOUD_TOKEN`, `HETZNER_SSH_PRIVATE_KEY`, `SSH_AUTHORIZED_KEY_*`)
+2. Trigger the CI workflow: `gh workflow run test.yml`
 
 #### VM Reset Timeout
 
@@ -582,8 +642,12 @@ hcloud server poweron pc2
 **Error**: "Permission denied (publickey)" or "Connection timeout"
 
 **Resolution**:
-1. Verify `HETZNER_SSH_PRIVATE_KEY` matches public key on VMs
-2. Regenerate SSH keys and reprovision VMs if needed
+1. Verify your SSH public key is added as a `SSH_AUTHORIZED_KEY_*` secret
+2. Delete VMs and reprovision to apply new keys:
+   ```bash
+   hcloud server delete pc1 pc2
+   gh workflow run test.yml
+   ```
 3. Check VM firewall rules
 
 #### Lock Acquisition Timeout
@@ -704,16 +768,16 @@ All infrastructure scripts are in `tests/infrastructure/scripts/`:
 
 | Problem | Quick Fix |
 |---------|-----------|
-| Provisioning fails | Delete VMs, re-run `provision-test-infra.sh` |
+| Provisioning fails | Delete VMs, trigger CI: `gh workflow run test.yml` |
 | Lock stuck | `hcloud server remove-label pc1 lock_holder lock_acquired` |
 | VM unreachable | `hcloud server reboot pc1` |
 | Baseline corrupt | Delete VMs, re-provision |
 | CI secrets missing | Add to Settings > Secrets and variables > Actions |
-| SSH permission denied | Verify `HETZNER_SSH_PRIVATE_KEY` matches public key on VMs |
+| SSH permission denied | Add your public key as `SSH_AUTHORIZED_KEY_*` secret, reprovision |
 | Reset timeout | Check VM status, manually reboot if needed |
 | Integration tests skip | Check environment variables or CI secrets |
 
 ---
 
 **Last Updated**: 2025-12-06
-**Document Version**: 1.0
+**Document Version**: 1.1 (CI-only provisioning, multi-key SSH support)

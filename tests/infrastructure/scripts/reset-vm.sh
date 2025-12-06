@@ -19,7 +19,7 @@ Environment Variables:
 
 Example:
   $(basename "$0") 192.168.1.100
-  $(basename "$0") pc-switcher-pc1
+  $(basename "$0") pc1
 
 Prerequisites:
   - Baseline snapshots must exist (/.snapshots/baseline/@ and /.snapshots/baseline/@home)

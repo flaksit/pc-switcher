@@ -9,15 +9,15 @@ set -euo pipefail
 #   ./create-vm.sh <VM_NAME>
 #
 # Arguments:
-#   VM_NAME    Name for the VM (e.g., "pc-switcher-pc1")
+#   VM_NAME    Name for the VM (e.g., "pc1")
 #
 # Environment Variables:
 #   HCLOUD_TOKEN           (required) Hetzner Cloud API token
 #   SSH_PUBLIC_KEY         (optional) Path to SSH public key (default: ~/.ssh/id_ed25519.pub)
 #
 # Examples:
-#   ./create-vm.sh pc-switcher-pc1
-#   SSH_PUBLIC_KEY=~/.ssh/mykey.pub ./create-vm.sh pc-switcher-pc2
+#   ./create-vm.sh pc1
+#   SSH_PUBLIC_KEY=~/.ssh/mykey.pub ./create-vm.sh pc2
 
 # Configuration
 readonly LOCATION="fsn1"
@@ -54,15 +54,15 @@ Usage: $0 <VM_NAME>
 Creates a single Hetzner Cloud VM and installs Ubuntu 24.04 with btrfs filesystem.
 
 Arguments:
-  VM_NAME    Name for the VM (e.g., "pc-switcher-pc1")
+  VM_NAME    Name for the VM (e.g., "pc1")
 
 Environment Variables:
   HCLOUD_TOKEN       (required) Hetzner Cloud API token
   SSH_PUBLIC_KEY     (optional) Path to SSH public key (default: ~/.ssh/id_ed25519.pub)
 
 Examples:
-  $0 pc-switcher-pc1
-  SSH_PUBLIC_KEY=~/.ssh/mykey.pub $0 pc-switcher-pc2
+  $0 pc1
+  SSH_PUBLIC_KEY=~/.ssh/mykey.pub $0 pc2
 
 VM Specifications:
   - Server Type: CX23 (2 shared vCPUs, 4GB RAM)

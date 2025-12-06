@@ -74,7 +74,7 @@ def _check_vms_exist() -> bool:
 
     try:
         result = subprocess.run(
-            ["hcloud", "server", "describe", "pc-switcher-pc1"],
+            ["hcloud", "server", "describe", "pc1"],
             check=False,
             capture_output=True,
             text=True,

@@ -12,8 +12,8 @@ fi
 
 # Configuration
 readonly SSH_USER="testuser"
-readonly VM1_NAME="pc-switcher-pc1"
-readonly VM2_NAME="pc-switcher-pc2"
+readonly VM1_NAME="pc1"
+readonly VM2_NAME="pc2"
 readonly SNAPSHOT_BASE_DIR="/.snapshots/baseline"
 readonly ROOT_SNAPSHOT="${SNAPSHOT_BASE_DIR}/@"
 readonly HOME_SNAPSHOT="${SNAPSHOT_BASE_DIR}/@home"

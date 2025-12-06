@@ -6,14 +6,14 @@ set -euo pipefail
 # SSH key injection, and baseline services.
 
 if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 <VM_HOST> <SSH_PUBLIC_KEY>" >&2
+    echo "Usage: $0 <VM_HOST> <SSH_AUTHORIZED_KEYS>" >&2
     echo "  VM_HOST: IP address or hostname of the target VM" >&2
-    echo "  SSH_PUBLIC_KEY: SSH public key content for testuser" >&2
+    echo "  SSH_AUTHORIZED_KEYS: SSH public keys (newline-separated) for testuser" >&2
     exit 1
 fi
 
 VM_HOST="$1"
-SSH_PUBLIC_KEY="$2"
+SSH_AUTHORIZED_KEYS="$2"
 
 echo "Configuring VM at ${VM_HOST}..."
 
@@ -42,8 +42,9 @@ mkdir -p /home/testuser/.ssh
 chmod 700 /home/testuser/.ssh
 EOF
 
-# Inject SSH public key (done separately to handle variable expansion)
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@"${VM_HOST}" "echo '${SSH_PUBLIC_KEY}' > /home/testuser/.ssh/authorized_keys"
+# Inject SSH public keys (done separately to handle variable expansion)
+# Using printf to preserve newlines in multi-key input
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@"${VM_HOST}" "printf '%s\n' '${SSH_AUTHORIZED_KEYS}' > /home/testuser/.ssh/authorized_keys"
 
 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@"${VM_HOST}" << 'EOF'
 set -euo pipefail

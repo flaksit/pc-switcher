@@ -29,5 +29,5 @@ The plan is comprehensive and well-aligned with the specification. It correctly 
 
 4. **Minor: VM Naming Consistency**
     - **Location**: `plan.md` vs `data-model.md`
-    - **Issue**: `plan.md` uses `pc1`/`pc2` shorthand in text but `pc-switcher-pc1` in code blocks. `data-model.md` uses `pc-switcher-pc1`.
-    - **Recommendation**: Ensure `pc-switcher-pc1` and `pc-switcher-pc2` are consistently used as the canonical VM names/hostnames in all technical specifications to avoid ambiguity.
+    - **Issue**: `plan.md` uses `pc1`/`pc2` shorthand in text but `pc1` in code blocks. `data-model.md` uses `pc1`.
+    - **Recommendation**: Ensure `pc1` and `pc2` are consistently used as the canonical VM names/hostnames in all technical specifications to avoid ambiguity.

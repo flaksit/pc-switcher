@@ -104,7 +104,7 @@ The lock file is stored on pc1 VM at `/tmp/pc-switcher-integration-test.lock`.
 
 To:
 ```
-The lock is stored as **Hetzner Server Labels** on the `pc-switcher-pc1` server (not as a file on the VM). This approach survives VM reboots and snapshot rollbacks:
+The lock is stored as **Hetzner Server Labels** on the `pc1` server (not as a file on the VM). This approach survives VM reboots and snapshot rollbacks:
 - **Lock labels**: `lock_holder` (identifier) and `lock_acquired` (ISO8601 timestamp)
 - **Lock holder format**: `ci-<run_id>` for CI jobs, `local-<username>` for local runs
 - **Maximum wait time**: 5 minutes with 10-second retry intervals

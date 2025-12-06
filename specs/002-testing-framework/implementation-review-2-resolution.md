@@ -40,8 +40,8 @@ echo "  $SCRIPT_DIR/reset-vm.sh $PC1_IP"
 echo "  $SCRIPT_DIR/reset-vm.sh $PC2_IP"
 echo
 echo "To destroy VMs (manual cleanup):"
-echo "  hcloud server delete pc-switcher-pc1"
-echo "  hcloud server delete pc-switcher-pc2"
+echo "  hcloud server delete pc1"
+echo "  hcloud server delete pc2"
 ```
 
 **Rationale**:

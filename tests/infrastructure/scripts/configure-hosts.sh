@@ -10,8 +10,8 @@ if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
 fi
 
 # VM names
-VM1="pc-switcher-pc1"
-VM2="pc-switcher-pc2"
+VM1="pc1"
+VM2="pc2"
 
 echo "Fetching VM IP addresses..."
 PC1_IP=$(hcloud server ip "$VM1")

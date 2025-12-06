@@ -43,16 +43,19 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H $(hcloud server ip pc-switcher-pc1 || echo "") >> ~/.ssh/known_hosts 2>/dev/null || true
-          ssh-keyscan -H $(hcloud server ip pc-switcher-pc2 || echo "") >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H $(hcloud server ip pc1 || echo "") >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H $(hcloud server ip pc2 || echo "") >> ~/.ssh/known_hosts 2>/dev/null || true
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Provision test infrastructure
+        env:
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
-          export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
-          export SSH_PUBLIC_KEY="$HOME/.ssh/id_ed25519.pub"
-          ssh-keygen -y -f ~/.ssh/id_ed25519 > "$SSH_PUBLIC_KEY"
+          # Collect all SSH_AUTHORIZED_KEY_* secrets into single variable
+          SSH_AUTHORIZED_KEYS=$(echo "$SECRETS_JSON" | jq -r 'to_entries[] | select(.key | startswith("SSH_AUTHORIZED_KEY_")) | .value')
+          export SSH_AUTHORIZED_KEYS
           tests/infrastructure/scripts/provision-test-infra.sh 2>&1 | tee provision-output.log
         timeout-minutes: 30
 
@@ -60,8 +63,8 @@ jobs:
         run: |
           export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
           export PC_SWITCHER_TEST_USER=testuser
-          PC1_IP=$(hcloud server ip pc-switcher-pc1)
-          PC2_IP=$(hcloud server ip pc-switcher-pc2)
+          PC1_IP=$(hcloud server ip pc1)
+          PC2_IP=$(hcloud server ip pc2)
           {
             tests/infrastructure/scripts/reset-vm.sh "$PC1_IP"
             tests/infrastructure/scripts/reset-vm.sh "$PC2_IP"
@@ -71,8 +74,8 @@ jobs:
       - name: Get VM IPs
         id: vm_ips
         run: |
-          PC1_IP=$(hcloud server ip pc-switcher-pc1)
-          PC2_IP=$(hcloud server ip pc-switcher-pc2)
+          PC1_IP=$(hcloud server ip pc1)
+          PC2_IP=$(hcloud server ip pc2)
           echo "pc1_ip=$PC1_IP" >> $GITHUB_OUTPUT
           echo "pc2_ip=$PC2_IP" >> $GITHUB_OUTPUT
         env:

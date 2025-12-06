@@ -11,13 +11,13 @@
 # Environment:
 #   HCLOUD_TOKEN: Required for Hetzner API access
 #
-# Lock is stored as labels on the pc-switcher-pc1 server:
+# Lock is stored as labels on the pc1 server:
 #   lock_holder: Identifier of the current lock holder
 #   lock_acquired: ISO8601 timestamp when lock was acquired
 
 set -euo pipefail
 
-readonly SERVER_NAME="pc-switcher-pc1"
+readonly SERVER_NAME="pc1"
 readonly LOCK_TIMEOUT_SECONDS=300  # 5 minutes
 readonly RETRY_INTERVAL_SECONDS=10
 

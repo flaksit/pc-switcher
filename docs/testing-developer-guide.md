@@ -510,7 +510,7 @@ sudo apt-get install hcloud
 brew install hcloud
 ```
 
-### Environment Variables
+### Environment Variables for Running Integration Tests on the VMs From Local Code
 
 Set up environment variables for local integration testing. Create a file `~/.pc-switcher-test-env`:
 
@@ -518,13 +518,10 @@ Set up environment variables for local integration testing. Create a file `~/.pc
 # Hetzner Cloud API token (from https://console.hetzner.cloud/)
 export HCLOUD_TOKEN="your-token-here"
 
-# Test VM hostnames/IPs (after provisioning)
+# Test VM hostnames/IPs (get from: hcloud server list)
 export PC_SWITCHER_TEST_PC1_HOST="192.0.2.1"
 export PC_SWITCHER_TEST_PC2_HOST="192.0.2.2"
-export PC_SWITCHER_TEST_USER="root"
-
-# SSH key (optional, defaults to ~/.ssh/id_ed25519.pub)
-export SSH_PUBLIC_KEY="$HOME/.ssh/id_ed25519.pub"
+export PC_SWITCHER_TEST_USER="testuser"
 ```
 
 Source this file before running integration tests:
@@ -533,23 +530,22 @@ Source this file before running integration tests:
 source ~/.pc-switcher-test-env
 ```
 
-### Provisioning Local Test VMs
+### Test VM Access
 
-Provision test VMs once (they persist between test runs):
+**Important**: Test VMs are provisioned exclusively by GitHub CI. Local provisioning is not supported.
 
-```bash
-cd tests/infrastructure
+Before running integration tests locally:
 
-# Provision VMs (creates pc-switcher-pc1 and pc-switcher-pc2)
-./scripts/provision-test-infra.sh
-```
+1. **Ensure your SSH public key is registered**:
+   - Ask a repository admin to add your public key (`~/.ssh/id_ed25519.pub`) as a GitHub secret: `SSH_AUTHORIZED_KEY_<YOUR_NAME>`
+   - VMs must be reprovisioned after adding your key (delete VMs, trigger CI)
 
-This script:
-1. Creates two VMs in Hetzner Cloud
-2. Installs Ubuntu 24.04 with btrfs filesystem
-3. Sets up SSH access
-4. Configures inter-VM networking
-5. Creates baseline snapshots
+2. **Ensure VMs exist**:
+   - VMs are created by the CI workflow when it runs
+   - If VMs don't exist, trigger CI: `gh workflow run test.yml`
+   - Get VM IPs: `hcloud server list`
+
+3. **Update your environment file** with the correct VM IPs
 
 The VMs remain running and are reset using btrfs snapshot rollback before each test run.
 
@@ -630,8 +626,8 @@ source ~/.pc-switcher-test-env
 
 2. Get current IP addresses:
    ```bash
-   hcloud server ip pc-switcher-pc1
-   hcloud server ip pc-switcher-pc2
+   hcloud server ip pc1
+   hcloud server ip pc2
    ```
 
 3. Update environment variables with correct IPs.
@@ -663,8 +659,8 @@ source ~/.pc-switcher-test-env
 2. If lock is stale (holder is no longer running), manually remove it:
    ```bash
    # Remove lock labels from the server
-   hcloud server remove-label pc-switcher-pc1 lock_holder
-   hcloud server remove-label pc-switcher-pc1 lock_acquired
+   hcloud server remove-label pc1 lock_holder
+   hcloud server remove-label pc1 lock_acquired
    ```
 
 3. Wait for other test runs to complete (check CI pipeline).
@@ -683,10 +679,13 @@ source ~/.pc-switcher-test-env
    ssh testuser@$PC_SWITCHER_TEST_PC1_HOST "sudo btrfs subvolume show /.snapshots/baseline/@home"
    ```
 
-2. Recreate baseline snapshots by re-provisioning the VMs:
+2. Recreate baseline snapshots by reprovisioning the VMs:
    ```bash
-   cd tests/infrastructure
-   ./scripts/provision-test-infra.sh
+   # Delete VMs
+   hcloud server delete pc1 pc2
+
+   # Trigger CI to reprovision
+   gh workflow run test.yml
    ```
 
    This will recreate the baseline snapshots at `/.snapshots/baseline/` on both VMs.
@@ -714,6 +713,8 @@ source ~/.pc-switcher-test-env
 2. Ensure CI has required secrets configured:
    - `HCLOUD_TOKEN`
    - `HETZNER_SSH_PRIVATE_KEY`
+   - `SSH_AUTHORIZED_KEY_CI`
+   - `SSH_AUTHORIZED_KEY_*` (developer keys)
 
 3. Add timeouts to flaky tests:
    ```python
