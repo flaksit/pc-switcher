@@ -1,7 +1,9 @@
 THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
 
+test if EFI partition is needed
 
-
+---
+/speckit.implement Delegate as much as possible to subagents, so that you can keep your context clean and you can focus on your task as project manager and orchestrator, but ensure that the final result is a coherent, working solution. Launch subagents in parallel if their tasks don't conflict.
 
 ---
 
@@ -258,8 +260,8 @@ Good docs!
 Feedback about @docs/testing-framework.md:
 - Snapshot-Based Reset
   - only talks about resetting `/` (`@`). We need to reset `@home` to an r/w copy of the original `@home`-snapshot as well and cleanup /.snapshots of anything that might linger (keeping of course our base snapshots of `@` and `@home`
-  - for clarity (be consistent with flat layout), the snapshots subvolume is called `@snapshots` and it is **mounted** at /.snapshot
-- Runing Tests > Prerequisites
+  - for clarity (be consistent with flat layout), the snapshots subvolume is called `@snapshots` and it is **mounted** at /.snapshots
+- Running Tests > Prerequisites
   - `uv sync --dev` does not exist. The dev dependencies are installed by default. Running `sync` is not necessary at all, if I understand well: locking and syncing is done automatically when running `uv run` (which we do right after)
 
 Feedback about specs/001-foundation/testing-report.md:
