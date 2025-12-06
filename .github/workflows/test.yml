@@ -1,0 +1,168 @@
+name: Test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run basedpyright
+        run: uv run basedpyright
+
+      - name: Run ruff check
+        run: uv run ruff check
+
+      - name: Run ruff format --check
+        run: uv run ruff format --check
+
+      - name: Run codespell
+        run: uv run codespell
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run unit and contract tests
+        run: uv run pytest tests/unit tests/contract -v
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    # Only run integration tests on PRs to main from same repo (not forks) or manual dispatch
+    if: |
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
+    concurrency:
+      group: pc-switcher-integration
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets availability
+        id: check_secrets
+        run: |
+          if [[ -z "${{ secrets.HCLOUD_TOKEN }}" ]] || [[ -z "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" ]]; then
+            echo "secrets_available=false" >> $GITHUB_OUTPUT
+            echo "::notice::Integration tests skipped: Required secrets (HCLOUD_TOKEN, HETZNER_SSH_PRIVATE_KEY) are not available"
+          else
+            echo "secrets_available=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Exit if secrets missing
+        if: steps.check_secrets.outputs.secrets_available == 'false'
+        run: exit 0
+
+      - name: Install uv
+        if: steps.check_secrets.outputs.secrets_available == 'true'
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        if: steps.check_secrets.outputs.secrets_available == 'true'
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        if: steps.check_secrets.outputs.secrets_available == 'true'
+        run: uv sync --dev
+
+      - name: Install hcloud CLI
+        if: steps.check_secrets.outputs.secrets_available == 'true'
+        run: |
+          curl -L https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz | tar xz
+          sudo mv hcloud /usr/local/bin/
+          hcloud version
+
+      - name: Setup SSH key
+        if: steps.check_secrets.outputs.secrets_available == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H $(hcloud server ip pc-switcher-pc1 || echo "") >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H $(hcloud server ip pc-switcher-pc2 || echo "") >> ~/.ssh/known_hosts 2>/dev/null || true
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+
+      - name: Provision test infrastructure
+        if: steps.check_secrets.outputs.secrets_available == 'true'
+        run: |
+          export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
+          export SSH_PUBLIC_KEY="$HOME/.ssh/id_ed25519.pub"
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > "$SSH_PUBLIC_KEY"
+          tests/infrastructure/scripts/provision-test-infra.sh
+        timeout-minutes: 30
+
+      - name: Reset VMs to baseline state
+        if: steps.check_secrets.outputs.secrets_available == 'true'
+        run: |
+          export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
+          export PC_SWITCHER_TEST_USER=testuser
+          PC1_IP=$(hcloud server ip pc-switcher-pc1)
+          PC2_IP=$(hcloud server ip pc-switcher-pc2)
+          tests/infrastructure/scripts/reset-vm.sh "$PC1_IP"
+          tests/infrastructure/scripts/reset-vm.sh "$PC2_IP"
+        timeout-minutes: 10
+
+      - name: Get VM IPs
+        if: steps.check_secrets.outputs.secrets_available == 'true'
+        id: vm_ips
+        run: |
+          PC1_IP=$(hcloud server ip pc-switcher-pc1)
+          PC2_IP=$(hcloud server ip pc-switcher-pc2)
+          echo "pc1_ip=$PC1_IP" >> $GITHUB_OUTPUT
+          echo "pc2_ip=$PC2_IP" >> $GITHUB_OUTPUT
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+
+      - name: Run integration tests
+        if: steps.check_secrets.outputs.secrets_available == 'true'
+        run: uv run pytest -m integration -v
+        env:
+          PC_SWITCHER_TEST_PC1_HOST: ${{ steps.vm_ips.outputs.pc1_ip }}
+          PC_SWITCHER_TEST_PC2_HOST: ${{ steps.vm_ips.outputs.pc2_ip }}
+          PC_SWITCHER_TEST_USER: testuser
+          CI_JOB_ID: ${{ github.run_id }}
+        timeout-minutes: 30
+
+      - name: Upload pytest output
+        if: always() && steps.check_secrets.outputs.secrets_available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output
+          path: pytest-output.log
+          retention-days: 14
+          if-no-files-found: ignore
