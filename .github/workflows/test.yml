@@ -42,11 +42,13 @@ jobs:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Provision test infrastructure
-        # env: ${{ secrets }}
+        env:
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
           set -o pipefail
           # Collect all SSH_AUTHORIZED_KEY_* secrets into single variable
-          SSH_AUTHORIZED_KEYS=$(env | grep '^SSH_AUTHORIZED_KEY_' | sed 's/^[^=]*=//')
+          SSH_AUTHORIZED_KEYS=$(echo "$SECRETS_JSON" | jq -r 'to_entries[] | select(.key | startswith("SSH_AUTHORIZED_KEY_")) | .value')
           export SSH_AUTHORIZED_KEYS
           tests/infrastructure/scripts/provision-test-infra.sh 2>&1 | tee provision-output.log
         timeout-minutes: 30
