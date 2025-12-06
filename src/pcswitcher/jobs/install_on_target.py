@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from packaging.version import Version
-
 from pcswitcher.jobs.base import SystemJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.models import Host, LogLevel
-from pcswitcher.version import get_this_version, parse_version_from_cli_output
+from pcswitcher.version import Version, get_this_version, parse_version_str_from_cli_output
 
 if TYPE_CHECKING:
     from pcswitcher.models import ValidationError
@@ -43,13 +41,13 @@ class InstallOnTargetJob(SystemJob):
         Returns:
             List of ValidationError if version check fails, empty list otherwise
         """
-        source_version = Version(get_this_version())
+        source_version = Version.parse_pep440(get_this_version())
 
         # Check target version
         result = await self.target.run_command("pc-switcher --version 2>/dev/null")
         if result.success:
             # Parse version string from output (e.g., "pc-switcher 0.4.0" -> "0.4.0")
-            target_version = Version(parse_version_from_cli_output(result.stdout))
+            target_version = Version.parse(parse_version_str_from_cli_output(result.stdout))
             if target_version > source_version:
                 return [
                     self._validation_error(
@@ -62,13 +60,13 @@ class InstallOnTargetJob(SystemJob):
 
     async def execute(self) -> None:
         """Install or upgrade pc-switcher on target if needed."""
-        source_version = Version(get_this_version())  # e.g., "0.4.0"
+        source_version = Version.parse_pep440(get_this_version())
 
         # Check target version (already validated in validate phase)
         result = await self.target.run_command("pc-switcher --version 2>/dev/null")
         if result.success:
             # Parse version string from output (e.g., "pc-switcher 0.4.0" -> "0.4.0")
-            target_version = Version(parse_version_from_cli_output(result.stdout))
+            target_version = Version.parse(parse_version_str_from_cli_output(result.stdout))
             if target_version == source_version:
                 self._log(
                     Host.TARGET,
