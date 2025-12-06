@@ -13,17 +13,17 @@ set -euo pipefail
 #
 # Environment Variables:
 #   HCLOUD_TOKEN           (required) Hetzner Cloud API token
-#   SSH_PUBLIC_KEY         (optional) Path to SSH public key (default: ~/.ssh/id_ed25519.pub)
 #
-# Examples:
+# Prerequisites:
+#   - SSH key 'pc-switcher-test-key' must already exist in Hetzner Cloud
+#
+# Example:
 #   ./create-vm.sh pc1
-#   SSH_PUBLIC_KEY=~/.ssh/mykey.pub ./create-vm.sh pc2
 
 # Configuration
 readonly LOCATION="fsn1"
 readonly SERVER_TYPE="cx23"
 readonly SSH_KEY_NAME="pc-switcher-test-key"
-readonly DEFAULT_SSH_PUBLIC_KEY="${HOME}/.ssh/id_ed25519.pub"
 readonly TIMEOUT_RESCUE=180
 readonly TIMEOUT_INSTALL=300
 readonly TIMEOUT_REBOOT=120
@@ -58,11 +58,13 @@ Arguments:
 
 Environment Variables:
   HCLOUD_TOKEN       (required) Hetzner Cloud API token
-  SSH_PUBLIC_KEY     (optional) Path to SSH public key (default: ~/.ssh/id_ed25519.pub)
+
+Prerequisites:
+  - SSH key 'pc-switcher-test-key' must already exist in Hetzner Cloud
 
 Examples:
   $0 pc1
-  SSH_PUBLIC_KEY=~/.ssh/mykey.pub $0 pc2
+  $0 pc2
 
 VM Specifications:
   - Server Type: CX23 (2 shared vCPUs, 4GB RAM)
@@ -94,31 +96,7 @@ check_prerequisites() {
         exit 1
     fi
 
-    # Determine SSH public key path
-    SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-$DEFAULT_SSH_PUBLIC_KEY}"
-
-    # Check if SSH public key exists
-    if [[ ! -f "$SSH_PUBLIC_KEY" ]]; then
-        log_error "SSH public key not found at: $SSH_PUBLIC_KEY"
-        echo ""
-        echo "Generate one with: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519"
-        exit 1
-    fi
-
     log_info "Prerequisites OK"
-}
-
-# Create or verify SSH key in Hetzner Cloud
-ensure_ssh_key() {
-    log_info "Ensuring SSH key '$SSH_KEY_NAME' exists in Hetzner Cloud..."
-
-    if hcloud ssh-key describe "$SSH_KEY_NAME" &> /dev/null; then
-        log_info "SSH key '$SSH_KEY_NAME' already exists"
-    else
-        log_info "Creating SSH key '$SSH_KEY_NAME'..."
-        hcloud ssh-key create --name "$SSH_KEY_NAME" --public-key-from-file "$SSH_PUBLIC_KEY"
-        log_info "SSH key created"
-    fi
 }
 
 # Check if VM already exists
@@ -303,9 +281,6 @@ main() {
 
     # Check prerequisites
     check_prerequisites
-
-    # Ensure SSH key exists
-    ensure_ssh_key
 
     # Check if VM already exists
     if vm_exists "$vm_name"; then

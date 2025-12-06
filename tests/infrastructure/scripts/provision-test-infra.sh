@@ -9,6 +9,32 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Configuration
+readonly SSH_KEY_NAME="pc-switcher-test-key"
+readonly DEFAULT_SSH_PUBLIC_KEY="${HOME}/.ssh/id_ed25519.pub"
+
+# Helper functions
+log_info() {
+    echo -e "\033[0;32m[INFO]\033[0m $*"
+}
+
+log_error() {
+    echo -e "\033[0;31m[ERROR]\033[0m $*" >&2
+}
+
+# Create or verify SSH key in Hetzner Cloud
+ensure_ssh_key() {
+    log_info "Ensuring SSH key '$SSH_KEY_NAME' exists in Hetzner Cloud..."
+
+    if hcloud ssh-key describe "$SSH_KEY_NAME" &> /dev/null; then
+        log_info "SSH key '$SSH_KEY_NAME' already exists"
+    else
+        log_info "Creating SSH key '$SSH_KEY_NAME'..."
+        hcloud ssh-key create --name "$SSH_KEY_NAME" --public-key-from-file "$SSH_PUBLIC_KEY"
+        log_info "SSH key created"
+    fi
+}
+
 # Help text
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     cat <<EOF
@@ -103,7 +129,20 @@ fi
 KEY_COUNT=$(echo "$SSH_AUTHORIZED_KEYS" | grep -c '^ssh-' || true)
 echo "    Found $KEY_COUNT authorized SSH key(s)"
 
+# Determine SSH public key path for Hetzner Cloud key
+SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-$DEFAULT_SSH_PUBLIC_KEY}"
+if [[ ! -f "$SSH_PUBLIC_KEY" ]]; then
+    log_error "SSH public key not found at: $SSH_PUBLIC_KEY"
+    echo ""
+    echo "Generate one with: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519"
+    exit 1
+fi
+
 echo "Prerequisites check passed."
+echo
+
+# Ensure SSH key exists in Hetzner Cloud (must be done once before parallel VM creation)
+ensure_ssh_key
 echo
 
 # Create VMs in parallel
