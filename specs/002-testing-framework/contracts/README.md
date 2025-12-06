@@ -8,7 +8,7 @@ This feature does not expose HTTP/REST/GraphQL APIs. The "contracts" for this fe
 
 1. **pytest marker contract**: Tests marked with `@pytest.mark.integration` are excluded by default
 2. **Environment variable contract**: Integration tests require specific environment variables
-3. **Lock format**: Hetzner Server Labels on pc-switcher-pc1
+3. **Lock format**: Hetzner Server Labels on pc1
 
 These contracts are documented in:
 - [data-model.md](../data-model.md) - Entity definitions and validation rules
@@ -46,7 +46,7 @@ markers = [
 
 ## Lock Contract
 
-The lock is stored as Hetzner Server Labels on the `pc-switcher-pc1` server object, which survives VM reboots and btrfs snapshot rollbacks.
+The lock is stored as Hetzner Server Labels on the `pc1` server object, which survives VM reboots and btrfs snapshot rollbacks.
 
 **Labels**:
 | Label | Value |
@@ -66,6 +66,6 @@ The lock is stored as Hetzner Server Labels on the `pc-switcher-pc1` server obje
 ./tests/infrastructure/scripts/lock.sh "$CI_JOB_ID" release
 
 # Manual cleanup (for stuck locks)
-hcloud server remove-label pc-switcher-pc1 lock_holder
-hcloud server remove-label pc-switcher-pc1 lock_acquired
+hcloud server remove-label pc1 lock_holder
+hcloud server remove-label pc1 lock_acquired
 ```

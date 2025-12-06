@@ -41,8 +41,8 @@ cd tests/infrastructure
 ./scripts/provision-vms.sh
 
 # 3. Note the VM IPs
-export PC_SWITCHER_TEST_PC1_HOST=$(hcloud server ip pc-switcher-pc1)
-export PC_SWITCHER_TEST_PC2_HOST=$(hcloud server ip pc-switcher-pc2)
+export PC_SWITCHER_TEST_PC1_HOST=$(hcloud server ip pc1)
+export PC_SWITCHER_TEST_PC2_HOST=$(hcloud server ip pc2)
 ```
 
 The `provision-vms.sh` script creates VMs if they don't exist, installs Ubuntu with btrfs using Hetzner's installimage, configures the test user, and sets up inter-VM SSH access.
@@ -122,13 +122,13 @@ Another test run is in progress. Check who holds the lock:
 ```bash
 ./tests/infrastructure/scripts/lock.sh "" status
 # Or directly via hcloud:
-hcloud server describe pc-switcher-pc1 -o json | jq '.labels'
+hcloud server describe pc1 -o json | jq '.labels'
 ```
 
 To force-release a stuck lock:
 ```bash
-hcloud server remove-label pc-switcher-pc1 lock_holder
-hcloud server remove-label pc-switcher-pc1 lock_acquired
+hcloud server remove-label pc1 lock_holder
+hcloud server remove-label pc1 lock_acquired
 ```
 
 ### "Baseline snapshot missing"
@@ -136,8 +136,8 @@ hcloud server remove-label pc-switcher-pc1 lock_acquired
 This means `/.snapshots/baseline/@` or `/.snapshots/baseline/@home` doesn't exist. Reprovision the VMs:
 ```bash
 cd tests/infrastructure
-./scripts/provision.sh pc-switcher-pc1
-./scripts/provision.sh pc-switcher-pc2
+./scripts/provision.sh pc1
+./scripts/provision.sh pc2
 ```
 
 ### SSH Connection Refused
@@ -161,8 +161,8 @@ Test VMs cost ~EUR 7/month total when running continuously. To reduce costs:
 
 ```bash
 # Destroy VMs when not needed
-hcloud server delete pc-switcher-pc1
-hcloud server delete pc-switcher-pc2
+hcloud server delete pc1
+hcloud server delete pc2
 
 # VMs will be reprovisioned automatically on next integration test run
 ```

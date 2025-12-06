@@ -17,7 +17,7 @@ Represents a Hetzner Cloud VM used for integration testing.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| name | string | VM name (e.g., "pc-switcher-pc1") |
+| name | string | VM name (e.g., "pc1") |
 | ipv4_address | string | Public IPv4 address |
 | server_type | string | Hetzner server type (e.g., "cx23") |
 | location | string | Datacenter location (e.g., "fsn1") |
@@ -53,7 +53,7 @@ Represents the concurrency control mechanism preventing simultaneous test runs.
 | acquired | datetime | ISO 8601 timestamp when lock was acquired |
 | hostname | string | Machine that acquired the lock |
 
-**Storage**: Hetzner Server Labels on pc-switcher-pc1 server object
+**Storage**: Hetzner Server Labels on pc1 server object
 - `lock_holder` label: holder identity
 - `lock_acquired` label: ISO 8601 timestamp
 
@@ -130,15 +130,25 @@ Represents a GitHub Actions workflow configuration.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| name | string | Workflow file name (e.g., "ci.yml") |
+| name | string | Workflow file name (e.g., "test.yml") |
 | trigger | enum | push, pull_request, workflow_dispatch |
 | target_branches | string[] | Branches that trigger the workflow |
 | concurrency_group | string | Concurrency group identifier |
 | cancel_in_progress | boolean | Whether to cancel queued runs |
 
-**Instances**:
-- `ci.yml`: Unit tests on every push (no concurrency restriction)
-- `integration.yml`: Integration tests on PR to main (shared concurrency group)
+**Instance**: Single consolidated workflow `test.yml` handles all testing:
+- **On push to any branch**: Run type checks (basedpyright), lint checks (ruff), and unit tests
+- **On PR to main**: Run above + integration tests (with auto-provisioning)
+- **On workflow_dispatch**: Manual trigger for integration tests on any branch
+
+**Integration Test Execution Flow**:
+1. Check if this is a fork PR: `if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'`
+   - If fork PR: Skip integration tests with notice, run unit tests only
+2. Run `provision-vms.sh` to ensure VMs exist (idempotent, provisions only if VMs don't exist)
+3. Reset VMs to baseline via `reset-vm.sh`
+4. Run integration tests via `uv run pytest -m integration`
+
+**Concurrency**: Integration test job uses concurrency group `integration-tests` to prevent parallel runs. Unit tests have no concurrency restriction.
 
 ---
 

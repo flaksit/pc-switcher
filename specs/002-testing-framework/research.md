@@ -119,7 +119,7 @@ if ! hcloud ssh-key describe pc-switcher-test-key &>/dev/null; then
 fi
 
 # Create VMs if needed
-for VM in pc-switcher-pc1 pc-switcher-pc2; do
+for VM in pc1 pc2; do
     if hcloud server describe "$VM" &>/dev/null; then
         echo "VM $VM already exists, skipping creation"
     else
@@ -140,8 +140,8 @@ echo "VMs created. Run provision.sh for each VM to install btrfs and configure."
 
 ```bash
 # Destroy VMs when not needed
-hcloud server delete pc-switcher-pc1
-hcloud server delete pc-switcher-pc2
+hcloud server delete pc1
+hcloud server delete pc2
 hcloud ssh-key delete pc-switcher-test-key  # optional
 ```
 
@@ -219,7 +219,7 @@ Active subvolumes (`@` and `@home`) are at the btrfs top level, not under `/.sna
 
 ## 5. Lock Mechanism
 
-### Decision: Hetzner Server Labels on pc-switcher-pc1
+### Decision: Hetzner Server Labels on pc1
 
 ### Rationale
 - Lock state stored externally to VM state (survives reboots and snapshot rollbacks)
@@ -262,8 +262,8 @@ This avoids over-complicating the provisioning workflow while ensuring test isol
 ./tests/infrastructure/scripts/lock.sh "CI-job-12345" release
 
 # Manual cleanup for stuck locks
-hcloud server remove-label pc-switcher-pc1 lock_holder
-hcloud server remove-label pc-switcher-pc1 lock_acquired
+hcloud server remove-label pc1 lock_holder
+hcloud server remove-label pc1 lock_acquired
 ```
 
 ### Alternatives Considered
@@ -277,21 +277,68 @@ hcloud server remove-label pc-switcher-pc1 lock_acquired
 
 ## 6. GitHub Actions CI/CD
 
-### Decision: Two workflows - ci.yml (unit tests on push) and integration.yml (integration tests on PR + manual)
+### Decision: Single consolidated workflow `test.yml` handling all test scenarios
 
 ### Rationale
-- Separation allows different concurrency controls
-- Unit tests should never be blocked by integration test queue
+- Consolidated workflow is simpler to maintain
+- Allows sharing setup steps (checkout, Python setup, dependency caching) between unit and integration test jobs
+- Different jobs within the same workflow can have different concurrency controls
 - Manual trigger enables testing feature branches before PR
 
-### Concurrency Configuration
+### Workflow Structure
 
 ```yaml
-# .github/workflows/integration.yml
-concurrency:
-  group: pc-switcher-integration
-  cancel-in-progress: false  # Queue instead of cancel
+# .github/workflows/test.yml
+name: Tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  lint-and-unit:
+    # Runs on every push, no concurrency restriction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ... setup steps ...
+      - run: uv run basedpyright
+      - run: uv run ruff check
+      - run: uv run pytest tests/unit tests/contract -v
+
+  integration:
+    # Only on PRs to main or manual trigger
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch'
+    needs: lint-and-unit
+    runs-on: ubuntu-latest
+    concurrency:
+      group: integration-tests
+      cancel-in-progress: false  # Queue instead of cancel
+    steps:
+      - uses: actions/checkout@v4
+      # ... setup steps ...
+      - name: Provision VMs
+        run: ./tests/infrastructure/scripts/provision-vms.sh
+      - name: Reset VMs
+        run: |
+          ./tests/infrastructure/scripts/reset-vm.sh pc1
+          ./tests/infrastructure/scripts/reset-vm.sh pc2
+      - run: uv run pytest -m integration -v
 ```
+
+### Fork PR Detection
+
+Integration tests are skipped for forked PRs using the condition:
+```yaml
+if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch'
+```
+
+This ensures integration tests only run when:
+1. The PR is from the same repository (not a fork), OR
+2. The workflow was manually triggered
 
 ### Secret Handling
 - `HCLOUD_TOKEN`: Hetzner API token (repository secret)
