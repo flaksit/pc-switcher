@@ -135,8 +135,7 @@ async def start_persistent_remote_lock(
 
     # First create directory and write holder info to lock file
     setup_result = await executor.run_command(
-        f"mkdir -p ~/.local/share/pc-switcher && "
-        f'echo "{holder_info}" > "{lock_path}"'
+        f'mkdir -p ~/.local/share/pc-switcher && echo "{holder_info}" > "{lock_path}"'
     )
     if not setup_result.success:
         return None

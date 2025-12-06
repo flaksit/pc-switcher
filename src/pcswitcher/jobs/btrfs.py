@@ -106,16 +106,12 @@ class BtrfsSnapshotJob(SystemJob):
             mount_point = subvolume_to_mount_point(subvol_name)
 
             # Check source
-            success, error_msg = await validate_subvolume_exists(
-                self.source, subvol_name, mount_point, Host.SOURCE
-            )
+            success, error_msg = await validate_subvolume_exists(self.source, subvol_name, mount_point, Host.SOURCE)
             if not success:
                 errors.append(self._validation_error(Host.SOURCE, error_msg or "Unknown error"))
 
             # Check target
-            success, error_msg = await validate_subvolume_exists(
-                self.target, subvol_name, mount_point, Host.TARGET
-            )
+            success, error_msg = await validate_subvolume_exists(self.target, subvol_name, mount_point, Host.TARGET)
             if not success:
                 errors.append(self._validation_error(Host.TARGET, error_msg or "Unknown error"))
 

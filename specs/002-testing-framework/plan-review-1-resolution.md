@@ -146,9 +146,9 @@ You raise an excellent point. Let me analyze the trade-offs:
 
 ```bash
 # Create VM if it doesn't exist
-if ! hcloud server describe pc-switcher-pc1 &>/dev/null; then
+if ! hcloud server describe pc1 &>/dev/null; then
     hcloud server create \
-        --name pc-switcher-pc1 \
+        --name pc1 \
         --type cx23 \
         --image ubuntu-24.04 \
         --location fsn1 \

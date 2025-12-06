@@ -46,7 +46,7 @@ pc-switcher --version
 ```bash
 uv tool uninstall pcswitcher
 ```
-(Note: Use the package name `pcswitcher`, not the command name `pc-switcher`)
+(Note: Use the Python package name `pcswitcher`, not the command name `pc-switcher`)
 
 After installation, create the default configuration:
 ```bash
@@ -70,8 +70,6 @@ pc-switcher logs
 ```
 
 After sync completes, power off the source machine and resume work on target.
-
-**Note**: Sync jobs are currently placeholders for testing infrastructure. Real sync functionality is in development.
 
 ## Configuration
 
@@ -137,26 +135,6 @@ pc-switcher cleanup-snapshots --older-than 7d [--dry-run]
 4. **Minimize disk wear**: NVMe SSDs—avoid unnecessary writes
 5. **Simplicity**: Easy to understand, modify, and maintain
 
-## Naming Convention
-
-This project uses two different names depending on context:
-
-- **Package name**: `pcswitcher` (no dash)
-  - Used for: `uv tool install/uninstall`, Python imports (`from pcswitcher...`)
-  - Why: Python package names cannot contain dashes (PEP 8 convention)
-
-- **Command name**: `pc-switcher` (with dash)
-  - Used for: Running commands in your terminal
-  - Why: CLI tools commonly use dashes for readability (like `docker-compose`, `git-lfs`)
-
-When you run `uv tool list`, you'll see:
-```
-pcswitcher v0.0.0.post159.dev0+3825b99
-- pc-switcher
-```
-
-This shows the package name provides the `pc-switcher` executable.
-
 ## Documentation
 
 - **[High level requirements](docs/High%20level%20requirements.md)** - Project vision, scope, workflow
@@ -207,8 +185,10 @@ This project uses **SpecKit**—a specification-driven workflow via custom slash
 
 ```bash
 /speckit.specify "feature description"  # Create feature spec
+/speckit.clarify                        # Refine spec details
 /speckit.plan                           # Generate design artifacts
 /speckit.tasks                          # Create actionable tasks
+/speckit.analyze                        # Check consistency specs-plan-tasks
 /speckit.implement                      # Execute implementation
 ```
 

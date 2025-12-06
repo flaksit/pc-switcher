@@ -62,14 +62,18 @@ uv run pytest -m integration -v
 uv run pytest tests/integration/test_sync.py -v -m integration
 ```
 
-### Resetting VMs Between Test Runs
+### VM Reset Behavior
 
-VMs are automatically reset before CI test runs. For local development:
+VMs are automatically reset to baseline by the `integration_session` pytest fixture before tests run. You do **not** need to manually reset VMs.
+
+**Manual reset** is only needed when:
+- VMs are corrupted from an aborted test run
+- You want to reset without running the full test suite
 
 ```bash
-cd tests/infrastructure
-./scripts/reset-vm.sh pc1  # Reset pc1 to baseline
-./scripts/reset-vm.sh pc2  # Reset pc2 to baseline
+# Manual reset (only if needed)
+tests/infrastructure/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC1_HOST
+tests/infrastructure/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC2_HOST
 ```
 
 The reset script restores VMs to their baseline snapshots (`/.snapshots/baseline/@` and `/.snapshots/baseline/@home`) using btrfs snapshot operations. This is much faster than reprovisioning (~20-30 seconds vs ~10 minutes).

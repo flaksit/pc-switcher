@@ -16,9 +16,7 @@ class TestLockPath:
         """LOCK_FILE_NAME should be a single unified name."""
         assert LOCK_FILE_NAME == "pc-switcher.lock"
 
-    def test_get_lock_path_returns_correct_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_get_lock_path_returns_correct_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """get_lock_path() should return path in .local/share/pc-switcher."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         expected = tmp_path / ".local/share/pc-switcher" / LOCK_FILE_NAME

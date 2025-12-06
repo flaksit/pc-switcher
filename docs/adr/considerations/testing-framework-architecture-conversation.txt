@@ -236,7 +236,7 @@ fresh OS with the right btrfs layout). However, then the tests that need the
 negligible. Not too slow?
 - You suggested to use Vagrant. I have no experience with that. Is that a 
 good idea? Still relevant if using Hetzner cloud VMs? I have experience with
- teraform (tofu), if that would do the job equally well. Hetzner has a
+ terraform (tofu), if that would do the job equally well. Hetzner has a
 terraform provider.
 
 Q1b: For good testing, we need root btrfs filesystem. No mockery. With 
@@ -487,7 +487,7 @@ For 1.
  needs a reboot. Use `btrfs set-default` to set the default subvolume for
 next boot. But that's probably what you were thinking already.
 - We'll need some script to create, tear down, setup and configure the VMs 
-anyway, in whatever technology (bash script, teraform, ...)
+anyway, in whatever technology (bash script, terraform, ...)
 
 For 2.: 2 VMs
 

@@ -197,7 +197,7 @@ Create and provision test VMs if they don't exist.
 
 This script:
   1. Creates SSH key in Hetzner Cloud (if needed)
-  2. Creates pc-switcher-pc1 and pc-switcher-pc2 VMs (if needed)
+  2. Creates pc1 and pc2 VMs (if needed)
   3. Runs provision.sh on each VM to install btrfs
   4. Runs configure-hosts.sh to setup inter-VM networking
 
@@ -229,7 +229,7 @@ fi
 VMS_TO_PROVISION=()
 
 # Create VMs if needed
-for VM in pc-switcher-pc1 pc-switcher-pc2; do
+for VM in pc1 pc2; do
     if hcloud server describe "$VM" &>/dev/null; then
         echo "VM $VM already exists, skipping creation"
     else
@@ -258,8 +258,8 @@ fi
 
 echo ""
 echo "VMs ready:"
-echo "  pc1: $(hcloud server ip pc-switcher-pc1)"
-echo "  pc2: $(hcloud server ip pc-switcher-pc2)"
+echo "  pc1: $(hcloud server ip pc1)"
+echo "  pc2: $(hcloud server ip pc2)"
 ```
 
 ### tests/infrastructure/scripts/lock.sh
@@ -272,7 +272,7 @@ the lock survives VM reboots and btrfs snapshot rollbacks.
 set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
-SERVER_NAME="pc-switcher-pc1"  # Lock is stored on pc1's server object
+SERVER_NAME="pc1"  # Lock is stored on pc1's server object
 
 show_help() {
     cat << EOF
@@ -567,15 +567,15 @@ This script:
   6. Creates baseline snapshots for test reset
 
 Arguments:
-  server-name    Name of the Hetzner server (e.g., pc-switcher-pc1)
+  server-name    Name of the Hetzner server (e.g., pc1)
 
 Environment:
   HCLOUD_TOKEN   Hetzner Cloud API token (required)
   SSH_PUBLIC_KEY Path to SSH public key (default: ~/.ssh/id_ed25519.pub)
 
 Examples:
-  $SCRIPT_NAME pc-switcher-pc1
-  $SCRIPT_NAME pc-switcher-pc2
+  $SCRIPT_NAME pc1
+  $SCRIPT_NAME pc2
 
 Note: This is a one-time operation. After provisioning, use reset-vm.sh
       for subsequent test runs.
@@ -784,8 +784,8 @@ if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
     exit 1
 fi
 
-PC1_IP=$(hcloud server ip pc-switcher-pc1)
-PC2_IP=$(hcloud server ip pc-switcher-pc2)
+PC1_IP=$(hcloud server ip pc1)
+PC2_IP=$(hcloud server ip pc2)
 
 echo "PC1 IP: $PC1_IP"
 echo "PC2 IP: $PC2_IP"
@@ -970,8 +970,8 @@ jobs:
       - name: Add VM host keys to known_hosts
         if: steps.secrets-check.outputs.skip != 'true'
         run: |
-          PC1_IP=$(hcloud server ip pc-switcher-pc1)
-          PC2_IP=$(hcloud server ip pc-switcher-pc2)
+          PC1_IP=$(hcloud server ip pc1)
+          PC2_IP=$(hcloud server ip pc2)
           ssh-keyscan -H "$PC1_IP" >> ~/.ssh/known_hosts
           ssh-keyscan -H "$PC2_IP" >> ~/.ssh/known_hosts
         env:
@@ -980,8 +980,8 @@ jobs:
       - name: Reset VMs
         if: steps.secrets-check.outputs.skip != 'true'
         run: |
-          PC1_IP=$(hcloud server ip pc-switcher-pc1)
-          PC2_IP=$(hcloud server ip pc-switcher-pc2)
+          PC1_IP=$(hcloud server ip pc1)
+          PC2_IP=$(hcloud server ip pc2)
           ./tests/infrastructure/scripts/reset-vm.sh "$PC1_IP"
           ./tests/infrastructure/scripts/reset-vm.sh "$PC2_IP"
         env:
@@ -990,8 +990,8 @@ jobs:
       - name: Run integration tests
         if: steps.secrets-check.outputs.skip != 'true'
         run: |
-          PC1_IP=$(hcloud server ip pc-switcher-pc1)
-          PC2_IP=$(hcloud server ip pc-switcher-pc2)
+          PC1_IP=$(hcloud server ip pc1)
+          PC2_IP=$(hcloud server ip pc2)
           uv run pytest tests/integration -v -m integration --tb=short 2>&1 | tee pytest-output.log
         env:
           PC_SWITCHER_TEST_PC1_HOST: ${{ env.PC1_IP }}

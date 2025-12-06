@@ -36,13 +36,13 @@ No clarifying questions were needed. All feedback points were clear, and the ove
 
 ### Point 4: VM Naming Consistency
 
-**Issue**: Mixed usage of `pc1`/`pc2` shorthand and `pc-switcher-pc1`/`pc-switcher-pc2` full names.
+**Issue**: Mixed usage of `pc1`/`pc2` shorthand and `pc1`/`pc2` full names.
 
 **Resolution**: Per override instruction, standardized to `pc1`/`pc2` everywhere. VMs will be in a separate Hetzner Cloud project, so there's no risk of name clashes with other resources.
 
 ## Files Modified
 
 - `data-model.md`: Updated CIWorkflow entity to single `test.yml`, VM naming to `pc1`/`pc2`, added fork detection logic and auto-provisioning flow
-- `quickstart.md`: Updated VM naming from `pc-switcher-pc1`/`pc-switcher-pc2` to `pc1`/`pc2`
+- `quickstart.md`: Updated VM naming from `pc1`/`pc2` to `pc1`/`pc2`
 - `research.md`: Updated CI/CD section to document single `test.yml` workflow with fork detection; updated VM naming to `pc1`/`pc2`
-- `contracts/README.md`: Updated lock contract to reference `pc1` instead of `pc-switcher-pc1`
+- `contracts/README.md`: Updated lock contract to reference `pc1` instead of `pc1`

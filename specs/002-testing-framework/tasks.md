@@ -19,9 +19,9 @@
 
 **Purpose**: Project initialization and pytest configuration
 
-- [ ] T001 Configure pytest with asyncio_mode="auto" and integration marker in pyproject.toml
-- [ ] T002 [P] Add `-m "not integration"` to pytest addopts to exclude integration tests by default in pyproject.toml
-- [ ] T003 [P] Create tests/integration/conftest.py with environment variable check and skip logic per research.md §2
+- [X] T001 Configure pytest with asyncio_mode="auto" and integration marker in pyproject.toml
+- [X] T002 [P] Add `-m "not integration"` to pytest addopts to exclude integration tests by default in pyproject.toml
+- [X] T003 [P] Create tests/integration/conftest.py with environment variable check and skip logic per research.md §2
 
 ---
 
@@ -33,13 +33,13 @@
 
 > **Reference**: Complete script implementations are available in `specs/002-testing-framework/pre-analysis/testing-implementation-plan.md`. Use these as starting point and verify they work correctly with the current environment.
 
-- [ ] T004 Create tests/infrastructure/scripts/create-vm.sh: creates a single VM via hcloud CLI and installs OS with btrfs filesystem; use CX23 instances (2 shared vCPUs, 4GB RAM) to stay within EUR 10/month cost cap (FR-012); called twice by orchestrator (once per VM, in parallel); see research.md §3
-- [ ] T005 [P] Create tests/infrastructure/scripts/configure-vm.sh: configures a single VM with testuser setup, CI/user SSH public key injection (per FR-006a), and baseline services (sshd enabled); called twice by orchestrator (once per VM, in parallel)
-- [ ] T006 [P] Create tests/infrastructure/scripts/configure-hosts.sh: configures both VMs with /etc/hosts entries and generates/exchanges inter-VM SSH keys for pc1↔pc2 communication; called once by orchestrator after both VMs are configured
-- [ ] T006a Create tests/infrastructure/scripts/create-baseline-snapshots.sh: creates baseline btrfs snapshots on both VMs; called once by orchestrator at the end of provisioning
-- [ ] T006b Create tests/infrastructure/scripts/provision-test-infra.sh: orchestrator that calls create-vm.sh (2x parallel), configure-vm.sh (2x parallel), configure-hosts.sh (1x), create-baseline-snapshots.sh (1x)
-- [ ] T007 Create tests/infrastructure/scripts/reset-vm.sh implementing btrfs snapshot reset flow per research.md §4; resets a single VM to baseline
-- [ ] T008 Create tests/infrastructure/scripts/lock.sh for Hetzner Server Labels lock operations per research.md §5
+- [X] T004 Create tests/infrastructure/scripts/create-vm.sh: creates a single VM via hcloud CLI and installs OS with btrfs filesystem; use CX23 instances (2 shared vCPUs, 4GB RAM) to stay within EUR 10/month cost cap (FR-012); called twice by orchestrator (once per VM, in parallel); see research.md §3
+- [X] T005 [P] Create tests/infrastructure/scripts/configure-vm.sh: configures a single VM with testuser setup, CI/user SSH public key injection (per FR-006a), and baseline services (sshd enabled); called twice by orchestrator (once per VM, in parallel)
+- [X] T006 [P] Create tests/infrastructure/scripts/configure-hosts.sh: configures both VMs with /etc/hosts entries and generates/exchanges inter-VM SSH keys for pc1↔pc2 communication; called once by orchestrator after both VMs are configured
+- [X] T006a Create tests/infrastructure/scripts/create-baseline-snapshots.sh: creates baseline btrfs snapshots on both VMs; called once by orchestrator at the end of provisioning
+- [X] T006b Create tests/infrastructure/scripts/provision-test-infra.sh: orchestrator that calls create-vm.sh (2x parallel), configure-vm.sh (2x parallel), configure-hosts.sh (1x), create-baseline-snapshots.sh (1x)
+- [X] T007 Create tests/infrastructure/scripts/reset-vm.sh implementing btrfs snapshot reset flow per research.md §4; resets a single VM to baseline
+- [X] T008 Create tests/infrastructure/scripts/lock.sh for Hetzner Server Labels lock operations per research.md §5
 
 **Checkpoint**: Foundation ready - VM infrastructure scripts complete
 
@@ -55,9 +55,9 @@
 
 > **Note**: US1 tasks are verification-only because unit test infrastructure already exists. The framework feature ensures existing tests work with new pytest configuration; no new test code is written here.
 
-- [ ] T009 [US1] Verify existing tests in tests/unit/ and tests/contract/ work with new pytest configuration; confirm tests contain no real btrfs operations, no network calls to external services, and no filesystem-type dependencies (FR-002 safety)
-- [ ] T010 [US1] Verify existing fixtures in tests/conftest.py are sufficient for unit test isolation; confirm mocks are used for all external system interactions (FR-002 safety)
-- [ ] T011 [US1] Implement contract tests for MockExecutor vs RemoteExecutor interface parity in tests/contract/test_executor_contract.py per FR-003a
+- [X] T009 [US1] Verify existing tests in tests/unit/ and tests/contract/ work with new pytest configuration; confirm tests contain no real btrfs operations, no network calls to external services, and no filesystem-type dependencies (FR-002 safety)
+- [X] T010 [US1] Verify existing fixtures in tests/conftest.py are sufficient for unit test isolation; confirm mocks are used for all external system interactions (FR-002 safety)
+- [X] T011 [US1] Implement contract tests for MockExecutor vs RemoteExecutor interface parity in tests/contract/test_executor_contract.py per FR-003a
 
 **Checkpoint**: User Story 1 complete - unit tests run fast and safe on any machine
 
@@ -73,10 +73,10 @@
 
 > **Note**: All US2 fixtures go in tests/integration/conftest.py only. The root tests/conftest.py remains unchanged (unit test fixtures only).
 
-- [ ] T012 [P] [US2] Create VM connection fixtures (pc1_connection, pc2_connection) in tests/integration/conftest.py per research.md §7
-- [ ] T013 [P] [US2] Create VM executor fixtures (pc1_executor, pc2_executor) wrapping RemoteExecutor in tests/integration/conftest.py
-- [ ] T014 [US2] Add session-scoped fixture for lock acquisition and release in tests/integration/conftest.py
-- [ ] T015 [US2] Add session-scoped fixture that handles: (1) lock acquisition, (2) VM existence check with auto-provisioning if VMs don't exist (or skip with clear message if secrets unavailable), (3) VM reset to baseline before test session in tests/integration/conftest.py
+- [X] T012 [P] [US2] Create VM connection fixtures (pc1_connection, pc2_connection) in tests/integration/conftest.py per research.md §7
+- [X] T013 [P] [US2] Create VM executor fixtures (pc1_executor, pc2_executor) wrapping RemoteExecutor in tests/integration/conftest.py
+- [X] T014 [US2] Add session-scoped fixture for lock acquisition and release in tests/integration/conftest.py
+- [X] T015 [US2] Add session-scoped fixture that handles: (1) lock acquisition, (2) VM existence check with auto-provisioning if VMs don't exist (or skip with clear message if secrets unavailable), (3) VM reset to baseline before test session in tests/integration/conftest.py
 
 **Checkpoint**: User Story 2 complete - integration test fixtures ready for use
 
@@ -90,10 +90,10 @@
 
 ### Implementation for User Story 3
 
-- [ ] T016 [US3] Create .github/workflows/test.yml with lint-and-unit job running on every push per research.md §6
-- [ ] T017 [US3] Add integration job to .github/workflows/test.yml with: fork detection, secret availability check (skip with clear notice per FR-017a when HCLOUD_TOKEN or SSH key unavailable), and concurrency group per research.md §6; job runs `uv run pytest -m integration` (fixtures handle provisioning/reset automatically)
-- [ ] T018 [US3] Configure artifact upload for pytest output and provisioning logs in .github/workflows/test.yml
-- [ ] T019 [US3] Add workflow_dispatch trigger for manual integration test runs in .github/workflows/test.yml
+- [X] T016 [US3] Create .github/workflows/test.yml with lint-and-unit job running on every push per research.md §6
+- [X] T017 [US3] Add integration job to .github/workflows/test.yml with: fork detection, secret availability check (skip with clear notice per FR-017a when HCLOUD_TOKEN or SSH key unavailable), and concurrency group per research.md §6; job runs `uv run pytest -m integration` (fixtures handle provisioning/reset automatically)
+- [X] T018 [US3] Configure artifact upload for pytest output and provisioning logs in .github/workflows/test.yml
+- [X] T019 [US3] Add workflow_dispatch trigger for manual integration test runs in .github/workflows/test.yml
 
 **Checkpoint**: User Story 3 complete - CI/CD pipeline operational
 
@@ -107,8 +107,8 @@
 
 ### Implementation for User Story 4
 
-- [ ] T020 [US4] Create docs/testing-playbook.md with visual verification steps (progress bars, colors, formatting)
-- [ ] T021 [US4] Add feature tour section to docs/testing-playbook.md covering all major pc-switcher features
+- [X] T020 [US4] Create docs/testing-playbook.md with visual verification steps (progress bars, colors, formatting)
+- [X] T021 [US4] Add feature tour section to docs/testing-playbook.md covering all major pc-switcher features
 
 **Checkpoint**: User Story 4 complete - manual playbook ready for release verification
 
@@ -122,11 +122,11 @@
 
 ### Implementation for User Story 5
 
-- [ ] T022 [P] [US5] Create docs/testing-developer-guide.md with test file creation and VM fixture usage patterns
-- [ ] T023 [P] [US5] Add VM interaction patterns section (SSH, file transfer, btrfs, snapshots) to docs/testing-developer-guide.md
-- [ ] T024 [US5] Add test organization section (directory structure, naming, markers) to docs/testing-developer-guide.md
-- [ ] T025 [US5] Add troubleshooting section for common integration test failures to docs/testing-developer-guide.md
-- [ ] T025a [US5] Add local development setup section documenting how to configure secrets for local integration test runs (environment variables mirroring CI secrets per FR-025) to docs/testing-developer-guide.md
+- [X] T022 [P] [US5] Create docs/testing-developer-guide.md with test file creation and VM fixture usage patterns
+- [X] T023 [P] [US5] Add VM interaction patterns section (SSH, file transfer, btrfs, snapshots) to docs/testing-developer-guide.md
+- [X] T024 [US5] Add test organization section (directory structure, naming, markers) to docs/testing-developer-guide.md
+- [X] T025 [US5] Add troubleshooting section for common integration test failures to docs/testing-developer-guide.md
+- [X] T025a [US5] Add local development setup section documenting how to configure secrets for local integration test runs (environment variables mirroring CI secrets per FR-025) to docs/testing-developer-guide.md
 
 **Checkpoint**: User Story 5 complete - developer documentation ready
 
@@ -140,11 +140,11 @@
 
 ### Implementation for User Story 6
 
-- [ ] T026 [P] [US6] Create docs/testing-ops-guide.md with CI secrets configuration (HCLOUD_TOKEN, HETZNER_SSH_PRIVATE_KEY)
-- [ ] T027 [P] [US6] Add VM provisioning instructions (hcloud CLI setup, SSH key management) to docs/testing-ops-guide.md
-- [ ] T028 [US6] Add environment variables documentation to docs/testing-ops-guide.md per data-model.md
-- [ ] T029 [US6] Add cost monitoring section (VM costs, destruction/reprovisioning) to docs/testing-ops-guide.md
-- [ ] T030 [US6] Add runbooks for common failure scenarios to docs/testing-ops-guide.md per spec.md edge cases
+- [X] T026 [P] [US6] Create docs/testing-ops-guide.md with CI secrets configuration (HCLOUD_TOKEN, HETZNER_SSH_PRIVATE_KEY)
+- [X] T027 [P] [US6] Add VM provisioning instructions (hcloud CLI setup, SSH key management) to docs/testing-ops-guide.md
+- [X] T028 [US6] Add environment variables documentation to docs/testing-ops-guide.md per data-model.md
+- [X] T029 [US6] Add cost monitoring section (VM costs, destruction/reprovisioning) to docs/testing-ops-guide.md
+- [X] T030 [US6] Add runbooks for common failure scenarios to docs/testing-ops-guide.md per spec.md edge cases
 
 **Checkpoint**: User Story 6 complete - operational documentation ready
 
@@ -158,10 +158,10 @@
 
 ### Implementation for User Story 7
 
-- [ ] T031 [US7] Update docs/testing-framework.md with three-tier test structure diagram (Mermaid)
-- [ ] T032 [US7] Add component interaction diagram (Mermaid format per FR-030) showing VM, lock, and CI relationships in docs/testing-framework.md
-- [ ] T033 [US7] Add design decision rationale (VM isolation, Hetzner labels lock, btrfs reset) to docs/testing-framework.md
-- [ ] T034 [US7] Add links to ADR-006 and related decision records in docs/testing-framework.md
+- [X] T031 [US7] Update docs/testing-framework.md with three-tier test structure diagram (Mermaid)
+- [X] T032 [US7] Add component interaction diagram (Mermaid format per FR-030) showing VM, lock, and CI relationships in docs/testing-framework.md
+- [X] T033 [US7] Add design decision rationale (VM isolation, Hetzner labels lock, btrfs reset) to docs/testing-framework.md
+- [X] T034 [US7] Add links to ADR-006 and related decision records in docs/testing-framework.md
 
 **Checkpoint**: User Story 7 complete - architecture documentation ready
 
@@ -171,10 +171,10 @@
 
 **Purpose**: Final validation and cleanup
 
-- [ ] T035 Validate all scripts are executable and have proper error handling
-- [ ] T036 Run quickstart.md validation - verify all copy-paste commands work
-- [ ] T037 Update docs/testing-framework.md navigation links to new documentation files
-- [ ] T038 Verify pytest configuration with `uv run pytest --collect-only` to confirm marker behavior
+- [X] T035 Validate all scripts are executable and have proper error handling
+- [X] T036 Run quickstart.md validation - verify all copy-paste commands work
+- [X] T037 Update docs/testing-framework.md navigation links to new documentation files
+- [X] T038 Verify pytest configuration with `uv run pytest --collect-only` to confirm marker behavior
 
 ---
 
