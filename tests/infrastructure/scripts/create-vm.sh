@@ -34,18 +34,10 @@ readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly NC='\033[0m' # No Color
 
-# Helper functions
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $*"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $*"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $*" >&2
-}
+log_step() { echo -e "${GREEN}==>${NC} $*"; }
+log_info() { echo "    $*"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 show_help() {
     cat << EOF
@@ -79,7 +71,7 @@ EOF
 
 # Check prerequisites
 check_prerequisites() {
-    log_info "Checking prerequisites..."
+    log_step "Checking prerequisites..."
 
     # Check if hcloud CLI is installed
     if ! command -v hcloud &> /dev/null; then
@@ -109,9 +101,9 @@ vm_exists() {
 create_vm() {
     local vm_name="$1"
 
-    log_info "Creating VM '$vm_name'..."
-    log_info "  Type: $SERVER_TYPE (2 vCPU, 4GB RAM)"
-    log_info "  Location: $LOCATION"
+    log_step "Creating VM '$vm_name'..."
+    log_info "Type: $SERVER_TYPE (2 vCPU, 4GB RAM)"
+    log_info "Location: $LOCATION"
 
     hcloud server create \
         --name "$vm_name" \
@@ -127,7 +119,7 @@ create_vm() {
 enable_rescue_mode() {
     local vm_name="$1"
 
-    log_info "Enabling rescue mode for '$vm_name'..."
+    log_step "Enabling rescue mode for '$vm_name'..."
     hcloud server enable-rescue "$vm_name" --type "linux64"
     log_info "Rescue mode enabled"
 }
@@ -136,7 +128,7 @@ enable_rescue_mode() {
 reboot_vm() {
     local vm_name="$1"
 
-    log_info "Rebooting '$vm_name' into rescue mode..."
+    log_step "Rebooting '$vm_name' into rescue mode..."
     hcloud server reboot "$vm_name"
 }
 
@@ -145,7 +137,7 @@ wait_for_ssh() {
     local vm_name="$1"
     local timeout="$2"
 
-    log_info "Waiting for SSH on '$vm_name' (timeout: ${timeout}s)..."
+    log_step "Waiting for SSH on '$vm_name' (timeout: ${timeout}s)..."
 
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
@@ -169,7 +161,7 @@ wait_for_ssh() {
 run_installimage() {
     local vm_name="$1"
 
-    log_info "Running installimage to install Ubuntu 24.04 with btrfs..."
+    log_step "Running installimage to install Ubuntu 24.04 with btrfs..."
 
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
@@ -204,7 +196,7 @@ EOF
 reboot_into_system() {
     local vm_name="$1"
 
-    log_info "Rebooting '$vm_name' into new system..."
+    log_step "Rebooting '$vm_name' into new system..."
 
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
@@ -225,7 +217,7 @@ reboot_into_system() {
 verify_system() {
     local vm_name="$1"
 
-    log_info "Verifying new system..."
+    log_step "Verifying new system..."
 
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
@@ -261,10 +253,10 @@ verify_system() {
         return 1
     fi
 
-    log_info "System verification successful"
-    log_info "  OS: Ubuntu 24.04 LTS"
-    log_info "  Filesystem: btrfs"
-    log_info "  Subvolumes: @, @home, @snapshots"
+    log_step "System verification successful"
+    log_info "OS: Ubuntu 24.04 LTS"
+    log_info "Filesystem: btrfs"
+    log_info "Subvolumes: @, @home, @snapshots"
 }
 
 # Main function
@@ -277,7 +269,7 @@ main() {
 
     local vm_name="$1"
 
-    log_info "=== Creating VM: $vm_name ==="
+    log_step "Creating VM: $vm_name"
 
     # Check prerequisites
     check_prerequisites
@@ -319,11 +311,11 @@ main() {
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
 
-    log_info "=== VM Creation Complete ==="
+    log_step "VM creation complete!"
     log_info "VM Name: $vm_name"
     log_info "IP Address: $vm_ip"
     log_info "SSH Access: ssh root@$vm_ip"
-    log_info ""
+    echo ""
     log_info "Next steps:"
     log_info "  1. Configure the VM (users, packages, baseline snapshots)"
     log_info "  2. Test SSH connectivity"

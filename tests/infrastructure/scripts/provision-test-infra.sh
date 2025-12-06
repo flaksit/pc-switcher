@@ -9,22 +9,24 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Colors for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly NC='\033[0m' # No Color
+
+log_step() { echo -e "${GREEN}==>${NC} $*"; }
+log_info() { echo "    $*"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
 # Configuration
 readonly SSH_KEY_NAME="pc-switcher-test-key"
 readonly DEFAULT_SSH_PUBLIC_KEY="${HOME}/.ssh/id_ed25519.pub"
 
-# Helper functions
-log_info() {
-    echo -e "\033[0;32m[INFO]\033[0m $*"
-}
-
-log_error() {
-    echo -e "\033[0;31m[ERROR]\033[0m $*" >&2
-}
-
 # Create or verify SSH key in Hetzner Cloud
 ensure_ssh_key() {
-    log_info "Ensuring SSH key '$SSH_KEY_NAME' exists in Hetzner Cloud..."
+    log_step "Ensuring SSH key '$SSH_KEY_NAME' exists in Hetzner Cloud..."
 
     if hcloud ssh-key describe "$SSH_KEY_NAME" &> /dev/null; then
         log_info "SSH key '$SSH_KEY_NAME' already exists"
@@ -72,83 +74,75 @@ check_vm_configured() {
 }
 
 # Get VM IPs (empty if VM doesn't exist)
-echo "==> Checking existing infrastructure..."
+log_step "Checking existing infrastructure..."
 PC1_IP=$(hcloud server ip pc1 2>/dev/null) || PC1_IP=""
 PC2_IP=$(hcloud server ip pc2 2>/dev/null) || PC2_IP=""
 
 # Early exit if VMs exist and are configured
 if [[ -n "$PC1_IP" && -n "$PC2_IP" ]]; then
-    echo "    Found existing VMs:"
-    echo "      pc1: $PC1_IP"
-    echo "      pc2: $PC2_IP"
-    echo ""
-    echo "    Checking if VMs are configured..."
+    log_info "Found existing VMs:"
+    log_info "  pc1: $PC1_IP"
+    log_info "  pc2: $PC2_IP"
+    log_info "Checking if VMs are configured..."
 
     if check_vm_configured "$PC1_IP" && check_vm_configured "$PC2_IP"; then
-        echo "    VMs are already configured. Skipping provisioning."
-        echo ""
-        echo "VMs ready for testing:"
-        echo "  pc1: $PC1_IP"
-        echo "  pc2: $PC2_IP"
+        log_info "VMs are already configured. Skipping provisioning."
+        log_step "VMs ready for testing:"
+        log_info "pc1: $PC1_IP"
+        log_info "pc2: $PC2_IP"
         exit 0
     fi
 
-    echo "    VMs exist but are not fully configured. Will reconfigure."
-    echo ""
+    log_warn "VMs exist but are not fully configured. Will reconfigure."
 fi
 
 # Provisioning needed - block if not CI
 if [[ -z "$PC1_IP" || -z "$PC2_IP" ]]; then
     if [[ -z "${CI:-}" ]]; then
-        echo "Error: VMs don't exist and provisioning is only allowed from GitHub CI." >&2
-        echo "" >&2
-        echo "To provision VMs, trigger the integration test workflow:" >&2
-        echo "  gh workflow run test.yml" >&2
-        echo "" >&2
-        echo "Then wait for it to complete before running local tests." >&2
+        log_error "VMs don't exist and provisioning is only allowed from GitHub CI."
+        log_info "To provision VMs, trigger the integration test workflow:"
+        log_info "  gh workflow run test.yml"
+        log_info "Then wait for it to complete before running local tests."
         exit 1
     fi
 fi
 
 # Check prerequisites for provisioning
-echo "==> Checking prerequisites..."
+log_step "Checking prerequisites..."
 : "${HCLOUD_TOKEN:?HCLOUD_TOKEN must be set}"
 : "${SSH_AUTHORIZED_KEYS:?SSH_AUTHORIZED_KEYS must be set with all authorized public keys}"
 
 if ! command -v hcloud >/dev/null 2>&1; then
-    echo "Error: hcloud CLI not found. Please install it first." >&2
+    log_error "hcloud CLI not found. Please install it first."
     exit 1
 fi
 
 if ! command -v ssh >/dev/null 2>&1; then
-    echo "Error: ssh not found. Please install openssh-client." >&2
+    log_error "ssh not found. Please install openssh-client."
     exit 1
 fi
 
 # Count authorized keys
 KEY_COUNT=$(echo "$SSH_AUTHORIZED_KEYS" | grep -c '^ssh-' || true)
-echo "    Found $KEY_COUNT authorized SSH key(s)"
+log_info "Found $KEY_COUNT authorized SSH key(s)"
 
 # Determine SSH public key path for Hetzner Cloud key
 SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-$DEFAULT_SSH_PUBLIC_KEY}"
 if [[ ! -f "$SSH_PUBLIC_KEY" ]]; then
     log_error "SSH public key not found at: $SSH_PUBLIC_KEY"
-    echo ""
-    echo "Generate one with: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519"
+    log_info "Generate one with: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519"
     exit 1
 fi
 
-echo "Prerequisites check passed."
-echo
+log_info "Prerequisites check passed"
 
 # Ensure SSH key exists in Hetzner Cloud (must be done once before parallel VM creation)
 ensure_ssh_key
-echo
 
 # Create VMs in parallel
-echo "==> Creating VMs in parallel..."
-echo "    - pc1"
-echo "    - pc2"
+log_step "Creating VMs in parallel..."
+log_info "- pc1"
+log_info "- pc2"
 "$SCRIPT_DIR/create-vm.sh" pc1 &
 PID1=$!
 "$SCRIPT_DIR/create-vm.sh" pc2 &
@@ -157,20 +151,18 @@ PID2=$!
 # Wait for both VM creation jobs
 wait $PID1
 wait $PID2
-echo "VM creation completed."
-echo
+log_info "VM creation completed"
 
 # Get VM IPs (refresh after potential creation)
-echo "==> Retrieving VM IP addresses..."
+log_step "Retrieving VM IP addresses..."
 PC1_IP=$(hcloud server ip pc1)
 PC2_IP=$(hcloud server ip pc2)
-echo "    pc1: $PC1_IP"
-echo "    pc2: $PC2_IP"
-echo
+log_info "pc1: $PC1_IP"
+log_info "pc2: $PC2_IP"
 
 # Configure VMs in parallel
-echo "==> Configuring VMs in parallel..."
-echo "    - Installing packages and setting up users on both VMs"
+log_step "Configuring VMs in parallel..."
+log_info "Installing packages and setting up users on both VMs"
 "$SCRIPT_DIR/configure-vm.sh" "$PC1_IP" "$SSH_AUTHORIZED_KEYS" &
 PID1=$!
 "$SCRIPT_DIR/configure-vm.sh" "$PC2_IP" "$SSH_AUTHORIZED_KEYS" &
@@ -179,35 +171,32 @@ PID2=$!
 # Wait for both configuration jobs
 wait $PID1
 wait $PID2
-echo "VM configuration completed."
-echo
+log_info "VM configuration completed"
 
 # Configure inter-VM networking
-echo "==> Configuring inter-VM networking..."
+log_step "Configuring inter-VM networking..."
 "$SCRIPT_DIR/configure-hosts.sh"
-echo "Inter-VM networking configured."
-echo
+log_info "Inter-VM networking configured"
 
 # Create baseline snapshots
-echo "==> Creating baseline snapshots..."
+log_step "Creating baseline snapshots..."
 "$SCRIPT_DIR/create-baseline-snapshots.sh"
-echo "Baseline snapshots created."
-echo
+log_info "Baseline snapshots created"
 
-echo "==> Test infrastructure provisioning complete!"
-echo
-echo "VMs ready for testing:"
-echo "  pc1: $PC1_IP"
-echo "  pc2: $PC2_IP"
-echo
-echo "To SSH into VMs:"
-echo "  ssh testuser@$PC1_IP"
-echo "  ssh testuser@$PC2_IP"
-echo
-echo "To reset VMs to baseline state:"
-echo "  $SCRIPT_DIR/reset-vm.sh $PC1_IP"
-echo "  $SCRIPT_DIR/reset-vm.sh $PC2_IP"
-echo
-echo "To destroy VMs (manual cleanup):"
-echo "  hcloud server delete pc1"
-echo "  hcloud server delete pc2"
+log_step "Test infrastructure provisioning complete!"
+echo ""
+log_info "VMs ready for testing:"
+log_info "  pc1: $PC1_IP"
+log_info "  pc2: $PC2_IP"
+echo ""
+log_info "To SSH into VMs:"
+log_info "  ssh testuser@$PC1_IP"
+log_info "  ssh testuser@$PC2_IP"
+echo ""
+log_info "To reset VMs to baseline state:"
+log_info "  $SCRIPT_DIR/reset-vm.sh $PC1_IP"
+log_info "  $SCRIPT_DIR/reset-vm.sh $PC2_IP"
+echo ""
+log_info "To destroy VMs (manual cleanup):"
+log_info "  hcloud server delete pc1"
+log_info "  hcloud server delete pc2"

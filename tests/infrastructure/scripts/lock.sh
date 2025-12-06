@@ -17,6 +17,44 @@
 
 set -euo pipefail
 
+# Help
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    cat <<EOF
+Usage: $(basename "$0") <holder> <acquire|release|status>
+
+Manage integration test lock using Hetzner Server Labels.
+
+Arguments:
+  holder    Lock holder identifier (e.g., "github-123456", username)
+  action    One of: acquire, release, status
+
+Actions:
+  acquire   Acquire the lock (waits up to 5 minutes if held by another)
+  release   Release the lock (must be the current holder)
+  status    Show current lock status
+
+Environment Variables:
+  HCLOUD_TOKEN    (required) Hetzner Cloud API token
+
+Examples:
+  $(basename "$0") github-123456 acquire
+  $(basename "$0") github-123456 release
+  $(basename "$0") "" status
+EOF
+    exit 0
+fi
+
+# Colors for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly NC='\033[0m' # No Color
+
+log_step() { echo -e "${GREEN}==>${NC} $*"; }
+log_info() { echo "    $*"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
 readonly SERVER_NAME="pc1"
 readonly LOCK_TIMEOUT_SECONDS=300  # 5 minutes
 readonly RETRY_INTERVAL_SECONDS=10
@@ -26,9 +64,9 @@ readonly RETRY_INTERVAL_SECONDS=10
 
 # Parse arguments
 if [[ $# -lt 2 ]]; then
-    echo "Usage: $0 <holder> <acquire|release|status>" >&2
-    echo "  holder: Lock holder identifier (or empty string for status)" >&2
-    echo "  action: acquire, release, or status" >&2
+    log_error "Expected 2 arguments, got $#"
+    echo "Usage: $(basename "$0") <holder> <acquire|release|status>" >&2
+    echo "Run with -h for help" >&2
     exit 1
 fi
 
@@ -70,19 +108,19 @@ status() {
     timestamp=$(get_lock_timestamp)
 
     if [[ -z "$holder" ]]; then
-        echo "Lock is not held"
+        log_info "Lock is not held"
         return 0
     fi
 
-    echo "Lock held by: $holder"
-    echo "Acquired at: $timestamp"
+    log_info "Lock held by: $holder"
+    log_info "Acquired at: $timestamp"
     return 0
 }
 
 # Acquire lock with timeout and retry
 acquire() {
     if [[ -z "$HOLDER" ]]; then
-        echo "Error: holder must not be empty for acquire operation" >&2
+        log_error "holder must not be empty for acquire operation"
         exit 1
     fi
 
@@ -98,7 +136,7 @@ acquire() {
 
         # Lock is free - try to acquire it
         if [[ -z "$current_holder" ]]; then
-            echo "Lock is free, attempting to acquire..."
+            log_info "Lock is free, attempting to acquire..."
             set_lock "$HOLDER"
 
             # Verify we got the lock (check for race condition)
@@ -106,20 +144,20 @@ acquire() {
             current_holder=$(get_lock_holder)
 
             if [[ "$current_holder" == "$HOLDER" ]]; then
-                echo "Successfully acquired lock as $HOLDER"
+                log_step "Successfully acquired lock as $HOLDER"
                 return 0
             else
-                echo "Race condition detected: lock acquired by $current_holder, retrying..."
+                log_warn "Race condition detected: lock acquired by $current_holder, retrying..."
             fi
         # Lock is held by us already
         elif [[ "$current_holder" == "$HOLDER" ]]; then
-            echo "Lock already held by $HOLDER"
+            log_info "Lock already held by $HOLDER"
             return 0
         # Lock is held by someone else
         else
             local timestamp
             timestamp=$(get_lock_timestamp)
-            echo "Lock held by $current_holder (since $timestamp), waiting..."
+            log_info "Lock held by $current_holder (since $timestamp), waiting..."
         fi
 
         # Check timeout
@@ -127,8 +165,8 @@ acquire() {
         elapsed=$((current_time - start_time))
 
         if [[ $elapsed -ge $LOCK_TIMEOUT_SECONDS ]]; then
-            echo "Error: Timeout waiting for lock (waited ${elapsed}s)" >&2
-            echo "Lock is still held by: $current_holder" >&2
+            log_error "Timeout waiting for lock (waited ${elapsed}s)"
+            log_error "Lock is still held by: $current_holder"
             exit 1
         fi
 
@@ -140,7 +178,7 @@ acquire() {
 # Release lock
 release() {
     if [[ -z "$HOLDER" ]]; then
-        echo "Error: holder must not be empty for release operation" >&2
+        log_error "holder must not be empty for release operation"
         exit 1
     fi
 
@@ -149,20 +187,20 @@ release() {
 
     # Lock not held
     if [[ -z "$current_holder" ]]; then
-        echo "Lock is not held, nothing to release"
+        log_info "Lock is not held, nothing to release"
         return 0
     fi
 
     # Lock held by us - release it
     if [[ "$current_holder" == "$HOLDER" ]]; then
-        echo "Releasing lock held by $HOLDER"
+        log_info "Releasing lock held by $HOLDER"
         remove_lock
-        echo "Lock released successfully"
+        log_step "Lock released successfully"
         return 0
     fi
 
     # Lock held by someone else - error
-    echo "Error: Cannot release lock held by $current_holder (requested by $HOLDER)" >&2
+    log_error "Cannot release lock held by $current_holder (requested by $HOLDER)"
     exit 1
 }
 
@@ -178,7 +216,7 @@ case "$ACTION" in
         release
         ;;
     *)
-        echo "Error: Invalid action '$ACTION'. Must be one of: acquire, release, status" >&2
+        log_error "Invalid action '$ACTION'. Must be one of: acquire, release, status"
         exit 1
         ;;
 esac
