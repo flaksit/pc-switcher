@@ -28,8 +28,26 @@ readonly DEFAULT_SSH_PUBLIC_KEY="${HOME}/.ssh/id_ed25519.pub"
 ensure_ssh_key() {
     log_step "Ensuring SSH key '$SSH_KEY_NAME' exists in Hetzner Cloud..."
 
+    # Get the fingerprint of our local public key
+    local local_fingerprint
+    local_fingerprint=$(ssh-keygen -lf "$SSH_PUBLIC_KEY" | awk '{print $2}')
+    log_info "Local key fingerprint: $local_fingerprint"
+
     if hcloud ssh-key describe "$SSH_KEY_NAME" &> /dev/null; then
-        log_info "SSH key '$SSH_KEY_NAME' already exists"
+        # Key exists, check if fingerprint matches
+        local remote_fingerprint
+        remote_fingerprint=$(hcloud ssh-key describe "$SSH_KEY_NAME" -o json | jq -r '.fingerprint')
+        log_info "Remote key fingerprint: $remote_fingerprint"
+
+        if [[ "$local_fingerprint" == "$remote_fingerprint" ]]; then
+            log_info "SSH key '$SSH_KEY_NAME' already exists with matching fingerprint"
+        else
+            log_warn "SSH key '$SSH_KEY_NAME' exists but fingerprint doesn't match!"
+            log_info "Deleting old key and creating new one..."
+            hcloud ssh-key delete "$SSH_KEY_NAME"
+            hcloud ssh-key create --name "$SSH_KEY_NAME" --public-key-from-file "$SSH_PUBLIC_KEY"
+            log_info "SSH key recreated with new fingerprint"
+        fi
     else
         log_info "Creating SSH key '$SSH_KEY_NAME'..."
         hcloud ssh-key create --name "$SSH_KEY_NAME" --public-key-from-file "$SSH_PUBLIC_KEY"
@@ -119,6 +137,11 @@ fi
 
 if ! command -v ssh >/dev/null 2>&1; then
     log_error "ssh not found. Please install openssh-client."
+    exit 1
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+    log_error "jq not found. Please install jq."
     exit 1
 fi
 

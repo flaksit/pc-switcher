@@ -32,12 +32,16 @@ readonly TIMEOUT_REBOOT=120
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
+readonly CYAN='\033[0;36m'
 readonly NC='\033[0m' # No Color
 
-log_step() { echo -e "${GREEN}==>${NC} $*"; }
-log_info() { echo "    $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+# Log prefix will be set after VM_NAME is known
+LOG_PREFIX=""
+
+log_step() { echo -e "${GREEN}==>${NC}${LOG_PREFIX} $*"; }
+log_info() { echo "   ${LOG_PREFIX} $*"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC}${LOG_PREFIX} $*"; }
+log_error() { echo -e "${RED}[ERROR]${NC}${LOG_PREFIX} $*" >&2; }
 
 show_help() {
     cat << EOF
@@ -120,7 +124,7 @@ enable_rescue_mode() {
     local vm_name="$1"
 
     log_step "Enabling rescue mode for '$vm_name'..."
-    hcloud server enable-rescue "$vm_name" --type "linux64"
+    hcloud server enable-rescue "$vm_name" --type "linux64" --quiet
     log_info "Rescue mode enabled"
 }
 
@@ -132,6 +136,20 @@ reboot_vm() {
     hcloud server reboot "$vm_name"
 }
 
+# Common SSH options
+readonly SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
+
+# Run SSH command and prefix all output with VM name
+run_ssh() {
+    local vm_ip="$1"
+    shift
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "root@$vm_ip" "$@" 2>&1 | while IFS= read -r line; do
+        echo "   ${LOG_PREFIX} $line"
+    done
+    return "${PIPESTATUS[0]}"
+}
+
 # Wait for SSH to become available
 wait_for_ssh() {
     local vm_name="$1"
@@ -141,19 +159,29 @@ wait_for_ssh() {
 
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
+    log_info "VM IP: $vm_ip"
 
     local elapsed=0
+    local attempt=0
     while ((elapsed < timeout)); do
-        if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-               "root@$vm_ip" "echo SSH ready" &> /dev/null; then
-            log_info "SSH is ready on $vm_ip"
+        ((attempt++))
+        # shellcheck disable=SC2086
+        if ssh $SSH_OPTS "root@$vm_ip" "echo SSH ready" &> /dev/null; then
+            log_info "SSH is ready on $vm_ip (after ${elapsed}s, attempt $attempt)"
             return 0
         fi
         sleep 5
         ((elapsed += 5))
+        if ((attempt % 6 == 0)); then
+            log_info "Still waiting for SSH... (${elapsed}s elapsed)"
+        fi
     done
 
     log_error "SSH did not become available within ${timeout}s"
+    log_error "Attempting verbose SSH for diagnostics..."
+    # Run one verbose attempt to help diagnose
+    # shellcheck disable=SC2086
+    ssh -v $SSH_OPTS "root@$vm_ip" "echo SSH ready" 2>&1 | tail -30 || true
     return 1
 }
 
@@ -182,12 +210,11 @@ EOF
 )
 
     log_info "Creating installimage config..."
-    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$vm_ip" \
-        "cat > /tmp/installimage.conf" <<< "$config"
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "root@$vm_ip" "cat > /tmp/installimage.conf" <<< "$config"
 
     log_info "Running installimage (this may take 5-10 minutes)..."
-    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$vm_ip" \
-        "installimage -a -c /tmp/installimage.conf"
+    run_ssh "$vm_ip" "installimage -a -c /tmp/installimage.conf"
 
     log_info "Installation complete"
 }
@@ -206,8 +233,8 @@ reboot_into_system() {
     hcloud server disable-rescue "$vm_name"
 
     # Reboot via SSH (rescue mode)
-    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$vm_ip" \
-        "reboot" || true  # SSH connection will drop, so ignore error
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "root@$vm_ip" "reboot" || true  # SSH connection will drop, so ignore error
 
     log_info "Waiting for system to reboot..."
     sleep 10
@@ -228,8 +255,8 @@ verify_system() {
     # Verify btrfs filesystem
     log_info "Checking btrfs filesystem..."
     local btrfs_check
-    btrfs_check=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$vm_ip" \
-        "df -T / | tail -n1 | awk '{print \$2}'")
+    # shellcheck disable=SC2086
+    btrfs_check=$(ssh $SSH_OPTS "root@$vm_ip" "df -T / | tail -n1 | awk '{print \$2}'")
 
     if [[ "$btrfs_check" != "btrfs" ]]; then
         log_error "Root filesystem is not btrfs (got: $btrfs_check)"
@@ -239,8 +266,8 @@ verify_system() {
     # Verify subvolumes
     log_info "Checking subvolumes..."
     local subvols
-    subvols=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$vm_ip" \
-        "btrfs subvolume list / | awk '{print \$NF}' | sort")
+    # shellcheck disable=SC2086
+    subvols=$(ssh $SSH_OPTS "root@$vm_ip" "btrfs subvolume list / | awk '{print \$NF}' | sort")
 
     local expected_subvols=$'@\n@home\n@snapshots'
 
@@ -268,6 +295,9 @@ main() {
     fi
 
     local vm_name="$1"
+
+    # Set log prefix for parallel execution clarity
+    LOG_PREFIX=" ${CYAN}[${vm_name}]${NC}"
 
     log_step "Creating VM: $vm_name"
 

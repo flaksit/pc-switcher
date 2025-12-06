@@ -47,23 +47,37 @@ fi
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
+readonly CYAN='\033[0;36m'
 readonly NC='\033[0m' # No Color
-
-log_step() { echo -e "${GREEN}==>${NC} $*"; }
-log_info() { echo "    $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 readonly VM_HOST="$1"
 readonly SSH_AUTHORIZED_KEYS="$2"
 
+# Log prefix includes VM host for parallel execution clarity
+readonly LOG_PREFIX=" ${CYAN}[${VM_HOST}]${NC}"
+
+log_step() { echo -e "${GREEN}==>${NC}${LOG_PREFIX} $*"; }
+log_info() { echo "   ${LOG_PREFIX} $*"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC}${LOG_PREFIX} $*"; }
+log_error() { echo -e "${RED}[ERROR]${NC}${LOG_PREFIX} $*" >&2; }
+
+# Common SSH options
+readonly SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
+
+# Run SSH command and prefix all output with VM host
+run_ssh() {
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS root@"${VM_HOST}" "$@" 2>&1 | while IFS= read -r line; do
+        echo "   [${VM_HOST}] $line"
+    done
+    return "${PIPESTATUS[0]}"
+}
+
 log_step "Configuring VM at ${VM_HOST}..."
 
-# SSH into VM and configure
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@"${VM_HOST}" << 'EOF'
+log_info "Installing required packages..."
+run_ssh << 'EOF'
 set -euo pipefail
-
-echo "    Installing required packages..."
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
     btrfs-progs \
@@ -71,56 +85,54 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     fail2ban \
     ufw \
     sudo
+EOF
 
-echo "    Creating testuser..."
+log_info "Creating testuser..."
+run_ssh << 'EOF'
+set -euo pipefail
 useradd -m -s /bin/bash testuser
-
-echo "    Configuring sudo access for testuser..."
 echo "testuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/testuser
 chmod 0440 /etc/sudoers.d/testuser
-
-echo "    Setting up SSH key for testuser..."
 mkdir -p /home/testuser/.ssh
 chmod 700 /home/testuser/.ssh
 EOF
 
-# Inject SSH public keys (done separately to handle variable expansion)
-# Using printf to preserve newlines in multi-key input
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@"${VM_HOST}" "printf '%s\n' '${SSH_AUTHORIZED_KEYS}' > /home/testuser/.ssh/authorized_keys"
+log_info "Injecting SSH keys for testuser..."
+# shellcheck disable=SC2086
+ssh $SSH_OPTS root@"${VM_HOST}" "printf '%s\n' '${SSH_AUTHORIZED_KEYS}' > /home/testuser/.ssh/authorized_keys"
 
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@"${VM_HOST}" << 'EOF'
+log_info "Configuring SSH hardening and services..."
+run_ssh << 'EOF'
 set -euo pipefail
 
 chmod 600 /home/testuser/.ssh/authorized_keys
 chown -R testuser:testuser /home/testuser/.ssh
 
-echo "    Configuring SSH hardening..."
+# SSH hardening
 mkdir -p /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/99-hardening.conf << 'SSHEOF'
 PermitRootLogin no
 PasswordAuthentication no
 AllowUsers testuser
 SSHEOF
-
-echo "    Restarting SSH service..."
 systemctl restart sshd
 
-echo "    Configuring fail2ban..."
+# fail2ban
 systemctl enable fail2ban
 systemctl start fail2ban
 
-echo "    Configuring ufw firewall..."
+# ufw firewall
 ufw --force reset
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow 22/tcp comment 'SSH'
 ufw --force enable
 
-echo "    Creating snapshot directories..."
+# Snapshot directories
 mkdir -p /.snapshots/baseline
 mkdir -p /.snapshots/pc-switcher
 
-echo "    Enabling qemu-guest-agent..."
+# qemu-guest-agent
 systemctl enable qemu-guest-agent
 systemctl start qemu-guest-agent
 EOF
