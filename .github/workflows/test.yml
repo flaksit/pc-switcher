@@ -27,16 +27,8 @@ jobs:
             exit 1
           fi
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: "latest"
-
-      - name: Install hcloud CLI
-        run: |
-          curl -L https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz | tar xz
-          sudo mv hcloud /usr/local/bin/
-          hcloud version
+      - name: Install Hetzner Cloud CLI
+        uses: hetznercloud/setup-hcloud@v1
 
       - name: Setup SSH key
         run: |
@@ -50,12 +42,11 @@ jobs:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Provision test infrastructure
-        env:
-          SECRETS_JSON: ${{ toJSON(secrets) }}
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        # env: ${{ secrets }}
         run: |
+          set -o pipefail
           # Collect all SSH_AUTHORIZED_KEY_* secrets into single variable
-          SSH_AUTHORIZED_KEYS=$(echo "$SECRETS_JSON" | jq -r 'to_entries[] | select(.key | startswith("SSH_AUTHORIZED_KEY_")) | .value')
+          SSH_AUTHORIZED_KEYS=$(env | grep '^SSH_AUTHORIZED_KEY_' | sed 's/^[^=]*=//')
           export SSH_AUTHORIZED_KEYS
           tests/infrastructure/scripts/provision-test-infra.sh 2>&1 | tee provision-output.log
         timeout-minutes: 30
@@ -71,7 +62,9 @@ jobs:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Run integration tests
-        run: uv run pytest -m integration -v 2>&1 | tee pytest-output.log
+        run: |
+          set -o pipefail
+          uv run pytest -m integration -v 2>&1 | tee pytest-output.log
         env:
           PC_SWITCHER_TEST_PC1_HOST: ${{ steps.vm_ips.outputs.pc1_ip }}
           PC_SWITCHER_TEST_PC2_HOST: ${{ steps.vm_ips.outputs.pc2_ip }}
