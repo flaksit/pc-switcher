@@ -36,8 +36,7 @@ async def test_btrfs_test_volume_exists(pc1_executor: RemoteExecutor) -> None:
     # Check if /test-vol exists and is a btrfs subvolume
     result = await pc1_executor.run_command("sudo btrfs subvolume show /test-vol 2>/dev/null")
 
-    if not result.success:
-        pytest.skip("Test volume /test-vol not found - VM may not be fully provisioned")
+    assert result.success, "Test volume /test-vol not found - VM may not be fully provisioned"
 
 
 @pytest.mark.integration

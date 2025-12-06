@@ -106,9 +106,8 @@ sequenceDiagram
             Dev->>VM1: Create baseline snapshot
             Dev->>VM2: Create baseline snapshot
         end
-        Dev->>VM1: Reset to baseline (snapshot rollback)
-        Dev->>VM2: Reset to baseline (snapshot rollback)
-        Dev->>Pytest: Run integration tests
+        Pytest->>VM1: Reset to baseline (via fixture)
+        Pytest->>VM2: Reset to baseline (via fixture)
         Pytest->>VM1: SSH + btrfs operations
         Pytest->>VM2: SSH + btrfs operations
         Pytest-->>Dev: Test results
@@ -203,7 +202,7 @@ Each VM has the following btrfs subvolume layout (flat layout):
 Before each test run, VMs are reset to a clean baseline state using btrfs snapshot rollback (not Hetzner VM snapshots, which are slow):
 
 1. Create read-only baseline snapshots of `@` and `@home` during initial provisioning
-2. Before each test run (via `reset-vm.sh`):
+2. Before each test session (automatically via `integration_session` fixture which calls `reset-vm.sh`):
    a. Delete any test artifacts in `/.snapshots/pc-switcher/test-*`
    b. Mount the top-level filesystem as /mnt/btrfs
    c. mv /mnt/btrfs/@ /mnt/btrfs/@_old
@@ -339,9 +338,8 @@ testpaths = tests
 
 1. Ensure your SSH public key is registered as a `SSH_AUTHORIZED_KEY_*` secret
 2. Ensure VMs exist (trigger CI if needed: `gh workflow run test.yml`)
-3. Reset VMs to baseline: `./scripts/reset-vm.sh $PC1_IP && ./scripts/reset-vm.sh $PC2_IP`
-4. Run integration tests with env vars set
-5. Tests clean up after themselves
+3. Run integration tests with env vars set (VMs are automatically reset by the pytest fixture)
+4. Tests clean up after themselves
 
 ### For Testing install.sh
 

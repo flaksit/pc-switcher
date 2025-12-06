@@ -59,18 +59,6 @@ jobs:
           tests/infrastructure/scripts/provision-test-infra.sh 2>&1 | tee provision-output.log
         timeout-minutes: 30
 
-      - name: Reset VMs to baseline state
-        run: |
-          export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
-          export PC_SWITCHER_TEST_USER=testuser
-          PC1_IP=$(hcloud server ip pc1)
-          PC2_IP=$(hcloud server ip pc2)
-          {
-            tests/infrastructure/scripts/reset-vm.sh "$PC1_IP"
-            tests/infrastructure/scripts/reset-vm.sh "$PC2_IP"
-          } 2>&1 | tee reset-output.log
-        timeout-minutes: 10
-
       - name: Get VM IPs
         id: vm_ips
         run: |
@@ -97,7 +85,6 @@ jobs:
           name: test-logs
           path: |
             provision-output.log
-            reset-output.log
             pytest-output.log
           retention-days: 14
           if-no-files-found: warn

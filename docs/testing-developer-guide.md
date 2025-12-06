@@ -573,16 +573,20 @@ Run all tests:
 uv run pytest -v
 ```
 
-### Resetting VMs to Baseline
+### VM Reset Behavior
 
-Before running integration tests, reset VMs to clean state:
+The `integration_session` pytest fixture automatically resets VMs to baseline before tests run. You do **not** need to manually reset VMs before running tests.
+
+**Manual reset** is only needed when:
+- VMs are corrupted from an aborted test run
+- You want to reset without running the full test suite
+- Debugging VM state issues
 
 ```bash
-cd tests/infrastructure
-
-# Reset both VMs (requires HCLOUD_TOKEN for hcloud CLI)
-./scripts/reset-vm.sh $PC_SWITCHER_TEST_PC1_HOST
-./scripts/reset-vm.sh $PC_SWITCHER_TEST_PC2_HOST
+# Manual reset (only if needed)
+source ~/.pc-switcher-test-env
+tests/infrastructure/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC1_HOST
+tests/infrastructure/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC2_HOST
 ```
 
 The `reset-vm.sh` script uses btrfs snapshot rollback and takes about 30 seconds per VM.
@@ -811,7 +815,7 @@ source ~/.pc-switcher-test-env
 - **Always mark integration tests** with `@pytest.mark.integration`
 - **Always use `uv run pytest`** to execute tests
 - **Set environment variables** before running integration tests
-- **Reset VMs** to baseline before integration testing
+- **VMs are automatically reset** by the pytest fixture before integration tests
 - **Check troubleshooting section** when tests fail
 
 For more information, see:

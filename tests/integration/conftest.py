@@ -34,14 +34,18 @@ SCRIPTS_DIR = Path(__file__).parent.parent / "infrastructure" / "scripts"
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip integration tests if VM environment not configured."""
+    """Fail if integration tests are collected but VM environment not configured."""
     missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
 
     if missing_vars:
-        skip_msg = f"Skipping integration tests: VM environment not configured (missing: {', '.join(missing_vars)})"
-        for item in items:
-            if "integration" in item.keywords:
-                item.add_marker(pytest.mark.skip(reason=skip_msg))
+        # Check if any integration tests are being collected
+        has_integration_tests = any("integration" in item.keywords for item in items)
+        if has_integration_tests:
+            pytest.fail(
+                f"Integration tests require VM environment. "
+                f"Missing: {', '.join(missing_vars)}. "
+                f"Run unit tests only with: uv run pytest tests/unit tests/contract"
+            )
 
 
 def _get_lock_holder() -> str:
@@ -56,7 +60,7 @@ def _run_script(script_name: str, *args: str, check: bool = True) -> subprocess.
     """Run an infrastructure script."""
     script_path = SCRIPTS_DIR / script_name
     if not script_path.exists():
-        pytest.skip(f"Infrastructure script not found: {script_path}")
+        pytest.fail(f"Infrastructure script not found: {script_path}")
     return subprocess.run(
         [str(script_path), *args],
         capture_output=True,
@@ -94,13 +98,13 @@ def integration_lock() -> Iterator[None]:
     """
     hcloud_token = os.getenv("HCLOUD_TOKEN")
     if not hcloud_token:
-        pytest.skip("HCLOUD_TOKEN not set, cannot acquire lock")
+        pytest.fail("HCLOUD_TOKEN not set, cannot acquire lock")
 
     holder = _get_lock_holder()
     lock_script = SCRIPTS_DIR / "lock.sh"
 
     if not lock_script.exists():
-        pytest.skip(f"Lock script not found: {lock_script}")
+        pytest.fail(f"Lock script not found: {lock_script}")
 
     # Acquire lock
     result = _run_script("lock.sh", holder, "acquire", check=False)
@@ -127,7 +131,7 @@ def integration_session(integration_lock: None) -> Iterator[None]:
     # Check if VMs exist
     if not _check_vms_exist():
         if not hcloud_token:
-            pytest.skip(
+            pytest.fail(
                 "Test VMs not found and HCLOUD_TOKEN not set. "
                 "Cannot auto-provision. See docs/testing-ops-guide.md for setup."
             )
@@ -135,7 +139,7 @@ def integration_session(integration_lock: None) -> Iterator[None]:
         # Auto-provision VMs
         provision_script = SCRIPTS_DIR / "provision-test-infra.sh"
         if not provision_script.exists():
-            pytest.skip(f"Provision script not found: {provision_script}")
+            pytest.fail(f"Provision script not found: {provision_script}")
 
         result = _run_script("provision-test-infra.sh", check=False)
         if result.returncode != 0:
