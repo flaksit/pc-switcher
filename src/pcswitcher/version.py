@@ -77,9 +77,9 @@ def to_semver_display(version_str: str) -> str:
     - "0.2.0b2" -> "0.2.0-beta.2"
     - "1.0.0rc1" -> "1.0.0-rc.1"
 
-    Also handles development versions by extracting the base+prerelease:
-    - "0.1.0a1.post20.dev0+4e7b776" -> "0.1.0-alpha.1+dev"
-    - "0.0.0.post125.dev0+09ab5f5" -> "0.0.0+dev"
+    Also handles development versions with full build metadata:
+    - "0.1.0a1.post20.dev0+4e7b776" -> "0.1.0-alpha.1+post20.4e7b776"
+    - "0.0.0.post125.dev0+09ab5f5" -> "0.0.0+post125.09ab5f5"
 
     Already-SemVer versions are returned unchanged:
     - "0.1.0-alpha.1" -> "0.1.0-alpha.1"
@@ -101,18 +101,24 @@ def to_semver_display(version_str: str) -> str:
         >>> to_semver_display("0.1.0-alpha.1")
         '0.1.0-alpha.1'
         >>> to_semver_display("0.1.0a1.post20.dev0+4e7b776")
-        '0.1.0-alpha.1+dev'
+        '0.1.0-alpha.1+post20.4e7b776'
     """
     # Check if this is a development version with .post/.dev suffixes
-    dev_match = re.match(r"^(\d+\.\d+\.\d+)((?:a|b|rc)\d+)?\.post\d+\.dev\d+\+", version_str)
+    # Format: X.Y.Z[aN|bN|rcN].postN.devN+hash
+    dev_match = re.match(
+        r"^(\d+\.\d+\.\d+)((?:a|b|rc)\d+)?\.post(\d+)\.dev\d+\+([a-f0-9]+)$", version_str
+    )
     if dev_match:
         base = dev_match.group(1)
         prerelease = dev_match.group(2)
+        post_num = dev_match.group(3)
+        git_hash = dev_match.group(4)
+        build_metadata = f"post{post_num}.{git_hash}"
         if prerelease:
             # Convert PEP 440 prerelease to SemVer format
             converted = _convert_pep440_prerelease(base, prerelease)
-            return f"{converted}+dev"
-        return f"{base}+dev"
+            return f"{converted}+{build_metadata}"
+        return f"{base}+{build_metadata}"
 
     # Check for PEP 440 pre-release format: 0.1.0a1, 0.2.0b2, 1.0.0rc1
     pep440_match = re.match(r"^(\d+\.\d+\.\d+)(a|b|rc)(\d+)$", version_str)

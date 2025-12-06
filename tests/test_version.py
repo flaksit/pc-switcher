@@ -141,12 +141,12 @@ class TestToSemverDisplay:
         assert to_semver_display("2.0.0rc10") == "2.0.0-rc.10"
 
     def test_dev_version_with_prerelease(self) -> None:
-        """Development versions with prerelease should show base+prerelease+dev."""
-        assert to_semver_display("0.1.0a1.post20.dev0+4e7b776") == "0.1.0-alpha.1+dev"
-        assert to_semver_display("0.2.0b2.post5.dev0+abc1234") == "0.2.0-beta.2+dev"
-        assert to_semver_display("1.0.0rc1.post10.dev0+deadbeef") == "1.0.0-rc.1+dev"
+        """Development versions with prerelease should include full build metadata."""
+        assert to_semver_display("0.1.0a1.post20.dev0+4e7b776") == "0.1.0-alpha.1+post20.4e7b776"
+        assert to_semver_display("0.2.0b2.post5.dev0+abc1234") == "0.2.0-beta.2+post5.abc1234"
+        assert to_semver_display("1.0.0rc1.post10.dev0+deadbeef") == "1.0.0-rc.1+post10.deadbeef"
 
     def test_dev_version_without_prerelease(self) -> None:
-        """Development versions without prerelease should show base+dev."""
-        assert to_semver_display("0.0.0.post125.dev0+09ab5f5") == "0.0.0+dev"
-        assert to_semver_display("1.0.0.post1.dev0+abc1234") == "1.0.0+dev"
+        """Development versions without prerelease should include full build metadata."""
+        assert to_semver_display("0.0.0.post125.dev0+09ab5f5") == "0.0.0+post125.09ab5f5"
+        assert to_semver_display("1.0.0.post1.dev0+abc1234") == "1.0.0+post1.abc1234"
