@@ -42,7 +42,7 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-echo "${{ secrets.SSH_AUTHORIZED_KEY_CI }}" > ~/.ssh/id_ed25519.pub
+          echo "${{ secrets.SSH_AUTHORIZED_KEY_CI }}" > ~/.ssh/id_ed25519.pub
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H $(hcloud server ip pc1 || echo "") >> ~/.ssh/known_hosts 2>/dev/null || true
           ssh-keyscan -H $(hcloud server ip pc2 || echo "") >> ~/.ssh/known_hosts 2>/dev/null || true
