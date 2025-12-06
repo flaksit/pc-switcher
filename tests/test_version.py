@@ -8,11 +8,12 @@ from unittest.mock import patch
 import pytest
 
 from pcswitcher.version import (
+    Pep440Version,
+    SemverVersion,
     get_this_version,
-    parse_version_from_cli_output,
-    pep440_to_semver,
-    semver_to_pep440,
-    to_semver_display,
+    is_semver_string,
+    parse_version_str_from_cli_output,
+    to_semver_str,
 )
 
 
@@ -39,234 +40,368 @@ class TestGetCurrentVersion:
             assert "Package metadata not found" in str(exc_info.value)
 
 
-class TestParseVersionFromCliOutput:
-    """Tests for parse_version_from_cli_output() with SemVer and PEP 440 support."""
+class TestParseVersionStrFromCliOutput:
+    """Tests for parse_version_str_from_cli_output() with SemVer and PEP 440 support."""
 
     def test_parse_base_version(self) -> None:
         """Should parse base version without pre-release."""
-        assert parse_version_from_cli_output("pc-switcher 0.1.0") == "0.1.0"
-        assert parse_version_from_cli_output("pc-switcher 1.2.3") == "1.2.3"
-        assert parse_version_from_cli_output("0.1.0") == "0.1.0"
+        assert parse_version_str_from_cli_output("pc-switcher 0.1.0") == "0.1.0"
+        assert parse_version_str_from_cli_output("pc-switcher 1.2.3") == "1.2.3"
+        assert parse_version_str_from_cli_output("0.1.0") == "0.1.0"
 
     def test_parse_semver_alpha_version(self) -> None:
         """Should parse SemVer-style alpha pre-release versions."""
-        assert parse_version_from_cli_output("pc-switcher 0.1.0-alpha") == "0.1.0-alpha"
-        assert parse_version_from_cli_output("pc-switcher 0.1.0-alpha.1") == "0.1.0-alpha.1"
-        assert parse_version_from_cli_output("0.1.0-alpha.2") == "0.1.0-alpha.2"
+        assert parse_version_str_from_cli_output("pc-switcher 0.1.0-alpha.1") == "0.1.0-alpha.1"
+        assert parse_version_str_from_cli_output("0.1.0-alpha.2") == "0.1.0-alpha.2"
 
     def test_parse_semver_beta_version(self) -> None:
         """Should parse SemVer-style beta pre-release versions."""
-        assert parse_version_from_cli_output("pc-switcher 0.1.0-beta") == "0.1.0-beta"
-        assert parse_version_from_cli_output("pc-switcher 0.1.0-beta.1") == "0.1.0-beta.1"
-        assert parse_version_from_cli_output("0.2.0-beta.3") == "0.2.0-beta.3"
+        assert parse_version_str_from_cli_output("pc-switcher 0.1.0-beta.1") == "0.1.0-beta.1"
+        assert parse_version_str_from_cli_output("0.2.0-beta.3") == "0.2.0-beta.3"
 
     def test_parse_semver_rc_version(self) -> None:
         """Should parse SemVer-style release candidate versions."""
-        assert parse_version_from_cli_output("pc-switcher 0.1.0-rc") == "0.1.0-rc"
-        assert parse_version_from_cli_output("pc-switcher 0.1.0-rc.1") == "0.1.0-rc.1"
-        assert parse_version_from_cli_output("1.0.0-rc.2") == "1.0.0-rc.2"
+        assert parse_version_str_from_cli_output("pc-switcher 0.1.0-rc.1") == "0.1.0-rc.1"
+        assert parse_version_str_from_cli_output("1.0.0-rc.2") == "1.0.0-rc.2"
 
     def test_parse_pep440_alpha_version(self) -> None:
         """Should parse PEP 440-style alpha pre-release versions."""
-        assert parse_version_from_cli_output("pc-switcher 0.1.0a1") == "0.1.0a1"
-        assert parse_version_from_cli_output("pc-switcher 0.1.0a2") == "0.1.0a2"
-        assert parse_version_from_cli_output("0.2.0a1") == "0.2.0a1"
+        assert parse_version_str_from_cli_output("pc-switcher 0.1.0a1") == "0.1.0a1"
+        assert parse_version_str_from_cli_output("0.2.0a1") == "0.2.0a1"
 
     def test_parse_pep440_beta_version(self) -> None:
         """Should parse PEP 440-style beta pre-release versions."""
-        assert parse_version_from_cli_output("pc-switcher 0.1.0b1") == "0.1.0b1"
-        assert parse_version_from_cli_output("pc-switcher 0.2.0b2") == "0.2.0b2"
-        assert parse_version_from_cli_output("1.0.0b3") == "1.0.0b3"
+        assert parse_version_str_from_cli_output("pc-switcher 0.1.0b1") == "0.1.0b1"
+        assert parse_version_str_from_cli_output("1.0.0b3") == "1.0.0b3"
 
     def test_parse_pep440_rc_version(self) -> None:
         """Should parse PEP 440-style release candidate versions."""
-        assert parse_version_from_cli_output("pc-switcher 0.1.0rc1") == "0.1.0rc1"
-        assert parse_version_from_cli_output("pc-switcher 1.0.0rc2") == "1.0.0rc2"
-        assert parse_version_from_cli_output("2.0.0rc1") == "2.0.0rc1"
+        assert parse_version_str_from_cli_output("pc-switcher 0.1.0rc1") == "0.1.0rc1"
+        assert parse_version_str_from_cli_output("2.0.0rc1") == "2.0.0rc1"
 
     def test_parse_with_extra_text(self) -> None:
         """Should extract version from output with extra text."""
         output = "pc-switcher 0.1.0-alpha.1\nsome other text"
-        assert parse_version_from_cli_output(output) == "0.1.0-alpha.1"
-
-    def test_parse_dev_version(self) -> None:
-        """Should parse development versions from git, extracting base+prerelease."""
-        # uv-dynamic-versioning creates versions like 0.1.0a1.post20.dev0+4e7b776
-        # Our regex captures the base version + prerelease part (0.1.0a1)
-        output = "pc-switcher 0.1.0a1.post20.dev0+4e7b776"
-        assert parse_version_from_cli_output(output) == "0.1.0a1"
-
-        # For base versions without prerelease, only captures the base
-        output = "pc-switcher 0.0.0.post125.dev0+09ab5f5"
-        assert parse_version_from_cli_output(output) == "0.0.0"
+        assert parse_version_str_from_cli_output(output) == "0.1.0-alpha.1"
 
     def test_parse_invalid_version(self) -> None:
         """Should raise ValueError for invalid version string."""
-        with pytest.raises(ValueError) as exc_info:
-            parse_version_from_cli_output("no version here")
-        assert "Cannot parse version from output" in str(exc_info.value)
+        with pytest.raises(ValueError, match="Cannot parse version"):
+            parse_version_str_from_cli_output("no version here")
 
     def test_parse_empty_string(self) -> None:
         """Should raise ValueError for empty string."""
-        with pytest.raises(ValueError) as exc_info:
-            parse_version_from_cli_output("")
-        assert "Cannot parse version from output" in str(exc_info.value)
+        with pytest.raises(ValueError, match="Cannot parse version"):
+            parse_version_str_from_cli_output("")
+
+
+class TestIsSemverString:
+    """Tests for is_semver_string()."""
+
+    def test_valid_semver(self) -> None:
+        """Should return True for valid SemVer strings."""
+        assert is_semver_string("1.0.0") is True
+        assert is_semver_string("0.1.0-alpha.1") is True
+        assert is_semver_string("1.0.0-rc.1+build") is True
+        assert is_semver_string("2.0.0+build.123") is True
+
+    def test_invalid_semver(self) -> None:
+        """Should return False for invalid SemVer strings."""
+        assert is_semver_string("1.0") is False
+        assert is_semver_string("1.0.0a1") is False  # PEP 440 format
+        assert is_semver_string("v1.0.0") is False
+        assert is_semver_string("invalid") is False
+
+
+class TestPep440VersionParse:
+    """Tests for Pep440Version.parse()."""
+
+    def test_stable_release(self) -> None:
+        """Should parse stable release versions."""
+        v = Pep440Version.parse("1.0.0")
+        assert v.release == (1, 0, 0)
+        assert v.pre is None
+        assert v.post is None
+        assert v.dev is None
+        assert v.local is None
+
+    def test_alpha_prerelease(self) -> None:
+        """Should parse alpha pre-release versions."""
+        v = Pep440Version.parse("1.0.0a1")
+        assert v.release == (1, 0, 0)
+        assert v.pre == ("a", 1)
+
+    def test_beta_prerelease(self) -> None:
+        """Should parse beta pre-release versions."""
+        v = Pep440Version.parse("1.0.0b2")
+        assert v.release == (1, 0, 0)
+        assert v.pre == ("b", 2)
+
+    def test_rc_prerelease(self) -> None:
+        """Should parse release candidate versions."""
+        v = Pep440Version.parse("1.0.0rc1")
+        assert v.release == (1, 0, 0)
+        assert v.pre == ("rc", 1)
+
+    def test_dev_release(self) -> None:
+        """Should parse dev release versions."""
+        v = Pep440Version.parse("1.0.0.dev5")
+        assert v.release == (1, 0, 0)
+        assert v.dev == 5
+
+    def test_post_release(self) -> None:
+        """Should parse post release versions."""
+        v = Pep440Version.parse("1.0.0.post1")
+        assert v.release == (1, 0, 0)
+        assert v.post == 1
+
+    def test_local_version(self) -> None:
+        """Should parse local version."""
+        v = Pep440Version.parse("1.0.0+ubuntu1")
+        assert v.release == (1, 0, 0)
+        assert v.local == "ubuntu1"
+
+    def test_complex_version(self) -> None:
+        """Should parse complex version with all parts."""
+        v = Pep440Version.parse("1.0.0a1.post2.dev3+local")
+        assert v.release == (1, 0, 0)
+        assert v.pre == ("a", 1)
+        assert v.post == 2
+        assert v.dev == 3
+        assert v.local == "local"
+
+    def test_implicit_zero_post(self) -> None:
+        """Should handle .post without number (implicit 0)."""
+        v = Pep440Version.parse("1.0.0.post")
+        assert v.post == 0
+
+    def test_implicit_zero_dev(self) -> None:
+        """Should handle .dev without number (implicit 0)."""
+        v = Pep440Version.parse("1.0.0.dev")
+        assert v.dev == 0
+
+    def test_epoch_raises(self) -> None:
+        """Should raise ValueError for epoch."""
+        with pytest.raises(ValueError, match="epoch is not supported"):
+            Pep440Version.parse("1!1.0.0")
+
+
+class TestPep440VersionStr:
+    """Tests for Pep440Version.__str__()."""
+
+    def test_str_stable(self) -> None:
+        """Should format stable version."""
+        v = Pep440Version(release=(1, 0, 0))
+        assert str(v) == "1.0.0"
+
+    def test_str_prerelease(self) -> None:
+        """Should format pre-release version."""
+        v = Pep440Version(release=(1, 0, 0), pre=("a", 1))
+        assert str(v) == "1.0.0a1"
+
+    def test_str_complex(self) -> None:
+        """Should format complex version."""
+        v = Pep440Version(release=(1, 0, 0), pre=("rc", 1), post=2, dev=3, local="build")
+        assert str(v) == "1.0.0rc1.post2.dev3+build"
+
+
+class TestSemverVersionParse:
+    """Tests for SemverVersion.parse()."""
+
+    def test_stable_release(self) -> None:
+        """Should parse stable release versions."""
+        v = SemverVersion.parse("1.0.0")
+        assert v.major == 1
+        assert v.minor == 0
+        assert v.patch == 0
+        assert v.prerelease is None
+        assert v.build is None
+
+    def test_prerelease(self) -> None:
+        """Should parse pre-release versions."""
+        v = SemverVersion.parse("1.0.0-alpha.1")
+        assert v.prerelease == "alpha.1"
+
+    def test_build_metadata(self) -> None:
+        """Should parse build metadata."""
+        v = SemverVersion.parse("1.0.0+build.123")
+        assert v.build == "build.123"
+
+    def test_full_version(self) -> None:
+        """Should parse full version with prerelease and build."""
+        v = SemverVersion.parse("1.0.0-alpha.1+build.123")
+        assert v.prerelease == "alpha.1"
+        assert v.build == "build.123"
+
+    def test_invalid_raises(self) -> None:
+        """Should raise ValueError for invalid SemVer."""
+        with pytest.raises(ValueError, match="Invalid SemVer"):
+            SemverVersion.parse("1.0")
+
+
+class TestSemverVersionStr:
+    """Tests for SemverVersion.__str__()."""
+
+    def test_str_stable(self) -> None:
+        """Should format stable version."""
+        v = SemverVersion(major=1, minor=0, patch=0)
+        assert str(v) == "1.0.0"
+
+    def test_str_prerelease(self) -> None:
+        """Should format pre-release version."""
+        v = SemverVersion(major=1, minor=0, patch=0, prerelease="alpha.1")
+        assert str(v) == "1.0.0-alpha.1"
+
+    def test_str_full(self) -> None:
+        """Should format full version."""
+        v = SemverVersion(major=1, minor=0, patch=0, prerelease="rc.1", build="build.123")
+        assert str(v) == "1.0.0-rc.1+build.123"
 
 
 class TestPep440ToSemver:
-    """Tests for pep440_to_semver() - converting PEP 440 to SemVer format."""
+    """Tests for Pep440Version.to_semver()."""
 
-    # === Release versions ===
     def test_stable_release(self) -> None:
-        """Stable release versions should convert directly."""
-        assert pep440_to_semver("1.0.0") == "1.0.0"
-        assert pep440_to_semver("0.1.0") == "0.1.0"
-        assert pep440_to_semver("2.3.4") == "2.3.4"
+        """Stable release should convert directly."""
+        v = Pep440Version.parse("1.0.0")
+        s = v.to_semver()
+        assert str(s) == "1.0.0"
 
-    def test_release_with_wrong_parts_raises(self) -> None:
-        """Release with != 3 parts should raise ValueError."""
-        with pytest.raises(ValueError, match="exactly 3 release parts"):
-            pep440_to_semver("1.0")
-        with pytest.raises(ValueError, match="exactly 3 release parts"):
-            pep440_to_semver("1.0.0.0")
-
-    # === Pre-release versions ===
     def test_alpha_prerelease(self) -> None:
-        """Alpha pre-release should convert to -alpha.N."""
-        assert pep440_to_semver("1.0.0a1") == "1.0.0-alpha.1"
-        assert pep440_to_semver("0.2.0a10") == "0.2.0-alpha.10"
+        """Alpha should convert to -alpha.N."""
+        v = Pep440Version.parse("1.0.0a1")
+        s = v.to_semver()
+        assert str(s) == "1.0.0-alpha.1"
 
     def test_beta_prerelease(self) -> None:
-        """Beta pre-release should convert to -beta.N."""
-        assert pep440_to_semver("1.0.0b1") == "1.0.0-beta.1"
-        assert pep440_to_semver("0.2.0b2") == "0.2.0-beta.2"
+        """Beta should convert to -beta.N."""
+        v = Pep440Version.parse("1.0.0b2")
+        s = v.to_semver()
+        assert str(s) == "1.0.0-beta.2"
 
     def test_rc_prerelease(self) -> None:
-        """Release candidate should convert to -rc.N."""
-        assert pep440_to_semver("1.0.0rc1") == "1.0.0-rc.1"
-        assert pep440_to_semver("2.0.0rc10") == "2.0.0-rc.10"
+        """RC should convert to -rc.N."""
+        v = Pep440Version.parse("1.0.0rc1")
+        s = v.to_semver()
+        assert str(s) == "1.0.0-rc.1"
 
-    # === Dev releases ===
     def test_dev_release(self) -> None:
-        """Dev release should convert to -dev.N."""
-        assert pep440_to_semver("1.0.0.dev5") == "1.0.0-dev.5"
-        assert pep440_to_semver("0.1.0.dev0") == "0.1.0-dev.0"
+        """Dev should convert to -dev.N."""
+        v = Pep440Version.parse("1.0.0.dev5")
+        s = v.to_semver()
+        assert str(s) == "1.0.0-dev.5"
 
     def test_prerelease_with_dev(self) -> None:
-        """Pre-release with dev should combine in prerelease."""
-        assert pep440_to_semver("1.0.0a1.dev2") == "1.0.0-alpha.1.dev.2"
-        assert pep440_to_semver("1.0.0b3.dev0") == "1.0.0-beta.3.dev.0"
-        assert pep440_to_semver("1.0.0rc1.dev5") == "1.0.0-rc.1.dev.5"
+        """Pre-release with dev (no post) should combine in prerelease."""
+        v = Pep440Version.parse("1.0.0a1.dev2")
+        s = v.to_semver()
+        assert str(s) == "1.0.0-alpha.1.dev.2"
 
-    # === Post releases ===
     def test_post_release(self) -> None:
-        """Post release should convert to +pN build metadata."""
-        assert pep440_to_semver("1.0.0.post1") == "1.0.0+p1"
-        assert pep440_to_semver("2.0.0.post10") == "2.0.0+p10"
+        """Post should convert to +post.N."""
+        v = Pep440Version.parse("1.0.0.post1")
+        s = v.to_semver()
+        assert str(s) == "1.0.0+post.1"
 
-    def test_prerelease_with_post(self) -> None:
-        """Pre-release with post should have both."""
-        assert pep440_to_semver("1.0.0a1.post2") == "1.0.0-alpha.1+p2"
-        assert pep440_to_semver("1.0.0rc1.post1") == "1.0.0-rc.1+p1"
+    def test_post_with_dev(self) -> None:
+        """Post with dev should put both in build."""
+        v = Pep440Version.parse("1.0.0.post3.dev5")
+        s = v.to_semver()
+        assert str(s) == "1.0.0+post.3.dev.5"
 
-    # === Local versions ===
-    def test_local_version(self) -> None:
-        """Local version should convert to +l.xxx build metadata."""
-        assert pep440_to_semver("1.0.0+ubuntu1") == "1.0.0+l.ubuntu1"
-        assert pep440_to_semver("1.0.0+local.build.123") == "1.0.0+l.local.build.123"
+    def test_local_only(self) -> None:
+        """Local only should go to build."""
+        v = Pep440Version.parse("1.0.0+abc123")
+        s = v.to_semver()
+        assert str(s) == "1.0.0+abc123"
 
     def test_post_with_local(self) -> None:
-        """Post with local should have both in build metadata."""
-        assert pep440_to_semver("1.0.0.post2+ubuntu1") == "1.0.0+p2.l.ubuntu1"
-        assert pep440_to_semver("1.0.0.post1+local.1") == "1.0.0+p1.l.local.1"
+        """Post with local should combine in build."""
+        v = Pep440Version.parse("1.0.0.post2+ubuntu1")
+        s = v.to_semver()
+        assert str(s) == "1.0.0+post.2.ubuntu1"
 
-    # === Complex combinations ===
-    def test_full_complex_version(self) -> None:
-        """Full complex version with all parts."""
-        assert pep440_to_semver("1.0.0a1.post2.dev3+local") == "1.0.0-alpha.1.dev.3+p2.l.local"
+    def test_post_dev_with_local(self) -> None:
+        """Post.dev with local should all go to build."""
+        v = Pep440Version.parse("1.0.0.post3.dev5+abc123")
+        s = v.to_semver()
+        assert str(s) == "1.0.0+post.3.dev.5.abc123"
 
-    # === Epoch (not supported) ===
-    def test_epoch_raises(self) -> None:
-        """Epoch should raise ValueError."""
-        with pytest.raises(ValueError, match="epoch is not supported"):
-            pep440_to_semver("1!1.0.0")
+    def test_wrong_release_parts_raises(self) -> None:
+        """Should raise ValueError if not 3 release parts."""
+        v = Pep440Version(release=(1, 0))
+        with pytest.raises(ValueError, match="exactly 3 release parts"):
+            v.to_semver()
 
 
 class TestSemverToPep440:
-    """Tests for semver_to_pep440() - converting SemVer to PEP 440 format."""
+    """Tests for SemverVersion.to_pep440()."""
 
-    # === Release versions ===
     def test_stable_release(self) -> None:
-        """Stable release versions should convert directly."""
-        assert semver_to_pep440("1.0.0") == "1.0.0"
-        assert semver_to_pep440("0.1.0") == "0.1.0"
-        assert semver_to_pep440("2.3.4") == "2.3.4"
+        """Stable release should convert directly."""
+        v = SemverVersion.parse("1.0.0")
+        p = v.to_pep440()
+        assert str(p) == "1.0.0"
 
-    # === Pre-release versions ===
     def test_alpha_prerelease(self) -> None:
-        """Alpha pre-release should convert to aN."""
-        assert semver_to_pep440("1.0.0-alpha.1") == "1.0.0a1"
-        assert semver_to_pep440("0.2.0-alpha.10") == "0.2.0a10"
+        """Alpha should convert to aN."""
+        v = SemverVersion.parse("1.0.0-alpha.1")
+        p = v.to_pep440()
+        assert str(p) == "1.0.0a1"
 
     def test_beta_prerelease(self) -> None:
-        """Beta pre-release should convert to bN."""
-        assert semver_to_pep440("1.0.0-beta.1") == "1.0.0b1"
-        assert semver_to_pep440("0.2.0-beta.2") == "0.2.0b2"
+        """Beta should convert to bN."""
+        v = SemverVersion.parse("1.0.0-beta.2")
+        p = v.to_pep440()
+        assert str(p) == "1.0.0b2"
 
     def test_rc_prerelease(self) -> None:
-        """Release candidate should convert to rcN."""
-        assert semver_to_pep440("1.0.0-rc.1") == "1.0.0rc1"
-        assert semver_to_pep440("2.0.0-rc.10") == "2.0.0rc10"
+        """RC should convert to rcN."""
+        v = SemverVersion.parse("1.0.0-rc.1")
+        p = v.to_pep440()
+        assert str(p) == "1.0.0rc1"
 
-    # === Dev releases ===
     def test_dev_release(self) -> None:
-        """Dev release should convert to .devN."""
-        assert semver_to_pep440("1.0.0-dev.5") == "1.0.0.dev5"
-        assert semver_to_pep440("0.1.0-dev.0") == "0.1.0.dev0"
+        """Dev should convert to .devN."""
+        v = SemverVersion.parse("1.0.0-dev.5")
+        p = v.to_pep440()
+        assert str(p) == "1.0.0.dev5"
 
     def test_prerelease_with_dev(self) -> None:
         """Pre-release with dev should combine."""
-        assert semver_to_pep440("1.0.0-alpha.1.dev.2") == "1.0.0a1.dev2"
-        assert semver_to_pep440("1.0.0-beta.3.dev.0") == "1.0.0b3.dev0"
-        assert semver_to_pep440("1.0.0-rc.1.dev.5") == "1.0.0rc1.dev5"
+        v = SemverVersion.parse("1.0.0-alpha.1.dev.2")
+        p = v.to_pep440()
+        assert str(p) == "1.0.0a1.dev2"
 
-    # === Post releases (from build metadata) ===
     def test_post_release(self) -> None:
-        """Build metadata pN should convert to .postN."""
-        assert semver_to_pep440("1.0.0+p1") == "1.0.0.post1"
-        assert semver_to_pep440("2.0.0+p10") == "2.0.0.post10"
+        """Build +post.N should convert to .postN."""
+        v = SemverVersion.parse("1.0.0+post.1")
+        p = v.to_pep440()
+        assert str(p) == "1.0.0.post1"
 
-    def test_prerelease_with_post(self) -> None:
-        """Pre-release with post build metadata."""
-        assert semver_to_pep440("1.0.0-alpha.1+p2") == "1.0.0a1.post2"
-        assert semver_to_pep440("1.0.0-rc.1+p1") == "1.0.0rc1.post1"
+    def test_post_with_dev(self) -> None:
+        """Build +post.N.dev.M should convert to .postN.devM."""
+        v = SemverVersion.parse("1.0.0+post.3.dev.5")
+        p = v.to_pep440()
+        assert str(p) == "1.0.0.post3.dev5"
 
-    # === Local versions (from build metadata) ===
-    def test_local_version(self) -> None:
-        """Build metadata l.xxx should convert to +xxx."""
-        assert semver_to_pep440("1.0.0+l.ubuntu1") == "1.0.0+ubuntu1"
-        assert semver_to_pep440("1.0.0+l.local.build.123") == "1.0.0+local.build.123"
+    def test_local_only(self) -> None:
+        """Build without post should become local."""
+        v = SemverVersion.parse("1.0.0+abc123")
+        p = v.to_pep440()
+        assert str(p) == "1.0.0+abc123"
 
     def test_post_with_local(self) -> None:
-        """Post and local in build metadata."""
-        assert semver_to_pep440("1.0.0+p2.l.ubuntu1") == "1.0.0.post2+ubuntu1"
-        assert semver_to_pep440("1.0.0+p1.l.local.1") == "1.0.0.post1+local.1"
+        """Build +post.N.local should split to .postN+local."""
+        v = SemverVersion.parse("1.0.0+post.2.ubuntu1")
+        p = v.to_pep440()
+        assert str(p) == "1.0.0.post2+ubuntu1"
 
-    # === Complex combinations ===
-    def test_full_complex_version(self) -> None:
-        """Full complex version with all parts."""
-        assert semver_to_pep440("1.0.0-alpha.1.dev.3+p2.l.local") == "1.0.0a1.post2.dev3+local"
-
-    # === Error cases ===
-    def test_unrecognized_prerelease_raises(self) -> None:
-        """Unrecognized prerelease identifier should raise."""
-        with pytest.raises(ValueError, match="Unrecognized prerelease"):
-            semver_to_pep440("1.0.0-foo.1")
-
-    def test_unrecognized_build_metadata_raises(self) -> None:
-        """Unrecognized build metadata should raise."""
-        with pytest.raises(ValueError, match="Unrecognized build metadata"):
-            semver_to_pep440("1.0.0+unknown")
+    def test_post_dev_with_local(self) -> None:
+        """Build +post.N.dev.M.local should convert fully."""
+        v = SemverVersion.parse("1.0.0+post.3.dev.5.abc123")
+        p = v.to_pep440()
+        assert str(p) == "1.0.0.post3.dev5+abc123"
 
 
 class TestSymmetricConversion:
@@ -283,17 +418,18 @@ class TestSymmetricConversion:
             "1.0.0.dev5",
             "1.0.0a1.dev2",
             "1.0.0.post1",
-            "1.0.0a1.post2",
+            "1.0.0.post3.dev5",
             "1.0.0+ubuntu1",
             "1.0.0.post2+ubuntu1",
-            "1.0.0a1.post2.dev3+local",
+            "1.0.0.post3.dev5+abc123",
         ],
     )
     def test_pep440_roundtrip(self, pep440: str) -> None:
         """PEP 440 → SemVer → PEP 440 should be identity."""
-        semver = pep440_to_semver(pep440)
-        result = semver_to_pep440(semver)
-        assert result == pep440, f"{pep440} → {semver} → {result}"
+        p = Pep440Version.parse(pep440)
+        s = p.to_semver()
+        result = s.to_pep440()
+        assert str(result) == pep440, f"{pep440} → {s} → {result}"
 
     @pytest.mark.parametrize(
         "semver",
@@ -305,65 +441,55 @@ class TestSymmetricConversion:
             "1.0.0-rc.1",
             "1.0.0-dev.5",
             "1.0.0-alpha.1.dev.2",
-            "1.0.0+p1",
-            "1.0.0-alpha.1+p2",
-            "1.0.0+l.ubuntu1",
-            "1.0.0+p2.l.ubuntu1",
-            "1.0.0-alpha.1.dev.3+p2.l.local",
+            "1.0.0+post.1",
+            "1.0.0+post.3.dev.5",
+            "1.0.0+ubuntu1",
+            "1.0.0+post.2.ubuntu1",
+            "1.0.0+post.3.dev.5.abc123",
         ],
     )
     def test_semver_roundtrip(self, semver: str) -> None:
         """SemVer → PEP 440 → SemVer should be identity."""
-        pep440 = semver_to_pep440(semver)
-        result = pep440_to_semver(pep440)
-        assert result == semver, f"{semver} → {pep440} → {result}"
+        s = SemverVersion.parse(semver)
+        p = s.to_pep440()
+        result = p.to_semver()
+        assert str(result) == semver, f"{semver} → {p} → {result}"
 
 
-class TestToSemverDisplay:
-    """Tests for to_semver_display() - converting versions to SemVer format for display."""
+class TestToSemverStr:
+    """Tests for to_semver_str() - converting versions to SemVer format."""
 
-    def test_stable_version_unchanged(self) -> None:
-        """Stable versions should be returned unchanged."""
-        assert to_semver_display("1.0.0") == "1.0.0"
-        assert to_semver_display("0.1.0") == "0.1.0"
-        assert to_semver_display("2.3.4") == "2.3.4"
+    def test_stable_version(self) -> None:
+        """Stable versions should convert."""
+        assert to_semver_str("1.0.0") == "1.0.0"
 
-    def test_semver_format_unchanged(self) -> None:
+    def test_semver_unchanged(self) -> None:
         """Already SemVer-formatted versions should be returned unchanged."""
-        assert to_semver_display("0.1.0-alpha.1") == "0.1.0-alpha.1"
-        assert to_semver_display("0.2.0-beta.2") == "0.2.0-beta.2"
-        assert to_semver_display("1.0.0-rc.1") == "1.0.0-rc.1"
+        assert to_semver_str("0.1.0-alpha.1") == "0.1.0-alpha.1"
+        assert to_semver_str("0.2.0-beta.2") == "0.2.0-beta.2"
+        assert to_semver_str("1.0.0-rc.1") == "1.0.0-rc.1"
 
     def test_pep440_alpha_to_semver(self) -> None:
-        """PEP 440 alpha versions should be converted to SemVer format."""
-        assert to_semver_display("0.1.0a1") == "0.1.0-alpha.1"
-        assert to_semver_display("0.2.0a2") == "0.2.0-alpha.2"
-        assert to_semver_display("1.0.0a10") == "1.0.0-alpha.10"
+        """PEP 440 alpha versions should be converted."""
+        assert to_semver_str("0.1.0a1") == "0.1.0-alpha.1"
 
     def test_pep440_beta_to_semver(self) -> None:
-        """PEP 440 beta versions should be converted to SemVer format."""
-        assert to_semver_display("0.1.0b1") == "0.1.0-beta.1"
-        assert to_semver_display("0.2.0b2") == "0.2.0-beta.2"
-        assert to_semver_display("1.0.0b3") == "1.0.0-beta.3"
+        """PEP 440 beta versions should be converted."""
+        assert to_semver_str("0.1.0b1") == "0.1.0-beta.1"
 
     def test_pep440_rc_to_semver(self) -> None:
-        """PEP 440 release candidate versions should be converted to SemVer format."""
-        assert to_semver_display("0.1.0rc1") == "0.1.0-rc.1"
-        assert to_semver_display("1.0.0rc2") == "1.0.0-rc.2"
-        assert to_semver_display("2.0.0rc10") == "2.0.0-rc.10"
+        """PEP 440 release candidate versions should be converted."""
+        assert to_semver_str("0.1.0rc1") == "0.1.0-rc.1"
 
-    def test_dev_version_with_prerelease(self) -> None:
-        """Development versions with prerelease should include full build metadata."""
-        assert to_semver_display("0.1.0a1.post20.dev0+4e7b776") == "0.1.0-alpha.1.dev.0+p20.l.4e7b776"
-        assert to_semver_display("0.2.0b2.post5.dev0+abc1234") == "0.2.0-beta.2.dev.0+p5.l.abc1234"
+    def test_post_release(self) -> None:
+        """Post release should convert to build metadata."""
+        assert to_semver_str("1.0.0.post2") == "1.0.0+post.2"
 
-    def test_dev_version_without_prerelease(self) -> None:
-        """Development versions without prerelease should include full build metadata."""
-        assert to_semver_display("0.0.0.post125.dev0+09ab5f5") == "0.0.0-dev.0+p125.l.09ab5f5"
-        assert to_semver_display("1.0.0.post1.dev0+abc1234") == "1.0.0-dev.0+p1.l.abc1234"
+    def test_post_with_local(self) -> None:
+        """Post with local should combine in build."""
+        assert to_semver_str("1.0.0.post2+ubuntu1") == "1.0.0+post.2.ubuntu1"
 
-    def test_invalid_pep440_returns_unchanged(self) -> None:
-        """Invalid PEP 440 versions should be returned as-is."""
-        # These don't match PEP 440 format
-        assert to_semver_display("invalid") == "invalid"
-        assert to_semver_display("1.0") == "1.0"
+    def test_invalid_raises(self) -> None:
+        """Invalid versions should raise ValueError."""
+        with pytest.raises(ValueError):
+            to_semver_str("invalid")

@@ -13,12 +13,20 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
+from typing import TYPE_CHECKING
+
+import semver
+
+if TYPE_CHECKING:
+    from typing import Self
 
 __all__ = [
+    "Pep440Version",
+    "SemverVersion",
     "get_this_version",
-    "parse_version_from_cli_output",
-    "pep440_to_semver",
-    "semver_to_pep440",
+    "is_semver_string",
+    "parse_version_str_from_cli_output",
+    "to_semver_str",
 ]
 
 # PEP 440 pre-release type mapping
@@ -27,8 +35,18 @@ _SEMVER_TO_PEP440_PRE = {"alpha": "a", "beta": "b", "rc": "rc"}
 
 
 @dataclass
-class ParsedPep440:
-    """Parsed components of a PEP 440 version string."""
+class Pep440Version:
+    """Parsed components of a PEP 440 version string.
+
+    PEP 440 format: [N!]N(.N)*[{a|b|rc}N][.postN][.devN][+local]
+
+    Attributes:
+        release: Tuple of release numbers (e.g., (1, 0, 0))
+        pre: Pre-release tuple (type, number) or None (e.g., ("a", 1) for "a1")
+        post: Post-release number or None
+        dev: Dev release number or None
+        local: Local version string or None
+    """
 
     release: tuple[int, ...]
     pre: tuple[str, int] | None = None  # ("a"|"b"|"rc", N)
@@ -36,16 +54,331 @@ class ParsedPep440:
     dev: int | None = None
     local: str | None = None
 
+    @classmethod
+    def parse(cls, version_str: str) -> Self:
+        """Parse a PEP 440 version string into components.
+
+        Args:
+            version_str: PEP 440 version string
+
+        Returns:
+            Pep440Version instance
+
+        Raises:
+            ValueError: If version string is invalid or uses epoch
+        """
+        # Check for epoch (not supported)
+        if "!" in version_str:
+            raise ValueError(f"PEP 440 epoch is not supported: {version_str}")
+
+        # Split off local version
+        local = None
+        if "+" in version_str:
+            version_str, local = version_str.split("+", 1)
+
+        # Full PEP 440 regex (without epoch)
+        # Release: N(.N)*
+        # Pre: (a|b|rc)N (number optional, defaults to 0)
+        # Post: .post[N] (number optional, defaults to 0)
+        # Dev: .dev[N] (number optional, defaults to 0)
+        pattern = r"""
+            ^
+            (\d+(?:\.\d+)*)           # Release segment (group 1)
+            (?:(a|b|rc)(\d+)?)?       # Pre-release (groups 2, 3) - number optional
+            (?:\.post(\d+)?)?         # Post-release (group 4) - number optional
+            (?:\.dev(\d+)?)?          # Dev release (group 5) - number optional
+            $
+        """
+        match = re.match(pattern, version_str, re.VERBOSE)
+        if not match:
+            raise ValueError(f"Invalid PEP 440 version: {version_str}")
+
+        release = tuple(int(x) for x in match.group(1).split("."))
+        pre = None
+        if match.group(2):
+            pre_num = int(match.group(3)) if match.group(3) else 0
+            pre = (match.group(2), pre_num)
+        post = int(match.group(4)) if match.group(4) is not None else (0 if match.group(4) == "" else None)
+        dev = int(match.group(5)) if match.group(5) is not None else (0 if match.group(5) == "" else None)
+
+        # Handle implicit 0 for post and dev when present without number
+        # The regex captures "" for .post without number, None for no .post at all
+        # We need to check if the original string contained .post or .dev
+        if ".post" in version_str.split("+")[0]:
+            post = int(match.group(4)) if match.group(4) else 0
+        if ".dev" in version_str.split("+")[0]:
+            dev = int(match.group(5)) if match.group(5) else 0
+
+        return cls(release=release, pre=pre, post=post, dev=dev, local=local)
+
+    def __str__(self) -> str:
+        """Return the PEP 440 string representation."""
+        result = ".".join(str(x) for x in self.release)
+
+        if self.pre is not None:
+            pre_type, pre_num = self.pre
+            result += f"{pre_type}{pre_num}"
+
+        if self.post is not None:
+            result += f".post{self.post}"
+
+        if self.dev is not None:
+            result += f".dev{self.dev}"
+
+        if self.local is not None:
+            result += f"+{self.local}"
+
+        return result
+
+    def to_semver(self) -> SemverVersion:
+        """Convert to SemVer format.
+
+        Conversion rules:
+        - Release X.Y.Z → X.Y.Z (must be exactly 3 parts)
+        - Pre-release aN/bN/rcN → -alpha.N/-beta.N/-rc.N
+        - Dev release .devN → -dev.N (added to prerelease, but only if no post)
+        - Post release .postN[.devM] → +post.N[.dev.M] (in build metadata)
+        - Local version +xxx → appended to build metadata after post/dev
+
+        Returns:
+            SemverVersion instance
+
+        Raises:
+            ValueError: If release doesn't have exactly 3 parts
+        """
+        if len(self.release) != 3:
+            raise ValueError(
+                f"PEP 440 version must have exactly 3 release parts for SemVer conversion: {self}"
+            )
+
+        major, minor, patch = self.release
+
+        # Build prerelease part
+        prerelease: str | None = None
+        prerelease_parts: list[str] = []
+
+        if self.pre is not None:
+            pre_type, pre_num = self.pre
+            semver_pre = _PEP440_TO_SEMVER_PRE[pre_type]
+            prerelease_parts.append(semver_pre)
+            prerelease_parts.append(str(pre_num))
+
+        # Dev goes to prerelease only if there's no post release
+        # If there's post, dev goes with post in build metadata
+        if self.dev is not None and self.post is None:
+            prerelease_parts.append("dev")
+            prerelease_parts.append(str(self.dev))
+
+        if prerelease_parts:
+            prerelease = ".".join(prerelease_parts)
+
+        # Build metadata: post[.dev].local
+        build: str | None = None
+        build_parts: list[str] = []
+
+        if self.post is not None:
+            build_parts.append("post")
+            build_parts.append(str(self.post))
+            # If we have post, dev goes here too
+            if self.dev is not None:
+                build_parts.append("dev")
+                build_parts.append(str(self.dev))
+
+        if self.local is not None:
+            build_parts.append(self.local)
+
+        if build_parts:
+            build = ".".join(build_parts)
+
+        return SemverVersion(
+            major=major,
+            minor=minor,
+            patch=patch,
+            prerelease=prerelease,
+            build=build,
+        )
+
 
 @dataclass
-class ParsedSemVer:
-    """Parsed components of a SemVer version string."""
+class SemverVersion:
+    """Parsed components of a SemVer version string.
+
+    SemVer format: X.Y.Z[-prerelease][+build]
+
+    Attributes:
+        major: Major version number
+        minor: Minor version number
+        patch: Patch version number
+        prerelease: Pre-release string (dot-separated identifiers) or None
+        build: Build metadata string (dot-separated identifiers) or None
+    """
 
     major: int
     minor: int
     patch: int
-    prerelease: list[str] | None = None  # dot-separated identifiers
-    build: list[str] | None = None  # dot-separated identifiers
+    prerelease: str | None = None
+    build: str | None = None
+
+    @classmethod
+    def parse(cls, version_str: str) -> Self:
+        """Parse a SemVer version string into components.
+
+        Uses the semver package for robust parsing.
+
+        Args:
+            version_str: SemVer version string
+
+        Returns:
+            SemverVersion instance
+
+        Raises:
+            ValueError: If version string is not valid SemVer
+        """
+        try:
+            parsed = semver.Version.parse(version_str)
+        except ValueError as e:
+            raise ValueError(f"Invalid SemVer version: {version_str}") from e
+
+        return cls(
+            major=parsed.major,
+            minor=parsed.minor,
+            patch=parsed.patch,
+            prerelease=parsed.prerelease,
+            build=parsed.build,
+        )
+
+    def __str__(self) -> str:
+        """Return the SemVer string representation."""
+        result = f"{self.major}.{self.minor}.{self.patch}"
+
+        if self.prerelease is not None:
+            result += f"-{self.prerelease}"
+
+        if self.build is not None:
+            result += f"+{self.build}"
+
+        return result
+
+    def to_pep440(self) -> Pep440Version:
+        """Convert to PEP 440 format.
+
+        Conversion rules (reverse of Pep440Version.to_semver):
+        - Release X.Y.Z → X.Y.Z
+        - Pre-release -alpha.N/-beta.N/-rc.N → aN/bN/rcN
+        - Pre-release -dev.N → .devN
+        - Build metadata +post.N[.dev.M][.local] → .postN[.devM][+local]
+
+        Returns:
+            Pep440Version instance
+
+        Raises:
+            ValueError: If prerelease format is unrecognized
+        """
+        pre: tuple[str, int] | None = None
+        dev: int | None = None
+        post: int | None = None
+        local: str | None = None
+
+        # Parse prerelease
+        if self.prerelease is not None:
+            pre, dev = self._parse_prerelease(self.prerelease)
+
+        # Parse build metadata for post, dev (with post), and local
+        if self.build is not None:
+            post, build_dev, local = self._parse_build(self.build)
+            # If dev came from build (with post), use that
+            if build_dev is not None:
+                dev = build_dev
+
+        return Pep440Version(
+            release=(self.major, self.minor, self.patch),
+            pre=pre,
+            post=post,
+            dev=dev,
+            local=local,
+        )
+
+    def _parse_prerelease(self, prerelease: str) -> tuple[tuple[str, int] | None, int | None]:
+        """Parse SemVer prerelease into PEP 440 pre and dev components.
+
+        Args:
+            prerelease: Prerelease string (e.g., "alpha.1", "alpha.1.dev.2")
+
+        Returns:
+            Tuple of (pre, dev) where pre is (type, num) or None
+
+        Raises:
+            ValueError: If prerelease format is unrecognized
+        """
+        parts = prerelease.split(".")
+        pre: tuple[str, int] | None = None
+        dev: int | None = None
+
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+            if part in _SEMVER_TO_PEP440_PRE:
+                if i + 1 >= len(parts):
+                    raise ValueError(f"Pre-release type '{part}' missing number")
+                pre = (_SEMVER_TO_PEP440_PRE[part], int(parts[i + 1]))
+                i += 2
+            elif part == "dev":
+                if i + 1 >= len(parts):
+                    raise ValueError("Dev release missing number")
+                dev = int(parts[i + 1])
+                i += 2
+            else:
+                raise ValueError(f"Unrecognized prerelease identifier '{part}'")
+
+        return pre, dev
+
+    def _parse_build(self, build: str) -> tuple[int | None, int | None, str | None]:
+        """Parse SemVer build metadata into PEP 440 post, dev, and local.
+
+        Build format: [post.N[.dev.M]][.local...]
+        - "post.N" or "post.N.dev.M" at the start indicates post/dev release
+        - Everything after that is local version
+
+        Args:
+            build: Build metadata string
+
+        Returns:
+            Tuple of (post, dev, local)
+        """
+        parts = build.split(".")
+        post: int | None = None
+        dev: int | None = None
+        local_start: int | None = None
+
+        i = 0
+
+        # Check for post.N at start
+        if (
+            i < len(parts)
+            and parts[i] == "post"
+            and i + 1 < len(parts)
+            and parts[i + 1].isdigit()
+        ):
+            post = int(parts[i + 1])
+            i += 2
+
+            # Check for dev.M after post
+            if (
+                i < len(parts)
+                and parts[i] == "dev"
+                and i + 1 < len(parts)
+                and parts[i + 1].isdigit()
+            ):
+                dev = int(parts[i + 1])
+                i += 2
+
+        # Everything remaining is local
+        if i < len(parts):
+            local_start = i
+
+        local = ".".join(parts[local_start:]) if local_start is not None else None
+
+        return post, dev, local
 
 
 def get_this_version() -> str:
@@ -65,7 +398,7 @@ def get_this_version() -> str:
         ) from e
 
 
-def parse_version_from_cli_output(output: str) -> str:
+def parse_version_str_from_cli_output(output: str) -> str:
     """Parse version string from pc-switcher --version output.
 
     Supports both SemVer format (0.1.0-alpha.1) and PEP 440 format (0.1.0a1).
@@ -80,346 +413,43 @@ def parse_version_from_cli_output(output: str) -> str:
         ValueError: If version string cannot be parsed
 
     Examples:
-        >>> parse_version_from_cli_output("pc-switcher 0.1.0")
+        >>> parse_version_str_from_cli_output("pc-switcher 0.1.0")
         '0.1.0'
-        >>> parse_version_from_cli_output("pc-switcher 0.1.0-alpha.1")
+        >>> parse_version_str_from_cli_output("pc-switcher 0.1.0-alpha.1")
         '0.1.0-alpha.1'
-        >>> parse_version_from_cli_output("pc-switcher 0.1.0a1")
+        >>> parse_version_str_from_cli_output("pc-switcher 0.1.0a1")
         '0.1.0a1'
-        >>> parse_version_from_cli_output("0.1.0-rc.2")
+        >>> parse_version_str_from_cli_output("0.1.0-rc.2")
         '0.1.0-rc.2'
     """
     # Matches both formats:
-    # - SemVer: MAJOR.MINOR.PATCH[-prerelease[.number]] (e.g., 0.1.0-alpha.1, 0.1.0-rc.2)
-    # - PEP 440: MAJOR.MINOR.PATCH[{a|b|rc}N] (e.g., 0.1.0a1, 0.2.0b2, 1.0.0rc1)
-    match = re.search(r"(\d+\.\d+\.\d+(?:(?:-[\w.]+)|(?:(?:a|b|rc)\d+))?)", output)
+    # - SemVer: MAJOR.MINOR.PATCH[-prerelease][+build] (e.g., 0.1.0-alpha.1, 0.1.0-rc.2+build)
+    # - PEP 440: MAJOR.MINOR.PATCH[{a|b|rc}N][.postN][.devN][+local] (e.g., 0.1.0a1, 0.1.0.post1)
+    # The regex captures PEP 440 pre-release (a/b/rc followed by digits) directly after patch version
+    match = re.search(r"(\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?(?:[-+.][\w.]+)*)", output)
     if not match:
         raise ValueError(f"Cannot parse version from output: {output}")
     return match.group(1)
 
 
-def _parse_pep440(version_str: str) -> ParsedPep440:
-    """Parse a PEP 440 version string into components.
-
-    PEP 440 format: [N!]N(.N)*[{a|b|rc}N][.postN][.devN][+local]
+def is_semver_string(version_str: str) -> bool:
+    """Check if a string is a valid SemVer version.
 
     Args:
-        version_str: PEP 440 version string
+        version_str: Version string to check
 
     Returns:
-        ParsedPep440 with all components
-
-    Raises:
-        ValueError: If version string is invalid or uses epoch
+        True if valid SemVer, False otherwise
     """
-    # Check for epoch (not supported)
-    if "!" in version_str:
-        raise ValueError(f"PEP 440 epoch is not supported: {version_str}")
-
-    # Split off local version
-    local = None
-    if "+" in version_str:
-        version_str, local = version_str.split("+", 1)
-
-    # Full PEP 440 regex (without epoch)
-    # Release: N(.N)*
-    # Pre: (a|b|rc)N
-    # Post: .postN
-    # Dev: .devN
-    pattern = r"""
-        ^
-        (\d+(?:\.\d+)*)           # Release segment (group 1)
-        (?:(a|b|rc)(\d+))?        # Pre-release (groups 2, 3)
-        (?:\.post(\d+))?          # Post-release (group 4)
-        (?:\.dev(\d+))?           # Dev release (group 5)
-        $
-    """
-    match = re.match(pattern, version_str, re.VERBOSE)
-    if not match:
-        raise ValueError(f"Invalid PEP 440 version: {version_str}")
-
-    release = tuple(int(x) for x in match.group(1).split("."))
-    pre = (match.group(2), int(match.group(3))) if match.group(2) else None
-    post = int(match.group(4)) if match.group(4) else None
-    dev = int(match.group(5)) if match.group(5) else None
-
-    return ParsedPep440(release=release, pre=pre, post=post, dev=dev, local=local)
-
-
-def _parse_semver(version_str: str) -> ParsedSemVer:
-    """Parse a SemVer version string into components.
-
-    SemVer format: X.Y.Z[-prerelease][+build]
-
-    Args:
-        version_str: SemVer version string
-
-    Returns:
-        ParsedSemVer with all components
-
-    Raises:
-        ValueError: If version string is invalid
-    """
-    # Split off build metadata
-    build = None
-    if "+" in version_str:
-        version_str, build_str = version_str.split("+", 1)
-        build = build_str.split(".")
-
-    # Split off prerelease
-    prerelease = None
-    if "-" in version_str:
-        version_str, pre_str = version_str.split("-", 1)
-        prerelease = pre_str.split(".")
-
-    # Parse release
-    parts = version_str.split(".")
-    if len(parts) != 3:
-        raise ValueError(f"Invalid SemVer version (expected X.Y.Z): {version_str}")
-
     try:
-        major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
-    except ValueError as e:
-        raise ValueError(f"Invalid SemVer version numbers: {version_str}") from e
-
-    return ParsedSemVer(major=major, minor=minor, patch=patch, prerelease=prerelease, build=build)
-
-
-def pep440_to_semver(version_str: str) -> str:
-    """Convert a PEP 440 version string to SemVer format.
-
-    Conversion rules:
-    - Release X.Y.Z → X.Y.Z (must be exactly 3 parts)
-    - Pre-release aN/bN/rcN → -alpha.N/-beta.N/-rc.N
-    - Dev release .devN → -dev.N (added to prerelease)
-    - Post release .postN → +pN (in build metadata with 'p' prefix)
-    - Local version +xxx → +lxxx (in build metadata with 'l' prefix)
-
-    The 'p' and 'l' prefixes in build metadata allow symmetric conversion back.
-
-    Args:
-        version_str: PEP 440 version string
-
-    Returns:
-        SemVer version string
-
-    Raises:
-        ValueError: If version uses epoch or has invalid format
-
-    Examples:
-        >>> pep440_to_semver("1.0.0")
-        '1.0.0'
-        >>> pep440_to_semver("1.0.0a1")
-        '1.0.0-alpha.1'
-        >>> pep440_to_semver("1.0.0b2")
-        '1.0.0-beta.2'
-        >>> pep440_to_semver("1.0.0rc1")
-        '1.0.0-rc.1'
-        >>> pep440_to_semver("1.0.0.post1")
-        '1.0.0+p1'
-        >>> pep440_to_semver("1.0.0a1.post2")
-        '1.0.0-alpha.1+p2'
-        >>> pep440_to_semver("1.0.0+ubuntu1")
-        '1.0.0+l.ubuntu1'
-        >>> pep440_to_semver("1.0.0.post2+ubuntu1")
-        '1.0.0+p2.l.ubuntu1'
-        >>> pep440_to_semver("1.0.0.dev5")
-        '1.0.0-dev.5'
-        >>> pep440_to_semver("1.0.0a1.dev2")
-        '1.0.0-alpha.1.dev.2'
-    """
-    parsed = _parse_pep440(version_str)
-
-    # Validate release has exactly 3 parts for SemVer
-    if len(parsed.release) != 3:
-        raise ValueError(
-            f"PEP 440 version must have exactly 3 release parts for SemVer conversion: {version_str}"
-        )
-
-    # Build release part
-    result = f"{parsed.release[0]}.{parsed.release[1]}.{parsed.release[2]}"
-
-    # Build prerelease part
-    prerelease_parts: list[str] = []
-    if parsed.pre:
-        pre_type, pre_num = parsed.pre
-        semver_pre = _PEP440_TO_SEMVER_PRE[pre_type]
-        prerelease_parts.append(semver_pre)
-        prerelease_parts.append(str(pre_num))
-    if parsed.dev is not None:
-        prerelease_parts.append("dev")
-        prerelease_parts.append(str(parsed.dev))
-
-    if prerelease_parts:
-        result += "-" + ".".join(prerelease_parts)
-
-    # Build metadata part (post and local)
-    # Use 'p' prefix for post, 'l.' prefix for local to make it reversible
-    build_parts: list[str] = []
-    if parsed.post is not None:
-        build_parts.append(f"p{parsed.post}")
-    if parsed.local is not None:
-        # Use 'l.' as prefix to clearly separate from post
-        build_parts.append("l")
-        build_parts.append(parsed.local)
-
-    if build_parts:
-        result += "+" + ".".join(build_parts)
-
-    return result
+        semver.Version.parse(version_str)
+        return True
+    except ValueError:
+        return False
 
 
-def _parse_semver_prerelease(
-    parts: list[str], version_str: str
-) -> tuple[str | None, int | None, int | None]:
-    """Parse SemVer prerelease parts into PEP 440 components.
-
-    Args:
-        parts: List of prerelease identifiers
-        version_str: Original version string for error messages
-
-    Returns:
-        Tuple of (pre_type, pre_num, dev_num)
-
-    Raises:
-        ValueError: If prerelease format is invalid
-    """
-    pre_type: str | None = None
-    pre_num: int | None = None
-    dev_num: int | None = None
-
-    i = 0
-    while i < len(parts):
-        part = parts[i]
-        if part in _SEMVER_TO_PEP440_PRE:
-            if i + 1 >= len(parts):
-                raise ValueError(f"Pre-release type '{part}' missing number: {version_str}")
-            pre_type = _SEMVER_TO_PEP440_PRE[part]
-            pre_num = int(parts[i + 1])
-            i += 2
-        elif part == "dev":
-            if i + 1 >= len(parts):
-                raise ValueError(f"Dev release missing number: {version_str}")
-            dev_num = int(parts[i + 1])
-            i += 2
-        else:
-            raise ValueError(f"Unrecognized prerelease identifier '{part}': {version_str}")
-
-    return pre_type, pre_num, dev_num
-
-
-def _parse_semver_build(parts: list[str], version_str: str) -> tuple[int | None, str | None]:
-    """Parse SemVer build metadata into PEP 440 components.
-
-    Args:
-        parts: List of build metadata identifiers
-        version_str: Original version string for error messages
-
-    Returns:
-        Tuple of (post_num, local)
-
-    Raises:
-        ValueError: If build metadata format is invalid
-    """
-    post_num: int | None = None
-    local: str | None = None
-
-    i = 0
-    while i < len(parts):
-        part = parts[i]
-        if part.startswith("p") and part[1:].isdigit():
-            post_num = int(part[1:])
-            i += 1
-        elif part == "l":
-            if i + 1 < len(parts):
-                local = ".".join(parts[i + 1 :])
-            break  # Consume all remaining
-        else:
-            raise ValueError(f"Unrecognized build metadata '{part}': {version_str}")
-
-    return post_num, local
-
-
-def semver_to_pep440(version_str: str) -> str:
-    """Convert a SemVer version string to PEP 440 format.
-
-    Conversion rules (reverse of pep440_to_semver):
-    - Release X.Y.Z → X.Y.Z
-    - Pre-release -alpha.N/-beta.N/-rc.N → aN/bN/rcN
-    - Pre-release -dev.N → .devN
-    - Build metadata +pN → .postN
-    - Build metadata +l.xxx → +xxx (local version)
-
-    Args:
-        version_str: SemVer version string
-
-    Returns:
-        PEP 440 version string
-
-    Raises:
-        ValueError: If version has invalid format or unrecognized prerelease
-
-    Examples:
-        >>> semver_to_pep440("1.0.0")
-        '1.0.0'
-        >>> semver_to_pep440("1.0.0-alpha.1")
-        '1.0.0a1'
-        >>> semver_to_pep440("1.0.0-beta.2")
-        '1.0.0b2'
-        >>> semver_to_pep440("1.0.0-rc.1")
-        '1.0.0rc1'
-        >>> semver_to_pep440("1.0.0+p1")
-        '1.0.0.post1'
-        >>> semver_to_pep440("1.0.0-alpha.1+p2")
-        '1.0.0a1.post2'
-        >>> semver_to_pep440("1.0.0+l.ubuntu1")
-        '1.0.0+ubuntu1'
-        >>> semver_to_pep440("1.0.0+p2.l.ubuntu1")
-        '1.0.0.post2+ubuntu1'
-        >>> semver_to_pep440("1.0.0-dev.5")
-        '1.0.0.dev5'
-        >>> semver_to_pep440("1.0.0-alpha.1.dev.2")
-        '1.0.0a1.dev2'
-    """
-    parsed = _parse_semver(version_str)
-
-    # Build release part
-    result = f"{parsed.major}.{parsed.minor}.{parsed.patch}"
-
-    # Parse prerelease
-    pre_type, pre_num, dev_num = (None, None, None)
-    if parsed.prerelease:
-        pre_type, pre_num, dev_num = _parse_semver_prerelease(parsed.prerelease, version_str)
-
-    # Add pre-release to result
-    if pre_type is not None and pre_num is not None:
-        result += f"{pre_type}{pre_num}"
-
-    # Parse build metadata for post and local
-    post_num, local = (None, None)
-    if parsed.build:
-        post_num, local = _parse_semver_build(parsed.build, version_str)
-
-    # Add post release
-    if post_num is not None:
-        result += f".post{post_num}"
-
-    # Add dev release
-    if dev_num is not None:
-        result += f".dev{dev_num}"
-
-    # Add local version
-    if local is not None:
-        result += f"+{local}"
-
-    return result
-
-
-def to_semver_display(version_str: str) -> str:
-    """Convert a version string to SemVer format for user display.
-
-    This is a convenience wrapper around pep440_to_semver that handles
-    already-SemVer versions gracefully.
+def to_semver_str(version_str: str) -> str:
+    """Convert a version string to SemVer format.
 
     Args:
         version_str: Version string in PEP 440 or SemVer format
@@ -427,22 +457,21 @@ def to_semver_display(version_str: str) -> str:
     Returns:
         Version string in SemVer format
 
+    Raises:
+        ValueError: If version string is invalid
+
     Examples:
-        >>> to_semver_display("0.1.0a1")
+        >>> to_semver_str("0.1.0a1")
         '0.1.0-alpha.1'
-        >>> to_semver_display("0.1.0-alpha.1")
+        >>> to_semver_str("0.1.0-alpha.1")
         '0.1.0-alpha.1'
-        >>> to_semver_display("1.0.0.post2+ubuntu1")
-        '1.0.0+p2.l.ubuntu1'
+        >>> to_semver_str("1.0.0.post2+ubuntu1")
+        '1.0.0+post.2.ubuntu1'
     """
-    # Check if it's already SemVer format (has hyphen for prerelease)
-    # PEP 440 never uses hyphen in version strings
-    if "-" in version_str:
+    # Check if it's already valid SemVer
+    if is_semver_string(version_str):
         return version_str
 
-    # Check if it looks like PEP 440
-    try:
-        return pep440_to_semver(version_str)
-    except ValueError:
-        # Not valid PEP 440, return as-is
-        return version_str
+    # Try to parse as PEP 440 and convert
+    pep440 = Pep440Version.parse(version_str)
+    return str(pep440.to_semver())

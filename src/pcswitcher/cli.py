@@ -22,7 +22,7 @@ from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.orchestrator import Orchestrator
-from pcswitcher.version import get_this_version, parse_version_from_cli_output, to_semver_display
+from pcswitcher.version import get_this_version, parse_version_str_from_cli_output, to_semver_str
 
 # Cleanup timeout for graceful shutdown after SIGINT.
 # After first SIGINT, cleanup has this many seconds to complete.
@@ -88,9 +88,9 @@ def _version_callback(value: bool) -> None:
     if value:
         try:
             pkg_version = get_this_version()
-            # If you change this format, also update the parsing in version.py:parse_version_from_cli_output()
+            # If you change this format, also update version.py:parse_version_str_from_cli_output()
             # Display in SemVer format for user-facing output
-            console.print(f"pc-switcher {to_semver_display(pkg_version)}")
+            console.print(f"pc-switcher {to_semver_str(pkg_version)}")
         except PackageNotFoundError:
             console.print("[bold red]Error:[/bold red] Cannot determine pc-switcher version")
             sys.exit(1)
@@ -490,7 +490,7 @@ def _verify_installed_version() -> str | None:
     )
     if result.returncode == 0:
         try:
-            return parse_version_from_cli_output(result.stdout)
+            return parse_version_str_from_cli_output(result.stdout)
         except ValueError:
             return None
     return None
@@ -541,8 +541,8 @@ def update(
 
     # Check if update is needed
     # Use SemVer format for user-facing output
-    current_display = to_semver_display(current_version)
-    target_display = to_semver_display(target_version)
+    current_display = to_semver_str(current_version)
+    target_display = to_semver_str(target_version)
 
     if target == current:
         console.print(f"[green]Already at version {current_display}[/green]")
@@ -579,7 +579,7 @@ def update(
     if installed_version != target:
         console.print(
             f"[bold red]Error:[/bold red] Version mismatch after update. "
-            f"Expected {target_display}, got {to_semver_display(installed_version_str)}"
+            f"Expected {target_display}, got {to_semver_str(installed_version_str)}"
         )
         sys.exit(1)
 
