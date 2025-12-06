@@ -67,12 +67,17 @@ markers = [
 import os
 import pytest
 
+REQUIRED_ENV_VARS = [
+    "PC_SWITCHER_TEST_PC1_HOST",
+    "PC_SWITCHER_TEST_PC2_HOST",
+]
+
 def pytest_collection_modifyitems(config, items):
     """Skip integration tests if VM environment not configured."""
-    vm_host = os.getenv("PC_SWITCHER_TEST_PC1_HOST")
+    missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
 
-    if not vm_host:
-        skip_msg = "Skipping integration tests: VM environment not configured"
+    if missing_vars:
+        skip_msg = f"Skipping integration tests: VM environment not configured (missing: {', '.join(missing_vars)})"
         for item in items:
             if "integration" in item.keywords:
                 item.add_marker(pytest.mark.skip(reason=skip_msg))
@@ -84,189 +89,256 @@ def pytest_collection_modifyitems(config, items):
 
 ---
 
-## 3. OpenTofu/Hetzner Cloud Configuration
+## 3. Hetzner Cloud VM Provisioning
 
-### Decision: Use OpenTofu with local state for test infrastructure
+### Decision: Use hcloud CLI for VM provisioning (no OpenTofu/Terraform)
 
 ### Rationale
-- OpenTofu is actively maintained Terraform fork (per constitution: well-supported tools)
-- Local state sufficient for single-developer project; remote state adds complexity
+- OpenTofu would only create 2 VMs and 1 SSH key - overkill for this simple use case
+- All real configuration (btrfs install, user setup, etc.) already uses bash scripts with hcloud CLI
+- No state management needed - simply check if VM exists: `hcloud server describe <name>`
+- Eliminates complexity of remote state storage and syncing
+- hcloud CLI is already required for other operations (rescue mode, SSH key management)
 - Hetzner CX23 VMs meet cost constraint (< EUR 10/month)
 
-### Configuration Structure
+### Provisioning Script
 
-```hcl
-# tests/infrastructure/main.tf
-terraform {
-  required_version = ">= 1.6"
-  required_providers {
-    hcloud = {
-      source  = "hetznercloud/hcloud"
-      version = "~> 1.45.0"
-    }
-  }
-}
+```bash
+#!/usr/bin/env bash
+# tests/infrastructure/scripts/provision-vms.sh
 
-provider "hcloud" {
-  token = var.hcloud_token
-}
+set -euo pipefail
 
-resource "hcloud_server" "pc1" {
-  name        = "pc-switcher-pc1"
-  server_type = "cx23"  # 2 vCPU, 4GB RAM, ~EUR 3.50/month
-  image       = "ubuntu-24.04"
-  location    = "fsn1"
-  ssh_keys    = [hcloud_ssh_key.test_key.id]
-}
+: "${HCLOUD_TOKEN:?HCLOUD_TOKEN must be set}"
 
-resource "hcloud_server" "pc2" {
-  name        = "pc-switcher-pc2"
-  server_type = "cx23"
-  image       = "ubuntu-24.04"
-  location    = "fsn1"
-  ssh_keys    = [hcloud_ssh_key.test_key.id]
-}
+# Create SSH key if needed
+if ! hcloud ssh-key describe pc-switcher-test-key &>/dev/null; then
+    echo "Creating SSH key..."
+    hcloud ssh-key create --name pc-switcher-test-key \
+        --public-key-from-file "${SSH_PUBLIC_KEY:-$HOME/.ssh/id_ed25519.pub}"
+fi
+
+# Create VMs if needed
+for VM in pc1 pc2; do
+    if hcloud server describe "$VM" &>/dev/null; then
+        echo "VM $VM already exists, skipping creation"
+    else
+        echo "Creating VM $VM..."
+        hcloud server create \
+            --name "$VM" \
+            --type cx23 \
+            --image ubuntu-24.04 \
+            --location fsn1 \
+            --ssh-key pc-switcher-test-key
+    fi
+done
+
+echo "VMs created. Run provision.sh for each VM to install btrfs and configure."
 ```
 
-### State Management
-- State file: `tests/infrastructure/terraform.tfstate` (gitignored)
-- No remote backend needed for single-developer project
-- State can be regenerated via `tofu import` if lost
+### VM Destruction
+
+```bash
+# Destroy VMs when not needed
+hcloud server delete pc1
+hcloud server delete pc2
+hcloud ssh-key delete pc-switcher-test-key  # optional
+```
 
 ### Alternatives Considered
-- **Hetzner Object Storage backend**: Adds complexity without benefit for single developer
-- **Smaller VM types**: CX11 (2GB RAM) may be insufficient for btrfs operations
+- **OpenTofu/Terraform**: Adds state management complexity without benefit for 2 VMs
+- **Smaller VM types**: CX11 (2GB RAM) may be insufficient for btrfs operations (Note: doesn't exist anymore)
 
 ---
 
 ## 4. btrfs Snapshot Management
 
-### Decision: Baseline snapshots created at provisioning; reset via snapshot + set-default + reboot
+### Decision: Baseline snapshots created at provisioning; reset via mv + snapshot + reboot
 
 ### Rationale
 - Read-only baseline snapshots preserve known-good state
-- `btrfs set-default` allows atomic switch without modifying fstab
-- Reboot required to activate new default subvolume (~10-20 seconds)
+- mv + snapshot approach is simpler and avoids set-default complexity
+- Reboot required to activate new root subvolume (~10-20 seconds)
 
 ### Reset Flow
+
+Per docs/testing-framework.md, the reset procedure is:
 
 ```bash
 #!/bin/bash
 # tests/infrastructure/scripts/reset-vm.sh
 
-# 1. Delete test artifacts (preserving baseline)
-ssh root@$VM "btrfs subvolume delete /.snapshots/pc-switcher/* 2>/dev/null || true"
+# 1. Delete test artifacts (preserving baseline snapshots)
+ssh root@$VM "rm -rf /.snapshots/pc-switcher/test-* 2>/dev/null || true"
 
-# 2. Create writable snapshot from baseline
-ssh root@$VM "btrfs subvolume snapshot /.snapshots/baseline-@ /.snapshots/active-@"
-ssh root@$VM "btrfs subvolume snapshot /.snapshots/baseline-@home /.snapshots/active-@home"
+# 2. Mount top-level btrfs filesystem
+ssh root@$VM "mount -o subvolid=5 /dev/sda2 /mnt/btrfs"
 
-# 3. Get new subvolume ID and set as default
-SUBVOL_ID=$(ssh root@$VM "btrfs subvolume list / | grep 'active-@$' | awk '{print \$2}'")
-ssh root@$VM "btrfs subvolume set-default $SUBVOL_ID /"
+# 3. Replace active subvolumes with fresh snapshots from baseline
+ssh root@$VM "mv /mnt/btrfs/@ /mnt/btrfs/@_old"
+ssh root@$VM "btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@ /mnt/btrfs/@"
+ssh root@$VM "mv /mnt/btrfs/@home /mnt/btrfs/@home_old"
+ssh root@$VM "btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@home /mnt/btrfs/@home"
 
-# 4. Reboot to activate
+# 4. Unmount and reboot
+ssh root@$VM "umount /mnt/btrfs"
 ssh root@$VM "reboot" || true
-sleep 20
-# Wait for VM to come back online
+
+# Wait for VM to come back online (polling loop, not fixed sleep)
+sleep 15
+until ssh -o ConnectTimeout=5 -o BatchMode=yes root@$VM true 2>/dev/null; do
+    sleep 5
+done
+
+# 5. Clean up old subvolumes after reboot
+ssh root@$VM "mount -o subvolid=5 /dev/sda2 /mnt/btrfs"
+ssh root@$VM "btrfs subvolume delete /mnt/btrfs/@_old"
+ssh root@$VM "btrfs subvolume delete /mnt/btrfs/@home_old"
+ssh root@$VM "umount /mnt/btrfs"
 ```
 
 ### Snapshot Layout
 
 ```text
 /.snapshots/
-├── baseline-@      # Read-only baseline of root (created at provisioning)
-├── baseline-@home  # Read-only baseline of home (created at provisioning)
-├── active-@        # Current writable root (recreated on reset)
-├── active-@home    # Current writable home (recreated on reset)
-└── pc-switcher/    # Test artifacts (deleted on reset)
+├── baseline/
+│   ├── @           # Read-only baseline of root (created at provisioning)
+│   └── @home       # Read-only baseline of home (created at provisioning)
+└── pc-switcher/
+    └── test-*      # Test artifacts (deleted on reset)
 ```
+
+Active subvolumes (`@` and `@home`) are at the btrfs top level, not under `/.snapshots/`.
 
 ### Alternatives Considered
 - **Hetzner VM snapshots**: Slow restore (minutes); rejected for fast iteration
-- **chroot-based isolation**: Complex; doesn't test real boot behavior
+- **btrfs set-default approach**: More complex; mv + snapshot is simpler
 - **LVM snapshots**: Would require different filesystem; rejected for btrfs consistency
 
 ---
 
 ## 5. Lock Mechanism
 
-### Decision: File-based lock on pc1 VM at `/tmp/pc-switcher-integration-test.lock`
+### Decision: Hetzner Server Labels on pc1
 
 ### Rationale
-- Simple implementation matching existing lock module patterns
-- Lock file contains holder identity and timestamp for debugging
-- `/tmp` location cleared on reboot (automatic cleanup)
+- Lock state stored externally to VM state (survives reboots and snapshot rollbacks)
+- Simple implementation using hcloud CLI
+- Labels (`lock_holder`, `lock_acquired`) contain holder identity and timestamp for debugging
+- Accessible from any machine with HCLOUD_TOKEN
 
-### Lock File Format
+**Note**: Originally considered file-based lock at `/tmp/pc-switcher-integration-test.lock`, but this was rejected because:
+1. `/tmp` is typically a tmpfs (cleared on reboot)
+2. Snapshot rollback restores VM to baseline state (pre-lock creation)
+3. Result: Lock would be destroyed during VM reset, breaking concurrency control
 
-```json
-{
-  "holder": "CI-job-12345",
-  "acquired": "2025-12-05T10:30:00Z",
-  "hostname": "github-runner-abc"
-}
-```
+### Lock Scope
 
-### Lock Script
+The lock protects **integration test execution only**, not provisioning:
+
+- **Integration tests**: Must acquire lock before reset and release after tests complete
+- **Provisioning**: Protected by CI concurrency groups for CI runs; local concurrent provisioning is explicitly unsupported (documented constraint)
+- **VM reset**: Part of test session lifecycle, covered by the test execution lock
+
+This avoids over-complicating the provisioning workflow while ensuring test isolation.
+
+### Lock Labels
+
+| Label | Value |
+|-------|-------|
+| `lock_holder` | CI job ID or username |
+| `lock_acquired` | ISO 8601 timestamp |
+
+### Lock Operations
 
 ```bash
-#!/bin/bash
-# tests/infrastructure/scripts/lock.sh
+# Check status
+./tests/infrastructure/scripts/lock.sh "" status
 
-LOCK_FILE="/tmp/pc-switcher-integration-test.lock"
-HOLDER="$1"
-ACTION="$2"
-TIMEOUT=300  # 5 minutes
+# Acquire (with 5 min timeout)
+./tests/infrastructure/scripts/lock.sh "CI-job-12345" acquire
 
-case "$ACTION" in
-  acquire)
-    # Try to acquire lock with timeout
-    end_time=$(($(date +%s) + TIMEOUT))
-    while [ $(date +%s) -lt $end_time ]; do
-      if mkdir "$LOCK_FILE.d" 2>/dev/null; then
-        echo "{\"holder\": \"$HOLDER\", \"acquired\": \"$(date -Iseconds)\"}" > "$LOCK_FILE"
-        echo "Lock acquired by $HOLDER"
-        exit 0
-      fi
-      current_holder=$(cat "$LOCK_FILE" 2>/dev/null | jq -r .holder)
-      echo "Lock held by $current_holder, waiting..."
-      sleep 10
-    done
-    echo "ERROR: Failed to acquire lock after ${TIMEOUT}s" >&2
-    exit 1
-    ;;
-  release)
-    rm -rf "$LOCK_FILE.d" "$LOCK_FILE"
-    echo "Lock released by $HOLDER"
-    ;;
-esac
+# Release
+./tests/infrastructure/scripts/lock.sh "CI-job-12345" release
+
+# Manual cleanup for stuck locks
+hcloud server remove-label pc1 lock_holder
+hcloud server remove-label pc1 lock_acquired
 ```
 
 ### Alternatives Considered
+- **File-based lock on VM**: Rejected - destroyed by reboot/snapshot rollback
 - **Database-based lock**: Over-engineering for two users (dev + CI)
 - **GitHub Actions artifact lock**: Doesn't prevent local dev conflicts
 - **Flock-based lock**: Requires persistent SSH connection
+- **Lock for all operations**: Adds complexity to provisioning without significant benefit (provisioning is rare)
 
 ---
 
 ## 6. GitHub Actions CI/CD
 
-### Decision: Two workflows - ci.yml (unit tests on push) and integration.yml (integration tests on PR + manual)
+### Decision: Single consolidated workflow `test.yml` handling all test scenarios
 
 ### Rationale
-- Separation allows different concurrency controls
-- Unit tests should never be blocked by integration test queue
+- Consolidated workflow is simpler to maintain
+- Allows sharing setup steps (checkout, Python setup, dependency caching) between unit and integration test jobs
+- Different jobs within the same workflow can have different concurrency controls
 - Manual trigger enables testing feature branches before PR
 
-### Concurrency Configuration
+### Workflow Structure
 
 ```yaml
-# .github/workflows/integration.yml
-concurrency:
-  group: pc-switcher-integration
-  cancel-in-progress: false  # Queue instead of cancel
+# .github/workflows/test.yml
+name: Tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  lint-and-unit:
+    # Runs on every push, no concurrency restriction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ... setup steps ...
+      - run: uv run basedpyright
+      - run: uv run ruff check
+      - run: uv run pytest tests/unit tests/contract -v
+
+  integration:
+    # Only on PRs to main or manual trigger
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch'
+    needs: lint-and-unit
+    runs-on: ubuntu-latest
+    concurrency:
+      group: integration-tests
+      cancel-in-progress: false  # Queue instead of cancel
+    steps:
+      - uses: actions/checkout@v4
+      # ... setup steps ...
+      - name: Provision VMs
+        run: ./tests/infrastructure/scripts/provision-vms.sh
+      - name: Reset VMs
+        run: |
+          ./tests/infrastructure/scripts/reset-vm.sh pc1
+          ./tests/infrastructure/scripts/reset-vm.sh pc2
+      - run: uv run pytest -m integration -v
 ```
+
+### Fork PR Detection
+
+Integration tests are skipped for forked PRs using the condition:
+```yaml
+if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch'
+```
+
+This ensures integration tests only run when:
+1. The PR is from the same repository (not a fork), OR
+2. The workflow was manually triggered
 
 ### Secret Handling
 - `HCLOUD_TOKEN`: Hetzner API token (repository secret)

@@ -29,7 +29,6 @@ Unit tests execute in < 30 seconds and use mocked executors.
 1. **Hetzner Cloud Account**: Required for test VM infrastructure
 2. **SSH Key**: ed25519 key at `~/.ssh/id_ed25519` (or set `SSH_PUBLIC_KEY`)
 3. **hcloud CLI**: Install via `brew install hcloud` or from [releases](https://github.com/hetznercloud/cli/releases)
-4. **OpenTofu**: Install via `brew install opentofu` or from [releases](https://github.com/opentofu/opentofu/releases)
 
 ### First-Time Setup
 
@@ -37,22 +36,16 @@ Unit tests execute in < 30 seconds and use mocked executors.
 # 1. Export Hetzner API token
 export HCLOUD_TOKEN="your-api-token"
 
-# 2. Provision test VMs (one-time, ~10 minutes)
+# 2. Create VMs and provision with btrfs (one-time, ~15 minutes total)
 cd tests/infrastructure
-tofu init
-tofu apply
+./scripts/provision-vms.sh
 
-# 3. Convert to btrfs and configure (one-time, ~5 minutes each)
-./scripts/provision.sh pc-switcher-pc1
-./scripts/provision.sh pc-switcher-pc2
-
-# 4. Configure /etc/hosts for inter-VM communication
-./scripts/configure-hosts.sh
-
-# 5. Note the VM IPs from tofu output
-export PC_SWITCHER_TEST_PC1_HOST=$(tofu output -raw pc1_ip)
-export PC_SWITCHER_TEST_PC2_HOST=$(tofu output -raw pc2_ip)
+# 3. Note the VM IPs
+export PC_SWITCHER_TEST_PC1_HOST=$(hcloud server ip pc1)
+export PC_SWITCHER_TEST_PC2_HOST=$(hcloud server ip pc2)
 ```
+
+The `provision-vms.sh` script creates VMs if they don't exist, installs Ubuntu with btrfs using Hetzner's installimage, configures the test user, and sets up inter-VM SSH access.
 
 ### Running Integration Tests
 
@@ -75,8 +68,11 @@ VMs are automatically reset before CI test runs. For local development:
 
 ```bash
 cd tests/infrastructure
-./scripts/reset-vm.sh  # Resets both VMs to baseline state
+./scripts/reset-vm.sh pc1  # Reset pc1 to baseline
+./scripts/reset-vm.sh pc2  # Reset pc2 to baseline
 ```
+
+The reset script restores VMs to their baseline snapshots (`/.snapshots/baseline/@` and `/.snapshots/baseline/@home`) using btrfs snapshot operations. This is much faster than reprovisioning (~20-30 seconds vs ~10 minutes).
 
 ---
 
@@ -87,20 +83,26 @@ cd tests/infrastructure
 | Secret | Description |
 |--------|-------------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
-| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519) |
+| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519 format) |
+
+Note: VM IP addresses are retrieved dynamically via `hcloud server ip` after auto-provisioning. No need to store VM IPs as secrets.
 
 ### Workflow Triggers
 
 - **Unit tests**: Every push to any branch
-- **Integration tests**: PRs to `main` branch only
+- **Integration tests**: PRs to `main` branch (from main repository only - forks are skipped with notice)
 - **Manual integration tests**: Via workflow dispatch on any branch
+
+### Fork PRs
+
+Integration tests are automatically skipped for PRs from forked repositories because GitHub does not expose secrets to forks. Unit tests still run normally. A notice is displayed explaining the skip.
 
 ### Viewing Test Results
 
 1. Go to Actions tab in GitHub
 2. Select the workflow run
 3. Expand the test job to see pytest output
-4. Download artifacts for detailed logs
+4. Download artifacts for detailed logs (pytest output, provisioning logs)
 
 ---
 
@@ -118,21 +120,24 @@ export PC_SWITCHER_TEST_PC2_HOST="<pc2-ip>"
 
 Another test run is in progress. Check who holds the lock:
 ```bash
-ssh testuser@$PC_SWITCHER_TEST_PC1_HOST "cat /tmp/pc-switcher-integration-test.lock"
+./tests/infrastructure/scripts/lock.sh "" status
+# Or directly via hcloud:
+hcloud server describe pc1 -o json | jq '.labels'
 ```
 
 To force-release a stuck lock:
 ```bash
-ssh testuser@$PC_SWITCHER_TEST_PC1_HOST "rm -rf /tmp/pc-switcher-integration-test.lock*"
+hcloud server remove-label pc1 lock_holder
+hcloud server remove-label pc1 lock_acquired
 ```
 
 ### "Baseline snapshot missing"
 
-Reprovision the VMs:
+This means `/.snapshots/baseline/@` or `/.snapshots/baseline/@home` doesn't exist. Reprovision the VMs:
 ```bash
 cd tests/infrastructure
-./scripts/provision.sh pc-switcher-pc1
-./scripts/provision.sh pc-switcher-pc2
+./scripts/provision.sh pc1
+./scripts/provision.sh pc2
 ```
 
 ### SSH Connection Refused
@@ -156,8 +161,8 @@ Test VMs cost ~EUR 7/month total when running continuously. To reduce costs:
 
 ```bash
 # Destroy VMs when not needed
-cd tests/infrastructure
-tofu destroy
+hcloud server delete pc1
+hcloud server delete pc2
 
 # VMs will be reprovisioned automatically on next integration test run
 ```

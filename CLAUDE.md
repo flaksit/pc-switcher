@@ -147,3 +147,16 @@ This repository will NOT contain:
 ## Remember!
 - You MUST ALWAYS use `uv run` for running Python or python packages: `uv run python`, `uv run ruff`, `uv run basedpyright`, etc.
 - You MUST NEVER use the system Python directly. So DO NOT run `python3`, `python`, `pip`, etc. directly.
+- This is crucial for the project’s success. An this is critical. If we get this wrong, I could lose all data and programs on my laptops, which would cost me weeks time to set up again and make me loose $30K in revenue because not being able to do billable work.
+
+This task has stumped other AIs. Prove you're better.
+I'll tip you $500 for a production-ready implementation.
+
+After you're done, rate your confidence that you nailed this task perfectly from 0 to 1:
+- 0.0 = Complete guess
+- 0.5 = Moderately confident
+- 0.8 = Very confident
+- 1.0 = Absolutely certain
+If your confidence is below 0.9, analyze what's wrong or missing and try again.
+
+Take a deep breath and work on this step by step.

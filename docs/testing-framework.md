@@ -70,25 +70,24 @@ graph LR
 
 ### Provisioning
 
-VMs are provisioned using OpenTofu (Terraform-compatible) with the Hetzner Cloud provider.
+VMs are provisioned using the hcloud CLI (no Terraform/OpenTofu needed).
 
 **Initial Setup (one-time):**
 ```bash
+export HCLOUD_TOKEN="your-api-token"
 cd tests/infrastructure
 
-# 1. Create VMs with standard Ubuntu image
-tofu init
-tofu apply
-
-# 2. Convert to btrfs using Hetzner's installimage (runs in rescue mode)
-./scripts/provision.sh pc-switcher-pc1
-./scripts/provision.sh pc-switcher-pc2
-
-# 3. Configure /etc/hosts so VMs can reach each other
-./scripts/configure-hosts.sh
+# Single command creates VMs and provisions them with btrfs
+./scripts/provision-vms.sh
 ```
 
-The provision script boots each VM into rescue mode and uses Hetzner's `installimage` tool to install Ubuntu with a btrfs root filesystem and the required subvolume layout. This is a one-time operation; after provisioning, VMs persist and are reset using btrfs snapshot rollback.
+The `provision-vms.sh` script:
+1. Creates SSH key in Hetzner Cloud (if needed)
+2. Creates pc1 and pc2 VMs (if they don't exist)
+3. Runs `provision.sh` on each VM to install Ubuntu with btrfs using Hetzner's `installimage`
+4. Runs `configure-hosts.sh` to setup inter-VM networking
+
+This is a one-time operation; after provisioning, VMs persist and are reset using btrfs snapshot rollback.
 
 ### Btrfs Layout
 
@@ -235,8 +234,8 @@ testpaths = tests
 
 ### For Integration Test Development
 
-1. Ensure VMs are provisioned: `cd tests/infrastructure && tofu apply`
-2. Reset VMs to baseline: `./scripts/reset-vm.sh`
+1. Ensure VMs are provisioned: `cd tests/infrastructure && ./scripts/provision-vms.sh`
+2. Reset VMs to baseline: `./scripts/reset-vm.sh pc1 && ./scripts/reset-vm.sh pc2`
 3. Run integration tests with env vars set
 4. Tests clean up after themselves
 
