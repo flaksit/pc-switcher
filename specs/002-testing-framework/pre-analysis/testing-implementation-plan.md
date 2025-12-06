@@ -2,6 +2,17 @@
 
 This document provides the detailed implementation plan for the testing framework infrastructure. Writing actual tests for specific features (e.g., 001-foundation) is out of scope and tracked separately in feature `003-foundation-tests`.
 
+> **Note**: The script structure was refactored after this document was written. See tasks.md for the current structure:
+> - `create-vm.sh` - creates a single VM (replaces provision-vms.sh VM creation + provision.sh)
+> - `configure-vm.sh` - configures a single VM (unchanged)
+> - `configure-hosts.sh` - configures both VMs (unchanged)
+> - `create-baseline-snapshots.sh` - creates baseline snapshots (extracted from configure-vm.sh)
+> - `provision-test-infra.sh` - orchestrator that calls all above scripts
+> - `reset-vm.sh` - resets single VM (unchanged)
+> - `lock.sh` - lock management (unchanged)
+>
+> The script implementations below are still useful as reference but need adaptation to the new structure.
+
 ## Test Directory Structure
 
 ```text
@@ -27,12 +38,13 @@ tests/
 └── infrastructure/                  # VM provisioning
     ├── README.md
     └── scripts/
-        ├── provision-vms.sh         # Create VMs via hcloud CLI
-        ├── provision.sh             # Install btrfs OS on VM
-        ├── configure-vm.sh          # Configure VM (user, SSH, etc.)
-        ├── configure-hosts.sh       # Setup /etc/hosts and SSH keys
-        ├── reset-vm.sh              # Reset VM to baseline snapshot
-        └── lock.sh                  # Lock management
+        ├── create-vm.sh                # Create single VM via hcloud + install OS with btrfs
+        ├── configure-vm.sh             # Configure single VM: testuser, SSH keys, services
+        ├── configure-hosts.sh          # Configure both VMs: /etc/hosts, inter-VM SSH keys
+        ├── create-baseline-snapshots.sh # Create baseline btrfs snapshots on both VMs
+        ├── provision-test-infra.sh     # Orchestrator: calls above scripts in correct order
+        ├── reset-vm.sh                 # Reset single VM to baseline snapshot
+        └── lock.sh                     # Lock management via Hetzner Server Labels
 
 docs/
 ├── testing-framework.md             # Architecture documentation (update)

@@ -33,10 +33,12 @@
 
 > **Reference**: Complete script implementations are available in `specs/002-testing-framework/pre-analysis/testing-implementation-plan.md`. Use these as starting point and verify they work correctly with the current environment.
 
-- [ ] T004 Create tests/infrastructure/scripts/provision-vms.sh to create VMs via hcloud CLI per research.md §3; use CX23 instances (2 shared vCPUs, 4GB RAM) to stay within EUR 10/month cost cap (FR-012)
-- [ ] T005 [P] Create tests/infrastructure/scripts/configure-vm.sh for testuser setup, SSH keys (including CI-provided public key injection per FR-006a), and baseline services
-- [ ] T006 [P] Create tests/infrastructure/scripts/configure-hosts.sh to configure /etc/hosts and inter-VM SSH access
-- [ ] T007 Create tests/infrastructure/scripts/reset-vm.sh implementing btrfs snapshot reset flow per research.md §4
+- [ ] T004 Create tests/infrastructure/scripts/create-vm.sh: creates a single VM via hcloud CLI and installs OS with btrfs filesystem; use CX23 instances (2 shared vCPUs, 4GB RAM) to stay within EUR 10/month cost cap (FR-012); called twice by orchestrator (once per VM, in parallel); see research.md §3
+- [ ] T005 [P] Create tests/infrastructure/scripts/configure-vm.sh: configures a single VM with testuser setup, CI/user SSH public key injection (per FR-006a), and baseline services (sshd enabled); called twice by orchestrator (once per VM, in parallel)
+- [ ] T006 [P] Create tests/infrastructure/scripts/configure-hosts.sh: configures both VMs with /etc/hosts entries and generates/exchanges inter-VM SSH keys for pc1↔pc2 communication; called once by orchestrator after both VMs are configured
+- [ ] T006a Create tests/infrastructure/scripts/create-baseline-snapshots.sh: creates baseline btrfs snapshots on both VMs; called once by orchestrator at the end of provisioning
+- [ ] T006b Create tests/infrastructure/scripts/provision-test-infra.sh: orchestrator that calls create-vm.sh (2x parallel), configure-vm.sh (2x parallel), configure-hosts.sh (1x), create-baseline-snapshots.sh (1x)
+- [ ] T007 Create tests/infrastructure/scripts/reset-vm.sh implementing btrfs snapshot reset flow per research.md §4; resets a single VM to baseline
 - [ ] T008 Create tests/infrastructure/scripts/lock.sh for Hetzner Server Labels lock operations per research.md §5
 
 **Checkpoint**: Foundation ready - VM infrastructure scripts complete
@@ -261,9 +263,9 @@ With multiple developers:
 
 | Metric | Value |
 |--------|-------|
-| Total tasks | 39 |
+| Total tasks | 41 |
 | Phase 1 (Setup) | 3 tasks |
-| Phase 2 (Foundational) | 5 tasks |
+| Phase 2 (Foundational) | 7 tasks |
 | User Story 1 (P1) | 3 tasks |
 | User Story 2 (P1) | 4 tasks |
 | User Story 3 (P2) | 4 tasks |
@@ -282,6 +284,6 @@ With multiple developers:
 - [P] tasks = different files, no dependencies
 - [Story] label maps task to specific user story for traceability
 - Tests NOT included as not explicitly requested in spec.md
-- Existing provision.sh script preserved; new scripts complement it
+- Infrastructure scripts follow single-responsibility: create-vm.sh and configure-vm.sh operate on single VMs (called in parallel), configure-hosts.sh and create-baseline-snapshots.sh operate on both VMs, provision-test-infra.sh orchestrates all
 - All infrastructure scripts go in tests/infrastructure/scripts/
 - All documentation goes in docs/

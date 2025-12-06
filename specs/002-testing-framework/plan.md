@@ -123,12 +123,13 @@ tests/
 │   └── test_*.py        # Future integration test files (out of scope for this feature)
 └── infrastructure/      # VM infrastructure (extend)
     └── scripts/
-        ├── provision-vms.sh  # Create VMs via hcloud CLI (create)
-        ├── provision.sh      # VM OS install with btrfs (exists)
-        ├── configure-vm.sh   # VM configuration (create)
-        ├── configure-hosts.sh # /etc/hosts and SSH keys setup (create)
-        ├── reset-vm.sh       # Btrfs snapshot reset (create)
-        └── lock.sh           # Lock management (create)
+        ├── create-vm.sh                # Create single VM via hcloud + install OS with btrfs (create)
+        ├── configure-vm.sh             # Configure single VM: testuser, SSH keys, services (create)
+        ├── configure-hosts.sh          # Configure both VMs: /etc/hosts, inter-VM SSH keys (create)
+        ├── create-baseline-snapshots.sh # Create baseline btrfs snapshots on both VMs (create)
+        ├── provision-test-infra.sh     # Orchestrator: calls above scripts in correct order (create)
+        ├── reset-vm.sh                 # Reset single VM to baseline snapshot (create)
+        └── lock.sh                     # Lock management via Hetzner Server Labels (create)
 
 .github/
 └── workflows/
