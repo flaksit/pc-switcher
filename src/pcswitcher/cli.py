@@ -22,7 +22,7 @@ from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.orchestrator import Orchestrator
-from pcswitcher.version import get_this_version, parse_version_from_cli_output
+from pcswitcher.version import get_this_version, parse_version_from_cli_output, to_semver_display
 
 # Cleanup timeout for graceful shutdown after SIGINT.
 # After first SIGINT, cleanup has this many seconds to complete.
@@ -89,7 +89,8 @@ def _version_callback(value: bool) -> None:
         try:
             pkg_version = get_this_version()
             # If you change this format, also update the parsing in version.py:parse_version_from_cli_output()
-            console.print(f"pc-switcher {pkg_version}")
+            # Display in SemVer format for user-facing output
+            console.print(f"pc-switcher {to_semver_display(pkg_version)}")
         except PackageNotFoundError:
             console.print("[bold red]Error:[/bold red] Cannot determine pc-switcher version")
             sys.exit(1)
@@ -539,15 +540,19 @@ def update(
         sys.exit(1)
 
     # Check if update is needed
+    # Use SemVer format for user-facing output
+    current_display = to_semver_display(current_version)
+    target_display = to_semver_display(target_version)
+
     if target == current:
-        console.print(f"[green]Already at version {current_version}[/green]")
+        console.print(f"[green]Already at version {current_display}[/green]")
         sys.exit(0)
 
     if target < current:
-        console.print(f"[yellow]Warning:[/yellow] Downgrading from {current_version} to {target_version}")
+        console.print(f"[yellow]Warning:[/yellow] Downgrading from {current_display} to {target_display}")
 
     # Perform the update
-    console.print(f"Updating pc-switcher from {current_version} to {target_version}...")
+    console.print(f"Updating pc-switcher from {current_display} to {target_display}...")
     result = _run_uv_tool_install(target_version)
 
     if result.returncode != 0:
@@ -574,11 +579,11 @@ def update(
     if installed_version != target:
         console.print(
             f"[bold red]Error:[/bold red] Version mismatch after update. "
-            f"Expected {target_version}, got {installed_version_str}"
+            f"Expected {target_display}, got {to_semver_display(installed_version_str)}"
         )
         sys.exit(1)
 
-    console.print(f"[green]Successfully updated to version {installed_version_str}[/green]")
+    console.print(f"[green]Successfully updated to version {target_display}[/green]")
 
 
 if __name__ == "__main__":

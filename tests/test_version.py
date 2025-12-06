@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pcswitcher.version import get_this_version, parse_version_from_cli_output
+from pcswitcher.version import get_this_version, parse_version_from_cli_output, to_semver_display
 
 
 class TestGetCurrentVersion:
@@ -105,3 +105,48 @@ class TestParseVersionFromCliOutput:
         with pytest.raises(ValueError) as exc_info:
             parse_version_from_cli_output("")
         assert "Cannot parse version from output" in str(exc_info.value)
+
+
+class TestToSemverDisplay:
+    """Tests for to_semver_display() - converting versions to SemVer format for display."""
+
+    def test_stable_version_unchanged(self) -> None:
+        """Stable versions should be returned unchanged."""
+        assert to_semver_display("1.0.0") == "1.0.0"
+        assert to_semver_display("0.1.0") == "0.1.0"
+        assert to_semver_display("2.3.4") == "2.3.4"
+
+    def test_semver_format_unchanged(self) -> None:
+        """Already SemVer-formatted versions should be returned unchanged."""
+        assert to_semver_display("0.1.0-alpha.1") == "0.1.0-alpha.1"
+        assert to_semver_display("0.2.0-beta.2") == "0.2.0-beta.2"
+        assert to_semver_display("1.0.0-rc.1") == "1.0.0-rc.1"
+
+    def test_pep440_alpha_to_semver(self) -> None:
+        """PEP 440 alpha versions should be converted to SemVer format."""
+        assert to_semver_display("0.1.0a1") == "0.1.0-alpha.1"
+        assert to_semver_display("0.2.0a2") == "0.2.0-alpha.2"
+        assert to_semver_display("1.0.0a10") == "1.0.0-alpha.10"
+
+    def test_pep440_beta_to_semver(self) -> None:
+        """PEP 440 beta versions should be converted to SemVer format."""
+        assert to_semver_display("0.1.0b1") == "0.1.0-beta.1"
+        assert to_semver_display("0.2.0b2") == "0.2.0-beta.2"
+        assert to_semver_display("1.0.0b3") == "1.0.0-beta.3"
+
+    def test_pep440_rc_to_semver(self) -> None:
+        """PEP 440 release candidate versions should be converted to SemVer format."""
+        assert to_semver_display("0.1.0rc1") == "0.1.0-rc.1"
+        assert to_semver_display("1.0.0rc2") == "1.0.0-rc.2"
+        assert to_semver_display("2.0.0rc10") == "2.0.0-rc.10"
+
+    def test_dev_version_with_prerelease(self) -> None:
+        """Development versions with prerelease should show base+prerelease+dev."""
+        assert to_semver_display("0.1.0a1.post20.dev0+4e7b776") == "0.1.0-alpha.1+dev"
+        assert to_semver_display("0.2.0b2.post5.dev0+abc1234") == "0.2.0-beta.2+dev"
+        assert to_semver_display("1.0.0rc1.post10.dev0+deadbeef") == "1.0.0-rc.1+dev"
+
+    def test_dev_version_without_prerelease(self) -> None:
+        """Development versions without prerelease should show base+dev."""
+        assert to_semver_display("0.0.0.post125.dev0+09ab5f5") == "0.0.0+dev"
+        assert to_semver_display("1.0.0.post1.dev0+abc1234") == "1.0.0+dev"

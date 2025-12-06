@@ -15,6 +15,7 @@ from importlib.metadata import PackageNotFoundError, version
 __all__ = [
     "get_this_version",
     "parse_version_from_cli_output",
+    "to_semver_display",
 ]
 
 
@@ -66,3 +67,84 @@ def parse_version_from_cli_output(output: str) -> str:
     if not match:
         raise ValueError(f"Cannot parse version from output: {output}")
     return match.group(1)
+
+
+def to_semver_display(version_str: str) -> str:
+    """Convert a version string to SemVer format for user display.
+
+    Converts PEP 440 pre-release suffixes to SemVer format:
+    - "0.1.0a1" -> "0.1.0-alpha.1"
+    - "0.2.0b2" -> "0.2.0-beta.2"
+    - "1.0.0rc1" -> "1.0.0-rc.1"
+
+    Also handles development versions by extracting the base+prerelease:
+    - "0.1.0a1.post20.dev0+4e7b776" -> "0.1.0-alpha.1+dev"
+    - "0.0.0.post125.dev0+09ab5f5" -> "0.0.0+dev"
+
+    Already-SemVer versions are returned unchanged:
+    - "0.1.0-alpha.1" -> "0.1.0-alpha.1"
+    - "1.0.0" -> "1.0.0"
+
+    Args:
+        version_str: Version string in any format
+
+    Returns:
+        Version string in SemVer format for display
+
+    Examples:
+        >>> to_semver_display("0.1.0a1")
+        '0.1.0-alpha.1'
+        >>> to_semver_display("0.2.0b2")
+        '0.2.0-beta.2'
+        >>> to_semver_display("1.0.0rc1")
+        '1.0.0-rc.1'
+        >>> to_semver_display("0.1.0-alpha.1")
+        '0.1.0-alpha.1'
+        >>> to_semver_display("0.1.0a1.post20.dev0+4e7b776")
+        '0.1.0-alpha.1+dev'
+    """
+    # Check if this is a development version with .post/.dev suffixes
+    dev_match = re.match(r"^(\d+\.\d+\.\d+)((?:a|b|rc)\d+)?\.post\d+\.dev\d+\+", version_str)
+    if dev_match:
+        base = dev_match.group(1)
+        prerelease = dev_match.group(2)
+        if prerelease:
+            # Convert PEP 440 prerelease to SemVer format
+            converted = _convert_pep440_prerelease(base, prerelease)
+            return f"{converted}+dev"
+        return f"{base}+dev"
+
+    # Check for PEP 440 pre-release format: 0.1.0a1, 0.2.0b2, 1.0.0rc1
+    pep440_match = re.match(r"^(\d+\.\d+\.\d+)(a|b|rc)(\d+)$", version_str)
+    if pep440_match:
+        base = pep440_match.group(1)
+        prerelease_type = pep440_match.group(2)
+        prerelease_num = pep440_match.group(3)
+        return _convert_pep440_prerelease(base, f"{prerelease_type}{prerelease_num}")
+
+    # Already SemVer or stable version, return as-is
+    return version_str
+
+
+def _convert_pep440_prerelease(base: str, prerelease: str) -> str:
+    """Convert PEP 440 prerelease suffix to SemVer format.
+
+    Args:
+        base: Base version (e.g., "0.1.0")
+        prerelease: PEP 440 prerelease suffix (e.g., "a1", "b2", "rc1")
+
+    Returns:
+        SemVer formatted version string
+    """
+    # Map PEP 440 suffixes to SemVer names
+    suffix_map = {"a": "alpha", "b": "beta", "rc": "rc"}
+
+    match = re.match(r"^(a|b|rc)(\d+)$", prerelease)
+    if match:
+        suffix_type = match.group(1)
+        suffix_num = match.group(2)
+        semver_name = suffix_map.get(suffix_type, suffix_type)
+        return f"{base}-{semver_name}.{suffix_num}"
+
+    # Unknown format, return base with prerelease as-is
+    return f"{base}-{prerelease}"
