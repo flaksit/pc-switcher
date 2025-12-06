@@ -82,7 +82,7 @@ Follow-up TODOs:
 
 ## Development Workflow Standards
 
-- Plans, specs, and tasks MUST annotate the primary principles they satisfy and call out trade-offs when principles compete.
+- Specs and plans MUST annotate the primary principles they satisfy and call out trade-offs when principles compete.
 - Research and design deliverables MUST describe reliability mechanisms, disk-wear mitigation, and UX considerations before implementation begins.
 - Performance budgets, conflict detection strategies, and documentation updates MUST appear as tracked tasks with owners.
 - Every change set MUST include verification evidence (tests, measurements, or checklists) proving adherence to the seven principles.
