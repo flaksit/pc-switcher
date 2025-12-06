@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from packaging.version import Version
 from rich.console import Console
 from rich.text import Text
 
@@ -22,7 +21,7 @@ from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.orchestrator import Orchestrator
-from pcswitcher.version import get_this_version, parse_version_str_from_cli_output, to_semver_str
+from pcswitcher.version import Version, get_this_version, parse_version_str_from_cli_output
 
 # Cleanup timeout for graceful shutdown after SIGINT.
 # After first SIGINT, cleanup has this many seconds to complete.
@@ -90,7 +89,7 @@ def _version_callback(value: bool) -> None:
             pkg_version = get_this_version()
             # If you change this format, also update version.py:parse_version_str_from_cli_output()
             # Display in SemVer format for user-facing output
-            console.print(f"pc-switcher {to_semver_str(pkg_version)}")
+            console.print(f"pc-switcher {Version.parse_pep440(pkg_version).semver_str()}")
         except PackageNotFoundError:
             console.print("[bold red]Error:[/bold red] Cannot determine pc-switcher version")
             sys.exit(1)
@@ -515,8 +514,8 @@ def update(
     """
     # Get current version
     try:
-        current_version = get_this_version()
-        current = Version(current_version)
+        current_version_str = get_this_version()
+        current = Version.parse_pep440(current_version_str)
     except PackageNotFoundError:
         console.print("[bold red]Error:[/bold red] Cannot determine current pc-switcher version")
         sys.exit(1)
@@ -525,24 +524,24 @@ def update(
     if version is None:
         console.print("[dim]Checking for latest version...[/dim]")
         try:
-            target_version = _get_latest_github_version(include_prerelease=prerelease)
+            target_version_str = _get_latest_github_version(include_prerelease=prerelease)
         except RuntimeError as e:
             console.print(f"[bold red]Error:[/bold red] {e}")
             sys.exit(1)
     else:
-        target_version = version
+        target_version_str = version
 
-    # Validate target version format
+    # Validate target version format (accepts both PEP 440 and SemVer)
     try:
-        target = Version(target_version)
-    except Exception:
-        console.print(f"[bold red]Error:[/bold red] Invalid version format: {target_version}")
+        target = Version.parse(target_version_str)
+    except ValueError:
+        console.print(f"[bold red]Error:[/bold red] Invalid version format: {target_version_str}")
         sys.exit(1)
 
     # Check if update is needed
     # Use SemVer format for user-facing output
-    current_display = to_semver_str(current_version)
-    target_display = to_semver_str(target_version)
+    current_display = current.semver_str()
+    target_display = target.semver_str()
 
     if target == current:
         console.print(f"[green]Already at version {current_display}[/green]")
@@ -553,7 +552,7 @@ def update(
 
     # Perform the update
     console.print(f"Updating pc-switcher from {current_display} to {target_display}...")
-    result = _run_uv_tool_install(target_version)
+    result = _run_uv_tool_install(target_version_str)
 
     if result.returncode != 0:
         console.print("[bold red]Error:[/bold red] Update failed")
@@ -569,17 +568,17 @@ def update(
 
     # Compare using Version objects to handle format differences (e.g., "0.1.0-alpha.1" vs "0.1.0a1")
     try:
-        installed_version = Version(installed_version_str)
-    except Exception:
+        installed = Version.parse(installed_version_str)
+    except ValueError:
         console.print(
             f"[bold red]Error:[/bold red] Cannot parse installed version: {installed_version_str}"
         )
         sys.exit(1)
 
-    if installed_version != target:
+    if installed != target:
         console.print(
             f"[bold red]Error:[/bold red] Version mismatch after update. "
-            f"Expected {target_display}, got {to_semver_str(installed_version_str)}"
+            f"Expected {target_display}, got {installed.semver_str()}"
         )
         sys.exit(1)
 
