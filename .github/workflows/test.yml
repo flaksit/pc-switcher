@@ -32,34 +32,27 @@ jobs:
 
       - name: Check secrets availability
         if: steps.check_fork.outputs.is_fork == 'false'
-        id: check_secrets
         run: |
           if [[ -z "${{ secrets.HCLOUD_TOKEN }}" ]] || [[ -z "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" ]]; then
-            echo "secrets_available=false" >> $GITHUB_OUTPUT
-            echo "::notice::Integration tests skipped: Required secrets (HCLOUD_TOKEN, HETZNER_SSH_PRIVATE_KEY) are not available"
-          else
-            echo "secrets_available=true" >> $GITHUB_OUTPUT
+            echo "::error::Integration tests cannot run: Required secrets (HCLOUD_TOKEN, HETZNER_SSH_PRIVATE_KEY) are not available"
+            exit 1
           fi
 
-      - name: Exit if secrets missing
-        if: steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'false'
-        run: exit 0
-
       - name: Install uv
-        if: steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'true'
+        if: steps.check_fork.outputs.is_fork == 'false'
         uses: astral-sh/setup-uv@v6
         with:
           version: "latest"
 
       - name: Install hcloud CLI
-        if: steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'true'
+        if: steps.check_fork.outputs.is_fork == 'false'
         run: |
           curl -L https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz | tar xz
           sudo mv hcloud /usr/local/bin/
           hcloud version
 
       - name: Setup SSH key
-        if: steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'true'
+        if: steps.check_fork.outputs.is_fork == 'false'
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
@@ -70,7 +63,7 @@ jobs:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Provision test infrastructure
-        if: steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'true'
+        if: steps.check_fork.outputs.is_fork == 'false'
         run: |
           export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
           export SSH_PUBLIC_KEY="$HOME/.ssh/id_ed25519.pub"
@@ -79,7 +72,7 @@ jobs:
         timeout-minutes: 30
 
       - name: Reset VMs to baseline state
-        if: steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'true'
+        if: steps.check_fork.outputs.is_fork == 'false'
         run: |
           export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
           export PC_SWITCHER_TEST_USER=testuser
@@ -92,7 +85,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Get VM IPs
-        if: steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'true'
+        if: steps.check_fork.outputs.is_fork == 'false'
         id: vm_ips
         run: |
           PC1_IP=$(hcloud server ip pc-switcher-pc1)
@@ -103,7 +96,7 @@ jobs:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Run integration tests
-        if: steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'true'
+        if: steps.check_fork.outputs.is_fork == 'false'
         run: uv run pytest -m integration -v 2>&1 | tee pytest-output.log
         env:
           PC_SWITCHER_TEST_PC1_HOST: ${{ steps.vm_ips.outputs.pc1_ip }}
@@ -113,7 +106,7 @@ jobs:
         timeout-minutes: 30
 
       - name: Upload test logs
-        if: always() && steps.check_fork.outputs.is_fork == 'false' && steps.check_secrets.outputs.secrets_available == 'true'
+        if: always() && steps.check_fork.outputs.is_fork == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: test-logs
