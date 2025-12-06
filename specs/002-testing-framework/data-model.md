@@ -53,12 +53,16 @@ Represents the concurrency control mechanism preventing simultaneous test runs.
 | acquired | datetime | ISO 8601 timestamp when lock was acquired |
 | hostname | string | Machine that acquired the lock |
 
-**Storage**: JSON file at `/tmp/pc-switcher-integration-test.lock` on pc1 VM
+**Storage**: Hetzner Server Labels on pc-switcher-pc1 server object
+- `lock_holder` label: holder identity
+- `lock_acquired` label: ISO 8601 timestamp
+
+This storage location is external to VM state and survives VM reboots and btrfs snapshot rollbacks.
 
 **Validation Rules**:
 - Lock can only be acquired if not currently held
 - Lock times out after 5 minutes of waiting (fail with error)
-- Lock file cleared on VM reboot
+- Stuck locks require manual cleanup via `hcloud server remove-label`
 
 **State Transitions**:
 ```mermaid
@@ -66,7 +70,7 @@ stateDiagram-v2
     [*] --> Available
     Available --> Held: acquire
     Held --> Available: release
-    Held --> Available: VM reboot (auto-cleanup)
+    Held --> Available: manual cleanup
 ```
 
 ---

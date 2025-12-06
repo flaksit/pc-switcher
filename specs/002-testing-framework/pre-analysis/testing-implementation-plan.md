@@ -71,7 +71,7 @@ Unit-specific fixtures:
 
 ```python
 # Key fixtures:
-# - integration_lock: Acquires lock for test session
+# - integration_lock: Acquires lock via Hetzner Server Labels (survives VM reboot/reset)
 # - reset_vms: Resets VMs to baseline at session start
 # - event_bus: Real EventBus instance
 # - local_executor: Real LocalExecutor
@@ -252,98 +252,146 @@ echo "  pc2: $(hcloud server ip pc-switcher-pc2)"
 
 ### tests/infrastructure/scripts/lock.sh
 
+Uses Hetzner Server Labels to store lock state externally from the VMs. This ensures
+the lock survives VM reboots and btrfs snapshot rollbacks.
+
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
-LOCK_FILE="/tmp/pc-switcher-integration-test.lock"
-LOCK_DIR="${LOCK_FILE}.d"
+SERVER_NAME="pc-switcher-pc1"  # Lock is stored on pc1's server object
 
 show_help() {
     cat << EOF
-Usage: $SCRIPT_NAME <holder> <acquire|release>
+Usage: $SCRIPT_NAME <holder> <acquire|release|status>
 
 Manage integration test lock to prevent concurrent test runs.
 
+The lock is stored as Hetzner Server Labels on $SERVER_NAME, which:
+  - Survives VM reboots
+  - Survives btrfs snapshot rollbacks
+  - Is accessible via hcloud CLI from any machine
+
 Arguments:
   holder    Identifier for lock holder (e.g., CI job ID or username)
-  action    One of: acquire, release
+  action    One of: acquire, release, status
 
-Lock file format (JSON):
-  {"holder": "<holder>", "acquired": "<ISO8601>", "hostname": "<hostname>"}
+Labels used:
+  lock_holder    Lock holder identifier
+  lock_acquired  ISO8601 timestamp when lock was acquired
 
 Examples:
   $SCRIPT_NAME github-123456 acquire
   $SCRIPT_NAME \$USER release
+  $SCRIPT_NAME "" status
 
-Lock file: $LOCK_FILE
+Environment:
+  HCLOUD_TOKEN   Hetzner Cloud API token (required)
 EOF
 }
 
 # Handle help flags
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || $# -lt 2 ]]; then
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     show_help
-    [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && exit 0
+    exit 0
+fi
+
+if [[ $# -lt 2 ]]; then
+    show_help
     exit 1
 fi
+
+: "${HCLOUD_TOKEN:?HCLOUD_TOKEN must be set}"
 
 LOCK_HOLDER="$1"
 ACTION="$2"
 TIMEOUT=300  # 5 minutes
 
+get_current_lock() {
+    # Returns "holder|timestamp" or empty string if no lock
+    local holder timestamp
+    holder=$(hcloud server describe "$SERVER_NAME" -o json | jq -r '.labels.lock_holder // empty')
+    timestamp=$(hcloud server describe "$SERVER_NAME" -o json | jq -r '.labels.lock_acquired // empty')
+    if [[ -n "$holder" ]]; then
+        echo "${holder}|${timestamp}"
+    fi
+}
+
 acquire_lock() {
     local end_time=$(($(date +%s) + TIMEOUT))
 
     while [ $(date +%s) -lt $end_time ]; do
-        if mkdir "$LOCK_DIR" 2>/dev/null; then
-            # Write JSON lock file with holder, timestamp, and hostname
-            cat > "$LOCK_FILE" << LOCKJSON
-{"holder": "$LOCK_HOLDER", "acquired": "$(date -Iseconds)", "hostname": "$(hostname)"}
-LOCKJSON
-            echo "Lock acquired by $LOCK_HOLDER"
-            return 0
+        current=$(get_current_lock)
+
+        if [[ -z "$current" ]]; then
+            # No lock held, try to acquire
+            local acquired_time
+            acquired_time=$(date -Iseconds)
+            hcloud server add-label "$SERVER_NAME" "lock_holder=$LOCK_HOLDER" --overwrite
+            hcloud server add-label "$SERVER_NAME" "lock_acquired=$acquired_time" --overwrite
+
+            # Verify we got the lock (check for race condition)
+            sleep 1
+            current=$(get_current_lock)
+            current_holder="${current%%|*}"
+            if [[ "$current_holder" == "$LOCK_HOLDER" ]]; then
+                echo "Lock acquired by $LOCK_HOLDER at $acquired_time"
+                return 0
+            fi
+            # Someone else got it, continue waiting
         fi
 
         # Show current holder while waiting
-        if [[ -f "$LOCK_FILE" ]]; then
-            current_holder=$(jq -r .holder "$LOCK_FILE" 2>/dev/null || echo 'unknown')
-            current_hostname=$(jq -r .hostname "$LOCK_FILE" 2>/dev/null || echo 'unknown')
-            echo "Lock held by $current_holder on $current_hostname, waiting..."
-        fi
+        current_holder="${current%%|*}"
+        current_time="${current##*|}"
+        echo "Lock held by $current_holder (since $current_time), waiting..."
         sleep 10
     done
 
     echo "ERROR: Failed to acquire lock after ${TIMEOUT}s" >&2
-    if [[ -f "$LOCK_FILE" ]]; then
-        echo "Current lock state:" >&2
-        cat "$LOCK_FILE" >&2
+    current=$(get_current_lock)
+    if [[ -n "$current" ]]; then
+        echo "Current lock: holder=${current%%|*}, acquired=${current##*|}" >&2
     fi
     return 1
 }
 
 release_lock() {
-    if [[ -d "$LOCK_DIR" ]]; then
-        if [[ -f "$LOCK_FILE" ]]; then
-            holder=$(jq -r .holder "$LOCK_FILE" 2>/dev/null || echo "unknown")
-            if [[ "$holder" == "$LOCK_HOLDER" ]]; then
-                rm -rf "$LOCK_DIR" "$LOCK_FILE"
-                echo "Lock released by $LOCK_HOLDER"
-            else
-                echo "Lock held by $holder, not releasing" >&2
-            fi
-        else
-            rm -rf "$LOCK_DIR"
-            echo "Lock directory cleaned up (no lock file found)"
-        fi
-    else
+    current=$(get_current_lock)
+
+    if [[ -z "$current" ]]; then
         echo "No lock held"
+        return 0
+    fi
+
+    current_holder="${current%%|*}"
+    if [[ "$current_holder" == "$LOCK_HOLDER" ]]; then
+        hcloud server remove-label "$SERVER_NAME" "lock_holder"
+        hcloud server remove-label "$SERVER_NAME" "lock_acquired"
+        echo "Lock released by $LOCK_HOLDER"
+        return 0
+    else
+        echo "ERROR: Lock held by $current_holder, not $LOCK_HOLDER. Not releasing." >&2
+        return 1
+    fi
+}
+
+show_status() {
+    current=$(get_current_lock)
+
+    if [[ -z "$current" ]]; then
+        echo "No lock held"
+    else
+        echo "Lock held by: ${current%%|*}"
+        echo "Acquired at:  ${current##*|}"
     fi
 }
 
 case "$ACTION" in
     acquire) acquire_lock ;;
     release) release_lock ;;
+    status) show_status ;;
     *) show_help; exit 1 ;;
 esac
 ```

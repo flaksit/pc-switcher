@@ -8,7 +8,7 @@ This feature does not expose HTTP/REST/GraphQL APIs. The "contracts" for this fe
 
 1. **pytest marker contract**: Tests marked with `@pytest.mark.integration` are excluded by default
 2. **Environment variable contract**: Integration tests require specific environment variables
-3. **Lock file format**: JSON structure for `/tmp/pc-switcher-integration-test.lock`
+3. **Lock format**: Hetzner Server Labels on pc-switcher-pc1
 
 These contracts are documented in:
 - [data-model.md](../data-model.md) - Entity definitions and validation rules
@@ -44,12 +44,28 @@ markers = [
 | HCLOUD_TOKEN | CI integration tests | Hetzner Cloud API token |
 | HETZNER_SSH_PRIVATE_KEY | CI integration tests | SSH private key for VM access |
 
-## Lock File Contract
+## Lock Contract
 
-```json
-{
-  "holder": "string (CI job ID or username)",
-  "acquired": "string (ISO 8601 datetime)",
-  "hostname": "string (optional, machine name)"
-}
+The lock is stored as Hetzner Server Labels on the `pc-switcher-pc1` server object, which survives VM reboots and btrfs snapshot rollbacks.
+
+**Labels**:
+| Label | Value |
+|-------|-------|
+| `lock_holder` | CI job ID or username |
+| `lock_acquired` | ISO 8601 datetime |
+
+**Operations**:
+```bash
+# Check lock status
+./tests/infrastructure/scripts/lock.sh "" status
+
+# Acquire lock
+./tests/infrastructure/scripts/lock.sh "$CI_JOB_ID" acquire
+
+# Release lock
+./tests/infrastructure/scripts/lock.sh "$CI_JOB_ID" release
+
+# Manual cleanup (for stuck locks)
+hcloud server remove-label pc-switcher-pc1 lock_holder
+hcloud server remove-label pc-switcher-pc1 lock_acquired
 ```

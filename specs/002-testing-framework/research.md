@@ -183,8 +183,12 @@ ssh root@$VM "btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@home /mnt
 # 4. Unmount and reboot
 ssh root@$VM "umount /mnt/btrfs"
 ssh root@$VM "reboot" || true
-sleep 20
-# Wait for VM to come back online
+
+# Wait for VM to come back online (polling loop, not fixed sleep)
+sleep 15
+until ssh -o ConnectTimeout=5 -o BatchMode=yes root@$VM true 2>/dev/null; do
+    sleep 5
+done
 
 # 5. Clean up old subvolumes after reboot
 ssh root@$VM "mount -o subvolid=5 /dev/sda2 /mnt/btrfs"
@@ -215,12 +219,18 @@ Active subvolumes (`@` and `@home`) are at the btrfs top level, not under `/.sna
 
 ## 5. Lock Mechanism
 
-### Decision: File-based lock on pc1 VM at `/tmp/pc-switcher-integration-test.lock`
+### Decision: Hetzner Server Labels on pc-switcher-pc1
 
 ### Rationale
-- Simple implementation matching existing lock module patterns
-- Lock file contains holder identity and timestamp for debugging
-- `/tmp` location cleared on reboot (automatic cleanup)
+- Lock state stored externally to VM state (survives reboots and snapshot rollbacks)
+- Simple implementation using hcloud CLI
+- Labels (`lock_holder`, `lock_acquired`) contain holder identity and timestamp for debugging
+- Accessible from any machine with HCLOUD_TOKEN
+
+**Note**: Originally considered file-based lock at `/tmp/pc-switcher-integration-test.lock`, but this was rejected because:
+1. `/tmp` is typically a tmpfs (cleared on reboot)
+2. Snapshot rollback restores VM to baseline state (pre-lock creation)
+3. Result: Lock would be destroyed during VM reset, breaking concurrency control
 
 ### Lock Scope
 
@@ -232,52 +242,32 @@ The lock protects **integration test execution only**, not provisioning:
 
 This avoids over-complicating the provisioning workflow while ensuring test isolation.
 
-### Lock File Format
+### Lock Labels
 
-```json
-{
-  "holder": "CI-job-12345",
-  "acquired": "2025-12-05T10:30:00Z",
-  "hostname": "github-runner-abc"
-}
-```
+| Label | Value |
+|-------|-------|
+| `lock_holder` | CI job ID or username |
+| `lock_acquired` | ISO 8601 timestamp |
 
-### Lock Script
+### Lock Operations
 
 ```bash
-#!/bin/bash
-# tests/infrastructure/scripts/lock.sh
+# Check status
+./tests/infrastructure/scripts/lock.sh "" status
 
-LOCK_FILE="/tmp/pc-switcher-integration-test.lock"
-HOLDER="$1"
-ACTION="$2"
-TIMEOUT=300  # 5 minutes
+# Acquire (with 5 min timeout)
+./tests/infrastructure/scripts/lock.sh "CI-job-12345" acquire
 
-case "$ACTION" in
-  acquire)
-    # Try to acquire lock with timeout
-    end_time=$(($(date +%s) + TIMEOUT))
-    while [ $(date +%s) -lt $end_time ]; do
-      if mkdir "$LOCK_FILE.d" 2>/dev/null; then
-        echo "{\"holder\": \"$HOLDER\", \"acquired\": \"$(date -Iseconds)\"}" > "$LOCK_FILE"
-        echo "Lock acquired by $HOLDER"
-        exit 0
-      fi
-      current_holder=$(cat "$LOCK_FILE" 2>/dev/null | jq -r .holder)
-      echo "Lock held by $current_holder, waiting..."
-      sleep 10
-    done
-    echo "ERROR: Failed to acquire lock after ${TIMEOUT}s" >&2
-    exit 1
-    ;;
-  release)
-    rm -rf "$LOCK_FILE.d" "$LOCK_FILE"
-    echo "Lock released by $HOLDER"
-    ;;
-esac
+# Release
+./tests/infrastructure/scripts/lock.sh "CI-job-12345" release
+
+# Manual cleanup for stuck locks
+hcloud server remove-label pc-switcher-pc1 lock_holder
+hcloud server remove-label pc-switcher-pc1 lock_acquired
 ```
 
 ### Alternatives Considered
+- **File-based lock on VM**: Rejected - destroyed by reboot/snapshot rollback
 - **Database-based lock**: Over-engineering for two users (dev + CI)
 - **GitHub Actions artifact lock**: Doesn't prevent local dev conflicts
 - **Flock-based lock**: Requires persistent SSH connection

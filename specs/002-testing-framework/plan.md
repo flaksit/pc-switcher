@@ -41,10 +41,10 @@ Implement the **testing framework infrastructure** for pc-switcher: VM provision
 
 ### Reliability Without Compromise ✅
 - **Data integrity**: Test VMs are isolated from production; btrfs snapshot reset ensures clean state before each test session
-- **Conflict detection**: Lock mechanism prevents concurrent test runs; lock file stores holder identity and acquisition time (see research.md §5)
+- **Conflict detection**: Lock mechanism prevents concurrent test runs; Hetzner Server Labels store holder identity and acquisition time (external to VM state)
 - **Rollback strategy**: Baseline snapshots created at provisioning time; reset restores VMs to known-good state; if reset fails, tests do not proceed (see research.md §4)
 
-*Post-design validation*: Lock file format and reset flow documented in data-model.md with state transitions.
+*Post-design validation*: Lock format (Hetzner Server Labels) and reset flow documented in data-model.md with state transitions.
 
 ### Frictionless Command UX ✅
 - **Single command**: `uv run pytest tests/unit tests/contract -v` for unit tests; `uv run pytest -m integration` for integration tests
@@ -74,7 +74,7 @@ Implement the **testing framework infrastructure** for pc-switcher: VM provision
 *Post-design validation*: Performance targets documented in Technical Context section.
 
 ### Deliberate Simplicity ✅
-- **Minimal components**: Two VMs mirror real sync architecture; single lock file for concurrency
+- **Minimal components**: Two VMs mirror real sync architecture; Hetzner Server Labels for concurrency lock
 - **Understandable flows**: Clear three-tier separation; existing conftest.py patterns extended
 - **No over-engineering**: Using existing pytest infrastructure; simple bash scripts for VM management
 
@@ -152,6 +152,6 @@ docs/
 | VM isolation | Hetzner Cloud VMs | Safety requirement; can't test destructive btrfs ops locally |
 | VM provisioning | hcloud CLI (no Terraform/OpenTofu) | Simple; only 2 VMs; no state management needed |
 | Snapshot reset | Btrfs snapshots at `/.snapshots/baseline/@` | Fast (< 30s) vs VM reprovisioning (minutes); matches docs/testing-framework.md |
-| Lock mechanism | File-based on pc1 | Simple; matches existing lock module patterns |
+| Lock mechanism | Hetzner Server Labels | External to VM state; survives reboots and snapshot rollbacks |
 | Lock scope | Test execution only | Provisioning is rare; protected by CI concurrency groups |
 | CI concurrency | GitHub Actions concurrency group | Built-in feature; no external dependencies |

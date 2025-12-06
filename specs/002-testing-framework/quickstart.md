@@ -120,12 +120,15 @@ export PC_SWITCHER_TEST_PC2_HOST="<pc2-ip>"
 
 Another test run is in progress. Check who holds the lock:
 ```bash
-ssh testuser@$PC_SWITCHER_TEST_PC1_HOST "cat /tmp/pc-switcher-integration-test.lock"
+./tests/infrastructure/scripts/lock.sh "" status
+# Or directly via hcloud:
+hcloud server describe pc-switcher-pc1 -o json | jq '.labels'
 ```
 
 To force-release a stuck lock:
 ```bash
-ssh testuser@$PC_SWITCHER_TEST_PC1_HOST "rm -rf /tmp/pc-switcher-integration-test.lock*"
+hcloud server remove-label pc-switcher-pc1 lock_holder
+hcloud server remove-label pc-switcher-pc1 lock_acquired
 ```
 
 ### "Baseline snapshot missing"
