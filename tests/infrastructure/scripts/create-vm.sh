@@ -233,10 +233,20 @@ EOF
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
     # -a = automatic mode, -c copies config file to /autosetup before running
-    # The confirmation dialog has Cancel as default; Tab switches to OK, Enter confirms
-    # Using stty to disable echo and sending Tab+Enter to confirm
+    # Show what's in the actual installimage script and what programs are available
+    log_info "Checking available dialog programs..."
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "export TERM=xterm; { sleep 3; printf '\t\n'; } | /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf" 2>&1 | while IFS= read -r line; do
+    ssh $SSH_OPTS "root@$vm_ip" "which dialog whiptail 2>/dev/null || echo 'No dialog/whiptail found'; head -50 /root/.oldroot/nfs/install/installimage" 2>&1 | while IFS= read -r line; do
+        echo -e "   ${LOG_PREFIX} [DEBUG-SCRIPT] $line"
+    done
+
+    # Try running with DIALOGOPTS to avoid the confirmation dialog
+    # shellcheck disable=SC2086
+    ssh -tt $SSH_OPTS "root@$vm_ip" "
+        export TERM=xterm
+        export DIALOGOPTS='--no-cancel --defaultno'
+        /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf
+    " 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     local exit_code="${PIPESTATUS[0]}"
