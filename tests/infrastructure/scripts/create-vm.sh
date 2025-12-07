@@ -235,14 +235,27 @@ EOF
     # -a = automatic mode, -c copies config file to /autosetup before running
     # Use hcloud server ssh which handles TTY allocation properly
     log_info "Using hcloud server ssh for proper TTY handling..."
-    # First copy the config to /autosetup directly (installimage looks for it there)
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "cp /tmp/installimage.conf /autosetup"
 
-    # Now run installimage using hcloud which properly allocates a TTY
-    # The -o option runs a single command
-    hcloud server ssh "$vm_name" -o "StrictHostKeyChecking=no" -- \
-        "export TERM=xterm; /root/.oldroot/nfs/install/installimage -a" 2>&1 | while IFS= read -r line; do
+    # Run installimage using hcloud which properly allocates a TTY
+    # Create config and run installimage in the same hcloud ssh session
+    local config_content="DRIVE1 /dev/sda
+USE_KERNEL_MODE_SETTING yes
+HOSTNAME $vm_name
+PART /boot/efi esp 128M
+PART btrfs.1 btrfs all
+SUBVOL btrfs.1 @ /
+SUBVOL btrfs.1 @home /home
+SUBVOL btrfs.1 @snapshots /.snapshots
+IMAGE /root/.oldroot/nfs/install/../images/Ubuntu-2404-noble-amd64-base.tar.gz"
+
+    hcloud server ssh "$vm_name" -- "
+        export TERM=xterm
+        echo '$config_content' > /autosetup
+        echo '[DEBUG] /autosetup contents:'
+        cat /autosetup
+        echo '[DEBUG] Running installimage -a...'
+        /root/.oldroot/nfs/install/installimage -a
+    " 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     local exit_code="${PIPESTATUS[0]}"
