@@ -231,28 +231,17 @@ EOF
     ssh $SSH_OPTS "root@$vm_ip" "ls -la /tmp/installimage.conf && head -3 /tmp/installimage.conf"
 
     log_info "Running installimage (this may take 5-10 minutes)..."
+    # Use -a (automatic mode) with -c (config file) to bypass interactive prompts
     # installimage is not in PATH in rescue mode, use full path
-    # Debug: look at the config.sh to understand what's causing "Cancelled."
-    # Also try looking at what the dialog function does
     # shellcheck disable=SC2086
     ssh $SSH_OPTS "root@$vm_ip" "
         export TERM=xterm
-        # Debug: examine the installimage scripts to understand Cancelled behavior
-        echo '[DEBUG] Looking for Cancelled in installimage scripts...'
-        grep -r 'Cancelled' /root/.oldroot/nfs/install/ 2>/dev/null | head -20 || true
-        echo '[DEBUG] Looking for dialog/whiptail calls...'
-        grep -r 'whiptail\|dialog' /root/.oldroot/nfs/install/*.sh 2>/dev/null | head -10 || true
-        # Also check if there's a way to bypass the confirmation
-        echo '[DEBUG] Checking config.sh for confirmation handling...'
-        grep -i 'confirm\|yesno\|autosetup' /root/.oldroot/nfs/install/config.sh 2>/dev/null | head -20 || true
-        # Try running with explicit stdin from /dev/null using setsid
-        cp /tmp/installimage.conf /autosetup
-        echo '[DEBUG] Running with setsid...'
-        setsid /root/.oldroot/nfs/install/installimage -a < /dev/null > /tmp/installimage.log 2>&1
+        echo '[DEBUG] Running installimage in automatic mode with explicit config...'
+        /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf > /tmp/installimage.log 2>&1
         EXIT_CODE=\$?
         echo '[DEBUG] Exit code:' \$EXIT_CODE
-        echo '[DEBUG] Full log:'
-        cat /tmp/installimage.log
+        echo '[DEBUG] Last 50 lines of log:'
+        tail -50 /tmp/installimage.log
         exit \$EXIT_CODE
     " 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
@@ -260,6 +249,11 @@ EOF
     local exit_code="${PIPESTATUS[0]}"
     if [[ "$exit_code" -ne 0 ]]; then
         log_error "installimage failed with exit code $exit_code"
+        log_error "Fetching full log..."
+        # shellcheck disable=SC2086
+        ssh $SSH_OPTS "root@$vm_ip" "cat /tmp/installimage.log" 2>&1 | while IFS= read -r line; do
+            echo -e "   ${LOG_PREFIX} [LOG] $line"
+        done
         return 1
     fi
 
