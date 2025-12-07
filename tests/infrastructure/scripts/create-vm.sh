@@ -232,12 +232,15 @@ EOF
 
     log_info "Running installimage (this may take 5-10 minutes)..."
     # Use -a (automatic mode) with -c (config file) to bypass interactive prompts
+    # Pipe 'yes' to auto-confirm any remaining dialog prompts
     # installimage is not in PATH in rescue mode, use full path
     # shellcheck disable=SC2086
     ssh $SSH_OPTS "root@$vm_ip" "
         export TERM=xterm
-        echo '[DEBUG] Running installimage in automatic mode with explicit config...'
-        /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf > /tmp/installimage.log 2>&1
+        echo '[DEBUG] Examining autosetup.sh to understand Cancelled logic...'
+        cat /root/.oldroot/nfs/install/autosetup.sh 2>/dev/null | head -100
+        echo '[DEBUG] Running installimage with yes pipe...'
+        yes '' | /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf > /tmp/installimage.log 2>&1
         EXIT_CODE=\$?
         echo '[DEBUG] Exit code:' \$EXIT_CODE
         echo '[DEBUG] Last 50 lines of log:'
