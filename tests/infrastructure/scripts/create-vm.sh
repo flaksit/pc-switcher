@@ -233,19 +233,31 @@ EOF
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
     # -a = automatic mode, -c copies config file to /autosetup before running
-    # Show what's in the actual installimage script and what programs are available
-    log_info "Checking available dialog programs..."
+    # Use screen to create a detached session with proper pseudo-terminal
+    # The screen session runs installimage and logs output
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "which dialog whiptail 2>/dev/null || echo 'No dialog/whiptail found'; head -50 /root/.oldroot/nfs/install/installimage" 2>&1 | while IFS= read -r line; do
-        echo -e "   ${LOG_PREFIX} [DEBUG-SCRIPT] $line"
-    done
-
-    # Try running with DIALOGOPTS to avoid the confirmation dialog
-    # shellcheck disable=SC2086
-    ssh -tt $SSH_OPTS "root@$vm_ip" "
+    ssh $SSH_OPTS "root@$vm_ip" "
         export TERM=xterm
-        export DIALOGOPTS='--no-cancel --defaultno'
-        /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf
+        export DEBIAN_FRONTEND=noninteractive
+        # Create a screen session that runs installimage with auto-confirmation
+        # -d -m: start detached, -L: enable logging, -S: session name
+        screen -d -m -L -Logfile /tmp/installimage.log -S installimage bash -c '
+            export TERM=xterm
+            # Send Enter to any prompts by having stdin be a stream of newlines
+            yes \"\" | /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf
+        '
+        # Wait for screen session to finish (check every 5 seconds)
+        while screen -list | grep -q installimage; do
+            sleep 5
+        done
+        # Show the log
+        cat /tmp/installimage.log
+        # Check if installation succeeded by looking for success indicators
+        if grep -q 'INSTALLATION COMPLETE' /tmp/installimage.log; then
+            exit 0
+        else
+            exit 1
+        fi
     " 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
