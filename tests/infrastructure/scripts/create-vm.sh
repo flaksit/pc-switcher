@@ -225,12 +225,17 @@ EOF
     # installimage -a reads from /autosetup by default
     ssh $SSH_OPTS "root@$vm_ip" "cat > /autosetup" <<< "$config"
 
+    # Verify config was written
+    # shellcheck disable=SC2086
+    log_info "Verifying /autosetup was written..."
+    ssh $SSH_OPTS "root@$vm_ip" "ls -la /autosetup && head -3 /autosetup"
+
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
     # -a = automatic mode (reads /autosetup), TERM needed for non-interactive
-    # Redirect stdin from /dev/null to prevent any interactive prompts
+    # Use 'yes ""' to auto-confirm any prompts, pipe through cat to provide stdin
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "TERM=xterm /root/.oldroot/nfs/install/installimage -a < /dev/null" 2>&1 | while IFS= read -r line; do
+    ssh $SSH_OPTS "root@$vm_ip" "yes '' | TERM=xterm /root/.oldroot/nfs/install/installimage -a" 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     local exit_code="${PIPESTATUS[0]}"
