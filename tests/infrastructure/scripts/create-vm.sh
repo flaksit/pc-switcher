@@ -233,15 +233,23 @@ EOF
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
     # -a = automatic mode, -c copies config file to /autosetup before running
-    # Use SSH with -tt for pseudo-terminal allocation, no stdin piping
-    # The AUTOSETUP mode should work without user input when properly detected
+    # Create a wrapper script that runs installimage with continuous Enter key input
     # shellcheck disable=SC2086
-    ssh -tt $SSH_OPTS "root@$vm_ip" "
+    ssh $SSH_OPTS "root@$vm_ip" "
         export TERM=xterm
-        # Verify /autosetup was created by -c flag earlier or create it now
-        cat /autosetup || echo 'Creating /autosetup...'
-        # Run installimage in automatic mode
-        /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf
+        # Create a wrapper that provides continuous newlines as input via named pipe
+        rm -f /tmp/input_pipe
+        mkfifo /tmp/input_pipe
+        # Background process sends continuous newlines
+        (while true; do echo; sleep 0.5; done) > /tmp/input_pipe &
+        INPUT_PID=\$!
+        # Run installimage reading from the pipe, with script for PTY
+        script -q -e -c '/root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf < /tmp/input_pipe' /dev/null
+        EXIT_CODE=\$?
+        # Cleanup
+        kill \$INPUT_PID 2>/dev/null
+        rm -f /tmp/input_pipe
+        exit \$EXIT_CODE
     " 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
