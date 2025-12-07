@@ -233,21 +233,10 @@ EOF
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
     # -a = automatic mode, -c copies config file to /autosetup before running
-    # Use expect to handle the dialog confirmation automatically
+    # The confirmation dialog has Cancel as default; Tab switches to OK, Enter confirms
+    # Using stty to disable echo and sending Tab+Enter to confirm
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "export TERM=xterm; expect -c '
-        set timeout 600
-        spawn /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf
-        expect {
-            \"*yes*\" { send \"yes\\r\"; exp_continue }
-            \"*OK*\" { send \"\\r\"; exp_continue }
-            \"*Continue*\" { send \"\\r\"; exp_continue }
-            \"*Press*\" { send \"\\r\"; exp_continue }
-            eof { }
-        }
-        lassign [wait] pid spawnid os_error value
-        exit \$value
-    '" 2>&1 | while IFS= read -r line; do
+    ssh $SSH_OPTS "root@$vm_ip" "export TERM=xterm; { sleep 3; printf '\t\n'; } | /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf" 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     local exit_code="${PIPESTATUS[0]}"
