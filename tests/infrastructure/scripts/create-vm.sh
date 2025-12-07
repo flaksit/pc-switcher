@@ -233,20 +233,16 @@ EOF
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
     # -a = automatic mode, -c copies config file to /autosetup before running
-    # Set various environment variables that might help skip confirmation dialogs
+    # Use hcloud server ssh which handles TTY allocation properly
+    log_info "Using hcloud server ssh for proper TTY handling..."
+    # First copy the config to /autosetup directly (installimage looks for it there)
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "
-        export TERM=xterm
-        export DEBIAN_FRONTEND=noninteractive
-        export CONFIRMED=1
-        export OPT_AUTOMODE=1
-        # Check config.sh for what variables control confirmation
-        echo '[DEBUG] Checking config.sh for confirmation variables...'
-        grep -i 'confirm\|automode\|dialogue\|dialog' /root/.oldroot/nfs/install/config.sh 2>/dev/null | head -20 || true
-        # Try running with nohup and redirecting stdin from a loop that sends y
-        echo '[DEBUG] Running installimage with confirmation bypass...'
-        (while true; do echo 'y'; sleep 1; done) | timeout 600 /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf
-    " 2>&1 | while IFS= read -r line; do
+    ssh $SSH_OPTS "root@$vm_ip" "cp /tmp/installimage.conf /autosetup"
+
+    # Now run installimage using hcloud which properly allocates a TTY
+    # The -o option runs a single command
+    hcloud server ssh "$vm_name" -o "StrictHostKeyChecking=no" -- \
+        "export TERM=xterm; /root/.oldroot/nfs/install/installimage -a" 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     local exit_code="${PIPESTATUS[0]}"
