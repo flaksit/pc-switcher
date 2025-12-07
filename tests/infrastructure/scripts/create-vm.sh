@@ -232,29 +232,25 @@ EOF
 
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
-    # Try running installimage with just AUTOSETUP file, no -a flag (might avoid conflict)
-    # Also try providing explicit nohup/background to not depend on SSH session
+    # Debug: look at the config.sh to understand what's causing "Cancelled."
+    # Also try looking at what the dialog function does
     # shellcheck disable=SC2086
     ssh $SSH_OPTS "root@$vm_ip" "
         export TERM=xterm
-        # Copy config directly to /autosetup
+        # Debug: examine the installimage scripts to understand Cancelled behavior
+        echo '[DEBUG] Looking for Cancelled in installimage scripts...'
+        grep -r 'Cancelled' /root/.oldroot/nfs/install/ 2>/dev/null | head -20 || true
+        echo '[DEBUG] Looking for dialog/whiptail calls...'
+        grep -r 'whiptail\|dialog' /root/.oldroot/nfs/install/*.sh 2>/dev/null | head -10 || true
+        # Also check if there's a way to bypass the confirmation
+        echo '[DEBUG] Checking config.sh for confirmation handling...'
+        grep -i 'confirm\|yesno\|autosetup' /root/.oldroot/nfs/install/config.sh 2>/dev/null | head -20 || true
+        # Try running with explicit stdin from /dev/null using setsid
         cp /tmp/installimage.conf /autosetup
-        echo '[DEBUG] /autosetup created:'
-        cat /autosetup
-        # Run installimage in background, logging to file
-        # When installimage sees /autosetup without -a, it should auto-detect and run
-        nohup /root/.oldroot/nfs/install/installimage > /tmp/installimage.log 2>&1 &
-        INSTALL_PID=\$!
-        echo '[DEBUG] installimage started with PID \$INSTALL_PID'
-        # Wait for process to complete (check every 10 seconds)
-        while kill -0 \$INSTALL_PID 2>/dev/null; do
-            sleep 10
-            echo '[DEBUG] Still running... last 5 lines of log:'
-            tail -5 /tmp/installimage.log 2>/dev/null || true
-        done
-        wait \$INSTALL_PID
+        echo '[DEBUG] Running with setsid...'
+        setsid /root/.oldroot/nfs/install/installimage -a < /dev/null > /tmp/installimage.log 2>&1
         EXIT_CODE=\$?
-        echo '[DEBUG] installimage exited with code \$EXIT_CODE'
+        echo '[DEBUG] Exit code:' \$EXIT_CODE
         echo '[DEBUG] Full log:'
         cat /tmp/installimage.log
         exit \$EXIT_CODE
