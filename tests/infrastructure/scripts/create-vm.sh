@@ -149,7 +149,7 @@ run_ssh() {
     shift
     # shellcheck disable=SC2086
     ssh $SSH_OPTS "root@$vm_ip" "$@" 2>&1 | while IFS= read -r line; do
-        echo "   ${LOG_PREFIX} $line"
+        echo -e "   ${LOG_PREFIX} $line"
     done
     return "${PIPESTATUS[0]}"
 }
@@ -197,6 +197,13 @@ run_installimage() {
 
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
+
+    # Debug: Check if we're actually in rescue mode
+    log_info "Verifying rescue mode environment..."
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "root@$vm_ip" "hostname; cat /etc/os-release 2>/dev/null | head -3 || true; which installimage || echo 'installimage not in PATH'; ls -la /root/.oldroot/nfs/install/installimage 2>/dev/null || echo 'installimage not at expected path'" 2>&1 | while IFS= read -r line; do
+        echo "   ${LOG_PREFIX} [DEBUG] $line"
+    done
 
     # Create installimage config
     local config
