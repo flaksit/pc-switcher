@@ -227,8 +227,8 @@ EOF
 
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
-    # -a = automatic mode (reads /autosetup), TERM needed for non-interactive
-    run_ssh "$vm_ip" "TERM=xterm /root/.oldroot/nfs/install/installimage -a"
+    # -a -c <file> = automatic mode with config file, TERM needed for non-interactive
+    run_ssh "$vm_ip" "TERM=xterm /root/.oldroot/nfs/install/installimage -a -c /autosetup"
 
     log_info "Installation complete"
 }
