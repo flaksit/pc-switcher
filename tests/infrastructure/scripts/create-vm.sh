@@ -232,10 +232,10 @@ EOF
 
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
-    # -a = automatic mode (reads /autosetup), TERM needed for non-interactive
-    # Use 'yes ""' to auto-confirm any prompts, pipe through cat to provide stdin
+    # In automatic mode, must explicitly pass: -a -c <config> -i <image>
+    local image_path="/root/.oldroot/nfs/install/../images/Ubuntu-2404-noble-amd64-base.tar.gz"
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "yes '' | TERM=xterm /root/.oldroot/nfs/install/installimage -a" 2>&1 | while IFS= read -r line; do
+    ssh $SSH_OPTS "root@$vm_ip" "TERM=xterm /root/.oldroot/nfs/install/installimage -a -c /autosetup -i '$image_path'" 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     local exit_code="${PIPESTATUS[0]}"
