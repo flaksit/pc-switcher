@@ -233,28 +233,15 @@ EOF
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
     # -a = automatic mode, -c copies config file to /autosetup before running
-    # Use hcloud server ssh which handles TTY allocation properly
-    log_info "Using hcloud server ssh for proper TTY handling..."
-
-    # Run installimage using hcloud which properly allocates a TTY
-    # Create config and run installimage in the same hcloud ssh session
-    local config_content="DRIVE1 /dev/sda
-USE_KERNEL_MODE_SETTING yes
-HOSTNAME $vm_name
-PART /boot/efi esp 128M
-PART btrfs.1 btrfs all
-SUBVOL btrfs.1 @ /
-SUBVOL btrfs.1 @home /home
-SUBVOL btrfs.1 @snapshots /.snapshots
-IMAGE /root/.oldroot/nfs/install/../images/Ubuntu-2404-noble-amd64-base.tar.gz"
-
-    hcloud server ssh "$vm_name" -- "
+    # Use SSH with -tt for pseudo-terminal allocation, no stdin piping
+    # The AUTOSETUP mode should work without user input when properly detected
+    # shellcheck disable=SC2086
+    ssh -tt $SSH_OPTS "root@$vm_ip" "
         export TERM=xterm
-        echo '$config_content' > /autosetup
-        echo '[DEBUG] /autosetup contents:'
-        cat /autosetup
-        echo '[DEBUG] Running installimage -a...'
-        /root/.oldroot/nfs/install/installimage -a
+        # Verify /autosetup was created by -c flag earlier or create it now
+        cat /autosetup || echo 'Creating /autosetup...'
+        # Run installimage in automatic mode
+        /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf
     " 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
