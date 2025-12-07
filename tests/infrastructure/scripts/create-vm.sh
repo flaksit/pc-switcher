@@ -233,31 +233,19 @@ EOF
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
     # -a = automatic mode, -c copies config file to /autosetup before running
-    # Use screen to create a detached session with proper pseudo-terminal
-    # The screen session runs installimage and logs output
+    # Set various environment variables that might help skip confirmation dialogs
     # shellcheck disable=SC2086
     ssh $SSH_OPTS "root@$vm_ip" "
         export TERM=xterm
         export DEBIAN_FRONTEND=noninteractive
-        # Create a screen session that runs installimage with auto-confirmation
-        # -d -m: start detached, -L: enable logging, -S: session name
-        screen -d -m -L -Logfile /tmp/installimage.log -S installimage bash -c '
-            export TERM=xterm
-            # Send Enter to any prompts by having stdin be a stream of newlines
-            yes \"\" | /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf
-        '
-        # Wait for screen session to finish (check every 5 seconds)
-        while screen -list | grep -q installimage; do
-            sleep 5
-        done
-        # Show the log
-        cat /tmp/installimage.log
-        # Check if installation succeeded by looking for success indicators
-        if grep -q 'INSTALLATION COMPLETE' /tmp/installimage.log; then
-            exit 0
-        else
-            exit 1
-        fi
+        export CONFIRMED=1
+        export OPT_AUTOMODE=1
+        # Check config.sh for what variables control confirmation
+        echo '[DEBUG] Checking config.sh for confirmation variables...'
+        grep -i 'confirm\|automode\|dialogue\|dialog' /root/.oldroot/nfs/install/config.sh 2>/dev/null | head -20 || true
+        # Try running with nohup and redirecting stdin from a loop that sends y
+        echo '[DEBUG] Running installimage with confirmation bypass...'
+        (while true; do echo 'y'; sleep 1; done) | timeout 600 /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf
     " 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
