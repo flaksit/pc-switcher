@@ -220,13 +220,15 @@ IMAGE /root/.oldroot/nfs/install/../images/Ubuntu-2404-noble-amd64-base.tar.gz
 EOF
 )
 
-    log_info "Creating installimage config..."
+    log_info "Creating installimage config at /autosetup..."
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "cat > /tmp/installimage.conf" <<< "$config"
+    # installimage -a reads from /autosetup by default
+    ssh $SSH_OPTS "root@$vm_ip" "cat > /autosetup" <<< "$config"
 
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
-    run_ssh "$vm_ip" "/root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf"
+    # -a = automatic mode (reads /autosetup), TERM needed for non-interactive
+    run_ssh "$vm_ip" "TERM=xterm /root/.oldroot/nfs/install/installimage -a"
 
     log_info "Installation complete"
 }
