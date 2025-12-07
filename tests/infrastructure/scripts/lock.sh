@@ -87,7 +87,8 @@ get_lock_timestamp() {
 set_lock() {
     local holder="$1"
     local timestamp
-    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    # Use format without colons (not valid in Hetzner labels)
+    timestamp=$(date -u +"%Y%m%d-%H%M%S")
 
     hcloud server add-label "$SERVER_NAME" "lock_holder=$holder" --overwrite
     hcloud server add-label "$SERVER_NAME" "lock_acquired=$timestamp" --overwrite
