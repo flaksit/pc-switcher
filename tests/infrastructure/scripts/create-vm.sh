@@ -232,23 +232,31 @@ EOF
 
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
-    # -a = automatic mode, -c copies config file to /autosetup before running
-    # Create a wrapper script that runs installimage with continuous Enter key input
+    # Try running installimage with just AUTOSETUP file, no -a flag (might avoid conflict)
+    # Also try providing explicit nohup/background to not depend on SSH session
     # shellcheck disable=SC2086
     ssh $SSH_OPTS "root@$vm_ip" "
         export TERM=xterm
-        # Create a wrapper that provides continuous newlines as input via named pipe
-        rm -f /tmp/input_pipe
-        mkfifo /tmp/input_pipe
-        # Background process sends continuous newlines
-        (while true; do echo; sleep 0.5; done) > /tmp/input_pipe &
-        INPUT_PID=\$!
-        # Run installimage reading from the pipe, with script for PTY
-        script -q -e -c '/root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf < /tmp/input_pipe' /dev/null
+        # Copy config directly to /autosetup
+        cp /tmp/installimage.conf /autosetup
+        echo '[DEBUG] /autosetup created:'
+        cat /autosetup
+        # Run installimage in background, logging to file
+        # When installimage sees /autosetup without -a, it should auto-detect and run
+        nohup /root/.oldroot/nfs/install/installimage > /tmp/installimage.log 2>&1 &
+        INSTALL_PID=\$!
+        echo '[DEBUG] installimage started with PID \$INSTALL_PID'
+        # Wait for process to complete (check every 10 seconds)
+        while kill -0 \$INSTALL_PID 2>/dev/null; do
+            sleep 10
+            echo '[DEBUG] Still running... last 5 lines of log:'
+            tail -5 /tmp/installimage.log 2>/dev/null || true
+        done
+        wait \$INSTALL_PID
         EXIT_CODE=\$?
-        # Cleanup
-        kill \$INPUT_PID 2>/dev/null
-        rm -f /tmp/input_pipe
+        echo '[DEBUG] installimage exited with code \$EXIT_CODE'
+        echo '[DEBUG] Full log:'
+        cat /tmp/installimage.log
         exit \$EXIT_CODE
     " 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
