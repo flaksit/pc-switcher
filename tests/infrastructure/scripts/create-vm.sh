@@ -127,7 +127,8 @@ enable_rescue_mode() {
     local vm_name="$1"
 
     log_step "Enabling rescue mode for '$vm_name'..."
-    hcloud server enable-rescue "$vm_name" --type "linux64" --quiet
+    # Must explicitly specify SSH key for rescue mode access
+    hcloud server enable-rescue "$vm_name" --type "linux64" --ssh-key "$SSH_KEY_NAME" --quiet
     log_info "Rescue mode enabled"
 }
 
