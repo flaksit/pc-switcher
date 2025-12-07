@@ -227,8 +227,17 @@ EOF
 
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
-    # -a -c <file> = automatic mode with config file, TERM needed for non-interactive
-    run_ssh "$vm_ip" "TERM=xterm /root/.oldroot/nfs/install/installimage -a -c /autosetup"
+    # -a = automatic mode (reads /autosetup), TERM needed for non-interactive
+    # Redirect stdin from /dev/null to prevent any interactive prompts
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "root@$vm_ip" "TERM=xterm /root/.oldroot/nfs/install/installimage -a < /dev/null" 2>&1 | while IFS= read -r line; do
+        echo -e "   ${LOG_PREFIX} $line"
+    done
+    local exit_code="${PIPESTATUS[0]}"
+    if [[ "$exit_code" -ne 0 ]]; then
+        log_error "installimage failed with exit code $exit_code"
+        return 1
+    fi
 
     log_info "Installation complete"
 }
