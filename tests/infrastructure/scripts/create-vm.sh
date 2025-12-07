@@ -225,7 +225,8 @@ EOF
     ssh $SSH_OPTS "root@$vm_ip" "cat > /tmp/installimage.conf" <<< "$config"
 
     log_info "Running installimage (this may take 5-10 minutes)..."
-    run_ssh "$vm_ip" "installimage -a -c /tmp/installimage.conf"
+    # installimage is not in PATH in rescue mode, use full path
+    run_ssh "$vm_ip" "/root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf"
 
     log_info "Installation complete"
 }
