@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Main orchestrator script for provisioning pc-switcher test infrastructure
-# Creates two VMs, configures them, sets up networking, and creates baseline snapshots
+# Main orchestrator script for provisioning pc-switcher test infrastructure.
+# Creates two VMs, configures them, sets up networking, and creates baseline snapshots.
+#
+# See docs/testing-infrastructure.md for the full provisioning flow diagram and details.
 #
 # IMPORTANT: This script can only be run from GitHub CI. Local provisioning is blocked
 # to ensure all authorized SSH keys are properly configured from secrets.
@@ -16,7 +18,7 @@ readonly YELLOW='\033[1;33m'
 readonly NC='\033[0m' # No Color
 
 log_step() { echo -e "${GREEN}==>${NC} $*"; }
-log_info() { echo "    $*"; }
+log_info() { echo -e "    $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
@@ -83,12 +85,24 @@ EOF
     exit 0
 fi
 
+# SSH options for root access
+readonly SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
+
 # Check if VM is configured (testuser can SSH)
 check_vm_configured() {
     local vm_ip="$1"
     ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         "testuser@$vm_ip" "echo configured" 2>/dev/null && return 0
     return 1
+}
+
+# Check if VM has btrfs filesystem (requires root SSH access)
+check_vm_has_btrfs() {
+    local vm_ip="$1"
+    local fs_type
+    # shellcheck disable=SC2086
+    fs_type=$(ssh $SSH_OPTS "root@$vm_ip" "df -T / 2>/dev/null | tail -n1 | awk '{print \$2}'" 2>/dev/null) || return 1
+    [[ "$fs_type" == "btrfs" ]]
 }
 
 # Get VM IPs (empty if VM doesn't exist)
@@ -105,13 +119,48 @@ if [[ -n "$PC1_IP" && -n "$PC2_IP" ]]; then
 
     if check_vm_configured "$PC1_IP" && check_vm_configured "$PC2_IP"; then
         log_info "VMs are already configured. Skipping provisioning."
-        log_step "VMs ready for testing:"
-        log_info "pc1: $PC1_IP"
-        log_info "pc2: $PC2_IP"
+        log_step "VMs ready for testing"
         exit 0
     fi
 
-    log_warn "VMs exist but are not fully configured. Will reconfigure."
+    # VMs exist but not configured - check if they have btrfs
+    log_info "VMs not configured. Checking filesystem state..."
+
+    PC1_HAS_BTRFS=false
+    PC2_HAS_BTRFS=false
+
+    if check_vm_has_btrfs "$PC1_IP"; then
+        PC1_HAS_BTRFS=true
+        log_info "  pc1: has btrfs filesystem"
+    else
+        log_warn "  pc1: does NOT have btrfs filesystem"
+    fi
+
+    if check_vm_has_btrfs "$PC2_IP"; then
+        PC2_HAS_BTRFS=true
+        log_info "  pc2: has btrfs filesystem"
+    else
+        log_warn "  pc2: does NOT have btrfs filesystem"
+    fi
+
+    # If any VM doesn't have btrfs, we can't just configure - need full reprovision
+    if [[ "$PC1_HAS_BTRFS" == "false" || "$PC2_HAS_BTRFS" == "false" ]]; then
+        log_error "VMs exist but are in an incomplete state (missing btrfs filesystem)."
+        log_error "This happens when VM creation was interrupted during the rescue/installimage phase."
+        log_error ""
+        log_error "To fix this, delete the VMs and re-run the workflow:"
+        log_error "  hcloud server delete pc1"
+        log_error "  hcloud server delete pc2"
+        log_error ""
+        log_error "Then trigger the workflow again to reprovision from scratch."
+        log_error "See docs/testing-infrastructure.md for more details."
+        exit 1
+    fi
+
+    log_info "Both VMs have btrfs. Will proceed with configuration only."
+    SKIP_VM_CREATION=true
+else
+    SKIP_VM_CREATION=false
 fi
 
 # Provisioning needed - block if not CI
@@ -162,33 +211,37 @@ log_info "Prerequisites check passed"
 # Ensure SSH key exists in Hetzner Cloud (must be done once before parallel VM creation)
 ensure_ssh_key
 
-# Create VMs in parallel
-log_step "Creating VMs in parallel..."
-log_info "- pc1"
-log_info "- pc2"
-"$SCRIPT_DIR/create-vm.sh" pc1 &
-PID1=$!
-"$SCRIPT_DIR/create-vm.sh" pc2 &
-PID2=$!
+# Create VMs in parallel (skip if VMs already exist with btrfs)
+if [[ "$SKIP_VM_CREATION" == "true" ]]; then
+    log_step "Skipping VM creation (VMs already exist with btrfs filesystem)"
+else
+    log_step "Creating VMs in parallel..."
+    log_info "- pc1"
+    log_info "- pc2"
+    "$SCRIPT_DIR/create-vm.sh" pc1 &
+    PID1=$!
+    "$SCRIPT_DIR/create-vm.sh" pc2 &
+    PID2=$!
 
-# Wait for both VM creation jobs
-wait $PID1
-wait $PID2
-log_info "VM creation completed"
+    # Wait for both VM creation jobs
+    wait $PID1
+    wait $PID2
+    log_info "VM creation completed"
 
-# Get VM IPs (refresh after potential creation)
-log_step "Retrieving VM IP addresses..."
-PC1_IP=$(hcloud server ip pc1)
-PC2_IP=$(hcloud server ip pc2)
-log_info "pc1: $PC1_IP"
-log_info "pc2: $PC2_IP"
+    # Get VM IPs (refresh after creation)
+    log_step "Retrieving VM IP addresses..."
+    PC1_IP=$(hcloud server ip pc1)
+    PC2_IP=$(hcloud server ip pc2)
+    log_info "pc1: $PC1_IP"
+    log_info "pc2: $PC2_IP"
+fi
 
 # Configure VMs in parallel
 log_step "Configuring VMs in parallel..."
 log_info "Installing packages and setting up users on both VMs"
-"$SCRIPT_DIR/configure-vm.sh" "$PC1_IP" "$SSH_AUTHORIZED_KEYS" &
+"$SCRIPT_DIR/configure-vm.sh" "$PC1_IP" "$SSH_AUTHORIZED_KEYS" "pc1" &
 PID1=$!
-"$SCRIPT_DIR/configure-vm.sh" "$PC2_IP" "$SSH_AUTHORIZED_KEYS" &
+"$SCRIPT_DIR/configure-vm.sh" "$PC2_IP" "$SSH_AUTHORIZED_KEYS" "pc2" &
 PID2=$!
 
 # Wait for both configuration jobs
@@ -217,6 +270,7 @@ log_info "  ssh testuser@$PC1_IP"
 log_info "  ssh testuser@$PC2_IP"
 echo ""
 log_info "To reset VMs to baseline state:"
+log_info "  (Note that this is done automatically by the integration tests.)"
 log_info "  $SCRIPT_DIR/reset-vm.sh $PC1_IP"
 log_info "  $SCRIPT_DIR/reset-vm.sh $PC2_IP"
 echo ""

@@ -361,6 +361,7 @@ The CI workflow automatically handles this by using the PR branch.
 
 ### Additional Guides
 
+- [Testing Infrastructure](testing-infrastructure.md) - VM provisioning flow and scripts
 - [Testing Developer Guide](testing-developer-guide.md) - Guide for writing integration tests
 - [Testing Ops Guide](testing-ops-guide.md) - Operational guide for test infrastructure
 - [Testing Playbook](testing-playbook.md) - Manual verification playbook

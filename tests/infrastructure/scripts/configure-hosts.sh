@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Configure /etc/hosts and SSH keys for inter-VM communication
+# Configure /etc/hosts and SSH keys for inter-VM communication.
+# Sets up bidirectional SSH trust between pc1 and pc2.
+#
+# See docs/testing-infrastructure.md for the full provisioning flow diagram.
 #
 # Usage: ./configure-hosts.sh
 #
@@ -42,7 +45,7 @@ readonly YELLOW='\033[1;33m'
 readonly NC='\033[0m' # No Color
 
 log_step() { echo -e "${GREEN}==>${NC} $*"; }
-log_info() { echo "    $*"; }
+log_info() { echo -e "    $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 

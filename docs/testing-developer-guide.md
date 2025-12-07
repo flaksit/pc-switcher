@@ -820,4 +820,5 @@ source ~/.pc-switcher-test-env
 
 For more information, see:
 - [Testing Framework Overview](testing-framework.md)
+- [Testing Infrastructure](testing-infrastructure.md) - VM provisioning flow and scripts
 - [ADR-006: Testing Framework](adr/adr-006-testing-framework.md)

@@ -6,6 +6,7 @@ This guide provides operational procedures for configuring and maintaining the p
 
 **Related Documentation**:
 - [Testing Framework Architecture](testing-framework.md) - Design and architecture overview
+- [Testing Infrastructure](testing-infrastructure.md) - VM provisioning flow and scripts
 - [Testing Developer Guide](testing-developer-guide.md) - Writing integration tests
 - [ADR-006: Testing Framework](adr/adr-006-testing-framework.md) - Architectural decision
 

@@ -2,19 +2,22 @@
 set -euo pipefail
 
 # VM Configuration Script
-# Configures a single VM after btrfs installation with testuser setup,
-# SSH key injection, and baseline services.
+# Configures a single VM after btrfs installation: creates testuser, injects SSH keys,
+# hardens SSH, and configures firewall.
 #
-# Usage: ./configure-vm.sh <VM_HOST> <SSH_AUTHORIZED_KEYS>
+# See docs/testing-infrastructure.md for the full provisioning flow diagram.
+#
+# Usage: ./configure-vm.sh <VM_HOST> <SSH_AUTHORIZED_KEYS> [VM_NAME]
 #
 # Arguments:
 #   VM_HOST              IP address or hostname of the target VM
 #   SSH_AUTHORIZED_KEYS  SSH public keys (newline-separated) for testuser
+#   VM_NAME              (optional) Display name for logs (defaults to VM_HOST)
 
 # Help
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     cat <<EOF
-Usage: $(basename "$0") <VM_HOST> <SSH_AUTHORIZED_KEYS>
+Usage: $(basename "$0") <VM_HOST> <SSH_AUTHORIZED_KEYS> [VM_NAME]
 
 Configure a single VM after btrfs installation.
 
@@ -29,16 +32,17 @@ This script:
 Arguments:
   VM_HOST              IP address or hostname of the target VM
   SSH_AUTHORIZED_KEYS  SSH public keys (newline-separated) for testuser
+  VM_NAME              (optional) Display name for logs (defaults to VM_HOST)
 
 Example:
-  $(basename "$0") 192.168.1.100 "\$(cat ~/.ssh/id_ed25519.pub)"
+  $(basename "$0") 192.168.1.100 "\$(cat ~/.ssh/id_ed25519.pub)" pc1
 EOF
     exit 0
 fi
 
-if [[ "$#" -ne 2 ]]; then
-    echo "Error: Expected 2 arguments, got $#" >&2
-    echo "Usage: $(basename "$0") <VM_HOST> <SSH_AUTHORIZED_KEYS>" >&2
+if [[ "$#" -lt 2 ]]; then
+    echo "Error: Expected at least 2 arguments, got $#" >&2
+    echo "Usage: $(basename "$0") <VM_HOST> <SSH_AUTHORIZED_KEYS> [VM_NAME]" >&2
     echo "Run with -h for help" >&2
     exit 1
 fi
@@ -52,23 +56,24 @@ readonly NC='\033[0m' # No Color
 
 readonly VM_HOST="$1"
 readonly SSH_AUTHORIZED_KEYS="$2"
+readonly VM_NAME="${3:-$VM_HOST}"  # Use VM_NAME if provided, otherwise fall back to VM_HOST
 
-# Log prefix includes VM host for parallel execution clarity
-readonly LOG_PREFIX=" ${CYAN}[${VM_HOST}]${NC}"
+# Log prefix includes VM name for parallel execution clarity
+readonly LOG_PREFIX=" ${CYAN}[${VM_NAME}]${NC}"
 
 log_step() { echo -e "${GREEN}==>${NC}${LOG_PREFIX} $*"; }
-log_info() { echo "   ${LOG_PREFIX} $*"; }
+log_info() { echo -e "   ${LOG_PREFIX} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC}${LOG_PREFIX} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC}${LOG_PREFIX} $*" >&2; }
 
 # Common SSH options
 readonly SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
 
-# Run SSH command and prefix all output with VM host
+# Run SSH command and prefix all output with VM name
 run_ssh() {
     # shellcheck disable=SC2086
     ssh $SSH_OPTS root@"${VM_HOST}" "$@" 2>&1 | while IFS= read -r line; do
-        echo "   [${VM_HOST}] $line"
+        echo -e "   [${VM_NAME}] $line"
     done
     return "${PIPESTATUS[0]}"
 }

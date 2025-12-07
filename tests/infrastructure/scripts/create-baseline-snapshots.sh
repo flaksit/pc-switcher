@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Create baseline btrfs snapshots on both test VMs
-# These snapshots are used by reset-vm.sh to restore VMs to a known-good state
+# Create baseline btrfs snapshots on both test VMs.
+# These snapshots are used by reset-vm.sh to restore VMs to a known-good state between tests.
+#
+# See docs/testing-infrastructure.md for the full provisioning flow diagram.
 #
 # Usage: ./create-baseline-snapshots.sh
 #
@@ -40,7 +42,7 @@ readonly YELLOW='\033[1;33m'
 readonly NC='\033[0m' # No Color
 
 log_step() { echo -e "${GREEN}==>${NC} $*"; }
-log_info() { echo "    $*"; }
+log_info() { echo -e "    $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
