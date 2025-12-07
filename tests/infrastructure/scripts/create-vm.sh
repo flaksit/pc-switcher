@@ -25,7 +25,7 @@ readonly LOCATION="fsn1"
 readonly SERVER_TYPE="cx23"
 readonly SSH_KEY_NAME="pc-switcher-test-key"
 readonly TIMEOUT_RESCUE=180
-readonly TIMEOUT_INSTALL=300
+readonly TIMEOUT_INSTALL=600
 readonly TIMEOUT_REBOOT=120
 
 # Colors for output
@@ -316,7 +316,7 @@ main() {
 
     # Wait for VM to be ready
     sleep 5
-    wait_for_ssh "$vm_name" "$TIMEOUT_RESCUE"
+    wait_for_ssh "$vm_name" "$TIMEOUT_INSTALL"
 
     # Enable rescue mode
     enable_rescue_mode "$vm_name"
