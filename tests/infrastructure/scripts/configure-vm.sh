@@ -115,7 +115,7 @@ PermitRootLogin no
 PasswordAuthentication no
 AllowUsers testuser
 SSHEOF
-systemctl restart sshd
+systemctl restart ssh
 
 # fail2ban
 systemctl enable fail2ban
