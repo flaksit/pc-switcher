@@ -71,6 +71,7 @@ jobs:
           set -o pipefail
           uv run pytest -m integration -v 2>&1 | tee pytest-output.log
         env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
           PC_SWITCHER_TEST_PC1_HOST: ${{ steps.vm_ips.outputs.pc1_ip }}
           PC_SWITCHER_TEST_PC2_HOST: ${{ steps.vm_ips.outputs.pc2_ip }}
           PC_SWITCHER_TEST_USER: testuser
