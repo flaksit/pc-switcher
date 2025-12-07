@@ -220,23 +220,22 @@ IMAGE /root/.oldroot/nfs/install/../images/Ubuntu-2404-noble-amd64-base.tar.gz
 EOF
 )
 
-    log_info "Creating installimage config at /autosetup..."
+    log_info "Creating installimage config at /tmp/installimage.conf..."
     # shellcheck disable=SC2086
-    # installimage -a reads from /autosetup by default
-    ssh $SSH_OPTS "root@$vm_ip" "cat > /autosetup" <<< "$config"
+    # Write to /tmp first, then use -c to copy to /autosetup
+    ssh $SSH_OPTS "root@$vm_ip" "cat > /tmp/installimage.conf" <<< "$config"
 
     # Verify config was written
     # shellcheck disable=SC2086
-    log_info "Verifying /autosetup was written..."
-    ssh $SSH_OPTS "root@$vm_ip" "ls -la /autosetup && head -3 /autosetup"
+    log_info "Verifying config was written..."
+    ssh $SSH_OPTS "root@$vm_ip" "ls -la /tmp/installimage.conf && head -3 /tmp/installimage.conf"
 
     log_info "Running installimage (this may take 5-10 minutes)..."
     # installimage is not in PATH in rescue mode, use full path
-    # -a = automatic mode (reads /autosetup which we already created)
-    # Use -tt to force tty allocation - installimage needs tty to work properly in auto mode
+    # -a = automatic mode, -c copies config file to /autosetup before running
     # TERM=xterm needed for curses output
     # shellcheck disable=SC2086
-    ssh -tt $SSH_OPTS "root@$vm_ip" "TERM=xterm /root/.oldroot/nfs/install/installimage -a" 2>&1 | while IFS= read -r line; do
+    ssh -tt $SSH_OPTS "root@$vm_ip" "TERM=xterm /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf" 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     local exit_code="${PIPESTATUS[0]}"
