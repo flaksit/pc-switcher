@@ -113,24 +113,19 @@ async def test_hostname_verification_pc2(pc2_executor: RemoteExecutor) -> None:
     assert "pc1" not in hostname.lower()
 
 
-async def test_inter_vm_connectivity_pc1_to_pc2(
-    pc1_executor: RemoteExecutor,
-    pc2_executor: RemoteExecutor,
-) -> None:
+async def test_inter_vm_connectivity_pc1_to_pc2(pc1_executor: RemoteExecutor) -> None:
     """Test SSH connectivity from pc1 to pc2.
 
     This is a critical acceptance scenario from User Story 2. Verifies that
     pc1 can successfully SSH to pc2, which is required for the sync operation.
     """
-    # First, get pc2's hostname/IP to connect to
-    pc2_hostname_result = await pc2_executor.run_command("hostname -I | awk '{print $1}'")
-    assert pc2_hostname_result.success
-    pc2_ip = pc2_hostname_result.stdout.strip()
-    assert len(pc2_ip) > 0
+    # Verify pc2 is reachable via hostname (configure-hosts.sh sets up /etc/hosts)
+    pc2_ping_result = await pc1_executor.run_command("getent hosts pc2")
+    assert pc2_ping_result.success, "pc2 hostname not resolvable from pc1"
 
-    # From pc1, SSH to pc2 and execute a simple command
-    # VMs have known_hosts set up by configure-hosts.sh, no special options needed
-    ssh_cmd = f"ssh testuser@{pc2_ip} 'echo inter-vm-success'"
+    # From pc1, SSH to pc2 using hostname
+    # VMs have /etc/hosts and known_hosts set up by configure-hosts.sh
+    ssh_cmd = "ssh testuser@pc2 'echo inter-vm-success'"
     result = await pc1_executor.run_command(ssh_cmd, timeout=10.0)
 
     assert result.success, f"Inter-VM SSH failed: {result.stderr}"
