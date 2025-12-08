@@ -198,62 +198,38 @@ run_installimage() {
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
 
-    # Debug: Check if we're actually in rescue mode
-    log_info "Verifying rescue mode environment..."
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "hostname; cat /etc/os-release 2>/dev/null | head -3 || true; which installimage || echo 'installimage not in PATH'; ls -la /root/.oldroot/nfs/install/installimage 2>/dev/null || echo 'installimage not at expected path'" 2>&1 | while IFS= read -r line; do
-        echo "   ${LOG_PREFIX} [DEBUG] $line"
-    done
-
     # Create installimage config
+    # NOTE: ESP partition requires minimum 256MB per installimage validation
     local config
-    config=$(cat << EOF
+    config=$(cat << 'CONFIGEOF'
 DRIVE1 /dev/sda
 USE_KERNEL_MODE_SETTING yes
-HOSTNAME $vm_name
-PART /boot/efi esp 128M
+PART /boot/efi esp 256M
 PART btrfs.1 btrfs all
 SUBVOL btrfs.1 @ /
 SUBVOL btrfs.1 @home /home
 SUBVOL btrfs.1 @snapshots /.snapshots
 IMAGE /root/.oldroot/nfs/install/../images/Ubuntu-2404-noble-amd64-base.tar.gz
-EOF
+CONFIGEOF
 )
+    # Add hostname separately to avoid quoting issues
+    config="HOSTNAME $vm_name
+$config"
 
-    log_info "Creating installimage config at /tmp/installimage.conf..."
+    log_info "Writing config to /autosetup..."
+    # Write config to /autosetup - installimage detects this and runs in automatic mode
     # shellcheck disable=SC2086
-    # Write to /tmp first, then use -c to copy to /autosetup
-    ssh $SSH_OPTS "root@$vm_ip" "cat > /tmp/installimage.conf" <<< "$config"
-
-    # Verify config was written
-    # shellcheck disable=SC2086
-    log_info "Verifying config was written..."
-    ssh $SSH_OPTS "root@$vm_ip" "ls -la /tmp/installimage.conf && head -3 /tmp/installimage.conf"
+    ssh $SSH_OPTS "root@$vm_ip" "cat > /autosetup" <<< "$config"
 
     log_info "Running installimage (this may take 5-10 minutes)..."
-    # Use bash interactive shell to get aliases loaded from .bashrc
-    # Use -a (automatic mode) with -c (config file) to bypass interactive prompts
+    # Use bash -i to get the installimage alias loaded from .bashrc
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "bash -i -c '
-        export TERM=xterm
-        echo \"[DEBUG] Checking for alias in bashrc...\"
-        grep -r installimage /root/.bashrc /etc/bash* 2>/dev/null | head -5 || true
-        echo \"[DEBUG] Checking installimage alias...\"
-        type installimage 2>&1 || true
-        alias installimage 2>&1 || true
-        echo \"[DEBUG] Running installimage -a -c /tmp/installimage.conf...\"
-        installimage -a -c /tmp/installimage.conf
-    '" 2>&1 | while IFS= read -r line; do
+    ssh $SSH_OPTS "root@$vm_ip" 'bash -i -c "installimage"' 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     local exit_code="${PIPESTATUS[0]}"
     if [[ "$exit_code" -ne 0 ]]; then
         log_error "installimage failed with exit code $exit_code"
-        log_error "Fetching full log..."
-        # shellcheck disable=SC2086
-        ssh $SSH_OPTS "root@$vm_ip" "cat /tmp/installimage.log" 2>&1 | while IFS= read -r line; do
-            echo -e "   ${LOG_PREFIX} [LOG] $line"
-        done
         return 1
     fi
 
