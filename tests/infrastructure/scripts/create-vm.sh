@@ -231,25 +231,16 @@ EOF
     ssh $SSH_OPTS "root@$vm_ip" "ls -la /tmp/installimage.conf && head -3 /tmp/installimage.conf"
 
     log_info "Running installimage (this may take 5-10 minutes)..."
+    # Use bash login shell to get the installimage alias properly loaded
     # Use -a (automatic mode) with -c (config file) to bypass interactive prompts
-    # Search functions.sh to understand what sets CANCELLED=true
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "
+    ssh $SSH_OPTS "root@$vm_ip" "bash -l -c '
         export TERM=xterm
-        echo '[DEBUG] Searching for what sets CANCELLED=true...'
-        grep -n 'CANCELLED=' /root/.oldroot/nfs/install/*.sh 2>/dev/null || true
-        echo '[DEBUG] Looking at validate_vars function...'
-        grep -A 30 'validate_vars' /root/.oldroot/nfs/install/functions.sh 2>/dev/null | head -50 || true
-        echo '[DEBUG] Checking if there is a dialog call in validate_vars...'
-        grep -B5 -A10 'CANCELLED' /root/.oldroot/nfs/install/functions.sh 2>/dev/null | head -40 || true
-        echo '[DEBUG] Running installimage...'
-        /root/.oldroot/nfs/install/installimage -a -c /tmp/installimage.conf < /dev/null > /tmp/installimage.log 2>&1
-        EXIT_CODE=\$?
-        echo '[DEBUG] Exit code:' \$EXIT_CODE
-        echo '[DEBUG] Full install log:'
-        cat /tmp/installimage.log
-        exit \$EXIT_CODE
-    " 2>&1 | while IFS= read -r line; do
+        echo \"[DEBUG] Checking installimage alias...\"
+        type installimage
+        echo \"[DEBUG] Running installimage -a -c /tmp/installimage.conf...\"
+        installimage -a -c /tmp/installimage.conf
+    '" 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     local exit_code="${PIPESTATUS[0]}"
