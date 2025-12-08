@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-import pytest
 import pytest_asyncio
 
 from pcswitcher.executor import RemoteExecutor
@@ -53,7 +52,6 @@ async def test_volume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     await pc1_executor.run_command("sudo btrfs subvolume delete /test-vol")
 
 
-@pytest.mark.integration
 async def test_btrfs_filesystem_present(pc1_executor: RemoteExecutor) -> None:
     """Test that btrfs filesystem is available on the test VM.
 
@@ -66,7 +64,6 @@ async def test_btrfs_filesystem_present(pc1_executor: RemoteExecutor) -> None:
     assert "btrfs-progs" in result.stdout.lower()
 
 
-@pytest.mark.integration
 async def test_create_readonly_snapshot(pc1_executor: RemoteExecutor, test_volume: str) -> None:
     """Test creating a read-only btrfs snapshot.
 
@@ -102,7 +99,6 @@ async def test_create_readonly_snapshot(pc1_executor: RemoteExecutor, test_volum
         )
 
 
-@pytest.mark.integration
 async def test_create_writable_snapshot(pc1_executor: RemoteExecutor, test_volume: str) -> None:
     """Test creating a writable (non-readonly) btrfs snapshot.
 
@@ -133,7 +129,6 @@ async def test_create_writable_snapshot(pc1_executor: RemoteExecutor, test_volum
         )
 
 
-@pytest.mark.integration
 async def test_list_snapshots(pc1_executor: RemoteExecutor, test_volume: str) -> None:
     """Test listing btrfs subvolumes/snapshots.
 
@@ -163,7 +158,6 @@ async def test_list_snapshots(pc1_executor: RemoteExecutor, test_volume: str) ->
         )
 
 
-@pytest.mark.integration
 async def test_delete_snapshot(pc1_executor: RemoteExecutor, test_volume: str) -> None:
     """Test deleting a btrfs snapshot.
 
@@ -193,7 +187,6 @@ async def test_delete_snapshot(pc1_executor: RemoteExecutor, test_volume: str) -
     assert not verify_result.success, "Snapshot still exists after deletion"
 
 
-@pytest.mark.integration
 async def test_snapshot_creation_failure_invalid_source(
     pc1_executor: RemoteExecutor,
 ) -> None:
@@ -210,7 +203,6 @@ async def test_snapshot_creation_failure_invalid_source(
     assert len(result.stderr) > 0 or "ERROR" in result.stdout
 
 
-@pytest.mark.integration
 async def test_snapshot_creation_failure_invalid_destination(
     pc1_executor: RemoteExecutor,
     test_volume: str,
@@ -227,7 +219,6 @@ async def test_snapshot_creation_failure_invalid_destination(
     assert len(result.stderr) > 0 or "ERROR" in result.stdout
 
 
-@pytest.mark.integration
 async def test_delete_snapshot_failure_nonexistent(
     pc1_executor: RemoteExecutor,
     test_volume: str,
@@ -246,7 +237,6 @@ async def test_delete_snapshot_failure_nonexistent(
     assert result.exit_code != 0
 
 
-@pytest.mark.integration
 async def test_snapshot_preserves_content(pc1_executor: RemoteExecutor, test_volume: str) -> None:
     """Test that snapshot preserves file content.
 
@@ -291,7 +281,6 @@ async def test_snapshot_preserves_content(pc1_executor: RemoteExecutor, test_vol
         )
 
 
-@pytest.mark.integration
 async def test_multiple_snapshots_isolation(pc1_executor: RemoteExecutor, test_volume: str) -> None:
     """Test that multiple snapshots are isolated from each other.
 

@@ -26,6 +26,9 @@ import pytest_asyncio
 
 from pcswitcher.executor import RemoteExecutor
 
+# Auto-apply integration marker to all tests in this folder
+pytestmark = pytest.mark.integration
+
 REQUIRED_ENV_VARS = [
     "PC_SWITCHER_TEST_PC1_HOST",
     "PC_SWITCHER_TEST_PC2_HOST",

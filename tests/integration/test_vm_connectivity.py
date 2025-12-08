@@ -13,7 +13,6 @@ import pytest
 from pcswitcher.executor import RemoteExecutor
 
 
-@pytest.mark.integration
 async def test_basic_command_execution_pc1(pc1_executor: RemoteExecutor) -> None:
     """Test basic command execution on pc1.
 
@@ -27,7 +26,6 @@ async def test_basic_command_execution_pc1(pc1_executor: RemoteExecutor) -> None
     assert result.stderr == ""
 
 
-@pytest.mark.integration
 async def test_basic_command_execution_pc2(pc2_executor: RemoteExecutor) -> None:
     """Test basic command execution on pc2.
 
@@ -41,7 +39,6 @@ async def test_basic_command_execution_pc2(pc2_executor: RemoteExecutor) -> None
     assert result.stderr == ""
 
 
-@pytest.mark.integration
 async def test_command_with_stdout_and_stderr(pc1_executor: RemoteExecutor) -> None:
     """Test that stdout and stderr are captured separately."""
     result = await pc1_executor.run_command("echo 'to stdout' && echo 'to stderr' >&2")
@@ -51,7 +48,6 @@ async def test_command_with_stdout_and_stderr(pc1_executor: RemoteExecutor) -> N
     assert "to stderr" in result.stderr
 
 
-@pytest.mark.integration
 async def test_command_failure_nonzero_exit(pc1_executor: RemoteExecutor) -> None:
     """Test command failure handling with non-zero exit code.
 
@@ -64,7 +60,6 @@ async def test_command_failure_nonzero_exit(pc1_executor: RemoteExecutor) -> Non
     assert result.exit_code == 42
 
 
-@pytest.mark.integration
 async def test_command_failure_invalid_command(pc1_executor: RemoteExecutor) -> None:
     """Test command failure with invalid command.
 
@@ -79,7 +74,6 @@ async def test_command_failure_invalid_command(pc1_executor: RemoteExecutor) -> 
     assert len(result.stderr) > 0
 
 
-@pytest.mark.integration
 async def test_command_timeout(pc1_executor: RemoteExecutor) -> None:
     """Test that command timeout is enforced.
 
@@ -89,7 +83,6 @@ async def test_command_timeout(pc1_executor: RemoteExecutor) -> None:
         await pc1_executor.run_command("sleep 10", timeout=0.5)
 
 
-@pytest.mark.integration
 async def test_hostname_verification_pc1(pc1_executor: RemoteExecutor) -> None:
     """Test that we're connected to the correct VM (pc1).
 
@@ -105,7 +98,6 @@ async def test_hostname_verification_pc1(pc1_executor: RemoteExecutor) -> None:
     assert "pc2" not in hostname.lower()
 
 
-@pytest.mark.integration
 async def test_hostname_verification_pc2(pc2_executor: RemoteExecutor) -> None:
     """Test that we're connected to the correct VM (pc2).
 
@@ -121,7 +113,6 @@ async def test_hostname_verification_pc2(pc2_executor: RemoteExecutor) -> None:
     assert "pc1" not in hostname.lower()
 
 
-@pytest.mark.integration
 async def test_inter_vm_connectivity_pc1_to_pc2(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
@@ -148,7 +139,6 @@ async def test_inter_vm_connectivity_pc1_to_pc2(
     assert "inter-vm-success" in result.stdout
 
 
-@pytest.mark.integration
 async def test_working_directory_isolation(pc1_executor: RemoteExecutor) -> None:
     """Test that each command runs in the user's home directory.
 
@@ -161,7 +151,6 @@ async def test_working_directory_isolation(pc1_executor: RemoteExecutor) -> None
     assert "/home/" in result.stdout or result.stdout.strip() == "~"
 
 
-@pytest.mark.integration
 async def test_environment_variables(pc1_executor: RemoteExecutor) -> None:
     """Test that standard environment variables are available."""
     result = await pc1_executor.run_command("echo $USER:$HOME")
@@ -175,7 +164,6 @@ async def test_environment_variables(pc1_executor: RemoteExecutor) -> None:
     assert len(parts[1]) > 0  # HOME should be set
 
 
-@pytest.mark.integration
 async def test_multiline_output(pc1_executor: RemoteExecutor) -> None:
     """Test that multi-line output is captured correctly."""
     result = await pc1_executor.run_command("echo 'line1' && echo 'line2' && echo 'line3'")

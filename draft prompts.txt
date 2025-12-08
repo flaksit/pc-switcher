@@ -1,6 +1,47 @@
 THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
 
 
+The following are very punctual remarks. They may not be complete, just what I noted down while reading through the code/docs. Extract what I mean with them and update all necessary and related code to get the desired effect and update documentation. If my intention is not clear, ask clarifying questions.
+
+(1)
+testing-developer-guide.md
+Chapter `### Environment Variables Required`
+HCLOUD_TOKEN is missing
+
+(2) conftest.py
+
+_check_vms_exist():
+- check for both pc1 and pc2
+- Check should not be if VMs exist, but if they are reachable and fully configured.
+- Does not use the env vars PC_SWITCHER_TEST_PC1_HOST and PC_SWITCHER_TEST_PC2_HOST
+
+_reset_vms_parallel():
+- what was the reason not to use asyncio? "interfering with" does not explain much.
+- remove _parallel suffix from function name
+
+_get_lock_holder():
+- If local, add hostname
+
+REQUIRED_ENV_VARS
+HCLOUD_TOKEN and PC_SWITCHER_TEST_USER are missing I think.
+Don't use defaults for PC_SWITCHER_TEST_PC1_HOST and PC_SWITCHER_TEST_PC2_HOST and PC_SWITCHER_TEST_USER. If not set, exit with error.
+
+(3)
+Make a tiny helper script to launch local integration tests on the VMs: it only needs HCLOUD_TOKEN and looks up the values of the other env vars and launch pytest with the right args / env vars.
+As always, document in the relevant places.
+
+
+
+---
+Iterate max 15 times: Evaluate workflow result - Check errors - Take a deep breath - Analyze - Fix.
+NEVER patch head-over-heals. Think deep! Leave well-structured code. Refactor if it becomes too much patchwork. Update documentation in line with code changes.
+NEVER take decisions without consulting me first. Always come back to me with clarifying questions if needed.
+---
+update CLAUDE.md so it is up to date with the current state of the project.
+---
+Code fix 4: The integration tests take already 1:30 and there are no real integration tests yet, only tests that test the test-infrastructure. Would this not be faster if the executor was in module-fixture scope? Would this work?
+---
+As soon as a pr is created for a feature branch, each single commit triggers the run of the integration tests. This is too much. Integration tests should run only once per pr, on the latest commit of the pr. Only unit tests should run on each commit. How can we organize that? Is the only way to manually trigger? Can we require that the integration tests run successfully on the last merge before allowing the pr to be merged? What are standard practices for this?
 ---
 rename test.yml to integration-tests.yml
 rename test-push.yml to unit-tests.yml

@@ -255,14 +255,12 @@ tests/integration/
 └── test_ssh_connection.py
 ```
 
-### Marking Integration Tests
+### Integration Test Marker
 
-All integration tests MUST be marked with `@pytest.mark.integration`:
+All tests in `tests/integration/` are **automatically** marked with `@pytest.mark.integration` via `pytestmark` in conftest.py. You don't need to add the marker to individual tests:
 
 ```python
-import pytest
-
-@pytest.mark.integration
+# No @pytest.mark.integration needed - it's auto-applied
 async def test_ssh_connection(pc1_executor):
     """Test SSH connection to pc1."""
     result = await pc1_executor.run_command("echo hello")
