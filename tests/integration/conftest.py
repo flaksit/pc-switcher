@@ -14,10 +14,10 @@ Fixtures provided:
 
 from __future__ import annotations
 
-import asyncio
 import os
 import subprocess
 from collections.abc import AsyncIterator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import asyncssh
@@ -71,33 +71,18 @@ def _run_script(script_name: str, *args: str, check: bool = True) -> subprocess.
     )
 
 
-async def _run_script_async(script_name: str, *args: str) -> tuple[int, str, str]:
-    """Run an infrastructure script asynchronously.
+def _reset_vms_parallel(pc1_host: str, pc2_host: str) -> None:
+    """Reset both VMs in parallel for faster test setup.
 
-    Returns:
-        Tuple of (return_code, stdout, stderr).
+    Uses ThreadPoolExecutor to run reset scripts concurrently without
+    interfering with pytest-asyncio's event loop management.
     """
-    script_path = SCRIPTS_DIR / script_name
-    if not script_path.exists():
-        pytest.fail(f"Infrastructure script not found: {script_path}")
-
-    proc = await asyncio.create_subprocess_exec(
-        str(script_path),
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "HCLOUD_TOKEN": os.getenv("HCLOUD_TOKEN", "")},
-    )
-    stdout, stderr = await proc.communicate()
-    return proc.returncode or 0, stdout.decode(), stderr.decode()
-
-
-async def _reset_vms_parallel(pc1_host: str, pc2_host: str) -> None:
-    """Reset both VMs in parallel for faster test setup."""
-    await asyncio.gather(
-        _run_script_async("reset-vm.sh", pc1_host),
-        _run_script_async("reset-vm.sh", pc2_host),
-    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future1 = executor.submit(_run_script, "reset-vm.sh", pc1_host, check=False)
+        future2 = executor.submit(_run_script, "reset-vm.sh", pc2_host, check=False)
+        # Wait for both to complete
+        future1.result()
+        future2.result()
 
 
 def _check_vms_exist() -> bool:
@@ -181,7 +166,7 @@ def integration_session(integration_lock: None) -> Iterator[None]:
 
     reset_script = SCRIPTS_DIR / "reset-vm.sh"
     if reset_script.exists() and pc1_host and pc2_host:
-        asyncio.run(_reset_vms_parallel(pc1_host, pc2_host))
+        _reset_vms_parallel(pc1_host, pc2_host)
 
     yield
 
