@@ -53,7 +53,7 @@ jobs:
           # Collect all SSH_AUTHORIZED_KEY_* secrets into single variable
           SSH_AUTHORIZED_KEYS=$(echo "$SECRETS_JSON" | jq -r 'to_entries[] | select(.key | startswith("SSH_AUTHORIZED_KEY_")) | .value')
           export SSH_AUTHORIZED_KEYS
-          tests/infrastructure/scripts/provision-test-infra.sh 2>&1 | tee provision-output.log
+          tests/integration/scripts/provision-test-infra.sh 2>&1 | tee provision-output.log
         timeout-minutes: 30
 
       - name: Get VM IPs

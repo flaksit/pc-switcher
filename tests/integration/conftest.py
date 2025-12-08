@@ -34,7 +34,7 @@ REQUIRED_ENV_VARS = [
     "PC_SWITCHER_TEST_USER",
 ]
 
-SCRIPTS_DIR = Path(__file__).parent.parent / "infrastructure" / "scripts"
+SCRIPTS_DIR = Path(__file__).parent / "scripts"
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

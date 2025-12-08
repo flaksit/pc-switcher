@@ -693,7 +693,7 @@ hcloud server poweron pc2
 
 ### Script Locations
 
-All infrastructure scripts are in `tests/infrastructure/scripts/`:
+All infrastructure scripts are in `tests/integration/scripts/`:
 
 | Script | Purpose |
 |--------|---------|

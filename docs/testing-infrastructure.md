@@ -198,9 +198,9 @@ If you need to manually complete configuration:
 
 ```bash
 # Run configuration (from repo root, in CI)
-tests/infrastructure/scripts/configure-vm.sh <IP> "$SSH_AUTHORIZED_KEYS"
-tests/infrastructure/scripts/configure-hosts.sh
-tests/infrastructure/scripts/create-baseline-snapshots.sh
+tests/integration/scripts/configure-vm.sh <IP> "$SSH_AUTHORIZED_KEYS"
+tests/integration/scripts/configure-hosts.sh
+tests/integration/scripts/create-baseline-snapshots.sh
 ```
 
 ## GitHub Actions Integration

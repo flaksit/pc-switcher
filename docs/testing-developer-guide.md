@@ -689,8 +689,8 @@ The `integration_session` pytest fixture automatically resets VMs to baseline be
 ```bash
 # Manual reset (only if needed)
 source ~/.pc-switcher-test-env
-tests/infrastructure/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC1_HOST
-tests/infrastructure/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC2_HOST
+tests/integration/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC1_HOST
+tests/integration/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC2_HOST
 ```
 
 The `reset-vm.sh` script uses btrfs snapshot rollback and takes about 30 seconds per VM.
@@ -761,7 +761,7 @@ source ~/.pc-switcher-test-env
 
 1. Check lock status (requires `HCLOUD_TOKEN`):
    ```bash
-   tests/infrastructure/scripts/lock.sh "" status
+   tests/integration/scripts/lock.sh "" status
    ```
 
 2. If lock is stale (holder is no longer running), manually remove it:
