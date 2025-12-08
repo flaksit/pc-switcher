@@ -26,9 +26,6 @@ import pytest_asyncio
 
 from pcswitcher.executor import RemoteExecutor
 
-# Auto-apply integration marker to all tests in this folder
-pytestmark = pytest.mark.integration
-
 REQUIRED_ENV_VARS = [
     "PC_SWITCHER_TEST_PC1_HOST",
     "PC_SWITCHER_TEST_PC2_HOST",
@@ -38,18 +35,24 @@ SCRIPTS_DIR = Path(__file__).parent.parent / "infrastructure" / "scripts"
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Fail if integration tests are collected but VM environment not configured."""
-    missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
+    """Auto-apply integration marker and check VM environment."""
+    integration_marker = pytest.mark.integration
+    integration_tests = []
 
-    if missing_vars:
-        # Check if any integration tests are being collected
-        has_integration_tests = any("integration" in item.keywords for item in items)
-        if has_integration_tests:
-            pytest.fail(
-                f"Integration tests require VM environment. "
-                f"Missing: {', '.join(missing_vars)}. "
-                f"Run unit tests only with: uv run pytest tests/unit tests/contract"
-            )
+    # Auto-apply integration marker to all tests in tests/integration/
+    for item in items:
+        if "/integration/" in str(item.fspath):
+            item.add_marker(integration_marker)
+            integration_tests.append(item)
+
+    # Fail if integration tests are collected but VM environment not configured
+    missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
+    if missing_vars and integration_tests:
+        pytest.fail(
+            f"Integration tests require VM environment. "
+            f"Missing: {', '.join(missing_vars)}. "
+            f"Run unit tests only with: uv run pytest tests/unit tests/contract"
+        )
 
 
 def _get_lock_holder() -> str:

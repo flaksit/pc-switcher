@@ -1,6 +1,12 @@
 THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
 
 
+provision-test-infra.sh:
+check_vm_configured(): this is not the last step in the provisioning flow. To check if the VMs are fully ready, we need to test if the LAST step in the flow is done. See `Provisioning Flow` in docs/testing-infrastructure.md . So check for the existence of the baseline snapshots.
+
+---
+RUNNING
+
 The following are very punctual remarks. They may not be complete, just what I noted down while reading through the code/docs. Extract what I mean with them and update all necessary and related code to get the desired effect and update documentation. If my intention is not clear, ask clarifying questions.
 
 (1)
@@ -30,6 +36,18 @@ Don't use defaults for PC_SWITCHER_TEST_PC1_HOST and PC_SWITCHER_TEST_PC2_HOST a
 Make a tiny helper script to launch local integration tests on the VMs: it only needs HCLOUD_TOKEN and looks up the values of the other env vars and launch pytest with the right args / env vars.
 As always, document in the relevant places.
 
+---
+
+There is a lot of use of `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null` in tests/infrastructure/scripts. Reduce this to the absolute minimum. Where possible, use proper known_hosts management instead of disabling host key checking.
+
+---
+
+fix flowchart in docs/testing-infrastructure.md: the explanation text in the subgraphs are not readable when rendered. Do something nice so they are readable.
+
+
+---
+update CLAUDE.md so it is up to date with the current state of the project.
+---
 
 
 ---
@@ -37,17 +55,8 @@ Iterate max 15 times: Evaluate workflow result - Check errors - Take a deep brea
 NEVER patch head-over-heals. Think deep! Leave well-structured code. Refactor if it becomes too much patchwork. Update documentation in line with code changes.
 NEVER take decisions without consulting me first. Always come back to me with clarifying questions if needed.
 ---
-update CLAUDE.md so it is up to date with the current state of the project.
----
-Code fix 4: The integration tests take already 1:30 and there are no real integration tests yet, only tests that test the test-infrastructure. Would this not be faster if the executor was in module-fixture scope? Would this work?
----
 As soon as a pr is created for a feature branch, each single commit triggers the run of the integration tests. This is too much. Integration tests should run only once per pr, on the latest commit of the pr. Only unit tests should run on each commit. How can we organize that? Is the only way to manually trigger? Can we require that the integration tests run successfully on the last merge before allowing the pr to be merged? What are standard practices for this?
----
-rename test.yml to integration-tests.yml
-rename test-push.yml to unit-tests.yml
-  split off the linting jobs into a separate workflow file lint.yml?
----
-in release.yml, is the upload of the package actually used anywhere by install.sh or uv tool install?
+
 ---
 test if EFI partition is needed
 

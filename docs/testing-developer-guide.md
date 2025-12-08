@@ -257,7 +257,7 @@ tests/integration/
 
 ### Integration Test Marker
 
-All tests in `tests/integration/` are **automatically** marked with `@pytest.mark.integration` via `pytestmark` in conftest.py. You don't need to add the marker to individual tests:
+All tests in `tests/integration/` are **automatically** marked with `@pytest.mark.integration` via the `pytest_collection_modifyitems` hook in conftest.py. You don't need to add the marker to individual tests:
 
 ```python
 # No @pytest.mark.integration needed - it's auto-applied
