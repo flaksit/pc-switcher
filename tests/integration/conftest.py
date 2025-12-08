@@ -132,7 +132,7 @@ async def _check_vms_ready() -> bool:
     return True
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def integration_lock() -> AsyncIterator[None]:
     """Acquire the integration test lock for the session.
 
@@ -160,7 +160,7 @@ async def integration_lock() -> AsyncIterator[None]:
     await _run_script("lock.sh", holder, "release", check=False)
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def integration_session(integration_lock: None) -> AsyncIterator[None]:
     """Session-scoped fixture for VM provisioning and reset.
 
