@@ -120,9 +120,20 @@ hcloud server delete pc2
 | VM creation | API error | Fails immediately, no cleanup needed |
 | Initial SSH wait | Timeout | VM may be stuck; delete and retry |
 | Rescue mode SSH | Timeout | Reboot manually or delete VM |
+| installimage | "Cancelled." | Config validation failed - see notes below |
 | installimage | Failure | Delete VM and retry |
 | Post-install SSH | Timeout | VM may be in bad state; delete and retry |
 | btrfs verification | Wrong FS | installimage failed silently; delete and retry |
+
+**installimage "Cancelled." error**: This occurs when config validation fails in automatic mode. Common causes:
+- ESP partition < 256MB (Hetzner requires minimum 256MB for UEFI)
+- Invalid IMAGE path
+- Invalid DRIVE specification
+- Missing required btrfs subvolumes
+
+The installimage config is in `create-vm.sh`. Key requirements:
+- `PART /boot/efi esp 256M` - ESP must be at least 256MB
+- `IMAGE` path must point to a valid image in `/root/.oldroot/nfs/install/../images/`
 
 ### configure-vm.sh Errors
 
@@ -139,6 +150,8 @@ hcloud server delete pc2
 | /etc/hosts update | SSH failure | Re-run script |
 | Key exchange | SSH failure | Re-run script |
 | Connectivity test | Connection refused | Check firewall, re-run script |
+
+**Note**: `configure-hosts.sh` connects as `testuser` (not root) because it runs after `configure-vm.sh` which disables root SSH login.
 
 ## Manual Operations
 
@@ -157,15 +170,17 @@ hcloud server delete pc2
 hcloud server ip pc1
 hcloud server ip pc2
 
-# Check if btrfs (as root)
-ssh root@<IP> "df -T / | grep btrfs"
-
 # Check if configured (as testuser)
 ssh testuser@<IP> "echo configured"
 
+# Check if btrfs (requires testuser with sudo - root login is disabled after configuration)
+ssh testuser@<IP> "df -T / | grep btrfs"
+
 # Check subvolumes
-ssh root@<IP> "btrfs subvolume list /"
+ssh testuser@<IP> "sudo btrfs subvolume list /"
 ```
+
+**Note**: After `configure-vm.sh` runs, root SSH login is disabled (`PermitRootLogin no`). All SSH access must use `testuser` with sudo for privileged commands.
 
 ### Manual VM Configuration
 
