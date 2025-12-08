@@ -222,6 +222,83 @@ The workflow in `.github/workflows/test.yml`:
 | `SSH_AUTHORIZED_KEY_CI` | Public key for CI runner |
 | `SSH_AUTHORIZED_KEY_*` | Additional authorized keys for manual access |
 
+## SSH Host Key Management
+
+The infrastructure scripts use proper SSH host key verification instead of disabling host key checking entirely. This provides better security while handling the legitimate key changes that occur during VM provisioning.
+
+### Principle
+
+For each host, in each phase:
+1. **Phase transition** (key changes): Remove old key + `accept-new`
+2. **First connection** (key might not exist): `accept-new` only
+3. **Subsequent connections**: Normal SSH (verify stored key)
+
+### SSH Helper Functions
+
+All scripts source `ssh-common.sh` which provides these helpers:
+
+| Function | When to use | Actions |
+|----------|-------------|---------|
+| `wait_for_ssh` | Phase transition with polling | `ssh-keygen -R` + poll with `accept-new` |
+| `ssh_first` | Phase transition (single call) | `ssh-keygen -R` + `accept-new` |
+| `ssh_accept_new` | First connection (key might not exist) | `accept-new` only |
+| `ssh_run` | Subsequent connections | Normal SSH (verify key) |
+
+### Flow Analysis
+
+#### Flow A: Fresh Provisioning (VMs don't exist)
+
+```
+provision-test-infra.sh
+  └─ create-vm.sh (×2 parallel)
+       └─ wait_for_ssh ← PHASE TRANSITION (created) - remove + accept-new
+       └─ wait_for_ssh ← PHASE TRANSITION (rescue) - remove + accept-new
+       └─ verify_system()
+            └─ wait_for_ssh ← PHASE TRANSITION (installed) - remove + accept-new
+            └─ ssh (verify) ← subsequent - ssh_run
+  └─ configure-vm.sh (×2 parallel) ← subsequent - ssh_run
+  └─ configure-hosts.sh ← subsequent - ssh_run
+  └─ create-baseline-snapshots.sh ← subsequent - ssh_run
+```
+
+#### Flow B: VMs Exist, Not Configured
+
+```
+provision-test-infra.sh
+  └─ check_vm_configured(PC1, PC2) ← FIRST (parallel) - ssh_first
+  └─ check_vm_has_btrfs(PC1, PC2) ← FIRST (parallel) - ssh_first
+  └─ configure-vm.sh ← subsequent - ssh_run
+  └─ configure-hosts.sh ← subsequent - ssh_run
+  └─ create-baseline-snapshots.sh ← subsequent - ssh_run
+```
+
+#### Flow C: Integration Tests (potentially different runner)
+
+```
+conftest.py (test runner - may have empty known_hosts)
+  └─ reset-vm.sh (×2 parallel) ← FIRST - ssh_accept_new (no remove)
+  └─ asyncssh.connect ← subsequent (key from reset-vm.sh)
+```
+
+**Why reset-vm.sh doesn't need ssh-keygen -R:**
+- Same runner as provisioning → key already correct
+- Different runner → known_hosts is empty, nothing to remove
+- Key for "installed" phase is stable (never changes after provisioning)
+
+### Script SSH Patterns
+
+| Script | SSH Pattern | Notes |
+|--------|-------------|-------|
+| `ssh-common.sh` | - | Defines 4 helper functions |
+| `create-vm.sh` | `wait_for_ssh` (phase) | 3 phase transitions |
+| `provision-test-infra.sh` | `ssh_first` (phase) | Parallel checks for both VMs |
+| `configure-vm.sh` | `ssh_run` only | Key established by create-vm.sh |
+| `configure-hosts.sh` | `ssh_run` only | Key established |
+| `create-baseline-snapshots.sh` | `ssh_run` only | Key established |
+| `reset-vm.sh` | `ssh_accept_new` | First from test runner |
+| `conftest.py` | Default known_hosts | Key from reset-vm.sh |
+| `test_vm_connectivity.py` | No SSH options | VMs have known_hosts from configure-hosts.sh |
+
 ## Cost
 
 - Server type: CX22 (2 vCPU, 4GB RAM, 40GB SSD)

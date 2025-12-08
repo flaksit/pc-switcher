@@ -129,10 +129,8 @@ async def test_inter_vm_connectivity_pc1_to_pc2(
     assert len(pc2_ip) > 0
 
     # From pc1, SSH to pc2 and execute a simple command
-    # Use StrictHostKeyChecking=no for test environment
-    ssh_cmd = (
-        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null testuser@{pc2_ip} 'echo inter-vm-success'"
-    )
+    # VMs have known_hosts set up by configure-hosts.sh, no special options needed
+    ssh_cmd = f"ssh testuser@{pc2_ip} 'echo inter-vm-success'"
     result = await pc1_executor.run_command(ssh_cmd, timeout=10.0)
 
     assert result.success, f"Inter-VM SSH failed: {result.stderr}"

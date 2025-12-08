@@ -10,6 +10,7 @@ set -euo pipefail
 # to ensure all authorized SSH keys are properly configured from secrets.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/ssh-common.sh"
 
 # Colors for output
 readonly RED='\033[0;31m'
@@ -85,23 +86,20 @@ EOF
     exit 0
 fi
 
-# SSH options for root access
-readonly SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
-
 # Check if VM is configured (testuser can SSH)
+# Uses ssh_first since this may be first connection after VM reprovisioning
 check_vm_configured() {
     local vm_ip="$1"
-    ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        "testuser@$vm_ip" "echo configured" 2>/dev/null && return 0
+    ssh_first "testuser@$vm_ip" "echo configured" 2>/dev/null && return 0
     return 1
 }
 
 # Check if VM has btrfs filesystem (requires root SSH access)
+# Uses ssh_first since this may be first connection after VM reprovisioning
 check_vm_has_btrfs() {
     local vm_ip="$1"
     local fs_type
-    # shellcheck disable=SC2086
-    fs_type=$(ssh $SSH_OPTS "root@$vm_ip" "df -T / 2>/dev/null | tail -n1 | awk '{print \$2}'" 2>/dev/null) || return 1
+    fs_type=$(ssh_first "root@$vm_ip" "df -T / 2>/dev/null | tail -n1 | awk '{print \$2}'" 2>/dev/null) || return 1
     [[ "$fs_type" == "btrfs" ]]
 }
 
@@ -117,7 +115,15 @@ if [[ -n "$PC1_IP" && -n "$PC2_IP" ]]; then
     log_info "  pc2: $PC2_IP"
     log_info "Checking if VMs are configured..."
 
-    if check_vm_configured "$PC1_IP" && check_vm_configured "$PC2_IP"; then
+    # Run checks in parallel to establish keys for both VMs (avoids short-circuit)
+    check_vm_configured "$PC1_IP" &
+    pid1=$!
+    check_vm_configured "$PC2_IP" &
+    pid2=$!
+    wait $pid1 && pc1_configured=true || pc1_configured=false
+    wait $pid2 && pc2_configured=true || pc2_configured=false
+
+    if [[ "$pc1_configured" == "true" && "$pc2_configured" == "true" ]]; then
         log_info "VMs are already configured. Skipping provisioning."
         log_step "VMs ready for testing"
         exit 0
@@ -126,18 +132,21 @@ if [[ -n "$PC1_IP" && -n "$PC2_IP" ]]; then
     # VMs exist but not configured - check if they have btrfs
     log_info "VMs not configured. Checking filesystem state..."
 
-    PC1_HAS_BTRFS=false
-    PC2_HAS_BTRFS=false
+    # Run btrfs checks in parallel
+    check_vm_has_btrfs "$PC1_IP" &
+    pid1=$!
+    check_vm_has_btrfs "$PC2_IP" &
+    pid2=$!
+    wait $pid1 && PC1_HAS_BTRFS=true || PC1_HAS_BTRFS=false
+    wait $pid2 && PC2_HAS_BTRFS=true || PC2_HAS_BTRFS=false
 
-    if check_vm_has_btrfs "$PC1_IP"; then
-        PC1_HAS_BTRFS=true
+    if [[ "$PC1_HAS_BTRFS" == "true" ]]; then
         log_info "  pc1: has btrfs filesystem"
     else
         log_warn "  pc1: does NOT have btrfs filesystem"
     fi
 
-    if check_vm_has_btrfs "$PC2_IP"; then
-        PC2_HAS_BTRFS=true
+    if [[ "$PC2_HAS_BTRFS" == "true" ]]; then
         log_info "  pc2: has btrfs filesystem"
     else
         log_warn "  pc2: does NOT have btrfs filesystem"

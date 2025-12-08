@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source common SSH helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/ssh-common.sh"
+
 # Reset a single VM to its baseline btrfs snapshot state
 # This script restores the VM to the known-good baseline created during provisioning
 #
@@ -61,13 +65,20 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 readonly VM_HOST="$1"
 readonly SSH_USER="${PC_SWITCHER_TEST_USER:-testuser}"
 
-# SSH connection helper with proper options
+# SSH connection helper
+# First connection uses ssh_accept_new (test runner may have empty known_hosts)
+# After first connection, key is stored and subsequent calls verify it
 ssh_vm() {
-    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${SSH_USER}@${VM_HOST}" "$@"
+    ssh_run "${SSH_USER}@${VM_HOST}" "$@"
 }
 
 log_step "Resetting VM: $VM_HOST"
 log_info "SSH User: $SSH_USER"
+
+# Establish SSH connection (accept new key if not in known_hosts)
+# Test runner may have empty known_hosts or correct key from provisioning
+log_info "Establishing SSH connection..."
+ssh_accept_new "${SSH_USER}@${VM_HOST}" true
 
 # Step 1: Validate baseline snapshots exist
 log_step "Validating baseline snapshots..."
@@ -122,11 +133,11 @@ log_info "(This typically takes 10-20 seconds)"
 # Give the VM a moment to actually go down
 sleep 5
 
-# Poll until VM is accessible
+# Poll until VM is accessible (key is already in known_hosts, just verify connection)
 RETRY_COUNT=0
 MAX_RETRIES=60  # 5 minutes maximum (60 * 5 seconds)
 
-until ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${SSH_USER}@${VM_HOST}" true 2>/dev/null; do
+until ssh_run -o ConnectTimeout=5 "${SSH_USER}@${VM_HOST}" true 2>/dev/null; do
     RETRY_COUNT=$((RETRY_COUNT + 1))
     if [[ $RETRY_COUNT -ge $MAX_RETRIES ]]; then
         log_error "Timeout waiting for VM to come back online after 5 minutes"

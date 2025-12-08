@@ -183,11 +183,13 @@ async def pc1_connection(integration_session: None) -> AsyncIterator[asyncssh.SS
 
     Module-scoped: shared across all tests in a module for efficiency.
     Each test module gets its own connection instance.
+
+    Uses default ~/.ssh/known_hosts - key is established by reset-vm.sh via ssh_accept_new.
     """
     host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
     user = os.environ.get("PC_SWITCHER_TEST_USER", "testuser")
 
-    async with asyncssh.connect(host, username=user, known_hosts=None) as conn:
+    async with asyncssh.connect(host, username=user) as conn:
         yield conn
 
 
@@ -197,11 +199,13 @@ async def pc2_connection(integration_session: None) -> AsyncIterator[asyncssh.SS
 
     Module-scoped: shared across all tests in a module for efficiency.
     Each test module gets its own connection instance.
+
+    Uses default ~/.ssh/known_hosts - key is established by reset-vm.sh via ssh_accept_new.
     """
     host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
     user = os.environ.get("PC_SWITCHER_TEST_USER", "testuser")
 
-    async with asyncssh.connect(host, username=user, known_hosts=None) as conn:
+    async with asyncssh.connect(host, username=user) as conn:
         yield conn
 
 

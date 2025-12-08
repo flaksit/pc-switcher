@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source common SSH helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/ssh-common.sh"
+
 # Configure /etc/hosts and SSH keys for inter-VM communication.
 # Sets up bidirectional SSH trust between pc1 and pc2.
 #
@@ -56,9 +60,6 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 readonly VM1="pc1"
 readonly VM2="pc2"
 
-# SSH options - disable host key checking since keys change after reinstallation
-readonly SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
-
 log_step "Fetching VM IP addresses..."
 PC1_IP=$(hcloud server ip "$VM1")
 PC2_IP=$(hcloud server ip "$VM2")
@@ -73,18 +74,17 @@ log_info "$VM2: $PC2_IP"
 
 # Function to run SSH command on a VM (as testuser with sudo)
 # Note: root login is disabled after configure-vm.sh runs
+# Key is already established by configure-vm.sh, so we use ssh_run
 run_ssh() {
     local vm_ip="$1"
     shift
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "testuser@$vm_ip" "sudo bash -c '$*'"
+    ssh_run "testuser@$vm_ip" "sudo bash -c '$*'"
 }
 
 # Function to run SSH command with heredoc (as testuser with sudo)
 run_ssh_heredoc() {
     local vm_ip="$1"
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "testuser@$vm_ip" 'sudo bash -s'
+    ssh_run "testuser@$vm_ip" 'sudo bash -s'
 }
 
 # Function to update /etc/hosts on a VM
@@ -113,8 +113,7 @@ generate_ssh_key() {
     local vm_ip="$1"
 
     log_info "Generating SSH keypair on $vm_ip if needed..."
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "testuser@$vm_ip" <<'EOF'
+    ssh_run "testuser@$vm_ip" <<'EOF'
 if [[ ! -f ~/.ssh/id_ed25519 ]]; then
     ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "testuser@$(hostname)"
     echo "Generated new SSH keypair"
@@ -127,8 +126,7 @@ EOF
 # Function to get public key from VM (testuser's key)
 get_pubkey() {
     local vm_ip="$1"
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "testuser@$vm_ip" 'cat ~/.ssh/id_ed25519.pub'
+    ssh_run "testuser@$vm_ip" 'cat ~/.ssh/id_ed25519.pub'
 }
 
 # Function to add public key to authorized_keys (for testuser)
@@ -137,8 +135,7 @@ add_authorized_key() {
     local pubkey="$2"
 
     log_info "Adding public key to $vm_ip authorized_keys..."
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "testuser@$vm_ip" <<EOF
+    ssh_run "testuser@$vm_ip" <<EOF
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
 touch ~/.ssh/authorized_keys
@@ -160,8 +157,7 @@ add_known_host() {
     local remote_hostname="$2"
 
     log_info "Adding $remote_hostname to $vm_ip known_hosts..."
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "testuser@$vm_ip" <<EOF
+    ssh_run "testuser@$vm_ip" <<EOF
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
 
@@ -204,12 +200,10 @@ add_known_host "$PC2_IP" "pc1"
 
 log_step "Testing SSH connectivity..."
 log_info "Testing pc1 -> pc2:"
-# shellcheck disable=SC2086
-ssh $SSH_OPTS "testuser@$PC1_IP" 'ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 pc2 hostname'
+ssh_run "testuser@$PC1_IP" 'ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 pc2 hostname'
 
 log_info "Testing pc2 -> pc1:"
-# shellcheck disable=SC2086
-ssh $SSH_OPTS "testuser@$PC2_IP" 'ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 pc1 hostname'
+ssh_run "testuser@$PC2_IP" 'ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 pc1 hostname'
 
 log_step "Configuration complete!"
 log_info "- /etc/hosts updated on both VMs"

@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+# Source common SSH helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/ssh-common.sh"
+
 # create-vm.sh
 # Creates a single Hetzner Cloud VM and installs Ubuntu 24.04 with btrfs filesystem
 # using Hetzner's rescue mode and installimage tool.
@@ -140,21 +144,20 @@ reboot_vm() {
     hcloud server reboot "$vm_name"
 }
 
-# Common SSH options
-readonly SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
-
 # Run SSH command and prefix all output with VM name
+# Uses ssh_run from ssh-common.sh for subsequent connections
 run_ssh() {
     local vm_ip="$1"
     shift
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "$@" 2>&1 | while IFS= read -r line; do
+    ssh_run "root@$vm_ip" "$@" 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     return "${PIPESTATUS[0]}"
 }
 
-# Wait for SSH to become available
+# Wait for SSH to become available after a phase transition
+# This is a wrapper around the common wait_for_ssh that adds logging and IP lookup.
+# It handles the ssh-keygen -R and accept-new pattern for phase transitions.
 wait_for_ssh() {
     local vm_name="$1"
     local timeout="$2"
@@ -165,12 +168,14 @@ wait_for_ssh() {
     vm_ip=$(hcloud server ip "$vm_name")
     log_info "VM IP: $vm_ip"
 
+    # Remove old host key since this is a phase transition (key has changed)
+    ssh-keygen -R "$vm_ip" 2>/dev/null || true
+
     local elapsed=0
     local attempt=0
     while ((elapsed < timeout)); do
         ((++attempt))  # pre-increment to avoid exit code 1 when attempt=0
-        # shellcheck disable=SC2086
-        if ssh $SSH_OPTS "root@$vm_ip" "echo SSH ready" &> /dev/null; then
+        if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "root@$vm_ip" true &> /dev/null; then
             log_info "SSH is ready on $vm_ip (after ${elapsed}s, attempt $attempt)"
             return 0
         fi
@@ -184,8 +189,7 @@ wait_for_ssh() {
     log_error "SSH did not become available within ${timeout}s"
     log_error "Attempting verbose SSH for diagnostics..."
     # Run one verbose attempt to help diagnose
-    # shellcheck disable=SC2086
-    ssh -v $SSH_OPTS "root@$vm_ip" "echo SSH ready" 2>&1 | tail -30 || true
+    ssh -v -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "root@$vm_ip" true 2>&1 | tail -30 || true
     return 1
 }
 
@@ -218,13 +222,11 @@ $config"
 
     log_info "Writing config to /autosetup..."
     # Write config to /autosetup - installimage detects this and runs in automatic mode
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "cat > /autosetup" <<< "$config"
+    ssh_run "root@$vm_ip" "cat > /autosetup" <<< "$config"
 
     log_info "Running installimage (this may take 5-10 minutes)..."
     # Use bash -i to get the installimage alias loaded from .bashrc
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" 'bash -i -c "installimage"' 2>&1 | while IFS= read -r line; do
+    ssh_run "root@$vm_ip" 'bash -i -c "installimage"' 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     local exit_code="${PIPESTATUS[0]}"
@@ -250,8 +252,7 @@ reboot_into_system() {
     hcloud server disable-rescue "$vm_name"
 
     # Reboot via SSH (rescue mode)
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "reboot" || true  # SSH connection will drop, so ignore error
+    ssh_run "root@$vm_ip" "reboot" || true  # SSH connection will drop, so ignore error
 
     log_info "Waiting for system to reboot..."
     sleep 10
@@ -272,8 +273,7 @@ verify_system() {
     # Verify btrfs filesystem
     log_info "Checking btrfs filesystem..."
     local btrfs_check
-    # shellcheck disable=SC2086
-    btrfs_check=$(ssh $SSH_OPTS "root@$vm_ip" "df -T / | tail -n1 | awk '{print \$2}'")
+    btrfs_check=$(ssh_run "root@$vm_ip" "df -T / | tail -n1 | awk '{print \$2}'")
 
     if [[ "$btrfs_check" != "btrfs" ]]; then
         log_error "Root filesystem is not btrfs (got: $btrfs_check)"
@@ -283,8 +283,7 @@ verify_system() {
     # Verify subvolumes
     log_info "Checking subvolumes..."
     local subvols
-    # shellcheck disable=SC2086
-    subvols=$(ssh $SSH_OPTS "root@$vm_ip" "btrfs subvolume list / | awk '{print \$NF}' | sort")
+    subvols=$(ssh_run "root@$vm_ip" "btrfs subvolume list / | awk '{print \$NF}' | sort")
 
     local expected_subvols=$'@\n@home\n@snapshots'
 

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source common SSH helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/ssh-common.sh"
+
 # Create baseline btrfs snapshots on both test VMs.
 # These snapshots are used by reset-vm.sh to restore VMs to a known-good state between tests.
 #
@@ -73,6 +77,7 @@ get_vm_ip() {
 }
 
 # Create baseline snapshots on a single VM
+# Key is already established by configure-hosts.sh, so we use ssh_run
 create_snapshots_on_vm() {
     local vm_name="$1"
     local vm_ip="$2"
@@ -80,26 +85,25 @@ create_snapshots_on_vm() {
     log_step "Creating baseline snapshots on $vm_name ($vm_ip)..."
 
     # Create the baseline directory if it doesn't exist
-    ssh -o StrictHostKeyChecking=no "${SSH_USER}@${vm_ip}" \
-        "sudo mkdir -p ${SNAPSHOT_BASE_DIR}"
+    ssh_run "${SSH_USER}@${vm_ip}" "sudo mkdir -p ${SNAPSHOT_BASE_DIR}"
 
     # Check if snapshots already exist and delete them
-    if ssh "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume list / | grep -q '${ROOT_SNAPSHOT}'"; then
+    if ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume list / | grep -q '${ROOT_SNAPSHOT}'"; then
         log_info "Deleting existing root snapshot..."
-        ssh "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume delete ${ROOT_SNAPSHOT}"
+        ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume delete ${ROOT_SNAPSHOT}"
     fi
 
-    if ssh "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume list / | grep -q '${HOME_SNAPSHOT}'"; then
+    if ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume list / | grep -q '${HOME_SNAPSHOT}'"; then
         log_info "Deleting existing home snapshot..."
-        ssh "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume delete ${HOME_SNAPSHOT}"
+        ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume delete ${HOME_SNAPSHOT}"
     fi
 
     # Create new read-only snapshots
     log_info "Creating read-only snapshot of / at ${ROOT_SNAPSHOT}..."
-    ssh "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume snapshot -r / ${ROOT_SNAPSHOT}"
+    ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume snapshot -r / ${ROOT_SNAPSHOT}"
 
     log_info "Creating read-only snapshot of /home at ${HOME_SNAPSHOT}..."
-    ssh "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume snapshot -r /home ${HOME_SNAPSHOT}"
+    ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume snapshot -r /home ${HOME_SNAPSHOT}"
 
     log_info "Snapshots created successfully"
 }

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source common SSH helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/ssh-common.sh"
+
 # VM Configuration Script
 # Configures a single VM after btrfs installation: creates testuser, injects SSH keys,
 # hardens SSH, and configures firewall.
@@ -66,13 +70,10 @@ log_info() { echo -e "   ${LOG_PREFIX} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC}${LOG_PREFIX} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC}${LOG_PREFIX} $*" >&2; }
 
-# Common SSH options
-readonly SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
-
 # Run SSH command and prefix all output with VM name
+# Key is already established by create-vm.sh, so we use ssh_run
 run_ssh() {
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS root@"${VM_HOST}" "$@" 2>&1 | while IFS= read -r line; do
+    ssh_run root@"${VM_HOST}" "$@" 2>&1 | while IFS= read -r line; do
         echo -e "   [${VM_NAME}] $line"
     done
     return "${PIPESTATUS[0]}"
@@ -103,8 +104,7 @@ chmod 700 /home/testuser/.ssh
 EOF
 
 log_info "Injecting SSH keys for testuser..."
-# shellcheck disable=SC2086
-ssh $SSH_OPTS root@"${VM_HOST}" "printf '%s\n' '${SSH_AUTHORIZED_KEYS}' > /home/testuser/.ssh/authorized_keys"
+ssh_run root@"${VM_HOST}" "printf '%s\n' '${SSH_AUTHORIZED_KEYS}' > /home/testuser/.ssh/authorized_keys"
 
 log_info "Configuring SSH hardening and services..."
 run_ssh << 'EOF'
