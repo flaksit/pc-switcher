@@ -219,23 +219,35 @@ The workflow in `.github/workflows/test.yml`:
 - Cost: ~€4/month per VM when running
 - VMs are kept running between workflow runs to avoid reprovisioning
 
-## Integration Test Fixture Scoping
+## Integration Test Fixtures
 
-### Event Loop Isolation (pyproject.toml)
+### Event Loop Configuration
 
-The pytest-asyncio configuration uses:
+pytest-asyncio is configured in `pyproject.toml` with module-scoped event loops:
+
 ```toml
-asyncio_default_fixture_loop_scope = "function"
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
 ```
 
-This means:
-- New tests are isolated by default - each test gets its own event loop
-- Prevents async state leakage between tests
-- Safe default for the growing test suite
+**Why both settings?** Fixtures and tests must share the same event loop scope. If fixtures use `loop_scope="module"` but tests default to `loop_scope="function"`, async objects (like SSH connections) created on the module loop cannot be used from the function loop, causing `RuntimeError: Task got Future attached to a different loop`.
 
-### Module-Scoped Shared Resources
+**Reference**: [pytest-asyncio concepts](https://pytest-asyncio.readthedocs.io/en/latest/concepts.html) recommends neighboring tests use the same event loop scope.
 
-These fixtures use explicit `scope="module", loop_scope="module"` for performance:
+### Session-Scoped Setup
+
+| Fixture | Purpose |
+|---------|---------|
+| `integration_lock` | Prevents concurrent test runs via Hetzner labels |
+| `integration_session` | VM provisioning and parallel reset to baseline |
+
+The `integration_session` fixture resets both VMs in parallel using `ThreadPoolExecutor` for faster setup (~20s instead of ~37s sequential).
+
+### Module-Scoped Test Fixtures
+
+These fixtures use `scope="module"` for performance (loop_scope defaults to "module" via pyproject.toml):
 
 | Fixture | File | Purpose |
 |---------|------|---------|
@@ -245,17 +257,10 @@ These fixtures use explicit `scope="module", loop_scope="module"` for performanc
 | `pc2_executor` | `conftest.py` | Command executor for pc2 |
 | `test_volume` | `test_btrfs_operations.py` | btrfs test subvolume |
 
-**Behavior:**
+**Behavior**:
 - Each test MODULE gets its own instances of these fixtures
-- Tests within a module share the same connection (faster)
-- Different modules are completely isolated
+- Tests within a module share the same SSH connection (~1-2s saved per test)
+- Different test files (modules) are completely isolated
 - Fixtures are torn down when pytest moves to the next module
 
-### Session-Scoped Setup
-
-| Fixture | Purpose |
-|---------|---------|
-| `integration_lock` | Prevents concurrent test runs via Hetzner labels |
-| `integration_session` | VM provisioning and parallel reset to baseline |
-
-The `integration_session` fixture resets both VMs in parallel using `asyncio.gather()` for faster setup (~20s instead of ~37s sequential).
+**Test requirements**: Tests must clean up their own artifacts (snapshots, files) in try/finally blocks since they share the module's resources.

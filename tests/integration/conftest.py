@@ -171,7 +171,7 @@ def integration_session(integration_lock: None) -> Iterator[None]:
     yield
 
 
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
+@pytest_asyncio.fixture(scope="module")
 async def pc1_connection(integration_session: None) -> AsyncIterator[asyncssh.SSHClientConnection]:
     """SSH connection to pc1 test VM.
 
@@ -185,7 +185,7 @@ async def pc1_connection(integration_session: None) -> AsyncIterator[asyncssh.SS
         yield conn
 
 
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
+@pytest_asyncio.fixture(scope="module")
 async def pc2_connection(integration_session: None) -> AsyncIterator[asyncssh.SSHClientConnection]:
     """SSH connection to pc2 test VM.
 
@@ -199,7 +199,7 @@ async def pc2_connection(integration_session: None) -> AsyncIterator[asyncssh.SS
         yield conn
 
 
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
+@pytest_asyncio.fixture(scope="module")
 async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> RemoteExecutor:
     """RemoteExecutor for running commands on pc1.
 
@@ -209,7 +209,7 @@ async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> RemoteEx
     return RemoteExecutor(pc1_connection)
 
 
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
+@pytest_asyncio.fixture(scope="module")
 async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> RemoteExecutor:
     """RemoteExecutor for running commands on pc2.
 
