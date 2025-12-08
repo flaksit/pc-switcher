@@ -304,11 +304,12 @@ Integration tests require these environment variables:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
+| `HCLOUD_TOKEN` | Hetzner Cloud API token | `hc-xxxx...` |
 | `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM hostname/IP | `192.0.2.1` |
 | `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM hostname/IP | `192.0.2.2` |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
 
-If these variables are not set, integration tests are automatically skipped with a clear message.
+If these variables are not set, integration tests fail with a clear message listing missing variables.
 
 ## VM Interaction Patterns
 
@@ -566,7 +567,8 @@ If a specific test needs complete isolation (e.g., it corrupts the connection), 
 async def isolated_connection():
     """Fresh connection for tests that need isolation."""
     host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
-    async with asyncssh.connect(host, username="testuser", known_hosts=None) as conn:
+    user = os.environ["PC_SWITCHER_TEST_USER"]
+    async with asyncssh.connect(host, username=user, known_hosts=None) as conn:
         yield conn
 ```
 
@@ -587,6 +589,30 @@ sudo apt-get install hcloud
 # On macOS:
 brew install hcloud
 ```
+
+### Quick Start: Helper Script
+
+The easiest way to run integration tests locally:
+
+```bash
+# Only HCLOUD_TOKEN is required
+export HCLOUD_TOKEN="your-token-here"
+
+# Run all integration tests
+tests/local-integration-tests.sh
+
+# Run specific test file
+tests/local-integration-tests.sh tests/integration/test_vm_connectivity.py
+
+# Run with extra pytest flags
+tests/local-integration-tests.sh -k "test_ssh" --tb=short
+```
+
+The script automatically:
+- Looks up VM IPs from Hetzner Cloud
+- Updates SSH known_hosts entries (removes old, adds new)
+- Sets all required environment variables
+- Runs pytest with integration markers
 
 ### Environment Variables for Running Integration Tests on the VMs From Local Code
 
