@@ -16,12 +16,15 @@ import pytest_asyncio
 from pcswitcher.executor import RemoteExecutor
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def test_volume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     """Isolated btrfs subvolume for snapshot tests.
 
     Creates /test-vol as a clean sandbox for btrfs operations testing.
     Cleans up any leftover state from previous runs before creating.
+
+    Module-scoped: shared across all tests in this module for efficiency.
+    Individual tests must clean up their own artifacts (snapshots) in try/finally.
     """
     # Clean slate: remove any leftover from crashed previous run
     await pc1_executor.run_command(

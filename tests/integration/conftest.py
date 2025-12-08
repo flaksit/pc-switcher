@@ -14,6 +14,7 @@ Fixtures provided:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 from collections.abc import AsyncIterator, Iterator
@@ -57,7 +58,7 @@ def _get_lock_holder() -> str:
 
 
 def _run_script(script_name: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """Run an infrastructure script."""
+    """Run an infrastructure script synchronously."""
     script_path = SCRIPTS_DIR / script_name
     if not script_path.exists():
         pytest.fail(f"Infrastructure script not found: {script_path}")
@@ -67,6 +68,35 @@ def _run_script(script_name: str, *args: str, check: bool = True) -> subprocess.
         text=True,
         check=check,
         env={**os.environ, "HCLOUD_TOKEN": os.getenv("HCLOUD_TOKEN", "")},
+    )
+
+
+async def _run_script_async(script_name: str, *args: str) -> tuple[int, str, str]:
+    """Run an infrastructure script asynchronously.
+
+    Returns:
+        Tuple of (return_code, stdout, stderr).
+    """
+    script_path = SCRIPTS_DIR / script_name
+    if not script_path.exists():
+        pytest.fail(f"Infrastructure script not found: {script_path}")
+
+    proc = await asyncio.create_subprocess_exec(
+        str(script_path),
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, "HCLOUD_TOKEN": os.getenv("HCLOUD_TOKEN", "")},
+    )
+    stdout, stderr = await proc.communicate()
+    return proc.returncode or 0, stdout.decode(), stderr.decode()
+
+
+async def _reset_vms_parallel(pc1_host: str, pc2_host: str) -> None:
+    """Reset both VMs in parallel for faster test setup."""
+    await asyncio.gather(
+        _run_script_async("reset-vm.sh", pc1_host),
+        _run_script_async("reset-vm.sh", pc2_host),
     )
 
 
@@ -145,21 +175,24 @@ def integration_session(integration_lock: None) -> Iterator[None]:
         if result.returncode != 0:
             pytest.fail(f"Failed to provision test VMs: {result.stderr}")
 
-    # Reset VMs to baseline
+    # Reset VMs to baseline (in parallel for faster setup)
     pc1_host = os.getenv("PC_SWITCHER_TEST_PC1_HOST", "")
     pc2_host = os.getenv("PC_SWITCHER_TEST_PC2_HOST", "")
 
     reset_script = SCRIPTS_DIR / "reset-vm.sh"
     if reset_script.exists() and pc1_host and pc2_host:
-        _run_script("reset-vm.sh", pc1_host, check=False)
-        _run_script("reset-vm.sh", pc2_host, check=False)
+        asyncio.run(_reset_vms_parallel(pc1_host, pc2_host))
 
     yield
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def pc1_connection(integration_session: None) -> AsyncIterator[asyncssh.SSHClientConnection]:
-    """SSH connection to pc1 test VM."""
+    """SSH connection to pc1 test VM.
+
+    Module-scoped: shared across all tests in a module for efficiency.
+    Each test module gets its own connection instance.
+    """
     host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
     user = os.environ.get("PC_SWITCHER_TEST_USER", "testuser")
 
@@ -167,9 +200,13 @@ async def pc1_connection(integration_session: None) -> AsyncIterator[asyncssh.SS
         yield conn
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def pc2_connection(integration_session: None) -> AsyncIterator[asyncssh.SSHClientConnection]:
-    """SSH connection to pc2 test VM."""
+    """SSH connection to pc2 test VM.
+
+    Module-scoped: shared across all tests in a module for efficiency.
+    Each test module gets its own connection instance.
+    """
     host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
     user = os.environ.get("PC_SWITCHER_TEST_USER", "testuser")
 
@@ -177,13 +214,21 @@ async def pc2_connection(integration_session: None) -> AsyncIterator[asyncssh.SS
         yield conn
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> RemoteExecutor:
-    """RemoteExecutor for running commands on pc1."""
+    """RemoteExecutor for running commands on pc1.
+
+    Module-scoped: shared across all tests in a module.
+    Tests must clean up their own artifacts and not modify executor state.
+    """
     return RemoteExecutor(pc1_connection)
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> RemoteExecutor:
-    """RemoteExecutor for running commands on pc2."""
+    """RemoteExecutor for running commands on pc2.
+
+    Module-scoped: shared across all tests in a module.
+    Tests must clean up their own artifacts and not modify executor state.
+    """
     return RemoteExecutor(pc2_connection)

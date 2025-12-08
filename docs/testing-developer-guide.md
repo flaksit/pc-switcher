@@ -10,8 +10,9 @@ This guide explains how to write tests for pc-switcher. Read this before writing
 4. [Writing Integration Tests](#writing-integration-tests)
 5. [VM Interaction Patterns](#vm-interaction-patterns)
 6. [Test Organization](#test-organization)
-7. [Local Development Setup](#local-development-setup)
-8. [Troubleshooting](#troubleshooting)
+7. [Integration Test Fixture Scoping](#integration-test-fixture-scoping)
+8. [Local Development Setup](#local-development-setup)
+9. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
@@ -274,22 +275,28 @@ async def test_ssh_connection(pc1_executor):
 Integration test fixtures are defined in `tests/integration/conftest.py`:
 
 ```python
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def pc1_connection():
-    """Async SSH connection to pc1 VM."""
+    """Async SSH connection to pc1 VM (module-scoped)."""
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def pc2_connection():
-    """Async SSH connection to pc2 VM."""
+    """Async SSH connection to pc2 VM (module-scoped)."""
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def pc1_executor(pc1_connection):
-    """RemoteExecutor for pc1 VM."""
+    """RemoteExecutor for pc1 VM (module-scoped)."""
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def pc2_executor(pc2_connection):
-    """RemoteExecutor for pc2 VM."""
+    """RemoteExecutor for pc2 VM (module-scoped)."""
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def test_volume(pc1_executor):
+    """Btrfs test subvolume at /test-vol (module-scoped)."""
 ```
+
+**Important:** These fixtures are **module-scoped** for performance. All tests in the same file share the same SSH connection and executor. See [Integration Test Fixture Scoping](#integration-test-fixture-scoping) for what this means for your tests.
 
 ### Environment Variables Required
 
@@ -478,19 +485,68 @@ Choose appropriate fixture scopes:
 
 | Scope | When to Use | Example |
 |-------|-------------|---------|
-| `function` (default) | Most tests | `mock_executor` |
+| `function` (default) | Most tests, need isolation | `mock_executor` |
 | `class` | Shared setup for test class | Database connection |
-| `module` | Expensive setup shared across file | - |
-| `session` | VM connections, one-time setup | `pc1_connection` |
+| `module` | Expensive setup shared across file | `pc1_connection`, `pc1_executor` |
+| `session` | One-time setup for entire test run | `integration_session` |
 
-Example:
+## Integration Test Fixture Scoping
+
+### Why Module Scope?
+
+Integration test fixtures (`pc1_connection`, `pc1_executor`, `test_volume`) use **module scope** because:
+
+1. **SSH connection setup is slow** (~0.5-1s per connection)
+2. **btrfs subvolume creation is slow** (~2-3s per volume)
+3. Module scope reduces this overhead from once-per-test to once-per-file
+
+### What This Means for Your Tests
+
+**Module-scoped fixtures** are shared across all tests in the same file. This is faster but requires discipline:
+
+1. **Always clean up your artifacts** - Use `try/finally` blocks:
+   ```python
+   @pytest.mark.integration
+   async def test_create_snapshot(pc1_executor: RemoteExecutor, test_volume: str) -> None:
+       snapshot = f"{test_volume}/.snapshots/my-test-snapshot"
+       try:
+           await pc1_executor.run_command(f"sudo btrfs subvolume snapshot -r {test_volume} {snapshot}")
+           # ... assertions ...
+       finally:
+           await pc1_executor.run_command(f"sudo btrfs subvolume delete {snapshot}")
+   ```
+
+2. **Use unique names** - Prefix artifacts with test name to avoid collisions:
+   ```python
+   snapshot = f"{test_volume}/.snapshots/test_my_feature_snapshot"
+   ```
+
+3. **Don't modify shared state** - The executor and connection are shared.
+   Don't close connections or change their configuration.
+
+4. **Don't leave dangling async tasks** - Await all coroutines before test ends.
+
+### When You Need Test Isolation
+
+If your test requires a completely fresh environment (e.g., tests connection lifecycle, modifies executor state), add function-scoped fixtures to `conftest.py`:
 
 ```python
-@pytest.fixture(scope="session")
-async def pc1_connection():
-    """SSH connection shared across all integration tests."""
-    # ... connection setup
+@pytest_asyncio.fixture  # No scope = function-scoped (default)
+async def isolated_pc1_connection(integration_session: None) -> AsyncIterator[asyncssh.SSHClientConnection]:
+    """Fresh SSH connection for tests that need isolation."""
+    host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
+    user = os.environ.get("PC_SWITCHER_TEST_USER", "testuser")
+    async with asyncssh.connect(host, username=user, known_hosts=None) as conn:
+        yield conn
 ```
+
+Then use this fixture instead of `pc1_connection` in tests that need isolation.
+
+### Test Organization
+
+- **Group related tests** in the same module to share fixtures efficiently
+- **Tests that need isolation** should be in their own module or use isolated fixtures
+- **Keep test files focused** - one feature area per file
 
 ## Local Development Setup
 
