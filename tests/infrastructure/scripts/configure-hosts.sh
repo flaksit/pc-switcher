@@ -71,12 +71,20 @@ fi
 log_info "$VM1: $PC1_IP"
 log_info "$VM2: $PC2_IP"
 
-# Function to run SSH command on a VM
+# Function to run SSH command on a VM (as testuser with sudo)
+# Note: root login is disabled after configure-vm.sh runs
 run_ssh() {
     local vm_ip="$1"
     shift
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "$@"
+    ssh $SSH_OPTS "testuser@$vm_ip" "sudo bash -c '$*'"
+}
+
+# Function to run SSH command with heredoc (as testuser with sudo)
+run_ssh_heredoc() {
+    local vm_ip="$1"
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "testuser@$vm_ip" 'sudo bash -s'
 }
 
 # Function to update /etc/hosts on a VM
@@ -86,26 +94,27 @@ update_hosts() {
     local pc2_ip="$3"
 
     log_info "Updating /etc/hosts on $vm_ip..."
-    run_ssh "$vm_ip" <<EOF
+    run_ssh_heredoc "$vm_ip" <<EOF
 # Remove old pc1/pc2 entries
-sudo sed -i '/\spc1$/d' /etc/hosts
-sudo sed -i '/\spc2$/d' /etc/hosts
+sed -i '/\spc1$/d' /etc/hosts
+sed -i '/\spc2$/d' /etc/hosts
 
 # Add new entries
-echo "$pc1_ip pc1" | sudo tee -a /etc/hosts >/dev/null
-echo "$pc2_ip pc2" | sudo tee -a /etc/hosts >/dev/null
+echo "$pc1_ip pc1" >> /etc/hosts
+echo "$pc2_ip pc2" >> /etc/hosts
 
 echo "Updated /etc/hosts:"
 grep -E '\spc[12]$' /etc/hosts
 EOF
 }
 
-# Function to generate SSH keypair if not exists
+# Function to generate SSH keypair if not exists (for testuser)
 generate_ssh_key() {
     local vm_ip="$1"
 
     log_info "Generating SSH keypair on $vm_ip if needed..."
-    run_ssh "$vm_ip" <<'EOF'
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "testuser@$vm_ip" <<'EOF'
 if [[ ! -f ~/.ssh/id_ed25519 ]]; then
     ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "testuser@$(hostname)"
     echo "Generated new SSH keypair"
@@ -115,19 +124,21 @@ fi
 EOF
 }
 
-# Function to get public key from VM
+# Function to get public key from VM (testuser's key)
 get_pubkey() {
     local vm_ip="$1"
-    run_ssh "$vm_ip" 'cat ~/.ssh/id_ed25519.pub'
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "testuser@$vm_ip" 'cat ~/.ssh/id_ed25519.pub'
 }
 
-# Function to add public key to authorized_keys
+# Function to add public key to authorized_keys (for testuser)
 add_authorized_key() {
     local vm_ip="$1"
     local pubkey="$2"
 
     log_info "Adding public key to $vm_ip authorized_keys..."
-    run_ssh "$vm_ip" <<EOF
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "testuser@$vm_ip" <<EOF
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
 touch ~/.ssh/authorized_keys
@@ -143,13 +154,14 @@ echo "Updated authorized_keys"
 EOF
 }
 
-# Function to add host key to known_hosts
+# Function to add host key to known_hosts (for testuser)
 add_known_host() {
     local vm_ip="$1"
     local remote_hostname="$2"
 
     log_info "Adding $remote_hostname to $vm_ip known_hosts..."
-    run_ssh "$vm_ip" <<EOF
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "testuser@$vm_ip" <<EOF
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
 
@@ -192,10 +204,12 @@ add_known_host "$PC2_IP" "pc1"
 
 log_step "Testing SSH connectivity..."
 log_info "Testing pc1 -> pc2:"
-run_ssh "$PC1_IP" 'ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 pc2 hostname'
+# shellcheck disable=SC2086
+ssh $SSH_OPTS "testuser@$PC1_IP" 'ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 pc2 hostname'
 
 log_info "Testing pc2 -> pc1:"
-run_ssh "$PC2_IP" 'ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 pc1 hostname'
+# shellcheck disable=SC2086
+ssh $SSH_OPTS "testuser@$PC2_IP" 'ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 pc1 hostname'
 
 log_step "Configuration complete!"
 log_info "- /etc/hosts updated on both VMs"
