@@ -16,7 +16,7 @@ The test infrastructure consists of two VMs (`pc1` and `pc2`) that simulate the 
 
 ```mermaid
 flowchart TD
-    subgraph prov["provision-test-infra.sh — Main orchestrator: coordinates all provisioning steps"]
+    subgraph prov["Check & Prepare"]
         A[Start] --> B{VMs exist?}
         B -->|No| C[Block if not CI]
         B -->|Yes| D{testuser can SSH?}
@@ -28,7 +28,7 @@ flowchart TD
         I --> J[Ensure SSH key in Hetzner]
     end
 
-    subgraph createvm["create-vm.sh — Creates VM with btrfs via Hetzner rescue mode + installimage"]
+    subgraph createvm["Create VMs with btrfs"]
         J --> K[Create VM]
         K --> L[Wait for SSH]
         L --> M[Enable rescue mode]
@@ -40,7 +40,7 @@ flowchart TD
         R --> S[Verify btrfs & subvolumes]
     end
 
-    subgraph configvm["configure-vm.sh — Configures OS: testuser, packages, SSH hardening, firewall"]
+    subgraph configvm["Configure OS"]
         S --> T[Install packages]
         T --> U[Create testuser]
         U --> V[Inject SSH keys]
@@ -48,14 +48,14 @@ flowchart TD
         W --> X[Configure firewall]
     end
 
-    subgraph confighosts["configure-hosts.sh — Sets up inter-VM networking and SSH trust"]
+    subgraph confighosts["Setup Networking"]
         X --> Y[Update /etc/hosts]
         Y --> Z[Generate SSH keypairs]
         Z --> AA[Exchange public keys]
         AA --> AB[Setup known_hosts]
     end
 
-    subgraph snapshots["create-baseline-snapshots.sh — Creates btrfs snapshots for test reset"]
+    subgraph snapshots["Create Baselines"]
         AB --> AC[Create btrfs snapshots]
         AC --> AD[Done]
     end
@@ -63,6 +63,16 @@ flowchart TD
     H --> T
     G --> AE[User: delete VMs & retry]
 ```
+
+### Provisioning Stage Descriptions
+
+| Script | Description |
+|--------|-------------|
+| **provision-test-infra.sh** | Main orchestrator that coordinates all provisioning steps. Checks VM existence, testuser SSH access, and btrfs filesystem state before deciding next action. |
+| **create-vm.sh** | Creates VM with btrfs via Hetzner rescue mode and installimage. Handles VM creation, rescue mode boot, filesystem installation, and btrfs subvolume verification. |
+| **configure-vm.sh** | Configures OS with testuser account, required packages, SSH hardening, and firewall rules. Runs after VM is fully booted. |
+| **configure-hosts.sh** | Sets up inter-VM networking by configuring `/etc/hosts`, generating SSH keypairs, and establishing SSH trust between pc1 and pc2. |
+| **create-baseline-snapshots.sh** | Creates btrfs snapshots of both VMs at a clean baseline state. Used by test framework to reset VMs to this state between test runs. |
 
 ## Scripts Reference
 
