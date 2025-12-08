@@ -231,13 +231,16 @@ EOF
     ssh $SSH_OPTS "root@$vm_ip" "ls -la /tmp/installimage.conf && head -3 /tmp/installimage.conf"
 
     log_info "Running installimage (this may take 5-10 minutes)..."
-    # Use bash login shell to get the installimage alias properly loaded
+    # Use bash interactive shell to get aliases loaded from .bashrc
     # Use -a (automatic mode) with -c (config file) to bypass interactive prompts
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "root@$vm_ip" "bash -l -c '
+    ssh $SSH_OPTS "root@$vm_ip" "bash -i -c '
         export TERM=xterm
+        echo \"[DEBUG] Checking for alias in bashrc...\"
+        grep -r installimage /root/.bashrc /etc/bash* 2>/dev/null | head -5 || true
         echo \"[DEBUG] Checking installimage alias...\"
-        type installimage
+        type installimage 2>&1 || true
+        alias installimage 2>&1 || true
         echo \"[DEBUG] Running installimage -a -c /tmp/installimage.conf...\"
         installimage -a -c /tmp/installimage.conf
     '" 2>&1 | while IFS= read -r line; do
