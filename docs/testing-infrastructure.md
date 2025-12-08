@@ -19,8 +19,8 @@ flowchart TD
     subgraph prov["Check & Prepare"]
         A[Start] --> B{VMs exist?}
         B -->|No| C[Block if not CI]
-        B -->|Yes| D{testuser can SSH?}
-        D -->|Yes| E[Exit: Already configured]
+        B -->|Yes| D{baseline snapshots exist?}
+        D -->|Yes| E[Exit: Already provisioned]
         D -->|No| F{btrfs filesystem?}
         F -->|No| G[Fail: Manual cleanup needed]
         F -->|Yes| H[Continue to configure]
@@ -68,7 +68,7 @@ flowchart TD
 
 | Script | Description |
 |--------|-------------|
-| **provision-test-infra.sh** | Main orchestrator that coordinates all provisioning steps. Checks VM existence, testuser SSH access, and btrfs filesystem state before deciding next action. |
+| **provision-test-infra.sh** | Main orchestrator that coordinates all provisioning steps. Checks VM existence, baseline snapshot existence, and btrfs filesystem state before deciding next action. |
 | **create-vm.sh** | Creates VM with btrfs via Hetzner rescue mode and installimage. Handles VM creation, rescue mode boot, filesystem installation, and btrfs subvolume verification. |
 | **configure-vm.sh** | Configures OS with testuser account, required packages, SSH hardening, and firewall rules. Runs after VM is fully booted. |
 | **configure-hosts.sh** | Sets up inter-VM networking by configuring `/etc/hosts`, generating SSH keypairs, and establishing SSH trust between pc1 and pc2. |

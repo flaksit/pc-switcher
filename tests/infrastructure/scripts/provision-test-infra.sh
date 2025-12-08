@@ -86,11 +86,15 @@ EOF
     exit 0
 fi
 
-# Check if VM is configured (testuser can SSH)
+# Check if VM is ready (baseline snapshots exist - last step of provisioning)
 # Uses ssh_first since this may be first connection after VM reprovisioning
-check_vm_configured() {
+check_vm_ready() {
     local vm_ip="$1"
-    ssh_first "testuser@$vm_ip" "echo configured" 2>/dev/null && return 0
+    # Check if baseline snapshots exist (last step of provisioning flow)
+    ssh_first "testuser@$vm_ip" \
+        "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1 && \
+         sudo btrfs subvolume show /.snapshots/baseline/@home >/dev/null 2>&1" \
+        2>/dev/null && return 0
     return 1
 }
 
@@ -113,18 +117,18 @@ if [[ -n "$PC1_IP" && -n "$PC2_IP" ]]; then
     log_info "Found existing VMs:"
     log_info "  pc1: $PC1_IP"
     log_info "  pc2: $PC2_IP"
-    log_info "Checking if VMs are configured..."
+    log_info "Checking if VMs have baseline snapshots..."
 
     # Run checks in parallel to establish keys for both VMs (avoids short-circuit)
-    check_vm_configured "$PC1_IP" &
+    check_vm_ready "$PC1_IP" &
     pid1=$!
-    check_vm_configured "$PC2_IP" &
+    check_vm_ready "$PC2_IP" &
     pid2=$!
-    wait $pid1 && pc1_configured=true || pc1_configured=false
-    wait $pid2 && pc2_configured=true || pc2_configured=false
+    wait $pid1 && pc1_ready=true || pc1_ready=false
+    wait $pid2 && pc2_ready=true || pc2_ready=false
 
-    if [[ "$pc1_configured" == "true" && "$pc2_configured" == "true" ]]; then
-        log_info "VMs are already configured. Skipping provisioning."
+    if [[ "$pc1_ready" == "true" && "$pc2_ready" == "true" ]]; then
+        log_info "VMs have baseline snapshots. Skipping provisioning."
         log_step "VMs ready for testing"
         exit 0
     fi
