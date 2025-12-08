@@ -19,13 +19,14 @@ wait_for_ssh() {
     # Remove old key since we expect the host key to have changed
     ssh-keygen -R "$host" 2>/dev/null || true
 
-    local elapsed=0
-    while ((elapsed < timeout)); do
+    local deadline
+    deadline=$(($(date +%s) + timeout))
+
+    while (($(date +%s) < deadline)); do
         if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "${user}@${host}" true 2>/dev/null; then
             return 0
         fi
         sleep 5
-        ((elapsed += 5))
     done
     return 1
 }

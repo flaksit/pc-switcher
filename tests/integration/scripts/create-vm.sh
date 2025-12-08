@@ -171,19 +171,19 @@ wait_for_ssh() {
     # Remove old host key since this is a phase transition (key has changed)
     ssh-keygen -R "$vm_ip" 2>/dev/null || true
 
-    local elapsed=0
-    local attempt=0
-    while ((elapsed < timeout)); do
-        ((++attempt))  # pre-increment to avoid exit code 1 when attempt=0
+    local start_time
+    start_time=$(date +%s)
+    local deadline
+    deadline=$((start_time + timeout))
+
+    while (($(date +%s) < deadline)); do
         if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "root@$vm_ip" true &> /dev/null; then
-            log_info "SSH is ready on $vm_ip (after ${elapsed}s, attempt $attempt)"
+            local elapsed
+            elapsed=$(($(date +%s) - start_time))
+            log_info "SSH is ready on $vm_ip (after ${elapsed}s)"
             return 0
         fi
         sleep 5
-        ((elapsed += 5))
-        if ((attempt % 6 == 0)); then
-            log_info "Still waiting for SSH... (${elapsed}s elapsed)"
-        fi
     done
 
     log_error "SSH did not become available within ${timeout}s"
