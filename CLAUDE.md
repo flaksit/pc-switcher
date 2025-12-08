@@ -7,7 +7,7 @@ This file provides guidance to AI agents when working with code in this reposito
 
 **PC-switcher** is a synchronization system for seamless switching between Linux desktop machines (laptops, workstations). The goal is near-complete system-state replication rather than simple user data sync.
 
-**Project Stage**: Early planning/design phase. No implementation code exists yet.
+**Project Stage**: Foundation infrastructure complete. Core sync functionality in development.
 
 **Target Environment**: Ubuntu 24.04 LTS, btrfs filesystem, machines connected via 1Gb LAN during sync.
 
@@ -16,10 +16,19 @@ This file provides guidance to AI agents when working with code in this reposito
 **ALWAYS READ FIRST**:
 - `~/.claude/CLAUDE.md` - General agent instructions for all projects
 - `~/.claude/python_conventions.md` and `~/.claude/python_tools.md` - Python coding conventions for this project. Read all referenced files therein as well!
-- `High level requirements.md` - Complete project vision, scope, workflow, and constraints
+- `docs/High level requirements.md` - Complete project vision, scope, workflow, and constraints
 - `docs/adr/_index.md` - Summary of all architectural decisions
 
 **Premature Analysis Warning**: Files in `docs/Premature analysis/` are early exploration work that may conflict with `High level requirements.md`. These are **inspiration only** and MUST NOT be read automatically or treated as requirements. Only reference them when explicitly requested for specific feature planning.
+
+## Current Project Structure
+
+```
+src/pcswitcher/       # Core implementation (orchestrator, CLI, jobs, config)
+tests/                # Unit, contract, and integration tests
+docs/                 # Architecture docs and ADRs
+specs/                # SpecKit feature specifications
+```
 
 ## Documentation-First Workflow
 
@@ -135,14 +144,32 @@ This repository will NOT contain:
 5. Resume work on target
 6. (Optional) Suspend/shutdown source machine
 
-## Notes
+## CLI Commands
 
-- UX: Terminal-based UI, single command to launch entire sync process
-- No implementation code exists yet - focus on specification and planning first using SpecKit workflow
+```bash
+pc-switcher sync <target>       # Sync to target machine
+pc-switcher init                # Create default config
+pc-switcher logs                # Show logs directory
+pc-switcher cleanup-snapshots   # Clean up old btrfs snapshots
+```
+
+## Development Commands
+
+```bash
+uv run pytest                                      # Unit tests
+HCLOUD_TOKEN=... tests/local-integration-tests.sh  # Integration tests locally
+uv run ruff check . && uv run ruff format .        # Lint and format
+uv run basedpyright                                # Type check
+```
 
 ## Active Technologies
 
 - **Python 3.14** (per ADR-003) via uv venv
+- **Typer** - CLI framework
+- **Rich** - Terminal UI with progress bars
+- **asyncssh** - SSH communication (per ADR-002)
+- **structlog** - Structured logging
+- **pytest + pytest-asyncio** - Testing framework
 
 ## Remember!
 - You MUST ALWAYS use `uv run` for running Python or python packages: `uv run python`, `uv run ruff`, `uv run basedpyright`, etc.
