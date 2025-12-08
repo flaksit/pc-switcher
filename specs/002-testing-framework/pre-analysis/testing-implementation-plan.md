@@ -626,7 +626,7 @@ cat << INSTALLCONFIG | ssh root@"$SERVER_IP" "cat > /autosetup"
 DRIVE1 /dev/sda
 USE_KERNEL_MODE_SETTING
 HOSTNAME $SERVER_NAME
-PART /boot/efi ext4 128M
+PART /boot/efi esp 256M
 PART btrfs.1 btrfs all
 SUBVOL btrfs.1 @ /
 SUBVOL btrfs.1 @home /home
