@@ -1,7 +1,67 @@
 THESE ARE DRAFT THOUGHTS/NOTES FOR NEW FEATURES. SHOULD NOT BE READ BY AI AGENTS OR INCLUDED IN ANSWERS.
 
 
+provision-test-infra.sh:
+check_vm_configured(): this is not the last step in the provisioning flow. To check if the VMs are fully ready, we need to test if the LAST step in the flow is done. See `Provisioning Flow` in docs/testing-infrastructure.md . So check for the existence of the baseline snapshots.
 
+---
+RUNNING
+
+The following are very punctual remarks. They may not be complete, just what I noted down while reading through the code/docs. Extract what I mean with them and update all necessary and related code to get the desired effect and update documentation. If my intention is not clear, ask clarifying questions.
+
+(1)
+testing-developer-guide.md
+Chapter `### Environment Variables Required`
+HCLOUD_TOKEN is missing
+
+(2) conftest.py
+
+_check_vms_exist():
+- check for both pc1 and pc2
+- Check should not be if VMs exist, but if they are reachable and fully configured.
+- Does not use the env vars PC_SWITCHER_TEST_PC1_HOST and PC_SWITCHER_TEST_PC2_HOST
+
+_reset_vms_parallel():
+- what was the reason not to use asyncio? "interfering with" does not explain much.
+- remove _parallel suffix from function name
+
+_get_lock_holder():
+- If local, add hostname
+
+REQUIRED_ENV_VARS
+HCLOUD_TOKEN and PC_SWITCHER_TEST_USER are missing I think.
+Don't use defaults for PC_SWITCHER_TEST_PC1_HOST and PC_SWITCHER_TEST_PC2_HOST and PC_SWITCHER_TEST_USER. If not set, exit with error.
+
+(3)
+Make a tiny helper script to launch local integration tests on the VMs: it only needs HCLOUD_TOKEN and looks up the values of the other env vars and launch pytest with the right args / env vars.
+As always, document in the relevant places.
+
+---
+
+There is a lot of use of `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null` in tests/infrastructure/scripts. Reduce this to the absolute minimum. Where possible, use proper known_hosts management instead of disabling host key checking.
+
+---
+
+fix flowchart in docs/testing-infrastructure.md: the explanation text in the subgraphs are not readable when rendered. Do something nice so they are readable.
+
+
+---
+update CLAUDE.md so it is up to date with the current state of the project.
+---
+
+
+---
+Iterate max 15 times: Evaluate workflow result - Check errors - Take a deep breath - Analyze - Fix.
+NEVER patch head-over-heals. Think deep! Leave well-structured code. Refactor if it becomes too much patchwork. Update documentation in line with code changes.
+NEVER take decisions without consulting me first. Always come back to me with clarifying questions if needed.
+---
+As soon as a pr is created for a feature branch, each single commit triggers the run of the integration tests. This is too much. Integration tests should run only once per pr, on the latest commit of the pr. Only unit tests should run on each commit. How can we organize that? Is the only way to manually trigger? Can we require that the integration tests run successfully on the last merge before allowing the pr to be merged? What are standard practices for this?
+
+---
+test if EFI partition is needed
+
+---
+/speckit.implement Delegate as much as possible to subagents, so that you can keep your context clean and you can focus on your task as project manager and orchestrator, but ensure that the final result is a coherent, working solution. Launch subagents in parallel if their tasks don't conflict.
 
 ---
 
@@ -258,8 +318,8 @@ Good docs!
 Feedback about @docs/testing-framework.md:
 - Snapshot-Based Reset
   - only talks about resetting `/` (`@`). We need to reset `@home` to an r/w copy of the original `@home`-snapshot as well and cleanup /.snapshots of anything that might linger (keeping of course our base snapshots of `@` and `@home`
-  - for clarity (be consistent with flat layout), the snapshots subvolume is called `@snapshots` and it is **mounted** at /.snapshot
-- Runing Tests > Prerequisites
+  - for clarity (be consistent with flat layout), the snapshots subvolume is called `@snapshots` and it is **mounted** at /.snapshots
+- Running Tests > Prerequisites
   - `uv sync --dev` does not exist. The dev dependencies are installed by default. Running `sync` is not necessary at all, if I understand well: locking and syncing is done automatically when running `uv run` (which we do right after)
 
 Feedback about specs/001-foundation/testing-report.md:

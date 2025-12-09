@@ -928,7 +928,7 @@ uv run pytest -v → 21 passed (7 new tests)
 
 ### User Request
 
-The Execution Flow Summary has a "Job Config Validation" phase (see @specs/001-foundation/architecture.md ). There is a class method validate_config(). However, this is never overriden by any Job subclass. E.g. disk_space_monitor.py does the validation of the thresholds in its validate() method, which is for SYSTEM validation, not for config validation. We want to catch all config errors early.
+The Execution Flow Summary has a "Job Config Validation" phase (see @specs/001-foundation/architecture.md ). There is a class method validate_config(). However, this is never overridden by any Job subclass. E.g. disk_space_monitor.py does the validation of the thresholds in its validate() method, which is for SYSTEM validation, not for config validation. We want to catch all config errors early.
 So refactor all Jobs to implement validate_config() if they need any further config validation than what is already specified in the JSON schema. Ensure they call the super().validate_config() as well to get the JSON schema validation from the base class.
 Refactor so that the parsing of the config values is only done once. I see it is done multiple times in disk_space_monitor.py: both in validate() and in execute().
 
