@@ -1,8 +1,7 @@
 name: Integration Tests
 
 on:
-  pull_request:
-    branches: [main]
+  merge_group:
   workflow_dispatch:
 
 jobs:
@@ -18,13 +17,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Check fork status and secrets
+      - name: Check secrets
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]] && \
-             [[ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
-            echo "::notice::Integration tests skipped: Fork PRs do not have access to secrets"
-            exit 0
-          fi
           if [[ -z "${{ secrets.HCLOUD_TOKEN }}" ]] || [[ -z "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" ]]; then
             echo "::error::Integration tests cannot run: Required secrets (HCLOUD_TOKEN, HETZNER_SSH_PRIVATE_KEY) are not available"
             exit 1
