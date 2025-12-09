@@ -241,7 +241,7 @@ pc-switcher sync localhost
 **Examine individual log lines** in the panel.
 
 **Expected format**:
-```
+```text
 HH:MM:SS LEVEL    job_name (hostname) message [context]
 ```
 
@@ -802,7 +802,7 @@ pc-switcher sync localhost
 
 Use this checklist for final verification before release:
 
-### Visual Verification
+### Visual Verification Checklist
 - [ ] Terminal capabilities verified (colors, size, unicode)
 - [ ] All log level colors are distinct and readable
 - [ ] Progress bars render smoothly without artifacts
@@ -812,7 +812,7 @@ Use this checklist for final verification before release:
 - [ ] Interrupt handling displays correct messages
 - [ ] TUI adapts to different terminal sizes
 
-### Feature Tour
+### Feature Tour Checklist
 - [ ] Pre-sync validation completes successfully
 - [ ] Pre-sync snapshots created correctly
 - [ ] Version check and installation works
@@ -828,7 +828,7 @@ Use this checklist for final verification before release:
 - [ ] Log files are created with correct structure
 - [ ] Log level filtering works for file and CLI
 
-### Accessibility
+### Accessibility Checklist
 - [ ] Information not conveyed by color alone
 - [ ] TUI works on small terminals (80×24)
 - [ ] TUI works on large terminals

@@ -487,7 +487,7 @@ The CI workflow detects missing VMs and provisions them from scratch (including 
    ```
 
    Expected output:
-   ```
+   ```text
    ID XXX gen XXX top level XXX path .snapshots/baseline/@
    ID XXX gen XXX top level XXX path .snapshots/baseline/@home
    ```
@@ -559,13 +559,14 @@ This recreates VMs with fresh baseline snapshots.
 
 **Recovery Options**:
 
-**Option 1: VM is powered off**
+#### Option 1: VM is powered off
+
 ```bash
 hcloud server poweron pc1
 hcloud server poweron pc2
 ```
 
-**Option 2: VM is running but SSH unreachable**
+#### Option 2: VM is running but SSH unreachable
 
 1. Check firewall rules in Hetzner Cloud Console
 2. Verify VM has public IP assigned
@@ -574,7 +575,7 @@ hcloud server poweron pc2
    hcloud server reboot pc1
    ```
 
-**Option 3: VM is completely unresponsive**
+#### Option 3: VM is completely unresponsive
 
 1. Hard reset via Hetzner Console or CLI:
    ```bash
@@ -587,7 +588,7 @@ hcloud server poweron pc2
    gh workflow run test.yml
    ```
 
-**Option 4: Network configuration issue**
+#### Option 4: Network configuration issue
 
 - Verify `/etc/hosts` entries on VMs for inter-VM communication
 - Check SSH keys for pc1↔pc2 communication
@@ -683,8 +684,8 @@ hcloud server poweron pc2
 
 ## Emergency Contacts
 
-- **Hetzner Cloud Support**: https://docs.hetzner.com/general/others/support/
-- **GitHub Actions Status**: https://www.githubstatus.com/
+- **Hetzner Cloud Support**: [https://docs.hetzner.com/general/others/support/](https://docs.hetzner.com/general/others/support/)
+- **GitHub Actions Status**: [https://www.githubstatus.com/](https://www.githubstatus.com/)
 - **Repository Maintainers**: See CODEOWNERS file
 
 ---

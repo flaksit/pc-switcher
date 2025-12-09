@@ -248,7 +248,7 @@ All scripts source `ssh-common.sh` which provides these helpers:
 
 #### Flow A: Fresh Provisioning (VMs don't exist)
 
-```
+```text
 provision-test-infra.sh
   └─ create-vm.sh (×2 parallel)
        └─ wait_for_ssh ← PHASE TRANSITION (created) - remove + accept-new
@@ -263,7 +263,7 @@ provision-test-infra.sh
 
 #### Flow B: VMs Exist, Not Configured
 
-```
+```text
 provision-test-infra.sh
   └─ check_vm_configured(PC1, PC2) ← FIRST (parallel) - ssh_first
   └─ check_vm_has_btrfs(PC1, PC2) ← FIRST (parallel) - ssh_first
@@ -274,7 +274,7 @@ provision-test-infra.sh
 
 #### Flow C: Integration Tests (potentially different runner)
 
-```
+```text
 conftest.py (test runner - may have empty known_hosts)
   └─ reset-vm.sh (×2 parallel) ← FIRST - ssh_accept_new (no remove)
   └─ asyncssh.connect ← subsequent (key from reset-vm.sh)
