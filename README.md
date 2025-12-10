@@ -155,7 +155,7 @@ This project uses two different names depending on context:
   - Why: CLI tools commonly use dashes for readability (like `docker-compose`, `git-lfs`)
 
 When you run `uv tool list`, you'll see:
-```
+```text
 pcswitcher v0.0.0.post159.dev0+3825b99
 - pc-switcher
 ```
