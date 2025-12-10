@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Source common SSH helpers
+# Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/ssh-common.sh"
+source "$SCRIPT_DIR/common.sh"
 
 # VM Configuration Script
 # Configures a single VM after btrfs installation: creates testuser, injects SSH keys,
@@ -51,24 +51,12 @@ if [[ "$#" -lt 2 ]]; then
     exit 1
 fi
 
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly CYAN='\033[0;36m'
-readonly NC='\033[0m' # No Color
-
 readonly VM_HOST="$1"
 readonly SSH_AUTHORIZED_KEYS="$2"
 readonly VM_NAME="${3:-$VM_HOST}"  # Use VM_NAME if provided, otherwise fall back to VM_HOST
 
 # Log prefix includes VM name for parallel execution clarity
 readonly LOG_PREFIX=" ${CYAN}[${VM_NAME}]${NC}"
-
-log_step() { echo -e "${GREEN}==>${NC}${LOG_PREFIX} $*"; }
-log_info() { echo -e "   ${LOG_PREFIX} $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC}${LOG_PREFIX} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC}${LOG_PREFIX} $*" >&2; }
 
 # Run SSH command and prefix all output with VM name
 # Key is already established by create-vm.sh, so we use ssh_run
@@ -79,9 +67,9 @@ run_ssh() {
     return "${PIPESTATUS[0]}"
 }
 
-log_step "Configuring VM at ${VM_HOST}..."
+log_step_prefixed "Configuring VM at ${VM_HOST}..."
 
-log_info "Installing required packages..."
+log_info_prefixed "Installing required packages..."
 run_ssh << 'EOF'
 set -euo pipefail
 apt-get update
@@ -93,7 +81,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     sudo
 EOF
 
-log_info "Creating testuser..."
+log_info_prefixed "Creating testuser..."
 run_ssh << 'EOF'
 set -euo pipefail
 useradd -m -s /bin/bash testuser
@@ -103,10 +91,10 @@ mkdir -p /home/testuser/.ssh
 chmod 700 /home/testuser/.ssh
 EOF
 
-log_info "Injecting SSH keys for testuser..."
+log_info_prefixed "Injecting SSH keys for testuser..."
 ssh_run root@"${VM_HOST}" "printf '%s\n' '${SSH_AUTHORIZED_KEYS}' > /home/testuser/.ssh/authorized_keys"
 
-log_info "Configuring SSH hardening and services..."
+log_info_prefixed "Configuring SSH hardening and services..."
 run_ssh << 'EOF'
 set -euo pipefail
 
@@ -142,5 +130,5 @@ systemctl enable qemu-guest-agent
 systemctl start qemu-guest-agent
 EOF
 
-log_step "Configuration of ${VM_HOST} completed successfully"
-log_info "SSH access: ssh testuser@${VM_HOST}"
+log_step_prefixed "Configuration of ${VM_HOST} completed successfully"
+log_info_prefixed "SSH access: ssh testuser@${VM_HOST}"

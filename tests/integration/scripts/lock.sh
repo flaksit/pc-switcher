@@ -17,6 +17,10 @@
 
 set -euo pipefail
 
+# Source common helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
 # Help
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     cat <<EOF
@@ -43,17 +47,6 @@ Examples:
 EOF
     exit 0
 fi
-
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly NC='\033[0m' # No Color
-
-log_step() { echo -e "${GREEN}==>${NC} $*"; }
-log_info() { echo "    $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 readonly SERVER_NAME="pc1"
 readonly LOCK_TIMEOUT_SECONDS=300  # 5 minutes
