@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-# Source common SSH helpers
+# Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/ssh-common.sh"
+source "$SCRIPT_DIR/common.sh"
 
 # create-vm.sh
 # Creates a single Hetzner Cloud VM and installs Ubuntu 24.04 with btrfs filesystem
@@ -35,20 +35,8 @@ readonly TIMEOUT_RESCUE=180
 readonly TIMEOUT_INSTALL=600
 readonly TIMEOUT_REBOOT=120
 
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly CYAN='\033[0;36m'
-readonly NC='\033[0m' # No Color
-
-# Log prefix will be set after VM_NAME is known
+# Log prefix will be set after VM_NAME is known (for parallel execution clarity)
 LOG_PREFIX=""
-
-log_step() { echo -e "${GREEN}==>${NC}${LOG_PREFIX} $*"; }
-log_info() { echo -e "   ${LOG_PREFIX} $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC}${LOG_PREFIX} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC}${LOG_PREFIX} $*" >&2; }
 
 show_help() {
     cat << EOF
@@ -82,24 +70,24 @@ EOF
 
 # Check prerequisites
 check_prerequisites() {
-    log_step "Checking prerequisites..."
+    log_step_prefixed "Checking prerequisites..."
 
     # Check if hcloud CLI is installed
     if ! command -v hcloud &> /dev/null; then
-        log_error "hcloud CLI not found. Install it with: brew install hcloud (macOS) or https://github.com/hetznercloud/cli"
+        log_error_prefixed "hcloud CLI not found. Install it with: brew install hcloud (macOS) or https://github.com/hetznercloud/cli"
         exit 1
     fi
 
     # Check if HCLOUD_TOKEN is set
     if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
-        log_error "HCLOUD_TOKEN environment variable is required"
+        log_error_prefixed "HCLOUD_TOKEN environment variable is required"
         echo ""
         echo "Get your API token from: https://console.hetzner.cloud/"
         echo "Then set it with: export HCLOUD_TOKEN=your-token-here"
         exit 1
     fi
 
-    log_info "Prerequisites OK"
+    log_info_prefixed "Prerequisites OK"
 }
 
 # Check if VM already exists
@@ -112,9 +100,9 @@ vm_exists() {
 create_vm() {
     local vm_name="$1"
 
-    log_step "Creating VM '$vm_name'..."
-    log_info "Type: $SERVER_TYPE (2 vCPU, 4GB RAM)"
-    log_info "Location: $LOCATION"
+    log_step_prefixed "Creating VM '$vm_name'..."
+    log_info_prefixed "Type: $SERVER_TYPE (2 vCPU, 4GB RAM)"
+    log_info_prefixed "Location: $LOCATION"
 
     hcloud server create \
         --name "$vm_name" \
@@ -123,29 +111,29 @@ create_vm() {
         --image "ubuntu-24.04" \
         --ssh-key "$SSH_KEY_NAME"
 
-    log_info "VM '$vm_name' created"
+    log_info_prefixed "VM '$vm_name' created"
 }
 
 # Enable rescue mode
 enable_rescue_mode() {
     local vm_name="$1"
 
-    log_step "Enabling rescue mode for '$vm_name'..."
+    log_step_prefixed "Enabling rescue mode for '$vm_name'..."
     # Must explicitly specify SSH key for rescue mode access
     hcloud server enable-rescue "$vm_name" --type "linux64" --ssh-key "$SSH_KEY_NAME" --quiet
-    log_info "Rescue mode enabled"
+    log_info_prefixed "Rescue mode enabled"
 }
 
 # Reboot VM
 reboot_vm() {
     local vm_name="$1"
 
-    log_step "Rebooting '$vm_name' into rescue mode..."
+    log_step_prefixed "Rebooting '$vm_name' into rescue mode..."
     hcloud server reboot "$vm_name"
 }
 
 # Run SSH command and prefix all output with VM name
-# Uses ssh_run from ssh-common.sh for subsequent connections
+# Uses ssh_run from common.sh for subsequent connections
 run_ssh() {
     local vm_ip="$1"
     shift
@@ -156,48 +144,27 @@ run_ssh() {
 }
 
 # Wait for SSH to become available after a phase transition
-# This is a wrapper around the common wait_for_ssh that adds logging and IP lookup.
-# It handles the ssh-keygen -R and accept-new pattern for phase transitions.
-wait_for_ssh() {
+# This is a wrapper that looks up VM IP and calls the common wait_for_ssh.
+# All phase transitions in create-vm.sh require REMOVE_KEY since the host key changes.
+wait_for_ssh_vm() {
     local vm_name="$1"
     local timeout="$2"
 
-    log_step "Waiting for SSH on '$vm_name' (timeout: ${timeout}s)..."
+    log_step_prefixed "Waiting for SSH on '$vm_name' (timeout: ${timeout}s)..."
 
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
-    log_info "VM IP: $vm_ip"
+    log_info_prefixed "VM IP: $vm_ip"
 
-    # Remove old host key since this is a phase transition (key has changed)
-    ssh-keygen -R "$vm_ip" 2>/dev/null || true
-
-    local start_time
-    start_time=$(date +%s)
-    local deadline
-    deadline=$((start_time + timeout))
-
-    while (($(date +%s) < deadline)); do
-        if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "root@$vm_ip" true &> /dev/null; then
-            local elapsed
-            elapsed=$(($(date +%s) - start_time))
-            log_info "SSH is ready on $vm_ip (after ${elapsed}s)"
-            return 0
-        fi
-        sleep 5
-    done
-
-    log_error "SSH did not become available within ${timeout}s"
-    log_error "Attempting verbose SSH for diagnostics..."
-    # Run one verbose attempt to help diagnose
-    ssh -v -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "root@$vm_ip" true 2>&1 | tail -30 || true
-    return 1
+    # Use the common wait_for_ssh with REMOVE_KEY for phase transitions
+    wait_for_ssh "root@$vm_ip" "$timeout" REMOVE_KEY
 }
 
 # Run installimage to install Ubuntu 24.04 with btrfs
 run_installimage() {
     local vm_name="$1"
 
-    log_step "Running installimage to install Ubuntu 24.04 with btrfs..."
+    log_step_prefixed "Running installimage to install Ubuntu 24.04 with btrfs..."
 
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
@@ -220,41 +187,41 @@ CONFIGEOF
     config="HOSTNAME $vm_name
 $config"
 
-    log_info "Writing config to /autosetup..."
+    log_info_prefixed "Writing config to /autosetup..."
     # Write config to /autosetup - installimage detects this and runs in automatic mode
     ssh_run "root@$vm_ip" "cat > /autosetup" <<< "$config"
 
-    log_info "Running installimage (this may take 5-10 minutes)..."
+    log_info_prefixed "Running installimage (this may take 5-10 minutes)..."
     # Use bash -i to get the installimage alias loaded from .bashrc
     ssh_run "root@$vm_ip" 'bash -i -c "installimage"' 2>&1 | while IFS= read -r line; do
         echo -e "   ${LOG_PREFIX} $line"
     done
     local exit_code="${PIPESTATUS[0]}"
     if [[ "$exit_code" -ne 0 ]]; then
-        log_error "installimage failed with exit code $exit_code"
+        log_error_prefixed "installimage failed with exit code $exit_code"
         return 1
     fi
 
-    log_info "Installation complete"
+    log_info_prefixed "Installation complete"
 }
 
 # Reboot into new system
 reboot_into_system() {
     local vm_name="$1"
 
-    log_step "Rebooting '$vm_name' into new system..."
+    log_step_prefixed "Rebooting '$vm_name' into new system..."
 
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
 
     # Disable rescue mode first
-    log_info "Disabling rescue mode..."
+    log_info_prefixed "Disabling rescue mode..."
     hcloud server disable-rescue "$vm_name"
 
     # Reboot via SSH (rescue mode)
     ssh_run "root@$vm_ip" "reboot" || true  # SSH connection will drop, so ignore error
 
-    log_info "Waiting for system to reboot..."
+    log_info_prefixed "Waiting for system to reboot..."
     sleep 10
 }
 
@@ -262,33 +229,33 @@ reboot_into_system() {
 verify_system() {
     local vm_name="$1"
 
-    log_step "Verifying new system..."
+    log_step_prefixed "Verifying new system..."
 
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
 
     # Wait for SSH to come back up
-    wait_for_ssh "$vm_name" "$TIMEOUT_REBOOT"
+    wait_for_ssh_vm "$vm_name" "$TIMEOUT_REBOOT"
 
     # Verify btrfs filesystem
-    log_info "Checking btrfs filesystem..."
+    log_info_prefixed "Checking btrfs filesystem..."
     local btrfs_check
     btrfs_check=$(ssh_run "root@$vm_ip" "df -T / | tail -n1 | awk '{print \$2}'")
 
     if [[ "$btrfs_check" != "btrfs" ]]; then
-        log_error "Root filesystem is not btrfs (got: $btrfs_check)"
+        log_error_prefixed "Root filesystem is not btrfs (got: $btrfs_check)"
         return 1
     fi
 
     # Verify subvolumes
-    log_info "Checking subvolumes..."
+    log_info_prefixed "Checking subvolumes..."
     local subvols
     subvols=$(ssh_run "root@$vm_ip" "btrfs subvolume list / | awk '{print \$NF}' | sort")
 
     local expected_subvols=$'@\n@home\n@snapshots'
 
     if [[ "$subvols" != "$expected_subvols" ]]; then
-        log_error "Subvolumes do not match expected configuration"
+        log_error_prefixed "Subvolumes do not match expected configuration"
         echo "Expected:"
         echo "$expected_subvols"
         echo "Got:"
@@ -296,10 +263,10 @@ verify_system() {
         return 1
     fi
 
-    log_step "System verification successful"
-    log_info "OS: Ubuntu 24.04 LTS"
-    log_info "Filesystem: btrfs"
-    log_info "Subvolumes: @, @home, @snapshots"
+    log_step_prefixed "System verification successful"
+    log_info_prefixed "OS: Ubuntu 24.04 LTS"
+    log_info_prefixed "Filesystem: btrfs"
+    log_info_prefixed "Subvolumes: @, @home, @snapshots"
 }
 
 # Main function
@@ -315,15 +282,15 @@ main() {
     # Set log prefix for parallel execution clarity
     LOG_PREFIX=" ${CYAN}[${vm_name}]${NC}"
 
-    log_step "Creating VM: $vm_name"
+    log_step_prefixed "Creating VM: $vm_name"
 
     # Check prerequisites
     check_prerequisites
 
     # Check if VM already exists
     if vm_exists "$vm_name"; then
-        log_warn "VM '$vm_name' already exists - skipping creation"
-        log_info "To recreate, first delete with: hcloud server delete $vm_name"
+        log_warn_prefixed "VM '$vm_name' already exists - skipping creation"
+        log_info_prefixed "To recreate, first delete with: hcloud server delete $vm_name"
         exit 0
     fi
 
@@ -332,7 +299,7 @@ main() {
 
     # Wait for VM to be ready
     sleep 5
-    wait_for_ssh "$vm_name" "$TIMEOUT_INSTALL"
+    wait_for_ssh_vm "$vm_name" "$TIMEOUT_INSTALL"
 
     # Enable rescue mode
     enable_rescue_mode "$vm_name"
@@ -342,7 +309,7 @@ main() {
 
     # Wait for rescue mode to be ready
     sleep 10
-    wait_for_ssh "$vm_name" "$TIMEOUT_RESCUE"
+    wait_for_ssh_vm "$vm_name" "$TIMEOUT_RESCUE"
 
     # Run installimage
     run_installimage "$vm_name"
@@ -357,14 +324,14 @@ main() {
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
 
-    log_step "VM creation complete!"
-    log_info "VM Name: $vm_name"
-    log_info "IP Address: $vm_ip"
-    log_info "SSH Access: ssh root@$vm_ip"
+    log_step_prefixed "VM creation complete!"
+    log_info_prefixed "VM Name: $vm_name"
+    log_info_prefixed "IP Address: $vm_ip"
+    log_info_prefixed "SSH Access: ssh root@$vm_ip"
     echo ""
-    log_info "Next steps:"
-    log_info "  1. Configure the VM (users, packages, baseline snapshots)"
-    log_info "  2. Test SSH connectivity"
+    log_info_prefixed "Next steps:"
+    log_info_prefixed "  1. Configure the VM (users, packages, baseline snapshots)"
+    log_info_prefixed "  2. Test SSH connectivity"
 }
 
 # Run main function

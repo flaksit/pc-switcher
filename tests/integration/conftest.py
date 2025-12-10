@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import socket
+import warnings
 from asyncio import TaskGroup
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import asyncssh
@@ -97,39 +100,61 @@ async def _reset_vms(pc1_host: str, pc2_host: str) -> None:
         tg.create_task(_run_script("reset-vm.sh", pc2_host, check=False))
 
 
-async def _check_vms_ready() -> bool:
+async def _check_baseline_age(executor: RemoteExecutor) -> None:
+    """Warn if baseline snapshots are older than 30 days.
+
+    This is a non-blocking check to remind maintainers to upgrade VMs periodically.
+    Baseline snapshots should be refreshed regularly with the upgrade-vms.sh script.
+    """
+    try:
+        # Get baseline snapshot creation time using btrfs
+        result = await executor.run_command(
+            "sudo btrfs subvolume show /.snapshots/baseline/@ 2>/dev/null | grep 'Creation time:' | head -1"
+        )
+
+        if not result.stdout:
+            # Can't determine age, skip warning
+            return
+
+        # Parse creation time (format: "Creation time: 2024-11-15 10:30:45")
+        match = re.search(r"Creation time: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", result.stdout)
+        if not match:
+            return
+
+        created_str = match.group(1)
+        created_time = datetime.strptime(created_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+        now = datetime.now(UTC)
+        age_days = (now - created_time).days
+
+        if age_days > 30:
+            warnings.warn(
+                f"Test VM baselines are {age_days} days old. "
+                f"Consider running: ./tests/integration/scripts/upgrade-vms.sh",
+                UserWarning,
+                stacklevel=2,
+            )
+    except Exception:
+        # Ignore errors in baseline age check - this is just a courtesy warning
+        pass
+
+
+async def _check_vms_ready(pc1_executor: RemoteExecutor, pc2_executor: RemoteExecutor) -> bool:
     """Check if test VMs are reachable and fully configured.
 
     Verifies:
     - SSH connectivity to both VMs
     - Baseline btrfs snapshots exist (implies user is configured)
     """
-    pc1_host = os.getenv("PC_SWITCHER_TEST_PC1_HOST")
-    pc2_host = os.getenv("PC_SWITCHER_TEST_PC2_HOST")
-    user = os.getenv("PC_SWITCHER_TEST_USER")
+    try:
+        # Check both VMs in parallel
+        async with TaskGroup() as tg:
+            tg.create_task(pc1_executor.run_command("sudo btrfs subvolume show /.snapshots/baseline/@"))
+            tg.create_task(pc2_executor.run_command("sudo btrfs subvolume show /.snapshots/baseline/@"))
 
-    if not all([pc1_host, pc2_host, user]):
+        # Both commands must succeed (no exception from TaskGroup means success)
+        return True
+    except Exception:
         return False
-
-    for host in [pc1_host, pc2_host]:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=5",
-                f"{user}@{host}",
-                "sudo btrfs subvolume show /.snapshots/baseline/@",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await asyncio.wait_for(proc.wait(), timeout=15)
-            if proc.returncode != 0:
-                return False
-        except (TimeoutError, FileNotFoundError):
-            return False
-    return True
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -168,25 +193,38 @@ async def integration_session(integration_lock: None) -> AsyncIterator[None]:
     1. Acquires the integration test lock (via integration_lock dependency)
     2. Checks if VMs are ready, provisions them if not
     3. Resets VMs to baseline before tests run
+    4. Checks baseline age and warns if outdated
     """
-    # Check if VMs are ready
-    if not await _check_vms_ready():
-        # Auto-provision VMs
-        provision_script = SCRIPTS_DIR / "provision-test-infra.sh"
-        if not provision_script.exists():
-            pytest.fail(f"Provision script not found: {provision_script}")
-
-        returncode, _, stderr = await _run_script("provision-test-infra.sh", check=False)
-        if returncode != 0:
-            pytest.fail(f"Failed to provision test VMs: {stderr}")
-
-    # Reset VMs to baseline (in parallel for faster setup)
     pc1_host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
     pc2_host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
+    user = os.environ["PC_SWITCHER_TEST_USER"]
 
-    reset_script = SCRIPTS_DIR / "reset-vm.sh"
-    if reset_script.exists():
-        await _reset_vms(pc1_host, pc2_host)
+    # Create connections and executors for VM readiness check and baseline age check
+    async with (
+        asyncssh.connect(pc1_host, username=user) as pc1_conn,
+        asyncssh.connect(pc2_host, username=user) as pc2_conn,
+    ):
+        pc1_executor = RemoteExecutor(pc1_conn)
+        pc2_executor = RemoteExecutor(pc2_conn)
+
+        # Check if VMs are ready
+        if not await _check_vms_ready(pc1_executor, pc2_executor):
+            # Auto-provision VMs
+            provision_script = SCRIPTS_DIR / "provision-test-infra.sh"
+            if not provision_script.exists():
+                pytest.fail(f"Provision script not found: {provision_script}")
+
+            returncode, _, stderr = await _run_script("provision-test-infra.sh", check=False)
+            if returncode != 0:
+                pytest.fail(f"Failed to provision test VMs: {stderr}")
+
+        # Reset VMs to baseline (in parallel for faster setup)
+        reset_script = SCRIPTS_DIR / "reset-vm.sh"
+        if reset_script.exists():
+            await _reset_vms(pc1_host, pc2_host)
+
+        # Check baseline age and warn if outdated
+        await _check_baseline_age(pc1_executor)
 
     yield
 
