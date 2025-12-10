@@ -1096,6 +1096,8 @@ graph TD
 
     InstallTarget["<b>Install/Upgrade on Target</b><br/>- Validate version compatibility<br/>- If target version newer → CRITICAL abort<br/>- If missing/outdated → install/upgrade<br/>- Done AFTER pre-sync snapshots for rollback safety"]
 
+    ConfigSync["<b>Config Sync</b><br/>- Compare source/target configs<br/>- If different → prompt user<br/>- Copy config if approved"]
+
     StartDiskMon["<b>Start DiskSpaceMonitor</b><br/>- Background task for source<br/>- Background task for target"]
 
     SyncJobs["<b>Sequential job execution</b><br/>- SyncJob1.execute<br/>- SyncJob2.execute<br/>- ..."]
@@ -1115,7 +1117,8 @@ graph TD
     SubvolCheck --> DiskPreflight
     DiskPreflight --> SnapPre
     SnapPre --> InstallTarget
-    InstallTarget --> StartDiskMon
+    InstallTarget --> ConfigSync
+    ConfigSync --> StartDiskMon
     StartDiskMon --> SyncJobs
     SyncJobs --> SnapPost
     SnapPost --> Cleanup
@@ -1131,6 +1134,7 @@ graph TD
     style DiskPreflight fill:#e8f5e9
     style SnapPre fill:#e8f5e9
     style InstallTarget fill:#e8f5e9
+    style ConfigSync fill:#e8f5e9
     style StartDiskMon fill:#fce4ec
     style SyncJobs fill:#e8f5e9
     style SnapPost fill:#e8f5e9
@@ -1142,9 +1146,10 @@ graph TD
 1. **Version check integrated into installation job**: Version compatibility validation occurs during InstallOnTargetJob's validate phase to detect incompatibilities early (fail-fast). Installation/upgrade happens AFTER pre-sync snapshots for rollback safety.
 2. **All checks before snapshots**: Locks → Subvolume validation → Disk preflight → Snapshots. Version compatibility is checked via InstallOnTargetJob validation. If any check fails, we abort cleanly with no state changes.
 3. **Installation after pre-sync snapshots**: Installation modifies the target system, so it must happen AFTER pre-sync snapshots to allow rollback if installation fails. Pre-sync snapshots capture the state BEFORE installation.
-4. **Three validation phases**: Schema → Job config → System state, with distinct error messages. Version compatibility is part of the System state validation phase.
-5. **DiskSpaceMonitor as background tasks**: Two instances run throughout sync - one monitors source (local commands), one monitors target (via `RemoteExecutor`). Either can abort sync on low space.
-6. **Lock acquisition**: Unified lock prevents any machine from participating in multiple syncs simultaneously (in any role: as source or target).
+4. **Config sync after installation**: After pc-switcher is installed/upgraded on target, the source configuration is synced to target. If configs differ, user is prompted to choose: accept source config, keep target config, or abort. If target has no config, user must approve the source config before proceeding.
+5. **Three validation phases**: Schema → Job config → System state, with distinct error messages. Version compatibility is part of the System state validation phase.
+6. **DiskSpaceMonitor as background tasks**: Two instances run throughout sync - one monitors source (local commands), one monitors target (via `RemoteExecutor`). Either can abort sync on low space.
+7. **Lock acquisition**: Unified lock prevents any machine from participating in multiple syncs simultaneously (in any role: as source or target).
 
 ---
 
@@ -1602,6 +1607,70 @@ async def execute(self) -> None:
 - Uses versioned URL to fetch the script matching the source version
 - Script handles all prerequisites (uv, btrfs-progs) internally
 - No separate Python installation module needed - single `install.sh` for everything
+
+### Config Sync After Installation
+
+After `InstallOnTargetJob` completes, the orchestrator syncs the source configuration to the target. This ensures both machines operate with consistent settings. The sync handles three scenarios:
+
+1. **Target has no config**: Display source config, prompt user for confirmation. If declined, abort sync (config is required).
+2. **Target config differs from source**: Display a diff, prompt user with three options:
+   - Accept config from source (overwrite target)
+   - Keep current config on target (proceed without syncing)
+   - Abort sync
+3. **Target config matches source**: Skip silently with INFO log.
+
+```python
+async def sync_config_to_target(
+    target: RemoteExecutor,
+    source_config_path: Path,
+    ui: TerminalUI | None,
+    console: Console,
+) -> bool:
+    """Sync configuration from source to target machine.
+
+    Returns:
+        True if sync should continue, False if sync should abort
+    """
+    source_content = source_config_path.read_text()
+    target_content = await _get_target_config(target)
+
+    # Pause UI for user interaction
+    if ui is not None:
+        ui.stop()
+
+    try:
+        if target_content is None:
+            # No config on target - prompt for confirmation
+            if _prompt_new_config(console, source_content):
+                await _copy_config_to_target(target, source_config_path)
+                return True
+            return False  # User declined, abort sync
+
+        elif source_content.strip() == target_content.strip():
+            # Configs match - skip silently
+            return True
+
+        else:
+            # Configs differ - show diff and prompt
+            diff = _generate_diff(source_content, target_content)
+            action = _prompt_config_diff(console, source_content, target_content, diff)
+            if action == ConfigSyncAction.ACCEPT_SOURCE:
+                await _copy_config_to_target(target, source_config_path)
+                return True
+            elif action == ConfigSyncAction.KEEP_TARGET:
+                return True
+            else:  # ABORT
+                return False
+    finally:
+        if ui is not None:
+            ui.start()
+```
+
+**Key points:**
+- Config sync happens after installation to ensure pc-switcher is available on target
+- UI live display is paused during user prompts for clean interaction
+- Uses Rich `Syntax` for syntax-highlighted config/diff display
+- Uses SFTP (`RemoteExecutor.send_file()`) for secure file transfer
 
 ---
 

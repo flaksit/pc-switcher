@@ -64,9 +64,9 @@ This delivers immediate value by establishing the development pattern for all 6 
 
 ### User Story 2 - Self-Installing Sync Orchestrator (Priority: P1)
 
-When a user initiates sync from source to target, the orchestrator ensures the pc-switcher package on the target machine is at the same version as the source machine. If versions differ or pc-switcher is not installed on target, the system automatically installs or upgrades the target installation. This installation/upgrade happens after pre-sync snapshots are created, providing rollback capability if installation fails.
+When a user initiates sync from source to target, the orchestrator ensures the pc-switcher package on the target machine is at the same version as the source machine. If versions differ or pc-switcher is not installed on target, the system automatically installs or upgrades the target installation. Additionally, the orchestrator ensures the target has the source's configuration file, prompting the user for confirmation before applying it. This installation/upgrade happens after pre-sync snapshots are created, providing rollback capability if installation fails.
 
-**Why this priority**: This is P1 because version consistency is required for reliable sync operations. Without matching versions, the target-side helper scripts may be incompatible with source-side orchestration logic, causing unpredictable failures. Self-installation also eliminates manual setup steps, aligning with "Frictionless Command UX".
+**Why this priority**: This is P1 because version consistency is required for reliable sync operations. Without matching versions, the target-side helper scripts may be incompatible with source-side orchestration logic, causing unpredictable failures. Self-installation also eliminates manual setup steps, aligning with "Frictionless Command UX". Configuration sync ensures both machines operate with the same settings.
 
 **Independent Test**: Can be fully tested by:
 1. Setting up a target machine without pc-switcher installed
@@ -75,12 +75,14 @@ When a user initiates sync from source to target, the orchestrator ensures the p
 4. Validating orchestrator installs pc-switcher on target
 5. Checking that versions now match
 6. Repeating with version mismatch (older version on target) to test upgrade path
+7. Verifying config is copied to target after user confirmation
+8. Testing config diff display when target has existing different config
 
 This delivers value by enabling zero-touch target setup and ensuring version consistency.
 
 **Constitution Alignment**:
 - Frictionless Command UX (automated installation, no manual setup)
-- Reliability Without Compromise (version consistency prevents compatibility issues)
+- Reliability Without Compromise (version consistency prevents compatibility issues, config consistency ensures predictable behavior)
 - Deliberate Simplicity (self-contained deployment, no separate install process)
 
 **Acceptance Scenarios**:
@@ -92,6 +94,12 @@ This delivers value by enabling zero-touch target setup and ensuring version con
 3. **Given** source and target both have version 0.4.0, **When** sync begins, **Then** orchestrator logs "Target pc-switcher version matches source (0.4.0), skipping installation" and proceeds immediately to next phase
 
 4. **Given** installation/upgrade fails on target (e.g., disk full, permissions issue), **When** the failure occurs, **Then** orchestrator logs CRITICAL error and does not proceed with sync
+
+5. **Given** target has no config file (`~/.config/pc-switcher/config.yaml`), **When** sync reaches config sync phase, **Then** orchestrator displays the source config content to the user, prompts "Apply this config to target? [y/N]", and if user confirms copies the config to target; if user declines, orchestrator aborts sync with message "Sync aborted: config required on target"
+
+6. **Given** target has existing config that differs from source, **When** sync reaches config sync phase, **Then** orchestrator displays a diff between source and target configs, prompts user with three options: (a) Accept config from source, (b) Keep current config on target, (c) Abort sync; user selects the desired action
+
+7. **Given** target config matches source config exactly, **When** sync reaches config sync phase, **Then** orchestrator logs "Target config matches source, skipping config sync" and proceeds without prompting
 
 ---
 
@@ -392,6 +400,12 @@ The terminal displays real-time sync progress including current job, operation p
 - **FR-006** `[Reliability Without Compromise]`: System MUST abort sync with CRITICAL log if the target machine's pc-switcher version is newer than the source version (preventing accidental downgrades)
 
 - **FR-007** `[Frictionless Command UX]`: If installation/upgrade fails, system MUST log CRITICAL error and abort sync
+
+- **FR-007a** `[Reliability Without Compromise]`: After pc-switcher installation/upgrade, system MUST sync configuration from source to target; if target has no config, system MUST display source config and prompt user for confirmation before copying; if user declines, system MUST abort sync
+
+- **FR-007b** `[Frictionless Command UX]`: If target has existing config that differs from source, system MUST display a diff and prompt user with three options: (a) Accept config from source, (b) Keep current config on target, (c) Abort sync
+
+- **FR-007c** `[Frictionless Command UX]`: If target config matches source config exactly, system MUST skip config sync with INFO log and proceed without prompting
 
 #### Safety Infrastructure
 
