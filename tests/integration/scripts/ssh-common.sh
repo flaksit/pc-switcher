@@ -59,8 +59,16 @@ ssh_accept_new() {
 # Use after key has been established by wait_for_ssh, ssh_first, or ssh_accept_new.
 # Fails if host key is not in known_hosts or doesn't match.
 #
+# Uses SSH ControlMaster for connection multiplexing to reduce overhead.
+# First call creates a master connection, subsequent calls reuse it.
+#
 # Usage: ssh_run <user@host> [ssh args...]
 # Example: ssh_run testuser@192.168.1.100 "sudo btrfs subvolume list /"
 ssh_run() {
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$@"
+    local control_path="/tmp/pcswitcher-ssh-%C"
+    ssh -o BatchMode=yes \
+        -o ControlMaster=auto \
+        -o ControlPath="$control_path" \
+        -o ControlPersist=60 \
+        "$@"
 }
