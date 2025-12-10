@@ -88,9 +88,7 @@ class FileLogger:
                 if isinstance(event, LogEvent) and event.level >= self._level:
                     # Convert to dict and add resolved hostname
                     event_dict = event.to_dict()
-                    event_dict["hostname"] = self._hostname_map.get(
-                        event.host, event.host.value
-                    )
+                    event_dict["hostname"] = self._hostname_map.get(event.host, event.host.value)
                     json_line = json.dumps(event_dict, default=str)
                     f.write(json_line + "\n")
                     f.flush()

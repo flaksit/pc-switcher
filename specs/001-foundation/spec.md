@@ -542,7 +542,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 - Source and target machines run Ubuntu 24.04 LTS with btrfs filesystems
 - User has sudo privileges on both machines for operations requiring elevation
-- Machines are connected via LAN during sync operations
+- Machines are reachable via SSH (LAN, VPN such as Tailscale, or other network) during sync operations
 - Terminal emulator supports ANSI escape codes for progress UI
 - User's `~/.ssh/config` contains target machine configurations if using aliases
 - Sufficient disk space exists on target for package installation
@@ -554,7 +554,6 @@ The terminal displays real-time sync progress including current job, operation p
 - Bi-directional sync or conflict resolution between divergent states
 - Automatic sync scheduling or daemon mode
 - GUI or web interface
-- Sync over internet (only LAN supported)
 - Windows or macOS support
 - Non-btrfs filesystems
 - Multi-user concurrent usage

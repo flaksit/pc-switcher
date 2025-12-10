@@ -41,8 +41,8 @@ cd tests/infrastructure
 ./scripts/provision-vms.sh
 
 # 3. Note the VM IPs
-export PC_SWITCHER_TEST_PC1_HOST=$(hcloud server ip pc-switcher-pc1)
-export PC_SWITCHER_TEST_PC2_HOST=$(hcloud server ip pc-switcher-pc2)
+export PC_SWITCHER_TEST_PC1_HOST=$(hcloud server ip pc1)
+export PC_SWITCHER_TEST_PC2_HOST=$(hcloud server ip pc2)
 ```
 
 The `provision-vms.sh` script creates VMs if they don't exist, installs Ubuntu with btrfs using Hetzner's installimage, configures the test user, and sets up inter-VM SSH access.
@@ -62,14 +62,18 @@ uv run pytest -m integration -v
 uv run pytest tests/integration/test_sync.py -v -m integration
 ```
 
-### Resetting VMs Between Test Runs
+### VM Reset Behavior
 
-VMs are automatically reset before CI test runs. For local development:
+VMs are automatically reset to baseline by the `integration_session` pytest fixture before tests run. You do **not** need to manually reset VMs.
+
+**Manual reset** is only needed when:
+- VMs are corrupted from an aborted test run
+- You want to reset without running the full test suite
 
 ```bash
-cd tests/infrastructure
-./scripts/reset-vm.sh pc1  # Reset pc1 to baseline
-./scripts/reset-vm.sh pc2  # Reset pc2 to baseline
+# Manual reset (only if needed)
+tests/infrastructure/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC1_HOST
+tests/infrastructure/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC2_HOST
 ```
 
 The reset script restores VMs to their baseline snapshots (`/.snapshots/baseline/@` and `/.snapshots/baseline/@home`) using btrfs snapshot operations. This is much faster than reprovisioning (~20-30 seconds vs ~10 minutes).
@@ -83,22 +87,26 @@ The reset script restores VMs to their baseline snapshots (`/.snapshots/baseline
 | Secret | Description |
 |--------|-------------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
-| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519) |
-| `PC1_TEST_HOST` | IP/hostname of pc1 test VM |
-| `PC2_TEST_HOST` | IP/hostname of pc2 test VM |
+| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519 format) |
+
+Note: VM IP addresses are retrieved dynamically via `hcloud server ip` after auto-provisioning. No need to store VM IPs as secrets.
 
 ### Workflow Triggers
 
 - **Unit tests**: Every push to any branch
-- **Integration tests**: PRs to `main` branch only
+- **Integration tests**: PRs to `main` branch (from main repository only - forks are skipped with notice)
 - **Manual integration tests**: Via workflow dispatch on any branch
+
+### Fork PRs
+
+Integration tests are automatically skipped for PRs from forked repositories because GitHub does not expose secrets to forks. Unit tests still run normally. A notice is displayed explaining the skip.
 
 ### Viewing Test Results
 
 1. Go to Actions tab in GitHub
 2. Select the workflow run
 3. Expand the test job to see pytest output
-4. Download artifacts for detailed logs
+4. Download artifacts for detailed logs (pytest output, provisioning logs)
 
 ---
 
@@ -116,12 +124,15 @@ export PC_SWITCHER_TEST_PC2_HOST="<pc2-ip>"
 
 Another test run is in progress. Check who holds the lock:
 ```bash
-ssh testuser@$PC_SWITCHER_TEST_PC1_HOST "cat /tmp/pc-switcher-integration-test.lock"
+./tests/infrastructure/scripts/lock.sh "" status
+# Or directly via hcloud:
+hcloud server describe pc1 -o json | jq '.labels'
 ```
 
 To force-release a stuck lock:
 ```bash
-ssh testuser@$PC_SWITCHER_TEST_PC1_HOST "rm -rf /tmp/pc-switcher-integration-test.lock*"
+hcloud server remove-label pc1 lock_holder
+hcloud server remove-label pc1 lock_acquired
 ```
 
 ### "Baseline snapshot missing"
@@ -129,8 +140,8 @@ ssh testuser@$PC_SWITCHER_TEST_PC1_HOST "rm -rf /tmp/pc-switcher-integration-tes
 This means `/.snapshots/baseline/@` or `/.snapshots/baseline/@home` doesn't exist. Reprovision the VMs:
 ```bash
 cd tests/infrastructure
-./scripts/provision.sh pc-switcher-pc1
-./scripts/provision.sh pc-switcher-pc2
+./scripts/provision.sh pc1
+./scripts/provision.sh pc2
 ```
 
 ### SSH Connection Refused
@@ -154,8 +165,8 @@ Test VMs cost ~EUR 7/month total when running continuously. To reduce costs:
 
 ```bash
 # Destroy VMs when not needed
-hcloud server delete pc-switcher-pc1
-hcloud server delete pc-switcher-pc2
+hcloud server delete pc1
+hcloud server delete pc2
 
 # VMs will be reprovisioned automatically on next integration test run
 ```

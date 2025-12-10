@@ -312,7 +312,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **SC-004**: Manual playbook covers all visual elements for release verification
 
-- **SC-005**: Test infrastructure costs remain under EUR 10/month; cost is constrained by infrastructure choices (VM type, provider) rather than active monitoring
+- **SC-005**: Test infrastructure costs remain under EUR 10/month (see FR-012 for details)
 
 - **SC-006**: Developer guide enables a new developer to write a working integration test without additional guidance
 

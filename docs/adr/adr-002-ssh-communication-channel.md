@@ -63,7 +63,7 @@ See `docs/adr/considerations/adr-002-ssh-communication-channel.md` for detailed 
 **Negative:**
 - Requires careful output buffering on target for real-time progress (must use explicit flush)
 - All remote operations must be designed as discrete, stateless scripts (no persistent daemons)
-- User must have SSH access to target (standard assumption for LAN sync)
+- User must have SSH access to target (standard assumption for network-based sync)
 
 ## References
 - FR-004: Support for SSH config specification

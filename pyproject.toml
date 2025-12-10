@@ -16,6 +16,7 @@ dependencies = [
     "pytimeparse2>=1.7.1",
     "pyyaml>=6.0.3",
     "rich>=14.2.0",
+    "semver>=3.0.4",
     "structlog>=25.5.0",
     "typer>=0.20.0",
 ]
@@ -48,3 +49,18 @@ source = "uv-dynamic-versioning"
 enable = true
 vcs = "git"
 style = "pep440"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "-v",
+    "-m", "not integration",
+]
+markers = [
+    "integration: Integration tests (require VM infrastructure)",
+    "slow: Tests that take >5 seconds",
+]

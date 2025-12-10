@@ -51,7 +51,7 @@ The machines are used for development (coding, building, testing), general produ
 ## Environment
 
 - All machines run Ubuntu 24.04 LTS
-- Machines are connected to same LAN (1Gb ethernet) during sync
+- Machines must be reachable via SSH during sync (LAN, VPN such as Tailscale, or other network)
 - All machines have a single btrfs filesystem with a flat layout (all synced data on one filesystem)
 
 ## Workflow
@@ -75,7 +75,6 @@ A few examples:
 - User needs to logout from desktop environment before sync
 - User needs to execute some commands in a specific program before/after sync
 - Subvolumes need to be created for certain directories
-- Sync can only be done when both machines are on the same LAN
 
 However, everything that can be automated should be automated.
 

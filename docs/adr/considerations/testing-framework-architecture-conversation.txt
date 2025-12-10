@@ -236,7 +236,7 @@ fresh OS with the right btrfs layout). However, then the tests that need the
 negligible. Not too slow?
 - You suggested to use Vagrant. I have no experience with that. Is that a 
 good idea? Still relevant if using Hetzner cloud VMs? I have experience with
- teraform (tofu), if that would do the job equally well. Hetzner has a
+ terraform (tofu), if that would do the job equally well. Hetzner has a
 terraform provider.
 
 Q1b: For good testing, we need root btrfs filesystem. No mockery. With 
@@ -381,8 +381,8 @@ What do you think?
   Q1: VM Specifications
 
   What Hetzner VM type should we use? Suggestions:
-  - CX22 (2 vCPU, 4GB RAM, €4.35/month) - probably sufficient
-  - CAX11 (2 ARM vCPU, 4GB RAM, €3.79/month) - cheaper but ARM
+  - CX23 (2 vCPU, 4GB RAM, €3.50/month) - probably sufficient
+  - CAX11 (2 ARM vCPU, 4GB RAM, €3.79/month) - ARM :-(
 
   Do you care about testing on ARM, or is x86 sufficient?
 
@@ -470,7 +470,7 @@ What do you think?
   ---
   My Questions Summarized
 
-  1. VM type: CX22 (x86) or CAX11 (ARM)?
+  1. VM type: CX23 (x86) or CAX11 (ARM)?
   2. Btrfs setup method: Custom image, cloud-init, or installimage?
   3. Test isolation: Per-test reset or per-run reset?
   4. Local dev: Should local VM testing be supported?
@@ -487,7 +487,7 @@ For 1.
  needs a reboot. Use `btrfs set-default` to set the default subvolume for
 next boot. But that's probably what you were thinking already.
 - We'll need some script to create, tear down, setup and configure the VMs 
-anyway, in whatever technology (bash script, teraform, ...)
+anyway, in whatever technology (bash script, terraform, ...)
 
 For 2.: 2 VMs
 
@@ -495,8 +495,7 @@ For 3.: tofu it is
 
 For 4.: Thanks for the info. We'll skip this for now. See my first remark.
 
-Q1: CX22 doesn't exist anymore. XC32 it is. No arm. My machines are all 
-x86_64.
+Q1: No arm. My machines are all x86_64.
 
 Q2: I follow your recommendation
 
@@ -734,7 +733,7 @@ an .md in docs/ and write your implementation plan for all this in another
   chapter
   5. Complete unit test suite (15+ test files)
   6. Complete integration test suite (12+ test files)
-  7. VM infrastructure via OpenTofu (2 Hetzner CX32 VMs)
+  7. VM infrastructure via OpenTofu (2 Hetzner CX23 VMs)
   8. GitHub Actions workflow
 
   Key Coverage:
@@ -766,7 +765,7 @@ an .md in docs/ and write your implementation plan for all this in another
      │                                |                                        │
      │ |------------------|--------------------------------|-------------------│
      │ -------------------------------|                                        │
-     │ | VM Provider      | Hetzner Cloud (CX32)           | CI-compatible,    │
+     │ | VM Provider      | Hetzner Cloud (CX23)           | CI-compatible,    │
      │ real btrfs root                   |                                     │
      │ | Provisioning     | OpenTofu                       | User has          │
      │ experience, works for both CI and local |                               │
@@ -882,7 +881,7 @@ an .md in docs/ and write your implementation plan for all this in another
      │                                                                         │
      │ tests/infrastructure/                                                   │
      │ ├── README.md               # Documentation                             │
-     │ ├── main.tf                 # OpenTofu - 2 Hetzner CX32 VMs             │
+     │ ├── main.tf                 # OpenTofu - 2 Hetzner CX23 VMs             │
      │ ├── variables.tf            # Variables (token, SSH key path)           │
      │ ├── outputs.tf              # VM IPs                                    │
      │ ├── versions.tf             # Provider versions                         │

@@ -43,7 +43,7 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 
 **Testing**: pytest with asyncio support (`pytest-asyncio`), mocking for SSH operations
 
-**Target Platform**: Ubuntu 24.04 LTS with btrfs filesystem, 1Gb LAN
+**Target Platform**: Ubuntu 24.04 LTS with btrfs filesystem, SSH connectivity (LAN, VPN, etc.)
 
 **Project Type**: Single installable Python package
 
@@ -53,7 +53,7 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 - Graceful interrupt with no orphaned processes (SC-006)
 
 **Constraints**:
-- Machines connected via LAN during sync
+- Machines reachable via SSH (LAN, VPN such as Tailscale, or other network) during sync
 - User has sudo privileges on both machines
 - btrfs filesystem required for snapshot safety
 - Single concurrent sync (locking mechanism)

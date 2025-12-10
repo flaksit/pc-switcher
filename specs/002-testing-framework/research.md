@@ -67,12 +67,17 @@ markers = [
 import os
 import pytest
 
+REQUIRED_ENV_VARS = [
+    "PC_SWITCHER_TEST_PC1_HOST",
+    "PC_SWITCHER_TEST_PC2_HOST",
+]
+
 def pytest_collection_modifyitems(config, items):
     """Skip integration tests if VM environment not configured."""
-    vm_host = os.getenv("PC_SWITCHER_TEST_PC1_HOST")
+    missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
 
-    if not vm_host:
-        skip_msg = "Skipping integration tests: VM environment not configured"
+    if missing_vars:
+        skip_msg = f"Skipping integration tests: VM environment not configured (missing: {', '.join(missing_vars)})"
         for item in items:
             if "integration" in item.keywords:
                 item.add_marker(pytest.mark.skip(reason=skip_msg))
@@ -114,7 +119,7 @@ if ! hcloud ssh-key describe pc-switcher-test-key &>/dev/null; then
 fi
 
 # Create VMs if needed
-for VM in pc-switcher-pc1 pc-switcher-pc2; do
+for VM in pc1 pc2; do
     if hcloud server describe "$VM" &>/dev/null; then
         echo "VM $VM already exists, skipping creation"
     else
@@ -135,14 +140,14 @@ echo "VMs created. Run provision.sh for each VM to install btrfs and configure."
 
 ```bash
 # Destroy VMs when not needed
-hcloud server delete pc-switcher-pc1
-hcloud server delete pc-switcher-pc2
+hcloud server delete pc1
+hcloud server delete pc2
 hcloud ssh-key delete pc-switcher-test-key  # optional
 ```
 
 ### Alternatives Considered
 - **OpenTofu/Terraform**: Adds state management complexity without benefit for 2 VMs
-- **Smaller VM types**: CX11 (2GB RAM) may be insufficient for btrfs operations
+- **Smaller VM types**: CX11 (2GB RAM) may be insufficient for btrfs operations (Note: doesn't exist anymore)
 
 ---
 
@@ -178,8 +183,12 @@ ssh root@$VM "btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@home /mnt
 # 4. Unmount and reboot
 ssh root@$VM "umount /mnt/btrfs"
 ssh root@$VM "reboot" || true
-sleep 20
-# Wait for VM to come back online
+
+# Wait for VM to come back online (polling loop, not fixed sleep)
+sleep 15
+until ssh -o ConnectTimeout=5 -o BatchMode=yes root@$VM true 2>/dev/null; do
+    sleep 5
+done
 
 # 5. Clean up old subvolumes after reboot
 ssh root@$VM "mount -o subvolid=5 /dev/sda2 /mnt/btrfs"
@@ -210,12 +219,18 @@ Active subvolumes (`@` and `@home`) are at the btrfs top level, not under `/.sna
 
 ## 5. Lock Mechanism
 
-### Decision: File-based lock on pc1 VM at `/tmp/pc-switcher-integration-test.lock`
+### Decision: Hetzner Server Labels on pc1
 
 ### Rationale
-- Simple implementation matching existing lock module patterns
-- Lock file contains holder identity and timestamp for debugging
-- `/tmp` location cleared on reboot (automatic cleanup)
+- Lock state stored externally to VM state (survives reboots and snapshot rollbacks)
+- Simple implementation using hcloud CLI
+- Labels (`lock_holder`, `lock_acquired`) contain holder identity and timestamp for debugging
+- Accessible from any machine with HCLOUD_TOKEN
+
+**Note**: Originally considered file-based lock at `/tmp/pc-switcher-integration-test.lock`, but this was rejected because:
+1. `/tmp` is typically a tmpfs (cleared on reboot)
+2. Snapshot rollback restores VM to baseline state (pre-lock creation)
+3. Result: Lock would be destroyed during VM reset, breaking concurrency control
 
 ### Lock Scope
 
@@ -227,52 +242,32 @@ The lock protects **integration test execution only**, not provisioning:
 
 This avoids over-complicating the provisioning workflow while ensuring test isolation.
 
-### Lock File Format
+### Lock Labels
 
-```json
-{
-  "holder": "CI-job-12345",
-  "acquired": "2025-12-05T10:30:00Z",
-  "hostname": "github-runner-abc"
-}
-```
+| Label | Value |
+|-------|-------|
+| `lock_holder` | CI job ID or username |
+| `lock_acquired` | ISO 8601 timestamp |
 
-### Lock Script
+### Lock Operations
 
 ```bash
-#!/bin/bash
-# tests/infrastructure/scripts/lock.sh
+# Check status
+./tests/infrastructure/scripts/lock.sh "" status
 
-LOCK_FILE="/tmp/pc-switcher-integration-test.lock"
-HOLDER="$1"
-ACTION="$2"
-TIMEOUT=300  # 5 minutes
+# Acquire (with 5 min timeout)
+./tests/infrastructure/scripts/lock.sh "CI-job-12345" acquire
 
-case "$ACTION" in
-  acquire)
-    # Try to acquire lock with timeout
-    end_time=$(($(date +%s) + TIMEOUT))
-    while [ $(date +%s) -lt $end_time ]; do
-      if mkdir "$LOCK_FILE.d" 2>/dev/null; then
-        echo "{\"holder\": \"$HOLDER\", \"acquired\": \"$(date -Iseconds)\"}" > "$LOCK_FILE"
-        echo "Lock acquired by $HOLDER"
-        exit 0
-      fi
-      current_holder=$(cat "$LOCK_FILE" 2>/dev/null | jq -r .holder)
-      echo "Lock held by $current_holder, waiting..."
-      sleep 10
-    done
-    echo "ERROR: Failed to acquire lock after ${TIMEOUT}s" >&2
-    exit 1
-    ;;
-  release)
-    rm -rf "$LOCK_FILE.d" "$LOCK_FILE"
-    echo "Lock released by $HOLDER"
-    ;;
-esac
+# Release
+./tests/infrastructure/scripts/lock.sh "CI-job-12345" release
+
+# Manual cleanup for stuck locks
+hcloud server remove-label pc1 lock_holder
+hcloud server remove-label pc1 lock_acquired
 ```
 
 ### Alternatives Considered
+- **File-based lock on VM**: Rejected - destroyed by reboot/snapshot rollback
 - **Database-based lock**: Over-engineering for two users (dev + CI)
 - **GitHub Actions artifact lock**: Doesn't prevent local dev conflicts
 - **Flock-based lock**: Requires persistent SSH connection
@@ -282,21 +277,68 @@ esac
 
 ## 6. GitHub Actions CI/CD
 
-### Decision: Two workflows - ci.yml (unit tests on push) and integration.yml (integration tests on PR + manual)
+### Decision: Single consolidated workflow `test.yml` handling all test scenarios
 
 ### Rationale
-- Separation allows different concurrency controls
-- Unit tests should never be blocked by integration test queue
+- Consolidated workflow is simpler to maintain
+- Allows sharing setup steps (checkout, Python setup, dependency caching) between unit and integration test jobs
+- Different jobs within the same workflow can have different concurrency controls
 - Manual trigger enables testing feature branches before PR
 
-### Concurrency Configuration
+### Workflow Structure
 
 ```yaml
-# .github/workflows/integration.yml
-concurrency:
-  group: pc-switcher-integration
-  cancel-in-progress: false  # Queue instead of cancel
+# .github/workflows/test.yml
+name: Tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  lint-and-unit:
+    # Runs on every push, no concurrency restriction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ... setup steps ...
+      - run: uv run basedpyright
+      - run: uv run ruff check
+      - run: uv run pytest tests/unit tests/contract -v
+
+  integration:
+    # Only on PRs to main or manual trigger
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch'
+    needs: lint-and-unit
+    runs-on: ubuntu-latest
+    concurrency:
+      group: integration-tests
+      cancel-in-progress: false  # Queue instead of cancel
+    steps:
+      - uses: actions/checkout@v4
+      # ... setup steps ...
+      - name: Provision VMs
+        run: ./tests/infrastructure/scripts/provision-vms.sh
+      - name: Reset VMs
+        run: |
+          ./tests/infrastructure/scripts/reset-vm.sh pc1
+          ./tests/infrastructure/scripts/reset-vm.sh pc2
+      - run: uv run pytest -m integration -v
 ```
+
+### Fork PR Detection
+
+Integration tests are skipped for forked PRs using the condition:
+```yaml
+if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch'
+```
+
+This ensures integration tests only run when:
+1. The PR is from the same repository (not a fork), OR
+2. The workflow was manually triggered
 
 ### Secret Handling
 - `HCLOUD_TOKEN`: Hetzner API token (repository secret)
