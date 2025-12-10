@@ -193,9 +193,7 @@ class Version:
         pv = self._pkg_version
 
         if len(pv.release) != 3:
-            raise ValueError(
-                f"Version must have exactly 3 release parts for SemVer: {pv}"
-            )
+            raise ValueError(f"Version must have exactly 3 release parts for SemVer: {pv}")
 
         major, minor, patch = pv.release
 
@@ -320,22 +318,12 @@ class Version:
         i = 0
 
         # Check for post.N at start
-        if (
-            i < len(parts)
-            and parts[i] == "post"
-            and i + 1 < len(parts)
-            and parts[i + 1].isdigit()
-        ):
+        if i < len(parts) and parts[i] == "post" and i + 1 < len(parts) and parts[i + 1].isdigit():
             post = int(parts[i + 1])
             i += 2
 
             # Check for dev.M after post
-            if (
-                i < len(parts)
-                and parts[i] == "dev"
-                and i + 1 < len(parts)
-                and parts[i + 1].isdigit()
-            ):
+            if i < len(parts) and parts[i] == "dev" and i + 1 < len(parts) and parts[i + 1].isdigit():
                 dev = int(parts[i + 1])
                 i += 2
 
@@ -413,8 +401,7 @@ def get_this_version() -> str:
         return get_pkg_version("pcswitcher")
     except PackageNotFoundError as e:
         raise PackageNotFoundError(
-            "Cannot determine pc-switcher version. Package metadata not found. "
-            "Is pc-switcher installed correctly?"
+            "Cannot determine pc-switcher version. Package metadata not found. Is pc-switcher installed correctly?"
         ) from e
 
 

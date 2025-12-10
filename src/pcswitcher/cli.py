@@ -566,9 +566,7 @@ def update(
     try:
         installed = Version.parse(installed_version_str)
     except ValueError:
-        console.print(
-            f"[bold red]Error:[/bold red] Cannot parse installed version: {installed_version_str}"
-        )
+        console.print(f"[bold red]Error:[/bold red] Cannot parse installed version: {installed_version_str}")
         sys.exit(1)
 
     if installed != target:
