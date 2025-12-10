@@ -146,9 +146,7 @@ def _display_log_file(log_file: Path) -> None:
                     color = level_colors.get(level, "white")
 
                     # Format timestamp (just time portion if full ISO format)
-                    time_part = (
-                        timestamp.split("T")[1].split(".")[0] if "T" in timestamp else timestamp
-                    )
+                    time_part = timestamp.split("T")[1].split(".")[0] if "T" in timestamp else timestamp
 
                     # Build formatted output
                     text = Text()
@@ -160,9 +158,7 @@ def _display_log_file(log_file: Path) -> None:
 
                     # Add context (all other fields besides the standard ones)
                     context_fields = {
-                        k: v
-                        for k, v in entry.items()
-                        if k not in {"timestamp", "level", "job", "host", "event"}
+                        k: v for k, v in entry.items() if k not in {"timestamp", "level", "job", "host", "event"}
                     }
                     if context_fields:
                         ctx_str = " ".join(f"{k}={v}" for k, v in context_fields.items())
@@ -271,8 +267,7 @@ async def _async_run_sync(target: str, cfg: Configuration) -> int:
                     )
                 except TimeoutError:
                     console.print(
-                        f"[red]Cleanup timeout ({CLEANUP_TIMEOUT_SECONDS}s) exceeded, "
-                        "forcing termination[/red]"
+                        f"[red]Cleanup timeout ({CLEANUP_TIMEOUT_SECONDS}s) exceeded, forcing termination[/red]"
                     )
 
             console.print("[yellow]Sync interrupted by user[/yellow]")

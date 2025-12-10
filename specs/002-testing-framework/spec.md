@@ -201,6 +201,8 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **FR-003**: Integration tests MUST run on isolated test infrastructure that is separate from developer machines and CI runners, preventing any possibility of damaging production systems
 
+- **FR-003a**: Contract tests MUST verify that MockExecutor and real executor implementations (LocalExecutor, RemoteExecutor) adhere to the same behavioral interface, ensuring mocks remain reliable representations of production behavior
+
 - **FR-004**: Test VMs MUST be reset to a clean baseline state before each integration test session, ensuring test isolation and reproducibility; reset MUST fail with an actionable error if baseline snapshots are missing or invalid
 
 - **FR-005**: Concurrent test runs MUST be prevented via a locking mechanism that stores holder identity and acquisition time; stuck locks require manual cleanup (documented in operational guide)
@@ -229,7 +231,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **FR-011a**: Test infrastructure MUST consist of exactly two VMs (pc1 and pc2) to mirror the real pc-switcher sync architecture; each VM MUST have btrfs root filesystem with `@` and `@home` subvolumes
 
-- **FR-012**: VMs and related test infrastructure costs MUST remain under EUR 10/month on continuous run basis
+- **FR-012**: VMs and related test infrastructure costs MUST remain under EUR 10/month on continuous run basis; VMs are expected to remain running persistently (reset via btrfs snapshots, not reprovisioning); manual destruction is acceptable when extended downtime is expected
 
 #### CI/CD Requirements
 
@@ -245,7 +247,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **FR-017a**: CI MUST skip integration tests with a clear notice when secrets are unavailable (e.g., forked PRs); unit tests MUST still run in this case
 
-- **FR-017b**: Integration tests on forked PRs are NOT supported; CI MUST clearly indicate this when a fork PR is detected
+- **FR-017b**: Integration tests on forked PRs are NOT supported; CI MUST skip (not fail) integration tests and clearly indicate this when a fork PR is detected
 
 - **FR-017c**: CI MUST preserve test logs and artifacts (pytest output, provisioning logs, reset logs) to enable debugging of failed runs
 
@@ -267,7 +269,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **FR-024**: Developer guide MUST include troubleshooting section for common integration test failures
 
-- **FR-025**: Operational guide MUST document all required CI secrets, their purposes, and how to obtain/generate them
+- **FR-025**: Operational guide MUST document all required CI secrets, their purposes, and how to obtain/generate them; Developer guide MUST document how to configure equivalent secrets for local integration test runs (e.g., environment variables or config file)
 
 - **FR-026**: Operational guide MUST provide step-by-step VM provisioning instructions including cloud provider configuration and SSH key management
 
@@ -284,6 +286,10 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - **FR-032**: Architecture documentation MUST provide links to ADR-006 and related decision records
 
 - **FR-033**: Documentation MUST be organized as separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md` (developer guide), `docs/testing-ops-guide.md` (operational guide), `docs/testing-playbook.md` (manual playbook)
+
+#### Test Fixture Requirements
+
+- **FR-034**: Testing framework MUST provide minimal pytest fixtures for VM command execution, enabling integration tests to run commands on test VMs via a RemoteExecutor-like interface
 
 ### Key Entities
 
@@ -306,7 +312,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 - **SC-004**: Manual playbook covers all visual elements for release verification
 
-- **SC-005**: Test infrastructure costs remain under EUR 10/month; cost is constrained by infrastructure choices (VM type, provider) rather than active monitoring
+- **SC-005**: Test infrastructure costs remain under EUR 10/month (see FR-012 for details)
 
 - **SC-006**: Developer guide enables a new developer to write a working integration test without additional guidance
 
@@ -320,6 +326,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - GitHub repository has GitHub Actions enabled
 - Developers have SSH key pairs for VM access
 - Network connectivity allows SSH to cloud provider IPs
+- Python 3.14 is used (per ADR-003)
 
 ## Out of Scope
 

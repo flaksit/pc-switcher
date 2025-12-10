@@ -2,6 +2,34 @@
 
 This document describes the testing framework for pc-switcher, including test categories, infrastructure setup, and how to run tests.
 
+## Overview
+
+The testing framework uses a three-tier architecture designed to balance safety, speed, and thoroughness. See [ADR-006: Testing Framework](adr/adr-006-testing-framework.md) for the architectural decision rationale.
+
+### Three-Tier Test Structure
+
+```mermaid
+flowchart TB
+    subgraph "Tier 1: Unit Tests"
+        UT[Unit Tests<br/>tests/unit/]
+        CT[Contract Tests<br/>tests/contract/]
+        UT_DESC[Fast, safe, no external dependencies<br/>Run on every commit]
+    end
+    subgraph "Tier 2: Integration Tests"
+        IT[Integration Tests<br/>tests/integration/]
+        IT_DESC[Real btrfs + SSH operations<br/>VM-isolated, run on PRs]
+    end
+    subgraph "Tier 3: Manual Verification"
+        MV[Testing Playbook<br/>docs/testing-playbook.md]
+        MV_DESC[Visual verification<br/>Run before releases]
+    end
+
+    UT --> CT
+    CT --> UT_DESC
+    IT --> IT_DESC
+    MV --> MV_DESC
+```
+
 ## Test Categories
 
 ### A) Unit Tests (Fast, No VMs)
@@ -43,7 +71,7 @@ This document describes the testing framework for pc-switcher, including test ca
 
 **When to run:** Before releases.
 
-**Location:** `specs/001-foundation/testing-playbook.md`
+**Location:** `docs/testing-playbook.md`
 
 ## VM Infrastructure
 
@@ -53,8 +81,41 @@ This document describes the testing framework for pc-switcher, including test ca
 graph LR
     A["pc1<br/>(CX23 VM)<br/><br/>- btrfs root<br/>- @ subvol<br/>- @home subvol<br/>- /.snapshots"]
     B["pc2<br/>(CX23 VM)<br/><br/>- btrfs root<br/>- @ subvol<br/>- @home subvol<br/>- /.snapshots"]
-    
+
     A -->|SSH| B
+```
+
+### Component Interaction
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer/CI
+    participant Lock as Hetzner Server Labels<br/>(Lock)
+    participant VM1 as pc1 VM
+    participant VM2 as pc2 VM
+    participant Pytest as pytest Suite
+
+    Dev->>Lock: Acquire lock (via labels API)
+    alt Lock acquired
+        Lock-->>Dev: Success
+        Dev->>VM1: Check existence
+        Dev->>VM2: Check existence
+        alt VMs don't exist
+            Dev->>VM1: Provision with btrfs
+            Dev->>VM2: Provision with btrfs
+            Dev->>VM1: Create baseline snapshot
+            Dev->>VM2: Create baseline snapshot
+        end
+        Pytest->>VM1: Reset to baseline (via fixture)
+        Pytest->>VM2: Reset to baseline (via fixture)
+        Pytest->>VM1: SSH + btrfs operations
+        Pytest->>VM2: SSH + btrfs operations
+        Pytest-->>Dev: Test results
+        Dev->>Lock: Release lock
+    else Lock held by other
+        Lock-->>Dev: Error: locked by [holder]
+        Dev->>Dev: Fail fast
+    end
 ```
 
 ### VM Specifications
@@ -68,27 +129,63 @@ graph LR
 | Location | fsn1 (Falkenstein) |
 | Cost | ~€3.50/month per VM |
 
+### Design Rationale
+
+#### Why VM Isolation?
+
+PC-switcher performs destructive operations that cannot be safely executed on developer machines:
+
+- **Root btrfs operations**: Creating, deleting, and rolling back snapshots of system subvolumes
+- **Filesystem modifications**: Writing to `/`, `/home`, and other system paths
+- **SSH key manipulation**: Generating and exchanging keys between machines
+- **System state changes**: Modifying `/etc`, user accounts, and systemd services
+
+Running these operations locally would risk data loss or system corruption if bugs exist in either the implementation or the test code itself. Dedicated VMs provide complete isolation where failures affect only disposable test infrastructure.
+
+#### Why Hetzner Server Labels for Locking?
+
+The lock mechanism must survive VM reboots and resets to remain effective. Hetzner Server Labels provide:
+
+- **Persistence**: Labels survive VM reboots, snapshots, and even VM recreation
+- **Atomic operations**: Hetzner API ensures consistent read-modify-write semantics
+- **No local state**: Lock state lives in cloud infrastructure, not on VMs
+- **Simplicity**: No need for dedicated lock server or database
+
+Alternative approaches (file-based locks on VM, external Redis/etcd) would either be lost during VM reset or require additional infrastructure.
+
+#### Why Btrfs Snapshot Reset?
+
+Resetting VMs to a clean baseline state before each test run ensures test isolation and reproducibility. Btrfs snapshot rollback provides:
+
+- **Speed**: Reset completes in < 30 seconds (snapshot + reboot)
+- **Completeness**: Entire filesystem tree returns to exact baseline state
+- **Efficiency**: Copy-on-write means snapshots consume minimal space
+- **Reliability**: Atomic operation - either fully succeeds or fully fails
+
+Alternative approaches and their drawbacks:
+
+- **Hetzner VM snapshots**: Slow (5-10 minutes), expensive (charged per snapshot)
+- **VM recreation**: Very slow (10-15 minutes), complex orchestration
+- **Manual cleanup scripts**: Fragile, incomplete, high maintenance burden
+
 ### Provisioning
 
-VMs are provisioned using OpenTofu (Terraform-compatible) with the Hetzner Cloud provider.
+VMs are provisioned exclusively by GitHub CI (no local provisioning). This ensures all authorized SSH keys are properly configured from secrets.
 
-**Initial Setup (one-time):**
+**Triggering Provisioning:**
 ```bash
-cd tests/infrastructure
-
-# 1. Create VMs with standard Ubuntu image
-tofu init
-tofu apply
-
-# 2. Convert to btrfs using Hetzner's installimage (runs in rescue mode)
-./scripts/provision.sh pc-switcher-pc1
-./scripts/provision.sh pc-switcher-pc2
-
-# 3. Configure /etc/hosts so VMs can reach each other
-./scripts/configure-hosts.sh
+# Trigger CI workflow (VMs are created automatically if they don't exist)
+gh workflow run test.yml
 ```
 
-The provision script boots each VM into rescue mode and uses Hetzner's `installimage` tool to install Ubuntu with a btrfs root filesystem and the required subvolume layout. This is a one-time operation; after provisioning, VMs persist and are reset using btrfs snapshot rollback.
+The `provision-test-infra.sh` script (run by CI):
+1. Creates pc1 and pc2 VMs (if they don't exist)
+2. Installs Ubuntu with btrfs using Hetzner's `installimage`
+3. Injects all `SSH_AUTHORIZED_KEY_*` secrets into VMs
+4. Runs `configure-hosts.sh` to setup inter-VM networking
+5. Creates baseline snapshots
+
+This is a one-time operation; after provisioning, VMs persist and are reset using btrfs snapshot rollback.
 
 ### Btrfs Layout
 
@@ -105,12 +202,15 @@ Each VM has the following btrfs subvolume layout (flat layout):
 Before each test run, VMs are reset to a clean baseline state using btrfs snapshot rollback (not Hetzner VM snapshots, which are slow):
 
 1. Create read-only baseline snapshots of `@` and `@home` during initial provisioning
-2. Before each test run:
-   a. Delete any test artifacts in `/.snapshots/pc-switcher/` (preserving baseline snapshots)
-   b. Create read-write snapshots from the baseline snapshots for both `@` and `@home`
-   c. Set the new `@` snapshot as default using `btrfs set-default`
-   d. Update `/home` mount to use the new `@home` snapshot
-   e. Reboot VM (~10-20 seconds)
+2. Before each test session (automatically via `integration_session` fixture which calls `reset-vm.sh`):
+   a. Delete any test artifacts in `/.snapshots/pc-switcher/test-*`
+   b. Mount the top-level filesystem as /mnt/btrfs
+   c. mv /mnt/btrfs/@ /mnt/btrfs/@_old
+   d. btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@ /mnt/btrfs/@
+   e. mv /mnt/btrfs/@home /mnt/btrfs/@home_old
+   f. btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@home /mnt/btrfs/@home
+   g. Reboot VM (~10-20 seconds)
+   h. Remove old subvolumes `/mnt/btrfs/@_old` and `/mnt/btrfs/@home_old`
 3. Clean state ready for tests
 
 This ensures test isolation without recreating VMs. The btrfs rollback is much faster than Hetzner's VM snapshot restore.
@@ -121,17 +221,19 @@ To prevent conflicts between dev and CI test runs:
 
 ```bash
 # Lock is acquired at start of test session
-tests/infrastructure/scripts/lock.sh $HOLDER acquire
+tests/integration/scripts/lock.sh $HOLDER acquire
 
 # Lock is released at end
-tests/infrastructure/scripts/lock.sh $HOLDER release
+tests/integration/scripts/lock.sh $HOLDER release
 ```
 
-The lock file is stored on pc1 VM at `/tmp/pc-switcher-integration-test.lock`.
+The lock is stored as **Hetzner Server Labels** on the `pc1` server (not as a file on the VM). This approach survives VM reboots and snapshot rollbacks:
 
-- Lock holder info includes: CI job ID or username
-- Maximum wait time: 5 minutes
-- If lock cannot be acquired, tests fail with clear error
+- **Lock labels**: `lock_holder` (identifier) and `lock_acquired` (ISO8601 timestamp)
+- **Lock holder format**: `ci-<run_id>` for CI jobs, `local-<username>` for local runs
+- **Maximum wait time**: 5 minutes with 10-second retry intervals
+- **Atomic acquisition**: Uses Hetzner API with 1-second verification to detect race conditions
+- If lock cannot be acquired, tests fail with clear error showing current holder
 
 ## Running Tests
 
@@ -188,7 +290,9 @@ The CI pipeline runs:
 | Secret | Description |
 |--------|-------------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
-| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access |
+| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for CI VM access |
+| `SSH_AUTHORIZED_KEY_CI` | CI public key for VM access |
+| `SSH_AUTHORIZED_KEY_*` | Developer public keys (one per developer/machine) |
 
 ### Concurrency Control
 
@@ -232,9 +336,9 @@ testpaths = tests
 
 ### For Integration Test Development
 
-1. Ensure VMs are provisioned: `cd tests/infrastructure && tofu apply`
-2. Reset VMs to baseline: `./scripts/reset-vm.sh`
-3. Run integration tests with env vars set
+1. Ensure your SSH public key is registered as a `SSH_AUTHORIZED_KEY_*` secret
+2. Ensure VMs exist (trigger CI if needed: `gh workflow run test.yml`)
+3. Run integration tests with env vars set (VMs are automatically reset by the pytest fixture)
 4. Tests clean up after themselves
 
 ### For Testing install.sh
@@ -246,3 +350,18 @@ Since `install.sh` downloads from GitHub, you must:
 3. Run integration tests
 
 The CI workflow automatically handles this by using the PR branch.
+
+## Related Documentation
+
+### Architecture Decision Records
+
+- [ADR-006: Testing Framework](adr/adr-006-testing-framework.md) - Core architectural decisions for the testing framework
+- [ADR-005: Asyncio Concurrency](adr/adr-005-asyncio-concurrency.md) - Async execution patterns used in tests
+- [ADR-002: SSH Communication Channel](adr/adr-002-ssh-communication-channel.md) - SSH protocol used in integration tests
+
+### Additional Guides
+
+- [Testing Infrastructure](testing-infrastructure.md) - VM provisioning flow and scripts
+- [Testing Developer Guide](testing-developer-guide.md) - Guide for writing integration tests
+- [Testing Ops Guide](testing-ops-guide.md) - Operational guide for test infrastructure
+- [Testing Playbook](testing-playbook.md) - Manual verification playbook

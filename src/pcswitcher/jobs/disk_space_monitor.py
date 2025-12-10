@@ -97,15 +97,9 @@ class DiskSpaceMonitorJob(BackgroundJob):
         self.mount_point = mount_point
 
         # Parse thresholds once (validation already done in validate_config)
-        self._preflight_threshold: ThresholdType = parse_threshold(
-            context.config["preflight_minimum"]
-        )
-        self._runtime_threshold: ThresholdType = parse_threshold(
-            context.config["runtime_minimum"]
-        )
-        self._warning_threshold: ThresholdType = parse_threshold(
-            context.config["warning_threshold"]
-        )
+        self._preflight_threshold: ThresholdType = parse_threshold(context.config["preflight_minimum"])
+        self._runtime_threshold: ThresholdType = parse_threshold(context.config["runtime_minimum"])
+        self._warning_threshold: ThresholdType = parse_threshold(context.config["warning_threshold"])
         self._check_interval: int = context.config["check_interval"]
 
     async def validate(self) -> list[ValidationError]:
@@ -123,8 +117,7 @@ class DiskSpaceMonitorJob(BackgroundJob):
         if not result.success:
             errors.append(
                 self._validation_error(
-                    self.host,
-                    f"Mount point does not exist or is not accessible: {self.mount_point}"
+                    self.host, f"Mount point does not exist or is not accessible: {self.mount_point}"
                 )
             )
 

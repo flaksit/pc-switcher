@@ -1,0 +1,415 @@
+# Testing Framework Research
+
+**Feature**: 002-testing-framework
+**Date**: 2025-12-05
+**Status**: Complete
+
+## Summary
+
+Research for the testing framework implementation. All technical decisions have been validated against best practices and existing patterns in the codebase.
+
+---
+
+## 1. pytest-asyncio Configuration
+
+### Decision: Use `asyncio_mode = "auto"` with function-scoped event loops
+
+### Rationale
+- Auto mode automatically detects async test functions without requiring explicit `@pytest.mark.asyncio` markers
+- Function-scoped loops provide highest test isolation (default behavior)
+- Aligns with existing codebase patterns in `tests/conftest.py`
+
+### Configuration
+
+```toml
+# pyproject.toml
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+```
+
+### Alternatives Considered
+- **Strict mode**: Requires explicit markers on all async tests; rejected for verbosity
+- **Module/session-scoped loops**: Rejected for reduced isolation between tests
+
+---
+
+## 2. pytest Markers and Test Selection
+
+### Decision: Default exclusion of integration tests via `-m "not integration"` in addopts
+
+### Rationale
+- FR-008a requires integration tests NOT run by default
+- Configuration-based exclusion is simpler than hook-based
+- Can be overridden with `-m integration` or `-m ""`
+
+### Configuration
+
+```toml
+# pyproject.toml
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "-v",
+    "-m", "not integration",
+]
+markers = [
+    "integration: Integration tests (require VM infrastructure)",
+    "slow: Tests that take >5 seconds",
+]
+```
+
+### Skip Behavior for Missing Environment
+
+```python
+# tests/integration/conftest.py
+import os
+import pytest
+
+REQUIRED_ENV_VARS = [
+    "PC_SWITCHER_TEST_PC1_HOST",
+    "PC_SWITCHER_TEST_PC2_HOST",
+]
+
+def pytest_collection_modifyitems(config, items):
+    """Skip integration tests if VM environment not configured."""
+    missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
+
+    if missing_vars:
+        skip_msg = f"Skipping integration tests: VM environment not configured (missing: {', '.join(missing_vars)})"
+        for item in items:
+            if "integration" in item.keywords:
+                item.add_marker(pytest.mark.skip(reason=skip_msg))
+```
+
+### Alternatives Considered
+- **Custom CLI option (`--run-integration`)**: More explicit but deviates from standard pytest patterns
+- **Hook-based exclusion in root conftest.py**: More complex; chosen approach is simpler
+
+---
+
+## 3. Hetzner Cloud VM Provisioning
+
+### Decision: Use hcloud CLI for VM provisioning (no OpenTofu/Terraform)
+
+### Rationale
+- OpenTofu would only create 2 VMs and 1 SSH key - overkill for this simple use case
+- All real configuration (btrfs install, user setup, etc.) already uses bash scripts with hcloud CLI
+- No state management needed - simply check if VM exists: `hcloud server describe <name>`
+- Eliminates complexity of remote state storage and syncing
+- hcloud CLI is already required for other operations (rescue mode, SSH key management)
+- Hetzner CX23 VMs meet cost constraint (< EUR 10/month)
+
+### Provisioning Script
+
+```bash
+#!/usr/bin/env bash
+# tests/infrastructure/scripts/provision-vms.sh
+
+set -euo pipefail
+
+: "${HCLOUD_TOKEN:?HCLOUD_TOKEN must be set}"
+
+# Create SSH key if needed
+if ! hcloud ssh-key describe pc-switcher-test-key &>/dev/null; then
+    echo "Creating SSH key..."
+    hcloud ssh-key create --name pc-switcher-test-key \
+        --public-key-from-file "${SSH_PUBLIC_KEY:-$HOME/.ssh/id_ed25519.pub}"
+fi
+
+# Create VMs if needed
+for VM in pc1 pc2; do
+    if hcloud server describe "$VM" &>/dev/null; then
+        echo "VM $VM already exists, skipping creation"
+    else
+        echo "Creating VM $VM..."
+        hcloud server create \
+            --name "$VM" \
+            --type cx23 \
+            --image ubuntu-24.04 \
+            --location fsn1 \
+            --ssh-key pc-switcher-test-key
+    fi
+done
+
+echo "VMs created. Run provision.sh for each VM to install btrfs and configure."
+```
+
+### VM Destruction
+
+```bash
+# Destroy VMs when not needed
+hcloud server delete pc1
+hcloud server delete pc2
+hcloud ssh-key delete pc-switcher-test-key  # optional
+```
+
+### Alternatives Considered
+- **OpenTofu/Terraform**: Adds state management complexity without benefit for 2 VMs
+- **Smaller VM types**: CX11 (2GB RAM) may be insufficient for btrfs operations (Note: doesn't exist anymore)
+
+---
+
+## 4. btrfs Snapshot Management
+
+### Decision: Baseline snapshots created at provisioning; reset via mv + snapshot + reboot
+
+### Rationale
+- Read-only baseline snapshots preserve known-good state
+- mv + snapshot approach is simpler and avoids set-default complexity
+- Reboot required to activate new root subvolume (~10-20 seconds)
+
+### Reset Flow
+
+Per docs/testing-framework.md, the reset procedure is:
+
+```bash
+#!/bin/bash
+# tests/infrastructure/scripts/reset-vm.sh
+
+# 1. Delete test artifacts (preserving baseline snapshots)
+ssh root@$VM "rm -rf /.snapshots/pc-switcher/test-* 2>/dev/null || true"
+
+# 2. Mount top-level btrfs filesystem
+ssh root@$VM "mount -o subvolid=5 /dev/sda2 /mnt/btrfs"
+
+# 3. Replace active subvolumes with fresh snapshots from baseline
+ssh root@$VM "mv /mnt/btrfs/@ /mnt/btrfs/@_old"
+ssh root@$VM "btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@ /mnt/btrfs/@"
+ssh root@$VM "mv /mnt/btrfs/@home /mnt/btrfs/@home_old"
+ssh root@$VM "btrfs subvolume snapshot /mnt/btrfs/.snapshots/baseline/@home /mnt/btrfs/@home"
+
+# 4. Unmount and reboot
+ssh root@$VM "umount /mnt/btrfs"
+ssh root@$VM "reboot" || true
+
+# Wait for VM to come back online (polling loop, not fixed sleep)
+sleep 15
+until ssh -o ConnectTimeout=5 -o BatchMode=yes root@$VM true 2>/dev/null; do
+    sleep 5
+done
+
+# 5. Clean up old subvolumes after reboot
+ssh root@$VM "mount -o subvolid=5 /dev/sda2 /mnt/btrfs"
+ssh root@$VM "btrfs subvolume delete /mnt/btrfs/@_old"
+ssh root@$VM "btrfs subvolume delete /mnt/btrfs/@home_old"
+ssh root@$VM "umount /mnt/btrfs"
+```
+
+### Snapshot Layout
+
+```text
+/.snapshots/
+├── baseline/
+│   ├── @           # Read-only baseline of root (created at provisioning)
+│   └── @home       # Read-only baseline of home (created at provisioning)
+└── pc-switcher/
+    └── test-*      # Test artifacts (deleted on reset)
+```
+
+Active subvolumes (`@` and `@home`) are at the btrfs top level, not under `/.snapshots/`.
+
+### Alternatives Considered
+- **Hetzner VM snapshots**: Slow restore (minutes); rejected for fast iteration
+- **btrfs set-default approach**: More complex; mv + snapshot is simpler
+- **LVM snapshots**: Would require different filesystem; rejected for btrfs consistency
+
+---
+
+## 5. Lock Mechanism
+
+### Decision: Hetzner Server Labels on pc1
+
+### Rationale
+- Lock state stored externally to VM state (survives reboots and snapshot rollbacks)
+- Simple implementation using hcloud CLI
+- Labels (`lock_holder`, `lock_acquired`) contain holder identity and timestamp for debugging
+- Accessible from any machine with HCLOUD_TOKEN
+
+**Note**: Originally considered file-based lock at `/tmp/pc-switcher-integration-test.lock`, but this was rejected because:
+1. `/tmp` is typically a tmpfs (cleared on reboot)
+2. Snapshot rollback restores VM to baseline state (pre-lock creation)
+3. Result: Lock would be destroyed during VM reset, breaking concurrency control
+
+### Lock Scope
+
+The lock protects **integration test execution only**, not provisioning:
+
+- **Integration tests**: Must acquire lock before reset and release after tests complete
+- **Provisioning**: Protected by CI concurrency groups for CI runs; local concurrent provisioning is explicitly unsupported (documented constraint)
+- **VM reset**: Part of test session lifecycle, covered by the test execution lock
+
+This avoids over-complicating the provisioning workflow while ensuring test isolation.
+
+### Lock Labels
+
+| Label | Value |
+|-------|-------|
+| `lock_holder` | CI job ID or username |
+| `lock_acquired` | ISO 8601 timestamp |
+
+### Lock Operations
+
+```bash
+# Check status
+./tests/infrastructure/scripts/lock.sh "" status
+
+# Acquire (with 5 min timeout)
+./tests/infrastructure/scripts/lock.sh "CI-job-12345" acquire
+
+# Release
+./tests/infrastructure/scripts/lock.sh "CI-job-12345" release
+
+# Manual cleanup for stuck locks
+hcloud server remove-label pc1 lock_holder
+hcloud server remove-label pc1 lock_acquired
+```
+
+### Alternatives Considered
+- **File-based lock on VM**: Rejected - destroyed by reboot/snapshot rollback
+- **Database-based lock**: Over-engineering for two users (dev + CI)
+- **GitHub Actions artifact lock**: Doesn't prevent local dev conflicts
+- **Flock-based lock**: Requires persistent SSH connection
+- **Lock for all operations**: Adds complexity to provisioning without significant benefit (provisioning is rare)
+
+---
+
+## 6. GitHub Actions CI/CD
+
+### Decision: Single consolidated workflow `test.yml` handling all test scenarios
+
+### Rationale
+- Consolidated workflow is simpler to maintain
+- Allows sharing setup steps (checkout, Python setup, dependency caching) between unit and integration test jobs
+- Different jobs within the same workflow can have different concurrency controls
+- Manual trigger enables testing feature branches before PR
+
+### Workflow Structure
+
+```yaml
+# .github/workflows/test.yml
+name: Tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  lint-and-unit:
+    # Runs on every push, no concurrency restriction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ... setup steps ...
+      - run: uv run basedpyright
+      - run: uv run ruff check
+      - run: uv run pytest tests/unit tests/contract -v
+
+  integration:
+    # Only on PRs to main or manual trigger
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch'
+    needs: lint-and-unit
+    runs-on: ubuntu-latest
+    concurrency:
+      group: integration-tests
+      cancel-in-progress: false  # Queue instead of cancel
+    steps:
+      - uses: actions/checkout@v4
+      # ... setup steps ...
+      - name: Provision VMs
+        run: ./tests/infrastructure/scripts/provision-vms.sh
+      - name: Reset VMs
+        run: |
+          ./tests/infrastructure/scripts/reset-vm.sh pc1
+          ./tests/infrastructure/scripts/reset-vm.sh pc2
+      - run: uv run pytest -m integration -v
+```
+
+### Fork PR Detection
+
+Integration tests are skipped for forked PRs using the condition:
+```yaml
+if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch'
+```
+
+This ensures integration tests only run when:
+1. The PR is from the same repository (not a fork), OR
+2. The workflow was manually triggered
+
+### Secret Handling
+- `HCLOUD_TOKEN`: Hetzner API token (repository secret)
+- `HETZNER_SSH_PRIVATE_KEY`: SSH key for VM access (repository secret)
+- Secrets not available to forked PRs (FR-017b compliance)
+
+### Workflow Structure
+
+```yaml
+# Unit tests: every push
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Integration tests: PRs to main + manual
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+```
+
+### Alternatives Considered
+- **Single workflow with conditional jobs**: Harder to reason about concurrency
+- **Reusable workflows**: Adds complexity without benefit for single repository
+
+---
+
+## 7. VM Fixtures for Integration Tests
+
+### Decision: Minimal fixtures providing RemoteExecutor-like interface via asyncssh
+
+### Rationale
+- FR-034 requires minimal fixtures for VM command execution
+- Reuse existing executor patterns from `src/pcswitcher/executor.py`
+- Fixtures handle connection lifecycle; tests focus on assertions
+
+### Fixture Design
+
+```python
+# tests/integration/conftest.py
+import pytest_asyncio
+import asyncssh
+import os
+
+@pytest_asyncio.fixture
+async def pc1_connection():
+    """SSH connection to pc1 test VM."""
+    host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
+    user = os.environ.get("PC_SWITCHER_TEST_USER", "testuser")
+
+    async with asyncssh.connect(host, username=user, known_hosts=None) as conn:
+        yield conn
+
+@pytest_asyncio.fixture
+async def pc1_executor(pc1_connection):
+    """Executor for running commands on pc1."""
+    from pcswitcher.executor import RemoteExecutor
+    return RemoteExecutor(pc1_connection)
+```
+
+### Alternatives Considered
+- **Custom VMExecutor class**: Adds abstraction without benefit; RemoteExecutor sufficient
+- **Parameterized fixtures for both VMs**: Complex; simpler to have explicit pc1/pc2 fixtures
+
+---
+
+## References
+
+- [pytest-asyncio documentation](https://pytest-asyncio.readthedocs.io/)
+- [OpenTofu Registry - Hetzner Cloud Provider](https://search.opentofu.org/provider/opentofu/hcloud/latest)
+- [btrfs-subvolume documentation](https://btrfs.readthedocs.io/en/latest/btrfs-subvolume.html)
+- [GitHub Actions concurrency](https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#concurrency)
+- [pytest markers](https://docs.pytest.org/en/stable/how-to/mark.html)
