@@ -2,6 +2,17 @@
 
 This document provides the detailed implementation plan for the testing framework infrastructure. Writing actual tests for specific features (e.g., 001-foundation) is out of scope and tracked separately in feature `003-foundation-tests`.
 
+> **Note**: The script structure was refactored after this document was written. See tasks.md for the current structure:
+> - `create-vm.sh` - creates a single VM (replaces provision-vms.sh VM creation + provision.sh)
+> - `configure-vm.sh` - configures a single VM (unchanged)
+> - `configure-hosts.sh` - configures both VMs (unchanged)
+> - `create-baseline-snapshots.sh` - creates baseline snapshots (extracted from configure-vm.sh)
+> - `provision-test-infra.sh` - orchestrator that calls all above scripts
+> - `reset-vm.sh` - resets single VM (unchanged)
+> - `lock.sh` - lock management (unchanged)
+>
+> The script implementations below are still useful as reference but need adaptation to the new structure.
+
 ## Test Directory Structure
 
 ```text
@@ -24,18 +35,22 @@ tests/
 │   ├── conftest.py                  # VM fixtures
 │   └── ...                          # Test files (out of scope for this feature)
 │
-├── infrastructure/                  # VM provisioning
-│   ├── README.md
-│   └── scripts/
-│       ├── provision-vms.sh         # Create VMs via hcloud CLI
-│       ├── provision.sh             # Install btrfs OS on VM
-│       ├── configure-vm.sh          # Configure VM (user, SSH, etc.)
-│       ├── configure-hosts.sh       # Setup /etc/hosts and SSH keys
-│       ├── reset-vm.sh              # Reset VM to baseline snapshot
-│       └── lock.sh                  # Lock management
-│
-└── playbook/
-    └── visual-verification.md
+└── infrastructure/                  # VM provisioning
+    ├── README.md
+    └── scripts/
+        ├── create-vm.sh                # Create single VM via hcloud + install OS with btrfs
+        ├── configure-vm.sh             # Configure single VM: testuser, SSH keys, services
+        ├── configure-hosts.sh          # Configure both VMs: /etc/hosts, inter-VM SSH keys
+        ├── create-baseline-snapshots.sh # Create baseline btrfs snapshots on both VMs
+        ├── provision-test-infra.sh     # Orchestrator: calls above scripts in correct order
+        ├── reset-vm.sh                 # Reset single VM to baseline snapshot
+        └── lock.sh                     # Lock management via Hetzner Server Labels
+
+docs/
+├── testing-framework.md             # Architecture documentation (update)
+├── testing-developer-guide.md       # Developer guide (create)
+├── testing-ops-guide.md             # Operational guide (create)
+└── testing-playbook.md              # Manual verification playbook (create, per FR-033)
 ```
 
 ## Shared Fixtures (conftest.py)
@@ -68,7 +83,7 @@ Unit-specific fixtures:
 
 ```python
 # Key fixtures:
-# - integration_lock: Acquires lock for test session
+# - integration_lock: Acquires lock via Hetzner Server Labels (survives VM reboot/reset)
 # - reset_vms: Resets VMs to baseline at session start
 # - event_bus: Real EventBus instance
 # - local_executor: Real LocalExecutor
@@ -79,6 +94,86 @@ Unit-specific fixtures:
 
 # pytest markers:
 # @pytest.mark.integration - marks tests requiring VMs
+```
+
+## Contract Tests (FR-003a)
+
+### tests/contract/test_executor_interface.py
+
+Contract tests verify that MockExecutor and real executor implementations (LocalExecutor, RemoteExecutor) adhere to the same behavioral interface, ensuring mocks remain reliable representations of production behavior.
+
+```python
+# Contract test structure:
+# - Define shared behavioral expectations as parameterized tests
+# - Run same tests against MockExecutor and real executors
+# - Verify consistent return types, error handling, and side effects
+
+import pytest
+from pcswitcher.executor import LocalExecutor, RemoteExecutor, MockExecutor
+
+class ExecutorContractTests:
+    """Base contract tests that all executor implementations must pass."""
+
+    @pytest.fixture
+    def executor(self):
+        """Override in subclasses to provide specific executor."""
+        raise NotImplementedError
+
+    async def test_run_returns_result_with_exit_code(self, executor):
+        """All executors must return result with exit_code attribute."""
+        result = await executor.run("echo hello")
+        assert hasattr(result, "exit_code")
+        assert isinstance(result.exit_code, int)
+
+    async def test_run_returns_result_with_stdout(self, executor):
+        """All executors must return result with stdout attribute."""
+        result = await executor.run("echo hello")
+        assert hasattr(result, "stdout")
+        assert isinstance(result.stdout, str)
+
+    async def test_run_returns_result_with_stderr(self, executor):
+        """All executors must return result with stderr attribute."""
+        result = await executor.run("echo hello")
+        assert hasattr(result, "stderr")
+        assert isinstance(result.stderr, str)
+
+    async def test_failed_command_returns_nonzero_exit(self, executor):
+        """Failed commands must return non-zero exit code."""
+        result = await executor.run("exit 1")
+        assert result.exit_code != 0
+
+    async def test_check_raises_on_failure(self, executor):
+        """check=True must raise exception on non-zero exit."""
+        with pytest.raises(Exception):  # Specific exception type TBD
+            await executor.run("exit 1", check=True)
+
+
+class TestMockExecutorContract(ExecutorContractTests):
+    """Verify MockExecutor adheres to executor contract."""
+
+    @pytest.fixture
+    def executor(self):
+        return MockExecutor()
+
+
+class TestLocalExecutorContract(ExecutorContractTests):
+    """Verify LocalExecutor adheres to executor contract."""
+
+    @pytest.fixture
+    def executor(self):
+        return LocalExecutor()
+
+
+# RemoteExecutor contract tests require VM infrastructure
+# and are marked as integration tests
+@pytest.mark.integration
+class TestRemoteExecutorContract(ExecutorContractTests):
+    """Verify RemoteExecutor adheres to executor contract."""
+
+    @pytest.fixture
+    async def executor(self, pc1_connection):
+        from pcswitcher.executor import RemoteExecutor
+        return RemoteExecutor(pc1_connection)
 ```
 
 ## Infrastructure Configuration
@@ -102,7 +197,7 @@ Create and provision test VMs if they don't exist.
 
 This script:
   1. Creates SSH key in Hetzner Cloud (if needed)
-  2. Creates pc-switcher-pc1 and pc-switcher-pc2 VMs (if needed)
+  2. Creates pc1 and pc2 VMs (if needed)
   3. Runs provision.sh on each VM to install btrfs
   4. Runs configure-hosts.sh to setup inter-VM networking
 
@@ -134,7 +229,7 @@ fi
 VMS_TO_PROVISION=()
 
 # Create VMs if needed
-for VM in pc-switcher-pc1 pc-switcher-pc2; do
+for VM in pc1 pc2; do
     if hcloud server describe "$VM" &>/dev/null; then
         echo "VM $VM already exists, skipping creation"
     else
@@ -163,84 +258,152 @@ fi
 
 echo ""
 echo "VMs ready:"
-echo "  pc1: $(hcloud server ip pc-switcher-pc1)"
-echo "  pc2: $(hcloud server ip pc-switcher-pc2)"
+echo "  pc1: $(hcloud server ip pc1)"
+echo "  pc2: $(hcloud server ip pc2)"
 ```
 
 ### tests/infrastructure/scripts/lock.sh
+
+Uses Hetzner Server Labels to store lock state externally from the VMs. This ensures
+the lock survives VM reboots and btrfs snapshot rollbacks.
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
-LOCK_FILE="/tmp/pc-switcher-integration-test.lock"
+SERVER_NAME="pc1"  # Lock is stored on pc1's server object
 
 show_help() {
     cat << EOF
-Usage: $SCRIPT_NAME <holder> <acquire|release>
+Usage: $SCRIPT_NAME <holder> <acquire|release|status>
 
 Manage integration test lock to prevent concurrent test runs.
 
+The lock is stored as Hetzner Server Labels on $SERVER_NAME, which:
+  - Survives VM reboots
+  - Survives btrfs snapshot rollbacks
+  - Is accessible via hcloud CLI from any machine
+
 Arguments:
   holder    Identifier for lock holder (e.g., CI job ID or username)
-  action    One of: acquire, release
+  action    One of: acquire, release, status
+
+Labels used:
+  lock_holder    Lock holder identifier
+  lock_acquired  ISO8601 timestamp when lock was acquired
 
 Examples:
   $SCRIPT_NAME github-123456 acquire
   $SCRIPT_NAME \$USER release
+  $SCRIPT_NAME "" status
 
-Lock file: $LOCK_FILE
+Environment:
+  HCLOUD_TOKEN   Hetzner Cloud API token (required)
 EOF
 }
 
 # Handle help flags
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || $# -lt 2 ]]; then
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     show_help
-    [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && exit 0
+    exit 0
+fi
+
+if [[ $# -lt 2 ]]; then
+    show_help
     exit 1
 fi
 
+: "${HCLOUD_TOKEN:?HCLOUD_TOKEN must be set}"
+
 LOCK_HOLDER="$1"
 ACTION="$2"
+TIMEOUT=300  # 5 minutes
+
+get_current_lock() {
+    # Returns "holder|timestamp" or empty string if no lock
+    local holder timestamp
+    holder=$(hcloud server describe "$SERVER_NAME" -o json | jq -r '.labels.lock_holder // empty')
+    timestamp=$(hcloud server describe "$SERVER_NAME" -o json | jq -r '.labels.lock_acquired // empty')
+    if [[ -n "$holder" ]]; then
+        echo "${holder}|${timestamp}"
+    fi
+}
 
 acquire_lock() {
-    local max_wait=300
-    local waited=0
+    local end_time=$(($(date +%s) + TIMEOUT))
 
-    while true; do
-        if mkdir "$LOCK_FILE" 2>/dev/null; then
-            echo "$LOCK_HOLDER" > "$LOCK_FILE/holder"
-            echo "Lock acquired by $LOCK_HOLDER"
-            return 0
+    while [ $(date +%s) -lt $end_time ]; do
+        current=$(get_current_lock)
+
+        if [[ -z "$current" ]]; then
+            # No lock held, try to acquire
+            local acquired_time
+            acquired_time=$(date -Iseconds)
+            hcloud server add-label "$SERVER_NAME" "lock_holder=$LOCK_HOLDER" --overwrite
+            hcloud server add-label "$SERVER_NAME" "lock_acquired=$acquired_time" --overwrite
+
+            # Verify we got the lock (check for race condition)
+            sleep 1
+            current=$(get_current_lock)
+            current_holder="${current%%|*}"
+            if [[ "$current_holder" == "$LOCK_HOLDER" ]]; then
+                echo "Lock acquired by $LOCK_HOLDER at $acquired_time"
+                return 0
+            fi
+            # Someone else got it, continue waiting
         fi
 
-        if [[ $waited -ge $max_wait ]]; then
-            echo "Failed to acquire lock after ${max_wait}s" >&2
-            echo "Current holder: $(cat "$LOCK_FILE/holder" 2>/dev/null || echo 'unknown')" >&2
-            return 1
-        fi
-
-        sleep 5
-        waited=$((waited + 5))
+        # Show current holder while waiting
+        current_holder="${current%%|*}"
+        current_time="${current##*|}"
+        echo "Lock held by $current_holder (since $current_time), waiting..."
+        sleep 10
     done
+
+    echo "ERROR: Failed to acquire lock after ${TIMEOUT}s" >&2
+    current=$(get_current_lock)
+    if [[ -n "$current" ]]; then
+        echo "Current lock: holder=${current%%|*}, acquired=${current##*|}" >&2
+    fi
+    return 1
 }
 
 release_lock() {
-    if [[ -d "$LOCK_FILE" ]]; then
-        holder=$(cat "$LOCK_FILE/holder" 2>/dev/null || echo "unknown")
-        if [[ "$holder" == "$LOCK_HOLDER" ]]; then
-            rm -rf "$LOCK_FILE"
-            echo "Lock released by $LOCK_HOLDER"
-        else
-            echo "Lock held by $holder, not releasing" >&2
-        fi
+    current=$(get_current_lock)
+
+    if [[ -z "$current" ]]; then
+        echo "No lock held"
+        return 0
+    fi
+
+    current_holder="${current%%|*}"
+    if [[ "$current_holder" == "$LOCK_HOLDER" ]]; then
+        hcloud server remove-label "$SERVER_NAME" "lock_holder"
+        hcloud server remove-label "$SERVER_NAME" "lock_acquired"
+        echo "Lock released by $LOCK_HOLDER"
+        return 0
+    else
+        echo "ERROR: Lock held by $current_holder, not $LOCK_HOLDER. Not releasing." >&2
+        return 1
+    fi
+}
+
+show_status() {
+    current=$(get_current_lock)
+
+    if [[ -z "$current" ]]; then
+        echo "No lock held"
+    else
+        echo "Lock held by: ${current%%|*}"
+        echo "Acquired at:  ${current##*|}"
     fi
 }
 
 case "$ACTION" in
     acquire) acquire_lock ;;
     release) release_lock ;;
+    status) show_status ;;
     *) show_help; exit 1 ;;
 esac
 ```
@@ -261,11 +424,12 @@ Usage: $SCRIPT_NAME <hostname>
 Reset a test VM to its baseline btrfs snapshot state.
 
 This script:
-  1. Cleans up test artifacts in /.snapshots/pc-switcher/
-  2. Mounts top-level btrfs filesystem
-  3. Replaces @ and @home with fresh snapshots from baseline
-  4. Reboots the VM and waits for it to come back online
-  5. Cleans up old subvolumes
+  1. Validates baseline snapshots exist
+  2. Cleans up test artifacts in /.snapshots/pc-switcher/
+  3. Mounts top-level btrfs filesystem
+  4. Replaces @ and @home with fresh snapshots from baseline
+  5. Reboots the VM and waits for it to come back online
+  6. Cleans up old subvolumes
 
 Arguments:
   hostname    SSH hostname of the VM to reset (e.g., pc1, pc2)
@@ -289,6 +453,46 @@ fi
 HOST="$1"
 
 echo "Resetting VM: $HOST"
+
+# Validate baseline snapshots exist (FR-004)
+echo "Validating baseline snapshots..."
+VALIDATION_RESULT=$(ssh "$USER@$HOST" << 'VALIDATE'
+    set -euo pipefail
+    missing=()
+
+    # Check baseline @ snapshot
+    if ! sudo btrfs subvolume show /.snapshots/baseline/@ &>/dev/null; then
+        missing+=("/.snapshots/baseline/@")
+    fi
+
+    # Check baseline @home snapshot
+    if ! sudo btrfs subvolume show /.snapshots/baseline/@home &>/dev/null; then
+        missing+=("/.snapshots/baseline/@home")
+    fi
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "MISSING:${missing[*]}"
+        exit 1
+    fi
+    echo "OK"
+VALIDATE
+) || true
+
+if [[ "$VALIDATION_RESULT" == MISSING:* ]]; then
+    missing_snapshots="${VALIDATION_RESULT#MISSING:}"
+    echo "ERROR: Baseline snapshot missing: $missing_snapshots" >&2
+    echo "" >&2
+    echo "Run provisioning to create baseline snapshots:" >&2
+    echo "  ./tests/infrastructure/scripts/provision-vms.sh" >&2
+    exit 1
+fi
+
+if [[ "$VALIDATION_RESULT" != "OK" ]]; then
+    echo "ERROR: Failed to validate baseline snapshots on $HOST" >&2
+    exit 1
+fi
+
+echo "Baseline snapshots validated"
 
 # Reset to baseline snapshots
 ssh "$USER@$HOST" << 'EOF'
@@ -363,15 +567,15 @@ This script:
   6. Creates baseline snapshots for test reset
 
 Arguments:
-  server-name    Name of the Hetzner server (e.g., pc-switcher-pc1)
+  server-name    Name of the Hetzner server (e.g., pc1)
 
 Environment:
   HCLOUD_TOKEN   Hetzner Cloud API token (required)
   SSH_PUBLIC_KEY Path to SSH public key (default: ~/.ssh/id_ed25519.pub)
 
 Examples:
-  $SCRIPT_NAME pc-switcher-pc1
-  $SCRIPT_NAME pc-switcher-pc2
+  $SCRIPT_NAME pc1
+  $SCRIPT_NAME pc2
 
 Note: This is a one-time operation. After provisioning, use reset-vm.sh
       for subsequent test runs.
@@ -422,7 +626,7 @@ cat << INSTALLCONFIG | ssh root@"$SERVER_IP" "cat > /autosetup"
 DRIVE1 /dev/sda
 USE_KERNEL_MODE_SETTING
 HOSTNAME $SERVER_NAME
-PART /boot/efi ext4 128M
+PART /boot/efi esp 256M
 PART btrfs.1 btrfs all
 SUBVOL btrfs.1 @ /
 SUBVOL btrfs.1 @home /home
@@ -580,8 +784,8 @@ if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
     exit 1
 fi
 
-PC1_IP=$(hcloud server ip pc-switcher-pc1)
-PC2_IP=$(hcloud server ip pc-switcher-pc2)
+PC1_IP=$(hcloud server ip pc1)
+PC2_IP=$(hcloud server ip pc2)
 
 echo "PC1 IP: $PC1_IP"
 echo "PC2 IP: $PC2_IP"
@@ -703,8 +907,10 @@ jobs:
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
+    # Run on PRs to main (from main repo only - secrets unavailable for forks)
+    # or on manual workflow dispatch
     if: |
-      github.event_name == 'pull_request' && github.base_ref == 'main' ||
+      (github.event_name == 'pull_request' && github.base_ref == 'main' && github.event.pull_request.head.repo.full_name == github.repository) ||
       github.event.inputs.run_integration == 'true'
     needs: [lint, unit-tests]
     concurrency:
@@ -716,40 +922,93 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Check if secrets are available (FR-017a/FR-017b)
+      - name: Check secrets availability
+        id: secrets-check
+        run: |
+          if [[ -z "${{ secrets.HCLOUD_TOKEN }}" ]] || [[ -z "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "::notice::Skipping integration tests: required secrets not available (fork PR or missing configuration)"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip notice for missing secrets
+        if: steps.secrets-check.outputs.skip == 'true'
+        run: |
+          echo "::warning::Integration tests skipped: secrets not available"
+          echo "This is expected for forked PRs. Unit tests still run."
+          exit 0
+
       - uses: astral-sh/setup-uv@v6
+        if: steps.secrets-check.outputs.skip != 'true'
         with:
           version: ${{ env.UV_VERSION }}
 
       - name: Install hcloud CLI
+        if: steps.secrets-check.outputs.skip != 'true'
         run: |
           curl -fsSL https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz | tar -xz
           sudo mv hcloud /usr/local/bin/
 
       - name: Setup SSH key
+        if: steps.secrets-check.outputs.skip != 'true'
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H ${{ secrets.PC1_TEST_HOST }} >> ~/.ssh/known_hosts
-          ssh-keyscan -H ${{ secrets.PC2_TEST_HOST }} >> ~/.ssh/known_hosts
+          # Generate public key from private key for provisioning (FR-006a)
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.pub
 
       - name: Provision VMs (if needed)
+        if: steps.secrets-check.outputs.skip != 'true'
         run: ./tests/infrastructure/scripts/provision-vms.sh
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          SSH_PUBLIC_KEY: ~/.ssh/id_ed25519.pub
+
+      - name: Add VM host keys to known_hosts
+        if: steps.secrets-check.outputs.skip != 'true'
+        run: |
+          PC1_IP=$(hcloud server ip pc1)
+          PC2_IP=$(hcloud server ip pc2)
+          ssh-keyscan -H "$PC1_IP" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$PC2_IP" >> ~/.ssh/known_hosts
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Reset VMs
+        if: steps.secrets-check.outputs.skip != 'true'
         run: |
-          ./tests/infrastructure/scripts/reset-vm.sh ${{ secrets.PC1_TEST_HOST }}
-          ./tests/infrastructure/scripts/reset-vm.sh ${{ secrets.PC2_TEST_HOST }}
+          PC1_IP=$(hcloud server ip pc1)
+          PC2_IP=$(hcloud server ip pc2)
+          ./tests/infrastructure/scripts/reset-vm.sh "$PC1_IP"
+          ./tests/infrastructure/scripts/reset-vm.sh "$PC2_IP"
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Run integration tests
-        run: uv run pytest tests/integration -v -m integration --tb=short
+        if: steps.secrets-check.outputs.skip != 'true'
+        run: |
+          PC1_IP=$(hcloud server ip pc1)
+          PC2_IP=$(hcloud server ip pc2)
+          uv run pytest tests/integration -v -m integration --tb=short 2>&1 | tee pytest-output.log
         env:
-          PC_SWITCHER_TEST_PC1_HOST: ${{ secrets.PC1_TEST_HOST }}
-          PC_SWITCHER_TEST_PC2_HOST: ${{ secrets.PC2_TEST_HOST }}
+          PC_SWITCHER_TEST_PC1_HOST: ${{ env.PC1_IP }}
+          PC_SWITCHER_TEST_PC2_HOST: ${{ env.PC2_IP }}
           PC_SWITCHER_TEST_USER: testuser
           CI_JOB_ID: ${{ github.run_id }}
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+
+      # Upload artifacts for debugging (FR-017c)
+      - name: Upload test artifacts
+        if: always() && steps.secrets-check.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-logs
+          path: |
+            pytest-output.log
+          retention-days: 14
 ```
 
 ## Required GitHub Secrets
@@ -757,9 +1016,9 @@ jobs:
 | Secret | Description |
 |--------|-------------|
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
-| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access |
-| `PC1_TEST_HOST` | IP/hostname of pc1 test VM |
-| `PC2_TEST_HOST` | IP/hostname of pc2 test VM |
+| `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519 format) |
+
+Note: VM IP addresses are no longer stored as secrets. The workflow retrieves them dynamically via `hcloud server ip` after auto-provisioning.
 
 ## Implementation Order
 
@@ -776,7 +1035,7 @@ Tasks can be implemented in parallel where noted.
 6. Create `tests/infrastructure/scripts/lock.sh`
 7. Create `tests/infrastructure/README.md`
 
-### Phase 2: Test Fixtures
+### Phase 2: Test Fixtures and Contract Tests
 
 **Sequential (shared conftest first):**
 8. Update `tests/conftest.py` with shared fixtures
@@ -785,13 +1044,14 @@ Tasks can be implemented in parallel where noted.
 9. Create `tests/unit/conftest.py`
 10. Create `tests/integration/conftest.py`
 11. Create `tests/integration/__init__.py`
+12. Create `tests/contract/test_executor_interface.py` (FR-003a: MockExecutor vs LocalExecutor/RemoteExecutor parity)
 
 ### Phase 3: CI/CD & Documentation
 
 **Can run in parallel:**
-12. Create `.github/workflows/test.yml`
-13. Update `pyproject.toml` with pytest configuration
-14. Create `tests/playbook/visual-verification.md`
-15. Update `docs/testing-developer-guide.md`
-16. Update `docs/testing-ops-guide.md`
-17. Update `docs/testing-framework.md`
+13. Create `.github/workflows/test.yml`
+14. Update `pyproject.toml` with pytest configuration
+15. Create `docs/testing-playbook.md` (visual verification + feature tour per FR-018-FR-020)
+16. Create `docs/testing-developer-guide.md` (fixtures, SSH/btrfs patterns, troubleshooting per FR-021-FR-024)
+17. Create `docs/testing-ops-guide.md` (secrets, env vars, cost monitoring, runbooks per FR-025-FR-029)
+18. Update `docs/testing-framework.md` (architecture diagrams, design rationale per FR-030-FR-032)

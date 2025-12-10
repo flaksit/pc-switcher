@@ -146,9 +146,7 @@ class TestDiskSpaceMonitorValidation:
     """Test validate() method for system state validation."""
 
     @pytest.mark.asyncio
-    async def test_validate_checks_mount_point_exists(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_validate_checks_mount_point_exists(self, mock_job_context: JobContext) -> None:
         """validate() should check that mount point exists."""
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
         # Mock executor already returns successful command result
@@ -159,15 +157,11 @@ class TestDiskSpaceMonitorValidation:
         mock_job_context.source.run_command.assert_called_once_with("test -d /")
 
     @pytest.mark.asyncio
-    async def test_validate_reports_mount_point_error(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_validate_reports_mount_point_error(self, mock_job_context: JobContext) -> None:
         """validate() should report error when mount point check fails."""
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/nonexistent")
         # Mock test -d command failure (exit code 1)
-        mock_job_context.source.run_command.return_value = CommandResult(
-            exit_code=1, stdout="", stderr=""
-        )
+        mock_job_context.source.run_command.return_value = CommandResult(exit_code=1, stdout="", stderr="")
         errors = await job.validate()
         assert len(errors) == 1
         assert "Mount point does not exist or is not accessible" in errors[0].message

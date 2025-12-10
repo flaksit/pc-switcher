@@ -41,20 +41,20 @@ Implement the **testing framework infrastructure** for pc-switcher: VM provision
 
 ### Reliability Without Compromise ✅
 - **Data integrity**: Test VMs are isolated from production; btrfs snapshot reset ensures clean state before each test session
-- **Conflict detection**: Lock mechanism prevents concurrent test runs; lock file stores holder identity and acquisition time (see research.md §5)
+- **Conflict detection**: Lock mechanism prevents concurrent test runs; Hetzner Server Labels store holder identity and acquisition time (external to VM state)
 - **Rollback strategy**: Baseline snapshots created at provisioning time; reset restores VMs to known-good state; if reset fails, tests do not proceed (see research.md §4)
 
-*Post-design validation*: Lock file format and reset flow documented in data-model.md with state transitions.
+*Post-design validation*: Lock format (Hetzner Server Labels) and reset flow documented in data-model.md with state transitions.
 
 ### Frictionless Command UX ✅
 - **Single command**: `uv run pytest tests/unit tests/contract -v` for unit tests; `uv run pytest -m integration` for integration tests
-- **Minimal intervention**: VM provisioning is automatic when VMs don't exist; reset is automatic before integration tests
+- **Minimal intervention**: Session-scoped fixtures handle everything automatically: lock acquisition, VM existence check, auto-provisioning if needed, and baseline reset. Developer/CI just runs pytest.
 - **Progressive feedback**: pytest provides test progress; CI preserves logs and artifacts for debugging
 
 *Post-design validation*: Quickstart.md provides copy-paste commands for all scenarios.
 
 ### Well-supported tools and best practices ✅
-- **Tools**: pytest (well-established), OpenTofu (actively maintained Terraform fork), Hetzner Cloud (reliable provider), GitHub Actions (standard CI)
+- **Tools**: pytest (well-established), hcloud CLI (Hetzner's official command-line tool), GitHub Actions (standard CI)
 - **Best practices**: Three-tier testing (unit/integration/e2e), contract tests for mock validation, infrastructure as code
 - **DRY/YAGNI**: Minimal fixtures for VM command execution only; no test data generation fixtures until needed
 
@@ -74,7 +74,7 @@ Implement the **testing framework infrastructure** for pc-switcher: VM provision
 *Post-design validation*: Performance targets documented in Technical Context section.
 
 ### Deliberate Simplicity ✅
-- **Minimal components**: Two VMs mirror real sync architecture; single lock file for concurrency
+- **Minimal components**: Two VMs mirror real sync architecture; Hetzner Server Labels for concurrency lock
 - **Understandable flows**: Clear three-tier separation; existing conftest.py patterns extended
 - **No over-engineering**: Using existing pytest infrastructure; simple bash scripts for VM management
 
@@ -123,17 +123,17 @@ tests/
 │   └── test_*.py        # Future integration test files (out of scope for this feature)
 └── infrastructure/      # VM infrastructure (extend)
     └── scripts/
-        ├── provision-vms.sh  # Create VMs via hcloud CLI (create)
-        ├── provision.sh      # VM OS install with btrfs (exists)
-        ├── configure-vm.sh   # VM configuration (create)
-        ├── configure-hosts.sh # /etc/hosts and SSH keys setup (create)
-        ├── reset-vm.sh       # Btrfs snapshot reset (create)
-        └── lock.sh           # Lock management (create)
+        ├── create-vm.sh                # Create single VM via hcloud + install OS with btrfs (create)
+        ├── configure-vm.sh             # Configure single VM: testuser, SSH keys, services (create)
+        ├── configure-hosts.sh          # Configure both VMs: /etc/hosts, inter-VM SSH keys (create)
+        ├── create-baseline-snapshots.sh # Create baseline btrfs snapshots on both VMs (create)
+        ├── provision-test-infra.sh     # Orchestrator: calls above scripts in correct order (create)
+        ├── reset-vm.sh                 # Reset single VM to baseline snapshot (create)
+        └── lock.sh                     # Lock management via Hetzner Server Labels (create)
 
 .github/
 └── workflows/
-    ├── ci.yml           # Unit tests on every push
-    └── integration.yml  # Integration tests on PR to main + manual trigger
+    └── test.yml         # All tests: unit on every push, integration on PR to main + manual trigger
 
 docs/
 ├── testing-framework.md       # Architecture (update)
@@ -153,6 +153,7 @@ docs/
 | VM isolation | Hetzner Cloud VMs | Safety requirement; can't test destructive btrfs ops locally |
 | VM provisioning | hcloud CLI (no Terraform/OpenTofu) | Simple; only 2 VMs; no state management needed |
 | Snapshot reset | Btrfs snapshots at `/.snapshots/baseline/@` | Fast (< 30s) vs VM reprovisioning (minutes); matches docs/testing-framework.md |
-| Lock mechanism | File-based on pc1 | Simple; matches existing lock module patterns |
+| Lock mechanism | Hetzner Server Labels | External to VM state; survives reboots and snapshot rollbacks |
 | Lock scope | Test execution only | Provisioning is rare; protected by CI concurrency groups |
+| Provisioning integration | Fixture-integrated | Session fixture checks VM existence and auto-provisions if needed; VMs may be destroyed regularly during idle periods |
 | CI concurrency | GitHub Actions concurrency group | Built-in feature; no external dependencies |

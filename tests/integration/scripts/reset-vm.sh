@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Source common helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+# Reset a single VM to its baseline btrfs snapshot state
+# This script restores the VM to the known-good baseline created during provisioning
+#
+# Usage: ./reset-vm.sh <VM_HOST>
+#
+# Arguments:
+#   VM_HOST    VM hostname or IP address to reset
+
+# Help
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    cat <<EOF
+Usage: $(basename "$0") <VM_HOST>
+
+Reset a VM to its baseline btrfs snapshot state.
+
+This script:
+  1. Validates baseline snapshots exist
+  2. Cleans up test artifacts
+  3. Replaces active subvolumes with baseline snapshots
+  4. Reboots the VM
+  5. Cleans up old subvolumes
+
+Arguments:
+  VM_HOST    VM hostname or IP address to reset
+
+Environment Variables:
+  PC_SWITCHER_TEST_USER    SSH user for VM access (default: testuser)
+
+Examples:
+  $(basename "$0") 192.168.1.100
+  $(basename "$0") pc1
+
+Prerequisites:
+  - Baseline snapshots must exist (/.snapshots/baseline/@ and /.snapshots/baseline/@home)
+  - Run provision-test-infra.sh if baseline snapshots are missing
+EOF
+    exit 0
+fi
+
+if [[ "$#" -ne 1 ]]; then
+    echo "Error: Expected 1 argument, got $#" >&2
+    echo "Usage: $(basename "$0") <VM_HOST>" >&2
+    echo "Run with -h for help" >&2
+    exit 1
+fi
+
+readonly VM_HOST="$1"
+readonly SSH_USER="${PC_SWITCHER_TEST_USER:-testuser}"
+
+# SSH connection helper
+# First connection uses ssh_accept_new (test runner may have empty known_hosts)
+# After first connection, key is stored and subsequent calls verify it
+ssh_vm() {
+    ssh_run "${SSH_USER}@${VM_HOST}" "$@"
+}
+
+log_step "Resetting VM: $VM_HOST"
+log_info "SSH User: $SSH_USER"
+
+# Establish SSH connection (accept new key if not in known_hosts)
+# Test runner may have empty known_hosts or correct key from provisioning
+log_info "Establishing SSH connection..."
+ssh_accept_new "${SSH_USER}@${VM_HOST}" true
+
+# Step 1: Validate baseline snapshots exist
+log_step "Validating baseline snapshots..."
+if ! ssh_vm 'bash -s' << 'EOF'
+set -euo pipefail
+sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1
+sudo btrfs subvolume show /.snapshots/baseline/@home >/dev/null 2>&1
+EOF
+then
+    log_error "Baseline snapshots not found on $VM_HOST"
+    log_info "Run provision-test-infra.sh to create baseline snapshots"
+    exit 1
+fi
+log_info "Baseline snapshots validated"
+
+# Step 2: Clean up test artifacts
+log_step "Cleaning up test artifacts..."
+ssh_vm "sudo rm -rf /.snapshots/pc-switcher/test-* 2>/dev/null || true"
+log_info "Test artifacts cleaned"
+
+# Steps 3-4: Mount filesystem and replace subvolumes with baseline snapshots
+log_step "Replacing subvolumes with baseline snapshots..."
+ssh_vm 'sudo bash -s' << 'EOF'
+set -euo pipefail
+
+# Helper: recursively delete a subvolume and its children
+delete_subvol_recursive() {
+    local path="$1"
+    local child
+    for child in $(btrfs subvolume list -o "$path" 2>/dev/null | awk '{print $NF}'); do
+        delete_subvol_recursive "/mnt/btrfs/$child"
+    done
+    btrfs subvolume delete "$path"
+}
+
+# 1. Mount top-level btrfs filesystem
+mkdir -p /mnt/btrfs
+if mountpoint -q /mnt/btrfs; then
+    umount /mnt/btrfs
+fi
+mount -o subvolid=5 /dev/sda2 /mnt/btrfs
+
+# 2. Verify / is mounted from @ (bail out if not)
+ROOT_SUBVOL=$(mount | grep ' on / ' | grep -o 'subvol=[^,)]*' | cut -d= -f2)
+if [ "$ROOT_SUBVOL" != "/@" ]; then
+    echo "ERROR: / is mounted from '$ROOT_SUBVOL', expected '/@'" >&2
+    exit 1
+fi
+
+# 3. Verify /home is mounted from @home (bail out if not)
+HOME_SUBVOL=$(mount | grep ' on /home ' | grep -o 'subvol=[^,)]*' | cut -d= -f2)
+if [ "$HOME_SUBVOL" != "/@home" ]; then
+    echo "ERROR: /home is mounted from '$HOME_SUBVOL', expected '/@home'" >&2
+    exit 1
+fi
+
+# 4. Cleanup ALL from previous run (do all cleanup first)
+if [ -e /mnt/btrfs/@_old ]; then
+    delete_subvol_recursive /mnt/btrfs/@_old  # May have nested subvols from tests
+fi
+if [ -e /mnt/btrfs/@_new ]; then
+    delete_subvol_recursive /mnt/btrfs/@_new   # Fresh snapshot, no nested subvols
+fi
+if [ -e /mnt/btrfs/@home_old ]; then
+    delete_subvol_recursive /mnt/btrfs/@home_old  # May have nested subvols
+fi
+if [ -e /mnt/btrfs/@home_new ]; then
+    delete_subvol_recursive /mnt/btrfs/@home_new   # Fresh snapshot, no nested subvols
+fi
+
+# 5. Create BOTH new snapshots (prepare everything before swapping)
+btrfs subvolume snapshot /.snapshots/baseline/@ /mnt/btrfs/@_new
+btrfs subvolume snapshot /.snapshots/baseline/@home /mnt/btrfs/@home_new
+
+# 6. Swap BOTH as fast as possible (back-to-back mv operations)
+mv /mnt/btrfs/@ /mnt/btrfs/@_old
+mv /mnt/btrfs/@_new /mnt/btrfs/@
+mv /mnt/btrfs/@home /mnt/btrfs/@home_old
+mv /mnt/btrfs/@home_new /mnt/btrfs/@home
+
+# 7. Update the default subvolume. It is not used for booting, but keeping it 
+#    blocks deletion of the old subvolume it might refer to.
+btrfs subvolume set-default /mnt/btrfs/@
+EOF
+log_info "Subvolumes replaced with baseline snapshots"
+
+# Step 5: Reboot (unmount not strictly necessary)
+log_step "Rebooting VM..."
+# Reboot may terminate SSH connection, so ignore exit code
+ssh_vm "sudo reboot" || true
+log_info "Reboot initiated"
+
+# Step 6: Wait for VM to come back online
+log_step "Waiting for VM to come back online..."
+
+# Give the VM a moment to actually go down
+sleep 5
+
+# Wait for SSH (no REMOVE_KEY - host key doesn't change on reboot)
+if ! wait_for_ssh "${SSH_USER}@${VM_HOST}" 300; then
+    log_error "Timeout waiting for VM to come back online"
+    log_info "Please check VM status manually"
+    exit 1
+fi
+
+# Step 7: Clean up old subvolumes after reboot
+log_step "Cleaning up old subvolumes..."
+ssh_vm 'sudo bash -s' << 'EOF'
+set -euo pipefail
+
+# Helper: recursively delete a subvolume and its children
+delete_subvol_recursive() {
+    local path="$1"
+    local child
+    for child in $(btrfs subvolume list -o "$path" 2>/dev/null | awk '{print $NF}'); do
+        delete_subvol_recursive "/mnt/btrfs/$child"
+    done
+    btrfs subvolume delete "$path"
+}
+
+# Mount filesystem
+mkdir -p /mnt/btrfs
+if mountpoint -q /mnt/btrfs; then
+    umount /mnt/btrfs
+fi
+mount -o subvolid=5 /dev/sda2 /mnt/btrfs
+
+# Delete old subvolumes (may have nested subvols from tests)
+delete_subvol_recursive /mnt/btrfs/@_old
+delete_subvol_recursive /mnt/btrfs/@home_old
+
+# Unmount
+umount /mnt/btrfs
+EOF
+log_info "Old subvolumes deleted"
+
+log_step "VM reset complete: $VM_HOST"

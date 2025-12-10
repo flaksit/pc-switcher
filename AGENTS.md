@@ -45,7 +45,7 @@ This file provides guidance to AI agents when working with code in this reposito
 
 **Project Stage**: Early planning/design phase. No implementation code exists yet.
 
-**Target Environment**: Ubuntu 24.04 LTS, btrfs filesystem, machines connected via 1Gb LAN during sync.
+**Target Environment**: Ubuntu 24.04 LTS, btrfs filesystem, machines connected via SSH (LAN, VPN, etc.).
 
 ## Critical Context Files
 
