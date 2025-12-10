@@ -103,7 +103,10 @@ log_info "Test artifacts cleaned"
 # Step 3: Mount top-level btrfs filesystem
 log_step "Mounting top-level btrfs filesystem..."
 ssh_vm "sudo mkdir -p /mnt/btrfs"
-ssh_vm "sudo mount -o subvolid=5 /dev/sda2 /mnt/btrfs 2>/dev/null || true"
+# Unmount first in case it's already mounted from a previous run
+ssh_vm "sudo umount /mnt/btrfs 2>/dev/null || true"
+# Mount without error suppression - fail loudly if mount fails
+ssh_vm "sudo mount -o subvolid=5 /dev/sda2 /mnt/btrfs"
 log_info "Top-level btrfs mounted at /mnt/btrfs"
 
 # Step 4: Replace active subvolumes with fresh snapshots from baseline
@@ -153,6 +156,8 @@ log_info "VM is back online"
 # Step 7: Clean up old subvolumes after reboot
 log_step "Cleaning up old subvolumes..."
 ssh_vm "sudo mkdir -p /mnt/btrfs"
+# Unmount first in case mount wasn't properly cleaned up
+ssh_vm "sudo umount /mnt/btrfs 2>/dev/null || true"
 ssh_vm "sudo mount -o subvolid=5 /dev/sda2 /mnt/btrfs"
 
 log_info "Deleting @_old..."
