@@ -12,6 +12,7 @@ from rich.console import Console
 
 from pcswitcher.btrfs_snapshots import session_folder_name
 from pcswitcher.config import Configuration
+from pcswitcher.config_sync import sync_config_to_target
 from pcswitcher.connection import Connection
 from pcswitcher.disk import DiskSpace, check_disk_space, parse_threshold
 from pcswitcher.events import EventBus
@@ -95,6 +96,7 @@ class Orchestrator:
         # Logging infrastructure (initialized in run())
         self._file_logger: FileLogger | None = None
         self._ui: TerminalUI | None = None
+        self._console: Console | None = None
         self._file_logger_task: asyncio.Task[None] | None = None
         self._ui_task: asyncio.Task[None] | None = None
 
@@ -161,12 +163,13 @@ class Orchestrator:
             queue=file_queue,
             hostname_map=hostname_map,
         )
-        # Calculate total steps: 7 system phases + sync jobs + 1 post-snapshot
+        # Calculate total steps: 8 system phases + sync jobs + 1 post-snapshot
         # System phases: 1=source lock, 2=SSH, 3=target lock, 4=validation,
-        # 5=disk check, 6=pre-snapshots, 7=install on target
-        total_steps = 7 + len(self._config.sync_jobs) + 1
+        # 5=disk check, 6=pre-snapshots, 7=install on target, 8=config sync
+        total_steps = 8 + len(self._config.sync_jobs) + 1
+        self._console = Console()
         self._ui = TerminalUI(
-            console=Console(),
+            console=self._console,
             total_steps=total_steps,
         )
 
@@ -219,15 +222,20 @@ class Orchestrator:
             await self._install_on_target_job()
             self._ui.set_current_step(7)
 
-            # Phase 8: Execute sync jobs with background monitoring
+            # Phase 8: Sync config from source to target
+            self._logger.log(LogLevel.INFO, Host.TARGET, "Syncing configuration to target")
+            await self._sync_config_to_target()
+            self._ui.set_current_step(8)
+
+            # Phase 9: Execute sync jobs with background monitoring
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Starting sync operations")
             job_results = await self._execute_jobs(jobs)
             session.job_results = job_results
 
-            # Phase 9: Post-sync snapshots
+            # Phase 10: Post-sync snapshots
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Creating post-sync snapshots")
             await self._create_snapshots(SnapshotPhase.POST)
-            self._ui.set_current_step(7 + len(jobs) + 1)
+            self._ui.set_current_step(8 + len(jobs) + 1)
 
             # Success
             session.status = SessionStatus.COMPLETED
@@ -312,6 +320,34 @@ class Orchestrator:
 
         # Execute
         await install_job.execute()
+
+    async def _sync_config_to_target(self) -> None:
+        """Sync configuration from source to target machine.
+
+        Handles three scenarios:
+        1. Target has no config: Display source config, prompt for confirmation
+        2. Target config differs: Display diff, offer three choices
+        3. Target config matches: Skip silently
+
+        Raises:
+            RuntimeError: If user aborts or config sync fails
+        """
+        assert self._remote_executor is not None
+        assert self._console is not None
+
+        source_config_path = Configuration.get_default_config_path()
+
+        should_continue = await sync_config_to_target(
+            target=self._remote_executor,
+            source_config_path=source_config_path,
+            ui=self._ui,
+            console=self._console,
+        )
+
+        if not should_continue:
+            raise RuntimeError("Config sync aborted by user")
+
+        self._logger.log(LogLevel.INFO, Host.TARGET, "Configuration sync completed")
 
     async def _discover_and_validate_jobs(self) -> list[Job]:
         """Discover enabled jobs from config and validate their configuration.
@@ -546,8 +582,8 @@ class Orchestrator:
             try:
                 # Execute sync jobs sequentially
                 for job_index, job in enumerate(jobs):
-                    # Update step counter (base 7 system steps + current job index)
-                    self._ui.set_current_step(7 + job_index + 1)
+                    # Update step counter (base 8 system steps + current job index)
+                    self._ui.set_current_step(8 + job_index + 1)
                     started_at = datetime.now(UTC)
                     try:
                         await job.execute()

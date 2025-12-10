@@ -10,18 +10,7 @@ set -euo pipefail
 # to ensure all authorized SSH keys are properly configured from secrets.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/ssh-common.sh"
-
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly NC='\033[0m' # No Color
-
-log_step() { echo -e "${GREEN}==>${NC} $*"; }
-log_info() { echo -e "    $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+source "$SCRIPT_DIR/common.sh"
 
 # Configuration
 readonly SSH_KEY_NAME="pc-switcher-test-key"

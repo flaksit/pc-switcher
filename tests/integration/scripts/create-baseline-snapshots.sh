@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Source common SSH helpers
+# Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/ssh-common.sh"
+source "$SCRIPT_DIR/common.sh"
 
 # Create baseline btrfs snapshots on both test VMs.
 # These snapshots are used by reset-vm.sh to restore VMs to a known-good state between tests.
@@ -39,17 +39,6 @@ EOF
     exit 0
 fi
 
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly NC='\033[0m' # No Color
-
-log_step() { echo -e "${GREEN}==>${NC} $*"; }
-log_info() { echo -e "    $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
-
 # Check for required environment variable
 : "${HCLOUD_TOKEN:?HCLOUD_TOKEN environment variable must be set}"
 
@@ -78,34 +67,40 @@ get_vm_ip() {
 
 # Create baseline snapshots on a single VM
 # Key is already established by configure-hosts.sh, so we use ssh_run
+# All operations consolidated into a single SSH call for performance
 create_snapshots_on_vm() {
     local vm_name="$1"
     local vm_ip="$2"
 
     log_step "Creating baseline snapshots on $vm_name ($vm_ip)..."
 
-    # Create the baseline directory if it doesn't exist
-    ssh_run "${SSH_USER}@${vm_ip}" "sudo mkdir -p ${SNAPSHOT_BASE_DIR}"
+    ssh_run "${SSH_USER}@${vm_ip}" 'sudo bash -s' << 'EOF'
+set -euo pipefail
 
-    # Check if snapshots already exist and delete them
-    if ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume list / | grep -q '${ROOT_SNAPSHOT}'"; then
-        log_info "Deleting existing root snapshot..."
-        ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume delete ${ROOT_SNAPSHOT}"
+SNAPSHOT_BASE_DIR="/.snapshots/baseline"
+ROOT_SNAPSHOT="${SNAPSHOT_BASE_DIR}/@"
+HOME_SNAPSHOT="${SNAPSHOT_BASE_DIR}/@home"
+
+# Create the baseline directory if it doesn't exist
+mkdir -p "$SNAPSHOT_BASE_DIR"
+
+# Delete existing snapshots if present
+for snap in "$ROOT_SNAPSHOT" "$HOME_SNAPSHOT"; do
+    if btrfs subvolume show "$snap" >/dev/null 2>&1; then
+        echo "Deleting existing snapshot: $snap"
+        btrfs subvolume delete "$snap"
     fi
+done
 
-    if ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume list / | grep -q '${HOME_SNAPSHOT}'"; then
-        log_info "Deleting existing home snapshot..."
-        ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume delete ${HOME_SNAPSHOT}"
-    fi
+# Create new read-only snapshots
+echo "Creating read-only snapshot of / at $ROOT_SNAPSHOT..."
+btrfs subvolume snapshot -r / "$ROOT_SNAPSHOT"
 
-    # Create new read-only snapshots
-    log_info "Creating read-only snapshot of / at ${ROOT_SNAPSHOT}..."
-    ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume snapshot -r / ${ROOT_SNAPSHOT}"
+echo "Creating read-only snapshot of /home at $HOME_SNAPSHOT..."
+btrfs subvolume snapshot -r /home "$HOME_SNAPSHOT"
 
-    log_info "Creating read-only snapshot of /home at ${HOME_SNAPSHOT}..."
-    ssh_run "${SSH_USER}@${vm_ip}" "sudo btrfs subvolume snapshot -r /home ${HOME_SNAPSHOT}"
-
-    log_info "Snapshots created successfully"
+echo "Snapshots created successfully"
+EOF
 }
 
 # Main execution
