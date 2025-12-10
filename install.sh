@@ -76,16 +76,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Verify we're on Ubuntu 24.04 LTS
+# Read OS info without sourcing to avoid polluting environment variables
 if [[ -f /etc/os-release ]]; then
-    source /etc/os-release
-    if [[ "${ID}" != "ubuntu" ]]; then
-        error "This script is designed for Ubuntu. Detected: ${ID}"
+    OS_ID=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+    OS_VERSION_ID=$(grep -E '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+
+    if [[ "${OS_ID}" != "ubuntu" ]]; then
+        error "This script is designed for Ubuntu. Detected: ${OS_ID}"
         error "PC-switcher requires Ubuntu 24.04 LTS."
         exit 1
     fi
-    if [[ "${VERSION_ID}" != "24.04" ]]; then
-        warn "PC-switcher is designed for Ubuntu 24.04 LTS. Detected: ${VERSION_ID}"
-        warn "Installation will continue, but functionality is not guaranteed."
+    if [[ "${OS_VERSION_ID}" != "24.04" ]]; then
+        warn "PC-switcher is designed for Ubuntu 24.04 LTS. Detected: ${OS_VERSION_ID}"
+        warn "Installation can continue, but functionality is not guaranteed."
         read -p "Continue anyway? (y/N) " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then

@@ -38,7 +38,7 @@ Based on PC-switcher's High Level Requirements, the orchestration system must su
 - Respect user's existing `~/.ssh/config` configuration (FR-004)
 
 ### Operational Constraints
-- Both machines on same 1Gb LAN during sync
+- Machines must be reachable via SSH (LAN, VPN such as Tailscale, or other network)
 - Manual trigger (not a persistent connection requirement)
 - Single user workflow (no concurrent operations)
 - Connection establishment within 5 seconds (SC-002)
@@ -305,9 +305,10 @@ async with conn.create_process('python3 /opt/pc-switcher/sync.py', term_type='xt
 Requirement: Connection within 5 seconds (SC-002).
 
 **Analysis:**
-- SSH connection on LAN typically completes in <2 seconds (including authentication)
+- SSH connection over local network typically completes in <2 seconds (including authentication)
+- VPN connections may add slight overhead but typically still within budget
 - DNS resolution might add 1-2 seconds if needed
-- Initial key exchange negligible on LAN
+- Initial key exchange negligible on low-latency networks
 
 **Verdict**: SSH easily meets the 5-second requirement. Not a concern.
 
@@ -354,7 +355,7 @@ Requirement: Connection within 5 seconds (SC-002).
 - Authentication separate from existing SSH infrastructure (mTLS or custom tokens)
 - Requires separate port management and firewall rules
 - gRPC requires HTTP/2 support (more complexity)
-- Overkill for LAN-only, manually-triggered use case
+- Overkill for manually-triggered point-to-point use case
 - Over-engineered for what is fundamentally remote command execution
 - gRPC libraries add significant dependencies
 

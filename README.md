@@ -56,8 +56,7 @@ pc-switcher init
 ## Quick Start
 
 Before syncing, ensure:
-- Target machine is powered on and reachable via SSH
-- Both machines are on the same LAN
+- Target machine is powered on and reachable via SSH (LAN, VPN, etc.)
 - You're logged out from the desktop (or close all apps)
 
 Trigger a sync:
@@ -119,14 +118,16 @@ pc-switcher logs --last       # Show path to most recent log file
 
 # Clean up old snapshots
 pc-switcher cleanup-snapshots --older-than 7d [--dry-run]
+
+# Self-update pc-switcher
+pc-switcher self update [VERSION] [--prerelease]
 ```
 
 ## Requirements
 
 - Ubuntu 24.04 LTS on all machines
 - Single btrfs filesystem (all synced data on one filesystem per machine)
-- SSH access between machines
-- Machines connected to same LAN (1Gb) during sync
+- SSH access between machines (LAN, VPN such as Tailscale, or other network)
 - Only one machine actively used at a time
 
 ## Key Design Principles
