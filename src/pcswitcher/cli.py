@@ -552,7 +552,8 @@ def update(
 
     # Perform the update
     console.print(f"Updating pc-switcher from {current_display} to {target_display}...")
-    result = _run_uv_tool_install(target_version_str)
+    # Use SemVer format for git tag (GitHub tags use SemVer, not PEP 440)
+    result = _run_uv_tool_install(target.semver_str())
 
     if result.returncode != 0:
         console.print("[bold red]Error:[/bold red] Update failed")
