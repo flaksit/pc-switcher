@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Source common SSH helpers
+# Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/ssh-common.sh"
+source "$SCRIPT_DIR/common.sh"
 
 # Reset a single VM to its baseline btrfs snapshot state
 # This script restores the VM to the known-good baseline created during provisioning
@@ -50,17 +50,6 @@ if [[ "$#" -ne 1 ]]; then
     echo "Run with -h for help" >&2
     exit 1
 fi
-
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly NC='\033[0m' # No Color
-
-log_step() { echo -e "${GREEN}==>${NC} $*"; }
-log_info() { echo "    $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 readonly VM_HOST="$1"
 readonly SSH_USER="${PC_SWITCHER_TEST_USER:-testuser}"
@@ -173,26 +162,16 @@ log_info "Reboot initiated"
 
 # Step 6: Wait for VM to come back online
 log_step "Waiting for VM to come back online..."
-log_info "(This typically takes 10-20 seconds)"
 
 # Give the VM a moment to actually go down
 sleep 5
 
-# Poll until VM is accessible
-RETRY_COUNT=0
-MAX_RETRIES=60  # 5 minutes maximum (60 * 5 seconds)
-
-until ssh_run -o ConnectTimeout=5 "${SSH_USER}@${VM_HOST}" true 2>/dev/null; do
-    RETRY_COUNT=$((RETRY_COUNT + 1))
-    if [[ $RETRY_COUNT -ge $MAX_RETRIES ]]; then
-        log_error "Timeout waiting for VM to come back online after 5 minutes"
-        log_info "Please check VM status manually"
-        exit 1
-    fi
-    log_info "Waiting for VM... (attempt $RETRY_COUNT/$MAX_RETRIES)"
-done
-
-log_info "VM is back online"
+# Wait for SSH (no REMOVE_KEY - host key doesn't change on reboot)
+if ! wait_for_ssh "${SSH_USER}@${VM_HOST}" 300; then
+    log_error "Timeout waiting for VM to come back online"
+    log_info "Please check VM status manually"
+    exit 1
+fi
 
 # Step 7: Clean up old subvolumes after reboot
 log_step "Cleaning up old subvolumes..."

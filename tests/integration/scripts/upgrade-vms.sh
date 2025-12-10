@@ -19,20 +19,9 @@ set -euo pipefail
 #   CI_JOB_ID              GitLab CI job ID (for lock holder identification)
 #   GITHUB_RUN_ID          GitHub Actions run ID (for lock holder identification)
 
-# Source common SSH helpers
+# Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/ssh-common.sh"
-
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly NC='\033[0m' # No Color
-
-log_step() { echo -e "${GREEN}==>${NC} $*"; }
-log_info() { echo "    $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+source "$SCRIPT_DIR/common.sh"
 
 # Help
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -230,22 +219,12 @@ reboot_vm() {
     # Give VM time to actually go down
     sleep 5
 
-    # Wait for VM to come back online
-    log_info "Waiting for $vm_name to come back online..."
-    local retry_count=0
-    local max_retries=60  # 5 minutes maximum (60 * 5 seconds)
+    # Wait for SSH (no REMOVE_KEY - host key doesn't change on reboot)
+    if ! wait_for_ssh "${SSH_USER}@${vm_ip}" 300; then
+        log_error "Timeout waiting for $vm_name to come back online"
+        return 1
+    fi
 
-    until ssh_run -o ConnectTimeout=5 "${SSH_USER}@${vm_ip}" true 2>/dev/null; do
-        retry_count=$((retry_count + 1))
-        if [[ $retry_count -ge $max_retries ]]; then
-            log_error "Timeout waiting for $vm_name to come back online after 5 minutes"
-            return 1
-        fi
-        log_info "Waiting for $vm_name... (attempt $retry_count/$max_retries)"
-        sleep 5
-    done
-
-    log_info "$vm_name is back online"
     return 0
 }
 

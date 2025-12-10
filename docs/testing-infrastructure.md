@@ -235,14 +235,14 @@ For each host, in each phase:
 
 ### SSH Helper Functions
 
-All scripts source `ssh-common.sh` which provides these helpers:
+All scripts source `common.sh` which provides these helpers:
 
 | Function | When to use | Actions |
 |----------|-------------|---------|
-| `wait_for_ssh` | Phase transition with polling | `ssh-keygen -R` + poll with `accept-new` |
+| `wait_for_ssh` | Wait for SSH with progress | Poll with optional `REMOVE_KEY` for phase transitions |
 | `ssh_first` | Phase transition (single call) | `ssh-keygen -R` + `accept-new` |
 | `ssh_accept_new` | First connection (key might not exist) | `accept-new` only |
-| `ssh_run` | Subsequent connections | Normal SSH (verify key) |
+| `ssh_run` | Subsequent connections | Normal SSH with ControlMaster (verify key) |
 
 ### Flow Analysis
 
