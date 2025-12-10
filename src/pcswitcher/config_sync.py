@@ -100,9 +100,7 @@ def _prompt_new_config(console: Console, source_content: str) -> bool:
     return response.lower() == "y"
 
 
-def _prompt_config_diff(
-    console: Console, source_content: str, target_content: str, diff: str
-) -> ConfigSyncAction:
+def _prompt_config_diff(console: Console, source_content: str, target_content: str, diff: str) -> ConfigSyncAction:
     """Prompt user to choose action when configs differ.
 
     Args:
@@ -117,8 +115,7 @@ def _prompt_config_diff(
     console.print()
     console.print(
         Panel(
-            "[yellow]Target configuration differs from source.[/yellow]\n"
-            "Review the differences below:",
+            "[yellow]Target configuration differs from source.[/yellow]\nReview the differences below:",
             title="Config Sync",
             border_style="yellow",
         )
@@ -197,16 +194,12 @@ async def sync_config_to_target(
                 console.print("[green]Configuration copied to target.[/green]")
                 return True
             else:
-                console.print(
-                    "[red]Sync aborted: configuration required on target.[/red]"
-                )
+                console.print("[red]Sync aborted: configuration required on target.[/red]")
                 return False
 
         elif source_content.strip() == target_content.strip():
             # Scenario 3: Configs match
-            console.print(
-                "[dim]Target config matches source, skipping config sync.[/dim]"
-            )
+            console.print("[dim]Target config matches source, skipping config sync.[/dim]")
             return True
 
         else:
@@ -219,9 +212,7 @@ async def sync_config_to_target(
                 console.print("[green]Configuration copied to target.[/green]")
                 return True
             elif action == ConfigSyncAction.KEEP_TARGET:
-                console.print(
-                    "[yellow]Keeping existing target configuration.[/yellow]"
-                )
+                console.print("[yellow]Keeping existing target configuration.[/yellow]")
                 return True
             else:  # ABORT
                 console.print("[red]Sync aborted by user.[/red]")
