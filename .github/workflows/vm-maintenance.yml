@@ -1,0 +1,41 @@
+name: VM Maintenance
+
+on:
+  schedule:
+    # Run weekly on Monday at 2am UTC
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+jobs:
+  upgrade-vms:
+    name: Upgrade Test VMs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Hetzner Cloud CLI
+        uses: hetznercloud/setup-hcloud@v1
+
+      - name: Check if VMs exist
+        id: check-vms
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          if hcloud server describe pc1 >/dev/null 2>&1 && hcloud server describe pc2 >/dev/null 2>&1; then
+            echo "vms_exist=true" >> $GITHUB_OUTPUT
+          else
+            echo "vms_exist=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upgrade VMs
+        if: steps.check-vms.outputs.vms_exist == 'true'
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: tests/integration/scripts/upgrade-vms.sh
+
+      - name: VMs not available
+        if: steps.check-vms.outputs.vms_exist == 'false'
+        run: |
+          echo "::warning::Test VMs (pc1, pc2) do not exist. Skipping upgrade."
+          echo "VMs are created on-demand when integration tests run."

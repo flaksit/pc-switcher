@@ -248,7 +248,7 @@ All scripts source `ssh-common.sh` which provides these helpers:
 
 #### Flow A: Fresh Provisioning (VMs don't exist)
 
-```
+```text
 provision-test-infra.sh
   └─ create-vm.sh (×2 parallel)
        └─ wait_for_ssh ← PHASE TRANSITION (created) - remove + accept-new
@@ -263,7 +263,7 @@ provision-test-infra.sh
 
 #### Flow B: VMs Exist, Not Configured
 
-```
+```text
 provision-test-infra.sh
   └─ check_vm_configured(PC1, PC2) ← FIRST (parallel) - ssh_first
   └─ check_vm_has_btrfs(PC1, PC2) ← FIRST (parallel) - ssh_first
@@ -274,7 +274,7 @@ provision-test-infra.sh
 
 #### Flow C: Integration Tests (potentially different runner)
 
-```
+```text
 conftest.py (test runner - may have empty known_hosts)
   └─ reset-vm.sh (×2 parallel) ← FIRST - ssh_accept_new (no remove)
   └─ asyncssh.connect ← subsequent (key from reset-vm.sh)
@@ -305,6 +305,58 @@ conftest.py (test runner - may have empty known_hosts)
 - Location: fsn1 (Falkenstein, Germany)
 - Cost: ~€4/month per VM when running
 - VMs are kept running between workflow runs to avoid reprovisioning
+
+## VM Maintenance
+
+### Upgrading Test VMs
+
+Test VMs should be upgraded periodically to receive security updates and package fixes. This is a maintenance operation that runs separately from integration tests to keep test runs fast and predictable.
+
+**When to upgrade:**
+- Weekly or monthly (recommended)
+- When security advisories affect your packages
+- If tests fail due to suspected outdated system packages
+
+**How to upgrade:**
+
+```bash
+export HCLOUD_TOKEN=your_hcloud_token
+./tests/integration/scripts/upgrade-vms.sh
+```
+
+**What the upgrade script does:**
+1. Acquires lock to prevent concurrent integration tests
+2. Resets VMs to current baseline state
+3. Upgrades all apt packages non-interactively
+4. Runs `apt-get autoremove` to clean unused dependencies
+5. Detects if reboot is needed (kernel or critical package updates)
+6. Reboots VMs if necessary (in parallel)
+7. Clears apt cache
+8. Creates new baseline snapshots (only if changes occurred)
+9. Releases lock
+
+**Runtime:** A few minutes (or ~1 minute if no updates available)
+
+**Automated updates:** A weekly scheduled GitHub Actions job (`vm-maintenance.yml`) automatically runs this script every Monday at 2am UTC. This job:
+- Only runs if the VMs exist (non-blocking if they don't)
+- Can be triggered manually via workflow_dispatch
+- Shows a warning if VMs are not available (doesn't fail the workflow)
+
+**Important:** The upgrade process runs against a temporary baseline. VMs stay on a stable baseline between upgrades for test reproducibility. Package updates only affect the baseline after the upgrade script completes, ensuring tests run against consistent packages.
+
+### Why not automatically upgrade during test runs?
+
+Integrating package upgrades into test fixtures would:
+- Add several minutes of overhead to every test run
+- Make test timing unpredictable (varies by available updates)
+- Reduce test reproducibility (packages change over time)
+- Waste CI minutes on upgrades that don't affect most test results
+
+The separate maintenance script approach provides:
+- Fast, predictable test runs
+- Controlled, explicit upgrade decisions
+- Clean separation of testing from maintenance concerns
+- Ability to verify upgrades don't break tests before updating baseline
 
 ## Integration Test Fixtures
 
