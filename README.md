@@ -118,6 +118,9 @@ pc-switcher logs --last       # Show path to most recent log file
 
 # Clean up old snapshots
 pc-switcher cleanup-snapshots --older-than 7d [--dry-run]
+
+# Self-update pc-switcher
+pc-switcher self update [VERSION] [--prerelease]
 ```
 
 ## Requirements
