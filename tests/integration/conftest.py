@@ -6,8 +6,8 @@ variables are not configured.
 Fixtures provided:
 - pc1_connection: SSH connection to pc1 test VM
 - pc2_connection: SSH connection to pc2 test VM
-- pc1_executor: RemoteExecutor for pc1
-- pc2_executor: RemoteExecutor for pc2
+- pc1_executor: RemoteExecutor for pc1 (with login shell environment)
+- pc2_executor: RemoteExecutor for pc2 (with login shell environment)
 - integration_lock: Session-scoped lock for test isolation
 - integration_session: Session-scoped fixture for VM provisioning and reset
 """
@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shlex
 import socket
 import warnings
 from asyncio import TaskGroup
@@ -29,6 +30,30 @@ import pytest
 import pytest_asyncio
 
 from pcswitcher.executor import RemoteExecutor
+from pcswitcher.models import CommandResult
+
+
+class RemoteLoginBashExecutor(RemoteExecutor):
+    """RemoteExecutor subclass that runs commands in a bash login shell.
+
+    Remote commands via SSH run in non-login, non-interactive shells by default,
+    which means ~/.profile isn't sourced and PATH may not include ~/.local/bin.
+
+    This subclass ensures commands run with the proper user environment by
+    wrapping them in `bash -l -c "..."`, which:
+    - Sources /etc/profile and ~/.profile (login shell behavior)
+    - Ensures PATH includes user-installed tools like uv and pc-switcher
+    - Simulates what a real user would experience when SSH'ing in
+    """
+
+    async def run_command(
+        self,
+        cmd: str,
+        timeout: float | None = None,
+    ) -> CommandResult:
+        """Run a command in a bash login shell environment."""
+        wrapped_cmd = f"bash -l -c {shlex.quote(cmd)}"
+        return await super().run_command(wrapped_cmd, timeout=timeout)
 
 REQUIRED_ENV_VARS = [
     "HCLOUD_TOKEN",
@@ -262,20 +287,28 @@ async def pc2_connection(integration_session: None) -> AsyncIterator[asyncssh.SS
 
 
 @pytest_asyncio.fixture(scope="module")
-async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> RemoteExecutor:
-    """RemoteExecutor for running commands on pc1.
+async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> RemoteLoginBashExecutor:
+    """Executor for running commands on pc1 in a bash login shell environment.
 
     Module-scoped: shared across all tests in a module.
     Tests must clean up their own artifacts and not modify executor state.
+
+    Commands run via this executor have ~/.profile sourced, ensuring:
+    - PATH includes ~/.local/bin (for uv-installed tools like pc-switcher)
+    - User environment matches interactive SSH sessions
     """
-    return RemoteExecutor(pc1_connection)
+    return RemoteLoginBashExecutor(pc1_connection)
 
 
 @pytest_asyncio.fixture(scope="module")
-async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> RemoteExecutor:
-    """RemoteExecutor for running commands on pc2.
+async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> RemoteLoginBashExecutor:
+    """Executor for running commands on pc2 in a bash login shell environment.
 
     Module-scoped: shared across all tests in a module.
     Tests must clean up their own artifacts and not modify executor state.
+
+    Commands run via this executor have ~/.profile sourced, ensuring:
+    - PATH includes ~/.local/bin (for uv-installed tools like pc-switcher)
+    - User environment matches interactive SSH sessions
     """
-    return RemoteExecutor(pc2_connection)
+    return RemoteLoginBashExecutor(pc2_connection)
