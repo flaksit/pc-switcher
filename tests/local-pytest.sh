@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Run integration tests locally with minimal setup.
+# Run pytest locally with test environment configured.
 #
 # This script only requires HCLOUD_TOKEN to be set. It automatically:
 # - Looks up VM IPs from Hetzner Cloud
 # - Updates SSH known_hosts entries
 # - Sets all required environment variables
-# - Runs pytest with integration markers
+# - Runs pytest with any arguments you provide
 #
 # Usage:
-#   ./local-integration-tests.sh                    # Run all integration tests
-#   ./local-integration-tests.sh test_vm_connectivity.py  # Run specific test file
-#   ./local-integration-tests.sh -k "test_ssh"     # Run tests matching pattern
+#   ./local-pytest.sh tests/integration -m integration          # Run all integration tests
+#   ./local-pytest.sh tests/integration/test_vm_connectivity.py # Run specific test file
+#   ./local-pytest.sh -k "test_ssh" -v                          # Run tests matching pattern
+#   ./local-pytest.sh tests/integration/test_executor_overhead.py::TestRemoteExecutorOverhead::test_no_op_command_overhead -s
 #
 set -euo pipefail
 
@@ -92,7 +93,7 @@ log_info "  PC_SWITCHER_TEST_PC1_HOST=$PC_SWITCHER_TEST_PC1_HOST"
 log_info "  PC_SWITCHER_TEST_PC2_HOST=$PC_SWITCHER_TEST_PC2_HOST"
 log_info "  PC_SWITCHER_TEST_USER=$PC_SWITCHER_TEST_USER"
 
-# Run tests
-log_info "Running integration tests..."
+# Run pytest with all provided arguments
+log_info "Running pytest..."
 cd "$PROJECT_ROOT"
-exec uv run pytest tests/integration -v -m integration "$@"
+exec uv run pytest "$@"

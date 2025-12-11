@@ -903,13 +903,16 @@ The easiest way to run integration tests locally:
 
 ```bash
 # Run all integration tests
-./tests/local-integration-tests.sh
+./tests/local-pytest.sh tests/integration -m integration
 
 # Run specific test file
-./tests/local-integration-tests.sh tests/integration/test_vm_connectivity.py
+./tests/local-pytest.sh tests/integration/test_vm_connectivity.py
+
+# Run specific test
+./tests/local-pytest.sh tests/integration/test_executor_overhead.py::TestRemoteExecutorOverhead::test_no_op_command_overhead -s
 
 # Run with extra pytest flags
-./tests/local-integration-tests.sh -k "test_ssh" --tb=short
+./tests/local-pytest.sh -k "test_ssh" --tb=short
 ```
 
 The script automatically:
@@ -917,12 +920,12 @@ The script automatically:
 - Looks up VM IPs from Hetzner Cloud using the `hcloud` CLI
 - Updates SSH known_hosts entries (removes old, adds new)
 - Sets all required environment variables (`PC_SWITCHER_TEST_PC1_HOST`, `PC_SWITCHER_TEST_PC2_HOST`, `PC_SWITCHER_TEST_USER`)
-- Runs pytest with integration markers
+- Runs pytest with any arguments you provide (full pytest wrapper)
 
 **Note**: If you don't use `pass`, set HCLOUD_TOKEN manually before running:
 ```bash
 export HCLOUD_TOKEN="your-token-here"
-./tests/local-integration-tests.sh
+./tests/local-pytest.sh tests/integration -m integration
 ```
 
 ### Environment Variables for Running Integration Tests on the VMs From Local Code
