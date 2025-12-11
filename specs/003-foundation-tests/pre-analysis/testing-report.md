@@ -27,6 +27,8 @@ This report provides a comprehensive overview of testing coverage for the founda
 | `jobs/disk_space_monitor.py` | Schema, validation | Real monitoring | Full |
 | `jobs/dummy_success.py` | Schema | Full execution | Full |
 | `jobs/dummy_fail.py` | Schema | Exception handling | Full |
+| `jobs/context.py` | JobContext dataclass | - | Full |
+| `config_sync.py` | Config sync unit tests, integration tests | Full | Needs verification |
 | `install.sh` | - | Fresh/upgrade/preserve | Full |
 
 ### Coverage by Spec Requirement
@@ -92,6 +94,30 @@ This report provides a comprehensive overview of testing coverage for the founda
 | **US-7** Installation/Setup | `test_install_script.py` | Integration |
 | **US-8** Dummy Jobs | `test_dummy_success.py`, `test_dummy_fail.py` | Unit, Integration |
 | **US-9** Terminal UI | `test_ui.py`, `test_orchestrator.py` | Unit (event delivery), Integration (full flow), Manual (visual layout/colors) |
+
+## Implementation Status
+
+### Tests Requiring Verification
+These tests exist but need verification against spec.md standards (FR-007 through FR-012):
+
+| Category | File | Tests | Covers | Verification Status |
+|----------|------|-------|--------|---------------------|
+| Contract | `test_job_interface.py` | 15 | FR-001 (job interface) | ⚠️ Needs review |
+| Contract | `test_executor_contract.py` | 16 | Executor parity | ⚠️ Needs review |
+| Unit | `test_lock.py` | 10 | FR-047 | ⚠️ Needs review |
+| Unit | `test_jobs/test_disk_space_monitor.py` | 13 | FR-016, FR-017 | ⚠️ Needs review |
+| Unit | `test_config_sync.py` | 20 | FR-007a, FR-007b, FR-007c | ⚠️ Needs review |
+| Integration | `test_config_sync.py` | 9 | FR-007a, FR-007b, FR-007c | ⚠️ Needs review |
+
+**Total tests requiring verification: 83**
+
+### Out of Scope
+| Category | File | Tests | Reason |
+|----------|------|-------|--------|
+| Integration | `test_vm_connectivity.py` | 14 | Framework smoke test |
+| Integration | `test_btrfs_operations.py` | 11 | Framework smoke test |
+| Unit | `test_cli_self_update.py` | 17 | PR #42, not 001-foundation |
+| Top-level | `test_version.py` (PEP440/SemVer) | ~60 | PR #42, not 001-foundation |
 
 ## How to Run Tests
 

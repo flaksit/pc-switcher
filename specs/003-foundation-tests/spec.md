@@ -14,13 +14,12 @@ Documentation Hierarchy:
 - Specification (this document) - Detailed requirements for retroactive tests
 
 Related Features:
-- [Testing Framework Specification](./spec.md) - Infrastructure this feature depends on
+- [Testing Framework Specification](../002-testing-framework/spec.md) - Infrastructure this feature depends on
 
 Pre-analysis References:
 - [Testing Framework Documentation](../../docs/testing-framework.md) - Architecture and Implementation details
 - [Testing Guide for Developers](../../docs/testing-developer-guide.md) - How to write and run tests using the framework
-- [Testing Implementation Plan](../002-testing-framework/pre-analysis/testing-implementation-plan.md) - Detailed implementation plan  
-  This document covers both the testing framework and retroactive tests for existing functionality. This feature is only about the retroactive tests.
+- [Testing Implementation Plan](../002-testing-framework/pre-analysis/testing-implementation-plan.md) - Detailed implementation plan
 - [Testing Report](pre-analysis/testing-report.md) - Coverage analysis
 
 ## Clarifications
@@ -144,7 +143,7 @@ As a pc-switcher developer, I can trace each test back to the specific requireme
 
 ## Assumptions
 
-- Testing framework infrastructure from [spec.md](./spec.md) is implemented and operational
+- Testing framework infrastructure from [../002-testing-framework/spec.md](../002-testing-framework/spec.md) is implemented and operational
 - specs/001-foundation/spec.md is the authoritative source for what needs testing
 - 001-foundation implementation exists and is testable
 

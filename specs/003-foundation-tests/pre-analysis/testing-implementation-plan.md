@@ -167,6 +167,12 @@ For testing framework infrastructure (conftest fixtures, VM provisioning scripts
 |------------|--------------|
 | `TestDummyFailJobConfigSchema` | `test_schema_has_fail_at_percent`, `test_valid_config_passes`, `test_default_fail_percent` |
 
+### tests/unit/test_jobs/test_context.py
+
+| Test Class | Test Methods |
+|------------|--------------|
+| `TestJobContext` | `test_frozen_immutable`, `test_all_fields_populated`, `test_type_annotations_correct` |
+
 ## Integration Test Specifications
 
 ### tests/integration/test_connection.py
@@ -303,30 +309,64 @@ Tasks within the same phase can be implemented **in parallel** by multiple agent
 14. Implement `tests/unit/test_jobs/test_install_on_target.py`
 15. Implement `tests/unit/test_jobs/test_dummy_success.py`
 16. Implement `tests/unit/test_jobs/test_dummy_fail.py`
+17. Implement `tests/unit/test_jobs/test_context.py`
 
 ### Phase 3: Integration Tests - Core Modules
 
 **Can run in parallel (all independent):**
-17. Implement `tests/integration/test_connection.py`
-18. Implement `tests/integration/test_executor.py`
-19. Implement `tests/integration/test_lock.py`
-20. Implement `tests/integration/test_disk.py`
-21. Implement `tests/integration/test_btrfs_snapshots.py`
-22. Implement `tests/integration/test_logger.py`
+18. Implement `tests/integration/test_connection.py`
+19. Implement `tests/integration/test_executor.py`
+20. Implement `tests/integration/test_lock.py`
+21. Implement `tests/integration/test_disk.py`
+22. Implement `tests/integration/test_btrfs_snapshots.py`
+23. Implement `tests/integration/test_logger.py`
 
 ### Phase 4: Integration Tests - Jobs
 
 **Can run in parallel (all independent):**
-23. Implement `tests/integration/test_jobs/test_btrfs.py`
-24. Implement `tests/integration/test_jobs/test_install_on_target.py`
-25. Implement `tests/integration/test_jobs/test_disk_space_monitor.py`
-26. Implement `tests/integration/test_jobs/test_dummy_success.py`
-27. Implement `tests/integration/test_jobs/test_dummy_fail.py`
+24. Implement `tests/integration/test_jobs/test_btrfs.py`
+25. Implement `tests/integration/test_jobs/test_install_on_target.py`
+26. Implement `tests/integration/test_jobs/test_disk_space_monitor.py`
+27. Implement `tests/integration/test_jobs/test_dummy_success.py`
+28. Implement `tests/integration/test_jobs/test_dummy_fail.py`
 
 ### Phase 5: Full System Integration Tests
 
 **Can run in parallel (all independent):**
-28. Implement `tests/integration/test_orchestrator.py`
-29. Implement `tests/integration/test_cli.py`
-30. Implement `tests/integration/test_cleanup_snapshots.py`
-31. Implement `tests/integration/test_install_script.py`
+29. Implement `tests/integration/test_orchestrator.py`
+30. Implement `tests/integration/test_cli.py`
+31. Implement `tests/integration/test_cleanup_snapshots.py`
+32. Implement `tests/integration/test_install_script.py`
+
+## Implementation Status
+
+### Needs Review (verify completeness against spec.md standards)
+
+These tests exist and need verification for spec compliance:
+
+| Test File | Tests | Requirements to Verify | Status |
+|-----------|-------|------------------------|--------|
+| `tests/contract/test_job_interface.py` | 15 | FR-001 (job interface) | Needs review |
+| `tests/contract/test_executor_contract.py` | 16 | Executor parity | Needs review |
+| `tests/unit/test_lock.py` | 10 | FR-047 (locking mechanism) | Needs review |
+| `tests/unit/test_jobs/test_disk_space_monitor.py` | 13 | FR-016, FR-017 (disk space checks) | Needs review |
+| `tests/unit/test_config_sync.py` | 20 | FR-007a, FR-007b, FR-007c (config sync) | Needs review |
+| `tests/integration/test_config_sync.py` | 9 | FR-007a, FR-007b, FR-007c (config sync) | Needs review |
+
+**Verification criteria from spec.md:**
+- FR-007: Test files MUST include docstrings/comments referencing spec requirements
+- FR-008: Test function names MUST indicate the requirement being tested
+- FR-009: Tests MUST be independent, no shared mutable state
+- FR-010: Tests MUST use fixtures from testing framework
+- FR-011: Unit tests MUST use mock executors
+- FR-012: Integration tests MUST execute real operations on test VMs
+
+### Out of Scope
+- `tests/integration/test_vm_connectivity.py` - Framework smoke test
+- `tests/integration/test_btrfs_operations.py` - Framework smoke test
+- `tests/unit/test_cli_self_update.py` - PR #42, not 001-foundation scope
+- `tests/test_version.py` (PEP 440/SemVer portion) - PR #42, not 001-foundation scope
+- `tests/conftest.py`, `tests/unit/conftest.py`, `tests/integration/conftest.py` - Framework infrastructure
+
+### Remaining Work
+All other test files listed in this plan need to be implemented.
