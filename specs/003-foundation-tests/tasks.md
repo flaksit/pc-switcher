@@ -25,10 +25,10 @@
 
 **Purpose**: Ensure test infrastructure is ready and create common fixtures
 
-- [ ] T001 Verify pytest, pytest-asyncio dependencies are available via `uv run pytest --version`
-- [ ] T002 [P] Create unit test directory structure: `tests/unit/orchestrator/`, `tests/unit/jobs/`, `tests/unit/cli/`
-- [ ] T003 [P] Add shared fixtures for mock JobContext in `tests/unit/conftest.py`
-- [ ] T004 [P] Add time-freezing fixtures for deterministic timestamp tests in `tests/unit/conftest.py`
+- [X] T001 Verify pytest, pytest-asyncio dependencies are available via `uv run pytest --version`
+- [X] T002 [P] Create unit test directory structure: `tests/unit/orchestrator/`, `tests/unit/jobs/`, `tests/unit/cli/`
+- [X] T003 [P] Add shared fixtures for mock JobContext in `tests/unit/conftest.py`
+- [X] T004 [P] Add time-freezing fixtures for deterministic timestamp tests in `tests/unit/conftest.py`
 
 ---
 
@@ -38,10 +38,10 @@
 
 **These files already exist and need additions per data-model.md**
 
-- [ ] T005 [P] Expand `tests/contract/test_job_interface.py` with US1-AS2 (config schema validation), US1-AS3 (job logging at all levels), US1-AS4 (job progress reporting) — Note: T010 also adds FR-001 test to this file; both tasks target same file intentionally
-- [ ] T006 [P] Expand `tests/unit/test_config_sync.py` with FR-007a (config sync prompt if missing), FR-007b (config diff and prompt), FR-007c (skip if configs match), US2-AS7 (skip when configs match)
-- [ ] T007 [P] Expand `tests/unit/test_lock.py` with FR-047 verification (lock prevents concurrent sync), edge case: concurrent sync attempts
-- [ ] T008 [P] Expand `tests/unit/jobs/test_disk_space_monitor.py` with FR-016 (preflight disk space check), FR-017 (runtime disk space monitoring) comprehensive coverage
+- [X] T005 [P] Expand `tests/contract/test_job_interface.py` with US1-AS2 (config schema validation), US1-AS3 (job logging at all levels), US1-AS4 (job progress reporting) — Note: T010 also adds FR-001 test to this file; both tasks target same file intentionally
+- [X] T006 [P] Expand `tests/unit/test_config_sync.py` with FR-007a (config sync prompt if missing), FR-007b (config diff and prompt), FR-007c (skip if configs match), US2-AS7 (skip when configs match)
+- [X] T007 [P] Expand `tests/unit/test_lock.py` with FR-047 verification (lock prevents concurrent sync), edge case: concurrent sync attempts
+- [X] T008 [P] Expand `tests/unit/jobs/test_disk_space_monitor.py` with FR-016 (preflight disk space check), FR-017 (runtime disk space monitoring) comprehensive coverage
 
 **Checkpoint**: Foundational test files expanded - new test file creation can proceed
 
@@ -55,7 +55,7 @@
 
 ### Unit Tests for US-1
 
-- [ ] T009 Create `tests/unit/orchestrator/test_job_lifecycle.py` with:
+- [X] T009 Create `tests/unit/orchestrator/test_job_lifecycle.py` with:
   - `test_001_fr002_lifecycle_validate_then_execute` (FR-002: validate then execute order)
   - `test_001_fr019_critical_on_exception` (FR-019: CRITICAL log and halt on exception)
   - `test_001_fr044_orchestrator_forwards_progress` (FR-044: progress forwarded to UI)
@@ -65,12 +65,12 @@
   - `test_001_edge_cleanup_exception` (edge: job cleanup raises exception)
   - `test_001_edge_partial_job_failures` (edge: some jobs succeed, some fail)
 
-- [ ] T010 [P] Add to `tests/contract/test_job_interface.py` (same file as T005, no conflict):
+- [X] T010 [P] Add to `tests/contract/test_job_interface.py` (same file as T005, no conflict):
   - `test_001_fr001_job_interface_contract` (FR-001: job interface defines standardized methods)
 
 ### Integration Tests for US-1
 
-- [ ] T011 Create `tests/integration/test_end_to_end_sync.py` with:
+- [X] T011 Create `tests/integration/test_end_to_end_sync.py` with:
   - `test_001_us1_as1_job_integration_via_interface` (US1-AS1: job integrates via interface)
   - `test_001_us1_as7_interrupt_terminates_job` (US1-AS7: Ctrl+C terminates job)
   - `test_001_edge_target_unreachable_mid_sync` (edge: target unreachable mid-sync)
@@ -87,7 +87,7 @@
 
 ### Unit Tests for US-2
 
-- [ ] T012 Create `tests/unit/jobs/test_install_job.py` with:
+- [X] T012 Create `tests/unit/jobs/test_install_job.py` with:
   - `test_001_fr005_version_check_and_install` (FR-005: check version, install from GitHub)
   - `test_001_fr006_abort_on_newer_target_version` (FR-006: abort if target newer)
   - `test_001_fr007_abort_on_install_failure` (FR-007: abort on installation failure)
@@ -97,7 +97,7 @@
 
 ### Integration Tests for US-2
 
-- [ ] T013 Create `tests/integration/test_self_installation.py` with:
+- [X] T013 Create `tests/integration/test_self_installation.py` with:
   - `test_001_us2_as1_install_missing_pcswitcher` (US2-AS1: install missing pc-switcher)
   - `test_001_us2_as2_upgrade_outdated_target` (US2-AS2: upgrade outdated target)
   - `test_001_us2_as5_prompt_for_missing_config` (US2-AS5: prompt for missing config)
@@ -115,7 +115,7 @@
 
 ### Unit Tests for US-3
 
-- [ ] T014 Create `tests/unit/jobs/test_snapshot_job.py` with:
+- [X] T014 Create `tests/unit/jobs/test_snapshot_job.py` with:
   - `test_001_fr008_create_presync_snapshots` (FR-008: create pre-sync snapshots)
   - `test_001_fr009_create_postsync_snapshots` (FR-009: create post-sync snapshots)
   - `test_001_fr010_snapshot_naming_pattern` (FR-010: snapshot naming pattern)
@@ -132,7 +132,7 @@
 
 ### Integration Tests for US-3
 
-- [ ] T015 Create `tests/integration/test_snapshot_infrastructure.py` with:
+- [X] T015 Create `tests/integration/test_snapshot_infrastructure.py` with:
   - `test_001_us3_as2_create_presync_snapshots` (US3-AS2: create pre-sync snapshots)
   - `test_001_us3_as3_create_postsync_snapshots` (US3-AS3: create post-sync snapshots)
   - `test_001_us3_as4_create_snapshots_subvolume` (US3-AS4: create /.snapshots/ subvolume)
@@ -152,7 +152,7 @@
 
 ### Unit Tests for US-4
 
-- [ ] T016 Create `tests/unit/orchestrator/test_logging_system.py` with:
+- [X] T016 Create `tests/unit/orchestrator/test_logging_system.py` with:
   - `test_001_fr018_log_level_ordering` (FR-018: six log levels with correct ordering)
   - `test_001_fr020_independent_log_levels` (FR-020: independent file and CLI log levels)
   - `test_001_fr021_timestamped_log_file` (FR-021: write logs to timestamped file)
@@ -164,7 +164,7 @@
 
 ### Integration Tests for US-4
 
-- [ ] T017 Create `tests/integration/test_logging_integration.py` with:
+- [X] T017 Create `tests/integration/test_logging_integration.py` with:
   - `test_001_fr023_aggregate_source_target_logs` (FR-023: aggregate source and target logs)
   - `test_001_us4_as6_logs_command_displays_last_log` (US4-AS6: logs command displays recent log)
 
@@ -180,14 +180,14 @@
 
 ### Unit Tests for US-5
 
-- [ ] T018 Create `tests/unit/orchestrator/test_interrupt_handling.py` with:
+- [X] T018 Create `tests/unit/orchestrator/test_interrupt_handling.py` with:
   - `test_001_fr003_termination_request_on_interrupt` (FR-003: termination request with cleanup timeout)
   - `test_001_fr024_sigint_handler_exit_130` (FR-024: SIGINT handler, log, exit 130)
   - `test_001_us5_as2_interrupt_between_jobs_skips_remaining` (US5-AS2: interrupt between jobs skips remaining)
 
 ### Integration Tests for US-5
 
-- [ ] T019 Create `tests/integration/test_interrupt_integration.py` with:
+- [X] T019 Create `tests/integration/test_interrupt_integration.py` with:
   - `test_001_fr025_terminate_target_processes` (FR-025: send termination to target processes)
   - `test_001_fr026_second_sigint_force_terminate` (FR-026: force-terminate on second SIGINT)
   - `test_001_fr027_no_orphaned_processes` (FR-027: no orphaned processes)
@@ -207,7 +207,7 @@
 
 ### Unit Tests for US-6
 
-- [ ] T020 Create `tests/unit/orchestrator/test_config_system.py` with:
+- [X] T020 Create `tests/unit/orchestrator/test_config_system.py` with:
   - `test_001_fr004_jobs_loaded_in_config_order` (FR-004: jobs loaded in config order)
   - `test_001_fr011_snapshots_always_active` (FR-011: snapshots always active - config aspect; T014 tests snapshot behavior aspect)
   - `test_001_fr028_load_from_config_path` (FR-028: load from ~/.config/pc-switcher/config.yaml)
@@ -235,12 +235,12 @@
 
 ### Unit Tests for US-7
 
-- [ ] T021 Add to `tests/unit/jobs/test_install_job.py`:
+- [X] T021 Add to `tests/unit/jobs/test_install_job.py`:
   - `test_001_us7_as2_target_install_shared_logic` (US7-AS2: target install uses shared logic)
 
 ### Integration Tests for US-7
 
-- [ ] T022 Create `tests/integration/test_installation_script.py` with:
+- [X] T022 Create `tests/integration/test_installation_script.py` with:
   - `test_001_fr035_install_script_no_prereqs` (FR-035: install.sh without prerequisites)
   - `test_001_fr036_default_config_with_comments` (FR-036: default config with inline comments)
   - `test_001_us7_as1_install_script_fresh_machine` (US7-AS1: curl install.sh on fresh machine)
@@ -258,7 +258,7 @@
 
 ### Unit Tests for US-8
 
-- [ ] T023 Create `tests/unit/jobs/test_dummy_jobs.py` with:
+- [X] T023 Create `tests/unit/jobs/test_dummy_jobs.py` with:
   - `test_001_fr038_dummy_jobs_exist` (FR-038: two dummy jobs exist)
   - `test_001_fr039_dummy_success_behavior` (FR-039: dummy_success behavior - 20s, logs, progress)
   - `test_001_fr041_dummy_fail_exception` (FR-041: dummy_fail raises exception at 60%)
@@ -280,7 +280,7 @@
 
 ### Integration Tests for US-9
 
-- [ ] T024 Create `tests/integration/test_terminal_ui.py` with:
+- [X] T024 Create `tests/integration/test_terminal_ui.py` with:
   - `test_001_us9_as1_progress_display` (US9-AS1: display progress bar, percentage, job name)
   - `test_001_us9_as2_multi_job_progress` (US9-AS2: overall and individual job progress)
   - `test_001_us9_as3_logs_with_progress` (US9-AS3: logs displayed below progress indicators)
@@ -299,7 +299,7 @@
 
 ### Unit Tests for CLI
 
-- [ ] T025 Create `tests/unit/cli/test_commands.py` with:
+- [X] T025 Create `tests/unit/cli/test_commands.py` with:
   - `test_001_fr046_sync_command` (FR-046: single command `pc-switcher sync <target>`)
 
 **Checkpoint**: CLI commands fully tested
@@ -314,7 +314,7 @@
 
 ### Integration Tests for Config Sync
 
-- [ ] T026 Expand `tests/integration/test_config_sync.py` with:
+- [X] T026 Expand `tests/integration/test_config_sync.py` with:
   - `test_001_us7_as2_target_install_shared_logic_integration` (US7-AS2: integration test for shared install logic)
 
 **Checkpoint**: Config sync integration tests complete
@@ -327,12 +327,12 @@
 
 ### Performance Verification
 
-- [ ] T027 Run full unit test suite: `uv run pytest tests/unit tests/contract -v` and verify <30s completion (FR-013 of 003 spec). If fails: optimize slow tests or split into separate test file. **Baseline**: 4-core CPU, 16GB RAM, SSD storage.
+- [X] T027 Run full unit test suite: `uv run pytest tests/unit tests/contract -v` and verify <30s completion (FR-013 of 003 spec). If fails: optimize slow tests or split into separate test file. **Baseline**: 4-core CPU, 16GB RAM, SSD storage. **Result**: 214 tests pass in 1.17s
 - [ ] T028 [P] Run full integration test suite: `uv run pytest tests/integration -v -m integration` and verify <15 minutes completion (SC-008 of 003 spec). If fails: identify bottleneck tests and optimize. **Baseline**: Same as T027 plus test VM with 2 vCPUs, 4GB RAM.
 
 ### Test Quality Verification
 
-- [ ] T029 [P] Run tests in random order: `uv run pytest tests/unit -v --randomly-seed=12345` to verify test independence (FR-009 of 003 spec). If fails: fix order-dependent tests by isolating state
+- [X] T029 [P] Run tests in random order: `uv run pytest tests/unit -v --randomly-seed=12345` to verify test independence (FR-009 of 003 spec). If fails: fix order-dependent tests by isolating state. **Result**: Tests pass with random seed 3809626195
 - [ ] T036 Verify unit tests use mock executors, not real system operations (FR-011 of 003 spec). Grep for direct subprocess/os calls in `tests/unit/` - should only use mocks. If violations found: refactor to use mocks
 - [ ] T037 [P] Verify integration tests execute real operations on test VMs (FR-012 of 003 spec). Review `tests/integration/` to confirm real btrfs, SSH, file operations. If mocked: refactor to use real operations
 - [ ] T038 [P] Verify tests use fixtures from testing framework for VM access, event buses, cleanup (FR-010 of 003 spec). Check imports from `tests/conftest.py` and framework fixtures. If missing: add fixture usage

@@ -272,3 +272,52 @@ class TestConfigSyncIntegration:
         finally:
             local_path.unlink()
             await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+
+    async def test_001_us7_as2_target_install_shared_logic_integration(self, pc1_executor: RemoteExecutor) -> None:
+        """US7-AS2: Target install uses shared install logic - installs uv if missing.
+
+        Verifies that when target is missing uv, the install.sh script (used by
+        InstallOnTargetJob) successfully installs uv first, then pc-switcher.
+        This confirms target install and initial install share the same logic.
+
+        Reference: specs/001-foundation/spec.md - User Story 7, Acceptance Scenario 2
+        """
+        # Save current uv installation state
+        uv_check = await pc1_executor.run_command("command -v uv")
+        had_uv = uv_check.success
+
+        # Uninstall uv to simulate missing prerequisite
+        await pc1_executor.run_command("rm -f ~/.local/bin/uv")
+
+        try:
+            # Verify uv is not available
+            result = await pc1_executor.run_command("command -v uv")
+            assert not result.success, "uv should not be available after removal"
+
+            # Run install.sh - this simulates what InstallOnTargetJob does
+            install_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
+            install_result = await pc1_executor.run_command(
+                f"curl -LsSf {install_url} | bash",
+                timeout=180.0,
+            )
+
+            # Verify install succeeded
+            assert install_result.success, f"Install script failed: {install_result.stderr}"
+
+            # Verify uv was installed
+            uv_result = await pc1_executor.run_command("command -v uv")
+            assert uv_result.success, "uv should be installed by install.sh"
+            assert "/.local/bin/uv" in uv_result.stdout, "uv should be in ~/.local/bin"
+
+            # Verify pc-switcher was installed
+            pc_result = await pc1_executor.run_command("pc-switcher --version")
+            assert pc_result.success, "pc-switcher should be installed"
+            assert "pc-switcher" in pc_result.stdout.lower(), "Version output should mention pc-switcher"
+
+        finally:
+            # Cleanup: uninstall pc-switcher
+            await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true")
+
+            # Restore uv if it wasn't there before (leave system as we found it)
+            if not had_uv:
+                await pc1_executor.run_command("rm -f ~/.local/bin/uv")

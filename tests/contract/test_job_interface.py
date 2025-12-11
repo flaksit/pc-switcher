@@ -128,6 +128,120 @@ class TestJobContract:
         job._report_progress(ProgressUpdate(percent=50))  # pyright: ignore[reportPrivateUsage]
         mock_job_context.event_bus.publish.assert_called_once()  # type: ignore[union-attr]
 
+    @pytest.mark.asyncio
+    async def test_001_fr001_job_interface_contract(self, mock_job_context: JobContext) -> None:
+        """FR-001: Job interface defines standardized methods.
+
+        Verifies that the Job interface includes:
+        - validate() method
+        - execute() method
+        - CONFIG_SCHEMA for config declaration
+        - name property
+        """
+        # Verify validate() method exists and returns list of ValidationError
+        job = ExampleTestJob(mock_job_context)
+        errors = await job.validate()
+        assert isinstance(errors, list)
+
+        # Verify execute() method exists
+        await job.execute()
+
+        # Verify CONFIG_SCHEMA class attribute exists
+        assert hasattr(ExampleTestJob, "CONFIG_SCHEMA")
+        assert isinstance(ExampleTestJob.CONFIG_SCHEMA, dict)
+
+        # Verify name property exists
+        assert hasattr(ExampleTestJob, "name")
+        assert isinstance(ExampleTestJob.name, str)
+
+    @pytest.mark.asyncio
+    async def test_001_us1_as2_config_schema_validation(self) -> None:
+        """US1-AS2: Job defines config schema, system validates.
+
+        Verifies that:
+        - Job can define configuration schema
+        - System validates job config against schema
+        - System applies defaults for missing values
+        - Invalid config produces ConfigError
+        """
+        # Test valid config passes validation
+        valid_config = {"test_value": "hello"}
+        errors = ExampleTestJob.validate_config(valid_config)
+        assert errors == []
+
+        # Test invalid config produces ConfigError
+        invalid_config = {"test_value": 123}  # Should be string
+        errors = ExampleTestJob.validate_config(invalid_config)
+        assert len(errors) == 1
+        assert isinstance(errors[0], ConfigError)
+        assert errors[0].job == "example_test"
+
+        # Test missing required field produces ConfigError
+        errors = InvalidSchemaJob.validate_config({})
+        assert len(errors) == 1
+        assert isinstance(errors[0], ConfigError)
+        assert "required_field" in errors[0].message
+
+    @pytest.mark.asyncio
+    async def test_001_us1_as3_job_logging_at_all_levels(self, mock_job_context: JobContext) -> None:
+        """US1-AS3: Job emits log messages at six levels.
+
+        Verifies that jobs can emit logs at all six levels:
+        DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL
+        """
+        job = ExampleTestJob(mock_job_context)
+
+        # Test each log level
+        for level in [
+            LogLevel.DEBUG,
+            LogLevel.FULL,
+            LogLevel.INFO,
+            LogLevel.WARNING,
+            LogLevel.ERROR,
+            LogLevel.CRITICAL,
+        ]:
+            mock_job_context.event_bus.publish.reset_mock()  # type: ignore[union-attr]
+            job._log(Host.SOURCE, level, f"Test message at {level.name}")  # pyright: ignore[reportPrivateUsage]
+
+            # Verify event was published
+            mock_job_context.event_bus.publish.assert_called_once()  # type: ignore[union-attr]
+            call_args = mock_job_context.event_bus.publish.call_args  # type: ignore[union-attr]
+            event = call_args[0][0]
+
+            # Verify event has correct level
+            assert event.level == level
+            assert event.job == "example_test"
+            assert event.host == Host.SOURCE
+
+    @pytest.mark.asyncio
+    async def test_001_us1_as4_job_progress_reporting(self, mock_job_context: JobContext) -> None:
+        """US1-AS4: Job emits progress updates.
+
+        Verifies that jobs can emit progress updates with:
+        - Percentage
+        - Current item
+        - Total items
+        """
+        job = ExampleTestJob(mock_job_context)
+
+        # Test progress with percentage
+        progress = ProgressUpdate(percent=50)
+        job._report_progress(progress)  # pyright: ignore[reportPrivateUsage]
+        mock_job_context.event_bus.publish.assert_called()  # type: ignore[union-attr]
+
+        # Test progress with current/total
+        mock_job_context.event_bus.publish.reset_mock()  # type: ignore[union-attr]
+        progress = ProgressUpdate(current=5, total=10, item="file.txt")
+        job._report_progress(progress)  # pyright: ignore[reportPrivateUsage]
+        mock_job_context.event_bus.publish.assert_called_once()  # type: ignore[union-attr]
+
+        # Verify event structure
+        call_args = mock_job_context.event_bus.publish.call_args  # type: ignore[union-attr]
+        event = call_args[0][0]
+        assert event.job == "example_test"
+        assert event.update.current == 5
+        assert event.update.total == 10
+
 
 class TestJobHierarchy:
     """Test job class hierarchy."""
