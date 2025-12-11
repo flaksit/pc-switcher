@@ -8,6 +8,8 @@ Fixtures provided:
 - pc2_connection: SSH connection to pc2 test VM
 - pc1_executor: RemoteExecutor for pc1 (with login shell environment)
 - pc2_executor: RemoteExecutor for pc2 (with login shell environment)
+- pc2_executor_without_pcswitcher_tool: pc2 executor with pc-switcher uninstalled (clean target)
+- pc2_executor_with_old_pcswitcher_tool: pc2 executor with old pc-switcher version (upgrade testing)
 - integration_lock: Session-scoped lock for test isolation
 - integration_session: Session-scoped fixture for VM provisioning and reset
 """
@@ -88,12 +90,18 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 def _get_lock_holder() -> str:
-    """Get a unique lock holder identifier for this test session."""
+    """Get a unique lock holder identifier for this test session.
+
+    The identifier must be valid for Hetzner Cloud labels which only allow
+    alphanumeric characters, underscores, and hyphens.
+    """
     ci_job_id = os.getenv("CI_JOB_ID") or os.getenv("GITHUB_RUN_ID")
     if ci_job_id:
         return f"ci-{ci_job_id}"
     hostname = socket.gethostname()
-    return f"local-{os.getenv('USER', 'unknown')}@{hostname}"
+    user = os.getenv("USER", "unknown")
+    # Use underscore instead of @ for Hetzner label compatibility
+    return f"local-{user}-{hostname}"
 
 
 async def _run_script(script_name: str, *args: str, check: bool = True) -> tuple[int, str, str]:
@@ -313,3 +321,86 @@ async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> RemoteLo
     - User environment matches interactive SSH sessions
     """
     return RemoteLoginBashExecutor(pc2_connection)
+
+
+@pytest_asyncio.fixture
+async def pc2_executor_without_pcswitcher_tool(pc2_executor: RemoteExecutor) -> AsyncIterator[RemoteExecutor]:
+    """Provide a clean environment on pc2 without pc-switcher installed.
+
+    WARNING: This fixture wraps pc2_executor and modifies VM state by uninstalling
+    pc-switcher. Tests using this fixture MUST NOT use pc2_executor directly in
+    parallel, as both operate on the same VM and will interfere with each other.
+
+    Removes pc-switcher installation but keeps test infrastructure intact.
+    Useful for testing fresh installs on a clean target.
+
+    Cleanup: Captures initial state and restores it after the test to avoid affecting
+    other tests in the same test session.
+    """
+    # Check if pc-switcher was installed before we modify state
+    version_check = await pc2_executor.run_command("pc-switcher --version 2>/dev/null || true", timeout=10.0)
+    was_installed = version_check.success and "pc-switcher" in version_check.stdout.lower()
+
+    # Uninstall pc-switcher if it exists
+    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
+    await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
+
+    yield pc2_executor
+
+    # Restore to initial state: if it was installed before, reinstall it
+    if was_installed:
+        install_script_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
+        result = await pc2_executor.run_command(
+            f"curl -sSL {install_script_url} | bash",
+            timeout=120.0,
+        )
+        if not result.success:
+            # Log but don't fail the test - cleanup issues shouldn't fail tests
+            warnings.warn(f"Failed to restore pc-switcher on pc2: {result.stderr}", stacklevel=2)
+
+
+@pytest_asyncio.fixture
+async def pc2_executor_with_old_pcswitcher_tool(pc2_executor: RemoteExecutor) -> AsyncIterator[RemoteExecutor]:
+    """Provide pc2 with an older version of pc-switcher (0.1.0-alpha.1) for upgrade testing.
+
+    WARNING: This fixture wraps pc2_executor and modifies VM state by installing
+    an older version of pc-switcher. Tests using this fixture MUST NOT use pc2_executor
+    directly in parallel, as both operate on the same VM and will interfere with each other.
+
+    Uninstalls current pc-switcher and installs version 0.1.0-alpha.1.
+    Useful for testing upgrade scenarios.
+
+    Cleanup: Captures initial state and restores it after the test to avoid affecting
+    other tests in the same test session.
+    """
+    # Install script URL from main branch
+    install_script_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
+
+    # Check if pc-switcher was installed before we modify state
+    version_check = await pc2_executor.run_command("pc-switcher --version 2>/dev/null || true", timeout=10.0)
+    was_installed = version_check.success and "pc-switcher" in version_check.stdout.lower()
+
+    # Uninstall and install older version
+    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
+    await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
+    result = await pc2_executor.run_command(
+        f"curl -sSL {install_script_url} | VERSION=0.1.0-alpha.1 bash",
+        timeout=120.0,
+    )
+    assert result.success, f"Failed to install old version: {result.stderr}"
+
+    yield pc2_executor
+
+    # Restore to initial state
+    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
+    await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
+
+    if was_installed:
+        # Reinstall latest version
+        result = await pc2_executor.run_command(
+            f"curl -sSL {install_script_url} | bash",
+            timeout=120.0,
+        )
+        if not result.success:
+            # Log but don't fail the test - cleanup issues shouldn't fail tests
+            warnings.warn(f"Failed to restore pc-switcher on pc2: {result.stderr}", stacklevel=2)

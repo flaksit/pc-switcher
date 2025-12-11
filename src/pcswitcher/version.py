@@ -174,6 +174,37 @@ class Version:
         """
         return str(self._pkg_version)
 
+    def release_version(self) -> Self:
+        """Return the release version, stripping post/dev/local parts.
+
+        This extracts the base release version that would have a corresponding
+        git tag. For example:
+        - "0.1.0a3.post23.dev0+da749fc" -> "0.1.0a3"
+        - "1.0.0.post1" -> "1.0.0"
+        - "1.0.0" -> "1.0.0"
+
+        Returns:
+            Version instance with only release and pre-release parts
+        """
+        pv = self._pkg_version
+
+        # Build version string with only release and pre parts
+        result = ".".join(str(x) for x in pv.release)
+
+        if pv.pre is not None:
+            pre_type, pre_num = pv.pre
+            result += f"{pre_type}{pre_num}"
+
+        return self.parse_pep440(result)
+
+    def is_release_version(self) -> bool:
+        """Check if the version is a release version (no pre/post/dev/local parts).
+
+        Returns:
+            True if release version, False otherwise
+        """
+        return self.release_version() == self
+
     def semver_str(self) -> str:
         """Return the version in SemVer format.
 

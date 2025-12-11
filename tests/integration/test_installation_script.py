@@ -1,9 +1,20 @@
 """Integration tests for install.sh script.
 
-Tests verify the installation script works on fresh machines and handles
-various scenarios like missing prerequisites, existing configs, etc.
+Tests verify the installation script works on fresh machines, handles various
+scenarios like missing prerequisites, and can install/upgrade specific versions.
 
 These tests run on VMs, not on development machine.
+
+**What these tests cover:**
+- install.sh works without prerequisites (fresh install)
+- install.sh can install specific versions via VERSION parameter
+- install.sh can upgrade from older to newer versions
+- Version-specific installation matches expected behavior
+
+**What these tests do NOT cover:**
+- InstallOnTargetJob class methods (see test_install_on_target.py)
+- Config synchronization (see test_install_on_target.py)
+- Pre/post-sync operations (see test_snapshot_infrastructure.py, etc.)
 """
 
 from __future__ import annotations
@@ -14,9 +25,20 @@ import pytest
 import pytest_asyncio
 
 from pcswitcher.executor import RemoteExecutor
+from pcswitcher.version import Version, get_this_version, parse_version_str_from_cli_output
 
 # Install script URL from main branch
 INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
+
+
+def _get_release_version() -> Version:
+    """Get the release version from current version, stripping post/dev/local parts.
+
+    E.g., "0.1.0-alpha.3+post.23.dev.0.da749fc" -> "0.1.0-alpha.3"
+    This gives us a version that has a corresponding git tag on GitHub.
+    """
+    current = Version.parse_pep440(get_this_version())
+    return current.release_version()
 
 
 @pytest_asyncio.fixture
@@ -58,17 +80,17 @@ async def test_001_fr035_install_script_no_prereqs(clean_install_environment: Re
 
     Verifies that the install.sh script can run on a fresh machine and:
     - Installs uv if not present (or uses existing uv)
-    - Installs btrfs-progs if not present
+    - Installs btrfs-progs if not present (prompts user)
     - Installs pc-switcher package
-    - Creates default configuration
+    - Does NOT create default config (user must run pc-switcher init)
+    - Shows instructions to run pc-switcher init
     """
     executor = clean_install_environment
 
     # Note: We assume uv is already installed on the test VM for test infrastructure.
     # The script should handle both cases (uv present and not present).
     # Testing the "no uv" case would require uninstalling uv, which could break
-    # the test infrastructure. The install.sh script logic for installing uv
-    # is tested indirectly through US7-AS1.
+    # the test infrastructure.
 
     # Run the installation script
     result = await executor.run_command(
@@ -80,8 +102,8 @@ async def test_001_fr035_install_script_no_prereqs(clean_install_environment: Re
     assert result.success, f"Installation script failed: {result.stderr}\nStdout: {result.stdout}"
     assert (
         "pc-switcher installed successfully" in result.stdout
+        or "pc-switcher upgraded successfully" in result.stdout
         or "Installation complete" in result.stdout
-        or "pc-switcher" in result.stdout
     ), f"Installation success message not found in output: {result.stdout}"
 
     # Verify pc-switcher is installed and accessible
@@ -89,169 +111,101 @@ async def test_001_fr035_install_script_no_prereqs(clean_install_environment: Re
     assert version_result.success, f"pc-switcher not accessible after install: {version_result.stderr}"
     assert "pc-switcher" in version_result.stdout.lower(), "Version output doesn't contain 'pc-switcher'"
 
-    # Verify config directory was created
-    config_check = await executor.run_command(
-        "test -d ~/.config/pc-switcher && echo 'exists'",
-        timeout=10.0,
-    )
-    assert config_check.success, "Config directory not created"
-    assert "exists" in config_check.stdout, "Config directory not created"
-
-    # Verify default config file was created
+    # Verify NO default config file was created (user must run pc-switcher init)
     config_file_check = await executor.run_command(
-        "test -f ~/.config/pc-switcher/config.yaml && echo 'exists'",
+        "test -f ~/.config/pc-switcher/config.yaml && echo 'exists' || echo 'not_found'",
         timeout=10.0,
     )
-    assert config_file_check.success, "Default config file not created"
-    assert "exists" in config_file_check.stdout, "Default config file not created"
+    assert "not_found" in config_file_check.stdout, (
+        "install.sh should NOT create default config - user must run 'pc-switcher init'"
+    )
+
+    # Verify installation output includes instructions to run pc-switcher init
+    assert "pc-switcher init" in result.stdout, (
+        "Installation output should include instructions to run 'pc-switcher init'"
+    )
+
+
+
+# Tests test_001_fr036_default_config_with_comments, test_001_us7_as1_install_script_fresh_machine,
+# and test_001_us7_as3_preserve_existing_config were removed because:
+# - install.sh does NOT create a default config file
+# - Users must run "pc-switcher init" to create the config
+# - Tests for "pc-switcher init" belong in tests/unit/test_cli.py or similar
+# See specs/001-foundation/spec.md for the documented workflow.
 
 
 @pytest.mark.integration
-async def test_001_fr036_default_config_with_comments(clean_install_environment: RemoteExecutor) -> None:
-    """Test FR-036: Default config file includes helpful inline comments.
+class TestInstallationScriptVersionParameter:
+    """Tests for install.sh with VERSION parameter.
 
-    Verifies that the default config.yaml created by install.sh contains
-    inline comments explaining each setting.
+    These tests verify the installation infrastructure works correctly by using
+    the RELEASE VERSION derived from the current version (stripping post/dev/local
+    parts). This allows the tests to run during development when the full source
+    version doesn't have a corresponding release tag.
+
+    This tests:
+    - install.sh script works with VERSION parameter
+    - Version-specific installation from GitHub releases
+    - Upgrade path from one version to another
     """
-    executor = clean_install_environment
 
-    # Run installation script
-    result = await executor.run_command(
-        f"curl -sSL {INSTALL_SCRIPT_URL} | bash",
-        timeout=180.0,
-    )
-    assert result.success, f"Installation failed: {result.stderr}"
+    async def test_001_install_release_version_on_clean_target(
+        self,
+        pc2_executor_without_pcswitcher_tool: RemoteExecutor,
+    ) -> None:
+        """Test installing the release version on a clean target.
 
-    # Read the generated config file
-    config_content_result = await executor.run_command(
-        "cat ~/.config/pc-switcher/config.yaml",
-        timeout=10.0,
-    )
-    assert config_content_result.success, "Failed to read config file"
+        Verifies that the install.sh script can install a specific version
+        when pc-switcher is not already installed.
+        """
+        release_version = _get_release_version()
 
-    config_content = config_content_result.stdout
+        # Install the release version using install.sh
+        cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={release_version.semver_str()} bash"
+        result = await pc2_executor_without_pcswitcher_tool.run_command(cmd, timeout=120.0)
+        assert result.success, f"Installation failed: {result.stderr}"
 
-    # Verify config contains comments (lines starting with #)
-    comment_lines = [line for line in config_content.split("\n") if line.strip().startswith("#")]
-    assert len(comment_lines) > 0, "Config file has no comment lines"
+        # Verify pc-switcher is now installed
+        result = await pc2_executor_without_pcswitcher_tool.run_command("pc-switcher --version")
+        assert result.success, f"pc-switcher should be installed: {result.stderr}"
 
-    # Verify config contains meaningful content (not just comments)
-    non_comment_lines = [
-        line for line in config_content.split("\n") if line.strip() and not line.strip().startswith("#")
-    ]
-    assert len(non_comment_lines) > 0, "Config file has no actual configuration"
+        # Verify installed version matches expected
+        installed_version_str = parse_version_str_from_cli_output(result.stdout)
+        installed_version = Version.parse(installed_version_str)
+        assert installed_version == release_version, (
+            f"Installed version {installed_version} should match {release_version}"
+        )
 
-    # Verify config is valid YAML by checking for common sections
-    # (we don't want to validate the entire structure here, just ensure it's not empty/malformed)
-    assert "sync_jobs" in config_content or "global" in config_content, "Config doesn't contain expected sections"
+    async def test_001_upgrade_from_older_version(
+        self,
+        pc2_executor_with_old_pcswitcher_tool: RemoteExecutor,
+    ) -> None:
+        """Test upgrading from an older version to the release version.
 
+        Verifies that the install.sh script can upgrade pc-switcher from
+        an older version to a newer version.
 
-@pytest.mark.integration
-async def test_001_us7_as1_install_script_fresh_machine(clean_install_environment: RemoteExecutor) -> None:
-    """Test US7-AS1: curl install.sh on fresh machine.
+        Note: This uses the pc2_executor_with_old_pcswitcher_tool fixture which installs
+        0.1.0-alpha.1, then we upgrade to the current release version.
+        """
+        release_version = _get_release_version()
+        old_version = Version.parse("0.1.0-alpha.1")
 
-    Verifies the full installation flow on a clean machine:
-    - Downloads and runs install.sh via curl
-    - Installs all dependencies
-    - Creates config with inline comments
-    - pc-switcher command becomes available
-    """
-    executor = clean_install_environment
+        # Skip if release version is not newer than old version
+        if release_version <= old_version:
+            pytest.skip(f"Release version {release_version} is not newer than {old_version}")
 
-    # Run the installation via curl (simulating fresh machine scenario)
-    result = await executor.run_command(
-        f"curl -LsSf {INSTALL_SCRIPT_URL} | bash",
-        timeout=180.0,
-    )
+        # Upgrade to the release version
+        cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={release_version.semver_str()} bash"
+        result = await pc2_executor_with_old_pcswitcher_tool.run_command(cmd, timeout=120.0)
+        assert result.success, f"Upgrade failed: {result.stderr}"
 
-    # Verify installation succeeded
-    assert result.success, f"Installation script failed: {result.stderr}\nStdout: {result.stdout}"
+        # Verify version changed to release version
+        result = await pc2_executor_with_old_pcswitcher_tool.run_command("pc-switcher --version")
+        assert result.success, f"pc-switcher should be available: {result.stderr}"
+        new_version = Version.parse(parse_version_str_from_cli_output(result.stdout))
 
-    # Verify pc-switcher is installed and in PATH
-    which_result = await executor.run_command("which pc-switcher", timeout=10.0)
-    assert which_result.success, "pc-switcher not found in PATH"
-    assert "pc-switcher" in which_result.stdout, f"Unexpected which output: {which_result.stdout}"
-
-    # Verify pc-switcher can run
-    help_result = await executor.run_command("pc-switcher --help", timeout=10.0)
-    assert help_result.success, f"pc-switcher --help failed: {help_result.stderr}"
-    assert "pc-switcher" in help_result.stdout.lower(), "Help output doesn't mention pc-switcher"
-
-    # Verify config was created
-    config_exists = await executor.run_command(
-        "test -f ~/.config/pc-switcher/config.yaml && echo 'yes'",
-        timeout=10.0,
-    )
-    assert config_exists.success and "yes" in config_exists.stdout, "Config file not created"
-
-    # Verify config has comments (FR-036)
-    config_content = await executor.run_command("cat ~/.config/pc-switcher/config.yaml", timeout=10.0)
-    assert config_content.success, "Failed to read config"
-    assert "#" in config_content.stdout, "Config file has no comments"
-
-
-@pytest.mark.integration
-async def test_001_us7_as3_preserve_existing_config(pc1_executor: RemoteExecutor) -> None:
-    """Test US7-AS3: Preserve existing config file.
-
-    Verifies that when a config file already exists, the installation script:
-    - Detects the existing config
-    - Does NOT overwrite it by default (or prompts for confirmation)
-    - Leaves the original config intact
-    """
-    # First, ensure pc-switcher is installed
-    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
-    install_result = await pc1_executor.run_command(
-        f"curl -sSL {INSTALL_SCRIPT_URL} | bash",
-        timeout=180.0,
-    )
-    assert install_result.success, f"Initial installation failed: {install_result.stderr}"
-
-    # Create a custom config with unique marker
-    custom_marker = "# CUSTOM_CONFIG_MARKER_FOR_TESTING"
-    await pc1_executor.run_command(
-        f"echo '{custom_marker}' >> ~/.config/pc-switcher/config.yaml",
-        timeout=10.0,
-    )
-
-    # Verify marker was added
-    verify_marker = await pc1_executor.run_command(
-        f"grep '{custom_marker}' ~/.config/pc-switcher/config.yaml",
-        timeout=10.0,
-    )
-    assert verify_marker.success, "Failed to add custom marker to config"
-
-    # Run installation script again (simulating re-installation)
-    # Note: The script should either preserve the config or prompt for overwrite.
-    # Since we can't interact with prompts in non-interactive mode, we expect
-    # the script to default to preserving the existing config.
-    reinstall_result = await pc1_executor.run_command(
-        f"curl -sSL {INSTALL_SCRIPT_URL} | bash",
-        timeout=180.0,
-    )
-
-    # Installation should still succeed (even if config is preserved)
-    assert reinstall_result.success, f"Re-installation failed: {reinstall_result.stderr}"
-
-    # Verify the custom marker is still present (config was preserved)
-    check_marker = await pc1_executor.run_command(
-        f"grep '{custom_marker}' ~/.config/pc-switcher/config.yaml",
-        timeout=10.0,
-    )
-
-    # The test passes if either:
-    # 1. The marker is still present (config was preserved), OR
-    # 2. The installation output indicates it asked about overwriting
-    marker_preserved = check_marker.success and custom_marker in check_marker.stdout
-    asked_about_overwrite = (
-        "overwrite" in reinstall_result.stdout.lower() or "exists" in reinstall_result.stdout.lower()
-    )
-
-    assert marker_preserved or asked_about_overwrite, (
-        "Config was overwritten without preserving existing content or prompting. "
-        f"Marker check: {check_marker.stdout}, Install output: {reinstall_result.stdout}"
-    )
-
-    # Clean up
-    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
-    await pc1_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
+        assert new_version == release_version, (
+            f"New version {new_version} should be {release_version}"
+        )

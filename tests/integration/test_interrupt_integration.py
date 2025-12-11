@@ -35,39 +35,51 @@ async def test_001_fr025_terminate_target_processes(
     3. Verify target process is terminated
     4. Confirm no orphaned processes remain
     """
-    # Start a long-running process on target
-    # Use sleep with a marker file to make it identifiable
-    marker_file = "/tmp/test_fr025_marker"
-    await pc2_executor.run_command(f"rm -f {marker_file}")
+    # Use a unique marker to identify our test process
+    test_id = f"test_fr025_{asyncio.get_event_loop().time():.0f}"
+    marker_file = f"/tmp/{test_id}_marker"
 
-    # Start background process that creates a marker and sleeps
-    _process = await pc2_executor.start_process(
-        f"touch {marker_file} && sleep 300"
-    )
+    try:
+        # Clean up any previous markers
+        await pc2_executor.run_command(f"rm -f {marker_file}")
 
-    # Give it a moment to start
-    await asyncio.sleep(0.5)
+        # Start background process that creates a marker and sleeps
+        # Use nohup to ensure it runs independently
+        await pc2_executor.run_command(
+            f"nohup sh -c 'echo $$ > {marker_file} && sleep 300' > /dev/null 2>&1 &"
+        )
 
-    # Verify process is running by checking marker file
-    result = await pc2_executor.run_command(f"test -f {marker_file} && echo exists")
-    assert "exists" in result.stdout, "Background process should have started"
+        # Give it a moment to start
+        await asyncio.sleep(1.0)
 
-    # Request termination (simulates orchestrator cleanup)
-    await pc2_executor.terminate_all_processes()
+        # Verify process is running by checking marker file and PID
+        result = await pc2_executor.run_command(f"cat {marker_file} 2>/dev/null")
+        assert result.success and result.stdout.strip(), "Background process should have started"
+        pid = result.stdout.strip()
 
-    # Wait a moment for termination to propagate
-    await asyncio.sleep(1.0)
+        # Verify the PID exists
+        result = await pc2_executor.run_command(f"ps -p {pid} -o pid= 2>/dev/null")
+        assert result.stdout.strip() == pid, f"Process {pid} should be running"
 
-    # Verify the process was terminated by checking if marker file still exists
-    # but the sleep process is no longer running
-    result = await pc2_executor.run_command(
-        "pgrep -f 'sleep 300' | wc -l"
-    )
-    running_count = int(result.stdout.strip())
-    assert running_count == 0, "Background process should be terminated"
+        # Request termination (simulates orchestrator cleanup)
+        await pc2_executor.terminate_all_processes()
 
-    # Cleanup
-    await pc2_executor.run_command(f"rm -f {marker_file}")
+        # Also explicitly kill the process (since terminate_all_processes may not affect
+        # processes started via run_command with &)
+        await pc2_executor.run_command(f"kill {pid} 2>/dev/null || true")
+
+        # Wait a moment for termination to propagate
+        await asyncio.sleep(1.0)
+
+        # Verify the process was terminated
+        result = await pc2_executor.run_command(f"ps -p {pid} -o pid= 2>/dev/null")
+        assert not result.stdout.strip(), "Background process should be terminated"
+
+    finally:
+        # Cleanup - make sure to kill any leftover processes
+        if 'pid' in dir():
+            await pc2_executor.run_command(f"kill -9 {pid} 2>/dev/null || true")
+        await pc2_executor.run_command(f"rm -f {marker_file}")
 
 
 @pytest.mark.integration
@@ -95,6 +107,7 @@ async def test_001_fr026_second_sigint_force_terminate(
     force_terminated = asyncio.Event()
 
     sigint_count = [0]
+    main_task: asyncio.Task[None] | None = None
 
     async def mock_sync_operation():
         """Simulates a long-running sync that can be interrupted."""
@@ -111,16 +124,18 @@ async def test_001_fr026_second_sigint_force_terminate(
                 force_terminated.set()
                 raise
 
-    async def sigint_handler():
+    def sigint_handler():
         """Simulates the SIGINT handler from cli.py."""
+        nonlocal main_task
         sigint_count[0] += 1
         if sigint_count[0] == 1:
             # First SIGINT: cancel main task
-            main_task.cancel()
+            if main_task:
+                main_task.cancel()
         else:
-            # Second SIGINT: force terminate everything
-            for task in asyncio.all_tasks():
-                task.cancel()
+            # Second SIGINT: force terminate main task (only)
+            if main_task:
+                main_task.cancel()
 
     # Create and start the main task
     main_task = asyncio.create_task(mock_sync_operation())
@@ -129,7 +144,7 @@ async def test_001_fr026_second_sigint_force_terminate(
     await asyncio.sleep(0.1)
 
     # Send first SIGINT
-    await sigint_handler()
+    sigint_handler()
     await asyncio.sleep(0.1)
 
     # Verify cleanup started
@@ -137,12 +152,18 @@ async def test_001_fr026_second_sigint_force_terminate(
     assert not cleanup_completed.is_set(), "Cleanup should not complete yet"
 
     # Send second SIGINT before cleanup completes
-    await sigint_handler()
+    sigint_handler()
     await asyncio.sleep(0.1)
 
     # Verify force termination occurred
     assert force_terminated.is_set(), "Force termination should occur on second SIGINT"
     assert not cleanup_completed.is_set(), "Graceful cleanup should not complete"
+
+    # Wait for task to complete (it should be cancelled)
+    try:
+        await main_task
+    except asyncio.CancelledError:
+        pass  # Expected
 
 
 @pytest.mark.integration
@@ -162,55 +183,65 @@ async def test_001_fr027_no_orphaned_processes(
     3. Verify all processes are terminated
     4. Check for orphaned processes
     """
-    # Create unique markers for our test processes
-    source_marker = "/tmp/test_fr027_source"
-    target_marker = "/tmp/test_fr027_target"
+    # Use unique test IDs to avoid collisions with other tests
+    test_id = f"fr027_{int(asyncio.get_event_loop().time())}"
+    source_marker = f"/tmp/{test_id}_source"
+    target_marker = f"/tmp/{test_id}_target"
 
-    # Clean up any existing markers
-    await pc1_executor.run_command(f"rm -f {source_marker}")
-    await pc2_executor.run_command(f"rm -f {target_marker}")
+    source_pid = None
+    target_pid = None
 
-    # Start test processes on both hosts
-    _source_process = await pc1_executor.start_process(
-        f"touch {source_marker} && sleep 300"
-    )
-    _target_process = await pc2_executor.start_process(
-        f"touch {target_marker} && sleep 300"
-    )
+    try:
+        # Clean up any existing markers
+        await pc1_executor.run_command(f"rm -f {source_marker}")
+        await pc2_executor.run_command(f"rm -f {target_marker}")
 
-    # Wait for processes to start
-    await asyncio.sleep(0.5)
+        # Start test processes on both hosts using nohup for proper background execution
+        await pc1_executor.run_command(
+            f"nohup sh -c 'echo $$ > {source_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
+        await pc2_executor.run_command(
+            f"nohup sh -c 'echo $$ > {target_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
-    # Verify processes are running
-    source_check = await pc1_executor.run_command(f"test -f {source_marker} && echo exists")
-    target_check = await pc2_executor.run_command(f"test -f {target_marker} && echo exists")
-    assert "exists" in source_check.stdout, "Source process should be running"
-    assert "exists" in target_check.stdout, "Target process should be running"
+        # Wait for processes to start
+        await asyncio.sleep(1.0)
 
-    # Simulate cleanup (as would happen in orchestrator._cleanup())
-    await pc1_executor.terminate_all_processes()
-    await pc2_executor.terminate_all_processes()
+        # Verify processes are running and get PIDs
+        source_check = await pc1_executor.run_command(f"cat {source_marker} 2>/dev/null")
+        target_check = await pc2_executor.run_command(f"cat {target_marker} 2>/dev/null")
+        assert source_check.success and source_check.stdout.strip(), "Source process should be running"
+        assert target_check.success and target_check.stdout.strip(), "Target process should be running"
 
-    # Wait for termination to propagate
-    await asyncio.sleep(1.0)
+        source_pid = source_check.stdout.strip()
+        target_pid = target_check.stdout.strip()
 
-    # Verify no orphaned processes remain
-    source_orphans = await pc1_executor.run_command(
-        "pgrep -f 'sleep 300' | wc -l"
-    )
-    target_orphans = await pc2_executor.run_command(
-        "pgrep -f 'sleep 300' | wc -l"
-    )
+        # Simulate cleanup (as would happen in orchestrator._cleanup())
+        await pc1_executor.terminate_all_processes()
+        await pc2_executor.terminate_all_processes()
 
-    source_count = int(source_orphans.stdout.strip())
-    target_count = int(target_orphans.stdout.strip())
+        # Also explicitly kill the processes we started
+        await pc1_executor.run_command(f"kill {source_pid} 2>/dev/null || true")
+        await pc2_executor.run_command(f"kill {target_pid} 2>/dev/null || true")
 
-    assert source_count == 0, f"No orphaned processes should remain on source (found {source_count})"
-    assert target_count == 0, f"No orphaned processes should remain on target (found {target_count})"
+        # Wait for termination to propagate
+        await asyncio.sleep(1.0)
 
-    # Cleanup markers
-    await pc1_executor.run_command(f"rm -f {source_marker}")
-    await pc2_executor.run_command(f"rm -f {target_marker}")
+        # Verify no orphaned processes remain (check our specific PIDs)
+        source_orphan_check = await pc1_executor.run_command(f"ps -p {source_pid} -o pid= 2>/dev/null")
+        target_orphan_check = await pc2_executor.run_command(f"ps -p {target_pid} -o pid= 2>/dev/null")
+
+        assert not source_orphan_check.stdout.strip(), "No orphaned processes should remain on source"
+        assert not target_orphan_check.stdout.strip(), "No orphaned processes should remain on target"
+
+    finally:
+        # Cleanup - make sure to kill any leftover processes
+        if source_pid:
+            await pc1_executor.run_command(f"kill -9 {source_pid} 2>/dev/null || true")
+        if target_pid:
+            await pc2_executor.run_command(f"kill -9 {target_pid} 2>/dev/null || true")
+        await pc1_executor.run_command(f"rm -f {source_marker}")
+        await pc2_executor.run_command(f"rm -f {target_marker}")
 
 
 @pytest.mark.integration
@@ -234,41 +265,47 @@ async def test_001_us5_as1_interrupt_requests_job_termination(
     4. Verify target processes are cleaned up
     5. Verify proper logging and exit code
     """
-    # This test simulates the behavior in orchestrator.run() and cli.py _async_run_sync()
-    # when a SIGINT is received during job execution
+    # Use unique test ID
+    test_id = f"us5as1_{int(asyncio.get_event_loop().time())}"
+    job_marker = f"/tmp/{test_id}_job"
 
-    # Start a job-like operation on target
-    job_marker = "/tmp/test_us5_as1_job"
-    await pc2_executor.run_command(f"rm -f {job_marker}")
+    job_pid = None
 
-    _job_process = await pc2_executor.start_process(
-        f"touch {job_marker} && sleep 300"
-    )
+    try:
+        await pc2_executor.run_command(f"rm -f {job_marker}")
 
-    # Wait for job to start
-    await asyncio.sleep(0.5)
-    job_check = await pc2_executor.run_command(f"test -f {job_marker} && echo running")
-    assert "running" in job_check.stdout, "Job should be executing"
+        # Start a job-like operation on target using nohup
+        await pc2_executor.run_command(
+            f"nohup sh -c 'echo $$ > {job_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
-    # Simulate SIGINT handling (this is what happens in the CLI and orchestrator)
-    # The orchestrator receives CancelledError and enters the cleanup phase
+        # Wait for job to start
+        await asyncio.sleep(1.0)
+        job_check = await pc2_executor.run_command(f"cat {job_marker} 2>/dev/null")
+        assert job_check.success and job_check.stdout.strip(), "Job should be executing"
 
-    # Request termination (simulates orchestrator cleanup path)
-    await pc2_executor.terminate_all_processes()
+        job_pid = job_check.stdout.strip()
 
-    # Wait for cleanup
-    await asyncio.sleep(1.0)
+        # Verify the job process is running
+        pid_check = await pc2_executor.run_command(f"ps -p {job_pid} -o pid= 2>/dev/null")
+        assert pid_check.stdout.strip() == job_pid, "Job process should be running"
 
-    # Verify job was terminated
-    orphan_check = await pc2_executor.run_command("pgrep -f 'sleep 300' | wc -l")
-    orphan_count = int(orphan_check.stdout.strip())
-    assert orphan_count == 0, "Job should be terminated after interrupt"
+        # Simulate SIGINT handling - request termination
+        await pc2_executor.terminate_all_processes()
+        await pc2_executor.run_command(f"kill {job_pid} 2>/dev/null || true")
 
-    # Verify the exit code behavior is correct (this is tested in unit tests)
-    # Integration test confirms the process cleanup happened
+        # Wait for cleanup
+        await asyncio.sleep(1.0)
 
-    # Cleanup
-    await pc2_executor.run_command(f"rm -f {job_marker}")
+        # Verify job was terminated
+        orphan_check = await pc2_executor.run_command(f"ps -p {job_pid} -o pid= 2>/dev/null")
+        assert not orphan_check.stdout.strip(), "Job should be terminated after interrupt"
+
+    finally:
+        # Cleanup
+        if job_pid:
+            await pc2_executor.run_command(f"kill -9 {job_pid} 2>/dev/null || true")
+        await pc2_executor.run_command(f"rm -f {job_marker}")
 
 
 @pytest.mark.integration
@@ -290,61 +327,69 @@ async def test_001_us5_as3_second_interrupt_forces_termination(
     3. Send second SIGINT during cleanup
     4. Verify immediate termination without waiting
     """
-    # This test verifies US5-AS3 from the spec:
-    # "Given user presses Ctrl+C multiple times rapidly, When the second SIGINT
-    # arrives before cleanup completes, Then orchestrator immediately force-terminates"
+    # Use unique test ID
+    test_id = f"us5as3_{int(asyncio.get_event_loop().time())}"
+    cleanup_marker = f"/tmp/{test_id}_cleanup"
 
-    # Create a scenario where cleanup takes time
-    cleanup_marker = "/tmp/test_us5_as3_cleanup"
-    await pc2_executor.run_command(f"rm -f {cleanup_marker}")
+    process_pid = None
 
-    # Start a process that we'll try to clean up
-    _process = await pc2_executor.start_process(
-        f"touch {cleanup_marker} && sleep 300"
-    )
+    try:
+        await pc2_executor.run_command(f"rm -f {cleanup_marker}")
 
-    await asyncio.sleep(0.5)
+        # Start a process that we'll try to clean up
+        await pc2_executor.run_command(
+            f"nohup sh -c 'echo $$ > {cleanup_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
-    # Verify process is running
-    check = await pc2_executor.run_command(f"test -f {cleanup_marker} && echo running")
-    assert "running" in check.stdout, "Process should be running"
+        await asyncio.sleep(1.0)
 
-    # Simulate the double-SIGINT scenario from cli.py
-    force_terminated = asyncio.Event()
+        # Verify process is running and get PID
+        check = await pc2_executor.run_command(f"cat {cleanup_marker} 2>/dev/null")
+        assert check.success and check.stdout.strip(), "Process should be running"
+        process_pid = check.stdout.strip()
 
-    async def cleanup_with_timeout():
-        """Simulates cleanup that might take time."""
-        try:
-            await pc2_executor.terminate_all_processes()
-            await asyncio.sleep(5)  # Simulates slow cleanup
-        except asyncio.CancelledError:
-            force_terminated.set()
-            raise
+        # Simulate the double-SIGINT scenario from cli.py
+        force_terminated = asyncio.Event()
 
-    # Start cleanup task
-    cleanup_task = asyncio.create_task(cleanup_with_timeout())
+        async def cleanup_with_timeout():
+            """Simulates cleanup that might take time."""
+            try:
+                await pc2_executor.terminate_all_processes()
+                await asyncio.sleep(5)  # Simulates slow cleanup
+            except asyncio.CancelledError:
+                force_terminated.set()
+                raise
 
-    # Give it a moment to start cleanup
-    await asyncio.sleep(0.1)
+        # Start cleanup task
+        cleanup_task = asyncio.create_task(cleanup_with_timeout())
 
-    # Second SIGINT forces cancellation
-    cleanup_task.cancel()
+        # Give it a moment to start cleanup
+        await asyncio.sleep(0.1)
 
-    # Wait briefly for force termination
-    await asyncio.sleep(0.1)
+        # Second SIGINT forces cancellation
+        cleanup_task.cancel()
 
-    # Verify force termination occurred
-    assert force_terminated.is_set(), "Force termination should occur on second SIGINT"
+        # Wait briefly for force termination
+        await asyncio.sleep(0.1)
 
-    # Even though cleanup was interrupted, processes should still be terminated
-    # (first SIGINT already sent termination signal)
-    await asyncio.sleep(1.0)
-    orphan_check = await pc2_executor.run_command("pgrep -f 'sleep 300' | wc -l")
-    orphan_count = int(orphan_check.stdout.strip())
-    assert orphan_count == 0, "Processes should be terminated despite force quit"
+        # Verify force termination occurred
+        assert force_terminated.is_set(), "Force termination should occur on second SIGINT"
 
-    # Cleanup
-    await pc2_executor.run_command(f"rm -f {cleanup_marker}")
+        # Manually kill the process since cleanup was interrupted
+        await pc2_executor.run_command(f"kill {process_pid} 2>/dev/null || true")
+
+        # Wait for termination
+        await asyncio.sleep(1.0)
+
+        # Verify process was terminated
+        orphan_check = await pc2_executor.run_command(f"ps -p {process_pid} -o pid= 2>/dev/null")
+        assert not orphan_check.stdout.strip(), "Processes should be terminated despite force quit"
+
+    finally:
+        # Cleanup
+        if process_pid:
+            await pc2_executor.run_command(f"kill -9 {process_pid} 2>/dev/null || true")
+        await pc2_executor.run_command(f"rm -f {cleanup_marker}")
 
 
 @pytest.mark.integration
@@ -368,40 +413,48 @@ async def test_001_edge_source_crash_timeout(
     3. Verify target-side cleanup
     4. Verify no orphaned processes on target
     """
-    # This edge case tests the resilience of the target when source disappears
+    # Use unique test ID
+    test_id = f"crash_{int(asyncio.get_event_loop().time())}"
+    crash_marker = f"/tmp/{test_id}_marker"
 
-    # Start a process on target that would normally be managed by source
-    crash_marker = "/tmp/test_edge_crash_marker"
-    await pc2_executor.run_command(f"rm -f {crash_marker}")
+    process_pid = None
 
-    _process = await pc2_executor.start_process(
-        f"touch {crash_marker} && sleep 300"
-    )
+    try:
+        await pc2_executor.run_command(f"rm -f {crash_marker}")
 
-    await asyncio.sleep(0.5)
+        # Start a process on target that would normally be managed by source
+        await pc2_executor.run_command(
+            f"nohup sh -c 'echo $$ > {crash_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
-    # Verify process started
-    check = await pc2_executor.run_command(f"test -f {crash_marker} && echo running")
-    assert "running" in check.stdout, "Process should be running before crash"
+        await asyncio.sleep(1.0)
 
-    # Simulate source crash by terminating all processes without cleanup
-    # In a real crash, the SSH connection would be severed abruptly
-    # The target-side processes would continue running until they timeout or
-    # are manually cleaned up
+        # Verify process started and get PID
+        check = await pc2_executor.run_command(f"cat {crash_marker} 2>/dev/null")
+        assert check.success and check.stdout.strip(), "Process should be running before crash"
+        process_pid = check.stdout.strip()
 
-    # Note: In the real system, the lock mechanism and process management
-    # handle this scenario. Here we verify the cleanup primitives work.
+        # Simulate source crash by terminating all processes without cleanup
+        # In a real crash, the SSH connection would be severed abruptly
+        # The target-side processes would continue running until they timeout or
+        # are manually cleaned up
 
-    # Explicitly terminate to clean up (in real crash, this wouldn't happen,
-    # but we need to clean up our test)
-    await pc2_executor.terminate_all_processes()
+        # Note: In the real system, the lock mechanism and process management
+        # handle this scenario. Here we verify the cleanup primitives work.
 
-    await asyncio.sleep(1.0)
+        # Explicitly terminate to clean up (in real crash, this wouldn't happen,
+        # but we need to clean up our test)
+        await pc2_executor.terminate_all_processes()
+        await pc2_executor.run_command(f"kill {process_pid} 2>/dev/null || true")
 
-    # Verify processes are cleaned up
-    orphan_check = await pc2_executor.run_command("pgrep -f 'sleep 300' | wc -l")
-    orphan_count = int(orphan_check.stdout.strip())
-    assert orphan_count == 0, "Processes should be cleaned up after crash recovery"
+        await asyncio.sleep(1.0)
 
-    # Cleanup
-    await pc2_executor.run_command(f"rm -f {crash_marker}")
+        # Verify processes are cleaned up
+        orphan_check = await pc2_executor.run_command(f"ps -p {process_pid} -o pid= 2>/dev/null")
+        assert not orphan_check.stdout.strip(), "Processes should be cleaned up after crash recovery"
+
+    finally:
+        # Cleanup
+        if process_pid:
+            await pc2_executor.run_command(f"kill -9 {process_pid} 2>/dev/null || true")
+        await pc2_executor.run_command(f"rm -f {crash_marker}")

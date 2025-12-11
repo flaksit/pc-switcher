@@ -428,6 +428,102 @@ class TestVersionPkgVersion:
             pv.major = 2  # type: ignore[misc]
 
 
+class TestVersionReleaseVersion:
+    """Tests for Version.release_version() - stripping post/dev/local parts."""
+
+    def test_stable_version_unchanged(self) -> None:
+        """Stable version should be unchanged."""
+        v = Version.parse_pep440("1.0.0")
+        assert v.release_version() == v
+        assert v.release_version().pep440_str() == "1.0.0"
+
+    def test_prerelease_preserved(self) -> None:
+        """Pre-release part should be preserved."""
+        v = Version.parse_pep440("1.0.0a1")
+        assert v.release_version().pep440_str() == "1.0.0a1"
+
+        v = Version.parse_pep440("1.0.0b2")
+        assert v.release_version().pep440_str() == "1.0.0b2"
+
+        v = Version.parse_pep440("1.0.0rc1")
+        assert v.release_version().pep440_str() == "1.0.0rc1"
+
+    def test_post_stripped(self) -> None:
+        """Post release part should be stripped."""
+        v = Version.parse_pep440("1.0.0.post1")
+        assert v.release_version().pep440_str() == "1.0.0"
+
+    def test_dev_stripped(self) -> None:
+        """Dev release part should be stripped."""
+        v = Version.parse_pep440("1.0.0.dev5")
+        assert v.release_version().pep440_str() == "1.0.0"
+
+    def test_local_stripped(self) -> None:
+        """Local version part should be stripped."""
+        v = Version.parse_pep440("1.0.0+ubuntu1")
+        assert v.release_version().pep440_str() == "1.0.0"
+
+    def test_prerelease_with_post_dev_local(self) -> None:
+        """Pre-release preserved, post/dev/local stripped."""
+        # This is the typical dev version format
+        v = Version.parse_pep440("0.1.0a3.post23.dev0+da749fc")
+        assert v.release_version().pep440_str() == "0.1.0a3"
+
+    def test_beta_with_post_dev(self) -> None:
+        """Beta pre-release with post.dev should strip post.dev."""
+        v = Version.parse_pep440("2.0.0b1.post5.dev2")
+        assert v.release_version().pep440_str() == "2.0.0b1"
+
+    def test_rc_with_local(self) -> None:
+        """RC with local should strip local."""
+        v = Version.parse_pep440("1.2.3rc1+build123")
+        assert v.release_version().pep440_str() == "1.2.3rc1"
+
+    def test_returns_version_instance(self) -> None:
+        """Should return a Version instance, not a string."""
+        v = Version.parse_pep440("1.0.0.post1")
+        release = v.release_version()
+        assert isinstance(release, Version)
+
+    def test_release_version_has_no_post_dev_local(self) -> None:
+        """Release version should have no post/dev/local parts."""
+        v = Version.parse_pep440("1.0.0a1.post2.dev3+local")
+        release = v.release_version()
+        assert release.pkg_version.post is None
+        assert release.pkg_version.dev is None
+        assert release.pkg_version.local is None
+
+    def test_semver_str_works_on_release_version(self) -> None:
+        """Should be able to call semver_str() on release version."""
+        v = Version.parse_pep440("0.1.0a3.post23.dev0+da749fc")
+        release = v.release_version()
+        assert release.semver_str() == "0.1.0-alpha.3"
+
+    def test_dev_version_greater_than_release_version(self) -> None:
+        """Dev version should be greater than its release version.
+
+        This verifies that a full dev version (with post/dev/local parts)
+        is considered "newer" than the corresponding release version when
+        parsed with PEP 440 semantics. This is important for version
+        comparison logic in installation and upgrade scenarios.
+        """
+        # Full dev version
+        dev_version = Version.parse_pep440("0.1.0a3.post23.dev0+da749fc")
+        # Corresponding release version
+        release = dev_version.release_version()
+
+        # Dev version should be >= release version in PEP 440 ordering
+        # (post-releases are "newer" than their base version)
+        assert dev_version >= release, (
+            f"Dev version {dev_version} should be >= release {release}"
+        )
+
+        # Verify round-trip works
+        semver_str = release.semver_str()
+        reparsed = Version.parse(semver_str)
+        assert reparsed == release, "Version should survive semver round-trip"
+
+
 class TestSymmetricConversion:
     """Tests for round-trip conversion between PEP 440 and SemVer."""
 

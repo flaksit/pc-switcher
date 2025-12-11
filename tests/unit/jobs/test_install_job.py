@@ -79,7 +79,7 @@ class TestInstallOnTargetJobVersionCheck:
             calls = mock_install_context.target.run_command.call_args_list
             install_call = calls[2][0][0]
             assert "curl -LsSf" in install_call
-            assert "v0.4.0/install.sh" in install_call
+            assert "main/install.sh" in install_call
             assert "VERSION=0.4.0" in install_call
 
     @pytest.mark.asyncio
@@ -119,7 +119,8 @@ class TestInstallOnTargetJobVersionCheck:
             calls = mock_install_context.target.run_command.call_args_list
             assert len(calls) == 4
             install_call = calls[2][0][0]
-            assert "v0.4.0/install.sh" in install_call
+            assert "main/install.sh" in install_call
+            assert "VERSION=0.4.0" in install_call
 
 
 class TestInstallOnTargetJobNewerTargetVersion:
@@ -393,5 +394,5 @@ class TestInstallOnTargetJobUS7AS2:
             # Should use the same curl | bash pattern as user installation
             assert "bash" in install_call, "Should pipe to bash like user installation"
 
-            # The version should be included in the URL path
-            assert "v0.4.0" in install_call, "Should reference version in URL"
+            # Should use main branch URL with VERSION env var (not version-specific branch)
+            assert "main/install.sh" in install_call, "Should use main branch install.sh"

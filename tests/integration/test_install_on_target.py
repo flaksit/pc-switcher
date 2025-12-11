@@ -1,7 +1,8 @@
-"""Integration tests for self-installation functionality.
+"""Integration tests for InstallOnTargetJob class.
 
-These tests verify that the sync orchestrator automatically installs or upgrades
-pc-switcher on the target machine and handles config synchronization.
+These tests verify that the InstallOnTargetJob correctly installs or upgrades
+pc-switcher on the target machine as part of the sync process, and handles
+config synchronization.
 
 Tests verify real behavior on VMs using the InstallOnTargetJob from
 src/pcswitcher/jobs/install_on_target.py.
@@ -11,14 +12,21 @@ User Stories covered:
 - US2-AS2: Upgrade outdated target
 - US2-AS5: Prompt for missing config
 - US2-AS6: Diff and prompt for different config
+
+**What these tests cover:**
+- InstallOnTargetJob validation and execution logic
+- Config synchronization between source and target
+- Error handling (missing pc-switcher, version mismatches, etc.)
+
+**What these tests do NOT cover:**
+- install.sh script functionality (see test_installation_script.py)
+- install.sh with VERSION parameter (see test_installation_script.py)
+- Pre/post-sync snapshot operations (see test_snapshot_infrastructure.py)
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-
 import pytest
-import pytest_asyncio
 
 from pcswitcher.events import EventBus
 from pcswitcher.executor import LocalExecutor, RemoteExecutor
@@ -27,39 +35,21 @@ from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.version import Version, get_this_version, parse_version_str_from_cli_output
 
 
-@pytest_asyncio.fixture
-async def clean_pc_switcher_target(pc2_executor: RemoteExecutor) -> AsyncIterator[RemoteExecutor]:
-    """Ensure pc-switcher is uninstalled on target before and after test.
+def _is_dev_version() -> bool:
+    """Check if current version is a development version.
 
-    This fixture provides a clean target VM for testing installation scenarios.
+    Development versions have .dev in their version string and don't have
+    corresponding release tags on GitHub.
     """
-    # Clean up before test
-    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true")
-
-    yield pc2_executor
-
-    # Clean up after test
-    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true")
+    version_str = get_this_version()
+    return ".dev" in version_str or ".post" in version_str
 
 
-@pytest_asyncio.fixture
-async def outdated_pc_switcher_target(pc2_executor: RemoteExecutor) -> AsyncIterator[RemoteExecutor]:
-    """Install an older version of pc-switcher on target for upgrade testing.
-
-    This fixture ensures the target has an older version installed that needs upgrading.
-    """
-    # Install a known older version (0.1.0-alpha.1) on target
-    install_cmd = (
-        "curl -LsSf https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | "
-        "VERSION=0.1.0-alpha.1 bash"
-    )
-    result = await pc2_executor.run_command(install_cmd, timeout=120.0)
-    assert result.success, f"Failed to install old version on target: {result.stderr}"
-
-    yield pc2_executor
-
-    # Clean up after test
-    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true")
+# Skip marker for tests that require a released version
+requires_release_version = pytest.mark.skipif(
+    _is_dev_version(),
+    reason="Test requires a released version (not a development version)",
+)
 
 
 async def _create_integration_job_context(
@@ -99,9 +89,10 @@ async def _create_integration_job_context(
 class TestSelfInstallation:
     """Integration tests for automatic pc-switcher installation on target."""
 
+    @requires_release_version
     async def test_001_us2_as1_install_missing_pcswitcher(
         self,
-        clean_pc_switcher_target: RemoteExecutor,
+        pc2_executor_without_pcswitcher_tool: RemoteExecutor,
         pc1_executor: RemoteExecutor,
     ) -> None:
         """US2-AS1: Install missing pc-switcher on target.
@@ -113,12 +104,8 @@ class TestSelfInstallation:
 
         Spec Reference: specs/001-foundation/spec.md - User Story 2, AS1
         """
-        # Verify target has no pc-switcher
-        result = await clean_pc_switcher_target.run_command("pc-switcher --version 2>/dev/null")
-        assert not result.success, "Target should not have pc-switcher initially"
-
         # Create job context for integration test
-        context = await _create_integration_job_context(pc1_executor, clean_pc_switcher_target)
+        context = await _create_integration_job_context(pc1_executor, pc2_executor_without_pcswitcher_tool)
 
         # Create and run install job
         job = InstallOnTargetJob(context)
@@ -131,7 +118,7 @@ class TestSelfInstallation:
         await job.execute()
 
         # Verify pc-switcher is now installed on target
-        result = await clean_pc_switcher_target.run_command("pc-switcher --version")
+        result = await pc2_executor_without_pcswitcher_tool.run_command("pc-switcher --version")
         assert result.success, f"pc-switcher should be installed on target: {result.stderr}"
 
         # Verify installed version matches source
@@ -142,9 +129,10 @@ class TestSelfInstallation:
             f"Target version {target_version} should match source {source_version}"
         )
 
+    @requires_release_version
     async def test_001_us2_as2_upgrade_outdated_target(
         self,
-        outdated_pc_switcher_target: RemoteExecutor,
+        pc2_executor_with_old_pcswitcher_tool: RemoteExecutor,
         pc1_executor: RemoteExecutor,
     ) -> None:
         """US2-AS2: Upgrade outdated target.
@@ -156,23 +144,16 @@ class TestSelfInstallation:
 
         Spec Reference: specs/001-foundation/spec.md - User Story 2, AS2
         """
-        # Verify target has older version
-        result = await outdated_pc_switcher_target.run_command("pc-switcher --version")
-        assert result.success, "Target should have old pc-switcher installed"
-        target_version_old = Version.parse(parse_version_str_from_cli_output(result.stdout))
-        expected_old_version = Version.parse("0.1.0-alpha.1")
-        assert target_version_old == expected_old_version, (
-            f"Target should have old version {expected_old_version}, got {target_version_old}"
-        )
-
-        # Source should have newer version
+        # Fixture guarantees target has 0.1.0-alpha.1 installed
+        # Verify source is newer
         source_version = Version.parse_pep440(get_this_version())
+        target_version_old = Version.parse("0.1.0-alpha.1")
         assert source_version > target_version_old, (
             f"Source {source_version} should be newer than target {target_version_old}"
         )
 
         # Create job context for integration test
-        context = await _create_integration_job_context(pc1_executor, outdated_pc_switcher_target)
+        context = await _create_integration_job_context(pc1_executor, pc2_executor_with_old_pcswitcher_tool)
 
         # Create and run install job
         job = InstallOnTargetJob(context)
@@ -185,7 +166,7 @@ class TestSelfInstallation:
         await job.execute()
 
         # Verify target is now upgraded
-        result = await outdated_pc_switcher_target.run_command("pc-switcher --version")
+        result = await pc2_executor_with_old_pcswitcher_tool.run_command("pc-switcher --version")
         assert result.success, f"pc-switcher should be upgraded on target: {result.stderr}"
 
         # Verify upgraded version matches source

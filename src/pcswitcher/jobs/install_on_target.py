@@ -88,17 +88,23 @@ class InstallOnTargetJob(SystemJob):
 
         # Run the same install.sh script used for initial installation
         # The script handles: uv bootstrap, dependencies, pc-switcher install
-        # Use VERSION env var to specify the version to install
-        install_url = f"https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/v{source_version}/install.sh"
-        cmd = f"curl -LsSf {install_url} | VERSION={source_version} bash"
+        # Use VERSION env var to specify the version to install (as semver format)
+        install_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
+        cmd = f"curl -LsSf {install_url} | VERSION={source_version.semver_str()} bash"
         result = await self.target.run_command(cmd)
         if not result.success:
             raise RuntimeError(f"Failed to install pc-switcher on target: {result.stderr}")
 
         # Verify installation
         result = await self.target.run_command("pc-switcher --version")
-        if not result.success or str(source_version) not in result.stdout:
-            raise RuntimeError("Installation verification failed")
+        if not result.success:
+            raise RuntimeError("Installation verification failed: pc-switcher not found")
+        # Parse and compare versions properly (handles both PEP440 and SemVer formats)
+        installed_version = Version.parse(parse_version_str_from_cli_output(result.stdout))
+        if installed_version != source_version:
+            raise RuntimeError(
+                f"Installation verification failed: expected {source_version}, got {installed_version}"
+            )
 
         self._log(
             Host.TARGET,

@@ -32,28 +32,6 @@ class JobContextFactory(Protocol):
     def __call__(self, config: dict[str, Any] | None = None) -> JobContext: ...
 
 
-@pytest.fixture
-def mock_job_context_factory(
-    mock_local_executor: MagicMock,
-    mock_remote_executor: MagicMock,
-    mock_event_bus: MagicMock,
-) -> JobContextFactory:
-    """Factory fixture to create JobContext with custom config."""
-
-    def create_context(config: dict[str, Any] | None = None) -> JobContext:
-        return JobContext(
-            config=config or {},
-            source=mock_local_executor,
-            target=mock_remote_executor,
-            event_bus=mock_event_bus,
-            session_id="test-session-12345678",
-            source_hostname="source-host",
-            target_hostname="target-host",
-        )
-
-    return create_context
-
-
 class TestDummyJobsExist:
     """Test FR-038: two dummy jobs exist."""
 

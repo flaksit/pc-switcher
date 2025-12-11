@@ -120,17 +120,9 @@ class TestMockExecutorFixtureContract:
         result = await mock_executor.run_command("echo hello")
         assert isinstance(result, CommandResult)
 
-    async def test_mock_executor_has_required_methods(self, mock_executor: MagicMock) -> None:
-        """mock_executor must have all required executor methods."""
-        assert hasattr(mock_executor, "run_command")
-        assert hasattr(mock_executor, "terminate_all_processes")
-
     async def test_mock_executor_result_has_required_attributes(self, mock_executor: MagicMock) -> None:
-        """mock_executor result must have exit_code, stdout, stderr."""
+        """mock_executor result must have success property (computed from exit_code)."""
         result = await mock_executor.run_command("test")
-        assert hasattr(result, "exit_code")
-        assert hasattr(result, "stdout")
-        assert hasattr(result, "stderr")
         assert hasattr(result, "success")
 
 

@@ -57,28 +57,6 @@ class MockSyncJob(SyncJob):
             raise self._execute_exception
 
 
-@pytest.fixture
-def mock_event_bus() -> MagicMock:
-    """Create a mock EventBus for testing."""
-    bus = MagicMock(spec=EventBus)
-    bus.publish = MagicMock()
-    return bus
-
-
-@pytest.fixture
-def mock_job_context(mock_event_bus: MagicMock) -> JobContext:
-    """Create a mock JobContext for job testing."""
-    return JobContext(
-        config={},
-        source=MagicMock(),
-        target=MagicMock(),
-        event_bus=mock_event_bus,
-        session_id="test-session",
-        source_hostname="source-host",
-        target_hostname="target-host",
-    )
-
-
 class TestFR002ValidateThenExecuteOrder:
     """FR-002: Jobs must run validate() before execute() in correct order."""
 
