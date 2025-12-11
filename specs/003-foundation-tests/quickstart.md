@@ -254,8 +254,11 @@ mock_asyncssh.connect = AsyncMock()
 
 ### 8. Test Both Success and Failure Paths
 
-Per FR-004 from 003-foundation-tests spec, every test must verify both success and failure:
+Per FR-004 from 003-foundation-tests spec, every requirement must have tests covering both success and failure paths.
 
+**Approach is flexible** - choose what's cleaner for each case:
+
+**Option A: Separate functions** (when success/failure have different setup or are complex):
 ```python
 def test_001_fr030_validate_job_configs_success() -> None:
     """FR-030: Valid config passes validation."""
@@ -264,6 +267,20 @@ def test_001_fr030_validate_job_configs_success() -> None:
 
 def test_001_fr030_validate_job_configs_failure() -> None:
     """FR-030: Invalid config returns ConfigError."""
+    errors = Job.validate_config({"invalid": 123})
+    assert len(errors) > 0
+    assert isinstance(errors[0], ConfigError)
+```
+
+**Option B: Combined function** (when both paths are simple and related):
+```python
+def test_001_fr030_validate_job_configs() -> None:
+    """FR-030: Config validation accepts valid configs and rejects invalid ones."""
+    # Success path
+    errors = Job.validate_config({"valid": "config"})
+    assert errors == []
+
+    # Failure path
     errors = Job.validate_config({"invalid": 123})
     assert len(errors) > 0
     assert isinstance(errors[0], ConfigError)
@@ -285,7 +302,56 @@ async def test_something(pc1_executor: RemoteExecutor) -> None:
     assert result.success
 ```
 
-### 10. Verify Test Coverage
+### 10. Ensure Test Independence (FR-009)
+
+Tests MUST be independent and not rely on execution order or shared mutable state:
+
+**Rules**:
+- Each test sets up its own state via fixtures/mocks
+- No global variables modified between tests
+- No test should depend on another test running first
+- Integration tests get clean VM state via btrfs snapshot reset
+
+**Verification**: Run tests in random order to catch hidden dependencies:
+```bash
+# Install pytest-randomly if needed
+uv add --dev pytest-randomly
+
+# Run with random order
+uv run pytest tests/unit -v --randomly-seed=12345
+
+# Run again with different seed to verify
+uv run pytest tests/unit -v --randomly-seed=67890
+```
+
+If tests pass with one seed but fail with another, there's an order dependency to fix.
+
+**Common violations to avoid**:
+```python
+# BAD: Module-level mutable state
+_cache = {}  # Shared between tests!
+
+def test_first():
+    _cache["key"] = "value"
+
+def test_second():
+    assert _cache["key"] == "value"  # Depends on test_first running first!
+
+# GOOD: Use fixtures for isolation
+@pytest.fixture
+def cache():
+    return {}
+
+def test_first(cache):
+    cache["key"] = "value"
+    assert cache["key"] == "value"
+
+def test_second(cache):
+    # Gets fresh empty cache
+    assert "key" not in cache
+```
+
+### 11. Verify Test Coverage
 
 After writing tests, verify they appear in the coverage map:
 

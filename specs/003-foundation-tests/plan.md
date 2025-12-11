@@ -83,11 +83,34 @@ tests/
 
 **Structure Decision**: Tests follow existing pytest structure from 002-testing-framework. Unit tests organized by component (orchestrator, jobs, cli) for clarity. Integration tests organized by user story for traceability. Each test file corresponds to a major component or user story from 001-foundation spec.
 
+## Test Independence (FR-009)
+
+All tests MUST be independent and not rely on execution order or shared mutable state:
+
+- **No shared state**: Each test sets up its own fixtures/mocks; no global variables modified between tests
+- **Isolation via fixtures**: Use pytest fixtures with appropriate scope (`function` by default) for setup/teardown
+- **Integration test isolation**: Each integration test gets a clean VM state via btrfs snapshot reset
+- **Verification**: Run tests in random order with `pytest --randomly-seed=<N>` to catch order dependencies
+
+## Success and Failure Path Coverage (FR-004, SC-004)
+
+Every requirement MUST have tests covering both success and failure paths:
+
+- **Success path**: Normal operation completes as expected
+- **Failure path**: Error conditions are handled correctly (invalid input, exceptions, edge cases)
+
+Implementation approach is flexible per test:
+- **Separate functions**: Use when success/failure scenarios are complex or have different setup
+- **Combined function**: Use when both paths can be tested cleanly with multiple assertions
+
+The edge cases listed in data-model.md cover failure paths for their respective requirements.
+
 ## Coverage Verification
 
 After all tests are implemented, perform a manual verification pass to confirm:
 1. All user stories, acceptance scenarios, and functional requirements from 001-foundation spec have corresponding tests
 2. Tests follow the naming convention and include traceability docstrings
+3. Each requirement has both success and failure path coverage (FR-004)
 
 **Note**: `contracts/coverage-map.yaml` and `data-model.md` are planning artifacts for this feature implementation. They guide test creation but are not maintained long-term after implementation is complete.
 
