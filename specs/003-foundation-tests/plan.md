@@ -29,7 +29,7 @@ Create comprehensive spec-driven tests for all existing 001-foundation functiona
 
 - **Frictionless Command UX**: ✓ Tests validate UX requirements (single command sync, automated installation, graceful interrupts). Running tests remains simple: `uv run pytest tests/unit` (fast) and `uv run pytest tests/integration -m integration` (comprehensive). No additional manual steps required beyond what testing framework provides.
 
-- **Proven Tooling Only**: ✓ No new tools introduced. Uses existing pytest + pytest-asyncio from 002-testing-framework. All dependencies already vetted and documented in ADR-006.
+- **Well-supported tools and best practices**: ✓ No new tools introduced. Uses existing pytest + pytest-asyncio from 002-testing-framework. All dependencies already vetted and documented in ADR-006. Follows standard Python testing patterns and pytest conventions.
 
 - **Minimize SSD Wear**: ✓ Tests execute on isolated VMs (integration) or in-memory (unit), not on development machines. No additional SSD wear on production systems. Integration tests verify btrfs snapshot COW behavior minimizes wear.
 

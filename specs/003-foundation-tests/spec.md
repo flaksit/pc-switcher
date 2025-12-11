@@ -147,6 +147,22 @@ As a pc-switcher developer, I can trace each test back to the specific requireme
 - specs/001-foundation/spec.md is the authoritative source for what needs testing
 - 001-foundation implementation exists and is testable
 
+## Constitution Alignment
+
+This feature aligns with the following constitution principles:
+
+- **Reliability Without Compromise**: Tests validate all reliability mechanisms (snapshots, error handling, interrupts, conflict detection) ensuring foundation infrastructure behaves correctly and catches regressions.
+
+- **Frictionless Command UX**: Tests validate UX requirements (single command sync, automated installation, graceful interrupts). Running tests is simple: `uv run pytest`.
+
+- **Well-supported tools and best practices**: Uses established pytest + pytest-asyncio. No new tools introduced. Follows standard Python testing patterns.
+
+- **Deliberate Simplicity**: Test structure follows standard pytest conventions. Clear naming ties tests to spec requirements. No complex test infrastructure beyond existing framework.
+
+- **Up-to-date Documentation**: Test traceability (FR-007, FR-008) ensures tests document what they verify. Coverage reports maintain alignment with spec.
+
+**Trade-offs**: None identified. This feature (testing) does not compete with other principles.
+
 ## Out of Scope
 
 - Tests for features beyond 001-foundation (those will have their own test specs)

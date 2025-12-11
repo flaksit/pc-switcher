@@ -325,17 +325,57 @@
 
 **Purpose**: Final validation and coverage verification
 
-- [ ] T027 Run full unit test suite: `uv run pytest tests/unit tests/contract -v` and verify <30s completion (FR-013 of 003 spec). If fails: optimize slow tests or split into separate test file
-- [ ] T028 [P] Run full integration test suite: `uv run pytest tests/integration -v -m integration` and verify <15 minutes completion (SC-008 of 003 spec). If fails: identify bottleneck tests and optimize
+### Performance Verification
+
+- [ ] T027 Run full unit test suite: `uv run pytest tests/unit tests/contract -v` and verify <30s completion (FR-013 of 003 spec). If fails: optimize slow tests or split into separate test file. **Baseline**: 4-core CPU, 16GB RAM, SSD storage.
+- [ ] T028 [P] Run full integration test suite: `uv run pytest tests/integration -v -m integration` and verify <15 minutes completion (SC-008 of 003 spec). If fails: identify bottleneck tests and optimize. **Baseline**: Same as T027 plus test VM with 2 vCPUs, 4GB RAM.
+
+### Test Quality Verification
+
 - [ ] T029 [P] Run tests in random order: `uv run pytest tests/unit -v --randomly-seed=12345` to verify test independence (FR-009 of 003 spec). If fails: fix order-dependent tests by isolating state
+- [ ] T036 Verify unit tests use mock executors, not real system operations (FR-011 of 003 spec). Grep for direct subprocess/os calls in `tests/unit/` - should only use mocks. If violations found: refactor to use mocks
+- [ ] T037 [P] Verify integration tests execute real operations on test VMs (FR-012 of 003 spec). Review `tests/integration/` to confirm real btrfs, SSH, file operations. If mocked: refactor to use real operations
+- [ ] T038 [P] Verify tests use fixtures from testing framework for VM access, event buses, cleanup (FR-010 of 003 spec). Check imports from `tests/conftest.py` and framework fixtures. If missing: add fixture usage
+
+### Traceability Verification
+
 - [ ] T030 Generate `contracts/coverage-map.yaml` from implemented tests for traceability verification. If coverage gaps found: add missing tests as new tasks
+- [ ] T035 Verify all tests include docstring with spec reference (FR-007 of 003 spec). If missing: add docstrings before marking complete
+- [ ] T039 Verify test function names include requirement ID (FR-008 of 003 spec). Pattern: `test_001_<req-id>_<description>`. Grep for non-conforming names. If found: rename to include requirement ID
+- [ ] T040 Verify test failure output includes spec requirement ID for navigation (US-2-AS-2 of 003 spec). Run a failing test and confirm output shows which spec requirement failed. If not: add requirement ID to assertion messages
+
+### Coverage Verification
+
 - [ ] T031 Verify all 9 user stories from 001-foundation spec have corresponding tests. If gaps found: create tasks to add missing coverage
 - [ ] T032 Verify all 44 active acceptance scenarios have corresponding test cases (3 removed: US4-AS3, US4-AS5, US8-AS2). If gaps found: create tasks to add missing coverage
 - [ ] T033 Verify all 44 active functional requirements have corresponding test assertions (4 removed: FR-013, FR-034, FR-037, FR-040). If gaps found: create tasks to add missing coverage
 - [ ] T034 Verify all 9 edge cases have test coverage. If gaps found: create tasks to add missing coverage
-- [ ] T035 Verify all tests include docstring with spec reference (FR-007 of 003 spec, FR-008 of 003 spec). If missing: add docstrings before marking complete
+- [ ] T041 Verify each requirement has both success and failure path tests (FR-004, SC-004 of 003 spec). Create checklist mapping each requirement to its success/failure test functions. If gaps found: add missing path coverage
 
 **Checkpoint**: All tests complete, verified, and traceable
+
+---
+
+## Test Writing Guidelines
+
+These guidelines address edge-case policies from spec.md. Developers MUST follow these when writing tests:
+
+### Gap Between Spec and Implementation
+When tests find that spec requirements are not implemented or implemented incorrectly:
+- Test MUST fail with clear assertion message indicating which spec requirement is not met
+- Assertion message SHOULD include the spec ID (e.g., "FR-001 violation: job interface missing validate() method")
+
+### Ambiguous Spec Interpretation
+When a spec requirement is ambiguous:
+- Test docstring MUST document the interpretation used
+- If implementation differs from interpretation, test fails and forces clarification
+- Example: `"""Tests FR-015. Interprets 'validate subvolumes exist' as checking both source and target."""`
+
+### Extra Functionality Not in Spec
+When implementation has functionality beyond what's specified:
+- Such functionality SHOULD still be tested for correctness
+- Test docstring SHOULD note this is implementation-specific, not spec-driven
+- Log a warning during test discovery or in test output to prompt spec update consideration
 
 ---
 
@@ -409,7 +449,7 @@ Task: "Create tests/integration/test_end_to_end_sync.py"
 
 | Category | Count |
 |----------|-------|
-| Total Tasks | 35 |
+| Total Tasks | 41 |
 | Setup Tasks | 4 |
 | Foundational Tasks | 4 |
 | US-1 Tests | 3 tasks (11 test functions) |
@@ -423,7 +463,7 @@ Task: "Create tests/integration/test_end_to_end_sync.py"
 | US-9 Tests | 1 task (3 test functions) |
 | CLI Tests | 1 task (1 test function) |
 | Config Sync Integration | 1 task (1 test function) |
-| Polish/Verification | 9 tasks |
+| Polish/Verification | 15 tasks |
 
 **Coverage Summary**:
 - User Stories: 9/9 (100%)
@@ -440,7 +480,10 @@ Task: "Create tests/integration/test_end_to_end_sync.py"
 - [P] tasks = different files, no dependencies
 - [Story] label maps task to specific 001-foundation user story being tested
 - Each user story phase can be independently completed and verified
-- Test naming convention: `test_001_<req-id>_<description>` (001 = foundation feature)
-- All tests must include docstrings referencing spec requirements
-- Unit tests use mock executors (FR-011 of 003 spec)
-- Integration tests use real VM operations (FR-012 of 003 spec)
+- Test naming convention: `test_001_<req-id>_<description>` (001 = foundation feature) — verified by T039
+- All tests must include docstrings referencing spec requirements — verified by T035
+- Unit tests use mock executors (FR-011 of 003 spec) — verified by T036
+- Integration tests use real VM operations (FR-012 of 003 spec) — verified by T037
+- Tests use framework fixtures (FR-010 of 003 spec) — verified by T038
+- Each requirement has success and failure path coverage (FR-004, SC-004) — verified by T041
+- Test failure output includes spec ID for navigation (US-2-AS-2) — verified by T040
