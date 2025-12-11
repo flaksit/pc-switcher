@@ -47,6 +47,94 @@ PC-switcher uses a three-tier testing approach:
 - Testing inter-VM communication
 - Testing install scripts
 
+### Spec-Driven Testing Philosophy
+
+PC-switcher uses **spec-driven testing** for features managed through the SpecKit workflow. This approach ensures tests validate **what** the system should do (from specifications) rather than **how** it does it (from implementation).
+
+**Important**: Spec-driven testing is about *organization and naming*, not about choosing between unit and integration tests. Both unit tests (bottom-up, mocked) and integration tests (end-to-end, real VMs) are essential and both use spec-driven naming.
+
+**Key Principles**:
+
+1. **100% Requirement Coverage**: Every user story, acceptance scenario, and functional requirement from feature specs has corresponding test coverage through BOTH unit and integration tests.
+
+2. **Traceability**: Test function names include feature + requirement IDs, making it immediately clear which specification requirement each test validates.
+
+3. **Machine-Readable Coverage**: The `specs/*/contracts/coverage-map.yaml` files provide machine-readable mappings that CI can verify for completeness.
+
+4. **Test Names as Documentation**: When a test fails in CI, the test name alone (e.g., `test_001_fr028_load_from_config_path FAILED`) tells you which feature and requirement failed without needing to open the file.
+
+5. **Unit Tests Still Essential**: Most spec requirements need BOTH unit tests (to test logic with mocks) AND integration tests (to verify real-world behavior). Unit tests remain the fastest, most reliable way to test component behavior.
+
+**SpecKit Features**:
+
+Features developed using the SpecKit workflow (001-foundation, 002-testing-framework, 003-foundation-tests, etc.) have:
+- Formal specifications in `specs/<feature>/spec.md`
+- Test coverage mappings in `specs/<feature>/contracts/coverage-map.yaml`
+- Developer quickstart guides in `specs/<feature>/quickstart.md`
+
+**Example: Testing a Single Requirement**:
+
+A single spec requirement typically needs multiple tests at different levels:
+
+```python
+# Unit test (fast, mocked executor)
+def test_001_fr008_create_presync_snapshots_logic() -> None:
+    """FR-008: Test snapshot creation logic with mocked executor."""
+    mock_executor = AsyncMock()
+    mock_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, ...))
+
+    job = SnapshotJob(context)
+    await job.create_snapshot("/@", "/.snapshots/pre-@")
+
+    # Verify correct btrfs command was called
+    mock_executor.run_command.assert_called_with("sudo btrfs subvolume snapshot -r ...")
+
+# Integration test (slow, real VM)
+@pytest.mark.integration
+async def test_001_fr008_create_presync_snapshots_real(pc1_executor) -> None:
+    """FR-008: Test snapshot creation on real btrfs filesystem."""
+    result = await pc1_executor.run_command("sudo btrfs subvolume snapshot -r ...")
+
+    # Verify snapshot actually exists and is read-only
+    verify = await pc1_executor.run_command("sudo btrfs property get ... ro")
+    assert "ro=true" in verify.stdout
+```
+
+Both tests validate FR-008, but at different levels. The unit test is fast and tests logic; the integration test is slow and verifies real btrfs behavior.
+
+**Compatibility with TDD (Test-Driven Development)**:
+
+Spec-driven naming is **fully compatible** with TDD workflow:
+
+1. **Read the spec requirement** (e.g., FR-028: "System MUST load config from ~/.config/pc-switcher/config.yaml")
+2. **Write failing test** with spec-driven name:
+   ```python
+   def test_001_fr028_load_from_config_path() -> None:  # RED - fails
+       """FR-028: System MUST load configuration from ~/.config/pc-switcher/config.yaml."""
+       config = Config.load_from_default_path()
+       assert config is not None
+   ```
+3. **Write minimal implementation** to make it pass (GREEN)
+4. **Refactor** while keeping tests green
+
+The spec-driven naming **enhances TDD** by:
+- Making it clear WHAT you're building (requirement ID in test name)
+- Providing clear success criteria (from spec requirement text)
+- Ensuring every test maps to a documented requirement
+- Serving as executable specification
+
+**For developers**:
+- When writing tests for SpecKit features, use the feature + requirement ID naming convention (see [Test Function Naming](#test-function-naming))
+- Write BOTH unit tests (with mocks) AND integration tests (on VMs) for most requirements
+- TDD workflow remains unchanged - just use spec-driven test names
+- Consult the feature's `quickstart.md` for examples and patterns
+- Verify your tests appear in the `coverage-map.yaml` after implementation
+
+**For non-SpecKit code**:
+- Use descriptive test names without requirement IDs
+- Focus on testing behavior and edge cases
+- Standard pytest conventions apply
+
 ## Writing Unit Tests
 
 ### Directory Structure
@@ -451,15 +539,69 @@ class TestDiskSpaceMonitorValidation:
 
 ### Test Function Naming
 
-Use descriptive names that explain what is being tested:
+PC-switcher uses two naming conventions depending on the type of test:
+
+#### Spec-Driven Tests (Validating Requirements)
+
+For tests that validate specific requirements from feature specs, use the **feature + requirement ID** naming pattern:
+
+**Format**: `test_<feature>_<req-id>_<description>()`
+
+**Components**:
+- `<feature>`: Feature number from SpecKit (e.g., `001` for foundation)
+- `<req-id>`: Requirement ID (`fr###` for functional requirements, `us#_as#` for acceptance scenarios)
+- `<description>`: Descriptive name in snake_case
+
+**Examples**:
+```python
+def test_001_fr028_load_from_config_path() -> None:
+    """FR-028: System MUST load configuration from ~/.config/pc-switcher/config.yaml."""
+    config = Config.load_from_default_path()
+    assert config is not None
+
+async def test_001_us2_as1_install_missing_pcswitcher() -> None:
+    """US-2 AS-1: Target missing pc-switcher, orchestrator installs from GitHub."""
+    # Test implementation
+
+def test_001_fr018_log_level_ordering() -> None:
+    """FR-018: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL."""
+    assert LogLevel.DEBUG > LogLevel.FULL
+    assert LogLevel.FULL > LogLevel.INFO
+```
+
+**Benefits**:
+- **Unique across features**: Feature number ensures no naming conflicts across SpecKit features
+- **Grep-able**: `pytest -k "001_fr028"` runs all FR-028 tests for feature 001
+- **CI-friendly**: Test failures show feature + requirement: `test_001_us3_as2_create_presync_snapshots FAILED`
+- **Immediate traceability**: Function name alone shows which feature and requirement is being tested
+
+**When to use**:
+- Tests validating requirements from `specs/*/spec.md` files
+- Tests listed in `specs/*/contracts/coverage-map.yaml`
+- All tests for SpecKit-managed features (001-foundation, 002-testing-framework, 003-foundation-tests, etc.)
+
+#### General Tests (Descriptive Naming)
+
+For tests not tied to specific spec requirements, use descriptive names:
 
 ```python
 def test_acquire_creates_lock_file(self, tmp_path: Path) -> None:
     """acquire() should create the lock file."""
+    lock = SyncLock(tmp_path / "test.lock")
+    lock.acquire()
+    assert (tmp_path / "test.lock").exists()
 
 def test_validate_config_rejects_invalid_format(self) -> None:
     """validate_config() should reject invalid format."""
+    errors = Job.validate_config({"invalid": "format"})
+    assert len(errors) > 0
 ```
+
+**When to use**:
+- Helper function tests
+- Edge case tests not directly tied to spec requirements
+- Infrastructure tests (test framework itself)
+- Tests for code not covered by formal specs
 
 ### Markers
 

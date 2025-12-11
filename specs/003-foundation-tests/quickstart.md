@@ -32,7 +32,7 @@ uv run pytest tests/unit/orchestrator/test_logging_system.py -v
 uv run pytest tests/unit/jobs/test_snapshot_job.py tests/integration/test_snapshot_infrastructure.py -v
 
 # Tests for specific requirement
-uv run pytest -k "test_fr018" -v
+uv run pytest -k "test_001_fr018" -v
 ```
 
 ### Run Tests for Specific User Story
@@ -95,28 +95,35 @@ Follow the structure from `specs/003-foundation-tests/data-model.md`:
 - **Contract tests**: `tests/contract/test_<contract>.py`
   - Example: `tests/contract/test_job_interface.py`
 
-### 3. Name Test Function with Requirement ID
+### 3. Name Test Function with Feature + Requirement ID
 
-**Pattern**:
-```python
-def test_fr###_<descriptive_name>() -> None:
-    """FR-###: Brief requirement description."""
+**Pattern**: `test_<feature>_<req-id>_<description>()`
 
-async def test_us#_as#_<descriptive_name>() -> None:
-    """US-# AS-#: Brief scenario description."""
-```
+**Format Rules**:
+- `<feature>`: Always `001` for foundation tests (ensures uniqueness across SpecKit features)
+- `<req-id>`: `fr###` for functional requirements, `us#_as#` for acceptance scenarios
+- `<description>`: Descriptive name in snake_case
 
 **Examples**:
 ```python
-def test_fr018_log_level_ordering() -> None:
+def test_001_fr018_log_level_ordering() -> None:
     """FR-018: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL."""
     assert LogLevel.DEBUG > LogLevel.FULL
     assert LogLevel.FULL > LogLevel.INFO
 
-async def test_us2_as1_install_missing_pcswitcher() -> None:
+async def test_001_us2_as1_install_missing_pcswitcher() -> None:
     """US-2 AS-1: Target missing pc-switcher, orchestrator installs from GitHub."""
     # Test implementation
+
+def test_001_fr028_load_from_config_path() -> None:
+    """FR-028: System MUST load configuration from ~/.config/pc-switcher/config.yaml."""
+    # Test implementation
 ```
+
+**Benefits**:
+- Unique across all SpecKit features (001, 002, 003, etc.)
+- Grep-able: `pytest -k "001_fr028"` runs all FR-028 tests
+- CI output shows feature + requirement: `test_001_us3_as2_create_presync_snapshots FAILED`
 
 ### 4. Unit Test Template
 
@@ -157,7 +164,7 @@ class TestComponentBehavior:
     """Test [component] behavior per spec requirements."""
 
     @pytest.mark.asyncio
-    async def test_fr###_requirement_description(self, mock_job_context: JobContext) -> None:
+    async def test_001_fr###_requirement_description(self, mock_job_context: JobContext) -> None:
         """FR-###: Brief requirement description from spec."""
         # Arrange
         component = Component(mock_job_context)
@@ -183,7 +190,7 @@ from pcswitcher.executor import RemoteExecutor
 
 
 @pytest.mark.integration
-async def test_us#_as#_scenario_description(
+async def test_001_us#_as#_scenario_description(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
 ) -> None:
@@ -250,12 +257,12 @@ mock_asyncssh.connect = AsyncMock()
 Per FR-004 from 003-foundation-tests spec, every test must verify both success and failure:
 
 ```python
-def test_fr030_validate_job_configs_success() -> None:
+def test_001_fr030_validate_job_configs_success() -> None:
     """FR-030: Valid config passes validation."""
     errors = Job.validate_config({"valid": "config"})
     assert errors == []
 
-def test_fr030_validate_job_configs_failure() -> None:
+def test_001_fr030_validate_job_configs_failure() -> None:
     """FR-030: Invalid config returns ConfigError."""
     errors = Job.validate_config({"invalid": 123})
     assert len(errors) > 0
@@ -284,7 +291,7 @@ After writing tests, verify they appear in the coverage map:
 
 ```bash
 # Check coverage-map.yaml includes your test
-grep "test_fr###" specs/003-foundation-tests/contracts/coverage-map.yaml
+grep "test_001_fr###" specs/003-foundation-tests/contracts/coverage-map.yaml
 ```
 
 ## Common Patterns
@@ -293,7 +300,7 @@ grep "test_fr###" specs/003-foundation-tests/contracts/coverage-map.yaml
 
 ```python
 @pytest.mark.asyncio
-async def test_fr002_lifecycle_validate_then_execute() -> None:
+async def test_001_fr002_lifecycle_validate_then_execute() -> None:
     """FR-002: System calls validate() then execute() in order."""
     mock_job = AsyncMock(spec=SyncJob)
     mock_job.validate = AsyncMock(return_value=[])
@@ -314,7 +321,7 @@ async def test_fr002_lifecycle_validate_then_execute() -> None:
 ### Pattern: Test Configuration Validation
 
 ```python
-def test_fr030_validate_against_job_schema() -> None:
+def test_001_fr030_validate_against_job_schema() -> None:
     """FR-030: Validate config against job-declared schemas."""
     # Test with invalid config
     errors = DummyJob.validate_config({"unknown_field": "value"})
@@ -328,7 +335,7 @@ def test_fr030_validate_against_job_schema() -> None:
 ### Pattern: Test Log Level Filtering
 
 ```python
-def test_fr020_independent_file_and_cli_levels() -> None:
+def test_001_fr020_independent_file_and_cli_levels() -> None:
     """FR-020: File and CLI log levels configured independently."""
     config = Config.load({
         "log_file_level": "FULL",
@@ -343,7 +350,7 @@ def test_fr020_independent_file_and_cli_levels() -> None:
 
 ```python
 @pytest.mark.integration
-async def test_us3_as2_create_presync_snapshots(
+async def test_001_us3_as2_create_presync_snapshots(
     pc1_executor: RemoteExecutor,
 ) -> None:
     """US-3 AS-2: Create pre-sync snapshots before jobs execute."""
@@ -368,7 +375,7 @@ async def test_us3_as2_create_presync_snapshots(
 
 ```python
 @pytest.mark.asyncio
-async def test_fr019_critical_on_exception() -> None:
+async def test_001_fr019_critical_on_exception() -> None:
     """FR-019: Log CRITICAL and halt when job raises exception."""
     mock_job = AsyncMock(spec=SyncJob)
     mock_job.validate = AsyncMock(return_value=[])
@@ -388,7 +395,7 @@ async def test_fr019_critical_on_exception() -> None:
 ### Run Single Test with Verbose Output
 
 ```bash
-uv run pytest tests/unit/orchestrator/test_logging_system.py::test_fr018_log_level_ordering -v -s
+uv run pytest tests/unit/orchestrator/test_logging_system.py::test_001_fr018_log_level_ordering -v -s
 ```
 
 The `-s` flag shows print statements and logging output.
@@ -456,6 +463,101 @@ If unit tests exceed 30s budget, consider:
 - Moving slow tests to integration suite
 - Using faster mocks instead of real objects
 - Simplifying test setup
+
+## Safety and Risk Assessment
+
+### High-Risk Tests (Require VM Isolation)
+
+**CRITICAL**: These tests must ONLY run on dedicated test VMs, never on development machines.
+
+| Test | Risk | Potential Damage | Mitigation |
+|------|------|------------------|------------|
+| `test_snapshot_infrastructure.py` | **HIGH** | Could corrupt btrfs filesystem if snapshot commands fail unexpectedly | Run only on dedicated test VMs; reset VMs after each session |
+| `test_cleanup_snapshots.py` | **HIGH** | Deletes btrfs subvolumes; could delete wrong snapshots if path logic is buggy | Use unique test session IDs; verify paths before deletion; test only on VMs |
+| `test_installation_script.py` | **MEDIUM** | Installs packages via apt; could leave system in inconsistent state | Run only on VMs; reset after tests |
+| `test_interrupt_integration.py` | **MEDIUM** | Spawns processes that might not terminate; could leave orphaned processes | Hard timeout fallback; process cleanup in fixtures; VM reset |
+| `test_end_to_end_sync.py` | **MEDIUM** | Runs full sync workflow including snapshots | VM isolation; test session cleanup |
+| Integration `test_lock.py` | **LOW** | Creates lock files that could interfere with real syncs | Use test-specific lock paths; cleanup fixtures |
+
+### Safety Measures
+
+The testing framework implements multiple layers of protection:
+
+1. **VM Isolation**: All destructive tests run only on dedicated Hetzner Cloud VMs, never on developer machines or CI runners.
+
+2. **Session ID Isolation**: Each test run uses a unique session ID (`test-<random>`) to prevent conflicts with real data.
+
+3. **Cleanup Fixtures**: pytest fixtures clean up test artifacts. Note: Per-test cleanup is optional for many tests since the VM is reset to a clean btrfs snapshot before each test session.
+
+4. **Lock-Based Exclusion**: Integration test lock prevents concurrent runs that could interfere with each other.
+
+5. **Snapshot Reset**: VMs are reset to baseline snapshot before each test session.
+
+6. **Timeout Protection**: Long-running tests have timeouts to prevent hangs.
+
+7. **CI Concurrency Control**: GitHub Actions `concurrency.group` prevents parallel integration test runs.
+
+### Test Execution Guidelines
+
+**DO**:
+- Run integration tests only on dedicated test VMs
+- Review test output for unexpected errors or warnings
+- Monitor VM state after test runs for leftover artifacts
+- Reset VMs periodically even if tests pass
+
+**DON'T**:
+- Never run integration tests on production machines
+- Never run integration tests on your development laptop
+- Never skip VM reset between test sessions
+- Never use test VMs for real pc-switcher usage
+
+## Test Limitations and Assumptions
+
+### Unit Test Limitations
+
+1. **Mocked I/O**: Unit tests use mocked subprocess and SSH connections. Bugs in the actual I/O layer will not be caught by unit tests alone.
+
+2. **No real btrfs**: Unit tests for btrfs-related code test only pure logic (naming, path generation). Actual btrfs operations are tested only in integration tests.
+
+3. **Time-dependent tests**: Tests involving timestamps (`snapshot_name`, `session_folder_name`) use `freezegun` library to freeze time, ensuring deterministic and reproducible results.
+
+### Integration Test Limitations
+
+1. **VM dependency**: Integration tests require Hetzner Cloud VMs. Cannot run locally without cloud access.
+
+2. **Cost**: Persistent VMs cost ~€7/month total (2 CX23 VMs at €3.50 each). Tests can run anytime without per-hour costs.
+
+3. **Network dependency**: Tests require stable network connectivity to Hetzner Cloud.
+
+4. **Reset time**: Btrfs snapshot rollback requires VM reboot (~10-20 seconds). This is much faster than Hetzner's VM-level snapshot restore.
+
+5. **Serial execution**: Integration tests must run serially due to shared VM state and locking.
+
+### Not Covered by Automated Tests
+
+1. **Terminal UI visual layout**: Progress bar appearance, colors, and rich formatting are verified only in manual playbook. However, automated tests verify that progress updates, log messages, and status changes are correctly delivered to the UI component.
+
+2. **Intermittent network failures**: Small packet drops and high latency are difficult to simulate reliably. However, complete network outages are tested by temporarily blocking network access via iptables rules on the VM.
+
+3. **Long-running stability**: Tests don't run for extended periods to catch memory leaks or resource exhaustion.
+
+Note: **Disk space exhaustion** is tested by setting thresholds very high (e.g., "99%") to trigger low-space conditions without actually filling disks.
+
+### Assumptions
+
+Integration tests assume:
+
+1. **Python 3.14+**: Tests assume Python 3.14 or later is available (handled automatically by `uv run`).
+
+2. **btrfs filesystem**: Integration tests assume VMs have btrfs root filesystem with `@` and `@home` subvolumes. *Automatically configured by OpenTofu provisioning scripts.*
+
+3. **SSH access**: Integration tests assume SSH key-based authentication to VMs is configured. *Automatically configured by OpenTofu - SSH keys are deployed during VM creation, and `~/.ssh/config` is set up with pc1/pc2 hostnames.*
+
+4. **sudo access**: Tests assume `testuser` has passwordless sudo on VMs. *Automatically configured by cloud-init during VM provisioning.*
+
+5. **Network access**: Tests assume VMs can reach GitHub for install.sh tests. *Hetzner VMs have public IPs with unrestricted outbound access by default.*
+
+6. **No concurrent modifications**: Tests assume no other processes are modifying the test VMs during test execution. Enforced by lock-based isolation.
 
 ## Next Steps
 

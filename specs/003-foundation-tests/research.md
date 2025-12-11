@@ -40,31 +40,42 @@ This document captures research findings for implementing comprehensive spec-dri
 
 ### Decision 3: Test Naming Convention
 
-**Chosen**: Test function names include requirement IDs
+**Chosen**: Test function names include feature number + requirement IDs
 
 **Pattern**:
 ```python
+# Format: test_<feature>_<req-id>_<description>()
+# Feature number is always 001 for foundation tests
+
 # Unit tests reference FR (Functional Requirement):
-def test_fr001_job_interface_defines_validate_method() -> None: ...
-def test_fr018_debug_level_includes_all_messages() -> None: ...
+def test_001_fr001_job_interface_defines_validate_method() -> None: ...
+def test_001_fr018_debug_level_includes_all_messages() -> None: ...
 
 # Integration tests reference US (User Story) and AS (Acceptance Scenario):
-async def test_us2_as1_install_missing_pcswitcher_on_target() -> None: ...
-async def test_us3_as2_create_pre_sync_snapshots() -> None: ...
+async def test_001_us2_as1_install_missing_pcswitcher_on_target() -> None: ...
+async def test_001_us3_as2_create_pre_sync_snapshots() -> None: ...
 
 # Edge case tests reference US and note edge case:
-async def test_us3_edge_insufficient_space_for_snapshots() -> None: ...
+async def test_001_us3_edge_insufficient_space_for_snapshots() -> None: ...
 ```
 
 **Rationale**:
-- Immediate traceability from failing test to specific spec requirement
-- Supports FR-008 from 003-foundation-tests spec
-- Test name alone tells developer which requirement is failing
-- Grep-able: `grep "test_us2" tests/` shows all tests for User Story 2
+- **Feature number prefix ensures uniqueness**: FR/US/AS IDs are only unique within a SpecKit feature. Adding the feature number (001, 002, 003, etc.) ensures test names are unique across all features in the project.
+- **Immediate traceability**: From failing test to specific feature and requirement
+- **Supports FR-008** from 003-foundation-tests spec
+- **Test name alone shows feature + requirement**: Developer immediately knows which feature and which requirement is failing
+- **Grep-able**: `pytest -k "001_fr028"` runs all FR-028 tests for feature 001
+- **CI-friendly**: Pytest output is self-documenting: `test_001_us3_as2_create_presync_snapshots FAILED`
 
 **Alternatives Considered**:
 - **Descriptive names only**: `test_job_interface_has_validate()` → Rejected because requires reading test docstring to find spec requirement; not grep-able
 - **Docstring-only traceability**: Names without IDs, rely on docstrings → Rejected because pytest output shows function names, not docstrings; harder to trace failures in CI
+- **Requirement IDs without feature number**: `test_fr028_...()` → Initially considered but rejected because FR/US/AS numbers are only unique within a feature, creating ambiguity across multiple SpecKit features
+
+**Decision History**:
+- Initial plan proposed requirement IDs without feature numbers
+- User feedback identified ambiguity risk (FR numbers not unique across features)
+- Final decision: Include feature number prefix (test_001_fr###_...) for uniqueness and clarity
 
 ### Decision 4: Mocking Strategy for Unit Tests
 

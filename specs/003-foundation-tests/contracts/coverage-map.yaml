@@ -13,262 +13,262 @@ user_stories:
     name: "Job Architecture and Integration Contract"
     acceptance_scenarios:
       - id: US1-AS1
-        test: tests/integration/test_end_to_end_sync.py::test_us1_as1_job_integration_via_interface
+        test: tests/integration/test_end_to_end_sync.py::test_001_us1_as1_job_integration_via_interface
       - id: US1-AS2
-        test: tests/contract/test_job_interface.py::test_us1_as2_config_schema_validation
+        test: tests/contract/test_job_interface.py::test_001_us1_as2_config_schema_validation
       - id: US1-AS3
-        test: tests/contract/test_job_interface.py::test_us1_as3_job_logging_at_all_levels
+        test: tests/contract/test_job_interface.py::test_001_us1_as3_job_logging_at_all_levels
       - id: US1-AS4
-        test: tests/contract/test_job_interface.py::test_us1_as4_job_progress_reporting
+        test: tests/contract/test_job_interface.py::test_001_us1_as4_job_progress_reporting
       - id: US1-AS5
-        test: tests/unit/orchestrator/test_job_lifecycle.py::test_us1_as5_validation_errors_halt_sync
+        test: tests/unit/orchestrator/test_job_lifecycle.py::test_001_us1_as5_validation_errors_halt_sync
       - id: US1-AS6
-        test: tests/unit/orchestrator/test_job_lifecycle.py::test_us1_as6_exception_handling
+        test: tests/unit/orchestrator/test_job_lifecycle.py::test_001_us1_as6_exception_handling
       - id: US1-AS7
-        test: tests/integration/test_end_to_end_sync.py::test_us1_as7_interrupt_terminates_job
+        test: tests/integration/test_end_to_end_sync.py::test_001_us1_as7_interrupt_terminates_job
 
   US-2:
     name: "Self-Installing Sync Orchestrator"
     acceptance_scenarios:
       - id: US2-AS1
-        test: tests/integration/test_self_installation.py::test_us2_as1_install_missing_pcswitcher
+        test: tests/integration/test_self_installation.py::test_001_us2_as1_install_missing_pcswitcher
       - id: US2-AS2
-        test: tests/integration/test_self_installation.py::test_us2_as2_upgrade_outdated_target
+        test: tests/integration/test_self_installation.py::test_001_us2_as2_upgrade_outdated_target
       - id: US2-AS3
-        test: tests/unit/jobs/test_install_job.py::test_us2_as3_skip_when_versions_match
+        test: tests/unit/jobs/test_install_job.py::test_001_us2_as3_skip_when_versions_match
       - id: US2-AS4
-        test: tests/unit/jobs/test_install_job.py::test_us2_as4_abort_on_install_failure
+        test: tests/unit/jobs/test_install_job.py::test_001_us2_as4_abort_on_install_failure
       - id: US2-AS5
-        test: tests/integration/test_self_installation.py::test_us2_as5_prompt_for_missing_config
+        test: tests/integration/test_self_installation.py::test_001_us2_as5_prompt_for_missing_config
       - id: US2-AS6
-        test: tests/integration/test_self_installation.py::test_us2_as6_diff_and_prompt_for_different_config
+        test: tests/integration/test_self_installation.py::test_001_us2_as6_diff_and_prompt_for_different_config
       - id: US2-AS7
-        test: tests/unit/test_config_sync.py::test_us2_as7_skip_when_configs_match
+        test: tests/unit/test_config_sync.py::test_001_us2_as7_skip_when_configs_match
 
   US-3:
     name: "Safety Infrastructure with Btrfs Snapshots"
     acceptance_scenarios:
       - id: US3-AS1
-        test: tests/unit/jobs/test_snapshot_job.py::test_us3_as1_validate_subvolumes_exist
+        test: tests/unit/jobs/test_snapshot_job.py::test_001_us3_as1_validate_subvolumes_exist
       - id: US3-AS2
-        test: tests/integration/test_snapshot_infrastructure.py::test_us3_as2_create_presync_snapshots
+        test: tests/integration/test_snapshot_infrastructure.py::test_001_us3_as2_create_presync_snapshots
       - id: US3-AS3
-        test: tests/integration/test_snapshot_infrastructure.py::test_us3_as3_create_postsync_snapshots
+        test: tests/integration/test_snapshot_infrastructure.py::test_001_us3_as3_create_postsync_snapshots
       - id: US3-AS4
-        test: tests/integration/test_snapshot_infrastructure.py::test_us3_as4_create_snapshots_subvolume
+        test: tests/integration/test_snapshot_infrastructure.py::test_001_us3_as4_create_snapshots_subvolume
       - id: US3-AS5
-        test: tests/unit/jobs/test_snapshot_job.py::test_us3_as5_abort_if_snapshots_not_subvolume
+        test: tests/unit/jobs/test_snapshot_job.py::test_001_us3_as5_abort_if_snapshots_not_subvolume
       - id: US3-AS6
-        test: tests/unit/jobs/test_snapshot_job.py::test_us3_as6_abort_on_snapshot_failure
+        test: tests/unit/jobs/test_snapshot_job.py::test_001_us3_as6_abort_on_snapshot_failure
       - id: US3-AS7
-        test: tests/integration/test_snapshot_infrastructure.py::test_us3_as7_cleanup_snapshots_with_retention
+        test: tests/integration/test_snapshot_infrastructure.py::test_001_us3_as7_cleanup_snapshots_with_retention
       - id: US3-AS8
-        test: tests/unit/jobs/test_snapshot_job.py::test_us3_as8_preflight_disk_space_check
+        test: tests/unit/jobs/test_snapshot_job.py::test_001_us3_as8_preflight_disk_space_check
       - id: US3-AS9
-        test: tests/integration/test_snapshot_infrastructure.py::test_us3_as9_runtime_disk_space_monitoring
+        test: tests/integration/test_snapshot_infrastructure.py::test_001_us3_as9_runtime_disk_space_monitoring
 
   US-4:
     name: "Comprehensive Logging System"
     acceptance_scenarios:
       - id: US4-AS1
-        test: tests/unit/orchestrator/test_logging_system.py::test_us4_as1_debug_excluded_at_full_level
+        test: tests/unit/orchestrator/test_logging_system.py::test_001_us4_as1_debug_excluded_at_full_level
       - id: US4-AS2
-        test: tests/unit/orchestrator/test_logging_system.py::test_us4_as2_full_excluded_at_info_level
+        test: tests/unit/orchestrator/test_logging_system.py::test_001_us4_as2_full_excluded_at_info_level
       - id: US4-AS4
-        test: tests/unit/orchestrator/test_logging_system.py::test_us4_as4_log_file_json_lines_format
+        test: tests/unit/orchestrator/test_logging_system.py::test_001_us4_as4_log_file_json_lines_format
       - id: US4-AS6
-        test: tests/integration/test_logging_integration.py::test_us4_as6_logs_command_displays_last_log
+        test: tests/integration/test_logging_integration.py::test_001_us4_as6_logs_command_displays_last_log
 
   US-5:
     name: "Graceful Interrupt Handling"
     acceptance_scenarios:
       - id: US5-AS1
-        test: tests/integration/test_interrupt_integration.py::test_us5_as1_interrupt_requests_job_termination
+        test: tests/integration/test_interrupt_integration.py::test_001_us5_as1_interrupt_requests_job_termination
       - id: US5-AS2
-        test: tests/unit/orchestrator/test_interrupt_handling.py::test_us5_as2_interrupt_between_jobs_skips_remaining
+        test: tests/unit/orchestrator/test_interrupt_handling.py::test_001_us5_as2_interrupt_between_jobs_skips_remaining
       - id: US5-AS3
-        test: tests/integration/test_interrupt_integration.py::test_us5_as3_second_interrupt_forces_termination
+        test: tests/integration/test_interrupt_integration.py::test_001_us5_as3_second_interrupt_forces_termination
 
   US-6:
     name: "Configuration System"
     acceptance_scenarios:
       - id: US6-AS1
-        test: tests/unit/orchestrator/test_config_system.py::test_us6_as1_load_and_validate_config
+        test: tests/unit/orchestrator/test_config_system.py::test_001_us6_as1_load_and_validate_config
       - id: US6-AS2
-        test: tests/unit/orchestrator/test_config_system.py::test_us6_as2_independent_log_levels
+        test: tests/unit/orchestrator/test_config_system.py::test_001_us6_as2_independent_log_levels
       - id: US6-AS3
-        test: tests/unit/orchestrator/test_config_system.py::test_us6_as3_enable_disable_jobs
+        test: tests/unit/orchestrator/test_config_system.py::test_001_us6_as3_enable_disable_jobs
       - id: US6-AS4
-        test: tests/unit/orchestrator/test_config_system.py::test_us6_as4_abort_on_missing_required_param
+        test: tests/unit/orchestrator/test_config_system.py::test_001_us6_as4_abort_on_missing_required_param
       - id: US6-AS5
-        test: tests/unit/orchestrator/test_config_system.py::test_us6_as5_yaml_syntax_error_handling
+        test: tests/unit/orchestrator/test_config_system.py::test_001_us6_as5_yaml_syntax_error_handling
 
   US-7:
     name: "Installation and Setup Infrastructure"
     acceptance_scenarios:
       - id: US7-AS1
-        test: tests/integration/test_installation_script.py::test_us7_as1_install_script_fresh_machine
+        test: tests/integration/test_installation_script.py::test_001_us7_as1_install_script_fresh_machine
       - id: US7-AS2
-        test: tests/integration/test_config_sync.py::test_us7_as2_target_install_shared_logic
+        test: tests/integration/test_config_sync.py::test_001_us7_as2_target_install_shared_logic
       - id: US7-AS3
-        test: tests/integration/test_installation_script.py::test_us7_as3_preserve_existing_config
+        test: tests/integration/test_installation_script.py::test_001_us7_as3_preserve_existing_config
 
   US-8:
     name: "Dummy Test Jobs"
     acceptance_scenarios:
       - id: US8-AS1
-        test: tests/unit/jobs/test_dummy_jobs.py::test_us8_as1_dummy_success_completes
+        test: tests/unit/jobs/test_dummy_jobs.py::test_001_us8_as1_dummy_success_completes
       - id: US8-AS3
-        test: tests/unit/jobs/test_dummy_jobs.py::test_us8_as3_dummy_fail_raises_exception
+        test: tests/unit/jobs/test_dummy_jobs.py::test_001_us8_as3_dummy_fail_raises_exception
       - id: US8-AS4
-        test: tests/unit/jobs/test_dummy_jobs.py::test_us8_as4_dummy_job_termination
+        test: tests/unit/jobs/test_dummy_jobs.py::test_001_us8_as4_dummy_job_termination
 
   US-9:
     name: "Terminal UI with Progress Reporting"
     acceptance_scenarios:
       - id: US9-AS1
-        test: tests/integration/test_terminal_ui.py::test_us9_as1_progress_display
+        test: tests/integration/test_terminal_ui.py::test_001_us9_as1_progress_display
       - id: US9-AS2
-        test: tests/integration/test_terminal_ui.py::test_us9_as2_multi_job_progress
+        test: tests/integration/test_terminal_ui.py::test_001_us9_as2_multi_job_progress
       - id: US9-AS3
-        test: tests/integration/test_terminal_ui.py::test_us9_as3_logs_with_progress
+        test: tests/integration/test_terminal_ui.py::test_001_us9_as3_logs_with_progress
 
 functional_requirements:
   job_architecture:
     - id: FR-001
-      test: tests/contract/test_job_interface.py::test_fr001_job_interface_contract
+      test: tests/contract/test_job_interface.py::test_001_fr001_job_interface_contract
     - id: FR-002
-      test: tests/unit/orchestrator/test_job_lifecycle.py::test_fr002_lifecycle_validate_then_execute
+      test: tests/unit/orchestrator/test_job_lifecycle.py::test_001_fr002_lifecycle_validate_then_execute
     - id: FR-003
-      test: tests/unit/orchestrator/test_interrupt_handling.py::test_fr003_termination_request_on_interrupt
+      test: tests/unit/orchestrator/test_interrupt_handling.py::test_001_fr003_termination_request_on_interrupt
     - id: FR-004
-      test: tests/unit/orchestrator/test_config_system.py::test_fr004_jobs_loaded_in_config_order
+      test: tests/unit/orchestrator/test_config_system.py::test_001_fr004_jobs_loaded_in_config_order
 
   self_installation:
     - id: FR-005
-      test: tests/unit/jobs/test_install_job.py::test_fr005_version_check_and_install
+      test: tests/unit/jobs/test_install_job.py::test_001_fr005_version_check_and_install
     - id: FR-006
-      test: tests/unit/jobs/test_install_job.py::test_fr006_abort_on_newer_target_version
+      test: tests/unit/jobs/test_install_job.py::test_001_fr006_abort_on_newer_target_version
     - id: FR-007
-      test: tests/unit/jobs/test_install_job.py::test_fr007_abort_on_install_failure
+      test: tests/unit/jobs/test_install_job.py::test_001_fr007_abort_on_install_failure
     - id: FR-007a
-      test: tests/unit/test_config_sync.py::test_fr007a_config_sync_prompt_if_missing
+      test: tests/unit/test_config_sync.py::test_001_fr007a_config_sync_prompt_if_missing
     - id: FR-007b
-      test: tests/unit/test_config_sync.py::test_fr007b_config_diff_and_prompt
+      test: tests/unit/test_config_sync.py::test_001_fr007b_config_diff_and_prompt
     - id: FR-007c
-      test: tests/unit/test_config_sync.py::test_fr007c_skip_if_configs_match
+      test: tests/unit/test_config_sync.py::test_001_fr007c_skip_if_configs_match
 
   safety_infrastructure:
     - id: FR-008
-      test: tests/unit/jobs/test_snapshot_job.py::test_fr008_create_presync_snapshots
+      test: tests/unit/jobs/test_snapshot_job.py::test_001_fr008_create_presync_snapshots
     - id: FR-009
-      test: tests/unit/jobs/test_snapshot_job.py::test_fr009_create_postsync_snapshots
+      test: tests/unit/jobs/test_snapshot_job.py::test_001_fr009_create_postsync_snapshots
     - id: FR-010
-      test: tests/unit/jobs/test_snapshot_job.py::test_fr010_snapshot_naming_pattern
+      test: tests/unit/jobs/test_snapshot_job.py::test_001_fr010_snapshot_naming_pattern
     - id: FR-011
-      test: tests/unit/orchestrator/test_config_system.py::test_fr011_snapshots_always_active
+      test: tests/unit/orchestrator/test_config_system.py::test_001_fr011_snapshots_always_active
     - id: FR-012
-      test: tests/unit/jobs/test_snapshot_job.py::test_fr012_abort_on_snapshot_failure
+      test: tests/unit/jobs/test_snapshot_job.py::test_001_fr012_abort_on_snapshot_failure
     - id: FR-014
-      test: tests/unit/jobs/test_snapshot_job.py::test_fr014_cleanup_with_retention
+      test: tests/unit/jobs/test_snapshot_job.py::test_001_fr014_cleanup_with_retention
     - id: FR-015
-      test: tests/unit/jobs/test_snapshot_job.py::test_fr015_validate_subvolumes_exist
+      test: tests/unit/jobs/test_snapshot_job.py::test_001_fr015_validate_subvolumes_exist
     - id: FR-015b
-      test: tests/unit/jobs/test_snapshot_job.py::test_fr015b_validate_snapshots_is_subvolume
+      test: tests/unit/jobs/test_snapshot_job.py::test_001_fr015b_validate_snapshots_is_subvolume
     - id: FR-016
-      test: tests/unit/jobs/test_disk_space_monitor.py::test_fr016_preflight_disk_space_check
+      test: tests/unit/jobs/test_disk_space_monitor.py::test_001_fr016_preflight_disk_space_check
     - id: FR-017
-      test: tests/unit/jobs/test_disk_space_monitor.py::test_fr017_runtime_disk_space_monitoring
+      test: tests/unit/jobs/test_disk_space_monitor.py::test_001_fr017_runtime_disk_space_monitoring
 
   logging_system:
     - id: FR-018
-      test: tests/unit/orchestrator/test_logging_system.py::test_fr018_log_level_ordering
+      test: tests/unit/orchestrator/test_logging_system.py::test_001_fr018_log_level_ordering
     - id: FR-019
-      test: tests/unit/orchestrator/test_job_lifecycle.py::test_fr019_critical_on_exception
+      test: tests/unit/orchestrator/test_job_lifecycle.py::test_001_fr019_critical_on_exception
     - id: FR-020
-      test: tests/unit/orchestrator/test_logging_system.py::test_fr020_independent_log_levels
+      test: tests/unit/orchestrator/test_logging_system.py::test_001_fr020_independent_log_levels
     - id: FR-021
-      test: tests/unit/orchestrator/test_logging_system.py::test_fr021_timestamped_log_file
+      test: tests/unit/orchestrator/test_logging_system.py::test_001_fr021_timestamped_log_file
     - id: FR-022
-      test: tests/unit/orchestrator/test_logging_system.py::test_fr022_log_format_json_and_console
+      test: tests/unit/orchestrator/test_logging_system.py::test_001_fr022_log_format_json_and_console
     - id: FR-023
-      test: tests/integration/test_logging_integration.py::test_fr023_aggregate_source_target_logs
+      test: tests/integration/test_logging_integration.py::test_001_fr023_aggregate_source_target_logs
 
   interrupt_handling:
     - id: FR-024
-      test: tests/unit/orchestrator/test_interrupt_handling.py::test_fr024_sigint_handler_exit_130
+      test: tests/unit/orchestrator/test_interrupt_handling.py::test_001_fr024_sigint_handler_exit_130
     - id: FR-025
-      test: tests/integration/test_interrupt_integration.py::test_fr025_terminate_target_processes
+      test: tests/integration/test_interrupt_integration.py::test_001_fr025_terminate_target_processes
     - id: FR-026
-      test: tests/integration/test_interrupt_integration.py::test_fr026_second_sigint_force_terminate
+      test: tests/integration/test_interrupt_integration.py::test_001_fr026_second_sigint_force_terminate
     - id: FR-027
-      test: tests/integration/test_interrupt_integration.py::test_fr027_no_orphaned_processes
+      test: tests/integration/test_interrupt_integration.py::test_001_fr027_no_orphaned_processes
 
   configuration_system:
     - id: FR-028
-      test: tests/unit/orchestrator/test_config_system.py::test_fr028_load_from_config_path
+      test: tests/unit/orchestrator/test_config_system.py::test_001_fr028_load_from_config_path
     - id: FR-029
-      test: tests/unit/orchestrator/test_config_system.py::test_fr029_config_structure
+      test: tests/unit/orchestrator/test_config_system.py::test_001_fr029_config_structure
     - id: FR-030
-      test: tests/unit/orchestrator/test_config_system.py::test_fr030_validate_job_configs
+      test: tests/unit/orchestrator/test_config_system.py::test_001_fr030_validate_job_configs
     - id: FR-031
-      test: tests/unit/orchestrator/test_config_system.py::test_fr031_apply_config_defaults
+      test: tests/unit/orchestrator/test_config_system.py::test_001_fr031_apply_config_defaults
     - id: FR-032
-      test: tests/unit/orchestrator/test_config_system.py::test_fr032_enable_disable_via_sync_jobs
+      test: tests/unit/orchestrator/test_config_system.py::test_001_fr032_enable_disable_via_sync_jobs
     - id: FR-033
-      test: tests/unit/orchestrator/test_config_system.py::test_fr033_config_error_messages
+      test: tests/unit/orchestrator/test_config_system.py::test_001_fr033_config_error_messages
 
   installation_setup:
     - id: FR-035
-      test: tests/integration/test_installation_script.py::test_fr035_install_script_no_prereqs
+      test: tests/integration/test_installation_script.py::test_001_fr035_install_script_no_prereqs
     - id: FR-036
-      test: tests/integration/test_installation_script.py::test_fr036_default_config_with_comments
+      test: tests/integration/test_installation_script.py::test_001_fr036_default_config_with_comments
 
   testing_infrastructure:
     - id: FR-038
-      test: tests/unit/jobs/test_dummy_jobs.py::test_fr038_dummy_jobs_exist
+      test: tests/unit/jobs/test_dummy_jobs.py::test_001_fr038_dummy_jobs_exist
     - id: FR-039
-      test: tests/unit/jobs/test_dummy_jobs.py::test_fr039_dummy_success_behavior
+      test: tests/unit/jobs/test_dummy_jobs.py::test_001_fr039_dummy_success_behavior
     - id: FR-041
-      test: tests/unit/jobs/test_dummy_jobs.py::test_fr041_dummy_fail_exception
+      test: tests/unit/jobs/test_dummy_jobs.py::test_001_fr041_dummy_fail_exception
     - id: FR-042
-      test: tests/unit/jobs/test_dummy_jobs.py::test_fr042_dummy_jobs_termination
+      test: tests/unit/jobs/test_dummy_jobs.py::test_001_fr042_dummy_jobs_termination
 
   progress_reporting:
     - id: FR-043
-      test: tests/unit/jobs/test_dummy_jobs.py::test_fr043_job_progress_emission
+      test: tests/unit/jobs/test_dummy_jobs.py::test_001_fr043_job_progress_emission
     - id: FR-044
-      test: tests/unit/orchestrator/test_job_lifecycle.py::test_fr044_orchestrator_forwards_progress
+      test: tests/unit/orchestrator/test_job_lifecycle.py::test_001_fr044_orchestrator_forwards_progress
     - id: FR-045
-      test: tests/unit/orchestrator/test_logging_system.py::test_fr045_progress_logged_at_full
+      test: tests/unit/orchestrator/test_logging_system.py::test_001_fr045_progress_logged_at_full
 
   core_orchestration:
     - id: FR-046
-      test: tests/unit/cli/test_commands.py::test_fr046_sync_command
+      test: tests/unit/cli/test_commands.py::test_001_fr046_sync_command
     - id: FR-047
-      test: tests/unit/test_lock.py::test_fr047_lock_prevents_concurrent_sync
+      test: tests/unit/test_lock.py::test_001_fr047_lock_prevents_concurrent_sync
     - id: FR-048
-      test: tests/unit/orchestrator/test_job_lifecycle.py::test_fr048_log_sync_summary
+      test: tests/unit/orchestrator/test_job_lifecycle.py::test_001_fr048_log_sync_summary
 
 edge_cases:
   - id: target_unreachable_mid_sync
-    test: tests/integration/test_end_to_end_sync.py::test_edge_target_unreachable_mid_sync
+    test: tests/integration/test_end_to_end_sync.py::test_001_edge_target_unreachable_mid_sync
   - id: insufficient_space_snapshots
-    test: tests/unit/jobs/test_snapshot_job.py::test_edge_insufficient_space_snapshots
+    test: tests/unit/jobs/test_snapshot_job.py::test_001_edge_insufficient_space_snapshots
   - id: cleanup_exception
-    test: tests/unit/orchestrator/test_job_lifecycle.py::test_edge_cleanup_exception
+    test: tests/unit/orchestrator/test_job_lifecycle.py::test_001_edge_cleanup_exception
   - id: concurrent_sync_attempts
-    test: tests/unit/test_lock.py::test_edge_concurrent_sync_attempts
+    test: tests/unit/test_lock.py::test_001_edge_concurrent_sync_attempts
   - id: unknown_job_in_config
-    test: tests/unit/orchestrator/test_config_system.py::test_edge_unknown_job_in_config
+    test: tests/unit/orchestrator/test_config_system.py::test_001_edge_unknown_job_in_config
   - id: partial_job_failures
-    test: tests/unit/orchestrator/test_job_lifecycle.py::test_edge_partial_job_failures
+    test: tests/unit/orchestrator/test_job_lifecycle.py::test_001_edge_partial_job_failures
   - id: target_newer_version
-    test: tests/unit/jobs/test_install_job.py::test_edge_target_newer_version
+    test: tests/unit/jobs/test_install_job.py::test_001_edge_target_newer_version
   - id: source_crash_timeout
-    test: tests/integration/test_interrupt_integration.py::test_edge_source_crash_timeout
+    test: tests/integration/test_interrupt_integration.py::test_001_edge_source_crash_timeout
   - id: btrfs_not_available
-    test: tests/integration/test_snapshot_infrastructure.py::test_edge_btrfs_not_available
+    test: tests/integration/test_snapshot_infrastructure.py::test_001_edge_btrfs_not_available
 
 summary:
   user_stories_total: 9
