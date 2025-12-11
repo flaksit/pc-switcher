@@ -814,7 +814,7 @@ tests/
 uv run pytest
 
 # Run specific test file
-uv run pytest tests/test_version.py
+uv run pytest tests/unit/test_version.py
 
 # Run with coverage
 uv run pytest --cov=pcswitcher
