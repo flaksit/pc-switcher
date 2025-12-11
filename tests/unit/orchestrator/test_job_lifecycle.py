@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pcswitcher.events import EventBus, ProgressEvent
+from pcswitcher.events import ProgressEvent
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.models import Host, JobResult, JobStatus, ProgressUpdate, ValidationError

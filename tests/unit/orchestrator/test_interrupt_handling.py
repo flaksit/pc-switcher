@@ -9,13 +9,17 @@ Tests verify FR-003, FR-024, and US5-AS2 from specs/001-foundation/spec.md:
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
+from rich.console import Console
 
+from pcswitcher.cli import _async_run_sync
 from pcswitcher.config import Configuration
 from pcswitcher.events import EventBus
 from pcswitcher.jobs.base import SyncJob
@@ -28,7 +32,7 @@ class SlowJob(SyncJob):
 
     name = "slow_job"
 
-    CONFIG_SCHEMA = {
+    CONFIG_SCHEMA: ClassVar = {
         "type": "object",
         "properties": {},
         "required": [],
@@ -65,7 +69,7 @@ class QuickJob(SyncJob):
 
     name = "quick_job"
 
-    CONFIG_SCHEMA = {
+    CONFIG_SCHEMA: ClassVar = {
         "type": "object",
         "properties": {},
         "required": [],
@@ -106,9 +110,7 @@ def mock_config() -> Configuration:
         },
     }
     # Create temporary config file
-    import tempfile
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-        import yaml
         yaml.dump(config_dict, f)
         config_path = Path(f.name)
 
@@ -178,9 +180,6 @@ class TestInterruptHandling:
         3. Logs interruption
         4. Returns exit code 130
         """
-        from pcswitcher.cli import _async_run_sync
-        from rich.console import Console
-
         # Create minimal mock config
         config_dict = {
             "log_file_level": "INFO",
@@ -204,8 +203,6 @@ class TestInterruptHandling:
             },
         }
 
-        import tempfile
-        import yaml
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(config_dict, f)
             config_path = Path(f.name)

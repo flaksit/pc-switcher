@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,7 +11,7 @@ import pytest
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
-from pcswitcher.models import CommandResult, Host
+from pcswitcher.models import CommandResult, DiskSpaceCriticalError, Host
 
 
 @pytest.fixture
@@ -252,8 +254,6 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         during sync and abort with CRITICAL if available free space falls below
         the configured runtime minimum.
         """
-        from pcswitcher.models import DiskSpaceCriticalError
-
         # Mock df output showing low disk space (5% free, below 15% threshold)
         df_output = """Filesystem     1B-blocks        Used   Available Use% Mounted on
 /dev/sda1      107374182400 102005473280  5368709120  95% /"""
@@ -358,7 +358,6 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
 
         # Start the monitoring task
-        import asyncio
         task = asyncio.create_task(job.execute())
 
         # Wait briefly to allow one check cycle
@@ -366,10 +365,8 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
 
         # Cancel the monitoring task
         task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
         # Verify warning was logged (event bus received progress update)
         # Note: actual logging verification depends on event_bus mock implementation
@@ -394,7 +391,6 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
 
         # Start the monitoring task
-        import asyncio
         task = asyncio.create_task(job.execute())
 
         # Wait briefly to allow one check cycle
@@ -443,7 +439,6 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         job = DiskSpaceMonitorJob(context, Host.TARGET, "/")
 
         # Start the monitoring task
-        import asyncio
         task = asyncio.create_task(job.execute())
 
         # Wait briefly to allow one check cycle

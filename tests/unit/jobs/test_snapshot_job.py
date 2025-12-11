@@ -6,11 +6,13 @@ Reference: specs/001-foundation/spec.md (User Story 3 - Safety Infrastructure wi
 
 from __future__ import annotations
 
+import inspect
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from freezegun import freeze_time
 
+from pcswitcher.btrfs_snapshots import cleanup_snapshots, create_snapshot
 from pcswitcher.jobs.btrfs import BtrfsSnapshotJob, subvolume_to_mount_point
 from pcswitcher.models import CommandResult
 
@@ -220,12 +222,7 @@ class TestBtrfsSnapshotJobErrorHandling:
         - Cleanup mechanism exists (cleanup_snapshots function)
         - Retention policy parameters are supported (keep_recent, max_age_days)
         """
-        # Import cleanup function to verify it exists
-        from pcswitcher.btrfs_snapshots import cleanup_snapshots
-
         # Verify function signature supports retention parameters
-        import inspect
-
         sig = inspect.signature(cleanup_snapshots)
         assert "keep_recent" in sig.parameters
         assert "max_age_days" in sig.parameters
@@ -470,9 +467,6 @@ class TestBtrfsSnapshotJobValidation:
         """
         # This is tested more thoroughly in orchestrator tests
         # Here we just verify snapshot job can handle low disk space errors
-        import inspect
-
-        from pcswitcher.btrfs_snapshots import create_snapshot
 
         # Verify that create_snapshot can return error results
         sig = inspect.signature(create_snapshot)

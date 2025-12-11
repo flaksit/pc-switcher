@@ -12,6 +12,7 @@ Tests User Story 5 (Graceful Interrupt Handling) acceptance scenarios and relate
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 
 import pytest
 
@@ -132,10 +133,9 @@ async def test_001_fr026_second_sigint_force_terminate(
             # First SIGINT: cancel main task
             if main_task:
                 main_task.cancel()
-        else:
-            # Second SIGINT: force terminate main task (only)
-            if main_task:
-                main_task.cancel()
+        # Second SIGINT: force terminate main task (only)
+        elif main_task:
+            main_task.cancel()
 
     # Create and start the main task
     main_task = asyncio.create_task(mock_sync_operation())
@@ -160,10 +160,8 @@ async def test_001_fr026_second_sigint_force_terminate(
     assert not cleanup_completed.is_set(), "Graceful cleanup should not complete"
 
     # Wait for task to complete (it should be cancelled)
-    try:
+    with suppress(asyncio.CancelledError):
         await main_task
-    except asyncio.CancelledError:
-        pass  # Expected
 
 
 @pytest.mark.integration

@@ -13,6 +13,7 @@ from specs/001-foundation/spec.md.
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime
 
@@ -255,8 +256,6 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
     - Keeps the most recent N sessions regardless of age
     - Deletes snapshots older than max_age_days (if specified)
     """
-    import time
-
     # Create multiple snapshot sessions with different ages
     sessions = []
     session_paths = []

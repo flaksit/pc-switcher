@@ -29,7 +29,6 @@ from __future__ import annotations
 import asyncio
 from io import StringIO
 
-import pytest
 from rich.console import Console
 
 from pcswitcher.events import ConnectionEvent, EventBus, LogEvent, ProgressEvent

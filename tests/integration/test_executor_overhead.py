@@ -11,7 +11,6 @@ These are performance benchmarks, not functional tests. Run with:
 
 from __future__ import annotations
 
-import asyncio
 import time
 from statistics import mean, stdev
 
@@ -61,7 +60,7 @@ class TestRemoteExecutorOverhead:
         print("\n" + "=" * 60)
         print("No-op Command Overhead Statistics")
         print("=" * 60)
-        print(f"Command: ':' (bash no-op)")
+        print("Command: ':' (bash no-op)")
         print(f"Runs: {num_runs}")
         print(f"Min:  {min_time*1000:.2f} ms")
         print(f"Max:  {max_time*1000:.2f} ms")
@@ -87,7 +86,7 @@ class TestRemoteExecutorOverhead:
         await pc1_executor.run_command("true")
 
         # Run multiple times and measure
-        for i in range(num_runs):
+        for _i in range(num_runs):
             start = time.perf_counter()
             result = await pc1_executor.run_command("true")
             elapsed = time.perf_counter() - start
@@ -140,7 +139,7 @@ class TestRemoteExecutorOverhead:
         if time2 < time1:
             print(f"✓ Connection reuse detected: cmd2 is {(time1-time2)*1000:.2f} ms faster than cmd1")
         else:
-            print(f"⚠ No obvious reuse benefit (cmd2 similar to cmd1)")
+            print("⚠ No obvious reuse benefit (cmd2 similar to cmd1)")
         print("=" * 60)
 
 
@@ -196,15 +195,15 @@ class TestExecutorWrapperOverhead:
         print("\n" + "=" * 70)
         print("RemoteExecutor vs RemoteLoginBashExecutor Overhead")
         print("=" * 70)
-        print(f"Direct RemoteExecutor (bare SSH):")
+        print("Direct RemoteExecutor (bare SSH):")
         print(f"  Mean:   {direct_mean*1000:.2f} ms")
         print(f"  StdDev: {direct_std*1000:.2f} ms")
         print()
-        print(f"RemoteLoginBashExecutor (bash -l -c wrapper):")
+        print("RemoteLoginBashExecutor (bash -l -c wrapper):")
         print(f"  Mean:   {wrapped_mean*1000:.2f} ms")
         print(f"  StdDev: {wrapped_std*1000:.2f} ms")
         print()
-        print(f"Wrapper Overhead:")
+        print("Wrapper Overhead:")
         print(f"  Absolute: {wrapper_cost*1000:.2f} ms")
         print(f"  Relative: {wrapper_cost_pct:.1f}% slower")
         print("=" * 70)
