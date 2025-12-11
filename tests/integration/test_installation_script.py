@@ -12,8 +12,8 @@ These tests run on VMs, not on development machine.
 - Version-specific installation matches expected behavior
 
 **What these tests do NOT cover:**
-- InstallOnTargetJob class methods (see test_install_on_target.py)
-- Config synchronization (see test_install_on_target.py)
+- InstallOnTargetJob class methods (see jobs/test_install_on_target_job.py)
+- Config synchronization (see jobs/test_install_on_target_job.py)
 - Pre/post-sync operations (see test_snapshot_infrastructure.py, etc.)
 """
 

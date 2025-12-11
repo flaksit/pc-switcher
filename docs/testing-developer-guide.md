@@ -714,7 +714,7 @@ All test files must start with `test_`:
 
 ```text
 tests/unit/test_lock.py          ✓ Correct
-tests/unit/test_jobs/test_disk_space_monitor.py  ✓ Correct
+tests/unit_jobs/test_disk_space_monitor.py  ✓ Correct
 tests/integration/test_ssh.py    ✓ Correct
 
 tests/unit/lock_test.py          ✗ Wrong

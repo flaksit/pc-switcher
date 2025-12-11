@@ -354,7 +354,7 @@ async def test_001_us3_as9_runtime_disk_space_monitoring(
 
     Note: This test verifies the disk space checking mechanism works.
     The actual monitoring job and abort logic is tested in
-    tests/unit/jobs/test_disk_space_monitor.py.
+    tests/unit_jobs/test_disk_space_monitor.py.
     """
     # Check current disk space on /
     df_result = await pc1_executor.run_command("df -h / | tail -1")

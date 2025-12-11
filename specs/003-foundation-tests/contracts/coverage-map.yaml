@@ -35,9 +35,9 @@ user_stories:
       - id: US2-AS2
         test: tests/integration/test_self_installation.py::test_001_us2_as2_upgrade_outdated_target
       - id: US2-AS3
-        test: tests/unit/jobs/test_install_job.py::test_001_us2_as3_skip_when_versions_match
+        test: tests/unit/jobs/test_install_on_target_job.py::test_001_us2_as3_skip_when_versions_match
       - id: US2-AS4
-        test: tests/unit/jobs/test_install_job.py::test_001_us2_as4_abort_on_install_failure
+        test: tests/unit/jobs/test_install_on_target_job.py::test_001_us2_as4_abort_on_install_failure
       - id: US2-AS5
         test: tests/integration/test_self_installation.py::test_001_us2_as5_prompt_for_missing_config
       - id: US2-AS6
@@ -146,11 +146,11 @@ functional_requirements:
 
   self_installation:
     - id: FR-005
-      test: tests/unit/jobs/test_install_job.py::test_001_fr005_version_check_and_install
+      test: tests/unit/jobs/test_install_on_target_job.py::test_001_fr005_version_check_and_install
     - id: FR-006
-      test: tests/unit/jobs/test_install_job.py::test_001_fr006_abort_on_newer_target_version
+      test: tests/unit/jobs/test_install_on_target_job.py::test_001_fr006_abort_on_newer_target_version
     - id: FR-007
-      test: tests/unit/jobs/test_install_job.py::test_001_fr007_abort_on_install_failure
+      test: tests/unit/jobs/test_install_on_target_job.py::test_001_fr007_abort_on_install_failure
     - id: FR-007a
       test: tests/unit/test_config_sync.py::test_001_fr007a_config_sync_prompt_if_missing
     - id: FR-007b
@@ -176,9 +176,9 @@ functional_requirements:
     - id: FR-015b
       test: tests/unit/jobs/test_snapshot_job.py::test_001_fr015b_validate_snapshots_is_subvolume
     - id: FR-016
-      test: tests/unit/jobs/test_disk_space_monitor.py::test_001_fr016_preflight_disk_space_check
+      test: tests/unit_jobs/test_disk_space_monitor.py::test_001_fr016_preflight_disk_space_check
     - id: FR-017
-      test: tests/unit/jobs/test_disk_space_monitor.py::test_001_fr017_runtime_disk_space_monitoring
+      test: tests/unit_jobs/test_disk_space_monitor.py::test_001_fr017_runtime_disk_space_monitoring
 
   logging_system:
     - id: FR-018
@@ -264,7 +264,7 @@ edge_cases:
   - id: partial_job_failures
     test: tests/unit/orchestrator/test_job_lifecycle.py::test_001_edge_partial_job_failures
   - id: target_newer_version
-    test: tests/unit/jobs/test_install_job.py::test_001_edge_target_newer_version
+    test: tests/unit/jobs/test_install_on_target_job.py::test_001_edge_target_newer_version
   - id: source_crash_timeout
     test: tests/integration/test_interrupt_integration.py::test_001_edge_source_crash_timeout
   - id: btrfs_not_available
