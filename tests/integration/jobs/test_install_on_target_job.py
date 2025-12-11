@@ -82,7 +82,6 @@ async def _create_integration_job_context(
     )
 
 
-@pytest.mark.integration
 class TestSelfInstallation:
     """Integration tests for automatic pc-switcher installation on target."""
 

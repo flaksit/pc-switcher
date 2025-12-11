@@ -19,7 +19,6 @@ import pytest
 from pcswitcher.executor import RemoteExecutor
 
 
-@pytest.mark.integration
 async def test_001_fr025_terminate_target_processes(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
@@ -81,7 +80,6 @@ async def test_001_fr025_terminate_target_processes(
         await pc2_executor.run_command(f"rm -f {marker_file}")
 
 
-@pytest.mark.integration
 async def test_001_fr026_second_sigint_force_terminate(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
@@ -162,7 +160,6 @@ async def test_001_fr026_second_sigint_force_terminate(
         await main_task
 
 
-@pytest.mark.integration
 async def test_001_fr027_no_orphaned_processes(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
@@ -236,7 +233,6 @@ async def test_001_fr027_no_orphaned_processes(
         await pc2_executor.run_command(f"rm -f {target_marker}")
 
 
-@pytest.mark.integration
 async def test_001_us5_as1_interrupt_requests_job_termination(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
@@ -298,7 +294,6 @@ async def test_001_us5_as1_interrupt_requests_job_termination(
         await pc2_executor.run_command(f"rm -f {job_marker}")
 
 
-@pytest.mark.integration
 async def test_001_us5_as3_second_interrupt_forces_termination(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
@@ -380,7 +375,6 @@ async def test_001_us5_as3_second_interrupt_forces_termination(
         await pc2_executor.run_command(f"rm -f {cleanup_marker}")
 
 
-@pytest.mark.integration
 async def test_001_edge_source_crash_timeout(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,

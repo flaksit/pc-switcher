@@ -71,7 +71,6 @@ async def test_subvolume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     await pc1_executor.run_command(f"sudo btrfs subvolume delete {subvolume_path}")
 
 
-@pytest.mark.integration
 async def test_001_us3_as2_create_presync_snapshots(
     pc1_executor: RemoteExecutor,
     test_subvolume: str,
@@ -124,7 +123,6 @@ async def test_001_us3_as2_create_presync_snapshots(
         await pc1_executor.run_command(f"sudo rmdir {session_path} 2>/dev/null || true")
 
 
-@pytest.mark.integration
 async def test_001_us3_as3_create_postsync_snapshots(
     pc1_executor: RemoteExecutor,
     test_subvolume: str,
@@ -179,7 +177,6 @@ async def test_001_us3_as3_create_postsync_snapshots(
         await pc1_executor.run_command(f"sudo rmdir {session_path} 2>/dev/null || true")
 
 
-@pytest.mark.integration
 async def test_001_us3_as4_create_snapshots_subvolume(
     pc1_executor: RemoteExecutor,
 ) -> None:
@@ -244,7 +241,6 @@ async def test_001_us3_as4_create_snapshots_subvolume(
         await pc1_executor.run_command(f"sudo rm -rf {test_snapshots_path}")
 
 
-@pytest.mark.integration
 async def test_001_us3_as7_cleanup_snapshots_with_retention(
     pc1_executor: RemoteExecutor,
     test_subvolume: str,
@@ -342,7 +338,6 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
             await pc1_executor.run_command(f"sudo rmdir {session_path} 2>/dev/null || true")
 
 
-@pytest.mark.integration
 async def test_001_us3_as9_runtime_disk_space_monitoring(
     pc1_executor: RemoteExecutor,
 ) -> None:
@@ -386,7 +381,6 @@ async def test_001_us3_as9_runtime_disk_space_monitoring(
     assert snapshots_df_result.stdout, "Disk space monitoring command returned no output"
 
 
-@pytest.mark.integration
 async def test_001_edge_btrfs_not_available(
     pc1_executor: RemoteExecutor,
 ) -> None:

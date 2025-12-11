@@ -21,7 +21,6 @@ from pcswitcher.executor import RemoteExecutor
 from tests.integration.conftest import RemoteLoginBashExecutor
 
 
-@pytest.mark.integration
 @pytest.mark.benchmark
 class TestRemoteExecutorOverhead:
     """Measure RemoteExecutor.run_command() overhead."""
@@ -143,7 +142,6 @@ class TestRemoteExecutorOverhead:
         print("=" * 60)
 
 
-@pytest.mark.integration
 @pytest.mark.benchmark
 class TestExecutorWrapperOverhead:
     """Measure overhead of RemoteLoginBashExecutor wrapper vs bare RemoteExecutor."""

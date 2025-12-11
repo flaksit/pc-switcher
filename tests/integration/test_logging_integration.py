@@ -16,7 +16,6 @@ import pytest
 from pcswitcher.executor import RemoteExecutor
 
 
-@pytest.mark.integration
 async def test_001_fr023_aggregate_source_target_logs(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
@@ -50,7 +49,6 @@ async def test_001_fr023_aggregate_source_target_logs(
     pytest.skip("Integration test requires full pc-switcher installation and sync workflow implementation")
 
 
-@pytest.mark.integration
 async def test_001_us4_as6_logs_command_displays_last_log(
     pc1_executor: RemoteExecutor,
 ) -> None:

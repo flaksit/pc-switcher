@@ -15,7 +15,6 @@ import pytest
 from pcswitcher.executor import RemoteExecutor
 
 
-@pytest.mark.integration
 async def test_001_us1_as1_job_integration_via_interface(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
@@ -48,7 +47,6 @@ async def test_001_us1_as1_job_integration_via_interface(
     pytest.skip("Integration test requires full pc-switcher installation and sync workflow")
 
 
-@pytest.mark.integration
 async def test_001_us1_as7_interrupt_terminates_job(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
@@ -86,7 +84,6 @@ async def test_001_us1_as7_interrupt_terminates_job(
     pytest.skip("Integration test requires orchestrated signal handling with real sync process")
 
 
-@pytest.mark.integration
 async def test_001_edge_target_unreachable_mid_sync(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,

@@ -25,7 +25,6 @@ from pcswitcher.config_sync import (
 from pcswitcher.executor import RemoteExecutor
 
 
-@pytest.mark.integration
 class TestConfigSyncIntegration:
     """Integration tests for config sync with real VMs."""
 

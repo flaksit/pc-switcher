@@ -74,7 +74,6 @@ async def clean_install_environment(pc1_executor: RemoteExecutor) -> AsyncIterat
     )
 
 
-@pytest.mark.integration
 async def test_001_fr035_install_script_no_prereqs(clean_install_environment: RemoteExecutor) -> None:
     """Test FR-035: install.sh works without prerequisites.
 
@@ -134,7 +133,6 @@ async def test_001_fr035_install_script_no_prereqs(clean_install_environment: Re
 # See specs/001-foundation/spec.md for the documented workflow.
 
 
-@pytest.mark.integration
 class TestInstallationScriptVersionParameter:
     """Tests for install.sh with VERSION parameter.
 

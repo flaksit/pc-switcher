@@ -55,7 +55,6 @@ async def clean_config_environment(pc1_executor: RemoteExecutor) -> AsyncIterato
     )
 
 
-@pytest.mark.integration
 class TestInitCommand:
     """Integration tests for pc-switcher init command."""
 
