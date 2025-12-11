@@ -128,10 +128,31 @@ async def _run_script(script_name: str, *args: str, check: bool = True) -> tuple
 
 
 async def _reset_vms(pc1_host: str, pc2_host: str) -> None:
-    """Reset both VMs in parallel for faster test setup."""
+    """Reset both VMs in parallel for faster test setup.
+
+    Both resets are allowed to complete before checking for errors. This prevents
+    a failure on one VM from interrupting the other mid-reset (which could leave
+    it in a corrupted state).
+
+    Raises pytest.fail if either reset fails - this prevents tests from running
+    against VMs in an inconsistent state.
+    """
     async with TaskGroup() as tg:
-        tg.create_task(_run_script("reset-vm.sh", pc1_host, check=False))
-        tg.create_task(_run_script("reset-vm.sh", pc2_host, check=False))
+        pc1_task = tg.create_task(_run_script("reset-vm.sh", pc1_host, check=False))
+        pc2_task = tg.create_task(_run_script("reset-vm.sh", pc2_host, check=False))
+
+    # Check results after both complete
+    pc1_rc, _pc1_stdout, pc1_stderr = pc1_task.result()
+    pc2_rc, _pc2_stdout, pc2_stderr = pc2_task.result()
+
+    errors = []
+    if pc1_rc != 0:
+        errors.append(f"pc1 reset failed: {pc1_stderr}")
+    if pc2_rc != 0:
+        errors.append(f"pc2 reset failed: {pc2_stderr}")
+
+    if errors:
+        pytest.fail("\n".join(errors))
 
 
 async def _check_baseline_age(executor: RemoteExecutor) -> None:
