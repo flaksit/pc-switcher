@@ -1,4 +1,6 @@
-# First Release Playbook for PC-Switcher v0.1.0
+# First Release Playbook for PC-Switcher v0.1.0-alpha.1
+
+This playbook outlines the steps to create the first release of PC-Switcher. It MUST not be followed afterwards.
 
 ## 📌 Versioning Convention
 

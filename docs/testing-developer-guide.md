@@ -9,10 +9,11 @@ This guide explains how to write tests for pc-switcher. Read this before writing
 3. [Writing Contract Tests](#writing-contract-tests)
 4. [Writing Integration Tests](#writing-integration-tests)
 5. [VM Interaction Patterns](#vm-interaction-patterns)
-6. [Test Organization](#test-organization)
-7. [Integration Test Fixture Scoping](#integration-test-fixture-scoping)
-8. [Local Development Setup](#local-development-setup)
-9. [Troubleshooting](#troubleshooting)
+6. [Writing Manual Playbook Tests](#writing-manual-playbook-tests)
+7. [Test Organization](#test-organization)
+8. [Integration Test Fixture Scoping](#integration-test-fixture-scoping)
+9. [Local Development Setup](#local-development-setup)
+10. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
@@ -22,30 +23,37 @@ PC-switcher uses a three-tier testing approach:
 
 | Tier | Purpose | Speed | Environment | When to Run |
 |------|---------|-------|-------------|-------------|
-| **Unit Tests** | Test pure logic, business rules, mocked I/O | Fast (< 30s) | Any machine | Every commit |
-| **Contract Tests** | Verify job interface compliance | Fast (< 30s) | Any machine | Every commit |
-| **Integration Tests** | Test real SSH, btrfs operations, full workflows | Slow (5-15 min) | Dedicated VMs only | PRs to main, on-demand |
+| **Tier 1: Unit & Contract Tests** | Test pure logic, business rules, mocked I/O, job interface compliance | Fast (< 30s) | Any machine | Every commit |
+| **Tier 2: Integration Tests** | Test real SSH, btrfs operations, full workflows | Slow (5-15 min) | Dedicated VMs only | PRs to main, on-demand |
+| **Tier 3: Manual Playbook** | Visual verification of TUI, colors, progress bars, UX.  | 45-60 min | Developer machine | Before releases |
 
 ### When to Use Each Tier
 
-**Unit Tests:**
+**Unit Tests (Tier 1):**
 - Testing business logic in jobs
 - Testing validation logic
 - Testing configuration parsing
 - Testing lock mechanisms
 - Testing models and utilities
 
-**Contract Tests:**
+**Contract Tests (Tier 1):**
 - Verifying jobs implement required interfaces
 - Ensuring mock/real executor behavior parity
 - Testing job base class functionality
 
-**Integration Tests:**
+**Integration Tests (Tier 2):**
 - Testing SSH connections between machines
 - Testing btrfs snapshot operations
 - Testing full sync workflows
 - Testing inter-VM communication
 - Testing install scripts
+
+**Manual Playbook (Tier 3):**
+- Visual verification of TUI elements (progress bars, colors, formatting)
+- Terminal rendering and color scheme validation
+- Accessibility testing (screen reader, color blindness, terminal sizes)
+- Feature tour and end-to-end UX verification
+- Any visual element that cannot be automated
 
 ### Spec-Driven Testing Philosophy
 
@@ -506,6 +514,87 @@ async def test_rsync_between_vms(pc1_executor, pc2_executor):
     result = await pc2_executor.run_command("cat /tmp/test.txt")
     assert "test data" in result.stdout
 ```
+
+## Writing Manual Playbook Tests
+
+The manual testing playbook (`docs/testing-playbook.md`) is the third tier of our testing strategy. It covers visual elements and UX that cannot be automated.
+
+### When to Update the Playbook
+
+Add entries to the manual playbook when you:
+
+1. **Add new TUI elements**: Progress bars, status indicators, panels, colors
+2. **Change CLI output formatting**: Error messages, success messages, help text
+3. **Modify visual feedback**: Log level colors, terminal rendering
+4. **Add new user-facing commands**: New subcommands or options
+5. **Change interrupt/error handling**: Visual feedback during failures
+
+### Playbook Structure
+
+The playbook is organized into sections:
+
+| Section | What to Test |
+|---------|--------------|
+| **Visual Verification** | Terminal rendering, colors, progress bars, log panels |
+| **Feature Tour** | End-to-end workflows, configuration, sync operations |
+| **Accessibility** | Screen readers, color blindness, terminal sizes |
+| **Checklist Summary** | Pre-release verification checklist |
+
+### Adding a New Test Entry
+
+When adding a visual test, follow this pattern:
+
+````markdown
+#### Your Feature Name
+
+**Objective**: One sentence describing what you're verifying.
+
+```bash
+# Commands to run
+pc-switcher <your-command>
+```
+
+**Verify**:
+- [ ] Element renders correctly
+- [ ] Colors are distinct and readable
+- [ ] No visual artifacts or flickering
+- [ ] Graceful handling of edge cases
+````
+
+### Example: Adding a Progress Bar Test
+
+If you add a new job with progress reporting, add an entry like:
+
+````markdown
+#### Your New Job Progress
+
+**Objective**: Verify progress bar for your_new_job renders correctly.
+
+```bash
+# Enable job in config
+nano ~/.config/pc-switcher/config.yaml
+# Set: sync_jobs.your_new_job: true
+
+# Run sync
+pc-switcher sync localhost
+```
+
+**Verify**:
+- [ ] Progress bar fills smoothly from 0% to 100%
+- [ ] Job name appears in cyan before the bar
+- [ ] Current item description updates without artifacts
+- [ ] Bar completes when job finishes
+````
+
+### When NOT to Update the Playbook
+
+- Pure backend logic changes (test with unit tests)
+- Non-visual bug fixes (test with integration tests)
+- Internal refactoring with no user-visible changes
+
+### Reference
+
+See [Testing Playbook](testing-playbook.md) for the complete manual testing procedures.
 
 ## Test Organization
 
@@ -1059,16 +1148,17 @@ source ~/.pc-switcher-test-env
 
 ## Summary
 
-- **Unit tests**: Fast, safe, use mocks, test logic
-- **Contract tests**: Verify interface compliance
-- **Integration tests**: Real VMs, real btrfs, real SSH
-- **Always mark integration tests** with `@pytest.mark.integration`
+- **Tier 1 - Unit & contract tests**: Fast, safe, use mocks, test logic and interface compliance
+- **Tier 2 - Integration tests**: Real VMs, real btrfs, real SSH
+- **Tier 3 - Manual playbook**: Visual verification, TUI testing, run before releases
 - **Always use `uv run pytest`** to execute tests
 - **Set environment variables** before running integration tests
 - **VMs are automatically reset** by the pytest fixture before integration tests
+- **Update the playbook** when adding visual/TUI changes
 - **Check troubleshooting section** when tests fail
 
 For more information, see:
 - [Testing Framework Overview](testing-framework.md)
+- [Testing Playbook](testing-playbook.md) - Manual verification procedures
 - [Testing Infrastructure](testing-infrastructure.md) - VM provisioning flow and scripts
 - [ADR-006: Testing Framework](adr/adr-006-testing-framework.md)
