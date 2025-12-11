@@ -15,11 +15,13 @@ from collections.abc import AsyncIterator
 import pytest_asyncio
 
 from pcswitcher.executor import RemoteExecutor
+from pcswitcher.version import Version, parse_version_str_from_cli_output
 
 # Test constants - update when new releases are made
-VERSION_WITHOUT_SELF_UPDATE = "0.1.0-alpha.1"
-VERSION_WITH_SELF_UPDATE_OLD = "0.1.0-alpha.2"
-VERSION_WITH_SELF_UPDATE_NEW = "0.1.0-alpha.3"
+# Use Version for proper SemVer/PEP440 comparison
+VERSION_WITHOUT_SELF_UPDATE = Version.parse("0.1.0-alpha.1")
+VERSION_WITH_SELF_UPDATE_OLD = Version.parse("0.1.0-alpha.2")
+VERSION_WITH_SELF_UPDATE_NEW = Version.parse("0.1.0-alpha.3")
 
 # Install script URL
 INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
@@ -40,26 +42,28 @@ async def clean_pc_switcher(pc1_executor: RemoteExecutor) -> AsyncIterator[Remot
     await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true")
 
 
-async def _install_version(executor: RemoteExecutor, version: str) -> None:
+async def _install_version(executor: RemoteExecutor, version: Version) -> None:
     """Install a specific version of pc-switcher using the install script."""
+    # Install script expects SemVer format for VERSION env var
     result = await executor.run_command(
-        f"curl -sSL {INSTALL_SCRIPT_URL} | VERSION={version} bash",
+        f"curl -sSL {INSTALL_SCRIPT_URL} | VERSION={version.semver_str()} bash",
         timeout=120.0,
     )
     assert result.success, f"Failed to install version {version}: {result.stderr}"
 
 
-async def _get_installed_version(executor: RemoteExecutor) -> str:
+async def _get_installed_version(executor: RemoteExecutor) -> Version:
     """Get the currently installed pc-switcher version."""
     result = await executor.run_command("pc-switcher --version", timeout=10.0)
     assert result.success, f"Failed to get version: {result.stderr}"
-    # Output format: "pc-switcher X.Y.Z-prerelease"
-    return result.stdout.strip().replace("pc-switcher ", "")
+    # Parse version from CLI output (handles both PEP440 and SemVer formats)
+    version_str = parse_version_str_from_cli_output(result.stdout)
+    return Version.parse(version_str)
 
 
 async def _run_self_update(
     executor: RemoteExecutor,
-    version: str | None = None,
+    version: Version | str | None = None,
     prerelease: bool = False,
 ) -> tuple[bool, str, str]:
     """Run pc-switcher self update and return (success, stdout, stderr)."""
@@ -67,7 +71,9 @@ async def _run_self_update(
     if prerelease:
         cmd += " --prerelease"
     if version:
-        cmd += f" {version}"
+        # Use SemVer format for version argument
+        version_str = version.semver_str() if isinstance(version, Version) else version
+        cmd += f" {version_str}"
 
     result = await executor.run_command(cmd, timeout=120.0)
     return result.success, result.stdout, result.stderr
@@ -82,7 +88,7 @@ class TestSelfUpdateCommandExists:
 
         # Verify version
         version = await _get_installed_version(clean_pc_switcher)
-        assert VERSION_WITHOUT_SELF_UPDATE in version
+        assert version == VERSION_WITHOUT_SELF_UPDATE
 
         # Self update command should not exist
         result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0)
@@ -95,7 +101,7 @@ class TestSelfUpdateCommandExists:
 
         # Verify version
         version = await _get_installed_version(clean_pc_switcher)
-        assert VERSION_WITH_SELF_UPDATE_OLD in version
+        assert version == VERSION_WITH_SELF_UPDATE_OLD
 
         # Self update command should exist
         result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0)
@@ -132,29 +138,29 @@ class TestSelfUpdateUpgrade:
 
         # Verify starting version
         version = await _get_installed_version(clean_pc_switcher)
-        assert VERSION_WITH_SELF_UPDATE_OLD in version
+        assert version == VERSION_WITH_SELF_UPDATE_OLD
 
         # Use self update to upgrade
         success, stdout, stderr = await _run_self_update(clean_pc_switcher, VERSION_WITH_SELF_UPDATE_NEW)
         assert success, f"Self update failed: {stderr}"
-        assert "Successfully updated" in stdout or VERSION_WITH_SELF_UPDATE_NEW in stdout
+        assert "Successfully updated" in stdout or VERSION_WITH_SELF_UPDATE_NEW.semver_str() in stdout
 
         # Verify new version
         new_version = await _get_installed_version(clean_pc_switcher)
-        assert VERSION_WITH_SELF_UPDATE_NEW in new_version
+        assert new_version == VERSION_WITH_SELF_UPDATE_NEW
 
     async def test_upgrade_with_prerelease_flag(self, clean_pc_switcher: RemoteExecutor) -> None:
         """Test using --prerelease flag to find latest prerelease."""
         # Install older version
         await _install_version(clean_pc_switcher, VERSION_WITH_SELF_UPDATE_OLD)
 
-        # Use self update with --prerelease (should find v0.1.0-alpha.3)
+        # Use self update with --prerelease (should find latest prerelease)
         success, _stdout, stderr = await _run_self_update(clean_pc_switcher, prerelease=True)
         assert success, f"Self update --prerelease failed: {stderr}"
 
-        # Should have upgraded to latest prerelease
+        # Should have upgraded to at least VERSION_WITH_SELF_UPDATE_NEW
         new_version = await _get_installed_version(clean_pc_switcher)
-        assert VERSION_WITH_SELF_UPDATE_NEW in new_version
+        assert new_version >= VERSION_WITH_SELF_UPDATE_NEW
 
 
 class TestSelfUpdateDowngrade:
@@ -167,7 +173,7 @@ class TestSelfUpdateDowngrade:
 
         # Verify starting version
         version = await _get_installed_version(clean_pc_switcher)
-        assert VERSION_WITH_SELF_UPDATE_NEW in version
+        assert version == VERSION_WITH_SELF_UPDATE_NEW
 
         # Use self update to downgrade
         success, stdout, stderr = await _run_self_update(clean_pc_switcher, VERSION_WITH_SELF_UPDATE_OLD)
@@ -176,7 +182,7 @@ class TestSelfUpdateDowngrade:
 
         # Verify downgraded version
         new_version = await _get_installed_version(clean_pc_switcher)
-        assert VERSION_WITH_SELF_UPDATE_OLD in new_version
+        assert new_version == VERSION_WITH_SELF_UPDATE_OLD
 
         # Verify self-update command still works after downgrade
         result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0)
@@ -195,7 +201,7 @@ class TestSelfUpdateDowngrade:
 
         # Verify downgraded version
         new_version = await _get_installed_version(clean_pc_switcher)
-        assert VERSION_WITHOUT_SELF_UPDATE in new_version
+        assert new_version == VERSION_WITHOUT_SELF_UPDATE
 
         # Self-update command should no longer exist
         result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0)
@@ -217,7 +223,7 @@ class TestSelfUpdateSameVersion:
 
         # Version should be unchanged
         version = await _get_installed_version(clean_pc_switcher)
-        assert VERSION_WITH_SELF_UPDATE_NEW in version
+        assert version == VERSION_WITH_SELF_UPDATE_NEW
 
 
 class TestSelfUpdateVersionFormats:
@@ -227,24 +233,24 @@ class TestSelfUpdateVersionFormats:
         """Test that SemVer format is accepted (e.g., 0.1.0-alpha.2)."""
         await _install_version(clean_pc_switcher, VERSION_WITH_SELF_UPDATE_NEW)
 
-        # Use SemVer format for downgrade
+        # Use SemVer format for downgrade (passing raw string, not Version)
         success, _stdout, stderr = await _run_self_update(clean_pc_switcher, "0.1.0-alpha.2")
         assert success, f"SemVer format failed: {stderr}"
 
         version = await _get_installed_version(clean_pc_switcher)
-        assert "0.1.0-alpha.2" in version
+        assert version == VERSION_WITH_SELF_UPDATE_OLD
 
     async def test_pep440_format(self, clean_pc_switcher: RemoteExecutor) -> None:
         """Test that PEP 440 format is accepted (e.g., 0.1.0a2)."""
         await _install_version(clean_pc_switcher, VERSION_WITH_SELF_UPDATE_NEW)
 
-        # Use PEP 440 format for downgrade
+        # Use PEP 440 format for downgrade (passing raw string, not Version)
         success, _stdout, stderr = await _run_self_update(clean_pc_switcher, "0.1.0a2")
         assert success, f"PEP 440 format failed: {stderr}"
 
         version = await _get_installed_version(clean_pc_switcher)
-        # Output will be in SemVer format
-        assert "0.1.0-alpha.2" in version
+        # Version comparison handles format differences
+        assert version == VERSION_WITH_SELF_UPDATE_OLD
 
 
 class TestSelfUpdateErrorHandling:
