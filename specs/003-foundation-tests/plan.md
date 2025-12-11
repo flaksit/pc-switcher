@@ -83,6 +83,14 @@ tests/
 
 **Structure Decision**: Tests follow existing pytest structure from 002-testing-framework. Unit tests organized by component (orchestrator, jobs, cli) for clarity. Integration tests organized by user story for traceability. Each test file corresponds to a major component or user story from 001-foundation spec.
 
+## Coverage Verification
+
+After all tests are implemented, perform a manual verification pass to confirm:
+1. All user stories, acceptance scenarios, and functional requirements from 001-foundation spec have corresponding tests
+2. Tests follow the naming convention and include traceability docstrings
+
+**Note**: `contracts/coverage-map.yaml` and `data-model.md` are planning artifacts for this feature implementation. They guide test creation but are not maintained long-term after implementation is complete.
+
 ## Complexity Tracking
 
 > **Fill ONLY if Constitution Check has violations that must be justified**
