@@ -44,12 +44,8 @@ class TestBtrfsSnapshotJobCreation:
         job = BtrfsSnapshotJob(context)
 
         # Mock successful snapshot creation
-        mock_local_executor.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="", stderr="")
-        )
-        mock_remote_executor.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="", stderr="")
-        )
+        mock_local_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        mock_remote_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
 
         await job.execute()
 
@@ -84,12 +80,8 @@ class TestBtrfsSnapshotJobCreation:
         )
         job = BtrfsSnapshotJob(context)
 
-        mock_local_executor.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="", stderr="")
-        )
-        mock_remote_executor.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="", stderr="")
-        )
+        mock_local_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        mock_remote_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
 
         await job.execute()
 
@@ -123,12 +115,8 @@ class TestBtrfsSnapshotJobCreation:
         )
         job = BtrfsSnapshotJob(context)
 
-        mock_local_executor.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="", stderr="")
-        )
-        mock_remote_executor.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="", stderr="")
-        )
+        mock_local_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        mock_remote_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
 
         await job.execute()
 
@@ -204,9 +192,7 @@ class TestBtrfsSnapshotJobErrorHandling:
                 CommandResult(exit_code=1, stdout="", stderr="No space left on device"),
             ]
         )
-        mock_remote_executor.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="", stderr="")
-        )
+        mock_remote_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
 
         # Verify that snapshot failure raises RuntimeError
         with pytest.raises(RuntimeError, match="Snapshot creation failed"):
@@ -439,9 +425,7 @@ class TestBtrfsSnapshotJobValidation:
         job = BtrfsSnapshotJob(context)
 
         # Source succeeds, target fails
-        mock_local_executor.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="", stderr="")
-        )
+        mock_local_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
         mock_remote_executor.run_command = AsyncMock(
             side_effect=[
                 # mkdir succeeds
@@ -517,9 +501,7 @@ class TestBtrfsSnapshotJobEdgeCases:
             )
 
         mock_local_executor.run_command = AsyncMock(side_effect=run_command_space_error)
-        mock_remote_executor.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="", stderr="")
-        )
+        mock_remote_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
 
         with pytest.raises(RuntimeError) as exc_info:
             await job.execute()

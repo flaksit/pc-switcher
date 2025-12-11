@@ -102,9 +102,7 @@ class InstallOnTargetJob(SystemJob):
         # Parse and compare versions properly (handles both PEP440 and SemVer formats)
         installed_version = Version.parse(parse_version_str_from_cli_output(result.stdout))
         if installed_version != source_version:
-            raise RuntimeError(
-                f"Installation verification failed: expected {source_version}, got {installed_version}"
-            )
+            raise RuntimeError(f"Installation verification failed: expected {source_version}, got {installed_version}")
 
         self._log(
             Host.TARGET,

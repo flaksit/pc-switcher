@@ -73,9 +73,7 @@ class TestInitCommand:
         # Run pc-switcher init
         result = await executor.run_command("pc-switcher init", timeout=30.0)
         assert result.success, f"pc-switcher init failed: {result.stderr}"
-        assert "Created configuration file" in result.stdout, (
-            f"Expected success message, got: {result.stdout}"
-        )
+        assert "Created configuration file" in result.stdout, f"Expected success message, got: {result.stdout}"
 
         # Verify config file was created
         check_after = await executor.run_command(
@@ -97,10 +95,7 @@ class TestInitCommand:
         assert len(comment_lines) > 0, "Config file should contain inline comments"
 
         # Check for meaningful content (not just comments)
-        non_comment_lines = [
-            line for line in content.split("\n")
-            if line.strip() and not line.strip().startswith("#")
-        ]
+        non_comment_lines = [line for line in content.split("\n") if line.strip() and not line.strip().startswith("#")]
         assert len(non_comment_lines) > 0, "Config file should contain configuration"
 
     async def test_001_us7_as1_init_after_install(
@@ -212,9 +207,7 @@ class TestInitCommand:
         # Run pc-switcher init WITH --force - should succeed
         init_result = await executor.run_command("pc-switcher init --force", timeout=30.0)
         assert init_result.success, f"pc-switcher init --force failed: {init_result.stderr}"
-        assert "Created configuration file" in init_result.stdout, (
-            f"Expected success message: {init_result.stdout}"
-        )
+        assert "Created configuration file" in init_result.stdout, f"Expected success message: {init_result.stdout}"
 
         # Verify the marker is no longer present (config was overwritten)
         check_content = await executor.run_command(
@@ -238,9 +231,7 @@ class TestInitCommand:
 
         # Backup and remove entire config directory
         await executor.run_command(
-            "if [ -d ~/.config/pc-switcher ]; then "
-            "mv ~/.config/pc-switcher ~/.config/pc-switcher.backup; "
-            "fi",
+            "if [ -d ~/.config/pc-switcher ]; then mv ~/.config/pc-switcher ~/.config/pc-switcher.backup; fi",
             timeout=10.0,
         )
 

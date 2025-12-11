@@ -61,9 +61,7 @@ class TestFR002ValidateThenExecuteOrder:
     """FR-002: Jobs must run validate() before execute() in correct order."""
 
     @pytest.mark.asyncio
-    async def test_001_fr002_lifecycle_validate_then_execute(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_001_fr002_lifecycle_validate_then_execute(self, mock_job_context: JobContext) -> None:
         """FR-002: Orchestrator calls validate() before execute() for each job.
 
         Validates that the orchestrator follows the validate-then-execute contract
@@ -171,9 +169,7 @@ class TestFR048LogSyncSummary:
     """FR-048: Orchestrator logs overall result and job summary."""
 
     @pytest.mark.asyncio
-    async def test_001_fr048_log_sync_summary(
-        self, mock_job_context: JobContext, mock_event_bus: MagicMock
-    ) -> None:
+    async def test_001_fr048_log_sync_summary(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
         """FR-048: Orchestrator logs sync completion summary.
 
         Validates that the orchestrator can construct a summary of job results
@@ -200,9 +196,7 @@ class TestFR048LogSyncSummary:
         assert all(r.status == JobStatus.SUCCESS for r in job_results)
 
         # Calculate total duration
-        total_duration = sum(
-            (r.ended_at - r.started_at).total_seconds() for r in job_results
-        )
+        total_duration = sum((r.ended_at - r.started_at).total_seconds() for r in job_results)
         assert total_duration == 150.0  # 60s + 90s
 
 
@@ -210,9 +204,7 @@ class TestUS1AS5ValidationErrorsHaltSync:
     """US1-AS5: Validation errors prevent sync execution."""
 
     @pytest.mark.asyncio
-    async def test_001_us1_as5_validation_errors_halt_sync(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_001_us1_as5_validation_errors_halt_sync(self, mock_job_context: JobContext) -> None:
         """US1-AS5: Jobs with validation errors do not execute.
 
         Validates that when a job's validate() returns errors, the orchestrator:
@@ -243,9 +235,7 @@ class TestUS1AS6ExceptionHandling:
     """US1-AS6: Orchestrator catches and handles job exceptions."""
 
     @pytest.mark.asyncio
-    async def test_001_us1_as6_exception_handling(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_001_us1_as6_exception_handling(self, mock_job_context: JobContext) -> None:
         """US1-AS6: Orchestrator catches exceptions from jobs.
 
         Validates that when a job raises an exception during execute():
@@ -277,9 +267,7 @@ class TestEdgeCases:
     """Edge cases for orchestrator job lifecycle."""
 
     @pytest.mark.asyncio
-    async def test_001_edge_cleanup_exception(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_001_edge_cleanup_exception(self, mock_job_context: JobContext) -> None:
         """Edge: Job cleanup raises exception.
 
         Validates behavior when a job's cleanup/termination raises an exception.
@@ -313,9 +301,7 @@ class TestEdgeCases:
         # In real orchestrator, cleanup would be explicit and exceptions would be caught
 
     @pytest.mark.asyncio
-    async def test_001_edge_partial_job_failures(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_001_edge_partial_job_failures(self, mock_job_context: JobContext) -> None:
         """Edge: Some jobs succeed, some fail.
 
         Validates that the orchestrator correctly handles a scenario where
@@ -325,9 +311,7 @@ class TestEdgeCases:
         3. Jobs after the failure do not execute
         """
         job1 = MockSyncJob(mock_job_context)  # Will succeed
-        job2 = MockSyncJob(
-            mock_job_context, execute_exception=RuntimeError("Job 2 failed")
-        )  # Will fail
+        job2 = MockSyncJob(mock_job_context, execute_exception=RuntimeError("Job 2 failed"))  # Will fail
         job3 = MockSyncJob(mock_job_context)  # Should not execute
 
         results: list[JobResult] = []

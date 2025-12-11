@@ -350,7 +350,6 @@ class TestProgressLogging:
         assert log_entry["item"] == "file.txt"
 
 
-
 class TestLogLevelFiltering:
     """Test US4-AS1 and US4-AS2: Log level filtering behavior."""
 

@@ -126,7 +126,6 @@ async def test_001_fr035_install_script_no_prereqs(clean_install_environment: Re
     )
 
 
-
 # Tests test_001_fr036_default_config_with_comments, test_001_us7_as1_install_script_fresh_machine,
 # and test_001_us7_as3_preserve_existing_config were removed because:
 # - install.sh does NOT create a default config file
@@ -206,6 +205,4 @@ class TestInstallationScriptVersionParameter:
         assert result.success, f"pc-switcher should be available: {result.stderr}"
         new_version = Version.parse(parse_version_str_from_cli_output(result.stdout))
 
-        assert new_version == release_version, (
-            f"New version {new_version} should be {release_version}"
-        )
+        assert new_version == release_version, f"New version {new_version} should be {release_version}"

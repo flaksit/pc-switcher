@@ -173,9 +173,7 @@ class TestDiskSpaceMonitorValidation:
 class TestDiskSpaceMonitorPreflightCheck:
     """Test preflight disk space checks - FR-016."""
 
-    def test_001_fr016_preflight_disk_space_check_percentage_threshold(
-        self, mock_job_context: JobContext
-    ) -> None:
+    def test_001_fr016_preflight_disk_space_check_percentage_threshold(self, mock_job_context: JobContext) -> None:
         """FR-016: DiskSpaceMonitorJob must support percentage-based preflight_minimum threshold.
 
         Spec requirement: FR-016 states that preflight_minimum MUST be specified
@@ -258,9 +256,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         df_output = """Filesystem     1B-blocks        Used   Available Use% Mounted on
 /dev/sda1      107374182400 102005473280  5368709120  95% /"""
 
-        mock_job_context.source.run_command.return_value = CommandResult(
-            exit_code=0, stdout=df_output, stderr=""
-        )
+        mock_job_context.source.run_command.return_value = CommandResult(exit_code=0, stdout=df_output, stderr="")
 
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
 
@@ -351,9 +347,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         df_output = """Filesystem     1B-blocks        Used   Available Use% Mounted on
 /dev/sda1      107374182400 85899345920 21474836480  80% /"""
 
-        mock_job_context.source.run_command.return_value = CommandResult(
-            exit_code=0, stdout=df_output, stderr=""
-        )
+        mock_job_context.source.run_command.return_value = CommandResult(exit_code=0, stdout=df_output, stderr="")
 
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
 
@@ -384,9 +378,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         df_output = """Filesystem     1B-blocks        Used   Available Use% Mounted on
 /dev/sda1      107374182400 53687091200 53687091200  50% /"""
 
-        mock_job_context.source.run_command.return_value = CommandResult(
-            exit_code=0, stdout=df_output, stderr=""
-        )
+        mock_job_context.source.run_command.return_value = CommandResult(exit_code=0, stdout=df_output, stderr="")
 
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
 

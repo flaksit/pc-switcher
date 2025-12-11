@@ -41,9 +41,7 @@ class TestInstallOnTargetJobVersionCheck:
     """Test version checking and installation logic - FR-005."""
 
     @pytest.mark.asyncio
-    async def test_001_fr005_version_check_and_install(
-        self, mock_install_context: JobContext
-    ) -> None:
+    async def test_001_fr005_version_check_and_install(self, mock_install_context: JobContext) -> None:
         """FR-005: System must check target version and install from GitHub if missing.
 
         Spec requirement: FR-005 states system MUST check target machine's pc-switcher
@@ -83,9 +81,7 @@ class TestInstallOnTargetJobVersionCheck:
             assert "VERSION=0.4.0" in install_call
 
     @pytest.mark.asyncio
-    async def test_001_fr005_upgrade_when_target_older(
-        self, mock_install_context: JobContext
-    ) -> None:
+    async def test_001_fr005_upgrade_when_target_older(self, mock_install_context: JobContext) -> None:
         """FR-005: System must upgrade target when version is older than source.
 
         Spec requirement: FR-005 requires installation/upgrade when target is
@@ -127,9 +123,7 @@ class TestInstallOnTargetJobNewerTargetVersion:
     """Test abort when target has newer version - FR-006."""
 
     @pytest.mark.asyncio
-    async def test_001_fr006_abort_on_newer_target_version(
-        self, mock_install_context: JobContext
-    ) -> None:
+    async def test_001_fr006_abort_on_newer_target_version(self, mock_install_context: JobContext) -> None:
         """FR-006: System must abort sync if target version is newer than source.
 
         Spec requirement: FR-006 states system MUST abort sync with CRITICAL log
@@ -153,9 +147,7 @@ class TestInstallOnTargetJobNewerTargetVersion:
             assert errors[0].host == Host.TARGET
 
     @pytest.mark.asyncio
-    async def test_001_edge_target_newer_version(
-        self, mock_install_context: JobContext
-    ) -> None:
+    async def test_001_edge_target_newer_version(self, mock_install_context: JobContext) -> None:
         """Edge case: Target has newer version prevents execution.
 
         Tests that when target has a newer version than source, the validation
@@ -184,9 +176,7 @@ class TestInstallOnTargetJobInstallationFailure:
     """Test abort on installation failure - FR-007."""
 
     @pytest.mark.asyncio
-    async def test_001_fr007_abort_on_install_failure(
-        self, mock_install_context: JobContext
-    ) -> None:
+    async def test_001_fr007_abort_on_install_failure(self, mock_install_context: JobContext) -> None:
         """FR-007: System must abort if installation/upgrade fails.
 
         Spec requirement: FR-007 states if installation/upgrade fails, system MUST
@@ -219,9 +209,7 @@ class TestInstallOnTargetJobInstallationFailure:
             assert "disk full" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_001_fr007_abort_on_verification_failure(
-        self, mock_install_context: JobContext
-    ) -> None:
+    async def test_001_fr007_abort_on_verification_failure(self, mock_install_context: JobContext) -> None:
         """FR-007: System must abort if installation verification fails.
 
         Tests that even if install command succeeds, verification must confirm
@@ -259,9 +247,7 @@ class TestInstallOnTargetJobSkipWhenMatching:
     """Test skip when versions match - US2-AS3."""
 
     @pytest.mark.asyncio
-    async def test_001_us2_as3_skip_when_versions_match(
-        self, mock_install_context: JobContext
-    ) -> None:
+    async def test_001_us2_as3_skip_when_versions_match(self, mock_install_context: JobContext) -> None:
         """US2-AS3: System must skip installation when versions match.
 
         Spec requirement: US2-AS3 states when source and target both have version
@@ -295,9 +281,7 @@ class TestInstallOnTargetJobAS4:
     """Test US2-AS4: Abort on install failure."""
 
     @pytest.mark.asyncio
-    async def test_001_us2_as4_abort_on_install_failure(
-        self, mock_install_context: JobContext
-    ) -> None:
+    async def test_001_us2_as4_abort_on_install_failure(self, mock_install_context: JobContext) -> None:
         """US2-AS4: System must abort sync when installation fails.
 
         Spec requirement: US2-AS4 states when installation/upgrade fails on target
@@ -335,9 +319,7 @@ class TestInstallOnTargetJobUS7AS2:
     """Test US7-AS2: Target install uses shared installation logic."""
 
     @pytest.mark.asyncio
-    async def test_001_us7_as2_target_install_shared_logic(
-        self, mock_install_context: JobContext
-    ) -> None:
+    async def test_001_us7_as2_target_install_shared_logic(self, mock_install_context: JobContext) -> None:
         """US7-AS2: InstallOnTargetJob must use the same install.sh script as initial installation.
 
         Spec requirement: US7-AS2 states that when pc-switcher sync installs on target
@@ -384,9 +366,9 @@ class TestInstallOnTargetJobUS7AS2:
             # The installation command should use install.sh from GitHub
             assert "curl -LsSf" in install_call, "Should use curl to download install.sh"
             assert "install.sh" in install_call, "Should execute install.sh script"
-            assert (
-                "github.com" in install_call or "githubusercontent.com" in install_call
-            ), "Should download from GitHub"
+            assert "github.com" in install_call or "githubusercontent.com" in install_call, (
+                "Should download from GitHub"
+            )
 
             # The VERSION env var should be passed to the install script
             assert "VERSION=0.4.0" in install_call, "Should pass VERSION env var"

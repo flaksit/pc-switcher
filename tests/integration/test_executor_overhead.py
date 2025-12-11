@@ -62,17 +62,17 @@ class TestRemoteExecutorOverhead:
         print("=" * 60)
         print("Command: ':' (bash no-op)")
         print(f"Runs: {num_runs}")
-        print(f"Min:  {min_time*1000:.2f} ms")
-        print(f"Max:  {max_time*1000:.2f} ms")
-        print(f"Mean: {avg_time*1000:.2f} ms")
-        print(f"StdDev: {std_dev*1000:.2f} ms")
+        print(f"Min:  {min_time * 1000:.2f} ms")
+        print(f"Max:  {max_time * 1000:.2f} ms")
+        print(f"Mean: {avg_time * 1000:.2f} ms")
+        print(f"StdDev: {std_dev * 1000:.2f} ms")
         print("\nPer-run timings (ms):")
         for i, t in enumerate(timings, 1):
-            print(f"  Run {i:2d}: {t*1000:6.2f} ms")
+            print(f"  Run {i:2d}: {t * 1000:6.2f} ms")
         print("=" * 60)
 
         # Basic assertions - should be reasonably fast
-        assert avg_time < 1.0, f"Average overhead too high: {avg_time*1000:.2f} ms"
+        assert avg_time < 1.0, f"Average overhead too high: {avg_time * 1000:.2f} ms"
 
     async def test_true_command_overhead(self, pc1_executor) -> None:
         """Time 'true' command for comparison.
@@ -101,9 +101,9 @@ class TestRemoteExecutorOverhead:
         print("\n" + "=" * 60)
         print("'true' Command Overhead")
         print("=" * 60)
-        print(f"Min:  {min_time*1000:.2f} ms")
-        print(f"Max:  {max_time*1000:.2f} ms")
-        print(f"Mean: {avg_time*1000:.2f} ms")
+        print(f"Min:  {min_time * 1000:.2f} ms")
+        print(f"Max:  {max_time * 1000:.2f} ms")
+        print(f"Mean: {avg_time * 1000:.2f} ms")
         print("=" * 60)
 
     async def test_master_connection_reuse(self, pc1_executor) -> None:
@@ -133,11 +133,11 @@ class TestRemoteExecutorOverhead:
         print("\n" + "=" * 60)
         print("Master Connection Reuse Test")
         print("=" * 60)
-        print(f"Command 1: {time1*1000:.2f} ms (may include connection setup)")
-        print(f"Command 2: {time2*1000:.2f} ms (should reuse connection)")
-        print(f"Command 3: {time3*1000:.2f} ms (should reuse connection)")
+        print(f"Command 1: {time1 * 1000:.2f} ms (may include connection setup)")
+        print(f"Command 2: {time2 * 1000:.2f} ms (should reuse connection)")
+        print(f"Command 3: {time3 * 1000:.2f} ms (should reuse connection)")
         if time2 < time1:
-            print(f"✓ Connection reuse detected: cmd2 is {(time1-time2)*1000:.2f} ms faster than cmd1")
+            print(f"✓ Connection reuse detected: cmd2 is {(time1 - time2) * 1000:.2f} ms faster than cmd1")
         else:
             print("⚠ No obvious reuse benefit (cmd2 similar to cmd1)")
         print("=" * 60)
@@ -148,9 +148,7 @@ class TestRemoteExecutorOverhead:
 class TestExecutorWrapperOverhead:
     """Measure overhead of RemoteLoginBashExecutor wrapper vs bare RemoteExecutor."""
 
-    async def test_direct_vs_wrapped_command_overhead(
-        self, pc1_connection: asyncssh.SSHClientConnection
-    ) -> None:
+    async def test_direct_vs_wrapped_command_overhead(self, pc1_connection: asyncssh.SSHClientConnection) -> None:
         """Compare direct RemoteExecutor vs RemoteLoginBashExecutor overhead.
 
         RemoteLoginBashExecutor wraps commands in 'bash -l -c "..."'
@@ -196,21 +194,19 @@ class TestExecutorWrapperOverhead:
         print("RemoteExecutor vs RemoteLoginBashExecutor Overhead")
         print("=" * 70)
         print("Direct RemoteExecutor (bare SSH):")
-        print(f"  Mean:   {direct_mean*1000:.2f} ms")
-        print(f"  StdDev: {direct_std*1000:.2f} ms")
+        print(f"  Mean:   {direct_mean * 1000:.2f} ms")
+        print(f"  StdDev: {direct_std * 1000:.2f} ms")
         print()
         print("RemoteLoginBashExecutor (bash -l -c wrapper):")
-        print(f"  Mean:   {wrapped_mean*1000:.2f} ms")
-        print(f"  StdDev: {wrapped_std*1000:.2f} ms")
+        print(f"  Mean:   {wrapped_mean * 1000:.2f} ms")
+        print(f"  StdDev: {wrapped_std * 1000:.2f} ms")
         print()
         print("Wrapper Overhead:")
-        print(f"  Absolute: {wrapper_cost*1000:.2f} ms")
+        print(f"  Absolute: {wrapper_cost * 1000:.2f} ms")
         print(f"  Relative: {wrapper_cost_pct:.1f}% slower")
         print("=" * 70)
 
-    async def test_direct_executor_performance(
-        self, pc1_connection: asyncssh.SSHClientConnection
-    ) -> None:
+    async def test_direct_executor_performance(self, pc1_connection: asyncssh.SSHClientConnection) -> None:
         """Measure bare RemoteExecutor (direct SSH) performance in detail."""
         executor = RemoteExecutor(pc1_connection)
 
@@ -238,11 +234,11 @@ class TestExecutorWrapperOverhead:
         print("Direct RemoteExecutor (Bare SSH) Performance")
         print("=" * 60)
         print(f"Runs: {num_runs}")
-        print(f"Min:  {min_time*1000:.2f} ms")
-        print(f"Max:  {max_time*1000:.2f} ms")
-        print(f"Mean: {avg_time*1000:.2f} ms")
-        print(f"StdDev: {std_dev*1000:.2f} ms")
+        print(f"Min:  {min_time * 1000:.2f} ms")
+        print(f"Max:  {max_time * 1000:.2f} ms")
+        print(f"Mean: {avg_time * 1000:.2f} ms")
+        print(f"StdDev: {std_dev * 1000:.2f} ms")
         print("\nPer-run timings (ms):")
         for i, t in enumerate(timings, 1):
-            print(f"  Run {i:2d}: {t*1000:6.2f} ms")
+            print(f"  Run {i:2d}: {t * 1000:6.2f} ms")
         print("=" * 60)

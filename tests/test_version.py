@@ -514,9 +514,7 @@ class TestVersionReleaseVersion:
 
         # Dev version should be >= release version in PEP 440 ordering
         # (post-releases are "newer" than their base version)
-        assert dev_version >= release, (
-            f"Dev version {dev_version} should be >= release {release}"
-        )
+        assert dev_version >= release, f"Dev version {dev_version} should be >= release {release}"
 
         # Verify round-trip works
         semver_str = release.semver_str()
