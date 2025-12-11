@@ -737,24 +737,28 @@ brew install hcloud
 The easiest way to run integration tests locally:
 
 ```bash
-# Only HCLOUD_TOKEN is required
-export HCLOUD_TOKEN="your-token-here"
-
 # Run all integration tests
-tests/local-integration-tests.sh
+./tests/local-integration-tests.sh
 
 # Run specific test file
-tests/local-integration-tests.sh tests/integration/test_vm_connectivity.py
+./tests/local-integration-tests.sh tests/integration/test_vm_connectivity.py
 
 # Run with extra pytest flags
-tests/local-integration-tests.sh -k "test_ssh" --tb=short
+./tests/local-integration-tests.sh -k "test_ssh" --tb=short
 ```
 
 The script automatically:
-- Looks up VM IPs from Hetzner Cloud
+- **Retrieves HCLOUD_TOKEN**: If not set in environment, attempts to retrieve from `pass` (password-store) at path `dev/pc-switcher/testing/hcloud_token_rw`
+- Looks up VM IPs from Hetzner Cloud using the `hcloud` CLI
 - Updates SSH known_hosts entries (removes old, adds new)
-- Sets all required environment variables
+- Sets all required environment variables (`PC_SWITCHER_TEST_PC1_HOST`, `PC_SWITCHER_TEST_PC2_HOST`, `PC_SWITCHER_TEST_USER`)
 - Runs pytest with integration markers
+
+**Note**: If you don't use `pass`, set HCLOUD_TOKEN manually before running:
+```bash
+export HCLOUD_TOKEN="your-token-here"
+./tests/local-integration-tests.sh
+```
 
 ### Environment Variables for Running Integration Tests on the VMs From Local Code
 

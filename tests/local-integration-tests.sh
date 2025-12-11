@@ -29,10 +29,23 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 # Check HCLOUD_TOKEN
 if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
-    log_error "HCLOUD_TOKEN not set"
-    echo "Please set your Hetzner Cloud API token:" >&2
-    echo "  export HCLOUD_TOKEN='your-token-here'" >&2
-    exit 1
+    log_info "HCLOUD_TOKEN not set, attempting to retrieve from pass..."
+    if command -v pass &> /dev/null; then
+        HCLOUD_TOKEN=$(pass show dev/pc-switcher/testing/hcloud_token_rw 2>/dev/null) || {
+            log_error "HCLOUD_TOKEN not set and could not retrieve from pass"
+            echo "Please set your Hetzner Cloud API token:" >&2
+            echo "  export HCLOUD_TOKEN='your-token-here'" >&2
+            echo "Or ensure you have the token set in pass 'dev/pc-switcher/testing/hcloud_token_rw'" >&2
+            exit 1
+        }
+        export HCLOUD_TOKEN
+        log_info "Successfully retrieved HCLOUD_TOKEN from pass"
+    else
+        log_error "HCLOUD_TOKEN not set and pass not available"
+        echo "Please set your Hetzner Cloud API token:" >&2
+        echo "  export HCLOUD_TOKEN='your-token-here'" >&2
+        exit 1
+    fi
 fi
 
 # Check hcloud CLI is available
