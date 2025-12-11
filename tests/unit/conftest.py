@@ -8,6 +8,7 @@ Provides:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -85,7 +86,7 @@ def mock_job_context_factory(
     mock_local_executor: MagicMock,
     mock_remote_executor: MagicMock,
     mock_event_bus: MagicMock,
-) -> type:
+) -> Callable[[dict[str, Any] | None], JobContext]:
     """Factory fixture to create JobContext with custom config.
 
     Usage:
