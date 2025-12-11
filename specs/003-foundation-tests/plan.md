@@ -19,7 +19,7 @@ Create comprehensive spec-driven tests for all existing 001-foundation functiona
 **Project Type**: Single project (testing existing pc-switcher implementation)
 **Performance Goals**: Unit test suite completes in <30 seconds; integration tests complete in <15 minutes
 **Constraints**: Tests must be spec-driven (validate requirements, not implementation details); 100% traceability to spec requirements; unit tests must use mock executors to avoid real system operations
-**Scale/Scope**: 9 user stories from 001-foundation spec, approximately 50+ acceptance scenarios, 48 functional requirements
+**Scale/Scope**: 9 user stories from 001-foundation spec, 44 active acceptance scenarios (3 removed), 44 active functional requirements (4 removed/skipped)
 
 ## Constitution Check
 

@@ -10,12 +10,16 @@ This document provides explicit traceability from every requirement in specs/001
 
 ## Coverage Summary
 
-| Category | Total Count | Tests Planned | Coverage |
-|----------|-------------|---------------|----------|
-| User Stories | 9 | 9 | 100% |
-| Acceptance Scenarios | 47 | 47 | 100% |
-| Functional Requirements | 48 | 48 | 100% |
-| Edge Cases | 9 | 9 | 100% |
+| Category | Total in 001-Spec | Removed | Active | Tests Planned | Coverage |
+|----------|-------------------|---------|--------|---------------|----------|
+| User Stories | 9 | 0 | 9 | 9 | 100% |
+| Acceptance Scenarios | 47 | 3 | 44 | 44 | 100% |
+| Functional Requirements | 48 | 4 | 44 | 44 | 100% |
+| Edge Cases | 9 | 0 | 9 | 9 | 100% |
+
+**Removed items from 001-spec**:
+- Acceptance Scenarios: US4-AS3, US4-AS5, US8-AS2 (marked "Removed" in spec)
+- Functional Requirements: FR-013 (rollback deferred), FR-034, FR-037 (numbering gaps), FR-040 (removed)
 
 ## User Story Coverage
 
@@ -215,7 +219,7 @@ This document provides explicit traceability from every requirement in specs/001
 | FR-008 | Create pre-sync snapshots | `test_001_fr008_create_presync_snapshots` | tests/unit/jobs/test_snapshot_job.py |
 | FR-009 | Create post-sync snapshots | `test_001_fr009_create_postsync_snapshots` | tests/unit/jobs/test_snapshot_job.py |
 | FR-010 | Snapshot naming pattern | `test_001_fr010_snapshot_naming_pattern` | tests/unit/jobs/test_snapshot_job.py |
-| FR-011 | Snapshots always active (not configurable) | `test_001_fr011_snapshots_always_active` | tests/unit/orchestrator/test_config_system.py |
+| FR-011 | Snapshots always active (not configurable) | `test_001_fr011_snapshots_always_active` | tests/unit/orchestrator/test_config_system.py (config aspect) + tests/unit/jobs/test_snapshot_job.py (snapshot behavior aspect) |
 | FR-012 | Abort if pre-sync snapshot fails | `test_001_fr012_abort_on_snapshot_failure` | tests/unit/jobs/test_snapshot_job.py |
 | FR-014 | Snapshot cleanup with retention policy | `test_001_fr014_cleanup_with_retention` | tests/unit/jobs/test_snapshot_job.py |
 | FR-015 | Validate subvolumes exist | `test_001_fr015_validate_subvolumes_exist` | tests/unit/jobs/test_snapshot_job.py |
@@ -391,8 +395,8 @@ This document provides explicit traceability from every requirement in specs/001
 Before marking tests complete:
 
 - [ ] All 9 user stories have at least one test
-- [ ] All 47 acceptance scenarios map to specific test functions
-- [ ] All 48 functional requirements have test assertions
+- [ ] All 44 active acceptance scenarios map to specific test functions (3 removed: US4-AS3, US4-AS5, US8-AS2)
+- [ ] All 44 active functional requirements have test assertions (4 removed: FR-013, FR-034, FR-037, FR-040)
 - [ ] All 9 edge cases have test coverage
 - [ ] Unit test suite runs in <30 seconds
 - [ ] Integration test suite runs in <15 minutes

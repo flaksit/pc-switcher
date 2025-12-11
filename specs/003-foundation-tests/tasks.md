@@ -38,7 +38,7 @@
 
 **These files already exist and need additions per data-model.md**
 
-- [ ] T005 [P] Expand `tests/contract/test_job_interface.py` with US1-AS2 (config schema validation), US1-AS3 (job logging at all levels), US1-AS4 (job progress reporting)
+- [ ] T005 [P] Expand `tests/contract/test_job_interface.py` with US1-AS2 (config schema validation), US1-AS3 (job logging at all levels), US1-AS4 (job progress reporting) — Note: T010 also adds FR-001 test to this file; both tasks target same file intentionally
 - [ ] T006 [P] Expand `tests/unit/test_config_sync.py` with FR-007a (config sync prompt if missing), FR-007b (config diff and prompt), FR-007c (skip if configs match), US2-AS7 (skip when configs match)
 - [ ] T007 [P] Expand `tests/unit/test_lock.py` with FR-047 verification (lock prevents concurrent sync), edge case: concurrent sync attempts
 - [ ] T008 [P] Expand `tests/unit/jobs/test_disk_space_monitor.py` with FR-016 (preflight disk space check), FR-017 (runtime disk space monitoring) comprehensive coverage
@@ -65,7 +65,7 @@
   - `test_001_edge_cleanup_exception` (edge: job cleanup raises exception)
   - `test_001_edge_partial_job_failures` (edge: some jobs succeed, some fail)
 
-- [ ] T010 [P] Add to `tests/contract/test_job_interface.py`:
+- [ ] T010 [P] Add to `tests/contract/test_job_interface.py` (same file as T005, no conflict):
   - `test_001_fr001_job_interface_contract` (FR-001: job interface defines standardized methods)
 
 ### Integration Tests for US-1
@@ -209,7 +209,7 @@
 
 - [ ] T020 Create `tests/unit/orchestrator/test_config_system.py` with:
   - `test_001_fr004_jobs_loaded_in_config_order` (FR-004: jobs loaded in config order)
-  - `test_001_fr011_snapshots_always_active` (FR-011: snapshots always active - config aspect)
+  - `test_001_fr011_snapshots_always_active` (FR-011: snapshots always active - config aspect; T014 tests snapshot behavior aspect)
   - `test_001_fr028_load_from_config_path` (FR-028: load from ~/.config/pc-switcher/config.yaml)
   - `test_001_fr029_config_structure` (FR-029: YAML structure - global, sync_jobs, per-job)
   - `test_001_fr030_validate_job_configs` (FR-030: validate against job schemas)
@@ -325,15 +325,15 @@
 
 **Purpose**: Final validation and coverage verification
 
-- [ ] T027 Run full unit test suite: `uv run pytest tests/unit tests/contract -v` and verify <30s completion (FR-013 of 003 spec)
-- [ ] T028 [P] Run full integration test suite: `uv run pytest tests/integration -v -m integration` and verify <15 minutes completion (SC-008 of 003 spec)
-- [ ] T029 [P] Run tests in random order: `uv run pytest tests/unit -v --randomly-seed=12345` to verify test independence (FR-009 of 003 spec)
-- [ ] T030 Generate `contracts/coverage-map.yaml` from implemented tests for traceability verification
-- [ ] T031 Verify all 9 user stories from 001-foundation spec have corresponding tests
-- [ ] T032 Verify all 47 acceptance scenarios have corresponding test cases
-- [ ] T033 Verify all 48 functional requirements have corresponding test assertions
-- [ ] T034 Verify all 9 edge cases have test coverage
-- [ ] T035 Verify all tests include docstring with spec reference (FR-007 of 003 spec, FR-008 of 003 spec)
+- [ ] T027 Run full unit test suite: `uv run pytest tests/unit tests/contract -v` and verify <30s completion (FR-013 of 003 spec). If fails: optimize slow tests or split into separate test file
+- [ ] T028 [P] Run full integration test suite: `uv run pytest tests/integration -v -m integration` and verify <15 minutes completion (SC-008 of 003 spec). If fails: identify bottleneck tests and optimize
+- [ ] T029 [P] Run tests in random order: `uv run pytest tests/unit -v --randomly-seed=12345` to verify test independence (FR-009 of 003 spec). If fails: fix order-dependent tests by isolating state
+- [ ] T030 Generate `contracts/coverage-map.yaml` from implemented tests for traceability verification. If coverage gaps found: add missing tests as new tasks
+- [ ] T031 Verify all 9 user stories from 001-foundation spec have corresponding tests. If gaps found: create tasks to add missing coverage
+- [ ] T032 Verify all 44 active acceptance scenarios have corresponding test cases (3 removed: US4-AS3, US4-AS5, US8-AS2). If gaps found: create tasks to add missing coverage
+- [ ] T033 Verify all 44 active functional requirements have corresponding test assertions (4 removed: FR-013, FR-034, FR-037, FR-040). If gaps found: create tasks to add missing coverage
+- [ ] T034 Verify all 9 edge cases have test coverage. If gaps found: create tasks to add missing coverage
+- [ ] T035 Verify all tests include docstring with spec reference (FR-007 of 003 spec, FR-008 of 003 spec). If missing: add docstrings before marking complete
 
 **Checkpoint**: All tests complete, verified, and traceable
 
@@ -427,8 +427,8 @@ Task: "Create tests/integration/test_end_to_end_sync.py"
 
 **Coverage Summary**:
 - User Stories: 9/9 (100%)
-- Acceptance Scenarios: 47/47 (100%)
-- Functional Requirements: 48/48 (100%)
+- Acceptance Scenarios: 44/44 (100%) — 3 removed from 001-spec: US4-AS3, US4-AS5, US8-AS2
+- Functional Requirements: 44/44 (100%) — 4 removed/skipped from 001-spec: FR-013, FR-034, FR-037, FR-040
 - Edge Cases: 9/9 (100%)
 
 **Suggested MVP Scope**: Phases 1-3 (Setup, Foundational, US-1) - establishes test infrastructure and verifies job architecture
