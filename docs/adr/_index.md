@@ -8,6 +8,7 @@
 - [ADR-004](adr-004-dynamic-versioning-github-releases.md): Dynamic package versioning from GitHub Releases
 - [ADR-005](adr-005-asyncio-concurrency.md): Use Asyncio for Concurrency
 - [ADR-006](adr-006-testing-framework.md): VM-Based Testing Framework
+- [ADR-007](adr-007-tdd-implementation.md): Test-Driven Development for Implementation
 
 ## Superseded
 
