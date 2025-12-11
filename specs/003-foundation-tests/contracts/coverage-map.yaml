@@ -31,19 +31,19 @@ user_stories:
     name: "Self-Installing Sync Orchestrator"
     acceptance_scenarios:
       - id: US2-AS1
-        test: tests/integration/test_self_installation.py::test_001_us2_as1_install_missing_pcswitcher
+        test: tests/integration/jobs/test_install_on_target_job.py::TestSelfInstallation::test_001_us2_as1_install_missing_pcswitcher
       - id: US2-AS2
-        test: tests/integration/test_self_installation.py::test_001_us2_as2_upgrade_outdated_target
+        test: tests/integration/jobs/test_install_on_target_job.py::TestSelfInstallation::test_001_us2_as2_upgrade_outdated_target
       - id: US2-AS3
         test: tests/unit/jobs/test_install_on_target_job.py::test_001_us2_as3_skip_when_versions_match
       - id: US2-AS4
         test: tests/unit/jobs/test_install_on_target_job.py::test_001_us2_as4_abort_on_install_failure
       - id: US2-AS5
-        test: tests/integration/test_self_installation.py::test_001_us2_as5_prompt_for_missing_config
+        test: tests/unit/cli/test_config_sync.py::test_001_fr007a_config_sync_prompt_if_missing
       - id: US2-AS6
-        test: tests/integration/test_self_installation.py::test_001_us2_as6_diff_and_prompt_for_different_config
+        test: tests/unit/cli/test_config_sync.py::test_001_fr007b_config_diff_and_prompt
       - id: US2-AS7
-        test: tests/unit/test_config_sync.py::test_001_us2_as7_skip_when_configs_match
+        test: tests/unit/cli/test_config_sync.py::test_001_us2_as7_skip_when_configs_match
 
   US-3:
     name: "Safety Infrastructure with Btrfs Snapshots"
@@ -152,11 +152,11 @@ functional_requirements:
     - id: FR-007
       test: tests/unit/jobs/test_install_on_target_job.py::test_001_fr007_abort_on_install_failure
     - id: FR-007a
-      test: tests/unit/test_config_sync.py::test_001_fr007a_config_sync_prompt_if_missing
+      test: tests/unit/cli/test_config_sync.py::test_001_fr007a_config_sync_prompt_if_missing
     - id: FR-007b
-      test: tests/unit/test_config_sync.py::test_001_fr007b_config_diff_and_prompt
+      test: tests/unit/cli/test_config_sync.py::test_001_fr007b_config_diff_and_prompt
     - id: FR-007c
-      test: tests/unit/test_config_sync.py::test_001_fr007c_skip_if_configs_match
+      test: tests/unit/cli/test_config_sync.py::test_001_fr007c_skip_if_configs_match
 
   safety_infrastructure:
     - id: FR-008

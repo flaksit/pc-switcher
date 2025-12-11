@@ -97,11 +97,10 @@
 
 ### Integration Tests for US-2
 
-- [X] T013 Create `tests/integration/test_self_installation.py` with:
+- [X] T013 Create `tests/integration/jobs/test_install_on_target_job.py` with:
   - `test_001_us2_as1_install_missing_pcswitcher` (US2-AS1: install missing pc-switcher)
   - `test_001_us2_as2_upgrade_outdated_target` (US2-AS2: upgrade outdated target)
-  - `test_001_us2_as5_prompt_for_missing_config` (US2-AS5: prompt for missing config)
-  - `test_001_us2_as6_diff_and_prompt_for_different_config` (US2-AS6: diff and prompt for different config)
+  - Note: US2-AS5 and US2-AS6 (config sync) covered by tests in `tests/unit/cli/test_config_sync.py` and `tests/integration/test_config_sync.py`
 
 **Checkpoint**: US-2 (Self-Installing Orchestrator) fully tested
 

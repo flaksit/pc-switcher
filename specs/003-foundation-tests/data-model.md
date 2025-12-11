@@ -62,8 +62,8 @@ This document provides explicit traceability from every requirement in specs/001
 | US2-AS2 | Version mismatch, orchestrator upgrades target | `test_001_us2_as2_upgrade_outdated_target` | integration |
 | US2-AS3 | Versions match, skip installation | `test_001_us2_as3_skip_when_versions_match` | unit |
 | US2-AS4 | Installation fails, abort sync | `test_001_us2_as4_abort_on_install_failure` | unit |
-| US2-AS5 | Target has no config, prompt user and copy | `test_001_us2_as5_prompt_for_missing_config` | integration |
-| US2-AS6 | Target config differs, show diff with options | `test_001_us2_as6_diff_and_prompt_for_different_config` | integration |
+| US2-AS5 | Target has no config, prompt user and copy | `test_001_fr007a_config_sync_prompt_if_missing` | unit |
+| US2-AS6 | Target config differs, show diff with options | `test_001_fr007b_config_diff_and_prompt` | unit |
 | US2-AS7 | Configs match, skip config sync | `test_001_us2_as7_skip_when_configs_match` | unit |
 
 ### US-3: Safety Infrastructure with Btrfs Snapshots
