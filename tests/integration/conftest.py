@@ -55,6 +55,7 @@ class RemoteLoginBashExecutor(RemoteExecutor):
         wrapped_cmd = f"bash -l -c {shlex.quote(cmd)}"
         return await super().run_command(wrapped_cmd, timeout=timeout)
 
+
 REQUIRED_ENV_VARS = [
     "HCLOUD_TOKEN",
     "PC_SWITCHER_TEST_PC1_HOST",

@@ -188,9 +188,7 @@ class TestSelfUpdateDowngrade:
         result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0)
         assert result.success, "Self update should still exist after downgrading to alpha.2"
 
-    async def test_downgrade_to_version_without_self_update(
-        self, clean_pc_switcher: RemoteExecutor
-    ) -> None:
+    async def test_downgrade_to_version_without_self_update(self, clean_pc_switcher: RemoteExecutor) -> None:
         """Test downgrading to v0.1.0-alpha.1 (loses self-update command)."""
         # Install version with self-update
         await _install_version(clean_pc_switcher, VERSION_WITH_SELF_UPDATE_OLD)
