@@ -499,6 +499,40 @@ async def test_command_execution(pc1_executor):
     print(f"Hostname: {result.stdout.strip()}")
 ```
 
+#### Command Execution Overhead
+
+Each `run_command()` call has measurable SSH overhead. When executing many commands, **group related commands to minimize calls**:
+
+**Performance characteristics** (see `tests/integration/test_executor_overhead.py` for detailed benchmarks):
+- **Bare RemoteExecutor (direct SSH)**: ~70ms per command
+- **RemoteLoginBashExecutor (bash -l wrapper)**: ~78ms per command
+- **SSH setup overhead (first connection)**: ~200ms
+
+**Optimization pattern**:
+
+```python
+# ✗ Inefficient: 30 separate command calls = 30 × 78ms = 2.3 seconds
+for file in files:
+    await executor.run_command(f"stat {file}")
+
+# ✓ Better: Group related commands with &&
+result = await executor.run_command(
+    " && ".join(f"stat {file}" for file in files)
+)
+
+# ✓ Or use bash to combine operations
+await executor.run_command(f"for f in {' '.join(files)}; do stat $f; done")
+
+# ✓ Or pipe output through single shell invocation
+await executor.run_command(f"ls -la {' '.join(dirs)} | grep pattern")
+```
+
+For 100 commands:
+- **Separate calls**: 100 × 78ms = **7.8 seconds**
+- **Single grouped call**: ~80ms (one SSH roundtrip)
+
+**Rule of thumb**: If you need more than 3-5 sequential commands on the same machine, group them into a single `run_command()` call.
+
 ### File Transfer with asyncssh
 
 Transfer files between local and remote machines:
@@ -775,6 +809,7 @@ Use pytest markers to categorize tests:
 ```python
 @pytest.mark.integration  # Requires VM infrastructure
 @pytest.mark.slow         # Takes >5 seconds
+@pytest.mark.benchmark    # Performance benchmarks (informational, not functional tests)
 ```
 
 Markers are configured in `pyproject.toml`:
@@ -784,7 +819,21 @@ Markers are configured in `pyproject.toml`:
 markers = [
     "integration: Integration tests (require VM infrastructure)",
     "slow: Tests that take >5 seconds",
+    "benchmark: Performance benchmarks (not run by default)",
 ]
+```
+
+**Default test behavior:**
+- Unit & contract tests: Always run
+- Integration tests: Excluded by default (use `-m integration` to include)
+- Benchmarks: Excluded by default (marked as integration), use `-m benchmark` to run
+
+**Running different test combinations:**
+```bash
+uv run pytest tests/unit tests/contract              # Only unit/contract (fast)
+uv run pytest tests/integration -m integration       # All integration except benchmarks
+uv run pytest tests/integration -m benchmark         # Only performance benchmarks
+uv run pytest tests/integration/test_executor_overhead.py -m benchmark -v -s  # Specific benchmark with output
 ```
 
 ### Fixture Scopes
