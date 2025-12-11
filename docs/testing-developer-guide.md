@@ -343,6 +343,82 @@ class TestJobContract:
 
 Integration tests run on dedicated test VMs with real btrfs filesystems and SSH connections.
 
+### Baseline VM State
+
+**IMPORTANT**: At the start of each integration test session, both `pc1` and `pc2` VMs are reset to a known baseline state. Understanding this baseline is critical for writing correct integration tests.
+
+**Baseline VM state (captured in `/.snapshots/baseline/` during provisioning)**:
+
+| Component | State | Location |
+|-----------|-------|----------|
+| **Operating System** | Ubuntu 24.04 LTS | / |
+| **Packages** | btrfs-progs, qemu-guest-agent, fail2ban, ufw, sudo | System-wide |
+| **Filesystem** | btrfs with flat subvolume layout (`@`, `@home`, `@snapshots`) | / |
+| **Users** | `testuser` with passwordless sudo | /home/testuser |
+| **SSH Keys** | All developer SSH keys from CI secrets | ~/.ssh/authorized_keys |
+| **Firewall** | ufw enabled, SSH allowed | System-wide |
+| **pc-switcher** | **NOT installed** | N/A |
+| **Python tools** | `uv` installed via `curl -LsSf https://astral.sh/uv/install.sh \| sh` | ~/.local/bin |
+
+**Key facts about the baseline**:
+- **pc-switcher is NOT installed** in the baseline. Tests that require pc-switcher must install it or use fixtures that install it.
+- **VMs are reset once per session** (not between test modules). The `integration_session` fixture resets VMs at the start of the pytest session.
+- **Tests must clean up after themselves** to avoid affecting other tests in the same session.
+
+### Test Isolation Requirements
+
+Since VMs are reset **once per session** (not between test modules), every integration test MUST:
+
+1. **Clean up all artifacts** created during the test (files, directories, snapshots, installed packages)
+2. **Restore VM state** if the test modifies it (e.g., if a test installs/uninstalls pc-switcher)
+3. **Use unique names** for test artifacts to avoid collisions with other tests
+
+**Example: Proper cleanup pattern**
+
+```python
+@pytest.mark.integration
+async def test_create_snapshot(pc1_executor):
+    """Test creating a btrfs snapshot with proper cleanup."""
+    snapshot_name = "/.snapshots/test-my-snapshot"
+
+    try:
+        # Test operations
+        result = await pc1_executor.run_command(
+            f"sudo btrfs subvolume snapshot -r / {snapshot_name}"
+        )
+        assert result.success
+
+        # Test assertions...
+    finally:
+        # Always clean up, even if test fails
+        await pc1_executor.run_command(
+            f"sudo btrfs subvolume delete {snapshot_name} 2>/dev/null || true"
+        )
+```
+
+**Bad example: No cleanup**
+
+```python
+# ✗ DON'T DO THIS - leaves artifacts that affect other tests
+@pytest.mark.integration
+async def test_create_snapshot(pc1_executor):
+    result = await pc1_executor.run_command(
+        "sudo btrfs subvolume snapshot -r / /.snapshots/test-snapshot"
+    )
+    assert result.success
+    # Missing cleanup! This snapshot will remain on the VM
+```
+
+**Fixtures that modify VM state**:
+
+If you create fixtures that modify VM state (like installing/uninstalling packages), the fixture MUST:
+1. **Capture the initial state** before modifying it
+2. **Restore to initial state** after the test (in the cleanup/finally section)
+
+See `tests/integration/conftest.py` for examples:
+- `pc2_executor_without_pcswitcher_tool`: Uninstalls pc-switcher, then restores it if it was present
+- `pc2_executor_with_old_pcswitcher_tool`: Installs old version, then restores original state
+
 ### Directory Structure
 
 ```text
