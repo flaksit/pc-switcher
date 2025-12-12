@@ -14,8 +14,6 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 
-import pytest
-
 from pcswitcher.executor import RemoteExecutor
 
 

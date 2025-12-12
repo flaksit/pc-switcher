@@ -24,7 +24,7 @@ from collections.abc import AsyncIterator
 import pytest
 import pytest_asyncio
 
-from pcswitcher.executor import RemoteExecutor
+from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import Version, find_one_version, get_this_version
 
 # Install script URL from main branch
@@ -42,7 +42,7 @@ def _get_release_version() -> Version:
 
 
 @pytest_asyncio.fixture
-async def clean_install_environment(pc1_executor: RemoteExecutor) -> AsyncIterator[RemoteExecutor]:
+async def clean_install_environment(pc1_executor: BashLoginRemoteExecutor) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide a clean environment for testing installation.
 
     Removes pc-switcher, config, and optionally uv to simulate fresh machine.
@@ -74,7 +74,7 @@ async def clean_install_environment(pc1_executor: RemoteExecutor) -> AsyncIterat
     )
 
 
-async def test_001_fr035_install_script_no_prereqs(clean_install_environment: RemoteExecutor) -> None:
+async def test_001_fr035_install_script_no_prereqs(clean_install_environment: BashLoginRemoteExecutor) -> None:
     """Test FR-035: install.sh works without prerequisites.
 
     Verifies that the install.sh script can run on a fresh machine and:
@@ -149,7 +149,7 @@ class TestInstallationScriptVersionParameter:
 
     async def test_001_install_release_version_on_clean_target(
         self,
-        pc2_executor_without_pcswitcher_tool: RemoteExecutor,
+        pc2_executor_without_pcswitcher_tool: BashLoginRemoteExecutor,
     ) -> None:
         """Test installing the release version on a clean target.
 
@@ -175,7 +175,7 @@ class TestInstallationScriptVersionParameter:
 
     async def test_001_upgrade_from_older_version(
         self,
-        pc2_executor_with_old_pcswitcher_tool: RemoteExecutor,
+        pc2_executor_with_old_pcswitcher_tool: BashLoginRemoteExecutor,
     ) -> None:
         """Test upgrading from an older version to the release version.
 

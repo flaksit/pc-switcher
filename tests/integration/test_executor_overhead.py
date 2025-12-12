@@ -18,7 +18,6 @@ import asyncssh
 import pytest
 
 from pcswitcher.executor import RemoteExecutor
-from tests.integration.conftest import RemoteLoginBashExecutor
 
 
 @pytest.mark.benchmark
@@ -144,38 +143,37 @@ class TestRemoteExecutorOverhead:
 
 @pytest.mark.benchmark
 class TestExecutorWrapperOverhead:
-    """Measure overhead of RemoteLoginBashExecutor wrapper vs bare RemoteExecutor."""
+    """Measure overhead of login_shell=True parameter vs bare RemoteExecutor."""
 
     async def test_direct_vs_wrapped_command_overhead(self, pc1_connection: asyncssh.SSHClientConnection) -> None:
-        """Compare direct RemoteExecutor vs RemoteLoginBashExecutor overhead.
+        """Compare direct RemoteExecutor vs login_shell=True overhead.
 
-        RemoteLoginBashExecutor wraps commands in 'bash -l -c "..."'
+        RemoteExecutor with login_shell=True wraps commands in 'bash -l -c "..."'
         to get a login shell environment. This test measures the cost of that wrapper.
         """
-        # Create both executor types
-        direct_executor = RemoteExecutor(pc1_connection)
-        wrapped_executor = RemoteLoginBashExecutor(pc1_connection)
+        # Create executor
+        executor = RemoteExecutor(pc1_connection)
 
         num_runs = 10
         direct_timings: list[float] = []
         wrapped_timings: list[float] = []
 
-        # Warm up both
-        await direct_executor.run_command(":")
-        await wrapped_executor.run_command(":")
+        # Warm up both modes
+        await executor.run_command(":", login_shell=False)
+        await executor.run_command(":", login_shell=True)
 
-        # Test direct executor
+        # Test direct executor (login_shell=False)
         for _ in range(num_runs):
             start = time.perf_counter()
-            result = await direct_executor.run_command(":")
+            result = await executor.run_command(":", login_shell=False)
             elapsed = time.perf_counter() - start
             direct_timings.append(elapsed)
             assert result.success
 
-        # Test wrapped executor
+        # Test with login shell wrapper (login_shell=True)
         for _ in range(num_runs):
             start = time.perf_counter()
-            result = await wrapped_executor.run_command(":")
+            result = await executor.run_command(":", login_shell=True)
             elapsed = time.perf_counter() - start
             wrapped_timings.append(elapsed)
             assert result.success
@@ -189,17 +187,17 @@ class TestExecutorWrapperOverhead:
         wrapper_cost_pct = (wrapper_cost / direct_mean * 100) if direct_mean > 0 else 0
 
         print("\n" + "=" * 70)
-        print("RemoteExecutor vs RemoteLoginBashExecutor Overhead")
+        print("RemoteExecutor: login_shell=False vs login_shell=True Overhead")
         print("=" * 70)
-        print("Direct RemoteExecutor (bare SSH):")
+        print("Direct RemoteExecutor (login_shell=False, bare SSH):")
         print(f"  Mean:   {direct_mean * 1000:.2f} ms")
         print(f"  StdDev: {direct_std * 1000:.2f} ms")
         print()
-        print("RemoteLoginBashExecutor (bash -l -c wrapper):")
+        print("With Login Shell (login_shell=True, bash -l -c wrapper):")
         print(f"  Mean:   {wrapped_mean * 1000:.2f} ms")
         print(f"  StdDev: {wrapped_std * 1000:.2f} ms")
         print()
-        print("Wrapper Overhead:")
+        print("Login Shell Overhead:")
         print(f"  Absolute: {wrapper_cost * 1000:.2f} ms")
         print(f"  Relative: {wrapper_cost_pct:.1f}% slower")
         print("=" * 70)

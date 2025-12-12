@@ -16,14 +16,13 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-import pytest
 import pytest_asyncio
 
-from pcswitcher.executor import RemoteExecutor
+from pcswitcher.executor import BashLoginRemoteExecutor
 
 
 @pytest_asyncio.fixture
-async def clean_config_environment(pc1_executor: RemoteExecutor) -> AsyncIterator[RemoteExecutor]:
+async def clean_config_environment(pc1_executor: BashLoginRemoteExecutor) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide a clean environment for testing init command.
 
     Removes existing config file before test, restores after test.
@@ -60,7 +59,7 @@ class TestInitCommand:
 
     async def test_001_fr036_init_creates_default_config(
         self,
-        clean_config_environment: RemoteExecutor,
+        clean_config_environment: BashLoginRemoteExecutor,
     ) -> None:
         """FR-036: pc-switcher init creates default config with inline comments.
 
@@ -99,7 +98,7 @@ class TestInitCommand:
 
     async def test_001_us7_as1_init_after_install(
         self,
-        clean_config_environment: RemoteExecutor,
+        clean_config_environment: BashLoginRemoteExecutor,
     ) -> None:
         """US7-AS1: Full workflow - install.sh followed by pc-switcher init.
 
@@ -139,7 +138,7 @@ class TestInitCommand:
 
     async def test_001_us7_as3_init_preserves_existing_config(
         self,
-        pc1_executor: RemoteExecutor,
+        pc1_executor: BashLoginRemoteExecutor,
     ) -> None:
         """US7-AS3: pc-switcher init refuses to overwrite existing config without --force.
 
@@ -186,7 +185,7 @@ class TestInitCommand:
 
     async def test_001_us7_as3_init_force_overwrites(
         self,
-        clean_config_environment: RemoteExecutor,
+        clean_config_environment: BashLoginRemoteExecutor,
     ) -> None:
         """US7-AS3: pc-switcher init --force overwrites existing config.
 
@@ -220,7 +219,7 @@ class TestInitCommand:
 
     async def test_001_init_creates_parent_directory(
         self,
-        pc1_executor: RemoteExecutor,
+        pc1_executor: BashLoginRemoteExecutor,
     ) -> None:
         """Test that pc-switcher init creates parent directory if missing.
 

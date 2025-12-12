@@ -69,9 +69,7 @@ class TestSourceLockConflictMessages:
             existing_lock.release()
 
     @pytest.mark.asyncio
-    async def test_source_lock_error_message_format(
-        self, mock_config: MagicMock, tmp_path: Path
-    ) -> None:
+    async def test_source_lock_error_message_format(self, mock_config: MagicMock, tmp_path: Path) -> None:
         """Source lock error follows expected format for user-facing display.
 
         Error format: "This machine is already involved in a sync (held by: <holder>)"
@@ -103,9 +101,7 @@ class TestTargetLockConflictMessages:
     """Test error messages when target lock acquisition fails."""
 
     @pytest.mark.asyncio
-    async def test_target_lock_error_includes_hostname(
-        self, mock_config: MagicMock
-    ) -> None:
+    async def test_target_lock_error_includes_hostname(self, mock_config: MagicMock) -> None:
         """Target lock error message includes the target hostname.
 
         When target lock acquisition fails, the error message should
@@ -132,9 +128,7 @@ class TestTargetLockConflictMessages:
             assert "already involved in a sync" in error_msg
 
     @pytest.mark.asyncio
-    async def test_target_lock_error_message_format(
-        self, mock_config: MagicMock
-    ) -> None:
+    async def test_target_lock_error_message_format(self, mock_config: MagicMock) -> None:
         """Target lock error follows expected format for user-facing display.
 
         Error format: "Target <hostname> is already involved in a sync"
@@ -160,9 +154,7 @@ class TestLockErrorMessageClarity:
     """Test that lock error messages are clear and actionable."""
 
     @pytest.mark.asyncio
-    async def test_source_lock_error_no_stack_trace_in_message(
-        self, mock_config: MagicMock, tmp_path: Path
-    ) -> None:
+    async def test_source_lock_error_no_stack_trace_in_message(self, mock_config: MagicMock, tmp_path: Path) -> None:
         """Source lock error is a clean RuntimeError without internal details.
 
         The error should be suitable for display to users without exposing
@@ -192,9 +184,7 @@ class TestLockErrorMessageClarity:
             existing_lock.release()
 
     @pytest.mark.asyncio
-    async def test_target_lock_error_no_stack_trace_in_message(
-        self, mock_config: MagicMock
-    ) -> None:
+    async def test_target_lock_error_no_stack_trace_in_message(self, mock_config: MagicMock) -> None:
         """Target lock error is a clean RuntimeError without internal details."""
         orchestrator = Orchestrator(target="test-target", config=mock_config)
         orchestrator._remote_executor = AsyncMock()  # pyright: ignore[reportPrivateUsage]

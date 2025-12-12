@@ -48,9 +48,7 @@ class TestSessionIdFormat:
         assert len(session_id) == 8, f"Session ID should be 8 chars, got {len(session_id)}"
 
         # Verify hex format (only 0-9 and a-f)
-        assert re.match(r"^[0-9a-f]{8}$", session_id), (
-            f"Session ID should be lowercase hex, got '{session_id}'"
-        )
+        assert re.match(r"^[0-9a-f]{8}$", session_id), f"Session ID should be lowercase hex, got '{session_id}'"
 
     def test_session_id_is_unique_per_orchestrator(self, mock_config: MagicMock) -> None:
         """Each orchestrator instance should have a unique session ID."""
@@ -110,13 +108,9 @@ class TestSessionFolderNaming:
         # Verify format: timestamp followed by session_id
         # Pattern: YYYYMMDDTHHMMSS-<session_id>
         pattern = r"^\d{8}T\d{6}-" + re.escape(session_id) + r"$"
-        assert re.match(pattern, folder_name), (
-            f"Folder name '{folder_name}' doesn't match expected pattern"
-        )
+        assert re.match(pattern, folder_name), f"Folder name '{folder_name}' doesn't match expected pattern"
 
-    def test_orchestrator_session_folder_uses_session_id(
-        self, mock_config: MagicMock
-    ) -> None:
+    def test_orchestrator_session_folder_uses_session_id(self, mock_config: MagicMock) -> None:
         """Orchestrator's session folder should incorporate its session ID."""
         orchestrator = Orchestrator(target="test-target", config=mock_config)
 
@@ -164,9 +158,7 @@ class TestSessionIdInLogFileName:
 class TestSessionIdConsistencyAcrossComponents:
     """Test that the same session ID is used across all components."""
 
-    def test_same_session_id_in_folder_and_context(
-        self, mock_config: MagicMock
-    ) -> None:
+    def test_same_session_id_in_folder_and_context(self, mock_config: MagicMock) -> None:
         """Session folder and job context should use the same session ID."""
         orchestrator = Orchestrator(target="test-target", config=mock_config)
         orchestrator._local_executor = MagicMock()  # pyright: ignore[reportPrivateUsage]

@@ -14,8 +14,6 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from pcswitcher.config_sync import (
     ConfigSyncAction,
     _copy_config_to_target,

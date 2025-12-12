@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shlex
 import socket
 import warnings
 from asyncio import TaskGroup
@@ -31,32 +30,7 @@ import asyncssh
 import pytest
 import pytest_asyncio
 
-from pcswitcher.executor import RemoteExecutor
-from pcswitcher.models import CommandResult
-
-
-class RemoteLoginBashExecutor(RemoteExecutor):
-    """RemoteExecutor subclass that runs commands in a bash login shell.
-
-    Remote commands via SSH run in non-login, non-interactive shells by default,
-    which means ~/.profile isn't sourced and PATH may not include ~/.local/bin.
-
-    This subclass ensures commands run with the proper user environment by
-    wrapping them in `bash -l -c "..."`, which:
-    - Sources /etc/profile and ~/.profile (login shell behavior)
-    - Ensures PATH includes user-installed tools like uv and pc-switcher
-    - Simulates what a real user would experience when SSH'ing in
-    """
-
-    async def run_command(
-        self,
-        cmd: str,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        """Run a command in a bash login shell environment."""
-        wrapped_cmd = f"bash -l -c {shlex.quote(cmd)}"
-        return await super().run_command(wrapped_cmd, timeout=timeout)
-
+from pcswitcher.executor import BashLoginRemoteExecutor, RemoteExecutor
 
 REQUIRED_ENV_VARS = [
     "HCLOUD_TOKEN",
@@ -322,35 +296,39 @@ async def pc2_connection(integration_session: None) -> AsyncIterator[asyncssh.SS
 
 
 @pytest_asyncio.fixture(scope="module")
-async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> RemoteLoginBashExecutor:
-    """Executor for running commands on pc1 in a bash login shell environment.
+async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
+    """Executor for running commands on pc1 with login shell enabled by default.
 
     Module-scoped: shared across all tests in a module.
     Tests must clean up their own artifacts and not modify executor state.
 
-    Commands run via this executor have ~/.profile sourced, ensuring:
-    - PATH includes ~/.local/bin (for uv-installed tools like pc-switcher)
-    - User environment matches interactive SSH sessions
+    Returns BashLoginRemoteExecutor which wraps all commands in bash login shell,
+    ensuring PATH includes ~/.local/bin for user-installed tools (uv, pc-switcher).
+    Commands use login_shell=True by default but can be overridden with login_shell=False
+    for system commands.
     """
-    return RemoteLoginBashExecutor(pc1_connection)
+    return BashLoginRemoteExecutor(pc1_connection)
 
 
 @pytest_asyncio.fixture(scope="module")
-async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> RemoteLoginBashExecutor:
-    """Executor for running commands on pc2 in a bash login shell environment.
+async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
+    """Executor for running commands on pc2 with login shell enabled by default.
 
     Module-scoped: shared across all tests in a module.
     Tests must clean up their own artifacts and not modify executor state.
 
-    Commands run via this executor have ~/.profile sourced, ensuring:
-    - PATH includes ~/.local/bin (for uv-installed tools like pc-switcher)
-    - User environment matches interactive SSH sessions
+    Returns BashLoginRemoteExecutor which wraps all commands in bash login shell,
+    ensuring PATH includes ~/.local/bin for user-installed tools (uv, pc-switcher).
+    Commands use login_shell=True by default but can be overridden with login_shell=False
+    for system commands.
     """
-    return RemoteLoginBashExecutor(pc2_connection)
+    return BashLoginRemoteExecutor(pc2_connection)
 
 
 @pytest_asyncio.fixture
-async def pc2_executor_without_pcswitcher_tool(pc2_executor: RemoteExecutor) -> AsyncIterator[RemoteExecutor]:
+async def pc2_executor_without_pcswitcher_tool(
+    pc2_executor: BashLoginRemoteExecutor,
+) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide a clean environment on pc2 without pc-switcher installed.
 
     WARNING: This fixture wraps pc2_executor and modifies VM state by uninstalling
@@ -386,12 +364,15 @@ async def pc2_executor_without_pcswitcher_tool(pc2_executor: RemoteExecutor) -> 
 
 
 @pytest_asyncio.fixture
-async def pc2_executor_with_old_pcswitcher_tool(pc2_executor: RemoteExecutor) -> AsyncIterator[RemoteExecutor]:
-    """Provide pc2 with an older version of pc-switcher (0.1.0-alpha.1) for upgrade testing.
+async def pc2_executor_with_old_pcswitcher_tool(
+    pc2_executor: BashLoginRemoteExecutor,
+) -> AsyncIterator[BashLoginRemoteExecutor]:
+    """Provide pc2 with an older version of pc-switcher (0.1.0-alpha.1).
 
     WARNING: This fixture wraps pc2_executor and modifies VM state by installing
     an older version of pc-switcher. Tests using this fixture MUST NOT use pc2_executor
-    directly in parallel, as both operate on the same VM and will interfere with each other.
+    directly in parallel, as both operate on the same VM and will interfere with each
+    other.
 
     Uninstalls current pc-switcher and installs version 0.1.0-alpha.1.
     Useful for testing upgrade scenarios.

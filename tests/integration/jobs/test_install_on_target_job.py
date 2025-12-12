@@ -26,10 +26,10 @@ from __future__ import annotations
 import pytest
 
 from pcswitcher.events import EventBus
-from pcswitcher.executor import LocalExecutor, RemoteExecutor
+from pcswitcher.executor import BashLoginRemoteExecutor, LocalExecutor
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
-from pcswitcher.version import Version, get_this_version, find_one_version
+from pcswitcher.version import Version, find_one_version, get_this_version
 
 
 def _is_dev_version() -> bool:
@@ -50,8 +50,8 @@ requires_release_version = pytest.mark.skipif(
 
 
 async def _create_integration_job_context(
-    source_executor: RemoteExecutor,
-    target_executor: RemoteExecutor,
+    source_executor: BashLoginRemoteExecutor,
+    target_executor: BashLoginRemoteExecutor,
 ) -> JobContext:
     """Create a JobContext for integration tests.
 
@@ -88,8 +88,8 @@ class TestSelfInstallation:
     @requires_release_version
     async def test_001_us2_as1_install_missing_pcswitcher(
         self,
-        pc2_executor_without_pcswitcher_tool: RemoteExecutor,
-        pc1_executor: RemoteExecutor,
+        pc2_executor_without_pcswitcher_tool: BashLoginRemoteExecutor,
+        pc1_executor: BashLoginRemoteExecutor,
     ) -> None:
         """US2-AS1: Install missing pc-switcher on target.
 
@@ -127,8 +127,8 @@ class TestSelfInstallation:
     @requires_release_version
     async def test_001_us2_as2_upgrade_outdated_target(
         self,
-        pc2_executor_with_old_pcswitcher_tool: RemoteExecutor,
-        pc1_executor: RemoteExecutor,
+        pc2_executor_with_old_pcswitcher_tool: BashLoginRemoteExecutor,
+        pc1_executor: BashLoginRemoteExecutor,
     ) -> None:
         """US2-AS2: Upgrade outdated target.
 
