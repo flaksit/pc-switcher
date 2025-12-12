@@ -10,7 +10,6 @@ Fixtures provided:
 - pc2_executor: RemoteExecutor for pc2 (with login shell environment)
 - pc2_executor_without_pcswitcher_tool: pc2 executor with pc-switcher uninstalled (clean target)
 - pc2_executor_with_old_pcswitcher_tool: pc2 executor with old pc-switcher version (upgrade testing)
-- integration_lock: Session-scoped lock for test isolation
 - integration_session: Session-scoped fixture for VM provisioning and reset
 """
 
@@ -66,6 +65,93 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 # Cache lock holder ID for this pytest session (module-level)
 _LOCK_HOLDER_CACHE: dict[str, str] = {}
+_ACQUIRED_LOCK = False
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Acquire integration test lock before test collection starts.
+
+    This hook runs synchronously before any test collection, allowing us to
+    cleanly exit pytest with pytest.exit() if locks can't be acquired.
+    """
+    global _ACQUIRED_LOCK
+
+    # Check if integration tests are being run
+    # If session.config.option.markexpr includes 'integration', we need the lock
+    marker_expr = getattr(session.config.option, "markexpr", None)
+    if not marker_expr or "integration" not in str(marker_expr):
+        return
+
+    hcloud_token = os.getenv("HCLOUD_TOKEN")
+    if not hcloud_token:
+        pytest.exit("HCLOUD_TOKEN not set, cannot acquire integration test lock", 1)
+
+    lock_script = SCRIPTS_DIR / "lock.sh"
+    if not lock_script.exists():
+        pytest.exit(f"Lock script not found: {lock_script}", 1)
+
+    # Get lock holder ID
+    holder = _get_lock_holder()
+
+    # Try to acquire lock synchronously using subprocess
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [str(lock_script), holder, "acquire"],
+            env={**os.environ, "HCLOUD_TOKEN": hcloud_token},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            error_detail = (
+                result.stderr.strip() if result.stderr.strip() else "Lock held by another test session"
+            )
+            pytest.exit(
+                f"\n{'='*70}\n"
+                f"INTEGRATION TEST LOCK CONFLICT\n"
+                f"{'='*70}\n"
+                f"Cannot acquire locks - {error_detail}\n"
+                f"{'='*70}\n",
+                2,
+            )
+        _ACQUIRED_LOCK = True
+    except subprocess.TimeoutExpired:
+        pytest.exit("Timeout acquiring integration test lock", 1)
+    except Exception as e:
+        pytest.exit(f"Error acquiring integration test lock: {e}", 1)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Release integration test lock after tests complete."""
+    global _ACQUIRED_LOCK
+
+    if not _ACQUIRED_LOCK:
+        return
+
+    hcloud_token = os.getenv("HCLOUD_TOKEN")
+    if not hcloud_token:
+        return
+
+    lock_script = SCRIPTS_DIR / "lock.sh"
+    if not lock_script.exists():
+        return
+
+    holder = _get_lock_holder()
+
+    import subprocess
+
+    try:
+        subprocess.run(
+            [str(lock_script), holder, "release"],
+            env={**os.environ, "HCLOUD_TOKEN": hcloud_token},
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception:
+        # Ignore errors during cleanup
+        pass
 
 
 def _get_lock_holder() -> str:
@@ -213,50 +299,15 @@ async def _check_vms_ready(pc1_executor: RemoteExecutor, pc2_executor: RemoteExe
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def integration_lock() -> AsyncIterator[None]:
-    """Acquire the integration test lock for the session.
-
-    Uses Hetzner Server Labels to prevent concurrent test runs.
-    The lock survives VM reboots and snapshot rollbacks.
-    """
-    hcloud_token = os.getenv("HCLOUD_TOKEN")
-    if not hcloud_token:
-        pytest.fail("HCLOUD_TOKEN not set, cannot acquire lock")
-
-    holder = _get_lock_holder()
-    lock_script = SCRIPTS_DIR / "lock.sh"
-
-    if not lock_script.exists():
-        pytest.fail(f"Lock script not found: {lock_script}")
-
-    # Acquire lock
-    returncode, _, stderr = await _run_script("lock.sh", holder, "acquire", check=False)
-    if returncode != 0:
-        # Lock acquisition failed - likely due to another test session
-        error_detail = stderr.strip() if stderr.strip() else "Another test session is holding the locks"
-        pytest.fail(
-            f"\n{'='*70}\n"
-            f"INTEGRATION TEST LOCK CONFLICT\n"
-            f"{'='*70}\n"
-            f"Cannot acquire locks - {error_detail}\n"
-            f"{'='*70}\n"
-        )
-
-    yield
-
-    # Release lock
-    await _run_script("lock.sh", holder, "release", check=False)
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def integration_session(integration_lock: None) -> AsyncIterator[None]:
+async def integration_session() -> AsyncIterator[None]:
     """Session-scoped fixture for VM provisioning and reset.
 
     This fixture:
-    1. Acquires the integration test lock (via integration_lock dependency)
-    2. Checks if VMs are ready, provisions them if not
-    3. Resets VMs to baseline before tests run
-    4. Checks baseline age and warns if outdated
+    1. Checks if VMs are ready, provisions them if not
+    2. Resets VMs to baseline before tests run
+    3. Checks baseline age and warns if outdated
+
+    Lock acquisition is handled by pytest_sessionstart hook before this fixture runs.
     """
     pc1_host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
     pc2_host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
