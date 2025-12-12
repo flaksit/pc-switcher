@@ -232,7 +232,15 @@ async def integration_lock() -> AsyncIterator[None]:
     # Acquire lock
     returncode, _, stderr = await _run_script("lock.sh", holder, "acquire", check=False)
     if returncode != 0:
-        pytest.fail(f"Failed to acquire integration test lock: {stderr}")
+        # Lock acquisition failed - likely due to another test session
+        error_detail = stderr.strip() if stderr.strip() else "Another test session is holding the locks"
+        pytest.fail(
+            f"\n{'='*70}\n"
+            f"INTEGRATION TEST LOCK CONFLICT\n"
+            f"{'='*70}\n"
+            f"Cannot acquire locks - {error_detail}\n"
+            f"{'='*70}\n"
+        )
 
     yield
 
