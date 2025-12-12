@@ -4,6 +4,7 @@ This module provides utilities for:
 - Determining the current pc-switcher version from package metadata
 - Parsing version strings from CLI output
 - A unified Version class supporting both PEP 440 and SemVer formats
+- PEP440 epochs (N!X.Y.Z) are not supported
 
 For installation and upgrade logic on target machines, see pcswitcher.jobs.install_on_target.
 """
@@ -23,13 +24,31 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Version",
+    "find_one_version",
     "get_this_version",
-    "parse_version_str_from_cli_output",
 ]
 
 # PEP 440 pre-release type mapping
 _PEP440_TO_SEMVER_PRE = {"a": "alpha", "b": "beta", "rc": "rc"}
 _SEMVER_TO_PEP440_PRE = {"alpha": "a", "beta": "b", "rc": "rc"}
+
+_VERSION_REGEX = re.compile(
+    r"(?<![^.,+\s-])"  # Start of string or preceded by whitespace or allowed punctuation
+    r"(?P<version>"
+    # PEP440 format
+    r"v?(?:(?P<epoch>[0-9]+)!)?(?P<release>[0-9]+(?:\.[0-9]+)*)"
+    r"(?P<pre>[-._]?(?P<pre_l>alpha|beta|preview|pre|a|b|c|rc)[-._]?(?P<pre_n>[0-9]+)?)?"
+    r"(?P<post>(?:-(?P<post_n1>[0-9]+))|(?:[-._]?(?P<post_l>post|rev|r)[-._]?(?P<post_n2>[0-9]+)?))?"
+    r"(?P<dev>[-._]?dev[-._]?(?P<dev_n>[0-9]+)?)?"
+    r"(?:\+(?P<local>[a-z0-9]+(?:[-._][a-z0-9]+)*))?"
+    r"|"
+    # SemVer format
+    r"v?(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)"
+    r"(?:-(?P<prerelease>(?:0|[1-9][0-9]*|[0-9]*[a-z-][0-9a-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[a-z-][0-9a-z-]*))*))?"
+    r"(?:\+(?P<buildmetadata>[0-9a-z-]+(?:\.[0-9a-z-]+)*))?"
+    r")"
+    r"(?![^.,+\s-])"  # End of string or followed by whitespace or allowed punctuation
+)
 
 
 class Version:
@@ -419,25 +438,50 @@ class Version:
         return hash(self._pkg_version)
 
 
-def get_this_version() -> str:
+def get_this_version() -> Version:
     """Get the version of pc-switcher currently running.
 
     Returns:
-        Version string from package metadata (PEP 440 format)
+        Version object from package metadata (PEP 440 format)
 
     Raises:
         PackageNotFoundError: If package metadata cannot be read
     """
     try:
-        return get_pkg_version("pcswitcher")
+        version_str = get_pkg_version("pcswitcher")
+        return Version.parse_pep440(version_str)
     except PackageNotFoundError as e:
         raise PackageNotFoundError(
             "Cannot determine pc-switcher version. Package metadata not found. Is pc-switcher installed correctly?"
         ) from e
 
 
-def parse_version_str_from_cli_output(output: str) -> str:
-    """Parse version string from pc-switcher --version output.
+def _find_one_version_str(text: str) -> str:
+    """Return a single first version string in text, raising if found none or multiple.
+    Args:
+        text: Text to search for version strings
+    Returns:
+        The first version string found
+    Raises:
+        ValueError: If no version strings or multiple version strings are found
+    """
+    matches = _VERSION_REGEX.finditer(text)
+
+    # get the first match
+    match = next(matches, None)
+
+    if match:
+        # if there are more matches, fail
+        if next(matches, None):
+            raise ValueError("Multiple version strings found in text")
+        else:
+            return match.group("version")
+    else:
+        raise ValueError("No version string found in text")
+
+
+def find_one_version(text: str) -> Version:
+    """Return a single Version instance parsed from text, raising if none or multiple found.
 
     Supports both SemVer format (0.1.0-alpha.1) and PEP 440 format (0.1.0a1).
 
@@ -451,17 +495,12 @@ def parse_version_str_from_cli_output(output: str) -> str:
         ValueError: If version string cannot be parsed
 
     Examples:
-        >>> parse_version_str_from_cli_output("pc-switcher 0.1.0")
+        >>> find_one_version("pc-switcher 0.1.0")
         '0.1.0'
-        >>> parse_version_str_from_cli_output("pc-switcher 0.1.0-alpha.1")
+        >>> find_one_version("pc-switcher v0.1.0-alpha.1  # this is a pre-release")
         '0.1.0-alpha.1'
-        >>> parse_version_str_from_cli_output("pc-switcher 0.1.0a1")
+        >>> find_one_version("pc-switcher 0.1.0a1")
         '0.1.0a1'
     """
-    # Matches both formats:
-    # - SemVer: MAJOR.MINOR.PATCH[-prerelease][+build]
-    # - PEP 440: MAJOR.MINOR.PATCH[{a|b|rc}N][.postN][.devN][+local]
-    match = re.search(r"(\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?(?:[-+.][\w.]+)*)", output)
-    if not match:
-        raise ValueError(f"Cannot parse version from output: {output}")
-    return match.group(1)
+    version_str = _find_one_version_str(text)
+    return Version.parse(version_str)

@@ -21,7 +21,7 @@ from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.orchestrator import Orchestrator
-from pcswitcher.version import Version, get_this_version, parse_version_str_from_cli_output
+from pcswitcher.version import Version, get_this_version, find_one_version
 
 # Cleanup timeout for graceful shutdown after SIGINT.
 # After first SIGINT, cleanup has this many seconds to complete.
@@ -86,10 +86,10 @@ def _version_callback(value: bool) -> None:
     """Print version and exit if --version flag is provided."""
     if value:
         try:
-            pkg_version = get_this_version()
-            # If you change this format, also update version.py:parse_version_str_from_cli_output()
+            version = get_this_version()
+            # If you change this format, also update version.py:find_one_version()
             # Display in SemVer format for user-facing output
-            console.print(f"pc-switcher {Version.parse_pep440(pkg_version).semver_str()}")
+            console.print(f"pc-switcher {version.semver_str()}")
         except PackageNotFoundError:
             console.print("[bold red]Error:[/bold red] Cannot determine pc-switcher version")
             sys.exit(1)
@@ -470,11 +470,11 @@ def _run_uv_tool_install(version: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _verify_installed_version() -> str | None:
+def _verify_installed_version() -> Version | None:
     """Get the currently installed pc-switcher version.
 
     Returns:
-        Version string if pc-switcher is installed and working, None otherwise
+        Version object if pc-switcher is installed and working, None otherwise
     """
     result = subprocess.run(
         ["pc-switcher", "--version"],
@@ -484,7 +484,7 @@ def _verify_installed_version() -> str | None:
     )
     if result.returncode == 0:
         try:
-            return parse_version_str_from_cli_output(result.stdout)
+            return find_one_version(result.stdout)
         except ValueError:
             return None
     return None
@@ -509,8 +509,7 @@ def update(
     """
     # Get current version
     try:
-        current_version_str = get_this_version()
-        current = Version.parse_pep440(current_version_str)
+        current = get_this_version()
     except PackageNotFoundError:
         console.print("[bold red]Error:[/bold red] Cannot determine current pc-switcher version")
         sys.exit(1)
@@ -557,16 +556,9 @@ def update(
         sys.exit(1)
 
     # Verify installation
-    installed_version_str = _verify_installed_version()
-    if installed_version_str is None:
+    installed = _verify_installed_version()
+    if installed is None:
         console.print("[bold red]Error:[/bold red] Verification failed - pc-switcher not working after update")
-        sys.exit(1)
-
-    # Compare using Version objects to handle format differences (e.g., "0.1.0-alpha.1" vs "0.1.0a1")
-    try:
-        installed = Version.parse(installed_version_str)
-    except ValueError:
-        console.print(f"[bold red]Error:[/bold red] Cannot parse installed version: {installed_version_str}")
         sys.exit(1)
 
     if installed != target:

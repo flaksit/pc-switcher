@@ -25,7 +25,7 @@ import pytest
 import pytest_asyncio
 
 from pcswitcher.executor import RemoteExecutor
-from pcswitcher.version import Version, get_this_version, parse_version_str_from_cli_output
+from pcswitcher.version import Version, find_one_version, get_this_version
 
 # Install script URL from main branch
 INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
@@ -37,7 +37,7 @@ def _get_release_version() -> Version:
     E.g., "0.1.0-alpha.3+post.23.dev.0.da749fc" -> "0.1.0-alpha.3"
     This gives us a version that has a corresponding git tag on GitHub.
     """
-    current = Version.parse_pep440(get_this_version())
+    current = get_this_version()
     return current.release_version()
 
 
@@ -168,8 +168,7 @@ class TestInstallationScriptVersionParameter:
         assert result.success, f"pc-switcher should be installed: {result.stderr}"
 
         # Verify installed version matches expected
-        installed_version_str = parse_version_str_from_cli_output(result.stdout)
-        installed_version = Version.parse(installed_version_str)
+        installed_version = find_one_version(result.stdout)
         assert installed_version == release_version, (
             f"Installed version {installed_version} should match {release_version}"
         )
@@ -201,6 +200,6 @@ class TestInstallationScriptVersionParameter:
         # Verify version changed to release version
         result = await pc2_executor_with_old_pcswitcher_tool.run_command("pc-switcher --version")
         assert result.success, f"pc-switcher should be available: {result.stderr}"
-        new_version = Version.parse(parse_version_str_from_cli_output(result.stdout))
+        new_version = find_one_version(result.stdout)
 
         assert new_version == release_version, f"New version {new_version} should be {release_version}"

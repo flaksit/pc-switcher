@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 import pytest_asyncio
 
 from pcswitcher.executor import RemoteExecutor
-from pcswitcher.version import Version, parse_version_str_from_cli_output
+from pcswitcher.version import Version, find_one_version
 
 # Test constants - update when new releases are made
 # Use Version for proper SemVer/PEP440 comparison
@@ -57,8 +57,7 @@ async def _get_installed_version(executor: RemoteExecutor) -> Version:
     result = await executor.run_command("pc-switcher --version", timeout=10.0)
     assert result.success, f"Failed to get version: {result.stderr}"
     # Parse version from CLI output (handles both PEP440 and SemVer formats)
-    version_str = parse_version_str_from_cli_output(result.stdout)
-    return Version.parse(version_str)
+    return find_one_version(result.stdout)
 
 
 async def _run_self_update(

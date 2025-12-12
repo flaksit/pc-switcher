@@ -29,7 +29,7 @@ from pcswitcher.events import EventBus
 from pcswitcher.executor import LocalExecutor, RemoteExecutor
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
-from pcswitcher.version import Version, get_this_version, parse_version_str_from_cli_output
+from pcswitcher.version import Version, get_this_version, find_one_version
 
 
 def _is_dev_version() -> bool:
@@ -38,7 +38,7 @@ def _is_dev_version() -> bool:
     Development versions have .dev in their version string and don't have
     corresponding release tags on GitHub.
     """
-    version_str = get_this_version()
+    version_str = get_this_version().pep440_str()
     return ".dev" in version_str or ".post" in version_str
 
 
@@ -118,9 +118,8 @@ class TestSelfInstallation:
         assert result.success, f"pc-switcher should be installed on target: {result.stderr}"
 
         # Verify installed version matches source
-        source_version = Version.parse_pep440(get_this_version())
-        target_version_str = parse_version_str_from_cli_output(result.stdout)
-        target_version = Version.parse(target_version_str)
+        source_version = get_this_version()
+        target_version = find_one_version(result.stdout)
         assert target_version == source_version, (
             f"Target version {target_version} should match source {source_version}"
         )
@@ -142,7 +141,7 @@ class TestSelfInstallation:
         """
         # Fixture guarantees target has 0.1.0-alpha.1 installed
         # Verify source is newer
-        source_version = Version.parse_pep440(get_this_version())
+        source_version = get_this_version()
         target_version_old = Version.parse("0.1.0-alpha.1")
         assert source_version > target_version_old, (
             f"Source {source_version} should be newer than target {target_version_old}"
@@ -166,7 +165,7 @@ class TestSelfInstallation:
         assert result.success, f"pc-switcher should be upgraded on target: {result.stderr}"
 
         # Verify upgraded version matches source
-        target_version_new = Version.parse(parse_version_str_from_cli_output(result.stdout))
+        target_version_new = find_one_version(result.stdout)
         assert target_version_new == source_version, (
             f"Target version {target_version_new} should match source {source_version} after upgrade"
         )

@@ -163,7 +163,7 @@ class TestVerifyInstalledVersion:
     """Tests for _verify_installed_version()."""
 
     def test_success(self) -> None:
-        """Should return version string on success."""
+        """Should return Version object on success."""
         with patch("pcswitcher.cli.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[],
@@ -172,7 +172,8 @@ class TestVerifyInstalledVersion:
                 stderr="",
             )
             result = cli._verify_installed_version()  # pyright: ignore[reportPrivateUsage]
-            assert result == "0.4.0"
+            assert result is not None
+            assert result.pep440_str() == "0.4.0"
 
     def test_command_not_found(self) -> None:
         """Should return None if pc-switcher not found."""

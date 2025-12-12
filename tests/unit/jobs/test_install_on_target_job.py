@@ -17,6 +17,7 @@ import pytest
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.models import CommandResult, Host
+from pcswitcher.version import Version
 
 
 @pytest.fixture
@@ -49,7 +50,7 @@ class TestInstallOnTargetJobVersionCheck:
         GitHub repository using uv tool install.
         """
         # Mock source version
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value="0.4.0"):
+        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
             # Mock target has no pc-switcher installed (command fails)
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
@@ -87,7 +88,7 @@ class TestInstallOnTargetJobVersionCheck:
         Spec requirement: FR-005 requires installation/upgrade when target is
         missing or mismatched with source version.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value="0.4.0"):
+        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
             # Mock target has older version
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
@@ -130,7 +131,7 @@ class TestInstallOnTargetJobNewerTargetVersion:
         if the target machine's pc-switcher version is newer than the source version
         (preventing accidental downgrades).
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value="0.3.2"):
+        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.3.2")):
             # Mock target has newer version
             mock_install_context.target.run_command = AsyncMock(
                 return_value=CommandResult(exit_code=0, stdout="pc-switcher 0.4.0", stderr="")
@@ -153,7 +154,7 @@ class TestInstallOnTargetJobNewerTargetVersion:
         Tests that when target has a newer version than source, the validation
         error prevents any installation attempt during execution phase.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value="0.3.0"):
+        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.3.0")):
             # Mock target has newer version
             mock_install_context.target.run_command = AsyncMock(
                 return_value=CommandResult(exit_code=0, stdout="pc-switcher 0.5.0", stderr="")
@@ -182,7 +183,7 @@ class TestInstallOnTargetJobInstallationFailure:
         Spec requirement: FR-007 states if installation/upgrade fails, system MUST
         log CRITICAL error and abort sync.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value="0.4.0"):
+        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
             # Mock target missing pc-switcher, install fails
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
@@ -215,7 +216,7 @@ class TestInstallOnTargetJobInstallationFailure:
         Tests that even if install command succeeds, verification must confirm
         the correct version is installed.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value="0.4.0"):
+        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
             # Mock install succeeds but verification fails
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
@@ -254,7 +255,7 @@ class TestInstallOnTargetJobSkipWhenMatching:
         0.4.0, orchestrator logs "Target pc-switcher version matches source (0.4.0),
         skipping installation" and proceeds immediately to next phase.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value="0.4.0"):
+        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
             # Mock target has matching version
             mock_install_context.target.run_command = AsyncMock(
                 return_value=CommandResult(exit_code=0, stdout="pc-switcher 0.4.0", stderr="")
@@ -288,7 +289,7 @@ class TestInstallOnTargetJobAS4:
         (e.g., disk full, permissions issue), orchestrator logs CRITICAL error and
         does not proceed with sync.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value="0.4.0"):
+        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
             # Mock target has old version, upgrade fails
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
@@ -335,7 +336,7 @@ class TestInstallOnTargetJobUS7AS2:
         2. The VERSION env var is passed to specify the version to install
         3. The command uses the same curl | bash pattern as user installation
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value="0.4.0"):
+        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
             # Mock target has no pc-switcher installed
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[

@@ -10,8 +10,8 @@ from packaging.version import Version as PkgVersion
 
 from pcswitcher.version import (
     Version,
+    find_one_version,
     get_this_version,
-    parse_version_str_from_cli_output,
 )
 
 
@@ -19,11 +19,12 @@ class TestGetCurrentVersion:
     """Tests for get_this_version()."""
 
     def test_get_this_version_success(self) -> None:
-        """Should return version from package metadata."""
+        """Should return Version object from package metadata."""
         with patch("pcswitcher.version.get_pkg_version") as mock_version:
             mock_version.return_value = "1.2.3"
             result = get_this_version()
-            assert result == "1.2.3"
+            assert isinstance(result, Version)
+            assert result.pep440_str() == "1.2.3"
             mock_version.assert_called_once_with("pcswitcher")
 
     def test_get_this_version_package_not_found(self) -> None:
@@ -37,60 +38,80 @@ class TestGetCurrentVersion:
             assert "Cannot determine pc-switcher version" in str(exc_info.value)
             assert "Package metadata not found" in str(exc_info.value)
 
+    def test_get_this_version_invalid_version_in_metadata(self) -> None:
+        """Should raise ValueError if package metadata contains invalid version."""
+        with patch("pcswitcher.version.get_pkg_version") as mock_version:
+            mock_version.return_value = "not-a-version"
+            with pytest.raises(ValueError, match="Invalid PEP 440 version"):
+                get_this_version()
 
-class TestParseVersionStrFromCliOutput:
-    """Tests for parse_version_str_from_cli_output() with SemVer and PEP 440 support."""
+    def test_get_this_version_epoch_in_metadata_raises(self) -> None:
+        """Should raise ValueError if package metadata contains epoch."""
+        with patch("pcswitcher.version.get_pkg_version") as mock_version:
+            mock_version.return_value = "1!1.0.0"
+            with pytest.raises(ValueError, match="epoch is not supported"):
+                get_this_version()
 
-    def test_parse_base_version(self) -> None:
-        """Should parse base version without pre-release."""
-        assert parse_version_str_from_cli_output("pc-switcher 0.1.0") == "0.1.0"
-        assert parse_version_str_from_cli_output("pc-switcher 1.2.3") == "1.2.3"
-        assert parse_version_str_from_cli_output("0.1.0") == "0.1.0"
 
-    def test_parse_semver_alpha_version(self) -> None:
-        """Should parse SemVer-style alpha pre-release versions."""
-        assert parse_version_str_from_cli_output("pc-switcher 0.1.0-alpha.1") == "0.1.0-alpha.1"
-        assert parse_version_str_from_cli_output("0.1.0-alpha.2") == "0.1.0-alpha.2"
+class TestFindOneVersion:
+    """Tests for find_one_version() - returns Version object or raises."""
 
-    def test_parse_semver_beta_version(self) -> None:
-        """Should parse SemVer-style beta pre-release versions."""
-        assert parse_version_str_from_cli_output("pc-switcher 0.1.0-beta.1") == "0.1.0-beta.1"
-        assert parse_version_str_from_cli_output("0.2.0-beta.3") == "0.2.0-beta.3"
+    def test_find_single_stable_version(self) -> None:
+        """Should parse single stable version."""
+        v = find_one_version("version 1.0.0")
+        assert isinstance(v, Version)
+        assert v.pep440_str() == "1.0.0"
 
-    def test_parse_semver_rc_version(self) -> None:
-        """Should parse SemVer-style release candidate versions."""
-        assert parse_version_str_from_cli_output("pc-switcher 0.1.0-rc.1") == "0.1.0-rc.1"
-        assert parse_version_str_from_cli_output("1.0.0-rc.2") == "1.0.0-rc.2"
+    def test_find_single_pep440_version(self) -> None:
+        """Should parse single PEP 440 version."""
+        v = find_one_version("pc-switcher 0.1.0a1")
+        assert isinstance(v, Version)
+        assert v.pep440_str() == "0.1.0a1"
 
-    def test_parse_pep440_alpha_version(self) -> None:
-        """Should parse PEP 440-style alpha pre-release versions."""
-        assert parse_version_str_from_cli_output("pc-switcher 0.1.0a1") == "0.1.0a1"
-        assert parse_version_str_from_cli_output("0.2.0a1") == "0.2.0a1"
+    def test_find_single_semver_version(self) -> None:
+        """Should parse single SemVer version."""
+        v = find_one_version("version 1.0.0-alpha.1")
+        assert isinstance(v, Version)
+        assert v.pep440_str() == "1.0.0a1"
+        assert v.semver_str() == "1.0.0-alpha.1"
 
-    def test_parse_pep440_beta_version(self) -> None:
-        """Should parse PEP 440-style beta pre-release versions."""
-        assert parse_version_str_from_cli_output("pc-switcher 0.1.0b1") == "0.1.0b1"
-        assert parse_version_str_from_cli_output("1.0.0b3") == "1.0.0b3"
-
-    def test_parse_pep440_rc_version(self) -> None:
-        """Should parse PEP 440-style release candidate versions."""
-        assert parse_version_str_from_cli_output("pc-switcher 0.1.0rc1") == "0.1.0rc1"
-        assert parse_version_str_from_cli_output("2.0.0rc1") == "2.0.0rc1"
-
-    def test_parse_with_extra_text(self) -> None:
+    def test_with_extra_text(self) -> None:
         """Should extract version from output with extra text."""
-        output = "pc-switcher 0.1.0-alpha.1\nsome other text"
-        assert parse_version_str_from_cli_output(output) == "0.1.0-alpha.1"
+        v = find_one_version("pc-switcher 0.1.0-beta.1\nsome other text")
+        assert isinstance(v, Version)
+        assert v.pep440_str() == "0.1.0b1"
 
-    def test_parse_invalid_version(self) -> None:
+    def test_no_version_raises(self) -> None:
         """Should raise ValueError for invalid version string."""
-        with pytest.raises(ValueError, match="Cannot parse version"):
-            parse_version_str_from_cli_output("no version here")
+        with pytest.raises(ValueError, match="No version string found"):
+            find_one_version("no version here")
 
-    def test_parse_empty_string(self) -> None:
+    def test_empty_string_raises(self) -> None:
         """Should raise ValueError for empty string."""
-        with pytest.raises(ValueError, match="Cannot parse version"):
-            parse_version_str_from_cli_output("")
+        with pytest.raises(ValueError, match="No version string found"):
+            find_one_version("")
+
+    def test_multiple_versions_raises(self) -> None:
+        """Should raise ValueError for multiple versions."""
+        with pytest.raises(ValueError, match="Multiple version strings found"):
+            find_one_version("version 1.0.0 and 2.0.0")
+
+    def test_whitespace_only_raises(self) -> None:
+        """Should raise ValueError for whitespace-only input."""
+        with pytest.raises(ValueError, match="No version string"):
+            find_one_version("   \n   ")
+
+    def test_invalid_version_format_raises(self) -> None:
+        """Should raise ValueError when matched string is not a valid version."""
+        # The regex is quite robust, but if it matches something invalid, Version.parse() will catch it
+        with pytest.raises(ValueError):
+            find_one_version("1!1.0.0")  # Epoch not supported
+
+    def test_parse_complex_version(self) -> None:
+        """Should parse complex versions from CLI output."""
+        v = find_one_version("Installing pc-switcher version 0.1.0a3.post23.dev0+da749fc")
+        assert isinstance(v, Version)
+        assert v.pep440_str() == "0.1.0a3.post23.dev0+da749fc"
 
 
 class TestVersionParsePep440:
