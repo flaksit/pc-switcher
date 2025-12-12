@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import secrets
 import socket
 import warnings
 from asyncio import TaskGroup
@@ -63,6 +64,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         )
 
 
+# Cache lock holder ID for this pytest session (module-level)
+_LOCK_HOLDER_CACHE: dict[str, str] = {}
+
+
 def _get_lock_holder() -> str:
     """Get a unique lock holder identifier for this test session.
 
@@ -71,16 +76,26 @@ def _get_lock_holder() -> str:
 
     The identifier must be valid for Hetzner Cloud labels which only allow
     alphanumeric characters, underscores, and hyphens.
+
+    Cached at module level to ensure consistency across fixture calls.
     """
+    # Return cached ID if already generated
+    if "holder" in _LOCK_HOLDER_CACHE:
+        return _LOCK_HOLDER_CACHE["holder"]
+
+    # Generate new ID (only once per pytest session)
     ci_job_id = os.getenv("CI_JOB_ID") or os.getenv("GITHUB_RUN_ID")
     if ci_job_id:
-        return f"ci-{ci_job_id}"
+        holder_id = f"ci-{ci_job_id}"
+    else:
+        hostname = socket.gethostname()
+        user = os.getenv("USER", "unknown")
+        # Add random suffix to ensure uniqueness per invocation
+        random_suffix = secrets.token_hex(3)  # 6 hex characters
+        holder_id = f"local-{user}-{hostname}-{random_suffix}"
 
-    hostname = socket.gethostname()
-    user = os.getenv("USER", "unknown")
-    # Add random suffix to ensure uniqueness per invocation
-    random_suffix = secrets.token_hex(3)  # 6 hex characters
-    return f"local-{user}-{hostname}-{random_suffix}"
+    _LOCK_HOLDER_CACHE["holder"] = holder_id
+    return holder_id
 
 
 async def _run_script(script_name: str, *args: str, check: bool = True) -> tuple[int, str, str]:
@@ -89,12 +104,18 @@ async def _run_script(script_name: str, *args: str, check: bool = True) -> tuple
     if not script_path.exists():
         pytest.fail(f"Infrastructure script not found: {script_path}")
 
+    env = {**os.environ, "HCLOUD_TOKEN": os.getenv("HCLOUD_TOKEN", "")}
+    # Pass lock holder ID to nested scripts so they reuse the same holder
+    lock_holder = os.getenv("PCSWITCHER_LOCK_HOLDER")
+    if lock_holder:
+        env["PCSWITCHER_LOCK_HOLDER"] = lock_holder
+
     proc = await asyncio.create_subprocess_exec(
         str(script_path),
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "HCLOUD_TOKEN": os.getenv("HCLOUD_TOKEN", "")},
+        env=env,
     )
     stdout_bytes, stderr_bytes = await proc.communicate()
     stdout = stdout_bytes.decode()
@@ -233,6 +254,10 @@ async def integration_session(integration_lock: None) -> AsyncIterator[None]:
     pc2_host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
     user = os.environ["PC_SWITCHER_TEST_USER"]
 
+    # Export lock holder ID so nested scripts reuse the same holder
+    lock_holder = _get_lock_holder()
+    os.environ["PCSWITCHER_LOCK_HOLDER"] = lock_holder
+
     # Create connections and executors for VM readiness check and baseline age check
     async with (
         asyncssh.connect(pc1_host, username=user) as pc1_conn,
@@ -248,7 +273,9 @@ async def integration_session(integration_lock: None) -> AsyncIterator[None]:
             if not provision_script.exists():
                 pytest.fail(f"Provision script not found: {provision_script}")
 
-            returncode, _, stderr = await _run_script("provision-test-infra.sh", check=False)
+            returncode, _, stderr = await _run_script(
+                "provision-test-infra.sh", check=False
+            )
             if returncode != 0:
                 pytest.fail(f"Failed to provision test VMs: {stderr}")
 
