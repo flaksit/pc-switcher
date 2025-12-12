@@ -213,6 +213,25 @@ log_info "Prerequisites check passed"
 # Ensure SSH key exists in Hetzner Cloud (must be done once before parallel VM creation)
 ensure_ssh_key
 
+# Acquire lock for VM operations (prevents concurrent provisioning runs)
+export PCSWITCHER_LOCK_HOLDER=$(get_lock_holder)
+log_info "Lock holder: $PCSWITCHER_LOCK_HOLDER"
+
+# Set up cleanup trap
+cleanup_lock() {
+    log_info "Releasing lock..."
+    "$SCRIPT_DIR/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release || true
+}
+trap cleanup_lock EXIT INT TERM
+
+# Acquire lock (waits up to 5 minutes if held by another process)
+log_step "Acquiring lock..."
+if ! "$SCRIPT_DIR/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire; then
+    log_error "Failed to acquire lock"
+    exit 1
+fi
+log_info "Lock acquired"
+
 # Create VMs in parallel (skip if VMs already exist with btrfs)
 if [[ "$SKIP_VM_CREATION" == "true" ]]; then
     log_step "Skipping VM creation (VMs already exist with btrfs filesystem)"

@@ -92,16 +92,21 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 def _get_lock_holder() -> str:
     """Get a unique lock holder identifier for this test session.
 
+    CRITICAL: Must be unique per invocation to prevent concurrent test runs
+    on the same machine by the same user.
+
     The identifier must be valid for Hetzner Cloud labels which only allow
     alphanumeric characters, underscores, and hyphens.
     """
     ci_job_id = os.getenv("CI_JOB_ID") or os.getenv("GITHUB_RUN_ID")
     if ci_job_id:
         return f"ci-{ci_job_id}"
+
     hostname = socket.gethostname()
     user = os.getenv("USER", "unknown")
-    # Use underscore instead of @ for Hetzner label compatibility
-    return f"local-{user}-{hostname}"
+    # Add random suffix to ensure uniqueness per invocation
+    random_suffix = secrets.token_hex(3)  # 6 hex characters
+    return f"local-{user}-{hostname}-{random_suffix}"
 
 
 async def _run_script(script_name: str, *args: str, check: bool = True) -> tuple[int, str, str]:

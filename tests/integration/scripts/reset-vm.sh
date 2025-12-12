@@ -56,6 +56,23 @@ fi
 readonly VM_HOST="$1"
 readonly SSH_USER="${PC_SWITCHER_TEST_USER:-testuser}"
 
+# Acquire lock for VM operations (prevents concurrent access)
+# Note: When called from conftest.py, lock is already held by pytest
+# Lock acquisition is idempotent (succeeds if same holder already has lock)
+export PCSWITCHER_LOCK_HOLDER=$(get_lock_holder)
+
+# Set up cleanup trap
+cleanup_lock() {
+    "$SCRIPT_DIR/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release 2>/dev/null || true
+}
+trap cleanup_lock EXIT INT TERM
+
+# Acquire lock (waits up to 5 minutes if held by another process)
+if ! "$SCRIPT_DIR/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire 2>/dev/null; then
+    log_error "Failed to acquire lock"
+    exit 1
+fi
+
 # SSH connection helper
 # First connection uses ssh_accept_new (test runner may have empty known_hosts)
 # After first connection, key is stored and subsequent calls verify it
