@@ -34,12 +34,12 @@ async def clean_pc_switcher(pc1_executor: BashLoginRemoteExecutor) -> AsyncItera
     This fixture provides a clean slate for testing installation and updates.
     """
     # Clean up before test
-    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true")
+    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", login_shell=True)
 
     yield pc1_executor
 
     # Clean up after test
-    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true")
+    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", login_shell=True)
 
 
 async def _install_version(executor: BashLoginRemoteExecutor, version: Version) -> None:
@@ -54,7 +54,7 @@ async def _install_version(executor: BashLoginRemoteExecutor, version: Version) 
 
 async def _get_installed_version(executor: BashLoginRemoteExecutor) -> Version:
     """Get the currently installed pc-switcher version."""
-    result = await executor.run_command("pc-switcher --version", timeout=10.0)
+    result = await executor.run_command("pc-switcher --version", timeout=10.0, login_shell=True)
     assert result.success, f"Failed to get version: {result.stderr}"
     # Parse version from CLI output (handles both PEP440 and SemVer formats)
     return find_one_version(result.stdout)
@@ -90,7 +90,7 @@ class TestSelfUpdateCommandExists:
         assert version == VERSION_WITHOUT_SELF_UPDATE
 
         # Self update command should not exist
-        result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0)
+        result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0, login_shell=True)
         assert not result.success, "Old version should not have 'self' command"
         assert "No such command" in result.stderr or "Error" in result.stderr
 
@@ -103,7 +103,7 @@ class TestSelfUpdateCommandExists:
         assert version == VERSION_WITH_SELF_UPDATE_OLD
 
         # Self update command should exist
-        result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0)
+        result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0, login_shell=True)
         assert result.success, f"Self update help failed: {result.stderr}"
         assert "Update pc-switcher" in result.stdout or "update" in result.stdout.lower()
 
@@ -111,7 +111,7 @@ class TestSelfUpdateCommandExists:
         """Test that 'pc-switcher self --help' shows the command group."""
         await _install_version(clean_pc_switcher, VERSION_WITH_SELF_UPDATE_OLD)
 
-        result = await clean_pc_switcher.run_command("pc-switcher self --help", timeout=10.0)
+        result = await clean_pc_switcher.run_command("pc-switcher self --help", timeout=10.0, login_shell=True)
         assert result.success, f"Self help failed: {result.stderr}"
         # Should show "self" command group and list subcommands
         assert "update" in result.stdout.lower()
@@ -121,7 +121,7 @@ class TestSelfUpdateCommandExists:
         """Test that 'pc-switcher self update --help' documents --prerelease flag."""
         await _install_version(clean_pc_switcher, VERSION_WITH_SELF_UPDATE_OLD)
 
-        result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0)
+        result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0, login_shell=True)
         assert result.success, f"Self update help failed: {result.stderr}"
         # Should document the --prerelease option
         assert "--prerelease" in result.stdout
@@ -184,7 +184,7 @@ class TestSelfUpdateDowngrade:
         assert new_version == VERSION_WITH_SELF_UPDATE_OLD
 
         # Verify self-update command still works after downgrade
-        result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0)
+        result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0, login_shell=True)
         assert result.success, "Self update should still exist after downgrading to alpha.2"
 
     async def test_downgrade_to_version_without_self_update(self, clean_pc_switcher: BashLoginRemoteExecutor) -> None:
@@ -201,7 +201,7 @@ class TestSelfUpdateDowngrade:
         assert new_version == VERSION_WITHOUT_SELF_UPDATE
 
         # Self-update command should no longer exist
-        result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0)
+        result = await clean_pc_switcher.run_command("pc-switcher self update --help", timeout=10.0, login_shell=True)
         assert not result.success, "Self update should not exist in alpha.1"
 
 

@@ -57,13 +57,13 @@ async def clean_install_environment(pc1_executor: BashLoginRemoteExecutor) -> As
     )
 
     # Clean up pc-switcher installation
-    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
+    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
     await pc1_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
 
     yield pc1_executor
 
     # Restore environment
-    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
+    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
     await pc1_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
     await pc1_executor.run_command(
         "if [ -f ~/.config/pc-switcher/config.yaml.backup ]; then "
@@ -106,7 +106,7 @@ async def test_001_fr035_install_script_no_prereqs(clean_install_environment: Ba
     ), f"Installation success message not found in output: {result.stdout}"
 
     # Verify pc-switcher is installed and accessible
-    version_result = await executor.run_command("pc-switcher --version", timeout=10.0)
+    version_result = await executor.run_command("pc-switcher --version", timeout=10.0, login_shell=True)
     assert version_result.success, f"pc-switcher not accessible after install: {version_result.stderr}"
     assert "pc-switcher" in version_result.stdout.lower(), "Version output doesn't contain 'pc-switcher'"
 
@@ -164,7 +164,7 @@ class TestInstallationScriptVersionParameter:
         assert result.success, f"Installation failed: {result.stderr}"
 
         # Verify pc-switcher is now installed
-        result = await pc2_executor_without_pcswitcher_tool.run_command("pc-switcher --version")
+        result = await pc2_executor_without_pcswitcher_tool.run_command("pc-switcher --version", login_shell=True)
         assert result.success, f"pc-switcher should be installed: {result.stderr}"
 
         # Verify installed version matches expected
@@ -198,7 +198,7 @@ class TestInstallationScriptVersionParameter:
         assert result.success, f"Upgrade failed: {result.stderr}"
 
         # Verify version changed to release version
-        result = await pc2_executor_with_old_pcswitcher_tool.run_command("pc-switcher --version")
+        result = await pc2_executor_with_old_pcswitcher_tool.run_command("pc-switcher --version", login_shell=True)
         assert result.success, f"pc-switcher should be available: {result.stderr}"
         new_version = find_one_version(result.stdout)
 
