@@ -17,7 +17,6 @@ import time
 from collections.abc import AsyncIterator
 from datetime import datetime
 
-import pytest
 import pytest_asyncio
 
 from pcswitcher.btrfs_snapshots import (

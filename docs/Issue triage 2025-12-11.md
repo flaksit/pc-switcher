@@ -19,8 +19,7 @@ These directly relate to the testing infrastructure being built in the current b
 | 1 | **#52** | Set lock on each VM used by testing framework | Test infrastructure integrity - prevents race conditions |
 | 2 | **#53** | Version functions should return Version instead of str | Code quality improvement for foundation module |
 | 3 | **#55** | Make Version.release_version() aware of GitHub releases | Correctness fix for version semantics |
-
-Note: #54 (Move test.py files) already done - closed.
+| 4 | **#59** | Make BashLogin an option of Remote Executor | Refactor test infrastructure for broader use |
 
 ---
 
@@ -87,9 +86,8 @@ Keep open - to be addressed when relaxing requirements:
 1. #52 - Set lock on each VM used by testing framework
 2. #53 - Version functions should return Version instead of str
 3. #55 - Make Version.release_version() aware of GitHub releases
-4. → Merge 003 to main
-
-(#54 already done - closed)
+4. #59 - Make BashLogin an option of Remote Executor
+5. → Merge 003 to main
 
 ### Phase B: Pre-requisites for features 5-10
 1. #37 - Add --dry-run to sync

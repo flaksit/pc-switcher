@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-import pytest
 import pytest_asyncio
 
 from pcswitcher.executor import RemoteExecutor
@@ -70,7 +69,7 @@ class TestInitCommand:
         executor = clean_config_environment
 
         # Run pc-switcher init
-        result = await executor.run_command("pc-switcher init", timeout=30.0)
+        result = await executor.run_command("pc-switcher init", timeout=30.0, login_shell=True)
         assert result.success, f"pc-switcher init failed: {result.stderr}"
         assert "Created configuration file" in result.stdout, f"Expected success message, got: {result.stdout}"
 
@@ -111,11 +110,11 @@ class TestInitCommand:
         executor = clean_config_environment
 
         # Verify pc-switcher is installed and accessible
-        version_result = await executor.run_command("pc-switcher --version", timeout=10.0)
+        version_result = await executor.run_command("pc-switcher --version", timeout=10.0, login_shell=True)
         assert version_result.success, f"pc-switcher not installed: {version_result.stderr}"
 
         # Run pc-switcher init
-        init_result = await executor.run_command("pc-switcher init", timeout=30.0)
+        init_result = await executor.run_command("pc-switcher init", timeout=30.0, login_shell=True)
         assert init_result.success, f"pc-switcher init failed: {init_result.stderr}"
 
         # Verify config was created at the expected path
@@ -168,7 +167,7 @@ class TestInitCommand:
         assert custom_marker in verify_marker.stdout, "Failed to create test config with marker"
 
         # Run pc-switcher init WITHOUT --force - should fail
-        init_result = await executor.run_command("pc-switcher init", timeout=30.0)
+        init_result = await executor.run_command("pc-switcher init", timeout=30.0, login_shell=True)
         assert not init_result.success, "pc-switcher init should fail when config exists"
         assert "already exists" in init_result.stdout or "Use --force" in init_result.stdout, (
             f"Should mention existing config: {init_result.stdout}"
@@ -204,7 +203,7 @@ class TestInitCommand:
         )
 
         # Run pc-switcher init WITH --force - should succeed
-        init_result = await executor.run_command("pc-switcher init --force", timeout=30.0)
+        init_result = await executor.run_command("pc-switcher init --force", timeout=30.0, login_shell=True)
         assert init_result.success, f"pc-switcher init --force failed: {init_result.stderr}"
         assert "Created configuration file" in init_result.stdout, f"Expected success message: {init_result.stdout}"
 
@@ -243,7 +242,7 @@ class TestInitCommand:
             assert "not_found" in dir_check.stdout, "Config directory should not exist"
 
             # Run pc-switcher init
-            init_result = await executor.run_command("pc-switcher init", timeout=30.0)
+            init_result = await executor.run_command("pc-switcher init", timeout=30.0, login_shell=True)
             assert init_result.success, f"pc-switcher init failed: {init_result.stderr}"
 
             # Verify directory was created

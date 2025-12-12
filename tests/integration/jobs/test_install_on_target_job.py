@@ -29,7 +29,7 @@ from pcswitcher.events import EventBus
 from pcswitcher.executor import LocalExecutor, RemoteExecutor
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
-from pcswitcher.version import Version, get_this_version, find_one_version
+from pcswitcher.version import Version, find_one_version, get_this_version
 
 
 def _is_dev_version() -> bool:
@@ -114,7 +114,7 @@ class TestSelfInstallation:
         await job.execute()
 
         # Verify pc-switcher is now installed on target
-        result = await pc2_executor_without_pcswitcher_tool.run_command("pc-switcher --version")
+        result = await pc2_executor_without_pcswitcher_tool.run_command("pc-switcher --version", login_shell=True)
         assert result.success, f"pc-switcher should be installed on target: {result.stderr}"
 
         # Verify installed version matches source
@@ -161,7 +161,7 @@ class TestSelfInstallation:
         await job.execute()
 
         # Verify target is now upgraded
-        result = await pc2_executor_with_old_pcswitcher_tool.run_command("pc-switcher --version")
+        result = await pc2_executor_with_old_pcswitcher_tool.run_command("pc-switcher --version", login_shell=True)
         assert result.success, f"pc-switcher should be upgraded on target: {result.stderr}"
 
         # Verify upgraded version matches source
