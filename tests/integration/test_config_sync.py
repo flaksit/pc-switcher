@@ -83,6 +83,7 @@ class TestConfigSyncIntegration:
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as f:
             f.write("test: value\n")
+            f.flush()
             local_path = Path(f.name)
 
             try:
@@ -106,6 +107,7 @@ class TestConfigSyncIntegration:
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as f:
             f.write(config_content)
+            f.flush()
             local_path = Path(f.name)
 
             try:
@@ -126,6 +128,7 @@ class TestConfigSyncIntegration:
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as f:
             f.write("log_level: DEBUG\nsync_jobs:\n  dummy: true\n")
+            f.flush()
             local_path = Path(f.name)
 
             console = MagicMock()
