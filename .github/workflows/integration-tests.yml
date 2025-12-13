@@ -27,18 +27,29 @@ jobs:
       - name: Install Hetzner Cloud CLI
         uses: hetznercloud/setup-hcloud@v1
 
-      - name: Setup SSH key
+      - name: Setup SSH key and get existing VM IPs
+        id: vm_ips
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           echo "${{ secrets.SSH_AUTHORIZED_KEY_CI }}" > ~/.ssh/id_ed25519.pub
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H $(hcloud server ip pc1 || echo "") >> ~/.ssh/known_hosts 2>/dev/null || true
-          ssh-keyscan -H $(hcloud server ip pc2 || echo "") >> ~/.ssh/known_hosts 2>/dev/null || true
+          # Get IPs once (if VMs exist) for known_hosts and later use
+          PC1_IP=$(hcloud server ip pc1 2>/dev/null || echo "")
+          PC2_IP=$(hcloud server ip pc2 2>/dev/null || echo "")
+          if [[ -n "$PC1_IP" ]]; then
+            ssh-keyscan -H "$PC1_IP" >> ~/.ssh/known_hosts 2>/dev/null || true
+            echo "pc1_ip=$PC1_IP" >> $GITHUB_OUTPUT
+          fi
+          if [[ -n "$PC2_IP" ]]; then
+            ssh-keyscan -H "$PC2_IP" >> ~/.ssh/known_hosts 2>/dev/null || true
+            echo "pc2_ip=$PC2_IP" >> $GITHUB_OUTPUT
+          fi
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Provision test infrastructure
+        id: provision
         env:
           SECRETS_JSON: ${{ toJSON(secrets) }}
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
@@ -48,17 +59,16 @@ jobs:
           SSH_AUTHORIZED_KEYS=$(echo "$SECRETS_JSON" | jq -r 'to_entries[] | select(.key | startswith("SSH_AUTHORIZED_KEY_")) | .value')
           export SSH_AUTHORIZED_KEYS
           tests/integration/scripts/provision-test-infra.sh 2>&1 | tee provision-output.log
+          # If VMs were just created, get their IPs now
+          if [[ -z "${{ steps.vm_ips.outputs.pc1_ip }}" ]]; then
+            PC1_IP=$(hcloud server ip pc1)
+            echo "pc1_ip=$PC1_IP" >> $GITHUB_OUTPUT
+          fi
+          if [[ -z "${{ steps.vm_ips.outputs.pc2_ip }}" ]]; then
+            PC2_IP=$(hcloud server ip pc2)
+            echo "pc2_ip=$PC2_IP" >> $GITHUB_OUTPUT
+          fi
         timeout-minutes: 30
-
-      - name: Get VM IPs
-        id: vm_ips
-        run: |
-          PC1_IP=$(hcloud server ip pc1)
-          PC2_IP=$(hcloud server ip pc2)
-          echo "pc1_ip=$PC1_IP" >> $GITHUB_OUTPUT
-          echo "pc2_ip=$PC2_IP" >> $GITHUB_OUTPUT
-        env:
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
       - name: Run integration tests
         run: |
@@ -66,8 +76,8 @@ jobs:
           uv run pytest -m integration -v 2>&1 | tee pytest-output.log
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-          PC_SWITCHER_TEST_PC1_HOST: ${{ steps.vm_ips.outputs.pc1_ip }}
-          PC_SWITCHER_TEST_PC2_HOST: ${{ steps.vm_ips.outputs.pc2_ip }}
+          PC_SWITCHER_TEST_PC1_HOST: ${{ steps.vm_ips.outputs.pc1_ip || steps.provision.outputs.pc1_ip }}
+          PC_SWITCHER_TEST_PC2_HOST: ${{ steps.vm_ips.outputs.pc2_ip || steps.provision.outputs.pc2_ip }}
           PC_SWITCHER_TEST_USER: testuser
           CI_JOB_ID: ${{ github.run_id }}
         timeout-minutes: 30
