@@ -396,6 +396,39 @@ async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> BashLogi
     return BashLoginRemoteExecutor(pc1_connection)
 
 
+# Install script URL from main branch
+_INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
+
+
+@pytest_asyncio.fixture(scope="module")
+async def pc1_with_pcswitcher(pc1_executor: BashLoginRemoteExecutor) -> BashLoginRemoteExecutor:
+    """Ensure pc-switcher is installed on pc1.
+
+    Module-scoped: installs pc-switcher once per test module if not already present.
+    Does NOT uninstall after tests - leaves pc-switcher installed for efficiency.
+
+    Use this fixture when tests require pc-switcher to be available on pc1.
+    """
+    # Check if pc-switcher is already installed
+    version_check = await pc1_executor.run_command(
+        "pc-switcher --version 2>/dev/null || true", timeout=10.0
+    )
+
+    if not version_check.success or "pc-switcher" not in version_check.stdout.lower():
+        # Install pc-switcher
+        result = await pc1_executor.run_command(
+            f"curl -sSL {_INSTALL_SCRIPT_URL} | bash",
+            timeout=120.0,
+        )
+        assert result.success, f"Failed to install pc-switcher on pc1: {result.stderr}"
+
+        # Verify installation
+        verify = await pc1_executor.run_command("pc-switcher --version", timeout=10.0)
+        assert verify.success, f"pc-switcher not accessible after install: {verify.stderr}"
+
+    return pc1_executor
+
+
 @pytest_asyncio.fixture(scope="module")
 async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
     """Executor for running commands on pc2 with login shell enabled by default.

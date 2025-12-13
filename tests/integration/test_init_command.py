@@ -22,11 +22,15 @@ from pcswitcher.executor import BashLoginRemoteExecutor
 
 
 @pytest_asyncio.fixture
-async def clean_config_environment(pc1_executor: BashLoginRemoteExecutor) -> AsyncIterator[BashLoginRemoteExecutor]:
+async def clean_config_environment(
+    pc1_with_pcswitcher: BashLoginRemoteExecutor,
+) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide a clean environment for testing init command.
 
+    Requires pc-switcher to be installed (via pc1_with_pcswitcher fixture).
     Removes existing config file before test, restores after test.
     """
+    pc1_executor = pc1_with_pcswitcher
     # Backup existing config if it exists
     await pc1_executor.run_command(
         "if [ -f ~/.config/pc-switcher/config.yaml ]; then "
@@ -138,7 +142,7 @@ class TestInitCommand:
 
     async def test_001_us7_as3_init_preserves_existing_config(
         self,
-        pc1_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher: BashLoginRemoteExecutor,
     ) -> None:
         """US7-AS3: pc-switcher init refuses to overwrite existing config without --force.
 
@@ -147,7 +151,7 @@ class TestInitCommand:
         - Refuses to overwrite without --force flag
         - Leaves the original config intact
         """
-        executor = pc1_executor
+        executor = pc1_with_pcswitcher
 
         # First ensure a config exists (either by init or creating one)
         await executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
@@ -219,13 +223,13 @@ class TestInitCommand:
 
     async def test_001_init_creates_parent_directory(
         self,
-        pc1_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher: BashLoginRemoteExecutor,
     ) -> None:
         """Test that pc-switcher init creates parent directory if missing.
 
         Verifies that init creates ~/.config/pc-switcher/ if it doesn't exist.
         """
-        executor = pc1_executor
+        executor = pc1_with_pcswitcher
 
         # Backup and remove entire config directory
         await executor.run_command(
