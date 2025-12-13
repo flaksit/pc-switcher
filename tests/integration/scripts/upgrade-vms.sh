@@ -21,7 +21,7 @@ set -euo pipefail
 
 # Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
+source "$SCRIPT_DIR/internal/common.sh"
 
 # Help
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -101,7 +101,7 @@ cleanup() {
 
     if [[ -n "$PCSWITCHER_LOCK_HOLDER" ]]; then
         log_info "Releasing lock..."
-        "$SCRIPT_DIR/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release || true
+        "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release || true
     fi
 
     if [[ -n "$TMPDIR" && -d "$TMPDIR" ]]; then
@@ -225,7 +225,7 @@ log_info "Lock holder: $PCSWITCHER_LOCK_HOLDER"
 
 # Acquire lock
 log_step "Acquiring lock..."
-if ! "$SCRIPT_DIR/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire; then
+if ! "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire; then
     log_error "Failed to acquire lock"
     exit 1
 fi
@@ -362,7 +362,7 @@ if [[ "$CHANGES_OCCURRED" == "true" ]]; then
 
     # Create new baseline snapshots
     log_step "Creating new baseline snapshots..."
-    if ! "$SCRIPT_DIR/create-baseline-snapshots.sh"; then
+    if ! "$SCRIPT_DIR/internal/create-baseline-snapshots.sh"; then
         log_error "Failed to create baseline snapshots"
         exit 1
     fi

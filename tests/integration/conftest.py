@@ -16,10 +16,12 @@ Fixtures provided:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import secrets
 import socket
+import subprocess
 import warnings
 from asyncio import TaskGroup
 from collections.abc import AsyncIterator
@@ -86,7 +88,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     if not hcloud_token:
         pytest.exit("HCLOUD_TOKEN not set, cannot acquire integration test lock", 1)
 
-    lock_script = SCRIPTS_DIR / "lock.sh"
+    lock_script = SCRIPTS_DIR / "internal" / "lock.sh"
     if not lock_script.exists():
         pytest.exit(f"Lock script not found: {lock_script}", 1)
 
@@ -134,7 +136,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     if not hcloud_token:
         return
 
-    lock_script = SCRIPTS_DIR / "lock.sh"
+    lock_script = SCRIPTS_DIR / "internal" / "lock.sh"
     if not lock_script.exists():
         return
 

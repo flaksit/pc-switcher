@@ -6,7 +6,9 @@
 # - Logging functions (standard and prefixed for parallel execution)
 # - SSH connection handling with ControlMaster multiplexing
 #
-# Source it at the top of each script: source "$(dirname "$0")/common.sh"
+# Source it at the top of each script:
+#   From scripts/: source "$SCRIPT_DIR/internal/common.sh"
+#   From scripts/internal/: source "$SCRIPT_DIR/common.sh"
 #
 # See docs/testing-infrastructure.md for the SSH host key management strategy.
 
