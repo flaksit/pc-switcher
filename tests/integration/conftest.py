@@ -8,17 +8,20 @@ Fixtures provided:
 - pc2_connection: SSH connection to pc2 test VM
 - pc1_executor: RemoteExecutor for pc1 (with login shell environment)
 - pc2_executor: RemoteExecutor for pc2 (with login shell environment)
-- integration_lock: Session-scoped lock for test isolation
+- pc2_executor_without_pcswitcher_tool: pc2 executor with pc-switcher uninstalled (clean target)
+- pc2_executor_with_old_pcswitcher_tool: pc2 executor with old pc-switcher version (upgrade testing)
 - integration_session: Session-scoped fixture for VM provisioning and reset
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
-import shlex
+import secrets
 import socket
+import subprocess
 import warnings
 from asyncio import TaskGroup
 from collections.abc import AsyncIterator
@@ -29,32 +32,7 @@ import asyncssh
 import pytest
 import pytest_asyncio
 
-from pcswitcher.executor import RemoteExecutor
-from pcswitcher.models import CommandResult
-
-
-class RemoteLoginBashExecutor(RemoteExecutor):
-    """RemoteExecutor subclass that runs commands in a bash login shell.
-
-    Remote commands via SSH run in non-login, non-interactive shells by default,
-    which means ~/.profile isn't sourced and PATH may not include ~/.local/bin.
-
-    This subclass ensures commands run with the proper user environment by
-    wrapping them in `bash -l -c "..."`, which:
-    - Sources /etc/profile and ~/.profile (login shell behavior)
-    - Ensures PATH includes user-installed tools like uv and pc-switcher
-    - Simulates what a real user would experience when SSH'ing in
-    """
-
-    async def run_command(
-        self,
-        cmd: str,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        """Run a command in a bash login shell environment."""
-        wrapped_cmd = f"bash -l -c {shlex.quote(cmd)}"
-        return await super().run_command(wrapped_cmd, timeout=timeout)
-
+from pcswitcher.executor import BashLoginRemoteExecutor, RemoteExecutor
 
 REQUIRED_ENV_VARS = [
     "HCLOUD_TOKEN",
@@ -87,13 +65,120 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         )
 
 
+# Cache lock holder ID for this pytest session (module-level)
+_LOCK_HOLDER_CACHE: dict[str, str] = {}
+_ACQUIRED_LOCK = False
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Acquire integration test lock before test collection starts.
+
+    This hook runs synchronously before any test collection, allowing us to
+    cleanly exit pytest with pytest.exit() if locks can't be acquired.
+    """
+    global _ACQUIRED_LOCK  # noqa: PLW0603
+
+    # Check if integration tests are being run
+    # If session.config.option.markexpr includes 'integration', we need the lock
+    marker_expr = getattr(session.config.option, "markexpr", None)
+    if not marker_expr or "integration" not in str(marker_expr):
+        return
+
+    hcloud_token = os.getenv("HCLOUD_TOKEN")
+    if not hcloud_token:
+        pytest.exit("HCLOUD_TOKEN not set, cannot acquire integration test lock", 1)
+
+    lock_script = SCRIPTS_DIR / "internal" / "lock.sh"
+    if not lock_script.exists():
+        pytest.exit(f"Lock script not found: {lock_script}", 1)
+
+    # Get lock holder ID
+    holder = _get_lock_holder()
+
+    # Try to acquire lock synchronously using subprocess
+    try:
+        result = subprocess.run(
+            [str(lock_script), holder, "acquire"],
+            env={**os.environ, "HCLOUD_TOKEN": hcloud_token},
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode != 0:
+            error_detail = (
+                result.stderr.strip() if result.stderr.strip() else "Lock held by another test session"
+            )
+            pytest.exit(
+                f"\n{'='*70}\n"
+                f"INTEGRATION TEST LOCK CONFLICT\n"
+                f"{'='*70}\n"
+                f"Cannot acquire locks - {error_detail}\n"
+                f"{'='*70}\n",
+                2,
+            )
+        _ACQUIRED_LOCK = True  # pyright: ignore[reportConstantRedefinition]
+    except subprocess.TimeoutExpired:
+        pytest.exit("Timeout acquiring integration test lock", 1)
+    except Exception as e:
+        pytest.exit(f"Error acquiring integration test lock: {e}", 1)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Release integration test lock after tests complete."""
+    global _ACQUIRED_LOCK  # noqa: PLW0602
+
+    if not _ACQUIRED_LOCK:
+        return
+
+    hcloud_token = os.getenv("HCLOUD_TOKEN")
+    if not hcloud_token:
+        return
+
+    lock_script = SCRIPTS_DIR / "internal" / "lock.sh"
+    if not lock_script.exists():
+        return
+
+    holder = _get_lock_holder()
+
+    with contextlib.suppress(Exception):
+        subprocess.run(
+            [str(lock_script), holder, "release"],
+            env={**os.environ, "HCLOUD_TOKEN": hcloud_token},
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+
+
 def _get_lock_holder() -> str:
-    """Get a unique lock holder identifier for this test session."""
+    """Get a unique lock holder identifier for this test session.
+
+    CRITICAL: Must be unique per invocation to prevent concurrent test runs
+    on the same machine by the same user.
+
+    The identifier must be valid for Hetzner Cloud labels which only allow
+    alphanumeric characters, underscores, and hyphens.
+
+    Cached at module level to ensure consistency across fixture calls.
+    """
+    # Return cached ID if already generated
+    if "holder" in _LOCK_HOLDER_CACHE:
+        return _LOCK_HOLDER_CACHE["holder"]
+
+    # Generate new ID (only once per pytest session)
     ci_job_id = os.getenv("CI_JOB_ID") or os.getenv("GITHUB_RUN_ID")
     if ci_job_id:
-        return f"ci-{ci_job_id}"
-    hostname = socket.gethostname()
-    return f"local-{os.getenv('USER', 'unknown')}@{hostname}"
+        holder_id = f"ci-{ci_job_id}"
+    else:
+        hostname = socket.gethostname()
+        user = os.getenv("USER", "unknown")
+        # Add random suffix to ensure uniqueness per invocation
+        random_suffix = secrets.token_hex(3)  # 6 hex characters
+        holder_id = f"local-{user}-{hostname}-{random_suffix}"
+
+    _LOCK_HOLDER_CACHE["holder"] = holder_id
+    return holder_id
 
 
 async def _run_script(script_name: str, *args: str, check: bool = True) -> tuple[int, str, str]:
@@ -102,12 +187,18 @@ async def _run_script(script_name: str, *args: str, check: bool = True) -> tuple
     if not script_path.exists():
         pytest.fail(f"Infrastructure script not found: {script_path}")
 
+    env = {**os.environ, "HCLOUD_TOKEN": os.getenv("HCLOUD_TOKEN", "")}
+    # Pass lock holder ID to nested scripts so they reuse the same holder
+    lock_holder = os.getenv("PCSWITCHER_LOCK_HOLDER")
+    if lock_holder:
+        env["PCSWITCHER_LOCK_HOLDER"] = lock_holder
+
     proc = await asyncio.create_subprocess_exec(
         str(script_path),
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "HCLOUD_TOKEN": os.getenv("HCLOUD_TOKEN", "")},
+        env=env,
     )
     stdout_bytes, stderr_bytes = await proc.communicate()
     stdout = stdout_bytes.decode()
@@ -120,10 +211,31 @@ async def _run_script(script_name: str, *args: str, check: bool = True) -> tuple
 
 
 async def _reset_vms(pc1_host: str, pc2_host: str) -> None:
-    """Reset both VMs in parallel for faster test setup."""
+    """Reset both VMs in parallel for faster test setup.
+
+    Both resets are allowed to complete before checking for errors. This prevents
+    a failure on one VM from interrupting the other mid-reset (which could leave
+    it in a corrupted state).
+
+    Raises pytest.fail if either reset fails - this prevents tests from running
+    against VMs in an inconsistent state.
+    """
     async with TaskGroup() as tg:
-        tg.create_task(_run_script("reset-vm.sh", pc1_host, check=False))
-        tg.create_task(_run_script("reset-vm.sh", pc2_host, check=False))
+        pc1_task = tg.create_task(_run_script("reset-vm.sh", pc1_host, check=False))
+        pc2_task = tg.create_task(_run_script("reset-vm.sh", pc2_host, check=False))
+
+    # Check results after both complete
+    pc1_rc, _pc1_stdout, pc1_stderr = pc1_task.result()
+    pc2_rc, _pc2_stdout, pc2_stderr = pc2_task.result()
+
+    errors = []
+    if pc1_rc != 0:
+        errors.append(f"pc1 reset failed: {pc1_stderr}")
+    if pc2_rc != 0:
+        errors.append(f"pc2 reset failed: {pc2_stderr}")
+
+    if errors:
+        pytest.fail("\n".join(errors))
 
 
 async def _check_baseline_age(executor: RemoteExecutor) -> None:
@@ -184,46 +296,23 @@ async def _check_vms_ready(pc1_executor: RemoteExecutor, pc2_executor: RemoteExe
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def integration_lock() -> AsyncIterator[None]:
-    """Acquire the integration test lock for the session.
-
-    Uses Hetzner Server Labels to prevent concurrent test runs.
-    The lock survives VM reboots and snapshot rollbacks.
-    """
-    hcloud_token = os.getenv("HCLOUD_TOKEN")
-    if not hcloud_token:
-        pytest.fail("HCLOUD_TOKEN not set, cannot acquire lock")
-
-    holder = _get_lock_holder()
-    lock_script = SCRIPTS_DIR / "lock.sh"
-
-    if not lock_script.exists():
-        pytest.fail(f"Lock script not found: {lock_script}")
-
-    # Acquire lock
-    returncode, _, stderr = await _run_script("lock.sh", holder, "acquire", check=False)
-    if returncode != 0:
-        pytest.fail(f"Failed to acquire integration test lock: {stderr}")
-
-    yield
-
-    # Release lock
-    await _run_script("lock.sh", holder, "release", check=False)
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def integration_session(integration_lock: None) -> AsyncIterator[None]:
+async def integration_session() -> AsyncIterator[None]:
     """Session-scoped fixture for VM provisioning and reset.
 
     This fixture:
-    1. Acquires the integration test lock (via integration_lock dependency)
-    2. Checks if VMs are ready, provisions them if not
-    3. Resets VMs to baseline before tests run
-    4. Checks baseline age and warns if outdated
+    1. Checks if VMs are ready, provisions them if not
+    2. Resets VMs to baseline before tests run
+    3. Checks baseline age and warns if outdated
+
+    Lock acquisition is handled by pytest_sessionstart hook before this fixture runs.
     """
     pc1_host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
     pc2_host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
     user = os.environ["PC_SWITCHER_TEST_USER"]
+
+    # Export lock holder ID so nested scripts reuse the same holder
+    lock_holder = _get_lock_holder()
+    os.environ["PCSWITCHER_LOCK_HOLDER"] = lock_holder
 
     # Create connections and executors for VM readiness check and baseline age check
     async with (
@@ -240,7 +329,9 @@ async def integration_session(integration_lock: None) -> AsyncIterator[None]:
             if not provision_script.exists():
                 pytest.fail(f"Provision script not found: {provision_script}")
 
-            returncode, _, stderr = await _run_script("provision-test-infra.sh", check=False)
+            returncode, _, stderr = await _run_script(
+                "provision-test-infra.sh", check=False
+            )
             if returncode != 0:
                 pytest.fail(f"Failed to provision test VMs: {stderr}")
 
@@ -288,28 +379,159 @@ async def pc2_connection(integration_session: None) -> AsyncIterator[asyncssh.SS
 
 
 @pytest_asyncio.fixture(scope="module")
-async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> RemoteLoginBashExecutor:
-    """Executor for running commands on pc1 in a bash login shell environment.
+async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
+    """Executor for running commands on pc1 with login shell enabled by default.
 
     Module-scoped: shared across all tests in a module.
     Tests must clean up their own artifacts and not modify executor state.
 
-    Commands run via this executor have ~/.profile sourced, ensuring:
-    - PATH includes ~/.local/bin (for uv-installed tools like pc-switcher)
-    - User environment matches interactive SSH sessions
+    Returns BashLoginRemoteExecutor which wraps all commands in bash login shell,
+    ensuring PATH includes ~/.local/bin for user-installed tools (uv, pc-switcher).
+    Commands use login_shell=True by default but can be overridden with login_shell=False
+    for system commands.
     """
-    return RemoteLoginBashExecutor(pc1_connection)
+    return BashLoginRemoteExecutor(pc1_connection)
+
+
+# Install script URL from main branch
+_INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
 
 
 @pytest_asyncio.fixture(scope="module")
-async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> RemoteLoginBashExecutor:
-    """Executor for running commands on pc2 in a bash login shell environment.
+async def pc1_with_pcswitcher(pc1_executor: BashLoginRemoteExecutor) -> BashLoginRemoteExecutor:
+    """Ensure pc-switcher is installed on pc1.
+
+    Module-scoped: installs pc-switcher once per test module if not already present.
+    Does NOT uninstall after tests - leaves pc-switcher installed for efficiency.
+
+    Use this fixture when tests require pc-switcher to be available on pc1.
+    """
+    # Check if pc-switcher is already installed
+    version_check = await pc1_executor.run_command(
+        "pc-switcher --version 2>/dev/null || true", timeout=10.0
+    )
+
+    if not version_check.success or "pc-switcher" not in version_check.stdout.lower():
+        # Install pc-switcher
+        result = await pc1_executor.run_command(
+            f"curl -sSL {_INSTALL_SCRIPT_URL} | bash",
+            timeout=120.0,
+        )
+        assert result.success, f"Failed to install pc-switcher on pc1: {result.stderr}"
+
+        # Verify installation
+        verify = await pc1_executor.run_command("pc-switcher --version", timeout=10.0)
+        assert verify.success, f"pc-switcher not accessible after install: {verify.stderr}"
+
+    return pc1_executor
+
+
+@pytest_asyncio.fixture(scope="module")
+async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
+    """Executor for running commands on pc2 with login shell enabled by default.
 
     Module-scoped: shared across all tests in a module.
     Tests must clean up their own artifacts and not modify executor state.
 
-    Commands run via this executor have ~/.profile sourced, ensuring:
-    - PATH includes ~/.local/bin (for uv-installed tools like pc-switcher)
-    - User environment matches interactive SSH sessions
+    Returns BashLoginRemoteExecutor which wraps all commands in bash login shell,
+    ensuring PATH includes ~/.local/bin for user-installed tools (uv, pc-switcher).
+    Commands use login_shell=True by default but can be overridden with login_shell=False
+    for system commands.
     """
-    return RemoteLoginBashExecutor(pc2_connection)
+    return BashLoginRemoteExecutor(pc2_connection)
+
+
+@pytest_asyncio.fixture
+async def pc2_executor_without_pcswitcher_tool(
+    pc2_executor: BashLoginRemoteExecutor,
+) -> AsyncIterator[BashLoginRemoteExecutor]:
+    """Provide a clean environment on pc2 without pc-switcher installed.
+
+    WARNING: This fixture wraps pc2_executor and modifies VM state by uninstalling
+    pc-switcher. Tests using this fixture MUST NOT use pc2_executor directly in
+    parallel, as both operate on the same VM and will interfere with each other.
+
+    Removes pc-switcher installation but keeps test infrastructure intact.
+    Useful for testing fresh installs on a clean target.
+
+    Cleanup: Captures initial state and restores it after the test to avoid affecting
+    other tests in the same test session.
+    """
+    # Check if pc-switcher was installed before we modify state
+    version_check = await pc2_executor.run_command(
+        "pc-switcher --version 2>/dev/null || true", timeout=10.0, login_shell=True
+    )
+    was_installed = version_check.success and "pc-switcher" in version_check.stdout.lower()
+
+    # Uninstall pc-switcher if it exists
+    await pc2_executor.run_command(
+        "uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True
+    )
+    await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
+
+    yield pc2_executor
+
+    # Restore to initial state: if it was installed before, reinstall it
+    if was_installed:
+        install_script_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
+        result = await pc2_executor.run_command(
+            f"curl -sSL {install_script_url} | bash",
+            timeout=120.0,
+        )
+        if not result.success:
+            # Log but don't fail the test - cleanup issues shouldn't fail tests
+            warnings.warn(f"Failed to restore pc-switcher on pc2: {result.stderr}", stacklevel=2)
+
+
+@pytest_asyncio.fixture
+async def pc2_executor_with_old_pcswitcher_tool(
+    pc2_executor: BashLoginRemoteExecutor,
+) -> AsyncIterator[BashLoginRemoteExecutor]:
+    """Provide pc2 with an older version of pc-switcher (0.1.0-alpha.1).
+
+    WARNING: This fixture wraps pc2_executor and modifies VM state by installing
+    an older version of pc-switcher. Tests using this fixture MUST NOT use pc2_executor
+    directly in parallel, as both operate on the same VM and will interfere with each
+    other.
+
+    Uninstalls current pc-switcher and installs version 0.1.0-alpha.1.
+    Useful for testing upgrade scenarios.
+
+    Cleanup: Captures initial state and restores it after the test to avoid affecting
+    other tests in the same test session.
+    """
+    # Install script URL from main branch
+    install_script_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
+
+    # Check if pc-switcher was installed before we modify state
+    version_check = await pc2_executor.run_command(
+        "pc-switcher --version 2>/dev/null || true", timeout=10.0, login_shell=True
+    )
+    was_installed = version_check.success and "pc-switcher" in version_check.stdout.lower()
+
+    # Uninstall and install older version
+    await pc2_executor.run_command(
+        "uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True
+    )
+    await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
+    result = await pc2_executor.run_command(
+        f"curl -sSL {install_script_url} | VERSION=0.1.0-alpha.1 bash",
+        timeout=120.0,
+    )
+    assert result.success, f"Failed to install old version: {result.stderr}"
+
+    yield pc2_executor
+
+    # Restore to initial state
+    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
+    await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
+
+    if was_installed:
+        # Reinstall latest version
+        result = await pc2_executor.run_command(
+            f"curl -sSL {install_script_url} | bash",
+            timeout=120.0,
+        )
+        if not result.success:
+            # Log but don't fail the test - cleanup issues shouldn't fail tests
+            warnings.warn(f"Failed to restore pc-switcher on pc2: {result.stderr}", stacklevel=2)

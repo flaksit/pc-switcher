@@ -82,6 +82,12 @@ Follow-up TODOs:
 
 ## Development Workflow Standards
 
+### Test-Driven Development (ADR-007)
+- Implementation MUST follow the TDD red-green-refactor cycle: write failing test → minimal implementation → refactor
+- Tests MUST be derived from task specifications before implementation begins
+- Refactoring MUST NOT change behavior; all tests must remain green
+- TDD may be skipped only for trivial changes where tests add no value
+
 - Specs and plans MUST annotate the primary principles they satisfy and call out trade-offs when principles compete.
 - Research and design deliverables MUST describe reliability mechanisms, disk-wear mitigation, and UX considerations before implementation begins.
 - Performance budgets, conflict detection strategies, and documentation updates MUST appear as tracked todos by the agents or analysts that write specifications and plans.

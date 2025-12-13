@@ -42,12 +42,6 @@ while [[ $# -gt 0 ]]; do
             INSTALL_REF="$2"
             shift 2
             ;;
-        --version)
-            # Deprecated: use VERSION env var instead
-            warn "--version is deprecated. Use: curl ... | VERSION=$2 bash"
-            INSTALL_REF="v$2"
-            shift 2
-            ;;
         -h|--help)
             echo "PC-switcher installation script"
             echo ""

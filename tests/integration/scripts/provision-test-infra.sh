@@ -10,7 +10,7 @@ set -euo pipefail
 # to ensure all authorized SSH keys are properly configured from secrets.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
+source "$SCRIPT_DIR/internal/common.sh"
 
 # Configuration
 readonly SSH_KEY_NAME="pc-switcher-test-key"
@@ -213,6 +213,25 @@ log_info "Prerequisites check passed"
 # Ensure SSH key exists in Hetzner Cloud (must be done once before parallel VM creation)
 ensure_ssh_key
 
+# Acquire lock for VM operations (prevents concurrent provisioning runs)
+export PCSWITCHER_LOCK_HOLDER=$(get_lock_holder)
+log_info "Lock holder: $PCSWITCHER_LOCK_HOLDER"
+
+# Set up cleanup trap
+cleanup_lock() {
+    log_info "Releasing lock..."
+    "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release || true
+}
+trap cleanup_lock EXIT INT TERM
+
+# Acquire lock (waits up to 5 minutes if held by another process)
+log_step "Acquiring lock..."
+if ! "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire; then
+    log_error "Failed to acquire lock"
+    exit 1
+fi
+log_info "Lock acquired"
+
 # Create VMs in parallel (skip if VMs already exist with btrfs)
 if [[ "$SKIP_VM_CREATION" == "true" ]]; then
     log_step "Skipping VM creation (VMs already exist with btrfs filesystem)"
@@ -220,9 +239,9 @@ else
     log_step "Creating VMs in parallel..."
     log_info "- pc1"
     log_info "- pc2"
-    "$SCRIPT_DIR/create-vm.sh" pc1 &
+    "$SCRIPT_DIR/internal/create-vm.sh" pc1 &
     PID1=$!
-    "$SCRIPT_DIR/create-vm.sh" pc2 &
+    "$SCRIPT_DIR/internal/create-vm.sh" pc2 &
     PID2=$!
 
     # Wait for both VM creation jobs
@@ -253,12 +272,12 @@ log_info "VM configuration completed"
 
 # Configure inter-VM networking
 log_step "Configuring inter-VM networking..."
-"$SCRIPT_DIR/configure-hosts.sh"
+"$SCRIPT_DIR/internal/configure-hosts.sh"
 log_info "Inter-VM networking configured"
 
 # Create baseline snapshots
 log_step "Creating baseline snapshots..."
-"$SCRIPT_DIR/create-baseline-snapshots.sh"
+"$SCRIPT_DIR/internal/create-baseline-snapshots.sh"
 log_info "Baseline snapshots created"
 
 log_step "Test infrastructure provisioning complete!"

@@ -428,3 +428,114 @@ class TestSyncConfigToTarget:
         # Should skip without prompting
         call_args = [str(call) for call in console.print.call_args_list]
         assert any("skipping" in str(arg).lower() for arg in call_args)
+
+    async def test_001_fr007a_config_sync_prompt_if_missing(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """FR-007a: Sync config after install, prompt if missing.
+
+        Verifies that when no config exists on target, user is prompted
+        to accept the source config for initial setup.
+        """
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("log_level: DEBUG\nsync_jobs:\n  dummy_success: true")
+
+        # No config on target
+        mock_remote_executor.run_command = AsyncMock(
+            side_effect=[
+                CommandResult(exit_code=1, stdout="", stderr="No such file"),  # cat fails
+                CommandResult(exit_code=0, stdout="", stderr=""),  # mkdir
+                CommandResult(exit_code=0, stdout="/home/user\n", stderr=""),  # echo $HOME
+            ]
+        )
+        mock_remote_executor.send_file = AsyncMock()
+
+        console = MagicMock()
+
+        # User accepts config
+        with patch("pcswitcher.config_sync._prompt_new_config", return_value=True):
+            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+
+        assert result is True
+        mock_remote_executor.send_file.assert_called_once()
+
+    async def test_001_fr007b_config_diff_and_prompt(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+        """FR-007b: Show diff and prompt if configs differ.
+
+        Verifies that when target config differs from source, a diff
+        is shown and user is prompted to choose an action.
+        """
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("log_level: DEBUG\n")
+
+        # Target has different config
+        mock_remote_executor.run_command = AsyncMock(
+            side_effect=[
+                CommandResult(exit_code=0, stdout="log_level: INFO\n", stderr=""),  # cat
+                CommandResult(exit_code=0, stdout="", stderr=""),  # mkdir
+                CommandResult(exit_code=0, stdout="/home/user\n", stderr=""),  # echo $HOME
+            ]
+        )
+        mock_remote_executor.send_file = AsyncMock()
+
+        console = MagicMock()
+
+        # User chooses to accept source
+        with patch(
+            "pcswitcher.config_sync._prompt_config_diff",
+            return_value=ConfigSyncAction.ACCEPT_SOURCE,
+        ):
+            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+
+        assert result is True
+        mock_remote_executor.send_file.assert_called_once()
+
+    async def test_001_fr007c_skip_if_configs_match(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+        """FR-007c: Skip config sync if configs match.
+
+        Verifies that when source and target configs are identical,
+        config sync is skipped without prompting.
+        """
+        config_content = "log_level: INFO\nsync_jobs:\n  dummy_success: true\n"
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_content)
+
+        # Target has identical config
+        mock_remote_executor.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=0, stdout=config_content, stderr="")
+        )
+
+        console = MagicMock()
+
+        result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+
+        assert result is True
+        # Verify skipping message was printed
+        console.print.assert_called()
+        call_args = [str(call) for call in console.print.call_args_list]
+        assert any("skipping" in str(arg).lower() for arg in call_args)
+        # Verify send_file was NOT called (config not copied)
+        mock_remote_executor.send_file.assert_not_called()
+
+    async def test_001_us2_as7_skip_when_configs_match(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+        """US2-AS7: Configs match, skip config sync.
+
+        User Story 2, Acceptance Scenario 7: When target already has
+        the same config as source, sync proceeds without config prompts.
+        """
+        config_content = "log_level: INFO\n"
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_content)
+
+        # Target has matching config
+        mock_remote_executor.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=0, stdout=config_content, stderr="")
+        )
+
+        console = MagicMock()
+
+        result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+
+        assert result is True
+        # Should not copy config when it matches
+        mock_remote_executor.send_file.assert_not_called()

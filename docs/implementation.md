@@ -719,14 +719,16 @@ From `src/pcswitcher/version.py`:
 ### Version Functions
 
 ```python
-def get_this_version() -> str:
+def get_this_version() -> Version:
     # Get version from package metadata (source machine)
+    # Returns Version object in PEP 440 format
     # Raises PackageNotFoundError if metadata not found
 
-def parse_version_from_cli_output(output: str) -> str:
-    # Parse version string from `pc-switcher --version` output
-    # e.g., "pc-switcher 0.4.0" -> "0.4.0"
-    # Raises ValueError if version cannot be parsed
+def find_one_version(text: str) -> Version:
+    # Find and parse a single version string from text
+    # e.g., "pc-switcher 0.4.0" -> Version("0.4.0")
+    # Supports both SemVer and PEP 440 formats
+    # Raises ValueError if no version or multiple versions found
 ```
 
 Target installation/upgrade is handled by `InstallOnTargetJob` in `src/pcswitcher/jobs/install_on_target.py`.
@@ -814,7 +816,7 @@ tests/
 uv run pytest
 
 # Run specific test file
-uv run pytest tests/test_version.py
+uv run pytest tests/unit/test_version.py
 
 # Run with coverage
 uv run pytest --cov=pcswitcher

@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Run integration tests locally with minimal setup.
+# Run pytest locally with test environment configured.
 #
 # This script only requires HCLOUD_TOKEN to be set. It automatically:
 # - Looks up VM IPs from Hetzner Cloud
 # - Updates SSH known_hosts entries
 # - Sets all required environment variables
-# - Runs pytest with integration markers
+# - Runs pytest with any arguments you provide
 #
 # Usage:
-#   ./local-integration-tests.sh                    # Run all integration tests
-#   ./local-integration-tests.sh test_vm_connectivity.py  # Run specific test file
-#   ./local-integration-tests.sh -k "test_ssh"     # Run tests matching pattern
+#   ./local-pytest.sh tests/integration -m integration          # Run all integration tests
+#   ./local-pytest.sh tests/integration/test_vm_connectivity.py # Run specific test file
+#   ./local-pytest.sh -k "test_ssh" -v                          # Run tests matching pattern
+#   ./local-pytest.sh tests/integration/test_executor_overhead.py::TestRemoteExecutorOverhead::test_no_op_command_overhead -s
 #
 set -euo pipefail
 
@@ -29,10 +30,23 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 # Check HCLOUD_TOKEN
 if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
-    log_error "HCLOUD_TOKEN not set"
-    echo "Please set your Hetzner Cloud API token:" >&2
-    echo "  export HCLOUD_TOKEN='your-token-here'" >&2
-    exit 1
+    log_info "HCLOUD_TOKEN not set, attempting to retrieve from pass..."
+    if command -v pass &> /dev/null; then
+        HCLOUD_TOKEN=$(pass show dev/pc-switcher/testing/hcloud_token_rw 2>/dev/null) || {
+            log_error "HCLOUD_TOKEN not set and could not retrieve from pass"
+            echo "Please set your Hetzner Cloud API token:" >&2
+            echo "  export HCLOUD_TOKEN='your-token-here'" >&2
+            echo "Or ensure you have the token set in pass 'dev/pc-switcher/testing/hcloud_token_rw'" >&2
+            exit 1
+        }
+        export HCLOUD_TOKEN
+        log_info "Successfully retrieved HCLOUD_TOKEN from pass"
+    else
+        log_error "HCLOUD_TOKEN not set and pass not available"
+        echo "Please set your Hetzner Cloud API token:" >&2
+        echo "  export HCLOUD_TOKEN='your-token-here'" >&2
+        exit 1
+    fi
 fi
 
 # Check hcloud CLI is available
@@ -79,7 +93,7 @@ log_info "  PC_SWITCHER_TEST_PC1_HOST=$PC_SWITCHER_TEST_PC1_HOST"
 log_info "  PC_SWITCHER_TEST_PC2_HOST=$PC_SWITCHER_TEST_PC2_HOST"
 log_info "  PC_SWITCHER_TEST_USER=$PC_SWITCHER_TEST_USER"
 
-# Run tests
-log_info "Running integration tests..."
+# Run pytest with all provided arguments
+log_info "Running pytest..."
 cd "$PROJECT_ROOT"
-exec uv run pytest tests/integration -v -m integration "$@"
+exec uv run pytest "$@"

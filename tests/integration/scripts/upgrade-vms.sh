@@ -21,7 +21,7 @@ set -euo pipefail
 
 # Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
+source "$SCRIPT_DIR/internal/common.sh"
 
 # Help
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -88,32 +88,20 @@ readonly VM1_NAME="pc1"
 readonly VM2_NAME="pc2"
 
 # Global state
-LOCK_HOLDER=""
 PC1_IP=""
 PC2_IP=""
 CHANGES_OCCURRED=false
 TMPDIR=""
 
-# Get lock holder identifier (CI or local user@hostname)
-get_lock_holder() {
-    local ci_job_id="${CI_JOB_ID:-${GITHUB_RUN_ID:-}}"
-
-    if [[ -n "$ci_job_id" ]]; then
-        echo "ci-${ci_job_id}"
-    else
-        local hostname
-        hostname=$(hostname)
-        echo "local-${USER:-unknown}@${hostname}"
-    fi
-}
+# get_lock_holder() is now provided by common.sh
 
 # Cleanup function - called on exit to release lock and clean temp files
 cleanup() {
     local exit_code=$?
 
-    if [[ -n "$LOCK_HOLDER" ]]; then
+    if [[ -n "$PCSWITCHER_LOCK_HOLDER" ]]; then
         log_info "Releasing lock..."
-        "$SCRIPT_DIR/lock.sh" "$LOCK_HOLDER" release || true
+        "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release || true
     fi
 
     if [[ -n "$TMPDIR" && -d "$TMPDIR" ]]; then
@@ -231,13 +219,13 @@ reboot_vm() {
 # Main execution
 log_step "VM upgrade and baseline update"
 
-# Get lock holder identifier
-LOCK_HOLDER=$(get_lock_holder)
-log_info "Lock holder: $LOCK_HOLDER"
+# Get lock holder identifier and export for nested scripts
+export PCSWITCHER_LOCK_HOLDER=$(get_lock_holder)
+log_info "Lock holder: $PCSWITCHER_LOCK_HOLDER"
 
 # Acquire lock
 log_step "Acquiring lock..."
-if ! "$SCRIPT_DIR/lock.sh" "$LOCK_HOLDER" acquire; then
+if ! "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire; then
     log_error "Failed to acquire lock"
     exit 1
 fi
@@ -374,7 +362,7 @@ if [[ "$CHANGES_OCCURRED" == "true" ]]; then
 
     # Create new baseline snapshots
     log_step "Creating new baseline snapshots..."
-    if ! "$SCRIPT_DIR/create-baseline-snapshots.sh"; then
+    if ! "$SCRIPT_DIR/internal/create-baseline-snapshots.sh"; then
         log_error "Failed to create baseline snapshots"
         exit 1
     fi

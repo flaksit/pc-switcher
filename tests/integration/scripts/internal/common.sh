@@ -6,7 +6,9 @@
 # - Logging functions (standard and prefixed for parallel execution)
 # - SSH connection handling with ControlMaster multiplexing
 #
-# Source it at the top of each script: source "$(dirname "$0")/common.sh"
+# Source it at the top of each script:
+#   From scripts/: source "$SCRIPT_DIR/internal/common.sh"
+#   From scripts/internal/: source "$SCRIPT_DIR/common.sh"
 #
 # See docs/testing-infrastructure.md for the SSH host key management strategy.
 
@@ -36,6 +38,40 @@ log_step_prefixed() { echo -e "${GREEN}==>${NC}${LOG_PREFIX:-} $*"; }
 log_info_prefixed() { echo -e "   ${LOG_PREFIX:-} $*"; }
 log_warn_prefixed() { echo -e "${YELLOW}[WARN]${NC}${LOG_PREFIX:-} $*" >&2; }
 log_error_prefixed() { echo -e "${RED}[ERROR]${NC}${LOG_PREFIX:-} $*" >&2; }
+
+# =============================================================================
+# Lock Holder ID Generation
+# =============================================================================
+
+# Get lock holder identifier for integration test locking
+# Returns: "ci-{job_id}" in CI, "local-{user}-{hostname}-{random}" for local runs
+# Format must be compatible with Hetzner Cloud labels (alphanumeric, dash, underscore only)
+#
+# CRITICAL: Lock holder ID must be UNIQUE PER INVOCATION to prevent concurrent runs
+# on the same machine by the same user. For nested script calls (e.g., provision-test-infra.sh
+# calling other scripts), the ID is passed via PCSWITCHER_LOCK_HOLDER environment variable.
+get_lock_holder() {
+    # If PCSWITCHER_LOCK_HOLDER is already set, reuse it (nested script call)
+    if [[ -n "${PCSWITCHER_LOCK_HOLDER:-}" ]]; then
+        echo "$PCSWITCHER_LOCK_HOLDER"
+        return
+    fi
+
+    # Generate new unique ID
+    local ci_job_id="${CI_JOB_ID:-${GITHUB_RUN_ID:-}}"
+
+    if [[ -n "$ci_job_id" ]]; then
+        echo "ci-${ci_job_id}"
+    else
+        local hostname
+        hostname=$(hostname)
+        local user="${USER:-unknown}"
+        # Add random suffix to ensure uniqueness per invocation
+        local random
+        random=$(openssl rand -hex 3)  # 6 hex characters
+        echo "local-${user}-${hostname}-${random}"
+    fi
+}
 
 # =============================================================================
 # SSH Helper Functions

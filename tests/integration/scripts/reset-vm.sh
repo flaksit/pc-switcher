@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
+source "$SCRIPT_DIR/internal/common.sh"
 
 # Reset a single VM to its baseline btrfs snapshot state
 # This script restores the VM to the known-good baseline created during provisioning
@@ -23,9 +23,11 @@ Reset a VM to its baseline btrfs snapshot state.
 This script:
   1. Validates baseline snapshots exist
   2. Cleans up test artifacts
-  3. Replaces active subvolumes with baseline snapshots
-  4. Reboots the VM
-  5. Cleans up old subvolumes
+  3. Pre-flight check - detects/recovers from interrupted previous resets
+  4. Replaces active subvolumes with baseline snapshots
+  5. Reboots the VM
+  6. Waits for VM to come back online
+  7. Cleans up old subvolumes
 
 Arguments:
   VM_HOST    VM hostname or IP address to reset
@@ -53,6 +55,23 @@ fi
 
 readonly VM_HOST="$1"
 readonly SSH_USER="${PC_SWITCHER_TEST_USER:-testuser}"
+
+# Acquire lock for VM operations (prevents concurrent access)
+# Note: When called from conftest.py, lock is already held by pytest
+# Lock acquisition is idempotent (succeeds if same holder already has lock)
+export PCSWITCHER_LOCK_HOLDER=$(get_lock_holder)
+
+# Set up cleanup trap
+cleanup_lock() {
+    "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release 2>/dev/null || true
+}
+trap cleanup_lock EXIT INT TERM
+
+# Acquire lock (waits up to 5 minutes if held by another process)
+if ! "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire 2>/dev/null; then
+    log_error "Failed to acquire lock"
+    exit 1
+fi
 
 # SSH connection helper
 # First connection uses ssh_accept_new (test runner may have empty known_hosts)
@@ -88,7 +107,94 @@ log_step "Cleaning up test artifacts..."
 ssh_vm "sudo rm -rf /.snapshots/pc-switcher/test-* 2>/dev/null || true"
 log_info "Test artifacts cleaned"
 
-# Steps 3-4: Mount filesystem and replace subvolumes with baseline snapshots
+# Step 3: Pre-flight check - detect and recover from interrupted previous resets
+log_step "Checking for interrupted previous reset..."
+ssh_vm 'sudo bash -s' << 'EOF'
+set -euo pipefail
+
+# Mount top-level btrfs filesystem
+mkdir -p /mnt/btrfs
+if mountpoint -q /mnt/btrfs; then
+    umount /mnt/btrfs
+fi
+mount -o subvolid=5 /dev/sda2 /mnt/btrfs
+
+# Check current state
+has_root=false
+has_root_new=false
+has_home=false
+has_home_new=false
+
+[ -d /mnt/btrfs/@ ] && has_root=true
+[ -d /mnt/btrfs/@_new ] && has_root_new=true
+[ -d /mnt/btrfs/@home ] && has_home=true
+[ -d /mnt/btrfs/@home_new ] && has_home_new=true
+
+# Check for any old snapshots in /.snapshots/old/ (or legacy locations at root)
+latest_root_old=$(ls -1d /mnt/btrfs/@snapshots/old/@_* /mnt/btrfs/@_old_* /mnt/btrfs/@_old 2>/dev/null | sort -r | head -1 || true)
+latest_home_old=$(ls -1d /mnt/btrfs/@snapshots/old/@home_* /mnt/btrfs/@home_old_* /mnt/btrfs/@home_old 2>/dev/null | sort -r | head -1 || true)
+
+# Normal state: @ and @home exist, no _new (old snapshots are expected and kept)
+if $has_root && $has_home && ! $has_root_new && ! $has_home_new; then
+    echo "OK: Subvolumes in normal state"
+    umount /mnt/btrfs
+    exit 0
+fi
+
+# Leftover state: @ and @home exist, but _new also exists (cleanup was interrupted)
+if $has_root && $has_home; then
+    echo "WARN: Found leftover @_new subvolumes from interrupted reset, will clean up"
+    umount /mnt/btrfs
+    exit 0
+fi
+
+# Critical: @ is missing - previous reset was interrupted during swap
+if ! $has_root; then
+    echo "ERROR: @ subvolume is missing!"
+
+    # Try to recover from most recent @_old_* or legacy @_old
+    if [ -n "$latest_root_old" ]; then
+        echo "RECOVERING: Restoring @ from $latest_root_old"
+        mv "$latest_root_old" /mnt/btrfs/@
+        has_root=true
+    # Try to recover from @_new (very unlikely but possible)
+    elif $has_root_new; then
+        echo "RECOVERING: Restoring @ from @_new"
+        mv /mnt/btrfs/@_new /mnt/btrfs/@
+        has_root=true
+    else
+        echo "FATAL: Cannot recover @ subvolume - manual intervention required"
+        echo "Consider deleting VMs and reprovisioning: hcloud server delete pc1 pc2"
+        umount /mnt/btrfs
+        exit 1
+    fi
+fi
+
+# Critical: @home is missing
+if ! $has_home; then
+    echo "ERROR: @home subvolume is missing!"
+
+    if [ -n "$latest_home_old" ]; then
+        echo "RECOVERING: Restoring @home from $latest_home_old"
+        mv "$latest_home_old" /mnt/btrfs/@home
+        has_home=true
+    elif $has_home_new; then
+        echo "RECOVERING: Restoring @home from @home_new"
+        mv /mnt/btrfs/@home_new /mnt/btrfs/@home
+        has_home=true
+    else
+        echo "FATAL: Cannot recover @home subvolume - manual intervention required"
+        umount /mnt/btrfs
+        exit 1
+    fi
+fi
+
+echo "Recovery complete, proceeding with reset"
+umount /mnt/btrfs
+EOF
+log_info "Pre-flight check passed"
+
+# Step 4: Mount filesystem and replace subvolumes with baseline snapshots
 log_step "Replacing subvolumes with baseline snapshots..."
 ssh_vm 'sudo bash -s' << 'EOF'
 set -euo pipefail
@@ -124,28 +230,39 @@ if [ "$HOME_SUBVOL" != "/@home" ]; then
     exit 1
 fi
 
-# 4. Cleanup ALL from previous run (do all cleanup first)
+# 4. Cleanup temporary snapshots from interrupted previous run
+#    NOTE: We keep old snapshots in /.snapshots/old/ for investigation
+#    Clean up: legacy snapshots at root level and @_new (temporary)
 if [ -e /mnt/btrfs/@_old ]; then
-    delete_subvol_recursive /mnt/btrfs/@_old  # May have nested subvols from tests
+    delete_subvol_recursive /mnt/btrfs/@_old  # Legacy naming
 fi
 if [ -e /mnt/btrfs/@_new ]; then
-    delete_subvol_recursive /mnt/btrfs/@_new   # Fresh snapshot, no nested subvols
+    delete_subvol_recursive /mnt/btrfs/@_new   # Temporary snapshot from interrupted reset
 fi
 if [ -e /mnt/btrfs/@home_old ]; then
-    delete_subvol_recursive /mnt/btrfs/@home_old  # May have nested subvols
+    delete_subvol_recursive /mnt/btrfs/@home_old  # Legacy naming
 fi
 if [ -e /mnt/btrfs/@home_new ]; then
-    delete_subvol_recursive /mnt/btrfs/@home_new   # Fresh snapshot, no nested subvols
+    delete_subvol_recursive /mnt/btrfs/@home_new   # Temporary snapshot from interrupted reset
 fi
+# Clean up legacy timestamped snapshots at root level (migrate to /.snapshots/old/)
+for legacy in /mnt/btrfs/@_old_* /mnt/btrfs/@home_old_*; do
+    [ -e "$legacy" ] && delete_subvol_recursive "$legacy"
+done
+
+# Ensure /.snapshots/old/ directory exists
+mkdir -p /mnt/btrfs/@snapshots/old
 
 # 5. Create BOTH new snapshots (prepare everything before swapping)
 btrfs subvolume snapshot /.snapshots/baseline/@ /mnt/btrfs/@_new
 btrfs subvolume snapshot /.snapshots/baseline/@home /mnt/btrfs/@home_new
 
 # 6. Swap BOTH as fast as possible (back-to-back mv operations)
-mv /mnt/btrfs/@ /mnt/btrfs/@_old
+#    Store old snapshots in /.snapshots/old/ with timestamps for investigation
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+mv /mnt/btrfs/@ /mnt/btrfs/@snapshots/old/@_${TIMESTAMP}
 mv /mnt/btrfs/@_new /mnt/btrfs/@
-mv /mnt/btrfs/@home /mnt/btrfs/@home_old
+mv /mnt/btrfs/@home /mnt/btrfs/@snapshots/old/@home_${TIMESTAMP}
 mv /mnt/btrfs/@home_new /mnt/btrfs/@home
 
 # 7. Update the default subvolume. It is not used for booting, but keeping it 
@@ -154,7 +271,7 @@ btrfs subvolume set-default /mnt/btrfs/@
 EOF
 log_info "Subvolumes replaced with baseline snapshots"
 
-# Step 5: Reboot (unmount not strictly necessary)
+# Step 5: Reboot
 log_step "Rebooting VM..."
 # Reboot may terminate SSH connection, so ignore exit code
 ssh_vm "sudo reboot" || true
@@ -173,8 +290,8 @@ if ! wait_for_ssh "${SSH_USER}@${VM_HOST}" 300; then
     exit 1
 fi
 
-# Step 7: Clean up old subvolumes after reboot
-log_step "Cleaning up old subvolumes..."
+# Step 7: Clean up old subvolumes after reboot (keep 3 most recent for investigation)
+log_step "Rotating old subvolumes (keeping 3 most recent)..."
 ssh_vm 'sudo bash -s' << 'EOF'
 set -euo pipefail
 
@@ -195,13 +312,22 @@ if mountpoint -q /mnt/btrfs; then
 fi
 mount -o subvolid=5 /dev/sda2 /mnt/btrfs
 
-# Delete old subvolumes (may have nested subvols from tests)
-delete_subvol_recursive /mnt/btrfs/@_old
-delete_subvol_recursive /mnt/btrfs/@home_old
+# Rotate old root snapshots in /.snapshots/old/: keep 3 most recent, delete the rest
+# Timestamped names sort chronologically (YYYYMMDD_HHMMSS format)
+for old_subvol in $(ls -1d /mnt/btrfs/@snapshots/old/@_* 2>/dev/null | sort -r | tail -n +4); do
+    echo "Deleting old snapshot: $old_subvol"
+    delete_subvol_recursive "$old_subvol"
+done
+
+# Rotate old home snapshots in /.snapshots/old/: keep 3 most recent, delete the rest
+for old_subvol in $(ls -1d /mnt/btrfs/@snapshots/old/@home_* 2>/dev/null | sort -r | tail -n +4); do
+    echo "Deleting old snapshot: $old_subvol"
+    delete_subvol_recursive "$old_subvol"
+done
 
 # Unmount
 umount /mnt/btrfs
 EOF
-log_info "Old subvolumes deleted"
+log_info "Old subvolumes rotated"
 
 log_step "VM reset complete: $VM_HOST"
