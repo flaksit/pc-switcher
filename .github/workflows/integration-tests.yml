@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-tags: true
+          fetch-depth: 0  # Full history needed for uv-dynamic-versioning
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4

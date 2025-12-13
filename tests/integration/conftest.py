@@ -76,7 +76,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     This hook runs synchronously before any test collection, allowing us to
     cleanly exit pytest with pytest.exit() if locks can't be acquired.
     """
-    global _ACQUIRED_LOCK
+    global _ACQUIRED_LOCK  # noqa: PLW0603
 
     # Check if integration tests are being run
     # If session.config.option.markexpr includes 'integration', we need the lock
@@ -96,8 +96,6 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     holder = _get_lock_holder()
 
     # Try to acquire lock synchronously using subprocess
-    import subprocess
-
     try:
         result = subprocess.run(
             [str(lock_script), holder, "acquire"],
@@ -105,6 +103,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
             capture_output=True,
             text=True,
             timeout=10,
+            check=False,
         )
         if result.returncode != 0:
             error_detail = (
@@ -118,7 +117,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
                 f"{'='*70}\n",
                 2,
             )
-        _ACQUIRED_LOCK = True
+        _ACQUIRED_LOCK = True  # pyright: ignore[reportConstantRedefinition]
     except subprocess.TimeoutExpired:
         pytest.exit("Timeout acquiring integration test lock", 1)
     except Exception as e:
@@ -127,7 +126,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Release integration test lock after tests complete."""
-    global _ACQUIRED_LOCK
+    global _ACQUIRED_LOCK  # noqa: PLW0602
 
     if not _ACQUIRED_LOCK:
         return
@@ -142,18 +141,14 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
     holder = _get_lock_holder()
 
-    import subprocess
-
-    try:
+    with contextlib.suppress(Exception):
         subprocess.run(
             [str(lock_script), holder, "release"],
             env={**os.environ, "HCLOUD_TOKEN": hcloud_token},
             capture_output=True,
             timeout=10,
+            check=False,
         )
-    except Exception:
-        # Ignore errors during cleanup
-        pass
 
 
 def _get_lock_holder() -> str:
