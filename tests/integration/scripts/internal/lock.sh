@@ -49,8 +49,6 @@ EOF
 fi
 
 readonly SERVER_NAMES=("pc1" "pc2")
-readonly LOCK_TIMEOUT_SECONDS=0  # Fail immediately if locks not available
-readonly RETRY_INTERVAL_SECONDS=10
 
 # Verify HCLOUD_TOKEN is set
 : "${HCLOUD_TOKEN:?HCLOUD_TOKEN environment variable must be set}"
@@ -158,187 +156,53 @@ status() {
 # Acquire locks on all VMs with timeout and retry
 acquire() {
     if [[ -z "$HOLDER" ]]; then
-        log_error "holder must not be empty for acquire operation"
+        log_error "HOLDER must not be empty for acquire operation"
         exit 1
     fi
 
-    local start_time
-    local current_time
-    local elapsed
+    # Check current holders for all servers
+    local some_free=false
 
-    start_time=$(date +%s)
-
-    while true; do
-        # Check current holders for all servers
-        local all_free=true
-        local all_ours=true
-        local we_hold_some=false
-        local we_hold_all=true
-        local holders=()
-
-        for server in "${SERVER_NAMES[@]}"; do
-            local holder
-            holder=$(get_server_lock_holder "$server")
-            holders+=("$holder")
-
-            if [[ -n "$holder" ]]; then
-                all_free=false
-                if [[ "$holder" == "$HOLDER" ]]; then
-                    we_hold_some=true
-                else
-                    all_ours=false
-                    we_hold_all=false
-                fi
-            else
-                we_hold_all=false
-            fi
-        done
-
-        # Detect inconsistent state (different non-empty holders on different VMs)
-        # This should never happen and requires manual intervention
-        local first_holder=""
-        local inconsistent=false
-        for holder in "${holders[@]}"; do
-            if [[ -n "$holder" ]]; then
-                if [[ -z "$first_holder" ]]; then
-                    first_holder="$holder"
-                elif [[ "$holder" != "$first_holder" ]]; then
-                    inconsistent=true
-                    break
-                fi
-            fi
-        done
-
-        if [[ "$inconsistent" == "true" ]]; then
-            log_error "Inconsistent lock state detected! VMs are locked by different holders:"
-            for i in "${!SERVER_NAMES[@]}"; do
-                local server="${SERVER_NAMES[$i]}"
-                local holder="${holders[$i]}"
-                if [[ -n "$holder" ]]; then
-                    log_error "  $server: $holder"
-                fi
-            done
-            log_error "This requires manual intervention. Run 'lock.sh \"\" status' for details."
-            exit 1
-        fi
-
-        # Detect partial lock state (we hold some but not all locks)
-        # Only proceed if the locks we don't hold are FREE (not held by someone else)
-        if [[ "$we_hold_some" == "true" && "$we_hold_all" == "false" ]]; then
-            # Check if any VM is held by someone other than us
-            local others_hold_locks=false
-            for holder in "${holders[@]}"; do
-                if [[ -n "$holder" && "$holder" != "$HOLDER" ]]; then
-                    others_hold_locks=true
-                    break
-                fi
-            done
-
-            if [[ "$others_hold_locks" == "true" ]]; then
-                # This should have been caught by inconsistent state check above
-                # But adding explicit check for safety
-                log_error "Partial lock conflict: we hold some VMs but others are held by different holder"
+    # Check if any locks are held by others
+    # Exit if so
+    for server in "${SERVER_NAMES[@]}"; do
+        local holder
+        holder=$(get_server_lock_holder "$server")
+        
+        if [[ -n "$holder" ]]; then
+            if [[ "$holder" != "$HOLDER" ]]; then
+                log_error "Lock held by: $holder"
                 exit 1
             fi
-
-            # Safe partial lock cleanup: we hold some, others are free
-            log_warn "Partial lock detected (likely from interrupted previous run), cleaning up..."
-            for server in "${SERVER_NAMES[@]}"; do
-                local holder
-                holder=$(get_server_lock_holder "$server")
-                if [[ "$holder" == "$HOLDER" ]]; then
-                    remove_server_lock "$server"
-                fi
-            done
-            # Continue to retry acquisition
-            
-        # Case 1: All locks are free - try to acquire
-        elif [[ "$all_free" == "true" ]]; then
-            log_info "All locks are free, attempting to acquire..."
-
-            # Acquire locks sequentially in order
-            for server in "${SERVER_NAMES[@]}"; do
-                set_server_lock "$server" "$HOLDER"
-            done
-
-            # Verify we got all locks (check for race condition)
-            sleep 1
-            local verify_success=true
-            for server in "${SERVER_NAMES[@]}"; do
-                local current_holder
-                current_holder=$(get_server_lock_holder "$server")
-                if [[ "$current_holder" != "$HOLDER" ]]; then
-                    log_warn "Race condition detected on $server: lock acquired by $current_holder, retrying..."
-                    verify_success=false
-                    break
-                fi
-            done
-
-            if [[ "$verify_success" == "true" ]]; then
-                log_step "Successfully acquired locks on all VMs as $HOLDER"
-                return 0
-            else
-                # Race detected - release any locks we might have and retry
-                for server in "${SERVER_NAMES[@]}"; do
-                    remove_server_lock "$server"
-                done
-            fi
-
-        # Case 2: All locks are held by us already
-        elif [[ "$all_ours" == "true" ]]; then
-            log_info "Locks already held by $HOLDER on all VMs"
-            return 0
-
-        # Case 3: Locks are held by someone else
         else
-            local holder_list=""
-            for i in "${!SERVER_NAMES[@]}"; do
-                local server="${SERVER_NAMES[$i]}"
-                local holder="${holders[$i]}"
-                if [[ -n "$holder" ]]; then
-                    local timestamp
-                    timestamp=$(get_server_lock_timestamp "$server")
-                    holder_list="$holder_list\n  $server: $holder (since $timestamp)"
-                fi
-            done
-            log_info "Locks held by:$holder_list"
-            log_info "Waiting..."
+            some_free=true
         fi
+    done
 
-        # Check timeout
-        current_time=$(date +%s)
-        elapsed=$((current_time - start_time))
+    if [[ "$some_free" == "false" ]]; then
+        log_info "Locks already held by $HOLDER on all VMs"
+        return 0
+    fi
 
-        if [[ $elapsed -ge $LOCK_TIMEOUT_SECONDS ]]; then
-            log_error "Timeout waiting for locks (waited ${elapsed}s)"
-            log_error "Current lock holders:"
-            for i in "${!SERVER_NAMES[@]}"; do
-                local server="${SERVER_NAMES[$i]}"
-                local holder="${holders[$i]}"
-                if [[ -n "$holder" ]]; then
-                    log_error "  $server: $holder"
-                else
-                    log_error "  $server: (free)"
-                fi
-            done
-            exit 1
+    # All or some are free --> acquire locks on servers where not held yet
+    for server in "${SERVER_NAMES[@]}"; do
+        local holder
+        holder=$(get_server_lock_holder "$server")
+        if [[ "$holder" != "$HOLDER" ]]; then
+            set_server_lock "$server" "$HOLDER"
         fi
-
-        # Wait before retry
-        sleep "$RETRY_INTERVAL_SECONDS"
     done
 }
 
-# Release locks on all VMs
+# Release our locks on all VMs
 release() {
     if [[ -z "$HOLDER" ]]; then
-        log_error "holder must not be empty for release operation"
+        log_error "HOLDER must not be empty for release operation"
         exit 1
     fi
 
-    local holders=()
-    local any_held_by_us=false
     local any_held_by_others=false
+    local any_held_by_us=false
 
     # Check current holders
     for server in "${SERVER_NAMES[@]}"; do
@@ -348,39 +212,33 @@ release() {
 
         if [[ -n "$holder" ]]; then
             if [[ "$holder" == "$HOLDER" ]]; then
+                log_info "Releasing lock on $server held by us ($HOLDER)"
+                remove_server_lock "$server"
                 any_held_by_us=true
             else
+                log_error "Cannot release lock on $server held by $holder"
                 any_held_by_others=true
             fi
         fi
     done
 
-    # No locks held
-    if [[ "$any_held_by_us" == "false" && "$any_held_by_others" == "false" ]]; then
-        log_info "Locks are not held on any VM, nothing to release"
-        return 0
-    fi
-
-    # Some locks held by others
     if [[ "$any_held_by_others" == "true" ]]; then
-        log_error "Cannot release locks held by another process:"
-        for i in "${!SERVER_NAMES[@]}"; do
-            local server="${SERVER_NAMES[$i]}"
-            local holder="${holders[$i]}"
-            if [[ -n "$holder" && "$holder" != "$HOLDER" ]]; then
-                log_error "  $server: $holder"
-            fi
-        done
+        log_error "Some locks are held by another process; cannot release all locks"
         exit 1
+    elif [[ "$any_held_by_us" == "true" ]]; then
+        log_step "Locks released successfully"
+    else
+        log_step "There are no locks; nothing to release"
     fi
+}
 
-    # All locks (if any) are held by us - release them
-    log_info "Releasing locks held by $HOLDER"
+# Cleanup: release all locks on all VMs, regardless of holder
+cleanup() {
+    log_info "Cleaning up: Releasing all locks on all VMs"
     for server in "${SERVER_NAMES[@]}"; do
         remove_server_lock "$server"
     done
-    log_step "Locks released successfully"
-    return 0
+    log_step "All locks released"
 }
 
 # Execute requested action
@@ -394,8 +252,11 @@ case "$ACTION" in
     release)
         release
         ;;
+    cleanup)
+        cleanup
+        ;;
     *)
-        log_error "Invalid action '$ACTION'. Must be one of: acquire, release, status"
+        log_error "Invalid action '$ACTION'. Must be one of: acquire, release, cleanup, status"
         exit 1
         ;;
 esac

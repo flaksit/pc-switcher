@@ -22,7 +22,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 import pytest
-import pytest_asyncio
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import Version, find_one_version, get_this_version
@@ -41,7 +40,7 @@ def _get_release_version() -> Version:
     return current.release_version()
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 async def clean_install_environment(pc1_executor: BashLoginRemoteExecutor) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide a clean environment for testing installation.
 

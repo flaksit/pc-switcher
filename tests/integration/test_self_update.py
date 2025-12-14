@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-import pytest_asyncio
+import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import Version, find_one_version
@@ -27,7 +27,7 @@ VERSION_WITH_SELF_UPDATE_NEW = Version.parse("0.1.0-alpha.3")
 INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 async def clean_pc_switcher(pc1_executor: BashLoginRemoteExecutor) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Ensure pc-switcher is uninstalled before and after each test.
 

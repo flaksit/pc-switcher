@@ -20,9 +20,10 @@ import os
 import re
 import secrets
 import socket
+import subprocess
 import warnings
-from asyncio import TaskGroup
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -40,6 +41,9 @@ REQUIRED_ENV_VARS = [
 ]
 
 SCRIPTS_DIR = Path(__file__).parent / "scripts"
+RESET_VM_SCRIPT = SCRIPTS_DIR / "reset-vm.sh"
+
+BASELINE_AGE_WARNING_DAYS = 30
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -56,31 +60,28 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     # Fail if integration tests are collected but VM environment not configured
     missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
     if missing_vars and integration_tests:
-        pytest.fail(
+        pytest.exit(
             f"Integration tests require VM environment. "
             f"Missing: {', '.join(missing_vars)}. "
-            f"Run unit tests only with: uv run pytest tests/unit tests/contract"
+            f"Run unit tests only with: uv run pytest tests/unit tests/contract",
+            1,
         )
 
 
-# Module-level state for this pytest session
+# Lock state for this pytest session
 _LOCK_HOLDER: str | None = None
-_ACQUIRED_LOCK = False
 
 
-def pytest_sessionstart(session: pytest.Session) -> None:
+def _acquire_lock() -> None:
     """Acquire integration test lock before test collection starts.
 
-    This hook runs synchronously before any test collection, allowing us to
+    This function is called synchronously before any test collection, allowing us to
     cleanly exit pytest with pytest.exit() if locks can't be acquired.
+    If we already hold the lock, this is a no-op.
     """
-    global _ACQUIRED_LOCK
-
-    # Check if integration tests are being run
-    # If session.config.option.markexpr includes 'integration', we need the lock
-    marker_expr = getattr(session.config.option, "markexpr", None)
-    if not marker_expr or "integration" not in str(marker_expr):
-        return
+    global _LOCK_HOLDER  # noqa: PLW0603
+    if _LOCK_HOLDER:
+        pytest.exit(f"Lock already acquired: {_LOCK_HOLDER}. This should be called only once.", 1)
 
     hcloud_token = os.getenv("HCLOUD_TOKEN")
     if not hcloud_token:
@@ -91,43 +92,40 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         pytest.exit(f"Lock script not found: {lock_script}", 1)
 
     # Get lock holder ID
-    holder = _get_lock_holder()
+    holder = _generate_lock_holder()
 
     # Try to acquire lock synchronously using subprocess
-    import subprocess
-
     try:
-        result = subprocess.run(
+        subprocess.run(
             [str(lock_script), holder, "acquire"],
             env={**os.environ, "HCLOUD_TOKEN": hcloud_token},
             capture_output=True,
+            check=False,
             text=True,
             timeout=10,
         )
-        if result.returncode != 0:
-            error_detail = (
-                result.stderr.strip() if result.stderr.strip() else "Lock held by another test session"
-            )
-            pytest.exit(
-                f"\n{'='*70}\n"
-                f"INTEGRATION TEST LOCK CONFLICT\n"
-                f"{'='*70}\n"
-                f"Cannot acquire locks - {error_detail}\n"
-                f"{'='*70}\n",
-                2,
-            )
-        _ACQUIRED_LOCK = True
+        _LOCK_HOLDER = holder  # pyright: ignore[reportConstantRedefinition]
+        print(f"Acquired integration test lock with holder ID: {_LOCK_HOLDER}:")
+    except subprocess.CalledProcessError as e:
+        pytest.exit(
+            f"\n{'=' * 70}\n"
+            f"INTEGRATION TEST LOCK CONFLICT\n"
+            f"{'=' * 70}\n"
+            f"stdout: {e.stdout.decode(errors='ignore') if e.stdout else '-'}\n"
+            f"stderr: {e.stderr.decode(errors='ignore') if e.stderr else '-'}\n"
+            f"{'=' * 70}\n",
+            1,
+        )
     except subprocess.TimeoutExpired:
         pytest.exit("Timeout acquiring integration test lock", 1)
     except Exception as e:
         pytest.exit(f"Error acquiring integration test lock: {e}", 1)
 
 
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+def _release_lock() -> None:
     """Release integration test lock after tests complete."""
-    global _ACQUIRED_LOCK
-
-    if not _ACQUIRED_LOCK:
+    if not _LOCK_HOLDER:
+        warnings.warn("No lock holder ID set, skipping lock release", RuntimeWarning, stacklevel=2)
         return
 
     hcloud_token = os.getenv("HCLOUD_TOKEN")
@@ -138,39 +136,67 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     if not lock_script.exists():
         return
 
-    holder = _get_lock_holder()
-
-    import subprocess
-
     try:
         subprocess.run(
-            [str(lock_script), holder, "release"],
+            [str(lock_script), _LOCK_HOLDER, "release"],
             env={**os.environ, "HCLOUD_TOKEN": hcloud_token},
+            check=True,
             capture_output=True,
             timeout=10,
         )
-    except Exception:
-        # Ignore errors during cleanup
-        pass
+    except subprocess.CalledProcessError as e:
+        warnings.warn(
+            "Error while releasing integration test lock"
+            f"stdout: {e.stdout.decode(errors='ignore') if e.stdout else '-'}\n"
+            f"stderr: {e.stderr.decode(errors='ignore') if e.stderr else '-'}\n",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        # Ignore the exception to allow pytest to finish normally
+    except Exception as e:
+        warnings.warn(f"Exception while releasing integration test lock: {e}", RuntimeWarning, stacklevel=2)
+        # Ignore the exception to allow pytest to finish normally
 
 
-def _get_lock_holder() -> str:
+def is_integration_test_running(session: pytest.Session) -> bool:
+    """Check if integration tests are being run in this pytest session."""
+    marker_expr = getattr(session.config.option, "markexpr", None)
+    # Do not match when preceded by the literal "not " (e.g. "not integration").
+    # The negative lookbehind ensures the 4 characters before the word are not "not ".
+    return re.search(r"(?<!\bnot\s)\bintegration\b", str(marker_expr)) is not None
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """This hook runs synchronously before any test collection, allowing us to
+    cleanly exit pytest with pytest.exit() if locks can't be acquired.
+    """
+
+    if not is_integration_test_running(session):
+        return
+
+    _acquire_lock()
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """This hook runs synchronously after all tests have completed."""
+
+    if not is_integration_test_running(session):
+        return
+
+    _release_lock()
+
+
+def _generate_lock_holder() -> str:
     """Get a unique lock holder identifier for this test session.
 
     CRITICAL: Must be unique per invocation to prevent concurrent test runs
     on the same machine by the same user.
 
-    The identifier must be valid for Hetzner Cloud labels which only allow
+    The identifier is valid for Hetzner Cloud labels which only allow
     alphanumeric characters, underscores, and hyphens.
 
     Cached at module level to ensure consistency across fixture calls.
     """
-    global _LOCK_HOLDER  # noqa: PLW0603
-
-    # Return cached ID if already generated
-    if _LOCK_HOLDER is not None:
-        return _LOCK_HOLDER
-
     # Generate new ID (only once per pytest session)
     ci_job_id = os.getenv("CI_JOB_ID") or os.getenv("GITHUB_RUN_ID")
     if ci_job_id:
@@ -182,7 +208,6 @@ def _get_lock_holder() -> str:
         random_suffix = secrets.token_hex(3)  # 6 hex characters
         holder_id = f"local-{user}-{hostname}-{random_suffix}"
 
-    _LOCK_HOLDER = holder_id  # pyright: ignore[reportConstantRedefinition]
     return holder_id
 
 
@@ -225,88 +250,103 @@ async def _reset_vms(pc1_host: str, pc2_host: str) -> None:
     Raises pytest.fail if either reset fails - this prevents tests from running
     against VMs in an inconsistent state.
     """
-    async with TaskGroup() as tg:
-        pc1_task = tg.create_task(_run_script("reset-vm.sh", pc1_host, check=False))
-        pc2_task = tg.create_task(_run_script("reset-vm.sh", pc2_host, check=False))
+    # Create tasks without TaskGroup to prevent cancellation on exception
+    pc1_task = asyncio.create_task(_run_script(str(RESET_VM_SCRIPT), pc1_host, check=False))
+    pc2_task = asyncio.create_task(_run_script(str(RESET_VM_SCRIPT), pc2_host, check=False))
+
+    # Wait for both tasks to complete, even if one raises an exception
+    await asyncio.gather(pc1_task, pc2_task, return_exceptions=True)
 
     # Check results after both complete
-    pc1_rc, _pc1_stdout, pc1_stderr = pc1_task.result()
-    pc2_rc, _pc2_stdout, pc2_stderr = pc2_task.result()
-
     errors = []
-    if pc1_rc != 0:
-        errors.append(f"pc1 reset failed: {pc1_stderr}")
-    if pc2_rc != 0:
-        errors.append(f"pc2 reset failed: {pc2_stderr}")
+    if pc1_task.exception():
+        errors.append(f"pc1 reset failed with exception: {pc1_task.exception()}")
+    else:
+        pc1_rc, _pc1_stdout, pc1_stderr = pc1_task.result()
+        if pc1_rc != 0:
+            errors.append(f"pc1 reset failed: {pc1_stderr}")
+
+    if pc2_task.exception():
+        errors.append(f"pc2 reset failed with exception: {pc2_task.exception()}")
+    else:
+        pc2_rc, _pc2_stdout, pc2_stderr = pc2_task.result()
+        if pc2_rc != 0:
+            errors.append(f"pc2 reset failed: {pc2_stderr}")
 
     if errors:
-        pytest.fail("\n".join(errors))
+        pytest.exit("\n".join(errors), 1)
 
 
-async def _check_baseline_age(executor: RemoteExecutor) -> None:
-    """Warn if baseline snapshots are older than 30 days.
+@dataclass
+class VMReadinessResult:
+    """Result of VM readiness check."""
 
-    This is a non-blocking check to remind maintainers to upgrade VMs periodically.
-    Baseline snapshots should be refreshed regularly with the upgrade-vms.sh script.
-    """
-    try:
-        # Get baseline snapshot creation time using btrfs
-        result = await executor.run_command(
-            "sudo btrfs subvolume show /.snapshots/baseline/@ 2>/dev/null | grep 'Creation time:' | head -1"
-        )
-
-        if not result.stdout:
-            # Can't determine age, skip warning
-            return
-
-        # Parse creation time (format: "Creation time: 2024-11-15 10:30:45")
-        match = re.search(r"Creation time: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", result.stdout)
-        if not match:
-            return
-
-        created_str = match.group(1)
-        created_time = datetime.strptime(created_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
-        now = datetime.now(UTC)
-        age_days = (now - created_time).days
-
-        if age_days > 30:
-            warnings.warn(
-                f"Test VM baselines are {age_days} days old. "
-                f"Consider running: ./tests/integration/scripts/upgrade-vms.sh",
-                UserWarning,
-                stacklevel=2,
-            )
-    except Exception:
-        # Ignore errors in baseline age check - this is just a courtesy warning
-        pass
+    ready: bool
+    baseline_warnings: list[str]
 
 
-async def _check_vms_ready(pc1_executor: RemoteExecutor, pc2_executor: RemoteExecutor) -> bool:
+async def _check_vms_ready(
+    pc1_executor: RemoteExecutor, pc2_executor: RemoteExecutor
+) -> VMReadinessResult:
     """Check if test VMs are reachable and fully configured.
 
     Verifies:
     - SSH connectivity to both VMs
     - Baseline btrfs snapshots exist (implies user is configured)
+    - Warns if baseline snapshots are older than 30 days
     """
-    try:
-        # Check both VMs in parallel
-        async with TaskGroup() as tg:
-            tg.create_task(pc1_executor.run_command("sudo btrfs subvolume show /.snapshots/baseline/@"))
-            tg.create_task(pc2_executor.run_command("sudo btrfs subvolume show /.snapshots/baseline/@"))
 
-        # Both commands must succeed (no exception from TaskGroup means success)
-        return True
-    except Exception:
-        return False
+    async def check_vm(vm_name: str, executor: RemoteExecutor) -> tuple[bool, str | None]:
+        """Check single VM readiness and baseline age. Returns (ready, warning_or_none)."""
+        try:
+            result = await executor.run_command("sudo btrfs subvolume show /.snapshots/baseline/@")
+
+            # Parse creation time from output (format: "Creation time: 2024-11-15 10:30:45")
+            match = re.search(
+                r"Creation time:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", result.stdout
+            )
+            if match:
+                created_str = match.group(1)
+                created_time = datetime.strptime(created_str, "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=UTC
+                )
+                now = datetime.now(UTC)
+                age_days = (now - created_time).days
+                print(f"{vm_name} baseline snapshot age: {age_days} days")
+                if age_days > BASELINE_AGE_WARNING_DAYS:
+                    return (True, f"{vm_name} baseline is {age_days} days old")
+
+            return (True, None)
+        except Exception:
+            return (False, None)
+
+    # Check both VMs in parallel
+    pc1_task = asyncio.create_task(check_vm("pc1", pc1_executor))
+    pc2_task = asyncio.create_task(check_vm("pc2", pc2_executor))
+
+    pc1_result, pc2_result = await asyncio.gather(pc1_task, pc2_task)
+
+    ready = pc1_result[0] and pc2_result[0]
+    baseline_warnings = [w for w in [pc1_result[1], pc2_result[1]] if w]
+
+    return VMReadinessResult(ready=ready, baseline_warnings=baseline_warnings)
 
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def integration_session() -> AsyncIterator[None]:
+@pytest.fixture(scope="session")
+def lock_holder() -> str:
+    """Provide the unique lock holder ID for this test session."""
+    if not _LOCK_HOLDER:
+        pytest.exit("Lock holder ID not set - lock acquisition must have failed", 1)
+    return _LOCK_HOLDER
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session", autouse=True)
+async def integration_session(lock_holder: str):
     """Session-scoped fixture for VM provisioning and reset.
 
     This fixture:
-    1. Checks if VMs are ready, provisions them if not
-    2. Resets VMs to baseline before tests run
+    1. Checks if VMs are ready
+    2. Resets VMs to baseline
     3. Checks baseline age and warns if outdated
 
     Lock acquisition is handled by pytest_sessionstart hook before this fixture runs.
@@ -316,7 +356,6 @@ async def integration_session() -> AsyncIterator[None]:
     user = os.environ["PC_SWITCHER_TEST_USER"]
 
     # Export lock holder ID so nested scripts reuse the same holder
-    lock_holder = _get_lock_holder()
     os.environ["PCSWITCHER_LOCK_HOLDER"] = lock_holder
 
     # Create connections and executors for VM readiness check and baseline age check
@@ -327,32 +366,37 @@ async def integration_session() -> AsyncIterator[None]:
         pc1_executor = RemoteExecutor(pc1_conn)
         pc2_executor = RemoteExecutor(pc2_conn)
 
-        # Check if VMs are ready
-        if not await _check_vms_ready(pc1_executor, pc2_executor):
-            # Auto-provision VMs
-            provision_script = SCRIPTS_DIR / "provision-test-infra.sh"
-            if not provision_script.exists():
-                pytest.fail(f"Provision script not found: {provision_script}")
-
-            returncode, _, stderr = await _run_script(
-                "provision-test-infra.sh", check=False
+        # Check if VMs are ready and baseline age
+        print("Checking if test VMs are provisioned and ready...")
+        result = await _check_vms_ready(pc1_executor, pc2_executor)
+        if not result.ready:
+            pytest.exit(
+                "Test VMs are not provisioned yet. "
+                "Run the GitHub workflow 'Integration Tests' to do this.",
+                1,
             )
-            if returncode != 0:
-                pytest.fail(f"Failed to provision test VMs: {stderr}")
+        print("Test VMs are ready.")
+
+        # Warn if baseline snapshots are outdated
+        if result.baseline_warnings:
+            combined_warning = "; ".join(result.baseline_warnings)
+            warnings.warn(
+                f"Test VM baselines are outdated: {combined_warning}. "
+                f"Consider running ./tests/integration/scripts/upgrade-vms.sh",
+                UserWarning,
+                stacklevel=1,
+            )
 
         # Reset VMs to baseline (in parallel for faster setup)
-        reset_script = SCRIPTS_DIR / "reset-vm.sh"
-        if reset_script.exists():
-            await _reset_vms(pc1_host, pc2_host)
-
-        # Check baseline age and warn if outdated
-        await _check_baseline_age(pc1_executor)
-
-    yield
+        if not RESET_VM_SCRIPT.exists():
+            pytest.exit(f"Reset script for test-VMs not found: {RESET_VM_SCRIPT}", 1)
+        print("Resetting test VMs to baseline snapshots...")
+        await _reset_vms(pc1_host, pc2_host)
+        print("Test VMs reset complete.")
 
 
-@pytest_asyncio.fixture(scope="module")
-async def pc1_connection(integration_session: None) -> AsyncIterator[asyncssh.SSHClientConnection]:
+@pytest.fixture(scope="module")
+async def _pc1_connection(integration_session: None) -> AsyncIterator[asyncssh.SSHClientConnection]:  # pyright: ignore[reportUnusedFunction]
     """SSH connection to pc1 test VM.
 
     Module-scoped: shared across all tests in a module for efficiency.
@@ -367,8 +411,8 @@ async def pc1_connection(integration_session: None) -> AsyncIterator[asyncssh.SS
         yield conn
 
 
-@pytest_asyncio.fixture(scope="module")
-async def pc2_connection(integration_session: None) -> AsyncIterator[asyncssh.SSHClientConnection]:
+@pytest.fixture(scope="module")
+async def _pc2_connection(integration_session: None) -> asyncssh.SSHClientConnection:  # pyright: ignore[reportUnusedFunction]
     """SSH connection to pc2 test VM.
 
     Module-scoped: shared across all tests in a module for efficiency.
@@ -380,11 +424,11 @@ async def pc2_connection(integration_session: None) -> AsyncIterator[asyncssh.SS
     user = os.environ["PC_SWITCHER_TEST_USER"]
 
     async with asyncssh.connect(host, username=user) as conn:
-        yield conn
+        return conn
 
 
-@pytest_asyncio.fixture(scope="module")
-async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
+@pytest.fixture(scope="module")
+async def pc1_executor(_pc1_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
     """Executor for running commands on pc1 with login shell enabled by default.
 
     Module-scoped: shared across all tests in a module.
@@ -395,14 +439,14 @@ async def pc1_executor(pc1_connection: asyncssh.SSHClientConnection) -> BashLogi
     Commands use login_shell=True by default but can be overridden with login_shell=False
     for system commands.
     """
-    return BashLoginRemoteExecutor(pc1_connection)
+    return BashLoginRemoteExecutor(_pc1_connection)
 
 
 # Install script URL from main branch
 _INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def pc1_with_pcswitcher(pc1_executor: BashLoginRemoteExecutor) -> BashLoginRemoteExecutor:
     """Ensure pc-switcher is installed on pc1.
 
@@ -412,9 +456,7 @@ async def pc1_with_pcswitcher(pc1_executor: BashLoginRemoteExecutor) -> BashLogi
     Use this fixture when tests require pc-switcher to be available on pc1.
     """
     # Check if pc-switcher is already installed
-    version_check = await pc1_executor.run_command(
-        "pc-switcher --version 2>/dev/null || true", timeout=10.0
-    )
+    version_check = await pc1_executor.run_command("pc-switcher --version 2>/dev/null || true", timeout=10.0)
 
     if not version_check.success or "pc-switcher" not in version_check.stdout.lower():
         # Install pc-switcher
@@ -431,8 +473,8 @@ async def pc1_with_pcswitcher(pc1_executor: BashLoginRemoteExecutor) -> BashLogi
     return pc1_executor
 
 
-@pytest_asyncio.fixture(scope="module")
-async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
+@pytest.fixture(scope="module")
+async def pc2_executor(_pc2_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
     """Executor for running commands on pc2 with login shell enabled by default.
 
     Module-scoped: shared across all tests in a module.
@@ -443,10 +485,10 @@ async def pc2_executor(pc2_connection: asyncssh.SSHClientConnection) -> BashLogi
     Commands use login_shell=True by default but can be overridden with login_shell=False
     for system commands.
     """
-    return BashLoginRemoteExecutor(pc2_connection)
+    return BashLoginRemoteExecutor(_pc2_connection)
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 async def pc2_executor_without_pcswitcher_tool(
     pc2_executor: BashLoginRemoteExecutor,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:
@@ -469,9 +511,7 @@ async def pc2_executor_without_pcswitcher_tool(
     was_installed = version_check.success and "pc-switcher" in version_check.stdout.lower()
 
     # Uninstall pc-switcher if it exists
-    await pc2_executor.run_command(
-        "uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True
-    )
+    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
     await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
 
     yield pc2_executor
@@ -488,7 +528,7 @@ async def pc2_executor_without_pcswitcher_tool(
             warnings.warn(f"Failed to restore pc-switcher on pc2: {result.stderr}", stacklevel=2)
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 async def pc2_executor_with_old_pcswitcher_tool(
     pc2_executor: BashLoginRemoteExecutor,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:
@@ -515,9 +555,7 @@ async def pc2_executor_with_old_pcswitcher_tool(
     was_installed = version_check.success and "pc-switcher" in version_check.stdout.lower()
 
     # Uninstall and install older version
-    await pc2_executor.run_command(
-        "uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True
-    )
+    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
     await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
     result = await pc2_executor.run_command(
         f"curl -sSL {install_script_url} | VERSION=0.1.0-alpha.1 bash",

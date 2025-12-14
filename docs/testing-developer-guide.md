@@ -445,23 +445,23 @@ async def test_ssh_connection(pc1_executor):
 Integration test fixtures are defined in `tests/integration/conftest.py`:
 
 ```python
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def pc1_connection():
     """Async SSH connection to pc1 VM."""
 
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def pc2_connection():
     """Async SSH connection to pc2 VM."""
 
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def pc1_executor(pc1_connection):
     """RemoteExecutor for pc1 VM."""
 
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def pc2_executor(pc2_connection):
     """RemoteExecutor for pc2 VM."""
 
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def test_volume(pc1_executor):
     """Btrfs test subvolume at /test-vol."""
 ```
@@ -919,7 +919,7 @@ If a specific test needs complete isolation (e.g., it corrupts the connection), 
 
 ```python
 # In a specific test file that needs isolation
-@pytest_asyncio.fixture  # defaults to function scope
+@pytest.fixture  # defaults to function scope
 async def isolated_connection():
     """Fresh connection for tests that need isolation."""
     host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]

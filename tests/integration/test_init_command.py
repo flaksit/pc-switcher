@@ -16,12 +16,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-import pytest_asyncio
+import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 async def clean_config_environment(
     pc1_with_pcswitcher: BashLoginRemoteExecutor,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:

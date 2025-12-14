@@ -10,12 +10,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-import pytest_asyncio
+import pytest
 
 from pcswitcher.executor import RemoteExecutor
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def test_volume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     """Isolated btrfs subvolume for snapshot tests.
 

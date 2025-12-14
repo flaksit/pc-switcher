@@ -17,7 +17,7 @@ import time
 from collections.abc import AsyncIterator
 from datetime import datetime
 
-import pytest_asyncio
+import pytest
 
 from pcswitcher.btrfs_snapshots import (
     cleanup_snapshots,
@@ -31,7 +31,7 @@ from pcswitcher.executor import RemoteExecutor
 from pcswitcher.models import Host, SnapshotPhase
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def test_subvolume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     """Create a test btrfs subvolume for snapshot testing.
 
