@@ -710,22 +710,22 @@ All infrastructure scripts are in `tests/integration/scripts/`:
 
 **Create single VM**:
 ```bash
-./scripts/create-vm.sh pc1
+./scripts/internal/create-vm.sh pc1
 ```
 
 **Configure single VM**:
 ```bash
-./scripts/configure-vm.sh pc1 <vm-ip>
+./scripts/internal/configure-vm.sh pc1 <vm-ip>
 ```
 
 **Setup inter-VM networking**:
 ```bash
-./scripts/configure-hosts.sh <pc1-ip> <pc2-ip>
+./scripts/internal/configure-hosts.sh <pc1-ip> <pc2-ip>
 ```
 
 **Create baseline snapshots**:
 ```bash
-./scripts/create-baseline-snapshots.sh <pc1-ip> <pc2-ip>
+./scripts/internal/create-baseline-snapshots.sh <pc1-ip> <pc2-ip>
 ```
 
 **Reset VM**:
@@ -735,8 +735,8 @@ All infrastructure scripts are in `tests/integration/scripts/`:
 
 **Lock operations**:
 ```bash
-./scripts/lock.sh <holder-id> acquire
-./scripts/lock.sh <holder-id> release
+./scripts/internal/lock.sh <holder-id> acquire
+./scripts/internal/lock.sh <holder-id> release
 ```
 
 ---

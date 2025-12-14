@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
+source "$SCRIPT_DIR/internal/common.sh"
 
 # Reset a single VM to its baseline btrfs snapshot state
 # This script restores the VM to the known-good baseline created during provisioning
@@ -63,12 +63,12 @@ export PCSWITCHER_LOCK_HOLDER=$(get_lock_holder)
 
 # Set up cleanup trap
 cleanup_lock() {
-    "$SCRIPT_DIR/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release 2>/dev/null || true
+    "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release 2>/dev/null || true
 }
 trap cleanup_lock EXIT INT TERM
 
 # Acquire lock (waits up to 5 minutes if held by another process)
-if ! "$SCRIPT_DIR/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire 2>/dev/null; then
+if ! "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire 2>/dev/null; then
     log_error "Failed to acquire lock"
     exit 1
 fi

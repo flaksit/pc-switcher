@@ -289,7 +289,7 @@ conftest.py (test runner - may have empty known_hosts)
 
 | Script | SSH Pattern | Notes |
 |--------|-------------|-------|
-| `ssh-common.sh` | - | Defines 4 helper functions |
+| `common.sh` | - | Helper functions |
 | `create-vm.sh` | `wait_for_ssh` (phase) | 3 phase transitions |
 | `provision-test-infra.sh` | `ssh_first` (phase) | Parallel checks for both VMs |
 | `configure-vm.sh` | `ssh_run` only | Key established by create-vm.sh |

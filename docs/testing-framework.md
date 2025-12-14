@@ -251,10 +251,10 @@ To prevent conflicts between dev and CI test runs:
 
 ```bash
 # Lock is acquired at start of test session
-tests/integration/scripts/lock.sh $HOLDER acquire
+tests/integration/scripts/internal/lock.sh $HOLDER acquire
 
 # Lock is released at end
-tests/integration/scripts/lock.sh $HOLDER release
+tests/integration/scripts/internal/lock.sh $HOLDER release
 ```
 
 The lock is stored as **Hetzner Server Labels** on the `pc1` server (not as a file on the VM). This approach survives VM reboots and snapshot rollbacks:
