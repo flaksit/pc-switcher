@@ -154,8 +154,8 @@ class TestSelfUpdateUpgrade:
         await _install_version(clean_pc_switcher, VERSION_WITH_SELF_UPDATE_OLD)
 
         # Use self update with --prerelease (should find latest prerelease)
-        success, _stdout, stderr = await _run_self_update(clean_pc_switcher, prerelease=True)
-        assert success, f"Self update --prerelease failed: {stderr}"
+        success, stdout, stderr = await _run_self_update(clean_pc_switcher, prerelease=True)
+        assert success, f"Self update --prerelease failed:\n--- STDOUT ---\n{stdout}\n\n--- STDERR ---\n{stderr}"
 
         # Should have upgraded to at least VERSION_WITH_SELF_UPDATE_NEW
         new_version = await _get_installed_version(clean_pc_switcher)
