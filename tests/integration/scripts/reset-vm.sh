@@ -57,20 +57,27 @@ readonly VM_HOST="$1"
 readonly SSH_USER="${PC_SWITCHER_TEST_USER:-testuser}"
 
 # Acquire lock for VM operations (prevents concurrent access)
-# Note: When called from conftest.py, lock is already held by pytest
-# Lock acquisition is idempotent (succeeds if same holder already has lock)
-export PCSWITCHER_LOCK_HOLDER=$(get_lock_holder)
+# Note: When called from conftest.py or upgrade-vms.sh, lock is already held
+# In that case, PCSWITCHER_LOCK_HOLDER is inherited and we skip lock management
+if [[ -z "${PCSWITCHER_LOCK_HOLDER:-}" ]]; then
+    # Not called from parent with lock - acquire our own
+    export PCSWITCHER_LOCK_HOLDER=$(get_lock_holder)
+    OWNS_LOCK=true
 
-# Set up cleanup trap
-cleanup_lock() {
-    "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release 2>/dev/null || true
-}
-trap cleanup_lock EXIT INT TERM
+    # Set up cleanup trap only if we own the lock
+    cleanup_lock() {
+        "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release 2>/dev/null || true
+    }
+    trap cleanup_lock EXIT INT TERM
 
-# Acquire lock (waits up to 5 minutes if held by another process)
-if ! "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire 2>/dev/null; then
-    log_error "Failed to acquire lock"
-    exit 1
+    # Acquire lock (waits up to 5 minutes if held by another process)
+    if ! "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire 2>/dev/null; then
+        log_error "Failed to acquire lock"
+        exit 1
+    fi
+else
+    OWNS_LOCK=false
+    log_info "Using inherited lock from parent (holder: $PCSWITCHER_LOCK_HOLDER)"
 fi
 
 # SSH connection helper
