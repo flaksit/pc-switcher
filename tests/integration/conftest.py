@@ -63,8 +63,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         )
 
 
-# Cache lock holder ID for this pytest session (module-level)
-_LOCK_HOLDER_CACHE: dict[str, str] = {}
+# Module-level state for this pytest session
+_LOCK_HOLDER: str | None = None
 _ACQUIRED_LOCK = False
 
 
@@ -165,9 +165,11 @@ def _get_lock_holder() -> str:
 
     Cached at module level to ensure consistency across fixture calls.
     """
+    global _LOCK_HOLDER  # noqa: PLW0603
+
     # Return cached ID if already generated
-    if "holder" in _LOCK_HOLDER_CACHE:
-        return _LOCK_HOLDER_CACHE["holder"]
+    if _LOCK_HOLDER is not None:
+        return _LOCK_HOLDER
 
     # Generate new ID (only once per pytest session)
     ci_job_id = os.getenv("CI_JOB_ID") or os.getenv("GITHUB_RUN_ID")
@@ -180,7 +182,7 @@ def _get_lock_holder() -> str:
         random_suffix = secrets.token_hex(3)  # 6 hex characters
         holder_id = f"local-{user}-{hostname}-{random_suffix}"
 
-    _LOCK_HOLDER_CACHE["holder"] = holder_id
+    _LOCK_HOLDER = holder_id  # pyright: ignore[reportConstantRedefinition]
     return holder_id
 
 
