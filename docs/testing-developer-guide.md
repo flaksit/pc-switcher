@@ -476,7 +476,7 @@ Integration tests require these environment variables:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `HCLOUD_TOKEN` | Hetzner Cloud API token | `hc-xxxx...` |
+| `HCLOUD_TOKEN` | Hetzner Cloud API token | `AbC123...` |
 | `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM hostname/IP | `192.0.2.1` |
 | `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM hostname/IP | `192.0.2.2` |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
@@ -1056,7 +1056,7 @@ tests/integration/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC1_HOST
 tests/integration/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC2_HOST
 ```
 
-The `reset-vm.sh` script uses btrfs snapshot rollback and takes about 30 seconds per VM.
+The `reset-vm.sh` script uses btrfs snapshot rollback and takes about 20 seconds.
 
 ## Troubleshooting
 

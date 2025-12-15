@@ -1,12 +1,4 @@
-"""Integration tests for config sync functionality.
-
-These tests require VM infrastructure and verify end-to-end config sync behavior.
-Tests are marked as integration and require:
-- HCLOUD_TOKEN
-- PC_SWITCHER_TEST_PC1_HOST
-- PC_SWITCHER_TEST_PC2_HOST
-- PC_SWITCHER_TEST_USER
-"""
+"""Integration tests for config sync functionality."""
 
 from __future__ import annotations
 
