@@ -78,19 +78,35 @@ create_snapshots_on_vm() {
 set -euo pipefail
 
 SNAPSHOT_BASE_DIR="/.snapshots/baseline"
+OLD_SNAPSHOT_DIR="/.snapshots/old"
 ROOT_SNAPSHOT="${SNAPSHOT_BASE_DIR}/@"
 HOME_SNAPSHOT="${SNAPSHOT_BASE_DIR}/@home"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-# Create the baseline directory if it doesn't exist
+# Helper: recursively delete a subvolume and its children
+delete_subvol_recursive() {
+    local path="$1"
+    local child
+    for child in $(btrfs subvolume list -o "$path" 2>/dev/null | awk '{print $NF}'); do
+        # Convert relative path to absolute
+        delete_subvol_recursive "$(dirname "$path")/$child"
+    done
+    btrfs subvolume delete "$path"
+}
+
+# Create directories if they don't exist
 mkdir -p "$SNAPSHOT_BASE_DIR"
+mkdir -p "$OLD_SNAPSHOT_DIR"
 
-# Delete existing snapshots if present
-for snap in "$ROOT_SNAPSHOT" "$HOME_SNAPSHOT"; do
-    if btrfs subvolume show "$snap" >/dev/null 2>&1; then
-        echo "Deleting existing snapshot: $snap"
-        btrfs subvolume delete "$snap"
-    fi
-done
+# Move existing baseline snapshots to old/ with timestamp (instead of deleting)
+if btrfs subvolume show "$ROOT_SNAPSHOT" >/dev/null 2>&1; then
+    echo "Archiving existing baseline: $ROOT_SNAPSHOT -> ${OLD_SNAPSHOT_DIR}/baseline_@_${TIMESTAMP}"
+    mv "$ROOT_SNAPSHOT" "${OLD_SNAPSHOT_DIR}/baseline_@_${TIMESTAMP}"
+fi
+if btrfs subvolume show "$HOME_SNAPSHOT" >/dev/null 2>&1; then
+    echo "Archiving existing baseline: $HOME_SNAPSHOT -> ${OLD_SNAPSHOT_DIR}/baseline_@home_${TIMESTAMP}"
+    mv "$HOME_SNAPSHOT" "${OLD_SNAPSHOT_DIR}/baseline_@home_${TIMESTAMP}"
+fi
 
 # Create new read-only snapshots
 echo "Creating read-only snapshot of / at $ROOT_SNAPSHOT..."
@@ -98,6 +114,17 @@ btrfs subvolume snapshot -r / "$ROOT_SNAPSHOT"
 
 echo "Creating read-only snapshot of /home at $HOME_SNAPSHOT..."
 btrfs subvolume snapshot -r /home "$HOME_SNAPSHOT"
+
+# Rotate old baseline snapshots: keep 3 most recent, delete the rest
+echo "Rotating old baseline snapshots (keeping 3 most recent)..."
+for old_subvol in $(ls -1d ${OLD_SNAPSHOT_DIR}/baseline_@_* 2>/dev/null | sort -r | tail -n +4); do
+    echo "Deleting old baseline: $old_subvol"
+    delete_subvol_recursive "$old_subvol"
+done
+for old_subvol in $(ls -1d ${OLD_SNAPSHOT_DIR}/baseline_@home_* 2>/dev/null | sort -r | tail -n +4); do
+    echo "Deleting old baseline: $old_subvol"
+    delete_subvol_recursive "$old_subvol"
+done
 
 echo "Snapshots created successfully"
 EOF
