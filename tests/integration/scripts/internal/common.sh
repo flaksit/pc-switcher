@@ -44,13 +44,14 @@ log_error_prefixed() { echo -e "${RED}[ERROR]${NC}${LOG_PREFIX:-} $*" >&2; }
 # =============================================================================
 
 readonly SERVER_NAMES=("pc1" "pc2")
+readonly LOCK_SERVER="pc1"
 
 # Get lock holder identifier for integration test locking, including optional name
 # Returns: "ci-{job_id}-{name}" in CI, "{user}-{hostname}-{name}-{random}" for local runs
 # Parameters:
 #   $1: name - Descriptive name to include in the lock holder ID (optional
 #              Formatted to be compatible with Hetzner Cloud labels (alphanumeric, dash, underscore only)
-generate_lock_holder() {
+_generate_lock_holder() {
     local name="$1"
     if [[ -n "$name" ]]; then
         name="-${name//[^a-zA-Z0-9_-]/_}"
@@ -74,60 +75,7 @@ generate_lock_holder() {
 
 
 #
-# Get current lock holder from server labels
-#
-# Parameters:
-#   $1: server_name - Name of the Hetzner Cloud server
-#
-# Output: lock holder string or empty if not held
-#
-# Environment Variables:
-#   HCLOUD_TOKEN    (required) Hetzner Cloud API token
-#
-_get_server_lock_holder() {
-    local server_name="$1"
-    hcloud server describe "$server_name" -o json | jq -r '.labels.lock_holder // empty'
-}
-
-
-#
-# get_lock_holder - Get current lock holder of all test VMs
-#
-# Output:  lock holder string or empty if not held or inconsistent
-#
-# Returns: 0 if lock is held or not held, in a consistent state
-#          1 if locks are held in inconsistent state: different holders on different VMs
-#
-get_lock_holder() {
-    # Verify HCLOUD_TOKEN is set
-    if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
-        log_error "HCLOUD_TOKEN environment variable must be set"
-        return 1
-    fi
-
-    # Gather status for all servers
-    local holders=()
-
-    for server in "${SERVER_NAMES[@]}"; do
-        holders+=("$(_get_server_lock_holder "$server")")
-    done
-
-    # Check if all holders are the same
-    # Return 1 if any differ
-    for holder in "${holders[@]:1}"; do
-        [[ "$holder" != "${holders[0]}" ]] && return 1
-    done
-
-    # All are the same - Only echo when a holder is present
-    if [[ -n "${holders[0]}" ]]; then
-        echo "${holders[0]}"
-    fi
-    return 0
-}
-
-
-#
-# acquire_lock - Acquire lock on the test-VMs and register cleanup
+# acquire_lock - Acquire lock and register cleanup
 #
 # If PCSWITCHER_LOCK_HOLDER environment variable is set,
 # this function assumes the lock is already held by the parent process. This function
@@ -139,8 +87,7 @@ get_lock_holder() {
 #   $1: name - Descriptive name for the script/function/program acquiring the lock (optional)
 #
 # Exits with: 1 if lock acquisition fails
-#             2 if locks are in an inconsistent state
-#             3 if PCSWITCHER_LOCK_HOLDER was set, but lock not held
+#             2 if PCSWITCHER_LOCK_HOLDER was set, but lock not held
 #
 # Environment Variables:
 #   PCSWITCHER_LOCK_HOLDER - If set, indicates the lock is already held
@@ -150,20 +97,15 @@ acquire_lock() {
     local name="$1"
     if [[ -n "${PCSWITCHER_LOCK_HOLDER:-}" ]]; then
         # Called from parent with lock - verify it's actually held
-        local current_holder="$(get_lock_holder)"
-        local rc=$?
-        if [[ $rc -ne 0 ]]; then
-            log_error "Failed to verify existing lock holder"
-            exit 2
-        fi
+        local current_holder="$("$SCRIPT_DIR/internal/lock.sh" "" get_lock_holder 2>/dev/null)"
         if [[ "${current_holder}" != "$PCSWITCHER_LOCK_HOLDER" ]]; then
             log_error "PCSWITCHER_LOCK_HOLDER is set, but lock is not held"
-            exit 3
+            exit 2
         fi
         log_info "Using inherited lock from parent (holder: $PCSWITCHER_LOCK_HOLDER)"
     else
         # Not called from parent with lock - acquire our own
-        local holder=$(generate_lock_holder "$name")
+        local holder=$(_generate_lock_holder "$name")
 
         # Set up cleanup trap only if we own the lock
         cleanup_lock() {

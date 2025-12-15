@@ -33,9 +33,10 @@ Arguments:
   action    One of: acquire, release, status
 
 Actions:
-  acquire   Acquire locks on both VMs
-  release   Release locks on both VMs (must be the current holder)
-  status    Show current lock status for both VMs
+  acquire   Acquire lock
+  release   Release lock (must be the current holder)
+  status    Show current lock status
+  clear     Release all locks (regardless of holder)
 
 Environment Variables:
   HCLOUD_TOKEN    (required) Hetzner Cloud API token
@@ -63,87 +64,48 @@ fi
 readonly HOLDER="$1"
 readonly ACTION="$2"
 
-# Get lock acquisition timestamp from server labels
-get_server_lock_timestamp() {
-    local server_name="$1"
-    hcloud server describe "$server_name" -o json | jq -r '.labels.lock_acquired // empty'
-}
-
-# Set lock labels on a server
-set_server_lock() {
-    local server_name="$1"
-    local holder="$2"
-    local timestamp
-    # Use format without colons (not valid in Hetzner labels)
-    timestamp=$(date -u +"%Y%m%d-%H%M%S")
-
-    hcloud server add-label "$server_name" "lock_holder=$holder" --overwrite
-    hcloud server add-label "$server_name" "lock_acquired=$timestamp" --overwrite
-}
-
-# Remove lock labels from a server
-remove_server_lock() {
-    local server_name="$1"
-    hcloud server remove-label "$server_name" "lock_holder" 2>/dev/null || true
-    hcloud server remove-label "$server_name" "lock_acquired" 2>/dev/null || true
-}
-
-# Display lock status for all VMs
-status() {
-    local holders=()
-    local timestamps=()
-
-    # Gather status for all servers
-    for server in "${SERVER_NAMES[@]}"; do
-        holders+=("$(_get_server_lock_holder "$server")")
-        timestamps+=("$(get_server_lock_timestamp "$server")")
-    done
-
-    # Check if any locks are held
-    local any_held=false
-    for holder in "${holders[@]}"; do
-        [[ -n "$holder" ]] && any_held=true && break
-    done
-
-    if [[ "$any_held" == "false" ]]; then
-        log_info "Locks are not held on any VM"
-        return 0
-    fi
-
-    # Display status for each server
-    log_info "Lock status:"
-    for i in "${!SERVER_NAMES[@]}"; do
-        local server="${SERVER_NAMES[$i]}"
-        local holder="${holders[$i]}"
-        local timestamp="${timestamps[$i]}"
-
-        if [[ -n "$holder" ]]; then
-            log_info "  $server: Held by $holder (acquired at $timestamp)"
-        else
-            log_info "  $server: Not held"
-        fi
-    done
-
-    # Detect inconsistent state (different holders on different VMs)
-    local first_holder=""
-    local inconsistent=false
-    for holder in "${holders[@]}"; do
-        if [[ -n "$holder" ]]; then
-            if [[ -z "$first_holder" ]]; then
-                first_holder="$holder"
-            elif [[ "$holder" != "$first_holder" ]]; then
-                inconsistent=true
-                break
-            fi
-        fi
-    done
-
-    if [[ "$inconsistent" == "true" ]]; then
-        log_error "Inconsistent lock state detected! VMs are locked by different holders."
+get_lock_holder() {
+    # Verify HCLOUD_TOKEN is set
+    if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+        log_error "HCLOUD_TOKEN environment variable must be set"
         return 1
     fi
 
-    return 0
+    hcloud server describe "$LOCK_SERVER" -o json | jq -r '.labels.lock_holder // empty'
+}
+
+# Get lock acquisition timestamp from server labels
+get_lock_timestamp() {
+    hcloud server describe "$LOCK_SERVER" -o json | jq -r '.labels.lock_acquired // empty'
+}
+
+# Set lock labels
+set_lock() {
+    local holder="$1"
+    local timestamp
+    # Use format without colons (not valid in Hetzner labels)
+    timestamp=$(date -u +"%Y%m%d-%H%M%SZ")
+
+    hcloud server add-label "$LOCK_SERVER" "lock_holder=$holder"
+    hcloud server add-label "$LOCK_SERVER" "lock_acquired=$timestamp"
+}
+
+# Remove lock labels
+remove_lock() {
+    hcloud server remove-label "$LOCK_SERVER" "lock_holder" 2>/dev/null || true
+    hcloud server remove-label "$LOCK_SERVER" "lock_acquired" 2>/dev/null || true
+}
+
+# Display lock status
+status() {
+    local holder="$(get_lock_holder)"
+    local timestamp="$(get_lock_timestamp)"
+
+    if [[ -n "$holder" ]]; then
+        log_info "Lock held by $holder (acquired at $timestamp)"
+    else
+        log_info "Lock not held"
+    fi
 }
 
 # Acquire locks on all VMs with timeout and retry
@@ -153,34 +115,19 @@ acquire() {
         exit 1
     fi
 
-    # Check current holders for all servers
-    local servers_to_lock=()
+    local holder=$(get_lock_holder)
 
-    # Check if any locks are held by others
-    # Exit if so
-    for server in "${SERVER_NAMES[@]}"; do
-        local holder
-        holder=$(_get_server_lock_holder "$server")
-        
-        if [[ -n "$holder" ]]; then
-            if [[ "$holder" != "$HOLDER" ]]; then
-                log_error "Lock on $server held by: $holder"
-                exit 1
-            fi
+    if [[ -n "$holder" ]]; then
+        if [[ "$holder" == "$HOLDER" ]]; then
+            log_info "Lock already held by $HOLDER"
         else
-            servers_to_lock+=("$server")
+            log_error "Lock held by $holder"
+            exit 1
         fi
-    done
-
-    if [[ "${#servers_to_lock[@]}" -eq 0 ]]; then
-        log_info "Locks already held by $HOLDER on all VMs"
-        return 0
+    else
+        set_lock "$HOLDER"
+        log_info "Lock acquired by $HOLDER"
     fi
-
-    # All or some are free --> acquire locks on servers where not held yet
-    for server in "${servers_to_lock[@]}"; do
-        set_server_lock "$server" "$HOLDER"
-    done
 }
 
 # Release our locks on all VMs
@@ -190,48 +137,33 @@ release() {
         exit 1
     fi
 
-    local any_held_by_others=false
-    local any_held_by_us=false
+    local holder=$(get_lock_holder)
 
-    # Check current holders
-    for server in "${SERVER_NAMES[@]}"; do
-        local holder
-        holder=$(_get_server_lock_holder "$server")
-        holders+=("$holder")
-
-        if [[ -n "$holder" ]]; then
-            if [[ "$holder" == "$HOLDER" ]]; then
-                log_info "Releasing lock on $server held by us ($HOLDER)"
-                remove_server_lock "$server"
-                any_held_by_us=true
-            else
-                log_error "Cannot release lock on $server held by $holder"
-                any_held_by_others=true
-            fi
+    if [[ -n "$holder" ]]; then
+        if [[ "$holder" == "$HOLDER" ]]; then
+            remove_lock
+            log_step "Lock released successfully"
+        else
+            log_error "Cannot release lock held by other holder $holder"
+            exit 1
         fi
-    done
-
-    if [[ "$any_held_by_others" == "true" ]]; then
-        log_error "Some locks are held by another process; cannot release all locks"
-        exit 1
-    elif [[ "$any_held_by_us" == "true" ]]; then
-        log_step "Locks released successfully"
     else
-        log_step "There are no locks; nothing to release"
+        log_info "Lock was not held; nothing to release"
     fi
 }
 
-# Clear: release all locks on all VMs, regardless of holder
+# Clear: release lock regardless of holder
 clear() {
-    log_info "Cleaning up: Releasing all locks on all VMs"
-    for server in "${SERVER_NAMES[@]}"; do
-        remove_server_lock "$server"
-    done
-    log_step "All locks released"
+    log_info "Cleaning up: Releasing lock"
+    remove_lock
+    log_step "Lock released"
 }
 
 # Execute requested action
 case "$ACTION" in
+    get_lock_holder)
+        get_lock_holder
+        ;;
     status)
         status
         ;;

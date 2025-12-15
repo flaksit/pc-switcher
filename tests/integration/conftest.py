@@ -75,6 +75,7 @@ async def lock() -> AsyncIterator[None]:
     """
     if os.environ.get("PCSWITCHER_LOCK_HOLDER"):
         print("Integration test lock already acquired or acquired by parent process")
+        yield
         return
 
     if not os.getenv("HCLOUD_TOKEN"):
