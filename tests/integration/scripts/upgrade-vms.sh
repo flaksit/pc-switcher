@@ -97,11 +97,6 @@ TMPDIR=""
 cleanup() {
     local exit_code=$?
 
-    if [[ -n "$PCSWITCHER_LOCK_HOLDER" ]]; then
-        log_info "Releasing lock..."
-        "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release || true
-    fi
-
     if [[ -n "$TMPDIR" && -d "$TMPDIR" ]]; then
         rm -rf "$TMPDIR" 2>/dev/null || true
     fi
@@ -226,17 +221,7 @@ reboot_vm() {
 # Main execution
 log_step "VM upgrade and baseline update"
 
-# Get lock holder identifier and export for nested scripts
-export PCSWITCHER_LOCK_HOLDER=$(get_lock_holder)
-log_info "Lock holder: $PCSWITCHER_LOCK_HOLDER"
-
-# Acquire lock
-log_step "Acquiring lock..."
-if ! "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" acquire; then
-    log_error "Failed to acquire lock"
-    exit 1
-fi
-log_info "Lock acquired"
+acquire_lock "upgrade-vms"
 
 # Get VM IP addresses (single API call)
 log_step "Resolving VM IP addresses..."

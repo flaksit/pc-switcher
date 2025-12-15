@@ -33,7 +33,7 @@ Arguments:
   action    One of: acquire, release, status
 
 Actions:
-  acquire   Acquire locks on both VMs (waits up to 5 minutes if held by another)
+  acquire   Acquire locks on both VMs
   release   Release locks on both VMs (must be the current holder)
   status    Show current lock status for both VMs
 
@@ -48,7 +48,6 @@ EOF
     exit 0
 fi
 
-readonly SERVER_NAMES=("pc1" "pc2")
 
 # Verify HCLOUD_TOKEN is set
 : "${HCLOUD_TOKEN:?HCLOUD_TOKEN environment variable must be set}"
@@ -63,12 +62,6 @@ fi
 
 readonly HOLDER="$1"
 readonly ACTION="$2"
-
-# Get current lock holder from server labels
-get_server_lock_holder() {
-    local server_name="$1"
-    hcloud server describe "$server_name" -o json | jq -r '.labels.lock_holder // empty'
-}
 
 # Get lock acquisition timestamp from server labels
 get_server_lock_timestamp() {
@@ -102,7 +95,7 @@ status() {
 
     # Gather status for all servers
     for server in "${SERVER_NAMES[@]}"; do
-        holders+=("$(get_server_lock_holder "$server")")
+        holders+=("$(_get_server_lock_holder "$server")")
         timestamps+=("$(get_server_lock_timestamp "$server")")
     done
 
@@ -161,36 +154,32 @@ acquire() {
     fi
 
     # Check current holders for all servers
-    local some_free=false
+    local servers_to_lock=()
 
     # Check if any locks are held by others
     # Exit if so
     for server in "${SERVER_NAMES[@]}"; do
         local holder
-        holder=$(get_server_lock_holder "$server")
+        holder=$(_get_server_lock_holder "$server")
         
         if [[ -n "$holder" ]]; then
             if [[ "$holder" != "$HOLDER" ]]; then
-                log_error "Lock held by: $holder"
+                log_error "Lock on $server held by: $holder"
                 exit 1
             fi
         else
-            some_free=true
+            servers_to_lock+=("$server")
         fi
     done
 
-    if [[ "$some_free" == "false" ]]; then
+    if [[ "${#servers_to_lock[@]}" -eq 0 ]]; then
         log_info "Locks already held by $HOLDER on all VMs"
         return 0
     fi
 
     # All or some are free --> acquire locks on servers where not held yet
-    for server in "${SERVER_NAMES[@]}"; do
-        local holder
-        holder=$(get_server_lock_holder "$server")
-        if [[ "$holder" != "$HOLDER" ]]; then
-            set_server_lock "$server" "$HOLDER"
-        fi
+    for server in "${servers_to_lock[@]}"; do
+        set_server_lock "$server" "$HOLDER"
     done
 }
 
@@ -207,7 +196,7 @@ release() {
     # Check current holders
     for server in "${SERVER_NAMES[@]}"; do
         local holder
-        holder=$(get_server_lock_holder "$server")
+        holder=$(_get_server_lock_holder "$server")
         holders+=("$holder")
 
         if [[ -n "$holder" ]]; then
@@ -232,8 +221,8 @@ release() {
     fi
 }
 
-# Cleanup: release all locks on all VMs, regardless of holder
-cleanup() {
+# Clear: release all locks on all VMs, regardless of holder
+clear() {
     log_info "Cleaning up: Releasing all locks on all VMs"
     for server in "${SERVER_NAMES[@]}"; do
         remove_server_lock "$server"
@@ -252,8 +241,8 @@ case "$ACTION" in
     release)
         release
         ;;
-    cleanup)
-        cleanup
+    clear)
+        clear
         ;;
     *)
         log_error "Invalid action '$ACTION'. Must be one of: acquire, release, cleanup, status"
