@@ -7,7 +7,6 @@ import json
 import signal
 import subprocess
 import sys
-import urllib.request
 from importlib.metadata import PackageNotFoundError
 from importlib.resources import files
 from pathlib import Path
@@ -21,7 +20,7 @@ from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.orchestrator import Orchestrator
-from pcswitcher.version import Version, find_one_version, get_this_version
+from pcswitcher.version import Version, find_one_version, get_highest_release, get_this_version
 
 # Cleanup timeout for graceful shutdown after SIGINT.
 # After first SIGINT, cleanup has this many seconds to complete.
@@ -403,56 +402,10 @@ def init(
     console.print("[dim]  - btrfs_snapshots.subvolumes (must match your system)[/dim]")
 
 
-GITHUB_RELEASES_URL = "https://api.github.com/repos/flaksit/pc-switcher/releases"
 GITHUB_REPO_URL = "https://github.com/flaksit/pc-switcher"
 
 
-def _get_latest_github_version(*, include_prerelease: bool = False) -> str:
-    """Fetch the latest release version from GitHub.
-
-    Args:
-        include_prerelease: If True, include pre-release versions. If False (default),
-            only return stable releases.
-
-    Returns:
-        Version string (e.g., "0.4.0" or "0.5.0-alpha.1" if prerelease included)
-
-    Raises:
-        RuntimeError: If unable to fetch releases or no matching release found
-    """
-    try:
-        req = urllib.request.Request(
-            GITHUB_RELEASES_URL,
-            headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "pc-switcher"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as response:
-            releases = json.loads(response.read().decode("utf-8"))
-
-            for release in releases:
-                if release.get("draft", False):
-                    continue
-                if not include_prerelease and release.get("prerelease", False):
-                    continue
-
-                tag_name = release.get("tag_name", "")
-                # Tags are in format "v0.4.0", strip the leading "v"
-                if tag_name.startswith("v"):
-                    return tag_name[1:]
-                return tag_name
-
-            if include_prerelease:
-                raise RuntimeError("No releases found on GitHub")
-            else:
-                raise RuntimeError(
-                    "No stable releases found on GitHub. Use --prerelease to install a pre-release version."
-                )
-    except RuntimeError:
-        raise
-    except Exception as e:
-        raise RuntimeError(f"Failed to fetch releases from GitHub: {e}") from e
-
-
-def _run_uv_tool_install(version: str) -> subprocess.CompletedProcess[str]:
+def _run_uv_tool_install(version: Version) -> subprocess.CompletedProcess[str]:
     """Run uv tool install to install/upgrade pc-switcher.
 
     Args:
@@ -461,7 +414,7 @@ def _run_uv_tool_install(version: str) -> subprocess.CompletedProcess[str]:
     Returns:
         CompletedProcess with stdout/stderr
     """
-    install_source = f"git+{GITHUB_REPO_URL}@v{version}"
+    install_source = f"git+{GITHUB_REPO_URL}@v{version.semver_str()}"
     return subprocess.run(
         ["uv", "tool", "install", "--force", install_source],
         capture_output=True,
@@ -490,6 +443,38 @@ def _verify_installed_version() -> Version | None:
     return None
 
 
+def _get_current_version_or_exit() -> Version:
+    """Return the current pc-switcher version or exit on failure."""
+    try:
+        return get_this_version()
+    except PackageNotFoundError:
+        console.print("[bold red]Error:[/bold red] Cannot determine current pc-switcher version")
+        sys.exit(1)
+
+
+def _resolve_target_version(version: str | None, prerelease: bool) -> Version:
+    """Resolve the target version to install based on CLI options."""
+    if version is not None:
+        try:
+            return Version.parse(version)
+        except ValueError:
+            console.print(f"[bold red]Error:[/bold red] Invalid version format: {version}")
+            sys.exit(1)
+
+    console.print("[dim]Checking for latest version...[/dim]")
+    try:
+        return get_highest_release(include_prereleases=prerelease).version
+    except RuntimeError as e:
+        if not prerelease and "No releases found" in str(e):
+            console.print(
+                "[bold red]Error:[/bold red] No stable releases found on GitHub. "
+                "Use --prerelease to install a pre-release version."
+            )
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+
+
 @self_app.command()
 def update(
     version: Annotated[
@@ -508,29 +493,8 @@ def update(
     Use --prerelease to include alpha/beta/rc versions.
     """
     # Get current version
-    try:
-        current = get_this_version()
-    except PackageNotFoundError:
-        console.print("[bold red]Error:[/bold red] Cannot determine current pc-switcher version")
-        sys.exit(1)
-
-    # Determine target version
-    if version is None:
-        console.print("[dim]Checking for latest version...[/dim]")
-        try:
-            target_version_str = _get_latest_github_version(include_prerelease=prerelease)
-        except RuntimeError as e:
-            console.print(f"[bold red]Error:[/bold red] {e}")
-            sys.exit(1)
-    else:
-        target_version_str = version
-
-    # Validate target version format (accepts both PEP 440 and SemVer)
-    try:
-        target = Version.parse(target_version_str)
-    except ValueError:
-        console.print(f"[bold red]Error:[/bold red] Invalid version format: {target_version_str}")
-        sys.exit(1)
+    current = _get_current_version_or_exit()
+    target = _resolve_target_version(version, prerelease)
 
     # Check if update is needed
     # Use SemVer format for user-facing output
@@ -547,7 +511,7 @@ def update(
     # Perform the update
     console.print(f"Updating pc-switcher from {current_display} to {target_display}...")
     # Use SemVer format for git tag (GitHub tags use SemVer, not PEP 440)
-    result = _run_uv_tool_install(target.semver_str())
+    result = _run_uv_tool_install(target)
 
     if result.returncode != 0:
         console.print("[bold red]Error:[/bold red] Update failed")

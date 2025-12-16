@@ -111,6 +111,30 @@ def get_releases(
         raise RuntimeError(f"Failed to fetch GitHub releases: {e}") from e
 
 
+def get_highest_release(
+    repository: str = "flaksit/pc-switcher",
+    *,
+    include_prereleases: bool = True,
+) -> Release:
+    """Fetch the latest release from GitHub API.
+
+    Args:
+        include_prereleases: If True, include pre-release versions
+        repository: GitHub repository in "owner/repo" format
+
+    Returns:
+        The latest non-draft release
+
+    Raises:
+        RuntimeError: If GitHub API request fails or no releases found
+    """
+    releases = get_releases(repository, include_prereleases=include_prereleases)
+    result = max(releases, key=lambda r: r.version, default=None)
+    if result is None:
+        raise RuntimeError("No releases found in the repository")
+    return result
+
+
 class Version:
     """Unified version class supporting both PEP 440 and SemVer formats.
 
