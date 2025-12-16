@@ -73,7 +73,7 @@ jobs:
       - name: Run integration tests
         run: |
           set -o pipefail
-          uv run pytest -m integration -v 2>&1 | tee pytest-output.log
+          uv run pytest -m "integration and not benchmark" -v 2>&1 | tee pytest-output.log
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
           PC_SWITCHER_TEST_PC1_HOST: ${{ steps.vm_ips.outputs.pc1_ip || steps.provision.outputs.pc1_ip }}

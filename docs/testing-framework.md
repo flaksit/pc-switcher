@@ -291,12 +291,13 @@ uv run pytest tests/unit/test_config.py -v
 
 ```bash
 # Set environment variables
+export HCLOUD_TOKEN="<your-hetzner-cloud-api-token>"
 export PC_SWITCHER_TEST_PC1_HOST="<pc1-vm-ip>"
 export PC_SWITCHER_TEST_PC2_HOST="<pc2-vm-ip>"
 export PC_SWITCHER_TEST_USER="testuser"
 
 # Run integration tests
-uv run pytest tests/integration -v -m integration
+uv run pytest tests/integration -v -m "integration and not benchmark"
 ```
 
 ### All Tests

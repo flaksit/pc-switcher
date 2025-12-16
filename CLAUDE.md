@@ -156,10 +156,10 @@ pc-switcher cleanup-snapshots   # Clean up old btrfs snapshots
 ## Development Commands
 
 ```bash
-uv run pytest                                           # Unit tests
-tests/local-pytest.sh -m integration                    # Integration tests locally
-uv run ruff check . && uv run ruff format .             # Lint and format
-uv run basedpyright                                     # Type check
+uv run pytest                                             # Unit tests
+tests/local-pytest.sh -m "integration and not benchmark"  # Integration tests locally
+uv run ruff check . && uv run ruff format .               # Lint and format
+uv run basedpyright                                       # Type check
 ```
 
 ## Active Technologies

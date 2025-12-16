@@ -825,15 +825,19 @@ markers = [
 
 **Default test behavior:**
 - Unit & contract tests: Always run
-- Integration tests: Excluded by default (use `-m integration` to include)
-- Benchmarks: Excluded by default (marked as integration), use `-m benchmark` to run
+- Integration tests: Excluded by default; use `-m "integration and not benchmark"` to run
+- Benchmarks: Excluded by default; use `-m benchmark` to run
 
 **Running different test combinations:**
 ```bash
-uv run pytest tests/unit tests/contract              # Only unit/contract (fast)
-uv run pytest tests/integration -m integration       # All integration except benchmarks
-uv run pytest tests/integration -m benchmark         # Only performance benchmarks
-uv run pytest tests/integration/test_executor_overhead.py -m benchmark -v -s  # Specific benchmark with output
+# Only unit/contract (fast)
+uv run pytest tests/unit tests/contract
+# All integration except benchmarks
+uv run pytest tests/integration -m "integration and not benchmark"
+# Only performance benchmarks
+uv run pytest tests/integration -m benchmark
+# Specific benchmark with output
+uv run pytest tests/integration/test_executor_overhead.py -m benchmark -v -s
 ```
 
 ### Fixture Scopes
@@ -952,7 +956,7 @@ The easiest way to run integration tests locally:
 
 ```bash
 # Run all integration tests
-./tests/local-pytest.sh tests/integration -m integration
+./tests/local-pytest.sh tests/integration -m "integration and not benchmark"
 
 # Run specific test file
 ./tests/local-pytest.sh tests/integration/test_vm_connectivity.py
@@ -974,12 +978,12 @@ The script automatically:
 **Note**: If you don't use `pass`, set HCLOUD_TOKEN manually before running:
 ```bash
 export HCLOUD_TOKEN="your-token-here"
-./tests/local-pytest.sh tests/integration -m integration
+./tests/local-pytest.sh tests/integration -m "integration and not benchmark"
 ```
 
 ### Environment Variables for Running Integration Tests on the VMs From Local Code
 
-Set up environment variables for local integration testing. Create a file `~/.pc-switcher-test-env`:
+Set up environment variables for local integration testing. Create a file `~/.env.test.local`:
 
 ```bash
 # Hetzner Cloud API token (from https://console.hetzner.cloud/)
@@ -994,7 +998,7 @@ export PC_SWITCHER_TEST_USER="testuser"
 Source this file before running integration tests:
 
 ```bash
-source ~/.pc-switcher-test-env
+source ~/.env.test.local
 ```
 
 ### Test VM Access
@@ -1031,7 +1035,7 @@ Run integration tests (requires VMs):
 source ~/.pc-switcher-test-env
 
 # Run integration tests
-uv run pytest tests/integration -v -m integration
+uv run pytest tests/integration -v -m "integration and not benchmark"
 ```
 
 Run all tests:
