@@ -92,7 +92,7 @@ async def lock() -> AsyncIterator[None]:
         await _run_script("internal/lock.sh", "release", holder, check=True)
         if os.environ["PCSWITCHER_LOCK_HOLDER"] == holder:
             del os.environ["PCSWITCHER_LOCK_HOLDER"]
-        print(f"Released integration test lock with holder ID: {holder}:")
+        print(f"Released integration test lock with holder ID {holder}")
 
 
 def _generate_lock_holder() -> str:
