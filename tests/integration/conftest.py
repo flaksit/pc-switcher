@@ -6,8 +6,8 @@ variables are not configured.
 Fixtures provided:
 - pc1_connection: SSH connection to pc1 test VM
 - pc2_connection: SSH connection to pc2 test VM
-- pc1_executor: RemoteExecutor for pc1 (with login shell environment)
-- pc2_executor: RemoteExecutor for pc2 (with login shell environment)
+- pc1_executor: BashLoginRemoteExecutor for pc1 (= RemoteExecutor with login shell environment)
+- pc2_executor: BashLoginRemoteExecutor for pc2 (= RemoteExecutor with login shell environment)
 - pc2_executor_without_pcswitcher_tool: pc2 executor with pc-switcher uninstalled (clean target)
 - pc2_executor_with_old_pcswitcher_tool: pc2 executor with old pc-switcher version (upgrade testing)
 - integration_session: Session-scoped fixture for VM provisioning and reset
