@@ -75,12 +75,18 @@ log_info "pc1: $PC1_IP"
 log_info "pc2: $PC2_IP"
 
 # Update SSH known_hosts
-log_info "Updating SSH known_hosts..."
+log_info "Updating SSH known_hosts if needed..."
 for ip in "$PC1_IP" "$PC2_IP"; do
-    # Remove old entries (suppress errors if not found)
-    ssh-keygen -R "$ip" 2>/dev/null || true
-    # Add new entries
-    ssh-keyscan -H "$ip" >> ~/.ssh/known_hosts 2>/dev/null
+    NEW_KEYS=$(ssh-keyscan -H "$ip" 2>/dev/null)
+    if [[ -n "$NEW_KEYS" ]]; then
+        NEW_FPS=$(echo "$NEW_KEYS" | ssh-keygen -lf - | awk '{print $2}' | sort)
+        OLD_FPS=$(ssh-keygen -F "$ip" 2>/dev/null | ssh-keygen -lf - | awk '{print $2}' | sort)
+
+        if [[ "$NEW_FPS" != "$OLD_FPS" ]]; then
+            ssh-keygen -R "$ip" 2>/dev/null || true
+            echo "$NEW_KEYS" >> ~/.ssh/known_hosts
+        fi
+    fi
 done
 
 # Export environment variables
@@ -96,4 +102,4 @@ log_info "  PC_SWITCHER_TEST_USER=$PC_SWITCHER_TEST_USER"
 # Run pytest with all provided arguments
 log_info "Running pytest..."
 cd "$PROJECT_ROOT"
-exec uv run pytest "$@"
+exec uv run pytest -m "integration and not benchmark" -v -s "$@"
