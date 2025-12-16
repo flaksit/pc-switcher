@@ -12,6 +12,8 @@ For installation and upgrade logic on target machines, see pcswitcher.jobs.insta
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as get_pkg_version
 from typing import TYPE_CHECKING
@@ -21,7 +23,7 @@ from github import Github
 from packaging.version import Version as PkgVersion
 
 if TYPE_CHECKING:
-    from typing import Any, Self
+    from typing import Self
 
 __all__ = [
     "Version",
@@ -52,11 +54,24 @@ _VERSION_REGEX = re.compile(
 )
 
 
-def _fetch_github_releases(
+@dataclass
+class Release:
+    """Release information.
+
+    Attributes:
+        version: The tag of the release (e.g., "v0.1.0")
+        is_prerelease: Whether the release is a prerelease
+    """
+
+    version: Version
+    is_prerelease: bool
+
+
+def get_releases(
+    repository: str = "flaksit/pc-switcher",
     *,
     include_prereleases: bool = True,
-    repository: str = "flaksit/pc-switcher",
-) -> list[dict[str, Any]]:
+) -> Iterator[Release]:
     """Fetch all releases from GitHub API with pagination.
 
     Args:
@@ -64,7 +79,7 @@ def _fetch_github_releases(
         repository: GitHub repository in "owner/repo" format
 
     Returns:
-        List of release dicts with keys: tag_name, draft, prerelease
+        List of all non-draft releases
 
     Raises:
         RuntimeError: If GitHub API request fails
@@ -75,7 +90,6 @@ def _fetch_github_releases(
         repo = g.get_repo(repository)
 
         # Fetch all releases with pagination
-        all_releases = []
         for release in repo.get_releases():
             # Skip drafts
             if release.draft:
@@ -85,15 +99,13 @@ def _fetch_github_releases(
             if not include_prereleases and release.prerelease:
                 continue
 
-            all_releases.append(
-                {
-                    "tag_name": release.tag_name,
-                    "draft": release.draft,
-                    "prerelease": release.prerelease,
-                }
-            )
-
-        return all_releases
+            try:
+                version = Version.parse(release.tag_name)
+            except ValueError:
+                # Skip invalid version tags
+                # TODO log warning
+                continue
+            yield Release(version, release.prerelease)
 
     except Exception as e:
         raise RuntimeError(f"Failed to fetch GitHub releases: {e}") from e
@@ -241,7 +253,7 @@ class Version:
         """
         return str(self._pkg_version)
 
-    def github_release_floor(self) -> Self:
+    def release_floor(self) -> Self:
         """Return the latest GitHub release that is <= this version.
 
         Queries GitHub API to find the greatest release tag that is <= this version.
@@ -259,22 +271,10 @@ class Version:
             RuntimeError: If GitHub API fails or no matching release found
         """
         # Fetch all releases (including prereleases)
-        releases = _fetch_github_releases(include_prereleases=True)
-
-        # Parse tags to Version objects
-        release_versions: list[Version] = []
-        for release in releases:
-            tag_name = release.get("tag_name", "")
-            # Strip 'v' prefix if present (e.g., v0.1.0 -> 0.1.0)
-            version_str = tag_name.removeprefix("v")
-            try:
-                release_versions.append(Version.parse(version_str))
-            except ValueError:
-                # Skip tags that aren't valid versions
-                continue
+        releases = get_releases(include_prereleases=True)
 
         # Find releases <= this version
-        candidates = [v for v in release_versions if v <= self]
+        candidates = [release.version for release in releases if release.version <= self]
 
         if not candidates:
             raise RuntimeError(
@@ -287,10 +287,10 @@ class Version:
         # Type checker needs help understanding this is still a Version
         return result  # type: ignore[return-value]
 
-    def is_github_release(self) -> bool:
+    def is_release(self) -> bool:
         """Check if this exact version exists as a GitHub release.
 
-        Unlike github_release_floor(), this checks for an exact match only.
+        Unlike release_floor(), this checks for an exact match only.
 
         Returns:
             True if this version is an exact GitHub release, False otherwise
@@ -299,21 +299,10 @@ class Version:
             RuntimeError: If GitHub API fails
         """
         # Fetch all releases (including prereleases)
-        releases = _fetch_github_releases(include_prereleases=True)
+        releases = get_releases(include_prereleases=True)
 
         # Check for exact match
-        for release in releases:
-            tag_name = release.get("tag_name", "")
-            version_str = tag_name.removeprefix("v")
-            try:
-                release_version = Version.parse(version_str)
-                if release_version == self:
-                    return True
-            except ValueError:
-                # Skip invalid tags
-                continue
-
-        return False
+        return any(release.version == self for release in releases)
 
     def semver_str(self) -> str:
         """Return the version in SemVer format.

@@ -40,7 +40,7 @@ def _get_release_version() -> Version:
         RuntimeError: If no matching GitHub release exists
     """
     current = get_this_version()
-    return current.github_release_floor()
+    return current.release_floor()
 
 
 @pytest.fixture
