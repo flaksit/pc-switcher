@@ -48,17 +48,21 @@ BASELINE_AGE_WARNING_DAYS = 30
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Auto-apply integration marker and check VM environment."""
     integration_marker = pytest.mark.integration
-    integration_tests = []
 
     # Auto-apply integration marker to all tests in tests/integration/
     for item in items:
         if "/integration/" in str(item.fspath):
             item.add_marker(integration_marker)
-            integration_tests.append(item)
 
-    # Fail if integration tests are collected but VM environment not configured
+
+@pytest.fixture(scope="session", autouse=True)
+def check_integration_env_vars() -> None:
+    """Session-scoped fixture to check integration test environment variables.
+
+    Exit the test session if any required environment variable is missing.
+    """
     missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
-    if missing_vars and integration_tests:
+    if missing_vars:
         pytest.exit(
             f"Integration tests require VM environment. "
             f"Missing: {', '.join(missing_vars)}. "
