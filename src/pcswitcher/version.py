@@ -17,10 +17,11 @@ from importlib.metadata import version as get_pkg_version
 from typing import TYPE_CHECKING
 
 import semver
+from github import Github
 from packaging.version import Version as PkgVersion
 
 if TYPE_CHECKING:
-    from typing import Self
+    from typing import Any, Self
 
 __all__ = [
     "Version",
@@ -49,6 +50,53 @@ _VERSION_REGEX = re.compile(
     r")"
     r"(?![^.,+\s-])"  # End of string or followed by whitespace or allowed punctuation
 )
+
+
+def _fetch_github_releases(
+    *,
+    include_prereleases: bool = True,
+    repository: str = "flaksit/pc-switcher",
+) -> list[dict[str, Any]]:
+    """Fetch all releases from GitHub API with pagination.
+
+    Args:
+        include_prereleases: If True, include pre-release versions
+        repository: GitHub repository in "owner/repo" format
+
+    Returns:
+        List of release dicts with keys: tag_name, draft, prerelease
+
+    Raises:
+        RuntimeError: If GitHub API request fails
+    """
+    try:
+        # Unauthenticated access (60 requests/hour limit)
+        g = Github()
+        repo = g.get_repo(repository)
+
+        # Fetch all releases with pagination
+        all_releases = []
+        for release in repo.get_releases():
+            # Skip drafts
+            if release.draft:
+                continue
+
+            # Filter prereleases if requested
+            if not include_prereleases and release.prerelease:
+                continue
+
+            all_releases.append(
+                {
+                    "tag_name": release.tag_name,
+                    "draft": release.draft,
+                    "prerelease": release.prerelease,
+                }
+            )
+
+        return all_releases
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to fetch GitHub releases: {e}") from e
 
 
 class Version:
@@ -193,36 +241,79 @@ class Version:
         """
         return str(self._pkg_version)
 
-    def release_version(self) -> Self:
-        """Return the release version, stripping post/dev/local parts.
+    def github_release_floor(self) -> Self:
+        """Return the latest GitHub release that is <= this version.
 
-        This extracts the base release version that would have a corresponding
-        git tag. For example:
-        - "0.1.0a3.post23.dev0+da749fc" -> "0.1.0a3"
-        - "1.0.0.post1" -> "1.0.0"
-        - "1.0.0" -> "1.0.0"
+        Queries GitHub API to find the greatest release tag that is <= this version.
+        This is the "floor" of this version in the set of GitHub releases.
 
-        Returns:
-            Version instance with only release and pre-release parts
-        """
-        pv = self._pkg_version
-
-        # Build version string with only release and pre parts
-        result = ".".join(str(x) for x in pv.release)
-
-        if pv.pre is not None:
-            pre_type, pre_num = pv.pre
-            result += f"{pre_type}{pre_num}"
-
-        return self.parse_pep440(result)
-
-    def is_release_version(self) -> bool:
-        """Check if the version is a release version (no pre/post/dev/local parts).
+        For example:
+        - "0.1.0a3.post23.dev0+da749fc" -> Version("0.1.0a3") if that's a release
+        - "0.1.0.post1" -> Version("0.1.0") if that's a release
+        - "0.2.0" -> Version("0.1.0") if 0.2.0 isn't released yet
 
         Returns:
-            True if release version, False otherwise
+            Version instance representing the GitHub release
+
+        Raises:
+            RuntimeError: If GitHub API fails or no matching release found
         """
-        return self.release_version() == self
+        # Fetch all releases (including prereleases)
+        releases = _fetch_github_releases(include_prereleases=True)
+
+        # Parse tags to Version objects
+        release_versions: list[Version] = []
+        for release in releases:
+            tag_name = release.get("tag_name", "")
+            # Strip 'v' prefix if present (e.g., v0.1.0 -> 0.1.0)
+            version_str = tag_name.removeprefix("v")
+            try:
+                release_versions.append(Version.parse(version_str))
+            except ValueError:
+                # Skip tags that aren't valid versions
+                continue
+
+        # Find releases <= this version
+        candidates = [v for v in release_versions if v <= self]
+
+        if not candidates:
+            raise RuntimeError(
+                f"No GitHub release found matching version {self}. "
+                f"This version may not correspond to any published release."
+            )
+
+        # Return the highest (most precise/recent) match
+        result = max(candidates)
+        # Type checker needs help understanding this is still a Version
+        return result  # type: ignore[return-value]
+
+    def is_github_release(self) -> bool:
+        """Check if this exact version exists as a GitHub release.
+
+        Unlike github_release_floor(), this checks for an exact match only.
+
+        Returns:
+            True if this version is an exact GitHub release, False otherwise
+
+        Raises:
+            RuntimeError: If GitHub API fails
+        """
+        # Fetch all releases (including prereleases)
+        releases = _fetch_github_releases(include_prereleases=True)
+
+        # Check for exact match
+        for release in releases:
+            tag_name = release.get("tag_name", "")
+            version_str = tag_name.removeprefix("v")
+            try:
+                release_version = Version.parse(version_str)
+                if release_version == self:
+                    return True
+            except ValueError:
+                # Skip invalid tags
+                continue
+
+        return False
 
     def semver_str(self) -> str:
         """Return the version in SemVer format.

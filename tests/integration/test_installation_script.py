@@ -31,13 +31,16 @@ INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs
 
 
 def _get_release_version() -> Version:
-    """Get the release version from current version, stripping post/dev/local parts.
+    """Get the latest GitHub release at or before the current version.
 
-    E.g., "0.1.0-alpha.3+post.23.dev.0.da749fc" -> "0.1.0-alpha.3"
-    This gives us a version that has a corresponding git tag on GitHub.
+    Queries GitHub to find the greatest release tag <= the current version.
+    E.g., "0.1.0a3.post23.dev0+da749fc" -> "0.1.0a3" (if that's a GitHub release)
+
+    Raises:
+        RuntimeError: If no matching GitHub release exists
     """
     current = get_this_version()
-    return current.release_version()
+    return current.github_release_floor()
 
 
 @pytest.fixture

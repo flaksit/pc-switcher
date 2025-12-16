@@ -449,98 +449,127 @@ class TestVersionPkgVersion:
             pv.major = 2  # type: ignore[misc]
 
 
-class TestVersionReleaseVersion:
-    """Tests for Version.release_version() - stripping post/dev/local parts."""
+class TestGithubReleaseFloorUnit:
+    """Unit tests for github_release_floor() with mocked GitHub API."""
 
-    def test_stable_version_unchanged(self) -> None:
-        """Stable version should be unchanged."""
-        v = Version.parse_pep440("1.0.0")
-        assert v.release_version() == v
-        assert v.release_version().pep440_str() == "1.0.0"
+    @pytest.fixture
+    def mock_releases(self) -> list[dict[str, bool | str]]:
+        """Mock GitHub releases data."""
+        return [
+            {"tag_name": "v0.1.0", "draft": False, "prerelease": False},
+            {"tag_name": "v0.1.0-alpha.1", "draft": False, "prerelease": True},
+            {"tag_name": "v0.1.0-alpha.2", "draft": False, "prerelease": True},
+            {"tag_name": "v0.1.0-alpha.3", "draft": False, "prerelease": True},
+        ]
 
-    def test_prerelease_preserved(self) -> None:
-        """Pre-release part should be preserved."""
-        v = Version.parse_pep440("1.0.0a1")
-        assert v.release_version().pep440_str() == "1.0.0a1"
+    def test_exact_match_stable(self, mock_releases: list[dict[str, bool | str]]) -> None:
+        """Should return exact match for stable version."""
+        with patch("pcswitcher.version._fetch_github_releases", return_value=mock_releases):
+            v = Version.parse("0.1.0")
+            assert v.github_release_floor() == v
 
-        v = Version.parse_pep440("1.0.0b2")
-        assert v.release_version().pep440_str() == "1.0.0b2"
+    def test_exact_match_prerelease(self, mock_releases: list[dict[str, bool | str]]) -> None:
+        """Should return exact match for pre-release."""
+        with patch("pcswitcher.version._fetch_github_releases", return_value=mock_releases):
+            v = Version.parse("0.1.0a3")
+            result = v.github_release_floor()
+            assert result == v
 
-        v = Version.parse_pep440("1.0.0rc1")
-        assert v.release_version().pep440_str() == "1.0.0rc1"
+    def test_dev_version_matches_base_prerelease(self, mock_releases: list[dict[str, bool | str]]) -> None:
+        """Dev version should match its base pre-release."""
+        with patch("pcswitcher.version._fetch_github_releases", return_value=mock_releases):
+            v = Version.parse("0.1.0a3.post23.dev0+da749fc")
+            result = v.github_release_floor()
+            assert result == Version.parse("0.1.0a3")
 
-    def test_post_stripped(self) -> None:
-        """Post release part should be stripped."""
-        v = Version.parse_pep440("1.0.0.post1")
-        assert v.release_version().pep440_str() == "1.0.0"
+    def test_post_version_matches_base(self, mock_releases: list[dict[str, bool | str]]) -> None:
+        """Post version should match its base release."""
+        with patch("pcswitcher.version._fetch_github_releases", return_value=mock_releases):
+            v = Version.parse("0.1.0.post5")
+            result = v.github_release_floor()
+            assert result == Version.parse("0.1.0")
 
-    def test_dev_stripped(self) -> None:
-        """Dev release part should be stripped."""
-        v = Version.parse_pep440("1.0.0.dev5")
-        assert v.release_version().pep440_str() == "1.0.0"
+    def test_unreleased_version_matches_latest(self, mock_releases: list[dict[str, bool | str]]) -> None:
+        """Version not yet released should match the latest release <= it."""
+        with patch("pcswitcher.version._fetch_github_releases", return_value=mock_releases):
+            v = Version.parse("0.2.0")  # Not released yet
+            result = v.github_release_floor()
+            assert result == Version.parse("0.1.0")  # Latest stable (0.1.0 > 0.1.0a3)
 
-    def test_local_stripped(self) -> None:
-        """Local version part should be stripped."""
-        v = Version.parse_pep440("1.0.0+ubuntu1")
-        assert v.release_version().pep440_str() == "1.0.0"
+    def test_no_matching_release_raises(self, mock_releases: list[dict[str, bool | str]]) -> None:
+        """Should raise if no release <= version exists."""
+        with patch("pcswitcher.version._fetch_github_releases", return_value=mock_releases):
+            v = Version.parse("0.0.1")  # Before any release
+            with pytest.raises(RuntimeError, match="No GitHub release found"):
+                v.github_release_floor()
 
-    def test_prerelease_with_post_dev_local(self) -> None:
-        """Pre-release preserved, post/dev/local stripped."""
-        # This is the typical dev version format
-        v = Version.parse_pep440("0.1.0a3.post23.dev0+da749fc")
-        assert v.release_version().pep440_str() == "0.1.0a3"
+    def test_api_failure_propagates(self) -> None:
+        """Should propagate GitHub API failures."""
+        with patch("pcswitcher.version._fetch_github_releases", side_effect=RuntimeError("API down")):
+            v = Version.parse("0.1.0")
+            with pytest.raises(RuntimeError, match="API down"):
+                v.github_release_floor()
 
-    def test_beta_with_post_dev(self) -> None:
-        """Beta pre-release with post.dev should strip post.dev."""
-        v = Version.parse_pep440("2.0.0b1.post5.dev2")
-        assert v.release_version().pep440_str() == "2.0.0b1"
+    def test_invalid_tags_skipped(self) -> None:
+        """Should skip tags that aren't valid versions."""
+        releases = [
+            {"tag_name": "v0.1.0", "draft": False, "prerelease": False},
+            {"tag_name": "docs-update", "draft": False, "prerelease": False},
+            {"tag_name": "invalid", "draft": False, "prerelease": False},
+        ]
+        with patch("pcswitcher.version._fetch_github_releases", return_value=releases):
+            v = Version.parse("0.1.0")
+            result = v.github_release_floor()
+            assert result == Version.parse("0.1.0")
 
-    def test_rc_with_local(self) -> None:
-        """RC with local should strip local."""
-        v = Version.parse_pep440("1.2.3rc1+build123")
-        assert v.release_version().pep440_str() == "1.2.3rc1"
 
-    def test_returns_version_instance(self) -> None:
-        """Should return a Version instance, not a string."""
-        v = Version.parse_pep440("1.0.0.post1")
-        release = v.release_version()
-        assert isinstance(release, Version)
+class TestIsGithubReleaseUnit:
+    """Unit tests for is_github_release() with mocked GitHub API."""
 
-    def test_release_version_has_no_post_dev_local(self) -> None:
-        """Release version should have no post/dev/local parts."""
-        v = Version.parse_pep440("1.0.0a1.post2.dev3+local")
-        release = v.release_version()
-        assert release.pkg_version.post is None
-        assert release.pkg_version.dev is None
-        assert release.pkg_version.local is None
+    @pytest.fixture
+    def mock_releases(self) -> list[dict[str, bool | str]]:
+        """Mock GitHub releases data."""
+        return [
+            {"tag_name": "v0.1.0", "draft": False, "prerelease": False},
+            {"tag_name": "v0.1.0-alpha.3", "draft": False, "prerelease": True},
+        ]
 
-    def test_semver_str_works_on_release_version(self) -> None:
-        """Should be able to call semver_str() on release version."""
-        v = Version.parse_pep440("0.1.0a3.post23.dev0+da749fc")
-        release = v.release_version()
-        assert release.semver_str() == "0.1.0-alpha.3"
+    def test_exact_release_returns_true(self, mock_releases: list[dict[str, bool | str]]) -> None:
+        """Should return True for exact GitHub release."""
+        with patch("pcswitcher.version._fetch_github_releases", return_value=mock_releases):
+            v = Version.parse("0.1.0")
+            assert v.is_github_release() is True
 
-    def test_dev_version_greater_than_release_version(self) -> None:
-        """Dev version should be greater than its release version.
+    def test_prerelease_returns_true(self, mock_releases: list[dict[str, bool | str]]) -> None:
+        """Should return True for exact pre-release."""
+        with patch("pcswitcher.version._fetch_github_releases", return_value=mock_releases):
+            v = Version.parse("0.1.0a3")
+            assert v.is_github_release() is True
 
-        This verifies that a full dev version (with post/dev/local parts)
-        is considered "newer" than the corresponding release version when
-        parsed with PEP 440 semantics. This is important for version
-        comparison logic in installation and upgrade scenarios.
-        """
-        # Full dev version
-        dev_version = Version.parse_pep440("0.1.0a3.post23.dev0+da749fc")
-        # Corresponding release version
-        release = dev_version.release_version()
+    def test_dev_version_returns_false(self, mock_releases: list[dict[str, bool | str]]) -> None:
+        """Should return False for dev version (not exact match)."""
+        with patch("pcswitcher.version._fetch_github_releases", return_value=mock_releases):
+            v = Version.parse("0.1.0.post23.dev0")
+            assert v.is_github_release() is False
 
-        # Dev version should be >= release version in PEP 440 ordering
-        # (post-releases are "newer" than their base version)
-        assert dev_version >= release, f"Dev version {dev_version} should be >= release {release}"
+    def test_post_version_returns_false(self, mock_releases: list[dict[str, bool | str]]) -> None:
+        """Should return False for post version (not exact match)."""
+        with patch("pcswitcher.version._fetch_github_releases", return_value=mock_releases):
+            v = Version.parse("0.1.0.post1")
+            assert v.is_github_release() is False
 
-        # Verify round-trip works
-        semver_str = release.semver_str()
-        reparsed = Version.parse(semver_str)
-        assert reparsed == release, "Version should survive semver round-trip"
+    def test_no_matching_release_returns_false(self, mock_releases: list[dict[str, bool | str]]) -> None:
+        """Should return False if no exact match found."""
+        with patch("pcswitcher.version._fetch_github_releases", return_value=mock_releases):
+            v = Version.parse("0.0.1")
+            assert v.is_github_release() is False
+
+    def test_api_failure_propagates(self) -> None:
+        """Should propagate GitHub API failures."""
+        with patch("pcswitcher.version._fetch_github_releases", side_effect=RuntimeError("API down")):
+            v = Version.parse("0.1.0")
+            with pytest.raises(RuntimeError, match="API down"):
+                v.is_github_release()
 
 
 class TestSymmetricConversion:
