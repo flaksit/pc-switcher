@@ -735,8 +735,8 @@ All infrastructure scripts are in `tests/integration/scripts/`:
 
 **Lock operations**:
 ```bash
-./scripts/internal/lock.sh <holder-id> acquire
-./scripts/internal/lock.sh <holder-id> release
+./scripts/internal/lock.sh acquire <holder-id>
+./scripts/internal/lock.sh release <holder-id>
 ```
 
 ---

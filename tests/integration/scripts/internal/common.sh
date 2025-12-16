@@ -97,7 +97,7 @@ acquire_lock() {
     local name="$1"
     if [[ -n "${PCSWITCHER_LOCK_HOLDER:-}" ]]; then
         # Called from parent with lock - verify it's actually held
-        local current_holder="$("$SCRIPT_DIR/internal/lock.sh" "" get_lock_holder 2>/dev/null)"
+        local current_holder="$("$SCRIPT_DIR/internal/lock.sh" get_lock_holder 2>/dev/null)"
         if [[ "${current_holder}" != "$PCSWITCHER_LOCK_HOLDER" ]]; then
             log_error "PCSWITCHER_LOCK_HOLDER is set, but lock is not held"
             exit 2
@@ -109,14 +109,14 @@ acquire_lock() {
 
         # Set up cleanup trap only if we own the lock
         cleanup_lock() {
-            "$SCRIPT_DIR/internal/lock.sh" "$PCSWITCHER_LOCK_HOLDER" release 2>/dev/null || true
+            "$SCRIPT_DIR/internal/lock.sh" release "$PCSWITCHER_LOCK_HOLDER" 2>/dev/null || true
         }
         trap "cleanup_lock; $(trap -p EXIT | cut -f2 -d \')" EXIT
         trap "cleanup_lock; $(trap -p INT | cut -f2 -d \')" INT
         trap "cleanup_lock; $(trap -p TERM | cut -f2 -d \')" TERM
 
         # Acquire lock
-        if ! "$SCRIPT_DIR/internal/lock.sh" "$holder" acquire; then
+        if ! "$SCRIPT_DIR/internal/lock.sh" acquire "$holder"; then
             log_error "Failed to acquire lock"
             exit 1
         fi

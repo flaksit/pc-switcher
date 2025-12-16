@@ -82,14 +82,14 @@ async def lock() -> AsyncIterator[None]:
         pytest.exit("HCLOUD_TOKEN not set, cannot acquire integration test lock", 1)
 
     holder = _generate_lock_holder()
-    await _run_script("internal/lock.sh", holder, "acquire", check=True)
+    await _run_script("internal/lock.sh", "acquire", holder, check=True)
     os.environ["PCSWITCHER_LOCK_HOLDER"] = holder
     print(f"Acquired integration test lock with holder ID: {holder}:")
 
     try:
         yield
     finally:
-        await _run_script("internal/lock.sh", holder, "release", check=True)
+        await _run_script("internal/lock.sh", "release", holder, check=True)
         if os.environ["PCSWITCHER_LOCK_HOLDER"] == holder:
             del os.environ["PCSWITCHER_LOCK_HOLDER"]
         print(f"Released integration test lock with holder ID: {holder}:")

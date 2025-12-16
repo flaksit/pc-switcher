@@ -1124,7 +1124,7 @@ source ~/.pc-switcher-test-env
 
 1. Check lock status (requires `HCLOUD_TOKEN`):
    ```bash
-   tests/integration/scripts/internal/lock.sh "" status
+   tests/integration/scripts/internal/lock.sh status
    ```
 
 2. If lock is stale (holder is no longer running), manually remove it:

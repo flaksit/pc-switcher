@@ -2,11 +2,12 @@
 # Integration test lock manager using Hetzner Server Labels
 #
 # Usage:
-#   lock.sh <holder> <acquire|release|status>
+#   lock.sh <command> [holder]
 #
 # Arguments:
-#   holder: Lock holder identifier (e.g., "github-123456", username, or "" for status)
-#   action: acquire, release, or status
+#   command: acquire, release, status, or clear
+#   holder:  Lock holder identifier (e.g., "github-123456", username)
+#            Required for acquire/release, not used for status/clear
 #
 # Environment:
 #   HCLOUD_TOKEN: Required for Hetzner API access
@@ -24,27 +25,29 @@ source "$SCRIPT_DIR/common.sh"
 # Help
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     cat <<EOF
-Usage: $(basename "$0") <holder> <acquire|release|status>
+Usage: $(basename "$0") <command> [holder]
 
 Manage integration test lock using Hetzner Server Labels.
 
 Arguments:
+  command   One of: acquire, release, status, clear
   holder    Lock holder identifier (e.g., "github-123456", username)
-  action    One of: acquire, release, status
+            Required for acquire/release, not used for status/clear
 
-Actions:
-  acquire   Acquire lock
-  release   Release lock (must be the current holder)
+Commands:
+  acquire   Acquire lock (requires holder)
+  release   Release lock (requires holder, must be current holder)
   status    Show current lock status
-  clear     Release all locks (regardless of holder)
+  clear     Release lock regardless of holder
 
 Environment Variables:
   HCLOUD_TOKEN    (required) Hetzner Cloud API token
 
 Examples:
-  $(basename "$0") github-123456 acquire
-  $(basename "$0") github-123456 release
-  $(basename "$0") "" status
+  $(basename "$0") acquire github-123456
+  $(basename "$0") release github-123456
+  $(basename "$0") status
+  $(basename "$0") clear
 EOF
     exit 0
 fi
@@ -54,15 +57,15 @@ fi
 : "${HCLOUD_TOKEN:?HCLOUD_TOKEN environment variable must be set}"
 
 # Parse arguments
-if [[ $# -lt 2 ]]; then
-    log_error "Expected 2 arguments, got $#"
-    echo "Usage: $(basename "$0") <holder> <acquire|release|status>" >&2
+if [[ $# -lt 1 ]]; then
+    log_error "Expected at least 1 argument, got $#"
+    echo "Usage: $(basename "$0") <command> [holder]" >&2
     echo "Run with -h for help" >&2
     exit 1
 fi
 
-readonly HOLDER="$1"
-readonly ACTION="$2"
+readonly ACTION="$1"
+readonly HOLDER="${2:-}"
 
 get_lock_holder() {
     # Verify HCLOUD_TOKEN is set
@@ -177,7 +180,7 @@ case "$ACTION" in
         clear
         ;;
     *)
-        log_error "Invalid action '$ACTION'. Must be one of: acquire, release, cleanup, status"
+        log_error "Invalid command '$ACTION'. Must be one of: acquire, release, status, clear"
         exit 1
         ;;
 esac
