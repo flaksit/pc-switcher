@@ -28,6 +28,28 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
+# Check GITHUB_TOKEN
+if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+    log_info "GITHUB_TOKEN not set, attempting to retrieve from pass..."
+    if command -v pass &> /dev/null; then
+        GITHUB_TOKEN=$(pass show dev/pc-switcher/github_token_public_ro 2>/dev/null) || {
+            log_warn "GITHUB_TOKEN not set and could not retrieve from pass"
+            echo "Please set your GitHub API token:"
+            echo "  export GITHUB_TOKEN='your-token-here'"
+            echo "Or ensure you have the token set in pass 'dev/pc-switcher/github_token_public_ro'"
+            echo "Or ensure you have the token set in pass 'dev/pc-switcher/github_token_public_ro'"
+            echo "Will continue with unauthenticated GitHub requests (60 requests/hour limit)."
+        }
+        export GITHUB_TOKEN
+        log_info "Successfully retrieved GITHUB_TOKEN from pass"
+    else
+        log_warn "GITHUB_TOKEN not set and pass not available"
+        echo "Please set your (read-only) GitHub token:"
+        echo "  export GITHUB_TOKEN='your-token-here'"
+        echo "Will continue with unauthenticated GitHub requests (60 requests/hour limit)."
+    fi
+fi
+
 # Check HCLOUD_TOKEN
 if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
     log_info "HCLOUD_TOKEN not set, attempting to retrieve from pass..."
