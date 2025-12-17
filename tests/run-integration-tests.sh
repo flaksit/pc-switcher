@@ -260,6 +260,12 @@ fi
 # =============================================================================
 
 # Run pytest with all provided arguments
+# Note: We don't use exec here because we need the EXIT trap to release the lock.
+# We disable errexit temporarily to capture pytest's exit code.
 log_info "Running pytest..."
 cd "$PROJECT_ROOT"
-exec uv run pytest -m "integration and not benchmark" -v -s "$@"
+set +e
+uv run pytest -m "integration and not benchmark" -v -s "$@"
+pytest_exit_code=$?
+set -e
+exit $pytest_exit_code
