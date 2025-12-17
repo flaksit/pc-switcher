@@ -268,6 +268,30 @@ These environment variables enable integration tests to connect to VMs:
 | `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM IP address or hostname | - |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
 
+### Optional: GitHub API Rate Limiting
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GITHUB_TOKEN` | GitHub Personal Access Token for API calls | - (unauthenticated) |
+
+**Why set GITHUB_TOKEN?**
+
+The self-update feature queries the GitHub API to fetch release information. Without authentication:
+- Rate limit: 60 requests/hour per IP address
+- Integration tests running on shared VMs can exhaust this limit
+
+With `GITHUB_TOKEN` set:
+- Rate limit: 5,000 requests/hour
+- Eliminates rate limit failures in integration tests
+
+**Creating a token:**
+
+1. Go to GitHub Settings > Developer settings > Personal access tokens > Tokens (classic)
+2. Generate new token with **no special permissions** (public repo access is sufficient)
+3. Copy the token and add as `GITHUB_TOKEN` environment variable or CI secret
+
+**For CI:** Add `GITHUB_TOKEN` as a repository secret. GitHub Actions automatically provides `secrets.GITHUB_TOKEN` for workflows, but a separate PAT may be needed for higher rate limits.
+
 **Setting for local runs**:
 
 ```bash
@@ -778,8 +802,9 @@ All infrastructure scripts are in `tests/integration/scripts/`:
 | SSH permission denied | Add your public key as `SSH_AUTHORIZED_KEY_*` secret, reprovision |
 | Reset timeout | Check VM status, manually reboot if needed |
 | Integration tests skip | Check environment variables or CI secrets |
+| GitHub API rate limit | Set `GITHUB_TOKEN` environment variable (see [Optional: GitHub API Rate Limiting](#optional-github-api-rate-limiting)) |
 
 ---
 
-**Last Updated**: 2025-12-06
-**Document Version**: 1.1 (CI-only provisioning, multi-key SSH support)
+**Last Updated**: 2025-12-17
+**Document Version**: 1.2 (Added GITHUB_TOKEN for API rate limiting)

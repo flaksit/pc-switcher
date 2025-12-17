@@ -483,6 +483,14 @@ Integration tests require these environment variables:
 
 If these variables are not set, integration tests fail with a clear message listing missing variables.
 
+**Optional but recommended:**
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `GITHUB_TOKEN` | GitHub PAT for API rate limiting | `ghp_xxx...` |
+
+Setting `GITHUB_TOKEN` increases the GitHub API rate limit from 60 to 5,000 requests/hour, preventing "rate limit exceeded" errors in tests that use `pc-switcher self update` or check for releases. See [Testing Ops Guide](testing-ops-guide.md#optional-github-api-rate-limiting) for setup instructions.
+
 ## VM Interaction Patterns
 
 ### SSH Command Execution
@@ -1197,6 +1205,26 @@ source ~/.pc-switcher-test-env
    async def test_with_timeout(pc1_executor):
        result = await pc1_executor.run_command("sleep 1", timeout=5.0)
    ```
+
+### GitHub API rate limit exceeded
+
+**Symptom:** Tests fail with "HTTP Error 403: rate limit exceeded" or "Failed to fetch releases from GitHub".
+
+**Cause:** GitHub API has a rate limit of 60 requests/hour for unauthenticated requests. When running tests on shared VMs or running multiple test sessions, this limit is quickly exhausted.
+
+**Solution:**
+
+Set the `GITHUB_TOKEN` environment variable to increase the rate limit to 5,000 requests/hour:
+
+```bash
+# Create a GitHub PAT (no special permissions needed)
+# Go to: GitHub Settings > Developer settings > Personal access tokens > Tokens (classic)
+
+# Set for local testing
+export GITHUB_TOKEN="ghp_your_token_here"
+```
+
+For CI, add `GITHUB_TOKEN` as a repository secret.
 
 ### Btrfs "Device or resource busy" errors
 

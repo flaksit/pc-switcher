@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from importlib.metadata import PackageNotFoundError
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from packaging.version import Version as PkgVersion
@@ -13,6 +14,7 @@ from pcswitcher.version import (
     Version,
     find_one_version,
     get_highest_release,
+    get_releases,
     get_this_version,
 )
 
@@ -509,6 +511,41 @@ class TestGetHighestRelease:
             with pytest.raises(RuntimeError) as exc_info:
                 get_highest_release(include_prereleases=True)
             assert "Failed to fetch GitHub releases: boom" in str(exc_info.value)
+
+
+class TestGetReleasesGithubToken:
+    """Tests for GITHUB_TOKEN support in get_releases()."""
+
+    def test_uses_token_when_set(self) -> None:
+        """Should pass GITHUB_TOKEN to Github() when environment variable is set."""
+        mock_github = MagicMock()
+        mock_repo = MagicMock()
+        mock_github.return_value.get_repo.return_value = mock_repo
+        mock_repo.get_releases.return_value = []
+
+        with (
+            patch.dict("os.environ", {"GITHUB_TOKEN": "test-token-123"}),
+            patch("pcswitcher.version.Github", mock_github),
+        ):
+            list(get_releases())
+            mock_github.assert_called_once_with("test-token-123")
+
+    def test_no_token_when_not_set(self) -> None:
+        """Should create unauthenticated Github() when GITHUB_TOKEN is not set."""
+        mock_github = MagicMock()
+        mock_repo = MagicMock()
+        mock_github.return_value.get_repo.return_value = mock_repo
+        mock_repo.get_releases.return_value = []
+
+        # Remove GITHUB_TOKEN from environment for this test
+        env_without_token = {k: v for k, v in os.environ.items() if k != "GITHUB_TOKEN"}
+        with (
+            patch.dict("os.environ", env_without_token, clear=True),
+            patch("pcswitcher.version.Github", mock_github),
+        ):
+            list(get_releases())
+            # Github() should be called with no arguments (unauthenticated)
+            mock_github.assert_called_once_with()
 
 
 class TestGithubReleaseFloor:

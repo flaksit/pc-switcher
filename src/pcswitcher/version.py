@@ -1,16 +1,19 @@
-"""Version utilities for pc-switcher.
+"""Version and release utilities for pc-switcher.
 
 This module provides utilities for:
 - Determining the current pc-switcher version from package metadata
 - Parsing version strings from CLI output
 - A unified Version class supporting both PEP 440 and SemVer formats
-- PEP440 epochs (N!X.Y.Z) are not supported
+- Querying releases (set GITHUB_TOKEN env var to avoid rate limits)
+
+PEP 440 epochs (N!X.Y.Z) are not supported.
 
 For installation and upgrade logic on target machines, see pcswitcher.jobs.install_on_target.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -83,10 +86,16 @@ def get_releases(
 
     Raises:
         RuntimeError: If GitHub API request fails
+
+    Note:
+        If GITHUB_TOKEN environment variable is set, authenticated requests
+        are used (5000 requests/hour). Otherwise, unauthenticated requests
+        are used (60 requests/hour).
     """
     try:
-        # Unauthenticated access (60 requests/hour limit)
-        g = Github()
+        # Use GITHUB_TOKEN if available for higher rate limit (5000/hour vs 60/hour)
+        token = os.environ.get("GITHUB_TOKEN")
+        g = Github(token) if token else Github()
         repo = g.get_repo(repository)
 
         # Fetch all releases with pagination
