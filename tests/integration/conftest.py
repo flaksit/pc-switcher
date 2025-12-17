@@ -452,7 +452,7 @@ async def pc2_executor_with_old_pcswitcher_tool(
     await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
     await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
     result = await pc2_executor.run_command(
-        f"curl -sSL {install_script_url} | VERSION=0.1.0-alpha.1 bash",
+        f"curl -sSL {install_script_url} | VERSION=v0.1.0-alpha.1 bash",
         timeout=120.0,
     )
     assert result.success, f"Failed to install old version: {result.stderr}"
