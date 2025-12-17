@@ -21,7 +21,7 @@ set -euo pipefail
 
 # Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
+source "$SCRIPT_DIR/internal/common.sh"
 
 # Help
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -88,33 +88,14 @@ readonly VM1_NAME="pc1"
 readonly VM2_NAME="pc2"
 
 # Global state
-LOCK_HOLDER=""
 PC1_IP=""
 PC2_IP=""
 CHANGES_OCCURRED=false
 TMPDIR=""
 
-# Get lock holder identifier (CI or local user@hostname)
-get_lock_holder() {
-    local ci_job_id="${CI_JOB_ID:-${GITHUB_RUN_ID:-}}"
-
-    if [[ -n "$ci_job_id" ]]; then
-        echo "ci-${ci_job_id}"
-    else
-        local hostname
-        hostname=$(hostname)
-        echo "local-${USER:-unknown}@${hostname}"
-    fi
-}
-
 # Cleanup function - called on exit to release lock and clean temp files
 cleanup() {
     local exit_code=$?
-
-    if [[ -n "$LOCK_HOLDER" ]]; then
-        log_info "Releasing lock..."
-        "$SCRIPT_DIR/lock.sh" "$LOCK_HOLDER" release || true
-    fi
 
     if [[ -n "$TMPDIR" && -d "$TMPDIR" ]]; then
         rm -rf "$TMPDIR" 2>/dev/null || true
@@ -126,64 +107,73 @@ cleanup() {
 # Setup trap to ensure lock is always released and temp files cleaned
 trap cleanup EXIT INT TERM
 
-# Detect if upgrade output shows changes
+# Detect if apt output shows changes
 # Returns 0 if changes occurred, 1 if no changes
-detect_upgrade_changes() {
+detect_apt_changes() {
     local output="$1"
 
-    # Check if any packages were upgraded, installed, or removed
-    if echo "$output" | grep -q "0 upgraded, 0 newly installed"; then
-        if echo "$output" | grep -q "0 to remove"; then
-            return 1  # No changes
-        fi
+    # apt outputs a summary line like: "5 upgraded, 2 newly installed, 0 to remove..."
+    # No changes if ALL three are zero
+    if echo "$output" | grep -qE "^0 upgraded, 0 newly installed, 0 to remove"; then
+        return 1  # No changes
     fi
 
     return 0  # Changes occurred
 }
 
 # Upgrade packages on a single VM
-# Returns "CHANGES" or "NO_CHANGES"
+# Outputs all apt output to stdout (for caller to prefix/display)
+# Final line is "RESULT:CHANGES" or "RESULT:NO_CHANGES"
 upgrade_vm() {
     local vm_name="$1"
     local vm_ip="$2"
 
-    log_step "Upgrading packages on $vm_name ($vm_ip)..."
+    echo "=== Upgrading packages on $vm_name ($vm_ip) ==="
 
     # Update package lists
-    log_info "Updating package lists..."
-    if ! ssh_run "${SSH_USER}@${vm_ip}" "sudo apt-get update" >/dev/null 2>&1; then
-        log_error "Failed to update package lists on $vm_name"
+    echo "--- apt-get update ---"
+    if ! ssh_run "${SSH_USER}@${vm_ip}" "sudo apt-get update" 2>&1; then
+        echo "ERROR: Failed to update package lists on $vm_name"
         exit 1
     fi
 
     # Upgrade packages non-interactively
-    log_info "Upgrading packages..."
+    echo "--- apt-get upgrade ---"
     local upgrade_output
     upgrade_output=$(ssh_run "${SSH_USER}@${vm_ip}" \
         "DEBIAN_FRONTEND=noninteractive sudo apt-get upgrade -y \
          -o Dpkg::Options::='--force-confold' \
          -o Dpkg::Options::='--force-confdef' 2>&1") || {
-        log_error "Package upgrade failed on $vm_name"
+        echo "$upgrade_output"
+        echo "ERROR: Package upgrade failed on $vm_name"
         exit 1
     }
+    echo "$upgrade_output"
 
     # Run autoremove to clean unused dependencies
-    log_info "Cleaning unused dependencies..."
+    echo "--- apt-get autoremove ---"
     local autoremove_output
     autoremove_output=$(ssh_run "${SSH_USER}@${vm_ip}" \
         "DEBIAN_FRONTEND=noninteractive sudo apt-get autoremove -y 2>&1") || {
-        log_error "Autoremove failed on $vm_name"
+        echo "$autoremove_output"
+        echo "ERROR: Autoremove failed on $vm_name"
         exit 1
     }
+    echo "$autoremove_output"
 
-    # Detect if changes occurred
-    local combined_output="${upgrade_output}\n${autoremove_output}"
-    if detect_upgrade_changes "$combined_output"; then
-        log_info "Changes detected on $vm_name"
-        echo "CHANGES"
+    # Detect if changes occurred (check each output separately)
+    local has_changes=false
+    if detect_apt_changes "$upgrade_output"; then
+        has_changes=true
+    fi
+    if detect_apt_changes "$autoremove_output"; then
+        has_changes=true
+    fi
+
+    if [[ "$has_changes" == "true" ]]; then
+        echo "RESULT:CHANGES"
     else
-        log_info "No package changes on $vm_name"
-        echo "NO_CHANGES"
+        echo "RESULT:NO_CHANGES"
     fi
 }
 
@@ -231,27 +221,20 @@ reboot_vm() {
 # Main execution
 log_step "VM upgrade and baseline update"
 
-# Get lock holder identifier
-LOCK_HOLDER=$(get_lock_holder)
-log_info "Lock holder: $LOCK_HOLDER"
+acquire_lock "upgrade-vms"
 
-# Acquire lock
-log_step "Acquiring lock..."
-if ! "$SCRIPT_DIR/lock.sh" "$LOCK_HOLDER" acquire; then
-    log_error "Failed to acquire lock"
+# Get VM IP addresses (single API call)
+log_step "Resolving VM IP addresses..."
+VM_LIST=$(hcloud server list -o columns=name,ipv4 -o noheader)
+PC1_IP=$(echo "$VM_LIST" | awk -v name="$VM1_NAME" '$1 == name {print $2}')
+PC2_IP=$(echo "$VM_LIST" | awk -v name="$VM2_NAME" '$1 == name {print $2}')
+
+if [[ -z "$PC1_IP" ]]; then
+    log_error "Failed to resolve IP for $VM1_NAME"
     exit 1
 fi
-log_info "Lock acquired"
-
-# Get VM IP addresses in parallel
-log_step "Resolving VM IP addresses..."
-PC1_IP=$(hcloud server ip "$VM1_NAME") &
-PID1=$!
-PC2_IP=$(hcloud server ip "$VM2_NAME") &
-PID2=$!
-
-if ! wait $PID1 || ! wait $PID2; then
-    log_error "Failed to resolve VM IP addresses"
+if [[ -z "$PC2_IP" ]]; then
+    log_error "Failed to resolve IP for $VM2_NAME"
     exit 1
 fi
 
@@ -276,30 +259,32 @@ if [[ $EXIT1 -ne 0 || $EXIT2 -ne 0 ]]; then
 fi
 log_info "VMs reset to baseline state"
 
-# Upgrade packages in parallel (write results to temp files)
+# Upgrade packages in parallel (output prefixed with VM name)
 log_step "Upgrading packages on both VMs..."
 TMPDIR=$(mktemp -d)
 
-upgrade_vm "$VM1_NAME" "$PC1_IP" > "$TMPDIR/pc1.result" 2>&1 &
+# Run upgrades in parallel, prefix each line with VM name
+upgrade_vm "$VM1_NAME" "$PC1_IP" 2>&1 | sed "s/^/[$VM1_NAME] /" | tee "$TMPDIR/pc1.out" &
 PID1=$!
-upgrade_vm "$VM2_NAME" "$PC2_IP" > "$TMPDIR/pc2.result" 2>&1 &
+upgrade_vm "$VM2_NAME" "$PC2_IP" 2>&1 | sed "s/^/[$VM2_NAME] /" | tee "$TMPDIR/pc2.out" &
 PID2=$!
 
 wait $PID1
-EXIT1=$?
+EXIT1=${PIPESTATUS[0]}
 wait $PID2
-EXIT2=$?
+EXIT2=${PIPESTATUS[0]}
 
-if [[ $EXIT1 -ne 0 || $EXIT2 -ne 0 ]]; then
+# Check for errors (grep for ERROR in output since exit codes don't propagate through pipes reliably)
+if grep -q "ERROR:" "$TMPDIR/pc1.out" || grep -q "ERROR:" "$TMPDIR/pc2.out"; then
     log_error "Package upgrade failed"
     exit 1
 fi
 
 log_info "Package upgrades complete"
 
-# Get results from temp files
-PC1_RESULT=$(cat "$TMPDIR/pc1.result")
-PC2_RESULT=$(cat "$TMPDIR/pc2.result")
+# Parse results from output (look for RESULT: marker)
+PC1_RESULT=$(grep "RESULT:" "$TMPDIR/pc1.out" | sed 's/.*RESULT://')
+PC2_RESULT=$(grep "RESULT:" "$TMPDIR/pc2.out" | sed 's/.*RESULT://')
 
 # Determine if changes occurred on either VM
 if [[ "$PC1_RESULT" == "CHANGES" || "$PC2_RESULT" == "CHANGES" ]]; then
@@ -374,7 +359,7 @@ if [[ "$CHANGES_OCCURRED" == "true" ]]; then
 
     # Create new baseline snapshots
     log_step "Creating new baseline snapshots..."
-    if ! "$SCRIPT_DIR/create-baseline-snapshots.sh"; then
+    if ! "$SCRIPT_DIR/internal/create-baseline-snapshots.sh"; then
         log_error "Failed to create baseline snapshots"
         exit 1
     fi

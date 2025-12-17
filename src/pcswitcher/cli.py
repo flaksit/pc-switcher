@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import signal
 import subprocess
 import sys
-import urllib.request
 from importlib.metadata import PackageNotFoundError
 from importlib.resources import files
 from pathlib import Path
@@ -21,7 +21,7 @@ from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.orchestrator import Orchestrator
-from pcswitcher.version import Version, get_this_version, parse_version_str_from_cli_output
+from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
 
 # Cleanup timeout for graceful shutdown after SIGINT.
 # After first SIGINT, cleanup has this many seconds to complete.
@@ -86,10 +86,10 @@ def _version_callback(value: bool) -> None:
     """Print version and exit if --version flag is provided."""
     if value:
         try:
-            pkg_version = get_this_version()
-            # If you change this format, also update version.py:parse_version_str_from_cli_output()
+            version = get_this_version()
+            # If you change this format, also update version.py:find_one_version()
             # Display in SemVer format for user-facing output
-            console.print(f"pc-switcher {Version.parse_pep440(pkg_version).semver_str()}")
+            console.print(f"pc-switcher {version.semver_str()}")
         except PackageNotFoundError:
             console.print("[bold red]Error:[/bold red] Cannot determine pc-switcher version")
             sys.exit(1)
@@ -104,6 +104,13 @@ def main(
     ] = False,
 ) -> None:
     """PC-switcher synchronization system."""
+    # Configure logging: INFO level for third-party libs
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(name)s: %(message)s",
+    )
+    # Set pcswitcher logger to DEBUG level
+    logging.getLogger("pcswitcher").setLevel(logging.DEBUG)
 
 
 def _display_log_file(log_file: Path) -> None:
@@ -403,65 +410,19 @@ def init(
     console.print("[dim]  - btrfs_snapshots.subvolumes (must match your system)[/dim]")
 
 
-GITHUB_RELEASES_URL = "https://api.github.com/repos/flaksit/pc-switcher/releases"
 GITHUB_REPO_URL = "https://github.com/flaksit/pc-switcher"
 
 
-def _get_latest_github_version(*, include_prerelease: bool = False) -> str:
-    """Fetch the latest release version from GitHub.
-
-    Args:
-        include_prerelease: If True, include pre-release versions. If False (default),
-            only return stable releases.
-
-    Returns:
-        Version string (e.g., "0.4.0" or "0.5.0-alpha.1" if prerelease included)
-
-    Raises:
-        RuntimeError: If unable to fetch releases or no matching release found
-    """
-    try:
-        req = urllib.request.Request(
-            GITHUB_RELEASES_URL,
-            headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "pc-switcher"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as response:
-            releases = json.loads(response.read().decode("utf-8"))
-
-            for release in releases:
-                if release.get("draft", False):
-                    continue
-                if not include_prerelease and release.get("prerelease", False):
-                    continue
-
-                tag_name = release.get("tag_name", "")
-                # Tags are in format "v0.4.0", strip the leading "v"
-                if tag_name.startswith("v"):
-                    return tag_name[1:]
-                return tag_name
-
-            if include_prerelease:
-                raise RuntimeError("No releases found on GitHub")
-            else:
-                raise RuntimeError(
-                    "No stable releases found on GitHub. Use --prerelease to install a pre-release version."
-                )
-    except RuntimeError:
-        raise
-    except Exception as e:
-        raise RuntimeError(f"Failed to fetch releases from GitHub: {e}") from e
-
-
-def _run_uv_tool_install(version: str) -> subprocess.CompletedProcess[str]:
+def _run_uv_tool_install(release: Release) -> subprocess.CompletedProcess[str]:
     """Run uv tool install to install/upgrade pc-switcher.
 
     Args:
-        version: Version to install (e.g., "0.4.0")
+        release: Release to install (tag will be used for git URL)
 
     Returns:
         CompletedProcess with stdout/stderr
     """
-    install_source = f"git+{GITHUB_REPO_URL}@v{version}"
+    install_source = f"git+{GITHUB_REPO_URL}@{release.tag}"
     return subprocess.run(
         ["uv", "tool", "install", "--force", install_source],
         capture_output=True,
@@ -470,11 +431,11 @@ def _run_uv_tool_install(version: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _verify_installed_version() -> str | None:
+def _verify_installed_version() -> Version | None:
     """Get the currently installed pc-switcher version.
 
     Returns:
-        Version string if pc-switcher is installed and working, None otherwise
+        Version object if pc-switcher is installed and working, None otherwise
     """
     result = subprocess.run(
         ["pc-switcher", "--version"],
@@ -484,10 +445,47 @@ def _verify_installed_version() -> str | None:
     )
     if result.returncode == 0:
         try:
-            return parse_version_str_from_cli_output(result.stdout)
+            return find_one_version(result.stdout)
         except ValueError:
             return None
     return None
+
+
+def _get_current_version_or_exit() -> Version:
+    """Return the current pc-switcher version or exit on failure."""
+    try:
+        return get_this_version()
+    except PackageNotFoundError:
+        console.print("[bold red]Error:[/bold red] Cannot determine current pc-switcher version")
+        sys.exit(1)
+
+
+def _resolve_target_version(version: str | None, prerelease: bool) -> Release:
+    """Resolve the target release to install based on CLI options."""
+    if version is not None:
+        try:
+            parsed_version = Version.parse(version)
+            release = parsed_version.get_release()
+            if release is None:
+                console.print(f"[bold red]Error:[/bold red] Version {version} is not a GitHub release")
+                sys.exit(1)
+            return release
+        except ValueError:
+            console.print(f"[bold red]Error:[/bold red] Invalid version format: {version}")
+            sys.exit(1)
+
+    console.print("[dim]Checking for latest version...[/dim]")
+    try:
+        return get_highest_release(include_prereleases=prerelease)
+    except RuntimeError as e:
+        if not prerelease and "No releases found" in str(e):
+            console.print(
+                "[bold red]Error:[/bold red] No stable releases found on GitHub. "
+                "Use --prerelease to install a pre-release version."
+            )
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
 
 
 @self_app.command()
@@ -508,47 +506,24 @@ def update(
     Use --prerelease to include alpha/beta/rc versions.
     """
     # Get current version
-    try:
-        current_version_str = get_this_version()
-        current = Version.parse_pep440(current_version_str)
-    except PackageNotFoundError:
-        console.print("[bold red]Error:[/bold red] Cannot determine current pc-switcher version")
-        sys.exit(1)
-
-    # Determine target version
-    if version is None:
-        console.print("[dim]Checking for latest version...[/dim]")
-        try:
-            target_version_str = _get_latest_github_version(include_prerelease=prerelease)
-        except RuntimeError as e:
-            console.print(f"[bold red]Error:[/bold red] {e}")
-            sys.exit(1)
-    else:
-        target_version_str = version
-
-    # Validate target version format (accepts both PEP 440 and SemVer)
-    try:
-        target = Version.parse(target_version_str)
-    except ValueError:
-        console.print(f"[bold red]Error:[/bold red] Invalid version format: {target_version_str}")
-        sys.exit(1)
+    current = _get_current_version_or_exit()
+    target_release = _resolve_target_version(version, prerelease)
 
     # Check if update is needed
     # Use SemVer format for user-facing output
     current_display = current.semver_str()
-    target_display = target.semver_str()
+    target_display = target_release.version.semver_str()
 
-    if target == current:
+    if target_release.version == current:
         console.print(f"[green]Already at version {current_display}[/green]")
         sys.exit(0)
 
-    if target < current:
+    if target_release.version < current:
         console.print(f"[yellow]Warning:[/yellow] Downgrading from {current_display} to {target_display}")
 
     # Perform the update
     console.print(f"Updating pc-switcher from {current_display} to {target_display}...")
-    # Use SemVer format for git tag (GitHub tags use SemVer, not PEP 440)
-    result = _run_uv_tool_install(target.semver_str())
+    result = _run_uv_tool_install(target_release)
 
     if result.returncode != 0:
         console.print("[bold red]Error:[/bold red] Update failed")
@@ -557,19 +532,12 @@ def update(
         sys.exit(1)
 
     # Verify installation
-    installed_version_str = _verify_installed_version()
-    if installed_version_str is None:
+    installed = _verify_installed_version()
+    if installed is None:
         console.print("[bold red]Error:[/bold red] Verification failed - pc-switcher not working after update")
         sys.exit(1)
 
-    # Compare using Version objects to handle format differences (e.g., "0.1.0-alpha.1" vs "0.1.0a1")
-    try:
-        installed = Version.parse(installed_version_str)
-    except ValueError:
-        console.print(f"[bold red]Error:[/bold red] Cannot parse installed version: {installed_version_str}")
-        sys.exit(1)
-
-    if installed != target:
+    if installed != target_release.version:
         console.print(
             f"[bold red]Error:[/bold red] Version mismatch after update. "
             f"Expected {target_display}, got {installed.semver_str()}"

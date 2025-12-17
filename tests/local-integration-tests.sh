@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Run integration tests locally with minimal setup.
+# Run pytest locally with test environment configured.
 #
 # This script only requires HCLOUD_TOKEN to be set. It automatically:
 # - Looks up VM IPs from Hetzner Cloud
 # - Updates SSH known_hosts entries
 # - Sets all required environment variables
-# - Runs pytest with integration markers
+# - Runs pytest with any arguments you provide
 #
 # Usage:
-#   ./local-integration-tests.sh                    # Run all integration tests
-#   ./local-integration-tests.sh test_vm_connectivity.py  # Run specific test file
-#   ./local-integration-tests.sh -k "test_ssh"     # Run tests matching pattern
+#   ./local-pytest.sh tests/integration -m integration          # Run all integration tests
+#   ./local-pytest.sh tests/integration/test_vm_connectivity.py # Run specific test file
+#   ./local-pytest.sh -k "test_ssh" -v                          # Run tests matching pattern
+#   ./local-pytest.sh tests/integration/test_executor_overhead.py::TestRemoteExecutorOverhead::test_no_op_command_overhead -s
 #
 set -euo pipefail
 
@@ -27,12 +28,46 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
+# Check GITHUB_TOKEN
+if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+    if command -v pass &> /dev/null; then
+        GITHUB_TOKEN=$(pass show dev/pc-switcher/github_token_public_ro 2>/dev/null) || {
+            log_warn "GITHUB_TOKEN not set and could not retrieve from pass"
+            echo "Please set your GitHub API token:"
+            echo "  export GITHUB_TOKEN='your-token-here'"
+            echo "Or ensure you have the token set in pass 'dev/pc-switcher/github_token_public_ro'"
+            echo "Or ensure you have the token set in pass 'dev/pc-switcher/github_token_public_ro'"
+            echo "Will continue with unauthenticated GitHub requests (60 requests/hour limit)."
+        }
+        export GITHUB_TOKEN
+        log_info "Successfully retrieved GITHUB_TOKEN from pass"
+    else
+        log_warn "GITHUB_TOKEN not set and pass not available"
+        echo "Please set your (read-only) GitHub token:"
+        echo "  export GITHUB_TOKEN='your-token-here'"
+        echo "Will continue with unauthenticated GitHub requests (60 requests/hour limit)."
+    fi
+fi
+
 # Check HCLOUD_TOKEN
 if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
-    log_error "HCLOUD_TOKEN not set"
-    echo "Please set your Hetzner Cloud API token:" >&2
-    echo "  export HCLOUD_TOKEN='your-token-here'" >&2
-    exit 1
+    log_info "HCLOUD_TOKEN not set, attempting to retrieve from pass..."
+    if command -v pass &> /dev/null; then
+        HCLOUD_TOKEN=$(pass show dev/pc-switcher/testing/hcloud_token_rw 2>/dev/null) || {
+            log_error "HCLOUD_TOKEN not set and could not retrieve from pass"
+            echo "Please set your Hetzner Cloud API token:" >&2
+            echo "  export HCLOUD_TOKEN='your-token-here'" >&2
+            echo "Or ensure you have the token set in pass 'dev/pc-switcher/testing/hcloud_token_rw'" >&2
+            exit 1
+        }
+        export HCLOUD_TOKEN
+        log_info "Successfully retrieved HCLOUD_TOKEN from pass"
+    else
+        log_error "HCLOUD_TOKEN not set and pass not available"
+        echo "Please set your Hetzner Cloud API token:" >&2
+        echo "  export HCLOUD_TOKEN='your-token-here'" >&2
+        exit 1
+    fi
 fi
 
 # Check hcloud CLI is available
@@ -61,12 +96,18 @@ log_info "pc1: $PC1_IP"
 log_info "pc2: $PC2_IP"
 
 # Update SSH known_hosts
-log_info "Updating SSH known_hosts..."
+log_info "Updating SSH known_hosts if needed..."
 for ip in "$PC1_IP" "$PC2_IP"; do
-    # Remove old entries (suppress errors if not found)
-    ssh-keygen -R "$ip" 2>/dev/null || true
-    # Add new entries
-    ssh-keyscan -H "$ip" >> ~/.ssh/known_hosts 2>/dev/null
+    NEW_KEYS=$(ssh-keyscan -H "$ip" 2>/dev/null)
+    if [[ -n "$NEW_KEYS" ]]; then
+        NEW_FPS=$(echo "$NEW_KEYS" | ssh-keygen -lf - | awk '{print $2}' | sort)
+        OLD_FPS=$(ssh-keygen -F "$ip" 2>/dev/null | ssh-keygen -lf - | awk '{print $2}' | sort)
+
+        if [[ "$NEW_FPS" != "$OLD_FPS" ]]; then
+            ssh-keygen -R "$ip" 2>/dev/null || true
+            echo "$NEW_KEYS" >> ~/.ssh/known_hosts
+        fi
+    fi
 done
 
 # Export environment variables
@@ -79,7 +120,7 @@ log_info "  PC_SWITCHER_TEST_PC1_HOST=$PC_SWITCHER_TEST_PC1_HOST"
 log_info "  PC_SWITCHER_TEST_PC2_HOST=$PC_SWITCHER_TEST_PC2_HOST"
 log_info "  PC_SWITCHER_TEST_USER=$PC_SWITCHER_TEST_USER"
 
-# Run tests
-log_info "Running integration tests..."
+# Run pytest with all provided arguments
+log_info "Running pytest..."
 cd "$PROJECT_ROOT"
-exec uv run pytest tests/integration -v -m integration "$@"
+exec uv run pytest -m "integration and not benchmark" -v -s "$@"

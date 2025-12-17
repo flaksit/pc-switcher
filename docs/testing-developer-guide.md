@@ -9,10 +9,11 @@ This guide explains how to write tests for pc-switcher. Read this before writing
 3. [Writing Contract Tests](#writing-contract-tests)
 4. [Writing Integration Tests](#writing-integration-tests)
 5. [VM Interaction Patterns](#vm-interaction-patterns)
-6. [Test Organization](#test-organization)
-7. [Integration Test Fixture Scoping](#integration-test-fixture-scoping)
-8. [Local Development Setup](#local-development-setup)
-9. [Troubleshooting](#troubleshooting)
+6. [Writing Manual Playbook Tests](#writing-manual-playbook-tests)
+7. [Test Organization](#test-organization)
+8. [Integration Test Fixture Scoping](#integration-test-fixture-scoping)
+9. [Local Development Setup](#local-development-setup)
+10. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
@@ -22,30 +23,125 @@ PC-switcher uses a three-tier testing approach:
 
 | Tier | Purpose | Speed | Environment | When to Run |
 |------|---------|-------|-------------|-------------|
-| **Unit Tests** | Test pure logic, business rules, mocked I/O | Fast (< 30s) | Any machine | Every commit |
-| **Contract Tests** | Verify job interface compliance | Fast (< 30s) | Any machine | Every commit |
-| **Integration Tests** | Test real SSH, btrfs operations, full workflows | Slow (5-15 min) | Dedicated VMs only | PRs to main, on-demand |
+| **Tier 1: Unit & Contract Tests** | Test pure logic, business rules, mocked I/O, job interface compliance | Fast (< 30s) | Any machine | Every commit |
+| **Tier 2: Integration Tests** | Test real SSH, btrfs operations, full workflows | Slow (5-15 min) | Dedicated VMs only | PRs to main, on-demand |
+| **Tier 3: Manual Playbook** | Visual verification of TUI, colors, progress bars, UX.  | 45-60 min | Developer machine | Before releases |
 
 ### When to Use Each Tier
 
-**Unit Tests:**
+**Unit Tests (Tier 1):**
 - Testing business logic in jobs
 - Testing validation logic
 - Testing configuration parsing
 - Testing lock mechanisms
 - Testing models and utilities
 
-**Contract Tests:**
+**Contract Tests (Tier 1):**
 - Verifying jobs implement required interfaces
 - Ensuring mock/real executor behavior parity
 - Testing job base class functionality
 
-**Integration Tests:**
+**Integration Tests (Tier 2):**
 - Testing SSH connections between machines
 - Testing btrfs snapshot operations
 - Testing full sync workflows
 - Testing inter-VM communication
 - Testing install scripts
+
+**Manual Playbook (Tier 3):**
+- Visual verification of TUI elements (progress bars, colors, formatting)
+- Terminal rendering and color scheme validation
+- Accessibility testing (screen reader, color blindness, terminal sizes)
+- Feature tour and end-to-end UX verification
+- Any visual element that cannot be automated
+
+### Spec-Driven Testing Philosophy
+
+PC-switcher uses **spec-driven testing** for features managed through the SpecKit workflow. This approach ensures tests validate **what** the system should do (from specifications) rather than **how** it does it (from implementation).
+
+**Important**: Spec-driven testing is about *organization and naming*, not about choosing between unit and integration tests. Both unit tests (bottom-up, mocked) and integration tests (end-to-end, real VMs) are essential and both use spec-driven naming.
+
+**Key Principles**:
+
+1. **100% Requirement Coverage**: Every user story, acceptance scenario, and functional requirement from feature specs has corresponding test coverage through BOTH unit and integration tests.
+
+2. **Traceability**: Test function names include feature + requirement IDs, making it immediately clear which specification requirement each test validates.
+
+3. **Machine-Readable Coverage**: The `specs/*/contracts/coverage-map.yaml` files provide machine-readable mappings that CI can verify for completeness.
+
+4. **Test Names as Documentation**: When a test fails in CI, the test name alone (e.g., `test_001_fr028_load_from_config_path FAILED`) tells you which feature and requirement failed without needing to open the file.
+
+5. **Unit Tests Still Essential**: Most spec requirements need BOTH unit tests (to test logic with mocks) AND integration tests (to verify real-world behavior). Unit tests remain the fastest, most reliable way to test component behavior.
+
+**SpecKit Features**:
+
+Features developed using the SpecKit workflow (001-foundation, 002-testing-framework, 003-foundation-tests, etc.) have:
+- Formal specifications in `specs/<feature>/spec.md`
+- Test coverage mappings in `specs/<feature>/contracts/coverage-map.yaml`
+- Developer quickstart guides in `specs/<feature>/quickstart.md`
+
+**Example: Testing a Single Requirement**:
+
+A single spec requirement typically needs multiple tests at different levels:
+
+```python
+# Unit test (fast, mocked executor)
+def test_001_fr008_create_presync_snapshots_logic() -> None:
+    """FR-008: Test snapshot creation logic with mocked executor."""
+    mock_executor = AsyncMock()
+    mock_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, ...))
+
+    job = SnapshotJob(context)
+    await job.create_snapshot("/@", "/.snapshots/pre-@")
+
+    # Verify correct btrfs command was called
+    mock_executor.run_command.assert_called_with("sudo btrfs subvolume snapshot -r ...")
+
+# Integration test (slow, real VM)
+@pytest.mark.integration
+async def test_001_fr008_create_presync_snapshots_real(pc1_executor) -> None:
+    """FR-008: Test snapshot creation on real btrfs filesystem."""
+    result = await pc1_executor.run_command("sudo btrfs subvolume snapshot -r ...")
+
+    # Verify snapshot actually exists and is read-only
+    verify = await pc1_executor.run_command("sudo btrfs property get ... ro")
+    assert "ro=true" in verify.stdout
+```
+
+Both tests validate FR-008, but at different levels. The unit test is fast and tests logic; the integration test is slow and verifies real btrfs behavior.
+
+**Compatibility with TDD (Test-Driven Development)**:
+
+Spec-driven naming is **fully compatible** with TDD workflow:
+
+1. **Read the spec requirement** (e.g., FR-028: "System MUST load config from ~/.config/pc-switcher/config.yaml")
+2. **Write failing test** with spec-driven name:
+   ```python
+   def test_001_fr028_load_from_config_path() -> None:  # RED - fails
+       """FR-028: System MUST load configuration from ~/.config/pc-switcher/config.yaml."""
+       config = Config.load_from_default_path()
+       assert config is not None
+   ```
+3. **Write minimal implementation** to make it pass (GREEN)
+4. **Refactor** while keeping tests green
+
+The spec-driven naming **enhances TDD** by:
+- Making it clear WHAT you're building (requirement ID in test name)
+- Providing clear success criteria (from spec requirement text)
+- Ensuring every test maps to a documented requirement
+- Serving as executable specification
+
+**For developers**:
+- When writing tests for SpecKit features, use the feature + requirement ID naming convention (see [Test Function Naming](#test-function-naming))
+- Write BOTH unit tests (with mocks) AND integration tests (on VMs) for most requirements
+- TDD workflow remains unchanged - just use spec-driven test names
+- Consult the feature's `quickstart.md` for examples and patterns
+- Verify your tests appear in the `coverage-map.yaml` after implementation
+
+**For non-SpecKit code**:
+- Use descriptive test names without requirement IDs
+- Focus on testing behavior and edge cases
+- Standard pytest conventions apply
 
 ## Writing Unit Tests
 
@@ -247,6 +343,82 @@ class TestJobContract:
 
 Integration tests run on dedicated test VMs with real btrfs filesystems and SSH connections.
 
+### Baseline VM State
+
+**IMPORTANT**: At the start of each integration test session, both `pc1` and `pc2` VMs are reset to a known baseline state. Understanding this baseline is critical for writing correct integration tests.
+
+**Baseline VM state (captured in `/.snapshots/baseline/` during provisioning)**:
+
+| Component | State | Location |
+|-----------|-------|----------|
+| **Operating System** | Ubuntu 24.04 LTS | / |
+| **Packages** | btrfs-progs, qemu-guest-agent, fail2ban, ufw, sudo | System-wide |
+| **Filesystem** | btrfs with flat subvolume layout (`@`, `@home`, `@snapshots`) | / |
+| **Users** | `testuser` with passwordless sudo | /home/testuser |
+| **SSH Keys** | All developer SSH keys from CI secrets | ~/.ssh/authorized_keys |
+| **Firewall** | ufw enabled, SSH allowed | System-wide |
+| **pc-switcher** | **NOT installed** | N/A |
+| **Python tools** | `uv` installed via `curl -LsSf https://astral.sh/uv/install.sh \| sh` | ~/.local/bin |
+
+**Key facts about the baseline**:
+- **pc-switcher is NOT installed** in the baseline. Tests that require pc-switcher must install it or use fixtures that install it.
+- **VMs are reset once per session** (not between test modules). The `integration_session` fixture resets VMs at the start of the pytest session.
+- **Tests must clean up after themselves** to avoid affecting other tests in the same session.
+
+### Test Isolation Requirements
+
+Since VMs are reset **once per session** (not between test modules), every integration test MUST:
+
+1. **Clean up all artifacts** created during the test (files, directories, snapshots, installed packages)
+2. **Restore VM state** if the test modifies it (e.g., if a test installs/uninstalls pc-switcher)
+3. **Use unique names** for test artifacts to avoid collisions with other tests
+
+**Example: Proper cleanup pattern**
+
+```python
+@pytest.mark.integration
+async def test_create_snapshot(pc1_executor):
+    """Test creating a btrfs snapshot with proper cleanup."""
+    snapshot_name = "/.snapshots/test-my-snapshot"
+
+    try:
+        # Test operations
+        result = await pc1_executor.run_command(
+            f"sudo btrfs subvolume snapshot -r / {snapshot_name}"
+        )
+        assert result.success
+
+        # Test assertions...
+    finally:
+        # Always clean up, even if test fails
+        await pc1_executor.run_command(
+            f"sudo btrfs subvolume delete {snapshot_name} 2>/dev/null || true"
+        )
+```
+
+**Bad example: No cleanup**
+
+```python
+# ✗ DON'T DO THIS - leaves artifacts that affect other tests
+@pytest.mark.integration
+async def test_create_snapshot(pc1_executor):
+    result = await pc1_executor.run_command(
+        "sudo btrfs subvolume snapshot -r / /.snapshots/test-snapshot"
+    )
+    assert result.success
+    # Missing cleanup! This snapshot will remain on the VM
+```
+
+**Fixtures that modify VM state**:
+
+If you create fixtures that modify VM state (like installing/uninstalling packages), the fixture MUST:
+1. **Capture the initial state** before modifying it
+2. **Restore to initial state** after the test (in the cleanup/finally section)
+
+See `tests/integration/conftest.py` for examples:
+- `pc2_executor_without_pcswitcher_tool`: Uninstalls pc-switcher, then restores it if it was present
+- `pc2_executor_with_old_pcswitcher_tool`: Installs old version, then restores original state
+
 ### Directory Structure
 
 ```text
@@ -273,23 +445,23 @@ async def test_ssh_connection(pc1_executor):
 Integration test fixtures are defined in `tests/integration/conftest.py`:
 
 ```python
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def pc1_connection():
     """Async SSH connection to pc1 VM."""
 
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def pc2_connection():
     """Async SSH connection to pc2 VM."""
 
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def pc1_executor(pc1_connection):
     """RemoteExecutor for pc1 VM."""
 
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def pc2_executor(pc2_connection):
     """RemoteExecutor for pc2 VM."""
 
-@pytest_asyncio.fixture(scope="module")
+@pytest.fixture(scope="module")
 async def test_volume(pc1_executor):
     """Btrfs test subvolume at /test-vol."""
 ```
@@ -304,12 +476,20 @@ Integration tests require these environment variables:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `HCLOUD_TOKEN` | Hetzner Cloud API token | `hc-xxxx...` |
+| `HCLOUD_TOKEN` | Hetzner Cloud API token | `AbC123...` |
 | `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM hostname/IP | `192.0.2.1` |
 | `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM hostname/IP | `192.0.2.2` |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
 
 If these variables are not set, integration tests fail with a clear message listing missing variables.
+
+**Optional but recommended:**
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `GITHUB_TOKEN` | GitHub PAT for API rate limiting | `ghp_xxx...` |
+
+Setting `GITHUB_TOKEN` increases the GitHub API rate limit from 60 to 5,000 requests/hour, preventing "rate limit exceeded" errors in tests that use `pc-switcher self update` or check for releases. See [Testing Ops Guide](testing-ops-guide.md#optional-github-api-rate-limiting) for setup instructions.
 
 ## VM Interaction Patterns
 
@@ -326,6 +506,40 @@ async def test_command_execution(pc1_executor):
     assert result.exit_code == 0
     print(f"Hostname: {result.stdout.strip()}")
 ```
+
+#### Command Execution Overhead
+
+Each `run_command()` call has measurable SSH overhead. When executing many commands, **group related commands to minimize calls**:
+
+**Performance characteristics** (see `tests/integration/test_executor_overhead.py` for detailed benchmarks):
+- **Bare RemoteExecutor (direct SSH)**: ~70ms per command
+- **RemoteLoginBashExecutor (bash -l wrapper)**: ~78ms per command
+- **SSH setup overhead (first connection)**: ~200ms
+
+**Optimization pattern**:
+
+```python
+# ✗ Inefficient: 30 separate command calls = 30 × 78ms = 2.3 seconds
+for file in files:
+    await executor.run_command(f"stat {file}")
+
+# ✓ Better: Group related commands with &&
+result = await executor.run_command(
+    " && ".join(f"stat {file}" for file in files)
+)
+
+# ✓ Or use bash to combine operations
+await executor.run_command(f"for f in {' '.join(files)}; do stat $f; done")
+
+# ✓ Or pipe output through single shell invocation
+await executor.run_command(f"ls -la {' '.join(dirs)} | grep pattern")
+```
+
+For 100 commands:
+- **Separate calls**: 100 × 78ms = **7.8 seconds**
+- **Single grouped call**: ~80ms (one SSH roundtrip)
+
+**Rule of thumb**: If you need more than 3-5 sequential commands on the same machine, group them into a single `run_command()` call.
 
 ### File Transfer with asyncssh
 
@@ -419,6 +633,87 @@ async def test_rsync_between_vms(pc1_executor, pc2_executor):
     assert "test data" in result.stdout
 ```
 
+## Writing Manual Playbook Tests
+
+The manual testing playbook (`docs/testing-playbook.md`) is the third tier of our testing strategy. It covers visual elements and UX that cannot be automated.
+
+### When to Update the Playbook
+
+Add entries to the manual playbook when you:
+
+1. **Add new TUI elements**: Progress bars, status indicators, panels, colors
+2. **Change CLI output formatting**: Error messages, success messages, help text
+3. **Modify visual feedback**: Log level colors, terminal rendering
+4. **Add new user-facing commands**: New subcommands or options
+5. **Change interrupt/error handling**: Visual feedback during failures
+
+### Playbook Structure
+
+The playbook is organized into sections:
+
+| Section | What to Test |
+|---------|--------------|
+| **Visual Verification** | Terminal rendering, colors, progress bars, log panels |
+| **Feature Tour** | End-to-end workflows, configuration, sync operations |
+| **Accessibility** | Screen readers, color blindness, terminal sizes |
+| **Checklist Summary** | Pre-release verification checklist |
+
+### Adding a New Test Entry
+
+When adding a visual test, follow this pattern:
+
+````markdown
+#### Your Feature Name
+
+**Objective**: One sentence describing what you're verifying.
+
+```bash
+# Commands to run
+pc-switcher <your-command>
+```
+
+**Verify**:
+- [ ] Element renders correctly
+- [ ] Colors are distinct and readable
+- [ ] No visual artifacts or flickering
+- [ ] Graceful handling of edge cases
+````
+
+### Example: Adding a Progress Bar Test
+
+If you add a new job with progress reporting, add an entry like:
+
+````markdown
+#### Your New Job Progress
+
+**Objective**: Verify progress bar for your_new_job renders correctly.
+
+```bash
+# Enable job in config
+nano ~/.config/pc-switcher/config.yaml
+# Set: sync_jobs.your_new_job: true
+
+# Run sync
+pc-switcher sync localhost
+```
+
+**Verify**:
+- [ ] Progress bar fills smoothly from 0% to 100%
+- [ ] Job name appears in cyan before the bar
+- [ ] Current item description updates without artifacts
+- [ ] Bar completes when job finishes
+````
+
+### When NOT to Update the Playbook
+
+- Pure backend logic changes (test with unit tests)
+- Non-visual bug fixes (test with integration tests)
+- Internal refactoring with no user-visible changes
+
+### Reference
+
+See [Testing Playbook](testing-playbook.md) for the complete manual testing procedures.
+
 ## Test Organization
 
 ### File Naming
@@ -427,7 +722,7 @@ All test files must start with `test_`:
 
 ```text
 tests/unit/test_lock.py          ✓ Correct
-tests/unit/test_jobs/test_disk_space_monitor.py  ✓ Correct
+tests/unit_jobs/test_disk_space_monitor.py  ✓ Correct
 tests/integration/test_ssh.py    ✓ Correct
 
 tests/unit/lock_test.py          ✗ Wrong
@@ -451,15 +746,69 @@ class TestDiskSpaceMonitorValidation:
 
 ### Test Function Naming
 
-Use descriptive names that explain what is being tested:
+PC-switcher uses two naming conventions depending on the type of test:
+
+#### Spec-Driven Tests (Validating Requirements)
+
+For tests that validate specific requirements from feature specs, use the **feature + requirement ID** naming pattern:
+
+**Format**: `test_<feature>_<req-id>_<description>()`
+
+**Components**:
+- `<feature>`: Feature number from SpecKit (e.g., `001` for foundation)
+- `<req-id>`: Requirement ID (`fr###` for functional requirements, `us#_as#` for acceptance scenarios)
+- `<description>`: Descriptive name in snake_case
+
+**Examples**:
+```python
+def test_001_fr028_load_from_config_path() -> None:
+    """FR-028: System MUST load configuration from ~/.config/pc-switcher/config.yaml."""
+    config = Config.load_from_default_path()
+    assert config is not None
+
+async def test_001_us2_as1_install_missing_pcswitcher() -> None:
+    """US-2 AS-1: Target missing pc-switcher, orchestrator installs from GitHub."""
+    # Test implementation
+
+def test_001_fr018_log_level_ordering() -> None:
+    """FR-018: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL."""
+    assert LogLevel.DEBUG > LogLevel.FULL
+    assert LogLevel.FULL > LogLevel.INFO
+```
+
+**Benefits**:
+- **Unique across features**: Feature number ensures no naming conflicts across SpecKit features
+- **Grep-able**: `pytest -k "001_fr028"` runs all FR-028 tests for feature 001
+- **CI-friendly**: Test failures show feature + requirement: `test_001_us3_as2_create_presync_snapshots FAILED`
+- **Immediate traceability**: Function name alone shows which feature and requirement is being tested
+
+**When to use**:
+- Tests validating requirements from `specs/*/spec.md` files
+- Tests listed in `specs/*/contracts/coverage-map.yaml`
+- All tests for SpecKit-managed features (001-foundation, 002-testing-framework, 003-foundation-tests, etc.)
+
+#### General Tests (Descriptive Naming)
+
+For tests not tied to specific spec requirements, use descriptive names:
 
 ```python
 def test_acquire_creates_lock_file(self, tmp_path: Path) -> None:
     """acquire() should create the lock file."""
+    lock = SyncLock(tmp_path / "test.lock")
+    lock.acquire()
+    assert (tmp_path / "test.lock").exists()
 
 def test_validate_config_rejects_invalid_format(self) -> None:
     """validate_config() should reject invalid format."""
+    errors = Job.validate_config({"invalid": "format"})
+    assert len(errors) > 0
 ```
+
+**When to use**:
+- Helper function tests
+- Edge case tests not directly tied to spec requirements
+- Infrastructure tests (test framework itself)
+- Tests for code not covered by formal specs
 
 ### Markers
 
@@ -468,6 +817,7 @@ Use pytest markers to categorize tests:
 ```python
 @pytest.mark.integration  # Requires VM infrastructure
 @pytest.mark.slow         # Takes >5 seconds
+@pytest.mark.benchmark    # Performance benchmarks (informational, not functional tests)
 ```
 
 Markers are configured in `pyproject.toml`:
@@ -477,7 +827,25 @@ Markers are configured in `pyproject.toml`:
 markers = [
     "integration: Integration tests (require VM infrastructure)",
     "slow: Tests that take >5 seconds",
+    "benchmark: Performance benchmarks (not run by default)",
 ]
+```
+
+**Default test behavior:**
+- Unit & contract tests: Always run
+- Integration tests: Excluded by default; use `-m "integration and not benchmark"` to run
+- Benchmarks: Excluded by default; use `-m benchmark` to run
+
+**Running different test combinations:**
+```bash
+# Only unit/contract (fast)
+uv run pytest tests/unit tests/contract
+# All integration except benchmarks
+uv run pytest tests/integration -m "integration and not benchmark"
+# Only performance benchmarks
+uv run pytest tests/integration -m benchmark
+# Specific benchmark with output
+uv run pytest tests/integration/test_executor_overhead.py -m benchmark -v -s
 ```
 
 ### Fixture Scopes
@@ -563,7 +931,7 @@ If a specific test needs complete isolation (e.g., it corrupts the connection), 
 
 ```python
 # In a specific test file that needs isolation
-@pytest_asyncio.fixture  # defaults to function scope
+@pytest.fixture  # defaults to function scope
 async def isolated_connection():
     """Fresh connection for tests that need isolation."""
     host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
@@ -595,28 +963,35 @@ brew install hcloud
 The easiest way to run integration tests locally:
 
 ```bash
-# Only HCLOUD_TOKEN is required
-export HCLOUD_TOKEN="your-token-here"
-
 # Run all integration tests
-tests/local-integration-tests.sh
+./tests/local-pytest.sh tests/integration -m "integration and not benchmark"
 
 # Run specific test file
-tests/local-integration-tests.sh tests/integration/test_vm_connectivity.py
+./tests/local-pytest.sh tests/integration/test_vm_connectivity.py
+
+# Run specific test
+./tests/local-pytest.sh tests/integration/test_executor_overhead.py::TestRemoteExecutorOverhead::test_no_op_command_overhead -s
 
 # Run with extra pytest flags
-tests/local-integration-tests.sh -k "test_ssh" --tb=short
+./tests/local-pytest.sh -k "test_ssh" --tb=short
 ```
 
 The script automatically:
-- Looks up VM IPs from Hetzner Cloud
+- **Retrieves HCLOUD_TOKEN**: If not set in environment, attempts to retrieve from `pass` (password-store) at path `dev/pc-switcher/testing/hcloud_token_rw`
+- Looks up VM IPs from Hetzner Cloud using the `hcloud` CLI
 - Updates SSH known_hosts entries (removes old, adds new)
-- Sets all required environment variables
-- Runs pytest with integration markers
+- Sets all required environment variables (`PC_SWITCHER_TEST_PC1_HOST`, `PC_SWITCHER_TEST_PC2_HOST`, `PC_SWITCHER_TEST_USER`)
+- Runs pytest with any arguments you provide (full pytest wrapper)
+
+**Note**: If you don't use `pass`, set HCLOUD_TOKEN manually before running:
+```bash
+export HCLOUD_TOKEN="your-token-here"
+./tests/local-pytest.sh tests/integration -m "integration and not benchmark"
+```
 
 ### Environment Variables for Running Integration Tests on the VMs From Local Code
 
-Set up environment variables for local integration testing. Create a file `~/.pc-switcher-test-env`:
+Set up environment variables for local integration testing. Create a file `~/.env.test.local`:
 
 ```bash
 # Hetzner Cloud API token (from https://console.hetzner.cloud/)
@@ -631,7 +1006,7 @@ export PC_SWITCHER_TEST_USER="testuser"
 Source this file before running integration tests:
 
 ```bash
-source ~/.pc-switcher-test-env
+source ~/.env.test.local
 ```
 
 ### Test VM Access
@@ -668,7 +1043,7 @@ Run integration tests (requires VMs):
 source ~/.pc-switcher-test-env
 
 # Run integration tests
-uv run pytest tests/integration -v -m integration
+uv run pytest tests/integration -v -m "integration and not benchmark"
 ```
 
 Run all tests:
@@ -693,7 +1068,7 @@ tests/integration/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC1_HOST
 tests/integration/scripts/reset-vm.sh $PC_SWITCHER_TEST_PC2_HOST
 ```
 
-The `reset-vm.sh` script uses btrfs snapshot rollback and takes about 30 seconds per VM.
+The `reset-vm.sh` script uses btrfs snapshot rollback and takes about 20 seconds.
 
 ## Troubleshooting
 
@@ -761,7 +1136,7 @@ source ~/.pc-switcher-test-env
 
 1. Check lock status (requires `HCLOUD_TOKEN`):
    ```bash
-   tests/integration/scripts/lock.sh "" status
+   tests/integration/scripts/internal/lock.sh status
    ```
 
 2. If lock is stale (holder is no longer running), manually remove it:
@@ -830,6 +1205,26 @@ source ~/.pc-switcher-test-env
    async def test_with_timeout(pc1_executor):
        result = await pc1_executor.run_command("sleep 1", timeout=5.0)
    ```
+
+### GitHub API rate limit exceeded
+
+**Symptom:** Tests fail with "HTTP Error 403: rate limit exceeded" or "Failed to fetch releases from GitHub".
+
+**Cause:** GitHub API has a rate limit of 60 requests/hour for unauthenticated requests. When running tests on shared VMs or running multiple test sessions, this limit is quickly exhausted.
+
+**Solution:**
+
+Set the `GITHUB_TOKEN` environment variable to increase the rate limit to 5,000 requests/hour:
+
+```bash
+# Create a GitHub PAT (no special permissions needed)
+# Go to: GitHub Settings > Developer settings > Personal access tokens > Tokens (classic)
+
+# Set for local testing
+export GITHUB_TOKEN="ghp_your_token_here"
+```
+
+For CI, add `GITHUB_TOKEN` as a repository secret.
 
 ### Btrfs "Device or resource busy" errors
 
@@ -913,16 +1308,17 @@ source ~/.pc-switcher-test-env
 
 ## Summary
 
-- **Unit tests**: Fast, safe, use mocks, test logic
-- **Contract tests**: Verify interface compliance
-- **Integration tests**: Real VMs, real btrfs, real SSH
-- **Always mark integration tests** with `@pytest.mark.integration`
+- **Tier 1 - Unit & contract tests**: Fast, safe, use mocks, test logic and interface compliance
+- **Tier 2 - Integration tests**: Real VMs, real btrfs, real SSH
+- **Tier 3 - Manual playbook**: Visual verification, TUI testing, run before releases
 - **Always use `uv run pytest`** to execute tests
 - **Set environment variables** before running integration tests
 - **VMs are automatically reset** by the pytest fixture before integration tests
+- **Update the playbook** when adding visual/TUI changes
 - **Check troubleshooting section** when tests fail
 
 For more information, see:
 - [Testing Framework Overview](testing-framework.md)
+- [Testing Playbook](testing-playbook.md) - Manual verification procedures
 - [Testing Infrastructure](testing-infrastructure.md) - VM provisioning flow and scripts
 - [ADR-006: Testing Framework](adr/adr-006-testing-framework.md)

@@ -268,6 +268,30 @@ These environment variables enable integration tests to connect to VMs:
 | `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM IP address or hostname | - |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
 
+### Optional: GitHub API Rate Limiting
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GITHUB_TOKEN` | GitHub Personal Access Token for API calls | - (unauthenticated) |
+
+**Why set GITHUB_TOKEN?**
+
+The self-update feature queries the GitHub API to fetch release information. Without authentication:
+- Rate limit: 60 requests/hour per IP address
+- Integration tests running on shared VMs can exhaust this limit
+
+With `GITHUB_TOKEN` set:
+- Rate limit: 5,000 requests/hour
+- Eliminates rate limit failures in integration tests
+
+**Creating a token:**
+
+1. Go to GitHub Settings > Developer settings > Personal access tokens > Tokens (classic)
+2. Generate new token with **no special permissions** (public repo access is sufficient)
+3. Copy the token and add as `GITHUB_TOKEN` environment variable or CI secret
+
+**For CI:** Add `GITHUB_TOKEN` as a repository secret. GitHub Actions automatically provides `secrets.GITHUB_TOKEN` for workflows, but a separate PAT may be needed for higher rate limits.
+
 **Setting for local runs**:
 
 ```bash
@@ -710,22 +734,22 @@ All infrastructure scripts are in `tests/integration/scripts/`:
 
 **Create single VM**:
 ```bash
-./scripts/create-vm.sh pc1
+./scripts/internal/create-vm.sh pc1
 ```
 
 **Configure single VM**:
 ```bash
-./scripts/configure-vm.sh pc1 <vm-ip>
+./scripts/internal/configure-vm.sh pc1 <vm-ip>
 ```
 
 **Setup inter-VM networking**:
 ```bash
-./scripts/configure-hosts.sh <pc1-ip> <pc2-ip>
+./scripts/internal/configure-hosts.sh <pc1-ip> <pc2-ip>
 ```
 
 **Create baseline snapshots**:
 ```bash
-./scripts/create-baseline-snapshots.sh <pc1-ip> <pc2-ip>
+./scripts/internal/create-baseline-snapshots.sh <pc1-ip> <pc2-ip>
 ```
 
 **Reset VM**:
@@ -735,8 +759,8 @@ All infrastructure scripts are in `tests/integration/scripts/`:
 
 **Lock operations**:
 ```bash
-./scripts/lock.sh <holder-id> acquire
-./scripts/lock.sh <holder-id> release
+./scripts/internal/lock.sh acquire <holder-id>
+./scripts/internal/lock.sh release <holder-id>
 ```
 
 ---
@@ -778,8 +802,9 @@ All infrastructure scripts are in `tests/integration/scripts/`:
 | SSH permission denied | Add your public key as `SSH_AUTHORIZED_KEY_*` secret, reprovision |
 | Reset timeout | Check VM status, manually reboot if needed |
 | Integration tests skip | Check environment variables or CI secrets |
+| GitHub API rate limit | Set `GITHUB_TOKEN` environment variable (see [Optional: GitHub API Rate Limiting](#optional-github-api-rate-limiting)) |
 
 ---
 
-**Last Updated**: 2025-12-06
-**Document Version**: 1.1 (CI-only provisioning, multi-key SSH support)
+**Last Updated**: 2025-12-17
+**Document Version**: 1.2 (Added GITHUB_TOKEN for API rate limiting)

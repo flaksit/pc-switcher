@@ -99,3 +99,64 @@ class TestSyncLock:
         source_lock.release()
         assert target_lock.acquire("target:hostB:session2")
         target_lock.release()
+
+    def test_001_fr047_lock_prevents_concurrent_sync(self, tmp_path: Path) -> None:
+        """FR-047: Locking prevents concurrent execution.
+
+        System MUST implement locking mechanism to prevent concurrent sync executions.
+        When a sync operation holds the lock, any attempt to start another sync should
+        fail to acquire the lock, preventing concurrent operations.
+        """
+        lock_path = tmp_path / "pc-switcher.lock"
+
+        # First sync acquires lock
+        sync1_lock = SyncLock(lock_path)
+        assert sync1_lock.acquire("source:laptop1:sync1")
+
+        # Second sync attempt should fail to acquire lock
+        sync2_lock = SyncLock(lock_path)
+        assert not sync2_lock.acquire("source:laptop2:sync2")
+
+        # Lock holder info should show first sync
+        assert sync1_lock.get_holder_info() == "source:laptop1:sync1"
+
+        # After first sync releases, second sync can acquire
+        sync1_lock.release()
+        assert sync2_lock.acquire("source:laptop2:sync2")
+        sync2_lock.release()
+
+    def test_001_edge_concurrent_sync_attempts(self, tmp_path: Path) -> None:
+        """Edge case: concurrent sync attempts are blocked.
+
+        When multiple processes attempt to acquire the lock simultaneously,
+        only one should succeed while all others fail gracefully without
+        corrupting the lock state.
+        """
+        lock_path = tmp_path / "pc-switcher.lock"
+
+        # First process acquires lock
+        lock1 = SyncLock(lock_path)
+        assert lock1.acquire("sync1:hostA:session1")
+
+        # Multiple concurrent attempts should all fail
+        lock2 = SyncLock(lock_path)
+        lock3 = SyncLock(lock_path)
+        lock4 = SyncLock(lock_path)
+
+        assert not lock2.acquire("sync2:hostB:session2")
+        assert not lock3.acquire("sync3:hostC:session3")
+        assert not lock4.acquire("sync4:hostD:session4")
+
+        # Lock holder should still be the first process
+        assert lock1.get_holder_info() == "sync1:hostA:session1"
+
+        # After release, one of the waiting processes can acquire
+        lock1.release()
+        assert lock2.acquire("sync2:hostB:session2")
+
+        # Now lock3 and lock4 should still fail
+        assert not lock3.acquire("sync3:hostC:session3")
+        assert not lock4.acquire("sync4:hostD:session4")
+
+        # Clean up
+        lock2.release()

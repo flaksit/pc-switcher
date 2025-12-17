@@ -57,13 +57,13 @@ The lock is stored as Hetzner Server Labels on the `pc1` server object, which su
 **Operations**:
 ```bash
 # Check lock status
-./tests/infrastructure/scripts/lock.sh "" status
+./tests/infrastructure/scripts/internal/lock.sh "" status
 
 # Acquire lock
-./tests/infrastructure/scripts/lock.sh "$CI_JOB_ID" acquire
+./tests/infrastructure/scripts/internal/lock.sh "$CI_JOB_ID" acquire
 
 # Release lock
-./tests/infrastructure/scripts/lock.sh "$CI_JOB_ID" release
+./tests/infrastructure/scripts/internal/lock.sh "$CI_JOB_ID" release
 
 # Manual cleanup (for stuck locks)
 hcloud server remove-label pc1 lock_holder

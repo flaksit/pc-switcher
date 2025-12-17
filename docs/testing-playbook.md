@@ -42,7 +42,7 @@ Install pc-switcher from the version/branch you want to test:
 curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.1 bash
 
 # OR install from specific branch for testing
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/001-foundation/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/001-foundation/install.sh | bash -s -- --ref 001-foundation
 
 # Verify installation
 pc-switcher --version
@@ -430,7 +430,140 @@ sudo btrfs subvolume list -r /.snapshots/pc-switcher/
 - [ ] Log message: "Target pc-switcher version matches source"
 - [ ] Installation step skipped
 
-#### Step 4: Job Execution
+#### Manual Self-Installation Verification (Release Testing Only)
+
+This step verifies that the InstallOnTargetJob can install the newly released version
+on a target machine. This cannot be tested automatically during development because
+development versions don't have release tags on GitHub.
+
+**Pre-requisites:**
+- Two machines (source and target) with SSH access between them
+- Target machine should have an older version of pc-switcher (or none)
+- Testing a newly created release
+
+**Test procedure:**
+
+```bash
+# On TARGET machine: Ensure pc-switcher is NOT installed or has an OLDER version
+# Option A: Uninstall pc-switcher
+uv tool uninstall pc-switcher 2>/dev/null || true
+pc-switcher --version  # Should fail: command not found
+
+# Option B: Install an older version (e.g., 0.1.0-alpha.1)
+curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.1 bash
+pc-switcher --version  # Should show 0.1.0-alpha.1
+
+# On SOURCE machine: Install the NEW release version
+curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=<NEW_VERSION> bash
+pc-switcher --version  # Should show NEW_VERSION
+
+# On SOURCE machine: Run sync to target
+# The InstallOnTargetJob should automatically install/upgrade pc-switcher on target
+pc-switcher sync <target-hostname>
+
+# On TARGET machine: Verify pc-switcher was installed/upgraded
+pc-switcher --version  # Should show NEW_VERSION (same as source)
+```
+
+**Expected behavior:**
+- If target has no pc-switcher: InstallOnTargetJob installs the source version
+- If target has older version: InstallOnTargetJob upgrades to source version
+- If target has same version: InstallOnTargetJob skips installation (logged)
+- If target has NEWER version: Validation fails with version conflict error
+
+**Automated tests:**
+The automated integration tests in `tests/integration/test_self_installation.py` test the
+installation mechanism using the release version derived from the current dev version.
+The tests that require "current version == released version" are skipped during
+development but would run if you install a release and run tests locally.
+
+#### Step 4: Configuration Sync
+
+**Objective**: Verify the interactive configuration synchronization between source and target.
+
+The config sync step compares source and target configurations and handles three scenarios:
+
+**Scenario 1: Target has no configuration**
+
+To test this scenario, ensure the target machine has no config file:
+```bash
+# On target machine
+rm -f ~/.config/pc-switcher/config.yaml
+
+# Run sync from source
+pc-switcher sync <target-hostname>
+```
+
+**Verify UI elements**:
+- [ ] Yellow-bordered panel appears with title "Config Sync"
+- [ ] Message: "[yellow]Target has no configuration file.[/yellow]"
+- [ ] Source configuration displayed with YAML syntax highlighting (monokai theme)
+- [ ] Line numbers shown in config display
+- [ ] Blue-bordered panel with title "Source Configuration"
+- [ ] Prompt: "[bold]Apply this config to target?[/bold]"
+- [ ] Choices: "y" or "n" displayed
+
+**Test "y" (accept)**:
+- [ ] "[green]Configuration copied to target.[/green]" appears
+- [ ] Sync continues normally
+
+**Test "n" (decline)**:
+- [ ] "[red]Sync aborted: configuration required on target.[/red]" appears
+- [ ] Sync terminates
+
+**Scenario 2: Target configuration differs from source**
+
+To test this scenario, modify the target config to differ from source:
+```bash
+# On target machine - modify a setting
+nano ~/.config/pc-switcher/config.yaml
+# Change log_level_file from INFO to WARNING (or any other change)
+
+# Run sync from source
+pc-switcher sync <target-hostname>
+```
+
+**Verify UI elements**:
+- [ ] Yellow-bordered panel with "[yellow]Target configuration differs from source.[/yellow]"
+- [ ] Configuration diff displayed with syntax highlighting (diff format)
+- [ ] Blue-bordered panel with title "Configuration Diff"
+- [ ] Lines starting with `-` show target values (to be removed)
+- [ ] Lines starting with `+` show source values (to be added)
+- [ ] Three choices displayed:
+  - [ ] `a` - Accept config from source (overwrite target)
+  - [ ] `k` - Keep current config on target
+  - [ ] `x` - Abort sync
+- [ ] Prompt: "[bold]Your choice[/bold]"
+
+**Test "a" (accept source)**:
+- [ ] "[green]Configuration copied to target.[/green]" appears
+- [ ] Sync continues
+
+**Test "k" (keep target)**:
+- [ ] "[yellow]Keeping existing target configuration.[/yellow]" appears
+- [ ] Sync continues with target's existing config
+
+**Test "x" (abort)**:
+- [ ] "[red]Sync aborted by user.[/red]" appears
+- [ ] Sync terminates
+
+**Scenario 3: Configurations match**
+
+To test this scenario, ensure source and target configs are identical:
+```bash
+# Copy source config to target
+scp ~/.config/pc-switcher/config.yaml <target>:~/.config/pc-switcher/
+
+# Run sync
+pc-switcher sync <target-hostname>
+```
+
+**Verify**:
+- [ ] "[dim]Target config matches source, skipping config sync.[/dim]" appears
+- [ ] No interactive prompt is shown
+- [ ] Sync continues automatically
+
+#### Step 5: Job Execution
 
 **With dummy_success job enabled**:
 
@@ -441,7 +574,7 @@ sudo btrfs subvolume list -r /.snapshots/pc-switcher/
 - [ ] Job completes successfully
 - [ ] Job completion logged
 
-#### Step 5: Post-Sync Snapshots
+#### Step 6: Post-Sync Snapshots
 
 **After all jobs complete**:
 
@@ -461,7 +594,7 @@ sudo btrfs subvolume list -r /.snapshots/pc-switcher/
 - [ ] Timestamps distinguish pre from post snapshots
 - [ ] Session ID directories contain both snapshot types
 
-#### Step 6: Sync Completion
+#### Step 7: Sync Completion
 
 **Verify**:
 - [ ] Sync completes with success message
@@ -811,11 +944,14 @@ Use this checklist for final verification before release:
 - [ ] CLI error messages are formatted and helpful
 - [ ] Interrupt handling displays correct messages
 - [ ] TUI adapts to different terminal sizes
+- [ ] Config sync UI displays correctly (panels, syntax highlighting, diff)
 
 ### Feature Tour Checklist
 - [ ] Pre-sync validation completes successfully
 - [ ] Pre-sync snapshots created correctly
 - [ ] Version check and installation works
+- [ ] Self-installation on target works (release testing only)
+- [ ] Config sync interactive prompts work correctly
 - [ ] Job execution displays progress accurately
 - [ ] Post-sync snapshots created after success
 - [ ] Sync completes and cleans up properly

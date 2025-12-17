@@ -215,16 +215,46 @@ Before each test run, VMs are reset to a clean baseline state using btrfs snapsh
 
 This ensures test isolation without recreating VMs. The btrfs rollback is much faster than Hetzner's VM snapshot restore.
 
+### Baseline State
+
+The baseline snapshots capture the following VM state (as configured by `configure-vm.sh`):
+
+| Component | State | Notes |
+|-----------|-------|-------|
+| **OS** | Ubuntu 24.04 LTS | Installed via Hetzner `installimage` |
+| **Packages** | btrfs-progs, qemu-guest-agent, fail2ban, ufw, sudo | Basic system tools only |
+| **Filesystem** | btrfs with flat subvolume layout (`@`, `@home`, `@snapshots`) | Root mounted as `@`, home as `@home` |
+| **Users** | `testuser` with passwordless sudo | All developer SSH keys injected |
+| **SSH** | Hardened (root login disabled, password auth disabled) | Only key-based auth allowed |
+| **Firewall** | ufw enabled, SSH port 22 allowed | fail2ban monitors SSH |
+| **pc-switcher** | **NOT installed** | Tests must install if needed |
+| **Python tools** | `uv` installed in testuser's ~/.local/bin | For installing pc-switcher |
+
+**IMPORTANT**: The baseline does NOT include pc-switcher. Tests that need pc-switcher must:
+- Install it via `curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash`
+- OR use fixtures like `pc2_executor_without_pcswitcher_tool` or `pc2_executor_with_old_pcswitcher_tool` that handle installation/cleanup
+
+### Test Isolation
+
+**Reset frequency**: VMs are reset to baseline **once per pytest session** (not between test modules).
+
+**Implications for test writers**:
+1. Tests in the same session share VM state between modules
+2. Each test MUST clean up all artifacts it creates (files, directories, snapshots, installed packages)
+3. Fixtures that modify VM state MUST restore the initial state after the test
+
+See [Testing Developer Guide](testing-developer-guide.md#test-isolation-requirements) for detailed requirements and examples.
+
 ## Lock-Based Isolation
 
 To prevent conflicts between dev and CI test runs:
 
 ```bash
 # Lock is acquired at start of test session
-tests/integration/scripts/lock.sh $HOLDER acquire
+tests/integration/scripts/internal/lock.sh acquire $HOLDER
 
 # Lock is released at end
-tests/integration/scripts/lock.sh $HOLDER release
+tests/integration/scripts/internal/lock.sh release $HOLDER
 ```
 
 The lock is stored as **Hetzner Server Labels** on the `pc1` server (not as a file on the VM). This approach survives VM reboots and snapshot rollbacks:
@@ -261,12 +291,13 @@ uv run pytest tests/unit/test_config.py -v
 
 ```bash
 # Set environment variables
+export HCLOUD_TOKEN="<your-hetzner-cloud-api-token>"
 export PC_SWITCHER_TEST_PC1_HOST="<pc1-vm-ip>"
 export PC_SWITCHER_TEST_PC2_HOST="<pc2-vm-ip>"
 export PC_SWITCHER_TEST_USER="testuser"
 
 # Run integration tests
-uv run pytest tests/integration -v -m integration
+uv run pytest tests/integration -v -m "integration and not benchmark"
 ```
 
 ### All Tests

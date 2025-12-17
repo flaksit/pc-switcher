@@ -156,15 +156,15 @@ pc-switcher cleanup-snapshots   # Clean up old btrfs snapshots
 ## Development Commands
 
 ```bash
-uv run pytest                                      # Unit tests
-HCLOUD_TOKEN=... tests/local-integration-tests.sh  # Integration tests locally
-uv run ruff check . && uv run ruff format .        # Lint and format
-uv run basedpyright                                # Type check
+uv run pytest                                 # Unit tests
+tests/local-integration-tests.sh              # Integration tests locally
+uv run ruff check . && uv run ruff format .   # Lint and format
+uv run basedpyright                           # Type check
 ```
 
 ## Active Technologies
-
-- **Python 3.14** (per ADR-003) via uv venv
+- Python 3.14 (per ADR-003) via uv env + pytest, pytest-asyncio, asyncssh (existing testing framework from 002-testing-framework) (003-foundation-tests)
+- N/A (tests verify code behavior, not storage) (003-foundation-tests)
 - **Typer** - CLI framework
 - **Rich** - Terminal UI with progress bars
 - **asyncssh** - SSH communication (per ADR-002)
@@ -187,3 +187,6 @@ After you're done, rate your confidence that you nailed this task perfectly from
 If your confidence is below 0.9, analyze what's wrong or missing and try again.
 
 Take a deep breath and work on this step by step.
+
+## Recent Changes
+- 003-foundation-tests: Added Python 3.14 (per ADR-003) + pytest, pytest-asyncio, asyncssh (existing testing framework from 002-testing-framework)

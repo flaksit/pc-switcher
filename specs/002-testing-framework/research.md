@@ -384,7 +384,7 @@ import pytest_asyncio
 import asyncssh
 import os
 
-@pytest_asyncio.fixture
+@pytest.fixture
 async def pc1_connection():
     """SSH connection to pc1 test VM."""
     host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
@@ -393,7 +393,7 @@ async def pc1_connection():
     async with asyncssh.connect(host, username=user, known_hosts=None) as conn:
         yield conn
 
-@pytest_asyncio.fixture
+@pytest.fixture
 async def pc1_executor(pc1_connection):
     """Executor for running commands on pc1."""
     from pcswitcher.executor import RemoteExecutor
