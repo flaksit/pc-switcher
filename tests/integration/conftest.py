@@ -38,6 +38,7 @@ def configure_test_logging() -> None:
     """
     logging.getLogger("tests").setLevel(logging.INFO)
 
+
 REQUIRED_ENV_VARS = [
     "HCLOUD_TOKEN",
     "PC_SWITCHER_TEST_PC1_HOST",
