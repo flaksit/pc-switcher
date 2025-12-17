@@ -32,8 +32,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "Release",
     "Version",
     "find_one_version",
+    "get_highest_release",
+    "get_releases",
     "get_this_version",
 ]
 
