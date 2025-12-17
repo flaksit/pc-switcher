@@ -63,9 +63,9 @@ _VERSION_REGEX = re.compile(
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class Release:
-    """Release information.
+    """Immutable release information.
 
     Attributes:
         version: The parsed version of the release
@@ -163,8 +163,8 @@ class Version:
     comparison, and normalization. Provides formatting methods for both
     PEP 440 and SemVer output formats.
 
-    The backing packaging.version.Version is immutable (properties without
-    setters), so it's safe to expose directly.
+    This class is effectively immutable - all attributes are exposed via
+    read-only properties and there are no mutating methods.
 
     Attributes:
         pkg_version: The underlying packaging.version.Version object.

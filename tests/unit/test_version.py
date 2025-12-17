@@ -508,6 +508,22 @@ class TestVersionOriginalAndParsedAs:
         assert v.parsed_as == "semver"
 
 
+class TestReleaseImmutability:
+    """Tests for Release immutability."""
+
+    def test_release_is_frozen(self) -> None:
+        """Release should be immutable (frozen dataclass)."""
+        release = Release(version=Version.parse("1.0.0"), is_prerelease=False, tag="v1.0.0")
+        with pytest.raises(AttributeError):
+            release.tag = "v2.0.0"  # type: ignore[misc]
+
+    def test_release_is_hashable(self) -> None:
+        """Frozen Release should be hashable."""
+        release = Release(version=Version.parse("1.0.0"), is_prerelease=False, tag="v1.0.0")
+        # Should not raise - frozen dataclasses are hashable
+        hash(release)
+
+
 class TestGetHighestRelease:
     """Tests for version.get_highest_release()."""
 
