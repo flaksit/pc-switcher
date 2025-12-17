@@ -517,8 +517,9 @@ class TestGetReleasesGithubToken:
     """Tests for GITHUB_TOKEN support in get_releases()."""
 
     def test_uses_token_when_set(self) -> None:
-        """Should pass GITHUB_TOKEN to Github() when environment variable is set."""
+        """Should pass GITHUB_TOKEN via Auth.Token to Github() when environment variable is set."""
         mock_github = MagicMock()
+        mock_auth_token = MagicMock()
         mock_repo = MagicMock()
         mock_github.return_value.get_repo.return_value = mock_repo
         mock_repo.get_releases.return_value = []
@@ -526,9 +527,11 @@ class TestGetReleasesGithubToken:
         with (
             patch.dict("os.environ", {"GITHUB_TOKEN": "test-token-123"}),
             patch("pcswitcher.version.Github", mock_github),
+            patch("pcswitcher.version.Auth.Token", mock_auth_token),
         ):
             list(get_releases())
-            mock_github.assert_called_once_with("test-token-123")
+            mock_auth_token.assert_called_once_with("test-token-123")
+            mock_github.assert_called_once_with(auth=mock_auth_token.return_value)
 
     def test_no_token_when_not_set(self) -> None:
         """Should create unauthenticated Github() when GITHUB_TOKEN is not set."""

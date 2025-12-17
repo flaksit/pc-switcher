@@ -23,7 +23,7 @@ from importlib.metadata import version as get_pkg_version
 from typing import TYPE_CHECKING
 
 import semver
-from github import Github
+from github import Auth, Github
 from packaging.version import Version as PkgVersion
 
 if TYPE_CHECKING:
@@ -108,7 +108,7 @@ def get_releases(
         else:
             logger.debug("GITHUB_TOKEN not set, using unauthenticated GitHub API (60 req/hr)")
 
-        g = Github(token) if token else Github()
+        g = Github(auth=Auth.Token(token)) if token else Github()
         repo = g.get_repo(repository)
 
         # Fetch all releases with pagination
