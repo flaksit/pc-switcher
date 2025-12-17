@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import signal
 import subprocess
 import sys
@@ -103,6 +104,13 @@ def main(
     ] = False,
 ) -> None:
     """PC-switcher synchronization system."""
+    # Configure logging: INFO level for third-party libs
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(name)s: %(message)s",
+    )
+    # Set pcswitcher logger to DEBUG level
+    logging.getLogger("pcswitcher").setLevel(logging.DEBUG)
 
 
 def _display_log_file(log_file: Path) -> None:

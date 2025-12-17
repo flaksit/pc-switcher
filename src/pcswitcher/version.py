@@ -13,6 +13,7 @@ For installation and upgrade logic on target machines, see pcswitcher.jobs.insta
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Iterator
@@ -27,6 +28,8 @@ from packaging.version import Version as PkgVersion
 
 if TYPE_CHECKING:
     from typing import Self
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "Version",
@@ -95,6 +98,11 @@ def get_releases(
     try:
         # Use GITHUB_TOKEN if available for higher rate limit (5000/hour vs 60/hour)
         token = os.environ.get("GITHUB_TOKEN")
+        if token:
+            logger.debug("Using GITHUB_TOKEN for authenticated GitHub API access (5000 req/hr)")
+        else:
+            logger.debug("GITHUB_TOKEN not set, using unauthenticated GitHub API (60 req/hr)")
+
         g = Github(token) if token else Github()
         repo = g.get_repo(repository)
 
@@ -111,8 +119,7 @@ def get_releases(
             try:
                 version = Version.parse(release.tag_name)
             except ValueError:
-                # Skip invalid version tags
-                # TODO log warning
+                logger.warning(f"Skipping release with invalid version tag: {release.tag_name}")
                 continue
             yield Release(version, release.prerelease)
 
