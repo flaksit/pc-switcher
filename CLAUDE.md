@@ -157,7 +157,7 @@ pc-switcher cleanup-snapshots   # Clean up old btrfs snapshots
 
 ```bash
 uv run pytest                                 # Unit tests
-tests/local-integration-tests.sh              # Integration tests locally
+tests/run-integration-tests.sh                # Integration tests (local or CI)
 uv run ruff check . && uv run ruff format .   # Lint and format
 uv run basedpyright                           # Type check
 ```
