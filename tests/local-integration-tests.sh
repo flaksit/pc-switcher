@@ -30,7 +30,6 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 # Check GITHUB_TOKEN
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-    log_info "GITHUB_TOKEN not set, attempting to retrieve from pass..."
     if command -v pass &> /dev/null; then
         GITHUB_TOKEN=$(pass show dev/pc-switcher/github_token_public_ro 2>/dev/null) || {
             log_warn "GITHUB_TOKEN not set and could not retrieve from pass"

@@ -44,9 +44,10 @@ async def clean_pc_switcher(pc1_executor: BashLoginRemoteExecutor) -> AsyncItera
 
 async def _install_version(executor: BashLoginRemoteExecutor, version: Version) -> None:
     """Install a specific version of pc-switcher using the install script."""
-    # Install script expects SemVer format for VERSION env var
+    release = version.get_release()
+    assert release is not None, f"Version {version} is not a GitHub release"
     result = await executor.run_command(
-        f"curl -sSL {INSTALL_SCRIPT_URL} | VERSION={version.semver_str()} bash",
+        f"curl -sSL {INSTALL_SCRIPT_URL} | VERSION={release.tag} bash",
         timeout=120.0,
     )
     assert result.success, f"Failed to install version {version}: {result.stderr}"

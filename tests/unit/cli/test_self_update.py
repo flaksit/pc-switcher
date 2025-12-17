@@ -6,7 +6,7 @@ import subprocess
 from unittest.mock import patch
 
 from pcswitcher import cli
-from pcswitcher.version import Version
+from pcswitcher.version import Release, Version
 
 
 class TestRunUvToolInstall:
@@ -21,7 +21,8 @@ class TestRunUvToolInstall:
                 stdout="Installed",
                 stderr="",
             )
-            cli._run_uv_tool_install(Version.parse("0.4.0"))  # pyright: ignore[reportPrivateUsage]
+            release = Release(Version.parse("0.4.0"), is_prerelease=False, tag="v0.4.0")
+            cli._run_uv_tool_install(release)  # pyright: ignore[reportPrivateUsage]
             mock_run.assert_called_once_with(
                 ["uv", "tool", "install", "--force", "git+https://github.com/flaksit/pc-switcher@v0.4.0"],
                 capture_output=True,
@@ -38,7 +39,8 @@ class TestRunUvToolInstall:
             stderr="",
         )
         with patch("pcswitcher.cli.subprocess.run", return_value=expected):
-            result = cli._run_uv_tool_install(Version.parse("1.0.0"))  # pyright: ignore[reportPrivateUsage]
+            release = Release(Version.parse("1.0.0"), is_prerelease=False, tag="v1.0.0")
+            result = cli._run_uv_tool_install(release)  # pyright: ignore[reportPrivateUsage]
             assert result.returncode == 0
             assert result.stdout == "Success"
 

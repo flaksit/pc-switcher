@@ -40,7 +40,7 @@ def _get_release_version() -> Version:
         RuntimeError: If no matching GitHub release exists
     """
     current = get_this_version()
-    return current.release_floor()
+    return current.get_release_floor().version
 
 
 @pytest.fixture
@@ -159,9 +159,11 @@ class TestInstallationScriptVersionParameter:
         when pc-switcher is not already installed.
         """
         release_version = _get_release_version()
+        release = release_version.get_release()
+        assert release is not None, f"Version {release_version} is not a GitHub release"
 
         # Install the release version using install.sh
-        cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={release_version.semver_str()} bash"
+        cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={release.tag} bash"
         result = await pc2_executor_without_pcswitcher_tool.run_command(cmd, timeout=120.0)
         assert result.success, f"Installation failed: {result.stderr}"
 
@@ -188,6 +190,8 @@ class TestInstallationScriptVersionParameter:
         0.1.0-alpha.1, then we upgrade to the current release version.
         """
         release_version = _get_release_version()
+        release = release_version.get_release()
+        assert release is not None, f"Version {release_version} is not a GitHub release"
         old_version = Version.parse("0.1.0-alpha.1")
 
         # Skip if release version is not newer than old version
@@ -195,7 +199,7 @@ class TestInstallationScriptVersionParameter:
             pytest.skip(f"Release version {release_version} is not newer than {old_version}")
 
         # Upgrade to the release version
-        cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={release_version.semver_str()} bash"
+        cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={release.tag} bash"
         result = await pc2_executor_with_old_pcswitcher_tool.run_command(cmd, timeout=120.0)
         assert result.success, f"Upgrade failed: {result.stderr}"
 

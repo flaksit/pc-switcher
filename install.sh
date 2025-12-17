@@ -3,7 +3,7 @@
 #
 # User installation (via curl):
 #   curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash
-#   curl -sSL ... | VERSION=0.2.0 bash    # Install specific release
+#   curl -sSL ... | VERSION=v0.2.0 bash    # Install specific release
 #
 # Developer installation (from git checkout):
 #   ./install.sh                          # Install from local checkout
@@ -46,8 +46,8 @@ while [[ $# -gt 0 ]]; do
             echo "PC-switcher installation script"
             echo ""
             echo "User installation (via curl):"
-            echo "  curl -sSL .../install.sh | bash              # Latest from main"
-            echo "  curl -sSL .../install.sh | VERSION=0.2.0 bash  # Specific version"
+            echo "  curl -sSL .../install.sh | bash                # Latest from main"
+            echo "  curl -sSL .../install.sh | VERSION=v0.2.0 bash  # Specific version"
             echo ""
             echo "Developer installation (from git checkout):"
             echo "  ./install.sh                # Install from local checkout"
@@ -58,7 +58,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -h, --help     Show this help message"
             echo ""
             echo "Environment variables:"
-            echo "  VERSION        Install specific release version (e.g., VERSION=0.2.0)"
+            echo "  VERSION        Install specific release version (e.g., VERSION=v0.2.0)"
             exit 0
             ;;
         *)
@@ -170,8 +170,8 @@ if [[ -n "${INSTALL_REF}" ]]; then
     INSTALL_SOURCE="git+https://github.com/flaksit/pc-switcher@${INSTALL_REF}"
     INSTALL_MODE="ref '${INSTALL_REF}' from GitHub"
 elif [[ -n "${VERSION:-}" ]]; then
-    # Priority 2: VERSION env var (for curl | VERSION=x.y.z bash)
-    INSTALL_SOURCE="git+https://github.com/flaksit/pc-switcher@v${VERSION}"
+    # Priority 2: VERSION env var (for curl | VERSION=vX.Y.Z bash)
+    INSTALL_SOURCE="git+https://github.com/flaksit/pc-switcher@${VERSION}"
     INSTALL_MODE="version ${VERSION} from GitHub"
 elif git rev-parse --is-inside-work-tree &>/dev/null; then
     # Priority 3: Running from git workspace - install local checkout

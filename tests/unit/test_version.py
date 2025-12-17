@@ -459,8 +459,8 @@ class TestGetHighestRelease:
     def test_returns_highest_stable_when_prereleases_excluded(self) -> None:
         """Should return highest stable release when prereleases are filtered out."""
         releases = [
-            Release(version=Version.parse("0.2.0"), is_prerelease=False),
-            Release(version=Version.parse("0.3.0-alpha.1"), is_prerelease=True),
+            Release(version=Version.parse("0.2.0"), is_prerelease=False, tag="v0.2.0"),
+            Release(version=Version.parse("0.3.0-alpha.1"), is_prerelease=True, tag="v0.3.0-alpha.1"),
         ]
 
         def fake_get_releases(repository: str, *, include_prereleases: bool):
@@ -477,8 +477,8 @@ class TestGetHighestRelease:
     def test_includes_prereleases_when_requested(self) -> None:
         """Should return prerelease version when include_prereleases=True."""
         releases = [
-            Release(version=Version.parse("0.2.0"), is_prerelease=False),
-            Release(version=Version.parse("0.3.0-alpha.1"), is_prerelease=True),
+            Release(version=Version.parse("0.2.0"), is_prerelease=False, tag="v0.2.0"),
+            Release(version=Version.parse("0.3.0-alpha.1"), is_prerelease=True, tag="v0.3.0-alpha.1"),
         ]
 
         def fake_get_releases(repository: str, *, include_prereleases: bool):
@@ -549,114 +549,126 @@ class TestGetReleasesGithubToken:
 
 
 class TestGithubReleaseFloor:
-    """Unit tests for release_floor() with mocked GitHub API."""
+    """Unit tests for get_release_floor() with mocked GitHub API."""
 
     @pytest.fixture
     def mock_releases(self) -> list[Release]:
         """Mock GitHub releases data."""
         return [
-            Release(Version.parse("v0.1.0"), is_prerelease=False),
-            Release(Version.parse("v0.1.0-alpha.1"), is_prerelease=True),
-            Release(Version.parse("v0.1.0-alpha.2"), is_prerelease=True),
-            Release(Version.parse("v0.1.0-alpha.3"), is_prerelease=True),
+            Release(Version.parse("v0.1.0"), is_prerelease=False, tag="v0.1.0"),
+            Release(Version.parse("v0.1.0-alpha.1"), is_prerelease=True, tag="v0.1.0-alpha.1"),
+            Release(Version.parse("v0.1.0-alpha.2"), is_prerelease=True, tag="v0.1.0-alpha.2"),
+            Release(Version.parse("v0.1.0-alpha.3"), is_prerelease=True, tag="v0.1.0-alpha.3"),
         ]
 
     def test_exact_match_stable(self, mock_releases: list[Release]) -> None:
         """Should return exact match for stable version."""
         with patch("pcswitcher.version.get_releases", return_value=mock_releases):
             v = Version.parse("0.1.0")
-            assert v.release_floor() == v
+            result = v.get_release_floor()
+            assert result.version == v
+            assert result.tag == "v0.1.0"
 
     def test_exact_match_prerelease(self, mock_releases: list[Release]) -> None:
         """Should return exact match for pre-release."""
         with patch("pcswitcher.version.get_releases", return_value=mock_releases):
             v = Version.parse("0.1.0a3")
-            result = v.release_floor()
-            assert result == v
+            result = v.get_release_floor()
+            assert result.version == v
+            assert result.tag == "v0.1.0-alpha.3"
 
     def test_dev_version_matches_base_prerelease(self, mock_releases: list[Release]) -> None:
         """Dev version should match its base pre-release."""
         with patch("pcswitcher.version.get_releases", return_value=mock_releases):
             v = Version.parse("0.1.0a3.post23.dev0+da749fc")
-            result = v.release_floor()
-            assert result == Version.parse("0.1.0a3")
+            result = v.get_release_floor()
+            assert result.version == Version.parse("0.1.0a3")
+            assert result.tag == "v0.1.0-alpha.3"
 
     def test_post_version_matches_base(self, mock_releases: list[Release]) -> None:
         """Post version should match its base release."""
         with patch("pcswitcher.version.get_releases", return_value=mock_releases):
             v = Version.parse("0.1.0.post5")
-            result = v.release_floor()
-            assert result == Version.parse("0.1.0")
+            result = v.get_release_floor()
+            assert result.version == Version.parse("0.1.0")
+            assert result.tag == "v0.1.0"
 
     def test_unreleased_version_matches_latest(self, mock_releases: list[Release]) -> None:
         """Version not yet released should match the latest release <= it."""
         with patch("pcswitcher.version.get_releases", return_value=mock_releases):
             v = Version.parse("0.2.0")  # Not released yet
-            result = v.release_floor()
-            assert result == Version.parse("0.1.0")  # Latest stable (0.1.0 > 0.1.0a3)
+            result = v.get_release_floor()
+            assert result.version == Version.parse("0.1.0")  # Latest stable (0.1.0 > 0.1.0a3)
+            assert result.tag == "v0.1.0"
 
     def test_no_matching_release_raises(self, mock_releases: list[Release]) -> None:
         """Should raise if no release <= version exists."""
         with patch("pcswitcher.version.get_releases", return_value=mock_releases):
             v = Version.parse("0.0.1")  # Before any release
             with pytest.raises(RuntimeError, match="No GitHub release found"):
-                v.release_floor()
+                v.get_release_floor()
 
     def test_api_failure_propagates(self) -> None:
         """Should propagate GitHub API failures."""
         with patch("pcswitcher.version.get_releases", side_effect=RuntimeError("API down")):
             v = Version.parse("0.1.0")
             with pytest.raises(RuntimeError, match="API down"):
-                v.release_floor()
+                v.get_release_floor()
 
 
-class TestIsGithubReleaseUnit:
-    """Unit tests for is_release() with mocked GitHub API."""
+class TestGetReleaseUnit:
+    """Unit tests for get_release() with mocked GitHub API."""
 
     @pytest.fixture
     def mock_releases(self) -> list[Release]:
         """Mock GitHub releases data."""
         return [
-            Release(Version.parse("v0.1.0"), is_prerelease=False),
-            Release(Version.parse("v0.1.0-alpha.3"), is_prerelease=True),
+            Release(Version.parse("v0.1.0"), is_prerelease=False, tag="v0.1.0"),
+            Release(Version.parse("v0.1.0-alpha.3"), is_prerelease=True, tag="v0.1.0-alpha.3"),
         ]
 
-    def test_exact_release_returns_true(self, mock_releases: list[Release]) -> None:
-        """Should return True for exact GitHub release."""
+    def test_exact_release_returns_release(self, mock_releases: list[Release]) -> None:
+        """Should return Release object for exact GitHub release."""
         with patch("pcswitcher.version.get_releases", return_value=mock_releases):
             v = Version.parse("0.1.0")
-            assert v.is_release() is True
+            release = v.get_release()
+            assert release is not None
+            assert release.version == v
+            assert release.tag == "v0.1.0"
 
-    def test_prerelease_returns_true(self, mock_releases: list[Release]) -> None:
-        """Should return True for exact pre-release."""
+    def test_prerelease_returns_release(self, mock_releases: list[Release]) -> None:
+        """Should return Release object for exact pre-release."""
         with patch("pcswitcher.version.get_releases", return_value=mock_releases):
             v = Version.parse("0.1.0a3")
-            assert v.is_release() is True
+            release = v.get_release()
+            assert release is not None
+            assert release.version == v
+            assert release.tag == "v0.1.0-alpha.3"
 
-    def test_dev_version_returns_false(self, mock_releases: list[Release]) -> None:
-        """Should return False for dev version (not exact match)."""
+    def test_dev_version_returns_none(self, mock_releases: list[Release]) -> None:
+        """Should return None for dev version (not exact match)."""
         with patch("pcswitcher.version.get_releases", return_value=mock_releases):
             v = Version.parse("0.1.0.post23.dev0")
-            assert v.is_release() is False
+            assert v.get_release() is None
 
-    def test_post_version_returns_false(self, mock_releases: list[Release]) -> None:
-        """Should return False for post version (not exact match)."""
+    def test_post_version_returns_none(self, mock_releases: list[Release]) -> None:
+        """Should return None for post version (not exact match)."""
         with patch("pcswitcher.version.get_releases", return_value=mock_releases):
             v = Version.parse("0.1.0.post1")
-            assert v.is_release() is False
+            assert v.get_release() is None
 
-    def test_no_matching_release_returns_false(self, mock_releases: list[Release]) -> None:
-        """Should return False if no exact match found."""
+    def test_no_matching_release_returns_none(self, mock_releases: list[Release]) -> None:
+        """Should return None if no exact match found."""
         with patch("pcswitcher.version.get_releases", return_value=mock_releases):
             v = Version.parse("0.0.1")
-            assert v.is_release() is False
+            assert v.get_release() is None
 
     def test_api_failure_propagates(self) -> None:
         """Should propagate GitHub API failures."""
         with patch("pcswitcher.version.get_releases", side_effect=RuntimeError("API down")):
             v = Version.parse("0.1.0")
             with pytest.raises(RuntimeError, match="API down"):
-                v.is_release()
+                v.get_release()
 
 
 class TestSymmetricConversion:

@@ -65,12 +65,14 @@ class Release:
     """Release information.
 
     Attributes:
-        version: The tag of the release (e.g., "v0.1.0")
+        version: The parsed version of the release
         is_prerelease: Whether the release is a prerelease
+        tag: The exact GitHub release tag (e.g., "v0.1.0", "v0.1.0-alpha.1"), or None if not from GitHub
     """
 
     version: Version
     is_prerelease: bool
+    tag: str | None = None
 
 
 def get_releases(
@@ -121,7 +123,7 @@ def get_releases(
             except ValueError:
                 logger.warning(f"Skipping release with invalid version tag: {release.tag_name}")
                 continue
-            yield Release(version, release.prerelease)
+            yield Release(version, release.prerelease, release.tag_name)
 
     except Exception as e:
         raise RuntimeError(f"Failed to fetch GitHub releases: {e}") from e
@@ -293,28 +295,31 @@ class Version:
         """
         return str(self._pkg_version)
 
-    def release_floor(self) -> Self:
+    def get_release_floor(self, *, include_prereleases: bool = True) -> Release:
         """Return the latest GitHub release that is <= this version.
 
         Queries GitHub API to find the greatest release tag that is <= this version.
         This is the "floor" of this version in the set of GitHub releases.
 
+        Args:
+            include_prereleases: If True, include pre-release versions
+
         For example:
-        - "0.1.0a3.post23.dev0+da749fc" -> Version("0.1.0a3") if that's a release
-        - "0.1.0.post1" -> Version("0.1.0") if that's a release
-        - "0.2.0" -> Version("0.1.0") if 0.2.0 isn't released yet
+        - "0.1.0a3.post23.dev0+da749fc" -> Release for "0.1.0a3" if that's a release
+        - "0.1.0.post1" -> Release for "0.1.0" if that's a release
+        - "0.2.0" -> Release for "0.1.0" if 0.2.0 isn't released yet
 
         Returns:
-            Version instance representing the GitHub release
+            Release object representing the GitHub release
 
         Raises:
             RuntimeError: If GitHub API fails or no matching release found
         """
-        # Fetch all releases (including prereleases)
-        releases = get_releases(include_prereleases=True)
+        # Fetch releases
+        all_releases = get_releases(include_prereleases=include_prereleases)
 
         # Find releases <= this version
-        candidates = [release.version for release in releases if release.version <= self]
+        candidates = [release for release in all_releases if release.version <= self]
 
         if not candidates:
             raise RuntimeError(
@@ -323,26 +328,28 @@ class Version:
             )
 
         # Return the highest (most precise/recent) match
-        result = max(candidates)
-        # Type checker needs help understanding this is still a Version
-        return result  # type: ignore[return-value]
+        return max(candidates, key=lambda r: r.version)
 
-    def is_release(self) -> bool:
-        """Check if this exact version exists as a GitHub release.
+    def get_release(self, *, include_prereleases: bool = True) -> Release | None:
+        """Get the GitHub Release for this exact version if it exists.
 
-        Unlike release_floor(), this checks for an exact match only.
+        Args:
+            include_prereleases: If True, include pre-release versions
 
         Returns:
-            True if this version is an exact GitHub release, False otherwise
+            Release object if this version is an exact GitHub release, None otherwise
 
         Raises:
             RuntimeError: If GitHub API fails
         """
-        # Fetch all releases (including prereleases)
-        releases = get_releases(include_prereleases=True)
+        # Fetch releases
+        releases = get_releases(include_prereleases=include_prereleases)
 
         # Check for exact match
-        return any(release.version == self for release in releases)
+        for release in releases:
+            if release.version == self:
+                return release
+        return None
 
     def semver_str(self) -> str:
         """Return the version in SemVer format.

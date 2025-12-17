@@ -17,7 +17,7 @@ import pytest
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.models import CommandResult, Host
-from pcswitcher.version import Version
+from pcswitcher.version import Release, Version
 
 
 @pytest.fixture
@@ -49,8 +49,14 @@ class TestInstallOnTargetJobVersionCheck:
         version before any other operations; if missing, MUST install from public
         GitHub repository using uv tool install.
         """
-        # Mock source version
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
+        # Mock source version and release
+        mock_version = Version.parse("0.4.0")
+        mock_release = Release(version=mock_version, is_prerelease=False, tag="v0.4.0")
+
+        with (
+            patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=mock_version),
+            patch.object(Version, "get_release_floor", return_value=mock_release),
+        ):
             # Mock target has no pc-switcher installed (command fails)
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
@@ -79,7 +85,7 @@ class TestInstallOnTargetJobVersionCheck:
             install_call = calls[2][0][0]
             assert "curl -LsSf" in install_call
             assert "main/install.sh" in install_call
-            assert "VERSION=0.4.0" in install_call
+            assert "VERSION=v0.4.0" in install_call
 
     @pytest.mark.asyncio
     async def test_001_fr005_upgrade_when_target_older(self, mock_install_context: JobContext) -> None:
@@ -88,7 +94,14 @@ class TestInstallOnTargetJobVersionCheck:
         Spec requirement: FR-005 requires installation/upgrade when target is
         missing or mismatched with source version.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
+        # Mock source version and release
+        mock_version = Version.parse("0.4.0")
+        mock_release = Release(version=mock_version, is_prerelease=False, tag="v0.4.0")
+
+        with (
+            patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=mock_version),
+            patch.object(Version, "get_release_floor", return_value=mock_release),
+        ):
             # Mock target has older version
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
@@ -117,7 +130,7 @@ class TestInstallOnTargetJobVersionCheck:
             assert len(calls) == 4
             install_call = calls[2][0][0]
             assert "main/install.sh" in install_call
-            assert "VERSION=0.4.0" in install_call
+            assert "VERSION=v0.4.0" in install_call
 
 
 class TestInstallOnTargetJobNewerTargetVersion:
@@ -336,7 +349,14 @@ class TestInstallOnTargetJobUS7AS2:
         2. The VERSION env var is passed to specify the version to install
         3. The command uses the same curl | bash pattern as user installation
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
+        # Mock source version and release
+        mock_version = Version.parse("0.4.0")
+        mock_release = Release(version=mock_version, is_prerelease=False, tag="v0.4.0")
+
+        with (
+            patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=mock_version),
+            patch.object(Version, "get_release_floor", return_value=mock_release),
+        ):
             # Mock target has no pc-switcher installed
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
@@ -372,7 +392,7 @@ class TestInstallOnTargetJobUS7AS2:
             )
 
             # The VERSION env var should be passed to the install script
-            assert "VERSION=0.4.0" in install_call, "Should pass VERSION env var"
+            assert "VERSION=v0.4.0" in install_call, "Should pass VERSION env var"
 
             # Should use the same curl | bash pattern as user installation
             assert "bash" in install_call, "Should pipe to bash like user installation"

@@ -21,7 +21,7 @@ from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.orchestrator import Orchestrator
-from pcswitcher.version import Version, find_one_version, get_highest_release, get_this_version
+from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
 
 # Cleanup timeout for graceful shutdown after SIGINT.
 # After first SIGINT, cleanup has this many seconds to complete.
@@ -413,16 +413,16 @@ def init(
 GITHUB_REPO_URL = "https://github.com/flaksit/pc-switcher"
 
 
-def _run_uv_tool_install(version: Version) -> subprocess.CompletedProcess[str]:
+def _run_uv_tool_install(release: Release) -> subprocess.CompletedProcess[str]:
     """Run uv tool install to install/upgrade pc-switcher.
 
     Args:
-        version: Version to install (e.g., "0.4.0")
+        release: Release to install (tag will be used for git URL)
 
     Returns:
         CompletedProcess with stdout/stderr
     """
-    install_source = f"git+{GITHUB_REPO_URL}@v{version.semver_str()}"
+    install_source = f"git+{GITHUB_REPO_URL}@{release.tag}"
     return subprocess.run(
         ["uv", "tool", "install", "--force", install_source],
         capture_output=True,
@@ -460,18 +460,23 @@ def _get_current_version_or_exit() -> Version:
         sys.exit(1)
 
 
-def _resolve_target_version(version: str | None, prerelease: bool) -> Version:
-    """Resolve the target version to install based on CLI options."""
+def _resolve_target_version(version: str | None, prerelease: bool) -> Release:
+    """Resolve the target release to install based on CLI options."""
     if version is not None:
         try:
-            return Version.parse(version)
+            parsed_version = Version.parse(version)
+            release = parsed_version.get_release()
+            if release is None:
+                console.print(f"[bold red]Error:[/bold red] Version {version} is not a GitHub release")
+                sys.exit(1)
+            return release
         except ValueError:
             console.print(f"[bold red]Error:[/bold red] Invalid version format: {version}")
             sys.exit(1)
 
     console.print("[dim]Checking for latest version...[/dim]")
     try:
-        return get_highest_release(include_prereleases=prerelease).version
+        return get_highest_release(include_prereleases=prerelease)
     except RuntimeError as e:
         if not prerelease and "No releases found" in str(e):
             console.print(
@@ -502,24 +507,23 @@ def update(
     """
     # Get current version
     current = _get_current_version_or_exit()
-    target = _resolve_target_version(version, prerelease)
+    target_release = _resolve_target_version(version, prerelease)
 
     # Check if update is needed
     # Use SemVer format for user-facing output
     current_display = current.semver_str()
-    target_display = target.semver_str()
+    target_display = target_release.version.semver_str()
 
-    if target == current:
+    if target_release.version == current:
         console.print(f"[green]Already at version {current_display}[/green]")
         sys.exit(0)
 
-    if target < current:
+    if target_release.version < current:
         console.print(f"[yellow]Warning:[/yellow] Downgrading from {current_display} to {target_display}")
 
     # Perform the update
     console.print(f"Updating pc-switcher from {current_display} to {target_display}...")
-    # Use SemVer format for git tag (GitHub tags use SemVer, not PEP 440)
-    result = _run_uv_tool_install(target)
+    result = _run_uv_tool_install(target_release)
 
     if result.returncode != 0:
         console.print("[bold red]Error:[/bold red] Update failed")
@@ -533,7 +537,7 @@ def update(
         console.print("[bold red]Error:[/bold red] Verification failed - pc-switcher not working after update")
         sys.exit(1)
 
-    if installed != target:
+    if installed != target_release.version:
         console.print(
             f"[bold red]Error:[/bold red] Version mismatch after update. "
             f"Expected {target_display}, got {installed.semver_str()}"
