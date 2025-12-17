@@ -453,6 +453,61 @@ class TestVersionPkgVersion:
             pv.major = 2  # type: ignore[misc]
 
 
+class TestVersionOriginalAndParsedAs:
+    """Tests for Version.original and Version.parsed_as properties."""
+
+    def test_pep440_original_preserved(self) -> None:
+        """Should preserve the original PEP 440 version string."""
+        v = Version.parse_pep440("1.0.0a1")
+        assert v.original == "1.0.0a1"
+
+    def test_pep440_parsed_as(self) -> None:
+        """Should indicate it was parsed as pep440."""
+        v = Version.parse_pep440("1.0.0a1")
+        assert v.parsed_as == "pep440"
+
+    def test_semver_original_preserved(self) -> None:
+        """Should preserve the original SemVer version string."""
+        v = Version.parse_semver("1.0.0-alpha.1")
+        assert v.original == "1.0.0-alpha.1"
+
+    def test_semver_parsed_as(self) -> None:
+        """Should indicate it was parsed as semver."""
+        v = Version.parse_semver("1.0.0-alpha.1")
+        assert v.parsed_as == "semver"
+
+    def test_parse_detects_semver(self) -> None:
+        """Version.parse() should detect and mark SemVer format."""
+        v = Version.parse("1.0.0-alpha.1")
+        assert v.original == "1.0.0-alpha.1"
+        assert v.parsed_as == "semver"
+
+    def test_parse_detects_pep440(self) -> None:
+        """Version.parse() should detect and mark PEP 440 format."""
+        # SemVer-incompatible format like .post will be parsed as PEP 440
+        v = Version.parse("1.0.0.post1")
+        assert v.original == "1.0.0.post1"
+        assert v.parsed_as == "pep440"
+
+    def test_parse_stable_version_as_semver(self) -> None:
+        """Stable versions valid in both formats should be parsed as SemVer first."""
+        v = Version.parse("1.0.0")
+        assert v.original == "1.0.0"
+        assert v.parsed_as == "semver"
+
+    def test_complex_pep440_original(self) -> None:
+        """Should preserve complex PEP 440 version strings."""
+        v = Version.parse_pep440("0.1.0a3.post23.dev0+da749fc")
+        assert v.original == "0.1.0a3.post23.dev0+da749fc"
+        assert v.parsed_as == "pep440"
+
+    def test_complex_semver_original(self) -> None:
+        """Should preserve complex SemVer version strings."""
+        v = Version.parse_semver("1.0.0-alpha.1.dev.2+post.3.local")
+        assert v.original == "1.0.0-alpha.1.dev.2+post.3.local"
+        assert v.parsed_as == "semver"
+
+
 class TestGetHighestRelease:
     """Tests for version.get_highest_release()."""
 

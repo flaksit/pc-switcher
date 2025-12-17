@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as get_pkg_version
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import semver
 from github import Auth, Github
@@ -169,6 +169,8 @@ class Version:
     Attributes:
         pkg_version: The underlying packaging.version.Version object.
             Provides access to .release, .pre, .post, .dev, .local, .epoch.
+        original: The original version string that was used to create this Version.
+        parsed_as: How the version was parsed ('pep440' or 'semver').
 
     Examples:
         >>> v = Version.parse_pep440("1.0.0a1")
@@ -176,10 +178,18 @@ class Version:
         '1.0.0-alpha.1'
         >>> v.pep440_str()
         '1.0.0a1'
+        >>> v.original
+        '1.0.0a1'
+        >>> v.parsed_as
+        'pep440'
 
         >>> v = Version.parse_semver("1.0.0-beta.2")
         >>> v.pep440_str()
         '1.0.0b2'
+        >>> v.original
+        '1.0.0-beta.2'
+        >>> v.parsed_as
+        'semver'
 
         >>> v1 = Version.parse("1.0.0a1")
         >>> v2 = Version.parse("1.0.0-alpha.1")
@@ -187,19 +197,32 @@ class Version:
         True
     """
 
-    __slots__ = ("_pkg_version",)
+    __slots__ = ("_original", "_parsed_as", "_pkg_version")
 
-    def __init__(self, pkg_version: PkgVersion) -> None:
+    _original: str
+    _parsed_as: Literal["pep440", "semver"]
+    _pkg_version: PkgVersion
+
+    def __init__(
+        self,
+        pkg_version: PkgVersion,
+        original: str,
+        parsed_as: Literal["pep440", "semver"],
+    ) -> None:
         """Initialize Version with a packaging.version.Version.
 
         Args:
             pkg_version: The backing packaging.version.Version object.
+            original: The original version string used to create this Version.
+            parsed_as: How the version was parsed ('pep440' or 'semver').
 
         Note:
             Use the class methods parse_pep440(), parse_semver(), or parse()
             instead of calling this constructor directly.
         """
         self._pkg_version = pkg_version
+        self._original = original
+        self._parsed_as = parsed_as
 
     @property
     def pkg_version(self) -> PkgVersion:
@@ -211,6 +234,16 @@ class Version:
         .is_postrelease, .is_devrelease.
         """
         return self._pkg_version
+
+    @property
+    def original(self) -> str:
+        """The original version string used to create this Version."""
+        return self._original
+
+    @property
+    def parsed_as(self) -> Literal["pep440", "semver"]:
+        """How the version was parsed ('pep440' or 'semver')."""
+        return self._parsed_as
 
     @classmethod
     def parse_pep440(cls, version_str: str) -> Self:
@@ -234,7 +267,7 @@ class Version:
         if parsed.epoch != 0:
             raise ValueError(f"PEP 440 epoch is not supported: {version_str}")
 
-        return cls(parsed)
+        return cls(parsed, original=version_str, parsed_as="pep440")
 
     @classmethod
     def parse_semver(cls, version_str: str) -> Self:
@@ -259,7 +292,7 @@ class Version:
 
         # Convert SemVer to PEP 440 string, then parse with packaging
         pep440_str = cls._semver_to_pep440_str(parsed)
-        return cls(PkgVersion(pep440_str))
+        return cls(PkgVersion(pep440_str), original=version_str, parsed_as="semver")
 
     @classmethod
     def parse(cls, version_str: str) -> Self:
