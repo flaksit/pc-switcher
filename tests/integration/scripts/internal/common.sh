@@ -57,20 +57,33 @@ _generate_lock_holder() {
         name="-${name//[^a-zA-Z0-9_-]/_}"
     fi
 
-    # Generate new unique ID
-    local ci_job_id="${CI_JOB_ID:-${GITHUB_RUN_ID:-}}"
+    local holder
 
+    # GitHub Actions
+    local ci_job_id="${CI_JOB_ID:-${GITHUB_RUN_ID:-}}"
     if [[ -n "$ci_job_id" ]]; then
-        echo "ci-${ci_job_id}${name}"
+        holder="ci-${ci_job_id}${name}"
     else
-        local hostname
-        hostname=$(hostname)
-        local user="${USER:-unknown}"
-        # Add random suffix to ensure uniqueness per invocation
-        local random
-        random=$(openssl rand -hex 3)  # 6 hex characters
-        echo "${user}-${hostname}${name}-${random}"
+        # Local run
+        local hostname=$(hostname)
+
+        local user
+        if [[ "$CLAUDECODE" = "1" ]]; then
+            user="claude"
+        else
+            user="${USER:-unknown}"
+            hostname="${hostname//[^a-zA-Z0-9_-]/_}"
+        fi
+
+        # Random suffix to ensure uniqueness per invocation
+        local random=$(openssl rand -hex 3)  # 6 hex characters
+
+        holder="${user}-${hostname}${name}-${random}"
     fi
+
+    # Sanitize to be compatible with Hetzner Cloud labels
+    holder="${holder//[^a-zA-Z0-9_-]/_}"
+    echo "$holder"
 }
 
 
