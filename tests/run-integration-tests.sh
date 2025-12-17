@@ -153,6 +153,112 @@ log_info "  PC_SWITCHER_TEST_PC1_HOST=$PC_SWITCHER_TEST_PC1_HOST"
 log_info "  PC_SWITCHER_TEST_PC2_HOST=$PC_SWITCHER_TEST_PC2_HOST"
 log_info "  PC_SWITCHER_TEST_USER=$PC_SWITCHER_TEST_USER"
 
+# =============================================================================
+# VM Provisioning: Lock, Readiness Check, and Reset
+# =============================================================================
+
+LOCK_SCRIPT="$SCRIPT_DIR/integration/scripts/internal/lock.sh"
+RESET_SCRIPT="$SCRIPT_DIR/integration/scripts/reset-vm.sh"
+
+# Generate lock holder ID
+generate_lock_holder_id() {
+    local ci_job_id="${CI_JOB_ID:-${GITHUB_RUN_ID:-}}"
+    if [[ -n "$ci_job_id" ]]; then
+        echo "ci-${ci_job_id}-pytest"
+    else
+        local hostname
+        hostname=$(hostname)
+        local user="${USER:-unknown}"
+        # Add random suffix to ensure uniqueness per invocation
+        local random_suffix
+        random_suffix=$(openssl rand -hex 3)  # 6 hex characters
+        echo "${user}-${hostname}-pytest-${random_suffix}"
+    fi
+}
+
+# Acquire lock
+log_info "Acquiring integration test lock..."
+LOCK_HOLDER=$(generate_lock_holder_id)
+if ! "$LOCK_SCRIPT" acquire "$LOCK_HOLDER"; then
+    log_error "Failed to acquire integration test lock"
+    exit 1
+fi
+export PCSWITCHER_LOCK_HOLDER="$LOCK_HOLDER"
+log_info "Lock acquired with holder ID: $LOCK_HOLDER"
+
+# Set up cleanup trap to release lock on exit/error
+cleanup_lock() {
+    if [[ -n "${PCSWITCHER_LOCK_HOLDER:-}" ]]; then
+        log_info "Releasing lock: $PCSWITCHER_LOCK_HOLDER"
+        "$LOCK_SCRIPT" release "$PCSWITCHER_LOCK_HOLDER" 2>/dev/null || true
+    fi
+}
+trap cleanup_lock EXIT INT TERM
+
+# Check VM readiness
+log_info "Checking if test VMs are provisioned and ready..."
+
+check_vm_ready() {
+    local vm_host="$1"
+    local user="$2"
+
+    # Try to connect and check baseline snapshot exists
+    if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+        "${user}@${vm_host}" \
+        "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Check both VMs are ready
+if ! check_vm_ready "$PC_SWITCHER_TEST_PC1_HOST" "$PC_SWITCHER_TEST_USER"; then
+    log_error "pc1 test VM is not provisioned yet"
+    log_info "Run the GitHub workflow 'Integration Tests' to provision test VMs"
+    exit 1
+fi
+
+if ! check_vm_ready "$PC_SWITCHER_TEST_PC2_HOST" "$PC_SWITCHER_TEST_USER"; then
+    log_error "pc2 test VM is not provisioned yet"
+    log_info "Run the GitHub workflow 'Integration Tests' to provision test VMs"
+    exit 1
+fi
+
+log_info "Test VMs are ready"
+
+# Reset VMs to baseline (unless skip flag is set)
+if [[ -z "${PC_SWITCHER_SKIP_RESET:-}" ]]; then
+    log_info "Resetting test VMs to baseline snapshots..."
+
+    # Reset both VMs in parallel
+    "$RESET_SCRIPT" "$PC_SWITCHER_TEST_PC1_HOST" &
+    PC1_RESET_PID=$!
+
+    "$RESET_SCRIPT" "$PC_SWITCHER_TEST_PC2_HOST" &
+    PC2_RESET_PID=$!
+
+    # Wait for both resets to complete
+    if ! wait "$PC1_RESET_PID"; then
+        log_error "pc1 reset failed"
+        wait "$PC2_RESET_PID" || true  # Let pc2 finish
+        exit 1
+    fi
+
+    if ! wait "$PC2_RESET_PID"; then
+        log_error "pc2 reset failed"
+        exit 1
+    fi
+
+    log_info "Test VMs reset complete"
+else
+    log_info "Skipping VM reset (PC_SWITCHER_SKIP_RESET is set)"
+fi
+
+# =============================================================================
+# Run pytest
+# =============================================================================
+
 # Run pytest with all provided arguments
 log_info "Running pytest..."
 cd "$PROJECT_ROOT"
