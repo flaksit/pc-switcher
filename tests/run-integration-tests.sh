@@ -81,12 +81,12 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
 fi
 
 # Check if we need to look up VM IPs from Hetzner Cloud
-NEED_LOOKUP=false
+NEED_LOOKUP_VM_IPS=false
 if [[ -z "${PC_SWITCHER_TEST_PC1_HOST:-}" ]] || [[ -z "${PC_SWITCHER_TEST_PC2_HOST:-}" ]]; then
-    NEED_LOOKUP=true
+    NEED_LOOKUP_VM_IPS=true
 fi
 
-if [[ "$NEED_LOOKUP" == "true" ]]; then
+if [[ "$NEED_LOOKUP_VM_IPS" == "true" ]]; then
     # Check HCLOUD_TOKEN
     if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
         log_info "HCLOUD_TOKEN not set, attempting to retrieve from pass..."
