@@ -97,6 +97,7 @@ jobs:
           PC_SWITCHER_TEST_PC2_HOST: ${{ steps.vm_ips.outputs.pc2_ip || steps.provision.outputs.pc2_ip }}
           PC_SWITCHER_TEST_USER: testuser
           CI_JOB_ID: ${{ github.run_id }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         timeout-minutes: 30
 
       - name: Upload test logs
