@@ -10,7 +10,6 @@ These tests install pc-switcher on a pristine VM and verify the update workflow.
 
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator
 
 import pytest
@@ -67,11 +66,7 @@ async def _run_self_update(
     version: Version | str | None = None,
     prerelease: bool = False,
 ) -> tuple[bool, str, str]:
-    """Run pc-switcher self update and return (success, stdout, stderr).
-
-    Forwards GITHUB_TOKEN from the local environment to the remote machine
-    to avoid GitHub API rate limiting (60 req/hr unauthenticated vs 5000/hr with token).
-    """
+    """Run pc-switcher self update and return (success, stdout, stderr)."""
     cmd = "pc-switcher self update"
     if prerelease:
         cmd += " --prerelease"
@@ -79,11 +74,6 @@ async def _run_self_update(
         # Use SemVer format for version argument
         version_str = version.semver_str() if isinstance(version, Version) else version
         cmd += f" {version_str}"
-
-    # Forward GITHUB_TOKEN to the remote machine to avoid rate limiting
-    github_token = os.environ.get("GITHUB_TOKEN")
-    if github_token:
-        cmd = f"export GITHUB_TOKEN={github_token} && {cmd}"
 
     result = await executor.run_command(cmd, timeout=120.0)
     return result.success, result.stdout, result.stderr

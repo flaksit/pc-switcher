@@ -60,20 +60,18 @@ class TestInstallOnTargetJobVersionCheck:
             # Mock target has no pc-switcher installed (command fails)
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
-                    # First call: pc-switcher --version (validate phase) - missing
+                    # Validate: pc-switcher --version - missing (target_version stays None)
                     CommandResult(exit_code=127, stdout="", stderr="command not found"),
-                    # Second call: pc-switcher --version (execute phase) - missing
-                    CommandResult(exit_code=127, stdout="", stderr="command not found"),
-                    # Third call: install command
+                    # Execute: install command succeeds
                     CommandResult(exit_code=0, stdout="", stderr=""),
-                    # Fourth call: verify installation
+                    # Execute: verify installation
                     CommandResult(exit_code=0, stdout="pc-switcher 0.4.0", stderr=""),
                 ]
             )
 
             job = InstallOnTargetJob(mock_install_context)
 
-            # Validate phase should pass (target not newer)
+            # Validate phase should pass (target not newer, just missing)
             errors = await job.validate()
             assert errors == []
 
@@ -81,8 +79,10 @@ class TestInstallOnTargetJobVersionCheck:
             await job.execute()
 
             # Verify install command was called with correct version
+            # validate + install + verify = 3 calls
             calls = mock_install_context.target.run_command.call_args_list
-            install_call = calls[2][0][0]
+            assert len(calls) == 3
+            install_call = calls[1][0][0]
             assert "curl -LsSf" in install_call
             assert "main/install.sh" in install_call
             assert "VERSION=v0.4.0" in install_call
@@ -105,30 +105,28 @@ class TestInstallOnTargetJobVersionCheck:
             # Mock target has older version
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
-                    # Validate phase: target has 0.3.2
+                    # Validate phase: target has 0.3.2 (stores target_version)
                     CommandResult(exit_code=0, stdout="pc-switcher 0.3.2", stderr=""),
-                    # Execute phase: target has 0.3.2
-                    CommandResult(exit_code=0, stdout="pc-switcher 0.3.2", stderr=""),
-                    # Install/upgrade command
+                    # Execute: install/upgrade command succeeds
                     CommandResult(exit_code=0, stdout="", stderr=""),
-                    # Verify installation
+                    # Execute: verify installation
                     CommandResult(exit_code=0, stdout="pc-switcher 0.4.0", stderr=""),
                 ]
             )
 
             job = InstallOnTargetJob(mock_install_context)
 
-            # Validate should pass
+            # Validate should pass and store target version
             errors = await job.validate()
             assert errors == []
 
-            # Execute should upgrade
+            # Execute should upgrade (using stored target_version)
             await job.execute()
 
-            # Verify upgrade was attempted
+            # Verify upgrade was attempted: validate + install + verify = 3 calls
             calls = mock_install_context.target.run_command.call_args_list
-            assert len(calls) == 4
-            install_call = calls[2][0][0]
+            assert len(calls) == 3
+            install_call = calls[1][0][0]
             assert "main/install.sh" in install_call
             assert "VERSION=v0.4.0" in install_call
 
@@ -196,15 +194,21 @@ class TestInstallOnTargetJobInstallationFailure:
         Spec requirement: FR-007 states if installation/upgrade fails, system MUST
         log CRITICAL error and abort sync.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
+        mock_version = Version.parse("0.4.0")
+        mock_release = Release(version=mock_version, is_prerelease=False, tag="v0.4.0")
+
+        with (
+            patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=mock_version),
+            patch.object(Version, "get_release_floor", return_value=mock_release),
+        ):
             # Mock target missing pc-switcher, install fails
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
-                    # Validate phase: missing
+                    # Validate: missing (target_version stays None)
                     CommandResult(exit_code=127, stdout="", stderr="command not found"),
-                    # Execute phase: missing
-                    CommandResult(exit_code=127, stdout="", stderr="command not found"),
-                    # Install command fails (disk full, permissions, etc)
+                    # Execute: install with exact version fails
+                    CommandResult(exit_code=1, stdout="", stderr="disk full"),
+                    # Execute: install with release floor also fails
                     CommandResult(exit_code=1, stdout="", stderr="disk full"),
                 ]
             )
@@ -233,13 +237,11 @@ class TestInstallOnTargetJobInstallationFailure:
             # Mock install succeeds but verification fails
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
-                    # Validate: missing
+                    # Validate: missing (target_version stays None)
                     CommandResult(exit_code=127, stdout="", stderr="command not found"),
-                    # Execute: missing
-                    CommandResult(exit_code=127, stdout="", stderr="command not found"),
-                    # Install succeeds
+                    # Execute: install succeeds
                     CommandResult(exit_code=0, stdout="", stderr=""),
-                    # Verify fails - version mismatch or command failed
+                    # Execute: verify fails - version mismatch or command failed
                     CommandResult(exit_code=1, stdout="", stderr="error"),
                 ]
             )
@@ -276,19 +278,18 @@ class TestInstallOnTargetJobSkipWhenMatching:
 
             job = InstallOnTargetJob(mock_install_context)
 
-            # Validate should pass
+            # Validate should pass and store target version
             errors = await job.validate()
             assert errors == []
 
-            # Execute should skip installation
+            # Execute should skip installation (uses stored target_version)
             await job.execute()
 
-            # Verify only version checks were performed (no install command)
+            # Verify only validate version check was performed (no install command)
+            # Execute reuses target_version from validate phase
             calls = mock_install_context.target.run_command.call_args_list
-            # Should have: 1 validate call + 1 execute call = 2 calls total
-            assert len(calls) == 2
-            for call in calls:
-                assert "pc-switcher --version" in call[0][0]
+            assert len(calls) == 1
+            assert "pc-switcher --version" in calls[0][0][0]
 
 
 class TestInstallOnTargetJobAS4:
@@ -302,15 +303,21 @@ class TestInstallOnTargetJobAS4:
         (e.g., disk full, permissions issue), orchestrator logs CRITICAL error and
         does not proceed with sync.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
+        mock_version = Version.parse("0.4.0")
+        mock_release = Release(version=mock_version, is_prerelease=False, tag="v0.4.0")
+
+        with (
+            patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=mock_version),
+            patch.object(Version, "get_release_floor", return_value=mock_release),
+        ):
             # Mock target has old version, upgrade fails
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
-                    # Validate: old version
+                    # Validate: old version (stores target_version)
                     CommandResult(exit_code=0, stdout="pc-switcher 0.3.2", stderr=""),
-                    # Execute: old version
-                    CommandResult(exit_code=0, stdout="pc-switcher 0.3.2", stderr=""),
-                    # Install fails with permissions error
+                    # Execute: install with exact version fails
+                    CommandResult(exit_code=1, stdout="", stderr="Permission denied"),
+                    # Execute: install with release floor also fails
                     CommandResult(exit_code=1, stdout="", stderr="Permission denied"),
                 ]
             )
@@ -360,13 +367,11 @@ class TestInstallOnTargetJobUS7AS2:
             # Mock target has no pc-switcher installed
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
-                    # Validate phase: missing
+                    # Validate: missing (target_version stays None)
                     CommandResult(exit_code=127, stdout="", stderr="command not found"),
-                    # Execute phase: missing
-                    CommandResult(exit_code=127, stdout="", stderr="command not found"),
-                    # Install via install.sh succeeds
+                    # Execute: install via install.sh succeeds
                     CommandResult(exit_code=0, stdout="pc-switcher installed successfully", stderr=""),
-                    # Verify installation
+                    # Execute: verify installation
                     CommandResult(exit_code=0, stdout="pc-switcher 0.4.0", stderr=""),
                 ]
             )
@@ -381,8 +386,10 @@ class TestInstallOnTargetJobUS7AS2:
             await job.execute()
 
             # Verify install.sh was used with VERSION env var
+            # validate + install + verify = 3 calls
             calls = mock_install_context.target.run_command.call_args_list
-            install_call = calls[2][0][0]
+            assert len(calls) == 3
+            install_call = calls[1][0][0]
 
             # The installation command should use install.sh from GitHub
             assert "curl -LsSf" in install_call, "Should use curl to download install.sh"

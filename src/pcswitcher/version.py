@@ -75,7 +75,7 @@ class Release:
 
     version: Version
     is_prerelease: bool
-    tag: str | None = None
+    tag: str
 
 
 def get_releases(
