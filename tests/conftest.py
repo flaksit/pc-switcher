@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from pcswitcher.events import EventBus
 from pcswitcher.models import CommandResult
+
+
+@pytest.fixture(scope="session", autouse=True)
+def configure_test_logging() -> None:
+    """Configure logging so test module logs show at INFO level.
+
+    pytest's log_cli_level is set to WARNING to suppress verbose library logs
+    (e.g., asyncssh). This fixture sets test module loggers to INFO so their
+    output is still visible in live logging.
+    """
+    logging.getLogger().setLevel(logging.WARNING)  # Keep root at WARNING to suppress libs
+    logging.getLogger("pcswitcher").setLevel(logging.DEBUG)
+    logging.getLogger("tests").setLevel(logging.DEBUG)
 
 
 @pytest.fixture
