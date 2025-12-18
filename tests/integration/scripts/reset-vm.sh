@@ -88,9 +88,37 @@ then
 fi
 log_info_prefixed "Baseline snapshots validated"
 
-# Step 2: Clean up test artifacts
+# Step 2: Clean up test artifacts (all subvolumes except baseline/* and old/*)
 log_step_prefixed "Cleaning up test artifacts..."
-ssh_vm "sudo rm -rf /.snapshots/pc-switcher/test-* 2>/dev/null || true"
+ssh_vm 'sudo bash -s' << 'EOF'
+set -euo pipefail
+
+delete_subvol_recursive() {
+    local path="$1"
+    local child
+    # btrfs subvolume list shows them as @snapshots/..., so we use sed to adjust that to /.snapshots/...
+    for child in $(btrfs subvolume list -o "$path" 2>/dev/null | awk '{print $NF}' | sed 's/^@snapshots/\/.snapshots/'); do
+        # verify that child starts with "/.snapshots" to avoid deleting wrong paths
+        if [[ "$child" != /.snapshots* ]]; then
+            echo "ERROR: Unexpected non-snapshot subvolume: '$child' of '$path', aborting deletion!" >&2
+            exit 1
+        fi
+        delete_subvol_recursive "$child"
+    done
+    # Double-check this is really a subvolume and still exists before deleting
+    if btrfs subvolume show "$path" >/dev/null 2>&1; then
+        echo "Deleting subvolume: $path"
+        btrfs subvolume delete "$path"
+    fi
+}
+
+# List all subvolumes under @snapshots/, excluding baseline/* and old/*
+for subvol_path in $(btrfs subvolume list / 2>/dev/null | awk '{print $NF}' | grep '^@snapshots/' | grep -v '^@snapshots/baseline/' | grep -v '^@snapshots/old/'); do
+    # Convert @snapshots/... to /.snapshots/...
+    abs_path=$(echo "$subvol_path" | sed 's/^@snapshots/\/.snapshots/')
+    delete_subvol_recursive "$abs_path"
+done
+EOF
 log_info_prefixed "Test artifacts cleaned"
 
 # Step 3: Pre-flight check - detect and recover from interrupted previous resets
@@ -266,12 +294,15 @@ delete_subvol_recursive() {
             echo "ERROR: Unexpected non-snapshot subvolume: '$child' of '$path', aborting deletion!" >&2
             exit 1
         fi
-
-        echo "Deleting child snapshot: $child"
         delete_subvol_recursive "$child"
     done
-    btrfs subvolume delete "$path"
+    # Double-check this is really a subvolume and still exists before deleting
+    if btrfs subvolume show "$path" >/dev/null 2>&1; then
+        echo "Deleting subvolume: $path"
+        btrfs subvolume delete "$path"
+    fi
 }
+
 
 # Rotate old root snapshots in /.snapshots/old/: keep 3 most recent, delete the rest
 # Timestamped names sort chronologically (YYYYMMDD_HHMMSS format)
