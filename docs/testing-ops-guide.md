@@ -41,12 +41,13 @@ VMs are expected to run persistently. Reset is performed via btrfs snapshot roll
 
 ### Workflow Overview
 
-The repository uses two separate GitHub Actions workflows:
+The repository uses three GitHub Actions workflows for testing:
 
 | Workflow | File | Triggers | Purpose |
 |----------|------|----------|---------|
 | CI | `ci.yml` | Every push | Lint (basedpyright, ruff, codespell) and unit tests |
 | Integration Tests | `integration-tests.yml` | PR ready for review | Full integration tests on Hetzner VMs |
+| VM Maintenance | `vm-maintenance.yml` | Weekly (Monday 2am UTC) | Keep test VMs updated with OS patches |
 
 ### Integration Tests Trigger Strategy
 
@@ -110,6 +111,19 @@ The `main` branch requires these status checks before merging:
 3. Add required checks: `Lint`, `Unit Tests`, `Integration Tests`
 
 **Note**: The merge queue feature is **not used**. Integration tests run directly on PR branches, gated by the draft/ready status.
+
+### VM Maintenance Workflow
+
+The `vm-maintenance.yml` workflow keeps test VMs updated with OS security patches:
+
+- **Schedule**: Runs weekly on Monday at 2am UTC
+- **Manual trigger**: Available via `workflow_dispatch`
+- **Behavior**:
+  - Checks if VMs exist before attempting upgrade
+  - Runs `tests/integration/scripts/upgrade-vms.sh` on both VMs
+  - Skips gracefully if VMs don't exist (with warning)
+
+This ensures VMs stay patched without manual intervention. The baseline snapshots are **not** updated by this workflow - they preserve the original provisioned state for consistent test resets.
 
 ---
 
