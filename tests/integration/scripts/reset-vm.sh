@@ -178,7 +178,7 @@ echo "Recovery complete, proceeding with reset"
 EOF
 log_info_prefixed "Pre-flight check passed"
 
-# Step 4: Mount filesystem and replace subvolumes with baseline snapshots
+# Step 4: Replace subvolumes with baseline snapshots
 log_step_prefixed "Replacing subvolumes with baseline snapshots..."
 ssh_vm 'sudo bash -s' << 'EOF'
 set -euo pipefail
@@ -259,7 +259,14 @@ set -euo pipefail
 delete_subvol_recursive() {
     local path="$1"
     local child
-    for child in $(btrfs subvolume list -o "$path" 2>/dev/null | awk '{print $NF}'); do
+    # btrfs subvolume list shows them as @snapshots/..., so we use sed to adjust that to /.snapshots/...
+    for child in $(btrfs subvolume list -o "$path" 2>/dev/null | awk '{print $NF}' | sed 's/^@snapshots/\/.snapshots/'); do
+        # verify that child starts with "/.snapshots" to avoid deleting wrong paths
+        if [[ "$child" != /.snapshots* ]]; then
+            echo "ERROR: Unexpected non-snapshot subvolume: '$child' of '$path', aborting deletion!" >&2
+            exit 1
+        fi
+
         echo "Deleting child snapshot: $child"
         delete_subvol_recursive "$child"
     done
