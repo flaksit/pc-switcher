@@ -66,35 +66,35 @@ ssh_vm() {
     ssh_run "${SSH_USER}@${VM_HOST}" "$@"
 }
 
-log_step "Resetting VM: $VM_HOST"
-log_info "SSH User: $SSH_USER"
+log_step_prefixed "Resetting VM: $VM_HOST"
+log_info_prefixed "SSH User: $SSH_USER"
 
 # Establish SSH connection (accept new key if not in known_hosts)
 # Test runner may have empty known_hosts or correct key from provisioning
-log_info "Establishing SSH connection..."
+log_info_prefixed "Establishing SSH connection..."
 ssh_accept_new "${SSH_USER}@${VM_HOST}" true
 
 # Step 1: Validate baseline snapshots exist
-log_step "Validating baseline snapshots..."
+log_step_prefixed "Validating baseline snapshots..."
 if ! ssh_vm 'bash -s' << 'EOF'
 set -euo pipefail
 sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1
 sudo btrfs subvolume show /.snapshots/baseline/@home >/dev/null 2>&1
 EOF
 then
-    log_error "Baseline snapshots not found on $VM_HOST"
-    log_info "Run provision-test-infra.sh to create baseline snapshots"
+    log_error_prefixed "Baseline snapshots not found on $VM_HOST"
+    log_info_prefixed "Run provision-test-infra.sh to create baseline snapshots"
     exit 1
 fi
-log_info "Baseline snapshots validated"
+log_info_prefixed "Baseline snapshots validated"
 
 # Step 2: Clean up test artifacts
-log_step "Cleaning up test artifacts..."
+log_step_prefixed "Cleaning up test artifacts..."
 ssh_vm "sudo rm -rf /.snapshots/pc-switcher/test-* 2>/dev/null || true"
-log_info "Test artifacts cleaned"
+log_info_prefixed "Test artifacts cleaned"
 
 # Step 3: Pre-flight check - detect and recover from interrupted previous resets
-log_step "Checking for interrupted previous reset..."
+log_step_prefixed "Checking for interrupted previous reset..."
 ssh_vm 'sudo bash -s' << 'EOF'
 set -euo pipefail
 
@@ -176,10 +176,10 @@ fi
 
 echo "Recovery complete, proceeding with reset"
 EOF
-log_info "Pre-flight check passed"
+log_info_prefixed "Pre-flight check passed"
 
 # Step 4: Mount filesystem and replace subvolumes with baseline snapshots
-log_step "Replacing subvolumes with baseline snapshots..."
+log_step_prefixed "Replacing subvolumes with baseline snapshots..."
 ssh_vm 'sudo bash -s' << 'EOF'
 set -euo pipefail
 
@@ -229,29 +229,29 @@ mv /mnt/btrfs/@home_new /mnt/btrfs/@home
 #    blocks deletion of the old subvolume it might refer to.
 btrfs subvolume set-default /mnt/btrfs/@
 EOF
-log_info "Subvolumes replaced with baseline snapshots"
+log_info_prefixed "Subvolumes replaced with baseline snapshots"
 
 # Step 5: Reboot
-log_step "Rebooting VM..."
+log_step_prefixed "Rebooting VM..."
 # Reboot may terminate SSH connection, so ignore exit code
 ssh_vm "sudo reboot" || true
-log_info "Reboot initiated"
+log_info_prefixed "Reboot initiated"
 
 # Step 6: Wait for VM to come back online
-log_step "Waiting for VM to come back online..."
+log_step_prefixed "Waiting for VM to come back online..."
 
 # Give the VM a moment to actually go down
 sleep 5
 
 # Wait for SSH (no REMOVE_KEY - host key doesn't change on reboot)
 if ! wait_for_ssh "${SSH_USER}@${VM_HOST}" 300; then
-    log_error "Timeout waiting for VM to come back online"
-    log_info "Please check VM status manually"
+    log_error_prefixed "Timeout waiting for VM to come back online"
+    log_info_prefixed "Please check VM status manually"
     exit 1
 fi
 
 # Step 7: Clean up old subvolumes after reboot (keep 3 most recent for investigation)
-log_step "Rotating old subvolumes (keeping 3 most recent)..."
+log_step_prefixed "Rotating old subvolumes (keeping 3 most recent)..."
 ssh_vm 'sudo bash -s' << 'EOF'
 set -euo pipefail
 
@@ -289,6 +289,6 @@ for old_subvol in $(ls -1d /.snapshots/old/@home_* 2>/dev/null | sort -r | tail 
     fi
 done
 EOF
-log_info "Old subvolumes rotated"
+log_info_prefixed "Old subvolumes rotated"
 
-log_step "VM reset complete: $VM_HOST"
+log_step_prefixed "VM reset complete: $VM_HOST"

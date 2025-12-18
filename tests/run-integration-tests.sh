@@ -23,15 +23,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+COMMON_SCRIPT="$SCRIPT_DIR/integration/scripts/internal/common.sh"
+RESET_SCRIPT="$SCRIPT_DIR/integration/scripts/reset-vm.sh"
 
-log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+# Source common helpers (colors, logging, lock helpers)
+source "$COMMON_SCRIPT"
 
 # Check GITHUB_TOKEN
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
@@ -157,43 +153,9 @@ log_info "  PC_SWITCHER_TEST_USER=$PC_SWITCHER_TEST_USER"
 # VM Provisioning: Lock, Readiness Check, and Reset
 # =============================================================================
 
-LOCK_SCRIPT="$SCRIPT_DIR/integration/scripts/internal/lock.sh"
-RESET_SCRIPT="$SCRIPT_DIR/integration/scripts/reset-vm.sh"
-
-# Generate lock holder ID
-generate_lock_holder_id() {
-    local ci_job_id="${CI_JOB_ID:-${GITHUB_RUN_ID:-}}"
-    if [[ -n "$ci_job_id" ]]; then
-        echo "ci-${ci_job_id}-pytest"
-    else
-        local hostname
-        hostname=$(hostname)
-        local user="${USER:-unknown}"
-        # Add random suffix to ensure uniqueness per invocation
-        local random_suffix
-        random_suffix=$(openssl rand -hex 3)  # 6 hex characters
-        echo "${user}-${hostname}-pytest-${random_suffix}"
-    fi
-}
-
-# Acquire lock
-log_info "Acquiring integration test lock..."
-LOCK_HOLDER=$(generate_lock_holder_id)
-if ! "$LOCK_SCRIPT" acquire "$LOCK_HOLDER"; then
-    log_error "Failed to acquire integration test lock"
-    exit 1
-fi
-export PCSWITCHER_LOCK_HOLDER="$LOCK_HOLDER"
-log_info "Lock acquired with holder ID: $LOCK_HOLDER"
-
-# Set up cleanup trap to release lock on exit/error
-cleanup_lock() {
-    if [[ -n "${PCSWITCHER_LOCK_HOLDER:-}" ]]; then
-        log_info "Releasing lock: $PCSWITCHER_LOCK_HOLDER"
-        "$LOCK_SCRIPT" release "$PCSWITCHER_LOCK_HOLDER" 2>/dev/null || true
-    fi
-}
-trap cleanup_lock EXIT INT TERM
+# Acquire lock (cleanup trap is set up by acquire_lock)
+log_step "Acquiring integration test lock..."
+acquire_lock "pytest"
 
 # Check VM readiness
 log_info "Checking if test VMs are provisioned and ready..."
@@ -232,10 +194,10 @@ if [[ -z "${PC_SWITCHER_SKIP_RESET:-}" ]]; then
     log_info "Resetting test VMs to baseline snapshots..."
 
     # Reset both VMs in parallel
-    "$RESET_SCRIPT" "$PC_SWITCHER_TEST_PC1_HOST" &
+    export LOG_PREFIX="pc1:" && "$RESET_SCRIPT" "$PC_SWITCHER_TEST_PC1_HOST" &
     PC1_RESET_PID=$!
 
-    "$RESET_SCRIPT" "$PC_SWITCHER_TEST_PC2_HOST" &
+    export LOG_PREFIX="pc2:" && "$RESET_SCRIPT" "$PC_SWITCHER_TEST_PC2_HOST" &
     PC2_RESET_PID=$!
 
     # Wait for both resets to complete
