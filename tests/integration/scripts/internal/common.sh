@@ -124,7 +124,10 @@ acquire_lock() {
 
         # Set up cleanup trap only if we own the lock
         cleanup_lock() {
-            "$LOCK_SCRIPT" release "$PCSWITCHER_LOCK_HOLDER" 2>/dev/null || true
+            # Use ${VAR:-} to handle unset variable (lock acquisition may have failed)
+            if [[ -n "${PCSWITCHER_LOCK_HOLDER:-}" ]]; then
+                "$LOCK_SCRIPT" release "$PCSWITCHER_LOCK_HOLDER" 2>/dev/null || true
+            fi
         }
         trap "cleanup_lock; $(trap -p EXIT | cut -f2 -d \')" EXIT
         trap "cleanup_lock; $(trap -p INT | cut -f2 -d \')" INT
