@@ -12,7 +12,9 @@ jobs:
       group: pc-switcher-integration
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
