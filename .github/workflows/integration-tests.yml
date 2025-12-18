@@ -1,12 +1,27 @@
 name: Integration Tests
 
 on:
-  merge_group:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/integration-tests.yml'
+      - 'src/**'
+      - 'tests/integration/**'
+      - 'install.sh'
+      - 'pyproject.toml'
+      - 'uv.lock'
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
   workflow_dispatch:
 
 jobs:
   integration:
     name: Integration Tests
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     concurrency:
       group: pc-switcher-integration
