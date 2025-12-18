@@ -108,7 +108,7 @@ def get_releases(
         else:
             logger.debug("GITHUB_TOKEN not set, using unauthenticated GitHub API (60 req/hr)")
 
-        g = Github(auth=Auth.Token(token)) if token else Github()
+        g = Github(auth=Auth.Token(token), retry=None) if token else Github(retry=None)
         repo = g.get_repo(repository)
 
         # Fetch all releases with pagination
