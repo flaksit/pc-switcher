@@ -11,12 +11,15 @@ These are performance benchmarks, not functional tests. Run with:
 
 from __future__ import annotations
 
+import logging
 import time
 from statistics import mean, stdev
 
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.mark.benchmark
@@ -54,20 +57,20 @@ class TestRemoteExecutorOverhead:
         avg_time = mean(timings)
         std_dev = stdev(timings) if len(timings) > 1 else 0.0
 
-        # Print results for analysis
-        print("\n" + "=" * 60)
-        print("No-op Command Overhead Statistics")
-        print("=" * 60)
-        print("Command: ':' (bash no-op)")
-        print(f"Runs: {num_runs}")
-        print(f"Min:  {min_time * 1000:.2f} ms")
-        print(f"Max:  {max_time * 1000:.2f} ms")
-        print(f"Mean: {avg_time * 1000:.2f} ms")
-        print(f"StdDev: {std_dev * 1000:.2f} ms")
-        print("\nPer-run timings (ms):")
+        # Log results for analysis
+        logger.info("=" * 60)
+        logger.info("No-op Command Overhead Statistics")
+        logger.info("=" * 60)
+        logger.info("Command: ':' (bash no-op)")
+        logger.info(f"Runs: {num_runs}")
+        logger.info(f"Min:  {min_time * 1000:.2f} ms")
+        logger.info(f"Max:  {max_time * 1000:.2f} ms")
+        logger.info(f"Mean: {avg_time * 1000:.2f} ms")
+        logger.info(f"StdDev: {std_dev * 1000:.2f} ms")
+        logger.info("Per-run timings (ms):")
         for i, t in enumerate(timings, 1):
-            print(f"  Run {i:2d}: {t * 1000:6.2f} ms")
-        print("=" * 60)
+            logger.info(f"  Run {i:2d}: {t * 1000:6.2f} ms")
+        logger.info("=" * 60)
 
         # Basic assertions - should be reasonably fast
         assert avg_time < 1.0, f"Average overhead too high: {avg_time * 1000:.2f} ms"
@@ -97,13 +100,13 @@ class TestRemoteExecutorOverhead:
         min_time = min(timings)
         max_time = max(timings)
 
-        print("\n" + "=" * 60)
-        print("'true' Command Overhead")
-        print("=" * 60)
-        print(f"Min:  {min_time * 1000:.2f} ms")
-        print(f"Max:  {max_time * 1000:.2f} ms")
-        print(f"Mean: {avg_time * 1000:.2f} ms")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("'true' Command Overhead")
+        logger.info("=" * 60)
+        logger.info(f"Min:  {min_time * 1000:.2f} ms")
+        logger.info(f"Max:  {max_time * 1000:.2f} ms")
+        logger.info(f"Mean: {avg_time * 1000:.2f} ms")
+        logger.info("=" * 60)
 
     async def test_master_connection_reuse(self, pc1_executor: BashLoginRemoteExecutor) -> None:
         """Verify SSH master connection is being reused across commands.
@@ -129,17 +132,17 @@ class TestRemoteExecutorOverhead:
         time3 = time.perf_counter() - start3
         assert result3.success
 
-        print("\n" + "=" * 60)
-        print("Master Connection Reuse Test")
-        print("=" * 60)
-        print(f"Command 1: {time1 * 1000:.2f} ms (may include connection setup)")
-        print(f"Command 2: {time2 * 1000:.2f} ms (should reuse connection)")
-        print(f"Command 3: {time3 * 1000:.2f} ms (should reuse connection)")
+        logger.info("=" * 60)
+        logger.info("Master Connection Reuse Test")
+        logger.info("=" * 60)
+        logger.info(f"Command 1: {time1 * 1000:.2f} ms (may include connection setup)")
+        logger.info(f"Command 2: {time2 * 1000:.2f} ms (should reuse connection)")
+        logger.info(f"Command 3: {time3 * 1000:.2f} ms (should reuse connection)")
         if time2 < time1:
-            print(f"✓ Connection reuse detected: cmd2 is {(time1 - time2) * 1000:.2f} ms faster than cmd1")
+            logger.info(f"✓ Connection reuse detected: cmd2 is {(time1 - time2) * 1000:.2f} ms faster than cmd1")
         else:
-            print("⚠ No obvious reuse benefit (cmd2 similar to cmd1)")
-        print("=" * 60)
+            logger.info("⚠ No obvious reuse benefit (cmd2 similar to cmd1)")
+        logger.info("=" * 60)
 
 
 @pytest.mark.benchmark
@@ -183,18 +186,18 @@ class TestExecutorWrapperOverhead:
         wrapper_cost = wrapped_mean - direct_mean
         wrapper_cost_pct = (wrapper_cost / direct_mean * 100) if direct_mean > 0 else 0
 
-        print("\n" + "=" * 70)
-        print("RemoteExecutor: login_shell=False vs login_shell=True Overhead")
-        print("=" * 70)
-        print("Direct RemoteExecutor (login_shell=False, bare SSH):")
-        print(f"  Mean:   {direct_mean * 1000:.2f} ms")
-        print(f"  StdDev: {direct_std * 1000:.2f} ms")
-        print()
-        print("With Login Shell (login_shell=True, bash -l -c wrapper):")
-        print(f"  Mean:   {wrapped_mean * 1000:.2f} ms")
-        print(f"  StdDev: {wrapped_std * 1000:.2f} ms")
-        print()
-        print("Login Shell Overhead:")
-        print(f"  Absolute: {wrapper_cost * 1000:.2f} ms")
-        print(f"  Relative: {wrapper_cost_pct:.1f}% slower")
-        print("=" * 70)
+        logger.info("=" * 70)
+        logger.info("RemoteExecutor: login_shell=False vs login_shell=True Overhead")
+        logger.info("=" * 70)
+        logger.info("Direct RemoteExecutor (login_shell=False, bare SSH):")
+        logger.info(f"  Mean:   {direct_mean * 1000:.2f} ms")
+        logger.info(f"  StdDev: {direct_std * 1000:.2f} ms")
+        logger.info("")
+        logger.info("With Login Shell (login_shell=True, bash -l -c wrapper):")
+        logger.info(f"  Mean:   {wrapped_mean * 1000:.2f} ms")
+        logger.info(f"  StdDev: {wrapped_std * 1000:.2f} ms")
+        logger.info("")
+        logger.info("Login Shell Overhead:")
+        logger.info(f"  Absolute: {wrapper_cost * 1000:.2f} ms")
+        logger.info(f"  Relative: {wrapper_cost_pct:.1f}% slower")
+        logger.info("=" * 70)

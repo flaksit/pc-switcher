@@ -12,6 +12,8 @@
 #
 # See docs/testing-infrastructure.md for the SSH host key management strategy.
 
+LOCK_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lock.sh"
+
 # =============================================================================
 # Color Definitions
 # =============================================================================
@@ -57,20 +59,33 @@ _generate_lock_holder() {
         name="-${name//[^a-zA-Z0-9_-]/_}"
     fi
 
-    # Generate new unique ID
-    local ci_job_id="${CI_JOB_ID:-${GITHUB_RUN_ID:-}}"
+    local holder
 
+    # GitHub Actions
+    local ci_job_id="${CI_JOB_ID:-${GITHUB_RUN_ID:-}}"
     if [[ -n "$ci_job_id" ]]; then
-        echo "ci-${ci_job_id}${name}"
+        holder="ci-${ci_job_id}${name}"
     else
-        local hostname
-        hostname=$(hostname)
-        local user="${USER:-unknown}"
-        # Add random suffix to ensure uniqueness per invocation
-        local random
-        random=$(openssl rand -hex 3)  # 6 hex characters
-        echo "${user}-${hostname}${name}-${random}"
+        # Local run
+        local hostname=$(hostname)
+
+        local user
+        if [[ "${CLAUDECODE:-}" = "1" ]]; then
+            user="claude"
+        else
+            user="${USER:-unknown}"
+            hostname="${hostname//[^a-zA-Z0-9_-]/_}"
+        fi
+
+        # Random suffix to ensure uniqueness per invocation
+        local random=$(openssl rand -hex 3)  # 6 hex characters
+
+        holder="${user}-${hostname}${name}-${random}"
     fi
+
+    # Sanitize to be compatible with Hetzner Cloud labels
+    holder="${holder//[^a-zA-Z0-9_-]/_}"
+    echo "$holder"
 }
 
 
@@ -97,7 +112,7 @@ acquire_lock() {
     local name="$1"
     if [[ -n "${PCSWITCHER_LOCK_HOLDER:-}" ]]; then
         # Called from parent with lock - verify it's actually held
-        local current_holder="$("$SCRIPT_DIR/internal/lock.sh" get_lock_holder 2>/dev/null)"
+        local current_holder="$("$LOCK_SCRIPT" get_lock_holder 2>/dev/null)"
         if [[ "${current_holder}" != "$PCSWITCHER_LOCK_HOLDER" ]]; then
             log_error "PCSWITCHER_LOCK_HOLDER is set, but lock is not held"
             exit 2
@@ -109,14 +124,17 @@ acquire_lock() {
 
         # Set up cleanup trap only if we own the lock
         cleanup_lock() {
-            "$SCRIPT_DIR/internal/lock.sh" release "$PCSWITCHER_LOCK_HOLDER" 2>/dev/null || true
+            # Use ${VAR:-} to handle unset variable (lock acquisition may have failed)
+            if [[ -n "${PCSWITCHER_LOCK_HOLDER:-}" ]]; then
+                "$LOCK_SCRIPT" release "$PCSWITCHER_LOCK_HOLDER" 2>/dev/null || true
+            fi
         }
         trap "cleanup_lock; $(trap -p EXIT | cut -f2 -d \')" EXIT
         trap "cleanup_lock; $(trap -p INT | cut -f2 -d \')" INT
         trap "cleanup_lock; $(trap -p TERM | cut -f2 -d \')" TERM
 
         # Acquire lock
-        if ! "$SCRIPT_DIR/internal/lock.sh" acquire "$holder"; then
+        if ! "$LOCK_SCRIPT" acquire "$holder"; then
             log_error "Failed to acquire lock"
             exit 1
         fi
@@ -207,11 +225,13 @@ wait_for_ssh() {
 
     local host="${userhost#*@}"
 
+    LOG_PREFIX="$host:"
+
     # Phase transition: remove old key and accept new
     if [[ "$remove_key_flag" == "REMOVE_KEY" ]]; then
         ssh-keygen -R "$host" 2>/dev/null || true
     elif [[ -n "$remove_key_flag" ]]; then
-        log_error "Invalid flag '$remove_key_flag'. Use 'REMOVE_KEY' or omit."
+        log_error_prefixed "Invalid flag '$remove_key_flag'. Use 'REMOVE_KEY' or omit."
         return 1
     fi
 
@@ -230,15 +250,15 @@ wait_for_ssh() {
 
         # shellcheck disable=SC2086
         if ssh_run $ssh_opts "$userhost" true 2>/dev/null; then
-            log_info "SSH ready after ${elapsed}s"
+            log_info_prefixed "SSH ready after ${elapsed}s"
             return 0
         fi
 
-        log_info "Waiting for SSH... (${elapsed}s / ${timeout}s)"
+        log_info_prefixed "Waiting for SSH... (${elapsed}s / ${timeout}s)"
         sleep 5
     done
 
-    log_error "SSH timeout after ${timeout}s"
+    log_error_prefixed "SSH timeout after ${timeout}s"
     return 1
 }
 

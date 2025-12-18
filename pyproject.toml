@@ -68,3 +68,9 @@ markers = [
     "slow: Tests that take >5 seconds",
     "benchmark: Performance benchmarks (not run by default)",
 ]
+log_cli = true
+# Here, set log level to the level we want from logs from our code.
+# Inside conftest.py, we filter the root logger to WARNING anyway to reduce noise from third-party libraries.
+log_cli_level = "WARNING"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
