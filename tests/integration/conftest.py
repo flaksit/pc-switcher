@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import warnings
 from collections.abc import AsyncIterator
 
 import asyncssh
@@ -178,7 +177,7 @@ async def pc2_executor(_pc2_connection: asyncssh.SSHClientConnection) -> BashLog
 @pytest.fixture
 async def pc2_without_pcswitcher(
     pc2_executor: BashLoginRemoteExecutor,
-) -> AsyncIterator[BashLoginRemoteExecutor]:
+) -> BashLoginRemoteExecutor:
     """Provide a clean environment on pc2 without pc-switcher installed.
 
     WARNING: This fixture wraps pc2_executor and modifies VM state by uninstalling
@@ -192,32 +191,17 @@ async def pc2_without_pcswitcher(
     other tests in the same test session.
     """
     # Check if pc-switcher was installed before we modify state
-    version_check = await pc2_executor.run_command("pc-switcher --version 2>/dev/null || true", timeout=10.0)
-    was_installed = version_check.success
-
     # Uninstall pc-switcher if it exists
     await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
     await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
 
-    yield pc2_executor
-
-    # TODO remove restore to initial state (see #68)
-    # Restore to initial state: if it was installed before, reinstall it
-    if was_installed:
-        install_script_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
-        result = await pc2_executor.run_command(
-            f"curl -sSL {install_script_url} | bash",
-            timeout=120.0,
-        )
-        if not result.success:
-            # Log but don't fail the test - cleanup issues shouldn't fail tests
-            warnings.warn(f"Failed to restore pc-switcher on pc2: {result.stderr}", stacklevel=2)
+    return pc2_executor
 
 
 @pytest.fixture
 async def pc2_with_old_pcswitcher(
-    pc2_executor: BashLoginRemoteExecutor,
-) -> AsyncIterator[BashLoginRemoteExecutor]:
+    pc2_without_pcswitcher: BashLoginRemoteExecutor,
+) -> BashLoginRemoteExecutor:
     """Provide pc2 with an older version of pc-switcher (0.1.0-alpha.1).
 
     WARNING: This fixture wraps pc2_executor and modifies VM state by installing
@@ -231,35 +215,18 @@ async def pc2_with_old_pcswitcher(
     Cleanup: Captures initial state and restores it after the test to avoid affecting
     other tests in the same test session.
     """
+    executor = pc2_without_pcswitcher
+
     # Install script URL from main branch
     install_script_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
 
-    # Check if pc-switcher was installed before we modify state
-    version_check = await pc2_executor.run_command("pc-switcher --version 2>/dev/null || true", timeout=10.0)
-    was_installed = version_check.success and "pc-switcher" in version_check.stdout.lower()
-
     # Uninstall and install older version
-    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
-    await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
-    result = await pc2_executor.run_command(
+    await executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
+    await executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
+    result = await executor.run_command(
         f"curl -sSL {install_script_url} | VERSION=v0.1.0-alpha.1 bash",
         timeout=120.0,
     )
     assert result.success, f"Failed to install old version: {result.stderr}"
 
-    yield pc2_executor
-
-    # TODO remove restore to initial state (see #68)
-    # Restore to initial state
-    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
-    await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
-
-    if was_installed:
-        # Reinstall latest version
-        result = await pc2_executor.run_command(
-            f"curl -sSL {install_script_url} | bash",
-            timeout=120.0,
-        )
-        if not result.success:
-            # Log but don't fail the test - cleanup issues shouldn't fail tests
-            warnings.warn(f"Failed to restore pc-switcher on pc2: {result.stderr}", stacklevel=2)
+    return executor

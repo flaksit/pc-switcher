@@ -5,7 +5,6 @@ These tests install pc-switcher on a pristine VM and verify the update workflow 
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import overload
 
 import pytest
@@ -78,33 +77,33 @@ async def executor_with_prerequisites(
 async def executor_with_old(
     executor_with_prerequisites: BashLoginRemoteExecutor,
     old_release: Release,
-) -> AsyncIterator[BashLoginRemoteExecutor]:
+) -> BashLoginRemoteExecutor:
     """Install the current pc-switcher version before each test."""
     await _install_with_uv(executor_with_prerequisites, release=old_release)
 
-    yield executor_with_prerequisites
+    return executor_with_prerequisites
 
 
 @pytest.fixture
 async def executor_with_new(
     executor_with_prerequisites: BashLoginRemoteExecutor,
     new_release: Release,
-) -> AsyncIterator[BashLoginRemoteExecutor]:
+) -> BashLoginRemoteExecutor:
     """Install the current pc-switcher version before each test."""
     await _install_with_uv(executor_with_prerequisites, release=new_release)
 
-    yield executor_with_prerequisites
+    return executor_with_prerequisites
 
 
 @pytest.fixture
 async def executor_with_current(
     executor_with_prerequisites: BashLoginRemoteExecutor,
     current_git_branch: str,
-) -> AsyncIterator[BashLoginRemoteExecutor]:
+) -> BashLoginRemoteExecutor:
     """Install the current pc-switcher version before each test."""
     await _install_with_uv(executor_with_prerequisites, ref=current_git_branch)
 
-    yield executor_with_prerequisites
+    return executor_with_prerequisites
 
 
 # async def _uninstall_with_uv(executor: BashLoginRemoteExecutor) -> None:
