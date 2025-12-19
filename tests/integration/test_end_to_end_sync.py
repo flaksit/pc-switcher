@@ -238,8 +238,10 @@ class TestEndToEndSync:
         )
 
         # Verify snapshots were created on source (pc1)
+        # Snapshots are at /.snapshots/pc-switcher/<session_folder>/<snapshot_name>
+        # e.g., /.snapshots/pc-switcher/20251219T143022-abc12345/pre-@-20251219T143022
         source_snapshots = await pc1_executor.run_command(
-            "sudo ls -d /.snapshots/pc-switcher-*/@ 2>/dev/null | head -1",
+            "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head -1",
             timeout=10.0,
             login_shell=False,
         )
@@ -249,7 +251,7 @@ class TestEndToEndSync:
 
         # Verify snapshots were created on target (pc2)
         target_snapshots = await pc2_executor.run_command(
-            "sudo ls -d /.snapshots/pc-switcher-*/@ 2>/dev/null | head -1",
+            "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head -1",
             timeout=10.0,
             login_shell=False,
         )
