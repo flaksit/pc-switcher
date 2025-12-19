@@ -19,18 +19,17 @@ These tests run on VMs, not on development machine.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
-from pcswitcher.version import Version, find_one_version, get_this_version
+from pcswitcher.version import Release, Version, find_one_version, get_this_version
 
 # Install script URL from main branch
 INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
 
 
-def _get_release_version() -> Version:
+@pytest.fixture(scope="session")
+def floor_release() -> Release:
     """Get the latest GitHub release at or before the current version.
 
     Queries GitHub to find the greatest release tag <= the current version.
@@ -40,43 +39,12 @@ def _get_release_version() -> Version:
         RuntimeError: If no matching GitHub release exists
     """
     current = get_this_version()
-    return current.get_release_floor().version
+    return current.get_release_floor()
 
 
-@pytest.fixture
-async def clean_install_environment(pc1_executor: BashLoginRemoteExecutor) -> AsyncIterator[BashLoginRemoteExecutor]:
-    """Provide a clean environment for testing installation.
-
-    Removes pc-switcher, config, and optionally uv to simulate fresh machine.
-    Restores the environment after test.
-    """
-    # Backup existing config if it exists
-    await pc1_executor.run_command(
-        "if [ -f ~/.config/pc-switcher/config.yaml ]; then "
-        "cp ~/.config/pc-switcher/config.yaml ~/.config/pc-switcher/config.yaml.backup; "
-        "fi",
-        timeout=10.0,
-    )
-
-    # Clean up pc-switcher installation
-    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
-    await pc1_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
-
-    yield pc1_executor
-
-    # Restore environment
-    await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
-    await pc1_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
-    await pc1_executor.run_command(
-        "if [ -f ~/.config/pc-switcher/config.yaml.backup ]; then "
-        "mkdir -p ~/.config/pc-switcher && "
-        "mv ~/.config/pc-switcher/config.yaml.backup ~/.config/pc-switcher/config.yaml; "
-        "fi",
-        timeout=10.0,
-    )
-
-
-async def test_001_fr035_install_script_no_prereqs(clean_install_environment: BashLoginRemoteExecutor) -> None:
+async def test_001_fr035_install_script_no_prereqs(
+    pc2_executor_without_pcswitcher_tool: BashLoginRemoteExecutor,
+) -> None:
     """Test FR-035: install.sh works without prerequisites.
 
     Verifies that the install.sh script can run on a fresh machine and:
@@ -86,7 +54,7 @@ async def test_001_fr035_install_script_no_prereqs(clean_install_environment: Ba
     - Does NOT create default config (user must run pc-switcher init)
     - Shows instructions to run pc-switcher init
     """
-    executor = clean_install_environment
+    executor = pc2_executor_without_pcswitcher_tool
 
     # Note: We assume uv is already installed on the test VM for test infrastructure.
     # The script should handle both cases (uv present and not present).
@@ -152,34 +120,35 @@ class TestInstallationScriptVersionParameter:
     async def test_001_install_release_version_on_clean_target(
         self,
         pc2_executor_without_pcswitcher_tool: BashLoginRemoteExecutor,
+        floor_release: Release,
     ) -> None:
         """Test installing the release version on a clean target.
 
         Verifies that the install.sh script can install a specific version
         when pc-switcher is not already installed.
         """
-        release_version = _get_release_version()
-        release = release_version.get_release()
-        assert release is not None, f"Version {release_version} is not a GitHub release"
+        executor = pc2_executor_without_pcswitcher_tool
+        release = floor_release
 
         # Install the release version using install.sh
         cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={release.tag} bash"
-        result = await pc2_executor_without_pcswitcher_tool.run_command(cmd, timeout=120.0)
+        result = await executor.run_command(cmd, timeout=120.0)
         assert result.success, f"Installation failed: {result.stderr}"
 
         # Verify pc-switcher is now installed
-        result = await pc2_executor_without_pcswitcher_tool.run_command("pc-switcher --version", login_shell=True)
+        result = await executor.run_command("pc-switcher --version", login_shell=True)
         assert result.success, f"pc-switcher should be installed: {result.stderr}"
 
         # Verify installed version matches expected
         installed_version = find_one_version(result.stdout)
-        assert installed_version == release_version, (
-            f"Installed version {installed_version} should match {release_version}"
+        assert installed_version == release.version, (
+            f"Installed version {installed_version} should match {release.version}"
         )
 
     async def test_001_upgrade_from_older_version(
         self,
         pc2_executor_with_old_pcswitcher_tool: BashLoginRemoteExecutor,
+        floor_release: Release,
     ) -> None:
         """Test upgrading from an older version to the release version.
 
@@ -189,14 +158,12 @@ class TestInstallationScriptVersionParameter:
         Note: This uses the pc2_executor_with_old_pcswitcher_tool fixture which installs
         0.1.0-alpha.1, then we upgrade to the current release version.
         """
-        release_version = _get_release_version()
-        release = release_version.get_release()
-        assert release is not None, f"Version {release_version} is not a GitHub release"
+        release = floor_release
         old_version = Version.parse("0.1.0-alpha.1")
 
         # Skip if release version is not newer than old version
-        if release_version <= old_version:
-            pytest.skip(f"Release version {release_version} is not newer than {old_version}")
+        if release.version <= old_version:
+            pytest.skip(f"Release version {release.version} is not newer than {old_version}")
 
         # Upgrade to the release version
         cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={release.tag} bash"
@@ -208,4 +175,4 @@ class TestInstallationScriptVersionParameter:
         assert result.success, f"pc-switcher should be available: {result.stderr}"
         new_version = find_one_version(result.stdout)
 
-        assert new_version == release_version, f"New version {new_version} should be {release_version}"
+        assert new_version == release.version, f"New version {new_version} should be {release.version}"
