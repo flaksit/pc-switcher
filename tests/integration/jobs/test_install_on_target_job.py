@@ -88,7 +88,7 @@ class TestSelfInstallation:
     @requires_release_version
     async def test_001_us2_as1_install_missing_pcswitcher(
         self,
-        pc2_executor_without_pcswitcher_tool: BashLoginRemoteExecutor,
+        pc2_without_pcswitcher: BashLoginRemoteExecutor,
         pc1_executor: BashLoginRemoteExecutor,
     ) -> None:
         """US2-AS1: Install missing pc-switcher on target.
@@ -101,7 +101,7 @@ class TestSelfInstallation:
         Spec Reference: specs/001-foundation/spec.md - User Story 2, AS1
         """
         # Create job context for integration test
-        context = await _create_integration_job_context(pc1_executor, pc2_executor_without_pcswitcher_tool)
+        context = await _create_integration_job_context(pc1_executor, pc2_without_pcswitcher)
 
         # Create and run install job
         job = InstallOnTargetJob(context)
@@ -114,7 +114,7 @@ class TestSelfInstallation:
         await job.execute()
 
         # Verify pc-switcher is now installed on target
-        result = await pc2_executor_without_pcswitcher_tool.run_command("pc-switcher --version", login_shell=True)
+        result = await pc2_without_pcswitcher.run_command("pc-switcher --version", login_shell=True)
         assert result.success, f"pc-switcher should be installed on target: {result.stderr}"
 
         # Verify installed version matches source
@@ -127,7 +127,7 @@ class TestSelfInstallation:
     @requires_release_version
     async def test_001_us2_as2_upgrade_outdated_target(
         self,
-        pc2_executor_with_old_pcswitcher_tool: BashLoginRemoteExecutor,
+        pc2_with_old_pcswitcher: BashLoginRemoteExecutor,
         pc1_executor: BashLoginRemoteExecutor,
     ) -> None:
         """US2-AS2: Upgrade outdated target.
@@ -148,7 +148,7 @@ class TestSelfInstallation:
         )
 
         # Create job context for integration test
-        context = await _create_integration_job_context(pc1_executor, pc2_executor_with_old_pcswitcher_tool)
+        context = await _create_integration_job_context(pc1_executor, pc2_with_old_pcswitcher)
 
         # Create and run install job
         job = InstallOnTargetJob(context)
@@ -161,7 +161,7 @@ class TestSelfInstallation:
         await job.execute()
 
         # Verify target is now upgraded
-        result = await pc2_executor_with_old_pcswitcher_tool.run_command("pc-switcher --version", login_shell=True)
+        result = await pc2_with_old_pcswitcher.run_command("pc-switcher --version", login_shell=True)
         assert result.success, f"pc-switcher should be upgraded on target: {result.stderr}"
 
         # Verify upgraded version matches source

@@ -27,7 +27,6 @@ Test VM Requirements:
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import AsyncIterator
 
 import pytest
@@ -35,24 +34,6 @@ import pytest_asyncio
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import get_this_version
-
-
-def _is_dev_version() -> bool:
-    """Check if current version is a development version.
-
-    Development versions have .dev in their version string and don't have
-    corresponding release tags on GitHub.
-    """
-    version_str = get_this_version().pep440_str()
-    return ".dev" in version_str or ".post" in version_str
-
-
-# Skip marker for tests that require a released version
-requires_release_version = pytest.mark.skipif(
-    _is_dev_version(),
-    reason="Test requires a released version (not a development version)",
-)
-
 
 # Test config with short durations for faster tests
 _TEST_CONFIG_TEMPLATE = """# Test configuration for end-to-end sync tests
@@ -171,12 +152,6 @@ async def sync_ready_source_long_duration(
     )
 
 
-def _is_dev_version_check() -> bool:
-    """Check if running a development version."""
-    version_str = get_this_version().pep440_str()
-    return ".dev" in version_str or ".post" in version_str
-
-
 class TestEndToEndSync:
     """Integration tests for complete pc-switcher sync workflow."""
 
@@ -209,11 +184,7 @@ class TestEndToEndSync:
         6. Verify log file contains job entries
         7. Verify snapshots were created
         """
-        if _is_dev_version_check():
-            pytest.skip("Test requires a released version for InstallOnTargetJob")
-
         pc1_executor = sync_ready_source
-        pc2_host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
 
         # Clean up any existing snapshots from previous test runs to get clean state
         await pc1_executor.run_command(
@@ -230,7 +201,7 @@ class TestEndToEndSync:
         # Run pc-switcher sync from pc1 to pc2
         # Timeout: ~60s for SSH + install + snapshots + job execution (4+4 seconds)
         sync_result = await pc1_executor.run_command(
-            f"pc-switcher sync {pc2_host}",
+            "pc-switcher sync pc2",
             timeout=180.0,
             login_shell=True,
         )
@@ -321,11 +292,7 @@ class TestEndToEndSync:
         - Wait for process to terminate
         - Check exit code and output
         """
-        if _is_dev_version_check():
-            pytest.skip("Test requires a released version for InstallOnTargetJob")
-
         pc1_executor = sync_ready_source_long_duration
-        pc2_host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
 
         # Start sync in background and capture output to a temp file
         # Use script to run in a pseudo-terminal for proper signal handling
@@ -339,7 +306,7 @@ class TestEndToEndSync:
         # We use bash -c to wrap the command and capture the PID
         start_result = await pc1_executor.run_command(
             f"nohup bash -c 'echo $$ > {pid_file}; "
-            f"exec pc-switcher sync {pc2_host} 2>&1' > {output_file} &",
+            f"exec pc-switcher sync pc2 2>&1' > {output_file} &",
             timeout=10.0,
             login_shell=True,
         )
@@ -444,7 +411,7 @@ class TestInstallOnTargetIntegration:
     async def test_install_on_target_fresh_machine(
         self,
         pc1_with_pcswitcher: BashLoginRemoteExecutor,
-        pc2_executor_without_pcswitcher_tool: BashLoginRemoteExecutor,
+        pc2_without_pcswitcher: BashLoginRemoteExecutor,
     ) -> None:
         """Verify InstallOnTargetJob installs pc-switcher on fresh target.
 
@@ -457,14 +424,10 @@ class TestInstallOnTargetIntegration:
         Unlike test_install_on_target_job.py which tests the job in isolation,
         this test verifies the job works correctly within the full sync pipeline.
         """
-        if _is_dev_version_check():
-            pytest.skip("Test requires a released version for InstallOnTargetJob")
-
         pc1_executor = pc1_with_pcswitcher
-        pc2_host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
 
         # Verify pc-switcher is NOT on target (fixture should have removed it)
-        pre_check = await pc2_executor_without_pcswitcher_tool.run_command(
+        pre_check = await pc2_without_pcswitcher.run_command(
             "pc-switcher --version 2>/dev/null || echo 'not_installed'",
             timeout=10.0,
             login_shell=True,
@@ -484,7 +447,7 @@ class TestInstallOnTargetIntegration:
         try:
             # Run sync - this should install pc-switcher on target
             sync_result = await pc1_executor.run_command(
-                f"pc-switcher sync {pc2_host}",
+                "pc-switcher sync pc2",
                 timeout=300.0,  # Allow more time for fresh install
                 login_shell=True,
             )
@@ -498,7 +461,7 @@ class TestInstallOnTargetIntegration:
             )
 
             # Verify pc-switcher is now installed on target
-            post_check = await pc2_executor_without_pcswitcher_tool.run_command(
+            post_check = await pc2_without_pcswitcher.run_command(
                 "pc-switcher --version",
                 timeout=10.0,
                 login_shell=True,
@@ -509,10 +472,10 @@ class TestInstallOnTargetIntegration:
                 f"Error: {post_check.stderr}"
             )
 
-            # Verify version matches source
-            source_version = get_this_version().semver_str()
-            assert source_version in post_check.stdout, (
-                f"Target version should match source {source_version}.\n"
+            # Verify version matches source floor release (dev versions install the floor release)
+            source_release = get_this_version().get_release_floor()
+            assert source_release.version.semver_str() in post_check.stdout, (
+                f"Target version should match source floor release {source_release.version.semver_str()}.\n"
                 f"Target output: {post_check.stdout}"
             )
 
@@ -523,7 +486,7 @@ class TestInstallOnTargetIntegration:
     async def test_install_on_target_upgrade_older_version(
         self,
         pc1_with_pcswitcher: BashLoginRemoteExecutor,
-        pc2_executor_with_old_pcswitcher_tool: BashLoginRemoteExecutor,
+        pc2_with_old_pcswitcher: BashLoginRemoteExecutor,
     ) -> None:
         """Verify InstallOnTargetJob upgrades older pc-switcher on target.
 
@@ -533,14 +496,10 @@ class TestInstallOnTargetIntegration:
         2. Upgrades to source version
         3. Verifies upgrade succeeded
         """
-        if _is_dev_version_check():
-            pytest.skip("Test requires a released version for InstallOnTargetJob")
-
         pc1_executor = pc1_with_pcswitcher
-        pc2_host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
 
         # Verify target has old version (fixture should have installed 0.1.0-alpha.1)
-        pre_check = await pc2_executor_with_old_pcswitcher_tool.run_command(
+        pre_check = await pc2_with_old_pcswitcher.run_command(
             "pc-switcher --version",
             timeout=10.0,
             login_shell=True,
@@ -560,7 +519,7 @@ class TestInstallOnTargetIntegration:
         try:
             # Run sync - this should upgrade pc-switcher on target
             sync_result = await pc1_executor.run_command(
-                f"pc-switcher sync {pc2_host}",
+                "pc-switcher sync pc2",
                 timeout=300.0,
                 login_shell=True,
             )
@@ -574,7 +533,7 @@ class TestInstallOnTargetIntegration:
             )
 
             # Verify pc-switcher was upgraded on target
-            post_check = await pc2_executor_with_old_pcswitcher_tool.run_command(
+            post_check = await pc2_with_old_pcswitcher.run_command(
                 "pc-switcher --version",
                 timeout=10.0,
                 login_shell=True,
@@ -584,10 +543,10 @@ class TestInstallOnTargetIntegration:
                 f"Error: {post_check.stderr}"
             )
 
-            # Verify version matches source (not old version)
-            source_version = get_this_version().semver_str()
-            assert source_version in post_check.stdout, (
-                f"Target version should match source {source_version}.\n"
+            # Verify version matches source floor release (not old version)
+            source_release = get_this_version().get_release_floor()
+            assert source_release.version.semver_str() in post_check.stdout, (
+                f"Target version should match source floor release {source_release.version.semver_str()}.\n"
                 f"Target output: {post_check.stdout}"
             )
             assert "0.1.0-alpha.1" not in post_check.stdout, (

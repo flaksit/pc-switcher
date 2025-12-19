@@ -11,13 +11,15 @@ Fixtures provided:
 - pc2_connection: SSH connection to pc2 test VM
 - pc1_executor: BashLoginRemoteExecutor for pc1 (= RemoteExecutor with login shell environment)
 - pc2_executor: BashLoginRemoteExecutor for pc2 (= RemoteExecutor with login shell environment)
-- pc2_executor_without_pcswitcher_tool: pc2 executor with pc-switcher uninstalled (clean target)
-- pc2_executor_with_old_pcswitcher_tool: pc2 executor with old pc-switcher version (upgrade testing)
+- pc1_with_pcswitcher: pc1 executor with pc-switcher installed from current branch
+- pc2_without_pcswitcher: pc2 executor with pc-switcher uninstalled (clean target)
+- pc2_with_old_pcswitcher: pc2 executor with old pc-switcher version (upgrade testing)
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 import warnings
 from collections.abc import AsyncIterator
 
@@ -111,29 +113,49 @@ async def pc1_executor(_pc1_connection: asyncssh.SSHClientConnection) -> BashLog
 _INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
 
 
+@pytest.fixture(scope="session")
+def current_git_branch() -> str:
+    """Get the current git branch name, defaulting to 'main' if not in a git repo."""
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "main"
+
+
 @pytest.fixture(scope="module")
-async def pc1_with_pcswitcher(pc1_executor: BashLoginRemoteExecutor) -> BashLoginRemoteExecutor:
-    """Ensure pc-switcher is installed on pc1.
+async def pc1_with_pcswitcher(
+    pc1_executor: BashLoginRemoteExecutor, current_git_branch: str
+) -> BashLoginRemoteExecutor:
+    """Ensure pc-switcher is installed on pc1 from current branch.
 
     Module-scoped: installs pc-switcher once per test module if not already present.
     Does NOT uninstall after tests - leaves pc-switcher installed for efficiency.
 
     Use this fixture when tests require pc-switcher to be available on pc1.
+
+    NOTE: This fixture installs from the current git branch to test in-development code.
+    The branch must be pushed to origin for this to work.
     """
-    # Check if pc-switcher is already installed
-    version_check = await pc1_executor.run_command("pc-switcher --version 2>/dev/null || true", timeout=10.0)
+    branch = current_git_branch
 
-    if not version_check.success or "pc-switcher" not in version_check.stdout.lower():
-        # Install pc-switcher
-        result = await pc1_executor.run_command(
-            f"curl -sSL {_INSTALL_SCRIPT_URL} | bash",
-            timeout=120.0,
-        )
-        assert result.success, f"Failed to install pc-switcher on pc1: {result.stderr}"
+    # Always reinstall to ensure we have the latest code from current branch
+    # This is important for testing in-development features
+    result = await pc1_executor.run_command(
+        f"curl -sSL {_INSTALL_SCRIPT_URL} | bash -s -- --ref {branch}",
+        timeout=120.0,
+    )
+    assert result.success, f"Failed to install pc-switcher on pc1 from branch {branch}: {result.stderr}"
 
-        # Verify installation
-        verify = await pc1_executor.run_command("pc-switcher --version", timeout=10.0)
-        assert verify.success, f"pc-switcher not accessible after install: {verify.stderr}"
+    # Verify installation
+    verify = await pc1_executor.run_command("pc-switcher --version", timeout=10.0)
+    assert verify.success, f"pc-switcher not accessible after install: {verify.stderr}"
 
     return pc1_executor
 
@@ -154,7 +176,7 @@ async def pc2_executor(_pc2_connection: asyncssh.SSHClientConnection) -> BashLog
 
 
 @pytest.fixture
-async def pc2_executor_without_pcswitcher_tool(
+async def pc2_without_pcswitcher(
     pc2_executor: BashLoginRemoteExecutor,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide a clean environment on pc2 without pc-switcher installed.
@@ -195,7 +217,7 @@ async def pc2_executor_without_pcswitcher_tool(
 
 
 @pytest.fixture
-async def pc2_executor_with_old_pcswitcher_tool(
+async def pc2_with_old_pcswitcher(
     pc2_executor: BashLoginRemoteExecutor,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide pc2 with an older version of pc-switcher (0.1.0-alpha.1).

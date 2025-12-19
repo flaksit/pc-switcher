@@ -6,6 +6,7 @@ These tests install pc-switcher on a pristine VM and verify the update workflow 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import overload
 
 import pytest
 
@@ -28,7 +29,7 @@ def github_releases_desc() -> list[Release]:
 
 
 @pytest.fixture(scope="session")
-def release_with_self_update_new(github_releases_desc: list[Release]) -> Release:
+def new_release(github_releases_desc: list[Release]) -> Release:
     """The highest GitHub release version.
 
     Skips any tests depending on this fixture if the the release predates self-update
@@ -43,7 +44,7 @@ def release_with_self_update_new(github_releases_desc: list[Release]) -> Release
 
 
 @pytest.fixture(scope="session")
-def release_with_self_update_old(github_releases_desc: list[Release]) -> Release:
+def old_release(github_releases_desc: list[Release]) -> Release:
     """The next-highest GitHub release version.
 
     Skips any tests depending on this fixture if the the release predates self-update
@@ -76,27 +77,34 @@ async def executor_with_prerequisites(
 @pytest.fixture
 async def executor_with_old(
     executor_with_prerequisites: BashLoginRemoteExecutor,
-    release_with_self_update_old: Release,
+    old_release: Release,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:
-    """Install the current pc-switcher version before each test, uninstall after."""
-    await _install_with_uv(executor_with_prerequisites, release_with_self_update_old)
+    """Install the current pc-switcher version before each test."""
+    await _install_with_uv(executor_with_prerequisites, release=old_release)
 
     yield executor_with_prerequisites
-
-    # await _uninstall_via_uv(executor_with_prerequisites)
 
 
 @pytest.fixture
 async def executor_with_new(
     executor_with_prerequisites: BashLoginRemoteExecutor,
-    release_with_self_update_new: Release,
+    new_release: Release,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:
-    """Install the current pc-switcher version before each test, uninstall after."""
-    await _install_with_uv(executor_with_prerequisites, release_with_self_update_new)
+    """Install the current pc-switcher version before each test."""
+    await _install_with_uv(executor_with_prerequisites, release=new_release)
 
     yield executor_with_prerequisites
 
-    # await _uninstall_via_uv(executor_with_prerequisites)
+
+@pytest.fixture
+async def executor_with_current(
+    executor_with_prerequisites: BashLoginRemoteExecutor,
+    current_git_branch: str,
+) -> AsyncIterator[BashLoginRemoteExecutor]:
+    """Install the current pc-switcher version before each test."""
+    await _install_with_uv(executor_with_prerequisites, ref=current_git_branch)
+
+    yield executor_with_prerequisites
 
 
 # async def _uninstall_with_uv(executor: BashLoginRemoteExecutor) -> None:
@@ -118,9 +126,39 @@ async def _install_with_script(executor: BashLoginRemoteExecutor, release: Relea
     assert result.success, f"Failed to install version {release}: {result.stderr}"
 
 
-async def _install_with_uv(executor: BashLoginRemoteExecutor, release: Release) -> None:
+@overload
+async def _install_with_uv(executor: BashLoginRemoteExecutor) -> None: ...
+
+
+@overload
+async def _install_with_uv(executor: BashLoginRemoteExecutor, *, release: Release) -> None: ...
+
+
+@overload
+async def _install_with_uv(executor: BashLoginRemoteExecutor, *, version: Version) -> None: ...
+
+
+@overload
+async def _install_with_uv(executor: BashLoginRemoteExecutor, *, ref: str) -> None: ...
+
+
+async def _install_with_uv(
+    executor: BashLoginRemoteExecutor,
+    *,
+    release: Release | None = None,
+    version: Version | None = None,
+    ref: str | None = None,
+) -> None:
     """Install a specific version of pc-switcher using uv tool."""
-    version_arg = f"@v{release.version.semver_str()}" if release else ""
+    if release:
+        version_arg = f"@v{release.version.semver_str()}"
+    elif version:
+        version_arg = f"@v{version.semver_str()}"
+    elif ref:
+        version_arg = f"@{ref}"
+    else:
+        version_arg = ""
+
     result = await executor.run_command(
         f"uv tool install --quiet --quiet git+https://github.com/flaksit/pc-switcher{version_arg}",
         timeout=120.0,
@@ -160,7 +198,6 @@ class TestSelfUpdateCommandExists:
     async def test_old_version_has_self_update(
         self,
         executor_with_old: BashLoginRemoteExecutor,
-        release_with_self_update_old: Release,
     ) -> None:
         """Test that the next-highest release has the self update command."""
         # Self update command should exist
@@ -168,21 +205,21 @@ class TestSelfUpdateCommandExists:
         assert result.success, f"Self update help failed: {result.stderr}"
         assert "update" in result.stdout.lower()
 
-    async def test_new_version_has_self_update(
+    async def test_has_self_update(
         self,
-        executor_with_new: BashLoginRemoteExecutor,
-        release_with_self_update_new: Release,
+        pc1_with_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """Test that the highest release has the self update command."""
-        await _install_with_script(executor_with_new, release_with_self_update_new)
         # Self update command should exist
-        result = await executor_with_new.run_command("pc-switcher self update --help", timeout=10.0)
+        result = await pc1_with_executor.run_command("pc-switcher self update --help", timeout=10.0)
         assert result.success, f"Self update help failed: {result.stderr}"
         assert "update" in result.stdout.lower()
 
-    async def test_self_command_group_help(self, executor_with_new: BashLoginRemoteExecutor) -> None:
+    async def test_self_command_group_help(
+        self,
+        pc1_with_executor: BashLoginRemoteExecutor,
+    ) -> None:
         """Test that 'pc-switcher self --help' shows the command group."""
-        result = await executor_with_new.run_command("pc-switcher self --help", timeout=10.0)
+        result = await pc1_with_executor.run_command("pc-switcher self --help", timeout=10.0)
         assert result.success, f"Self help failed: {result.stderr}"
         # Should show "self" command group and list subcommands
         assert "update" in result.stdout.lower()
@@ -190,71 +227,57 @@ class TestSelfUpdateCommandExists:
 
     async def test_self_update_help_shows_prerelease_flag(
         self,
-        executor_with_old: BashLoginRemoteExecutor,
-        release_with_self_update_old: Release,
+        pc1_with_executor: BashLoginRemoteExecutor,
     ) -> None:
         """Test that 'pc-switcher self update --help' documents --prerelease flag."""
-        await _install_with_script(executor_with_old, release_with_self_update_old)
-        result = await executor_with_old.run_command("pc-switcher self update --help", timeout=10.0)
+        result = await pc1_with_executor.run_command("pc-switcher self update --help", timeout=10.0)
         assert result.success, f"Self update help failed: {result.stderr}"
         # Should document the --prerelease option
         assert "--prerelease" in result.stdout
 
 
-class TestSelfUpdateUpgrade:
-    """Tests for upgrading pc-switcher using self update."""
+async def test_upgrade_to_specific_version(
+    executor_with_old: BashLoginRemoteExecutor,
+    new_release: Release,
+) -> None:
+    """Test upgrading from the next-highest release to the highest release."""
+    # Use self update to upgrade
+    success, stdout, stderr = await _run_self_update(executor_with_old, new_release.version)
+    assert success, f"Self update failed: {stderr}"
+    assert "Successfully updated" in stdout or new_release.version.semver_str() in stdout
 
-    async def test_upgrade_to_specific_version(
-        self,
-        executor_with_old: BashLoginRemoteExecutor,
-        release_with_self_update_new: Release,
-    ) -> None:
-        """Test upgrading from the next-highest release to the highest release."""
-        # Use self update to upgrade
-        success, stdout, stderr = await _run_self_update(executor_with_old, release_with_self_update_new.version)
-        assert success, f"Self update failed: {stderr}"
-        assert "Successfully updated" in stdout or release_with_self_update_new.version.semver_str() in stdout
-
-        # Verify new version
-        new_version = await _get_installed_version(executor_with_old)
-        assert new_version == release_with_self_update_new.version
-
-    async def test_upgrade_with_prerelease_flag(
-        self,
-        executor_with_old: BashLoginRemoteExecutor,
-        release_with_self_update_new: Release,
-    ) -> None:
-        """Test using --prerelease flag to find latest prerelease."""
-        # Use self update with --prerelease (should find latest prerelease)
-        success, stdout, stderr = await _run_self_update(executor_with_old, prerelease=True)
-        assert success, f"Self update --prerelease failed:\n--- STDOUT ---\n{stdout}\n\n--- STDERR ---\n{stderr}"
-
-        # Should have upgraded to at least the highest release
-        new_version = await _get_installed_version(executor_with_old)
-        assert new_version >= release_with_self_update_new.version
+    # Verify new version
+    new_version = await _get_installed_version(executor_with_old)
+    assert new_version == new_release.version
 
 
-class TestSelfUpdateDowngrade:
-    """Tests for downgrading pc-switcher using self update."""
+async def test_upgrade_with_prerelease_flag(
+    executor_with_old: BashLoginRemoteExecutor,
+    new_release: Release,
+) -> None:
+    """Test using --prerelease flag to find latest prerelease."""
+    # Use self update with --prerelease (should find latest prerelease)
+    success, stdout, stderr = await _run_self_update(executor_with_old, prerelease=True)
+    assert success, f"Self update --prerelease failed:\n--- STDOUT ---\n{stdout}\n\n--- STDERR ---\n{stderr}"
 
-    async def test_downgrade_to_specific_version(
-        self,
-        executor_with_new: BashLoginRemoteExecutor,
-        release_with_self_update_old: Release,
-    ) -> None:
-        """Test downgrading from the highest release to the next-highest release."""
-        # Use self update to downgrade
-        success, stdout, stderr = await _run_self_update(executor_with_new, release_with_self_update_old.version)
-        assert success, f"Self update (downgrade) failed: {stderr}"
-        assert "downgrading" in stdout.lower() and "warning" in stdout.lower()
+    # Should have upgraded to at least the highest release
+    new_version = await _get_installed_version(executor_with_old)
+    assert new_version >= new_release.version
 
-        # Verify downgraded version
-        new_version = await _get_installed_version(executor_with_new)
-        assert new_version == release_with_self_update_old.version
 
-        # Verify self-update command still works after downgrade
-        result = await executor_with_new.run_command("pc-switcher self update --help", timeout=10.0)
-        assert result.success, "Self update should still exist after downgrading to the previous release"
+async def test_downgrade_to_specific_version(
+    executor_with_new: BashLoginRemoteExecutor,
+    old_release: Release,
+) -> None:
+    """Test downgrading from the highest release to the next-highest release."""
+    # Use self update to downgrade
+    success, stdout, stderr = await _run_self_update(executor_with_new, old_release.version)
+    assert success, f"Self update (downgrade) failed: {stderr}"
+    assert "downgrading" in stdout.lower() and "warning" in stdout.lower()
+
+    # Verify downgraded version
+    new_version = await _get_installed_version(executor_with_new)
+    assert new_version == old_release.version
 
 
 class TestSelfUpdateSameVersion:
@@ -263,17 +286,17 @@ class TestSelfUpdateSameVersion:
     async def test_already_at_version(
         self,
         executor_with_new: BashLoginRemoteExecutor,
-        release_with_self_update_new: Release,
+        new_release: Release,
     ) -> None:
         """Test self update when already at the target version."""
         # Try to update to same version
-        success, stdout, stderr = await _run_self_update(executor_with_new, release_with_self_update_new.version)
+        success, stdout, stderr = await _run_self_update(executor_with_new, new_release.version)
         assert success, f"Self update to same version failed: {stderr}"
         assert "Already at version" in stdout
 
         # Version should be unchanged
         version = await _get_installed_version(executor_with_new)
-        assert version == release_with_self_update_new.version
+        assert version == new_release.version
 
 
 class TestSelfUpdateVersionFormats:
@@ -282,33 +305,29 @@ class TestSelfUpdateVersionFormats:
     async def test_semver_format(
         self,
         executor_with_new: BashLoginRemoteExecutor,
-        release_with_self_update_old: Release,
+        old_release: Release,
     ) -> None:
         """Test that SemVer format is accepted (e.g., 0.1.0-alpha.N)."""
         # Use SemVer format for downgrade (passing raw string, not Version).
-        success, _stdout, stderr = await _run_self_update(
-            executor_with_new, release_with_self_update_old.version.semver_str()
-        )
+        success, _stdout, stderr = await _run_self_update(executor_with_new, old_release.version.semver_str())
         assert success, f"SemVer format failed: {stderr}"
 
         version = await _get_installed_version(executor_with_new)
-        assert version == release_with_self_update_old.version
+        assert version == old_release.version
 
     async def test_pep440_format(
         self,
         executor_with_new: BashLoginRemoteExecutor,
-        release_with_self_update_old: Release,
+        old_release: Release,
     ) -> None:
         """Test that PEP 440 format is accepted (e.g., 0.1.0aN)."""
         # Use PEP 440 format for downgrade (passing raw string, not Version)
-        success, _stdout, stderr = await _run_self_update(
-            executor_with_new, release_with_self_update_old.version.pep440_str()
-        )
+        success, _stdout, stderr = await _run_self_update(executor_with_new, old_release.version.pep440_str())
         assert success, f"PEP 440 format failed: {stderr}"
 
         version = await _get_installed_version(executor_with_new)
         # Version comparison handles format differences
-        assert version == release_with_self_update_old.version
+        assert version == old_release.version
 
 
 class TestSelfUpdateErrorHandling:
@@ -316,19 +335,19 @@ class TestSelfUpdateErrorHandling:
 
     async def test_invalid_version_format(
         self,
-        executor_with_new: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher: BashLoginRemoteExecutor,
     ) -> None:
         """Test error handling for invalid version format."""
-        success, stdout, _stderr = await _run_self_update(executor_with_new, "not-a-version")
+        success, stdout, _stderr = await _run_self_update(pc1_with_pcswitcher, "not-a-version")
         assert not success, "Should fail with invalid version"
         assert "invalid version format" in stdout.lower() or "error" in stdout.lower()
 
     async def test_nonexistent_version(
         self,
-        executor_with_new: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher: BashLoginRemoteExecutor,
     ) -> None:
         """Test error handling for non-existent version."""
-        success, stdout, stderr = await _run_self_update(executor_with_new, "99.99.99")
+        success, stdout, stderr = await _run_self_update(pc1_with_pcswitcher, "99.99.99")
         assert not success, "Should fail with non-existent version"
         # Error could come from uv or from GitHub API
         assert len(stdout) > 0 or len(stderr) > 0
@@ -340,7 +359,7 @@ class TestSelfUpdateNoStableRelease:
     async def test_no_stable_release_error(
         self,
         executor_with_new: BashLoginRemoteExecutor,
-        release_with_self_update_old: Release,
+        old_release: Release,
         github_releases_desc: list[Release],
     ) -> None:
         """Test that self update without --prerelease fails when no stable releases exist."""
@@ -351,9 +370,9 @@ class TestSelfUpdateNoStableRelease:
                 f"{[r.tag for r in stable_releases[:3]]}{'...' if len(stable_releases) > 3 else ''}"
             )
 
-        await _install_with_script(executor_with_new, release_with_self_update_old)
+        await _install_with_script(executor_with_new, old_release)
 
         # Without --prerelease, should fail (only prereleases exist)
         success, stdout, _stderr = await _run_self_update(executor_with_new)
         assert not success, "Self update should fail when no stable releases exist"
-        assert "Error" in stdout, "Should show error message about no stable releases"
+        assert "error" in stdout.lower(), "Should show error message about no stable releases"

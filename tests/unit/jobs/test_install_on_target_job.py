@@ -233,7 +233,13 @@ class TestInstallOnTargetJobInstallationFailure:
         Tests that even if install command succeeds, verification must confirm
         the correct version is installed.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
+        mock_version = Version.parse("0.4.0")
+        mock_release = Release(version=mock_version, is_prerelease=False, tag="v0.4.0")
+
+        with (
+            patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=mock_version),
+            patch.object(Version, "get_release_floor", return_value=mock_release),
+        ):
             # Mock install succeeds but verification fails
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
@@ -270,7 +276,13 @@ class TestInstallOnTargetJobSkipWhenMatching:
         0.4.0, orchestrator logs "Target pc-switcher version matches source (0.4.0),
         skipping installation" and proceeds immediately to next phase.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
+        mock_version = Version.parse("0.4.0")
+        mock_release = Release(version=mock_version, is_prerelease=False, tag="v0.4.0")
+
+        with (
+            patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=mock_version),
+            patch.object(Version, "get_release_floor", return_value=mock_release),
+        ):
             # Mock target has matching version
             mock_install_context.target.run_command = AsyncMock(
                 return_value=CommandResult(exit_code=0, stdout="pc-switcher 0.4.0", stderr="")
