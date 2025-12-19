@@ -193,12 +193,12 @@ async def pc2_without_pcswitcher(
     """
     # Check if pc-switcher was installed before we modify state
     version_check = await pc2_executor.run_command(
-        "pc-switcher --version 2>/dev/null || true", timeout=10.0, login_shell=True
+        "pc-switcher --version 2>/dev/null || true", timeout=10.0
     )
     was_installed = version_check.success
 
     # Uninstall pc-switcher if it exists
-    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
+    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
     await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
 
     yield pc2_executor
@@ -238,12 +238,12 @@ async def pc2_with_old_pcswitcher(
 
     # Check if pc-switcher was installed before we modify state
     version_check = await pc2_executor.run_command(
-        "pc-switcher --version 2>/dev/null || true", timeout=10.0, login_shell=True
+        "pc-switcher --version 2>/dev/null || true", timeout=10.0
     )
     was_installed = version_check.success and "pc-switcher" in version_check.stdout.lower()
 
     # Uninstall and install older version
-    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
+    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
     await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
     result = await pc2_executor.run_command(
         f"curl -sSL {install_script_url} | VERSION=v0.1.0-alpha.1 bash",
@@ -255,7 +255,7 @@ async def pc2_with_old_pcswitcher(
 
     # TODO remove restore to initial state (see #68)
     # Restore to initial state
-    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
+    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
     await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
 
     if was_installed:

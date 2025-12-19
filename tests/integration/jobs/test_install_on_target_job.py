@@ -114,7 +114,7 @@ class TestSelfInstallation:
         await job.execute()
 
         # Verify pc-switcher is now installed on target
-        result = await pc2_without_pcswitcher.run_command("pc-switcher --version", login_shell=True)
+        result = await pc2_without_pcswitcher.run_command("pc-switcher --version")
         assert result.success, f"pc-switcher should be installed on target: {result.stderr}"
 
         # Verify installed version matches source
@@ -161,7 +161,7 @@ class TestSelfInstallation:
         await job.execute()
 
         # Verify target is now upgraded
-        result = await pc2_with_old_pcswitcher.run_command("pc-switcher --version", login_shell=True)
+        result = await pc2_with_old_pcswitcher.run_command("pc-switcher --version")
         assert result.success, f"pc-switcher should be upgraded on target: {result.stderr}"
 
         # Verify upgraded version matches source

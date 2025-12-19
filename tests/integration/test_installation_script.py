@@ -76,7 +76,7 @@ async def test_001_fr035_install_script_no_prereqs(
     ), f"Installation success message not found in output: {result.stdout}"
 
     # Verify pc-switcher is installed and accessible
-    version_result = await executor.run_command("pc-switcher --version", timeout=10.0, login_shell=True)
+    version_result = await executor.run_command("pc-switcher --version", timeout=10.0)
     assert version_result.success, f"pc-switcher not accessible after install: {version_result.stderr}"
     assert "pc-switcher" in version_result.stdout.lower(), "Version output doesn't contain 'pc-switcher'"
 
@@ -136,7 +136,7 @@ class TestInstallationScriptVersionParameter:
         assert result.success, f"Installation failed: {result.stderr}"
 
         # Verify pc-switcher is now installed
-        result = await executor.run_command("pc-switcher --version", login_shell=True)
+        result = await executor.run_command("pc-switcher --version")
         assert result.success, f"pc-switcher should be installed: {result.stderr}"
 
         # Verify installed version matches expected
@@ -171,7 +171,7 @@ class TestInstallationScriptVersionParameter:
         assert result.success, f"Upgrade failed: {result.stderr}"
 
         # Verify version changed to release version
-        result = await pc2_with_old_pcswitcher.run_command("pc-switcher --version", login_shell=True)
+        result = await pc2_with_old_pcswitcher.run_command("pc-switcher --version")
         assert result.success, f"pc-switcher should be available: {result.stderr}"
         new_version = find_one_version(result.stdout)
 
