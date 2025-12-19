@@ -37,6 +37,96 @@ VMs are expected to run persistently. Reset is performed via btrfs snapshot roll
 
 ---
 
+## CI Workflow Configuration
+
+### Workflow Overview
+
+The repository uses three GitHub Actions workflows for testing:
+
+| Workflow | File | Triggers | Purpose |
+|----------|------|----------|---------|
+| CI | `ci.yml` | Every push | Lint (basedpyright, ruff, codespell) and unit tests |
+| Integration Tests | `integration-tests.yml` | PR ready for review | Full integration tests on Hetzner VMs |
+| VM Maintenance | `vm-maintenance.yml` | Weekly (Monday 2am UTC) | Keep test VMs updated with OS patches |
+
+### Integration Tests Trigger Strategy
+
+Integration tests are expensive (they provision/use cloud VMs), so they don't run on every commit. Instead:
+
+| PR State | Integration Tests |
+|----------|-------------------|
+| Draft PR | **Skipped** |
+| Marked "Ready for review" | **Runs** |
+| New commits to ready PR | **Runs** |
+| Manual trigger | **Runs** (via `workflow_dispatch`) |
+
+This is achieved via:
+
+```yaml
+# integration-tests.yml
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+jobs:
+  integration:
+    if: github.event.pull_request.draft == false
+    # ...
+```
+
+**Rationale**: Developers iterate on draft PRs without triggering expensive integration tests. When ready for review, tests run automatically. Subsequent commits to ready PRs also trigger tests.
+
+### Path Filtering
+
+Integration tests only run when relevant files change:
+
+```yaml
+paths:
+  - '.github/workflows/integration-tests.yml'
+  - 'src/**'
+  - 'tests/integration/**'
+  - 'install.sh'
+  - 'pyproject.toml'
+  - 'uv.lock'
+```
+
+Documentation-only changes skip integration tests.
+
+### Branch Protection Configuration
+
+The `main` branch requires these status checks before merging:
+
+| Check | Workflow | Required |
+|-------|----------|----------|
+| Lint | CI | Yes |
+| Unit Tests | CI | Yes |
+| Integration Tests | Integration Tests | Yes |
+
+**Configuration steps** (Settings > Branches > main):
+
+1. Enable "Require status checks to pass before merging"
+2. Enable "Require branches to be up to date before merging" (recommended)
+3. Add required checks: `Lint`, `Unit Tests`, `Integration Tests`
+
+**Note**: The merge queue feature is **not used**. Integration tests run directly on PR branches, gated by the draft/ready status.
+
+### VM Maintenance Workflow
+
+The `vm-maintenance.yml` workflow keeps test VMs updated with OS security patches:
+
+- **Schedule**: Runs weekly on Monday at 2am UTC
+- **Manual trigger**: Available via `workflow_dispatch`
+- **Behavior**:
+  - Checks if VMs exist before attempting upgrade
+  - Runs `tests/integration/scripts/upgrade-vms.sh` on both VMs
+  - Skips gracefully if VMs don't exist (with warning)
+
+This ensures VMs stay patched without manual intervention. The baseline snapshots are **not** updated by this workflow - they preserve the original provisioned state for consistent test resets.
+
+---
+
 ## CI Secrets Configuration
 
 ### About security of secrets in public GitHub repositories
@@ -806,5 +896,5 @@ All infrastructure scripts are in `tests/integration/scripts/`:
 
 ---
 
-**Last Updated**: 2025-12-17
-**Document Version**: 1.2 (Added GITHUB_TOKEN for API rate limiting)
+**Last Updated**: 2025-12-18
+**Document Version**: 1.3 (Added CI Workflow Configuration section)

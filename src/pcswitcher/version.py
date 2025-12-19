@@ -197,8 +197,6 @@ class Version:
         True
     """
 
-    __slots__ = ("_original", "_parsed_as", "_pkg_version")
-
     _original: str
     _parsed_as: Literal["pep440", "semver"]
     _pkg_version: PkgVersion
