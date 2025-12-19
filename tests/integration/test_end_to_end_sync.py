@@ -187,16 +187,19 @@ class TestEndToEndSync:
         pc1_executor = sync_ready_source
 
         # Clean up any existing snapshots from previous test runs to get clean state
-        await pc1_executor.run_command(
-            "sudo rm -rf /.snapshots/pc-switcher-* 2>/dev/null || true",
+        # Check both hosts in parallel
+        # TODO use btrfs subvolume delete instead of rm -rf
+        pc1_task = pc1_executor.run_command(
+            "sudo rm -rf /.snapshots/pc-switcher* 2>/dev/null || true",
             timeout=30.0,
             login_shell=False,
         )
-        await pc2_executor.run_command(
-            "sudo rm -rf /.snapshots/pc-switcher-* 2>/dev/null || true",
+        pc2_task = pc2_executor.run_command(
+            "sudo rm -rf /.snapshots/pc-switcher* 2>/dev/null || true",
             timeout=30.0,
             login_shell=False,
         )
+        await asyncio.gather(pc1_task, pc2_task)
 
         # Run pc-switcher sync from pc1 to pc2
         # Timeout: ~60s for SSH + install + snapshots + job execution (4+4 seconds)
