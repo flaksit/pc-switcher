@@ -173,7 +173,7 @@ async def pc2_executor_without_pcswitcher_tool(
     version_check = await pc2_executor.run_command(
         "pc-switcher --version 2>/dev/null || true", timeout=10.0, login_shell=True
     )
-    was_installed = version_check.success and "pc-switcher" in version_check.stdout.lower()
+    was_installed = version_check.success
 
     # Uninstall pc-switcher if it exists
     await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
@@ -181,6 +181,7 @@ async def pc2_executor_without_pcswitcher_tool(
 
     yield pc2_executor
 
+    # TODO remove restore to initial state (see #68)
     # Restore to initial state: if it was installed before, reinstall it
     if was_installed:
         install_script_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
@@ -230,6 +231,7 @@ async def pc2_executor_with_old_pcswitcher_tool(
 
     yield pc2_executor
 
+    # TODO remove restore to initial state (see #68)
     # Restore to initial state
     await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0, login_shell=True)
     await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)

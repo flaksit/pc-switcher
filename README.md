@@ -138,6 +138,27 @@ pc-switcher self update [VERSION] [--prerelease]
 4. **Minimize disk wear**: NVMe SSDs—avoid unnecessary writes
 5. **Simplicity**: Easy to understand, modify, and maintain
 
+## Troubleshooting
+
+### GitHub API Rate Limits
+
+When running `pc-switcher --version`, `self update`, or sync (which installs pc-switcher on target), you may see rate limit errors like:
+
+```
+RuntimeError: Failed to fetch GitHub releases: 403 {"message": "API rate limit exceeded..."}
+```
+
+This happens because pc-switcher queries the GitHub API to check for releases. Unauthenticated requests are limited to 60/hour.
+
+**Solution**: Add a GitHub personal access token with public read-only permissions to your `~/.profile` on both source and target machines:
+
+```bash
+echo 'export GITHUB_TOKEN=ghp_your_token_here' >> ~/.profile
+source ~/.profile
+```
+
+With a token, the rate limit increases to 5,000 requests/hour.
+
 ## Documentation
 
 - **[High level requirements](docs/High%20level%20requirements.md)** - Project vision, scope, workflow

@@ -602,7 +602,7 @@ class TestGetReleasesGithubToken:
         ):
             list(get_releases())
             mock_auth_token.assert_called_once_with("test-token-123")
-            mock_github.assert_called_once_with(auth=mock_auth_token.return_value)
+            mock_github.assert_called_once_with(auth=mock_auth_token.return_value, retry=None)
 
     def test_no_token_when_not_set(self) -> None:
         """Should create unauthenticated Github() when GITHUB_TOKEN is not set."""
@@ -618,8 +618,8 @@ class TestGetReleasesGithubToken:
             patch("pcswitcher.version.Github", mock_github),
         ):
             list(get_releases())
-            # Github() should be called with no arguments (unauthenticated)
-            mock_github.assert_called_once_with()
+            # Github() should be called with only retry=None (unauthenticated)
+            mock_github.assert_called_once_with(retry=None)
 
 
 class TestGithubReleaseFloor:

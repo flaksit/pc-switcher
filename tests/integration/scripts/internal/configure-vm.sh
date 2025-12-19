@@ -94,6 +94,13 @@ EOF
 log_info_prefixed "Injecting SSH keys for testuser..."
 ssh_run root@"${VM_HOST}" "printf '%s\n' '${SSH_AUTHORIZED_KEYS}' > /home/testuser/.ssh/authorized_keys"
 
+# Add GITHUB_TOKEN to testuser's .profile if available (for GitHub API rate limiting)
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    log_info_prefixed "Adding GITHUB_TOKEN to testuser's .profile..."
+    # Pass token via stdin to avoid command line exposure (visible in ps)
+    printf 'export GITHUB_TOKEN=%q\n' "${GITHUB_TOKEN}" | ssh_run root@"${VM_HOST}" "cat >> /home/testuser/.profile"
+fi
+
 log_info_prefixed "Configuring SSH hardening and services..."
 run_ssh << 'EOF'
 set -euo pipefail

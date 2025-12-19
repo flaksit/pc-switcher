@@ -75,7 +75,7 @@ class Release:
 
     version: Version
     is_prerelease: bool
-    tag: str | None = None
+    tag: str
 
 
 def get_releases(
@@ -108,7 +108,7 @@ def get_releases(
         else:
             logger.debug("GITHUB_TOKEN not set, using unauthenticated GitHub API (60 req/hr)")
 
-        g = Github(auth=Auth.Token(token)) if token else Github()
+        g = Github(auth=Auth.Token(token), retry=None) if token else Github(retry=None)
         repo = g.get_repo(repository)
 
         # Fetch all releases with pagination
@@ -196,8 +196,6 @@ class Version:
         >>> v1 == v2
         True
     """
-
-    __slots__ = ("_original", "_parsed_as", "_pkg_version")
 
     _original: str
     _parsed_as: Literal["pep440", "semver"]
