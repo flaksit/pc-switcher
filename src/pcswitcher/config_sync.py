@@ -148,11 +148,83 @@ def _prompt_config_diff(console: Console, source_content: str, target_content: s
         return ConfigSyncAction.ABORT
 
 
+async def _handle_config_sync(
+    target: RemoteExecutor,
+    source_config_path: Path,
+    source_content: str,
+    target_content: str | None,
+    console: Console,
+    auto_accept: bool,
+) -> bool:
+    """Handle config sync logic based on target state.
+
+    Returns True if sync should continue, False if aborted.
+    """
+    # Scenario 1: No config on target
+    if target_content is None:
+        return await _handle_no_target_config(target, source_config_path, source_content, console, auto_accept)
+
+    # Scenario 2: Configs match
+    if source_content.strip() == target_content.strip():
+        console.print("[dim]Target config matches source, skipping config sync.[/dim]")
+        return True
+
+    # Scenario 3: Configs differ
+    return await _handle_config_diff(target, source_config_path, source_content, target_content, console, auto_accept)
+
+
+async def _handle_no_target_config(
+    target: RemoteExecutor,
+    source_config_path: Path,
+    source_content: str,
+    console: Console,
+    auto_accept: bool,
+) -> bool:
+    """Handle case when target has no config."""
+    if auto_accept or _prompt_new_config(console, source_content):
+        await _copy_config_to_target(target, source_config_path)
+        console.print("[green]Configuration copied to target.[/green]")
+        return True
+    console.print("[red]Sync aborted: configuration required on target.[/red]")
+    return False
+
+
+async def _handle_config_diff(
+    target: RemoteExecutor,
+    source_config_path: Path,
+    source_content: str,
+    target_content: str,
+    console: Console,
+    auto_accept: bool,
+) -> bool:
+    """Handle case when configs differ."""
+    if auto_accept:
+        await _copy_config_to_target(target, source_config_path)
+        console.print("[green]Configuration copied to target (auto-accepted).[/green]")
+        return True
+
+    diff = _generate_diff(source_content, target_content)
+    action = _prompt_config_diff(console, source_content, target_content, diff)
+
+    if action == ConfigSyncAction.ACCEPT_SOURCE:
+        await _copy_config_to_target(target, source_config_path)
+        console.print("[green]Configuration copied to target.[/green]")
+        return True
+    if action == ConfigSyncAction.KEEP_TARGET:
+        console.print("[yellow]Keeping existing target configuration.[/yellow]")
+        return True
+    # ABORT
+    console.print("[red]Sync aborted by user.[/red]")
+    return False
+
+
 async def sync_config_to_target(
     target: RemoteExecutor,
     source_config_path: Path,
     ui: TerminalUI | None,
     console: Console,
+    *,
+    auto_accept: bool = False,
 ) -> bool:
     """Sync configuration from source to target machine.
 
@@ -166,6 +238,7 @@ async def sync_config_to_target(
         source_config_path: Path to source config file
         ui: TerminalUI instance (will be paused during prompts)
         console: Rich console for display
+        auto_accept: If True, auto-accept source config without prompting
 
     Returns:
         True if sync should continue, False if sync should abort
@@ -182,42 +255,15 @@ async def sync_config_to_target(
     # Fetch target config
     target_content = await _get_target_config(target)
 
-    # Pause UI for user interaction
-    if ui is not None:
+    # Pause UI for user interaction (only if we'll prompt)
+    if ui is not None and not auto_accept:
         ui.stop()
 
     try:
-        if target_content is None:
-            # Scenario 1: No config on target
-            if _prompt_new_config(console, source_content):
-                await _copy_config_to_target(target, source_config_path)
-                console.print("[green]Configuration copied to target.[/green]")
-                return True
-            else:
-                console.print("[red]Sync aborted: configuration required on target.[/red]")
-                return False
-
-        elif source_content.strip() == target_content.strip():
-            # Scenario 3: Configs match
-            console.print("[dim]Target config matches source, skipping config sync.[/dim]")
-            return True
-
-        else:
-            # Scenario 2: Configs differ
-            diff = _generate_diff(source_content, target_content)
-            action = _prompt_config_diff(console, source_content, target_content, diff)
-
-            if action == ConfigSyncAction.ACCEPT_SOURCE:
-                await _copy_config_to_target(target, source_config_path)
-                console.print("[green]Configuration copied to target.[/green]")
-                return True
-            elif action == ConfigSyncAction.KEEP_TARGET:
-                console.print("[yellow]Keeping existing target configuration.[/yellow]")
-                return True
-            else:  # ABORT
-                console.print("[red]Sync aborted by user.[/red]")
-                return False
-
+        should_continue = await _handle_config_sync(
+            target, source_config_path, source_content, target_content, console, auto_accept
+        )
+        return should_continue
     finally:
         # Resume UI
         if ui is not None:

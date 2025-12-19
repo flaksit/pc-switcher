@@ -203,8 +203,9 @@ class TestEndToEndSync:
 
         # Run pc-switcher sync from pc1 to pc2
         # Timeout: ~60s for SSH + install + snapshots + job execution (4+4 seconds)
+        # Use --yes to auto-accept config sync prompts (non-interactive)
         sync_result = await pc1_executor.run_command(
-            "pc-switcher sync pc2",
+            "pc-switcher sync pc2 --yes",
             timeout=180.0,
             login_shell=True,
         )
@@ -308,8 +309,7 @@ class TestEndToEndSync:
         # Start sync in background with script for TTY emulation
         # We use bash -c to wrap the command and capture the PID
         start_result = await pc1_executor.run_command(
-            f"nohup bash -c 'echo $$ > {pid_file}; "
-            f"exec pc-switcher sync pc2 2>&1' > {output_file} &",
+            f"nohup bash -c 'echo $$ > {pid_file}; exec pc-switcher sync pc2 --yes 2>&1' > {output_file} &",
             timeout=10.0,
             login_shell=True,
         )
@@ -320,9 +320,7 @@ class TestEndToEndSync:
 
         # Get the PID
         pid_result = await pc1_executor.run_command(f"cat {pid_file}", timeout=10.0)
-        assert pid_result.success and pid_result.stdout.strip(), (
-            f"Failed to get sync process PID: {pid_result.stderr}"
-        )
+        assert pid_result.success and pid_result.stdout.strip(), f"Failed to get sync process PID: {pid_result.stderr}"
         sync_pid = pid_result.stdout.strip()
 
         # Wait for sync to actually start (look for connection or log activity)
@@ -367,9 +365,7 @@ class TestEndToEndSync:
         output_text = output_result.stdout
 
         # Verify interrupt handling message
-        assert "interrupt" in output_text.lower(), (
-            f"Output should contain interrupt message.\nOutput:\n{output_text}"
-        )
+        assert "interrupt" in output_text.lower(), f"Output should contain interrupt message.\nOutput:\n{output_text}"
 
         # Clean up temp files
         await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
@@ -449,8 +445,9 @@ class TestInstallOnTargetIntegration:
 
         try:
             # Run sync - this should install pc-switcher on target
+            # Use --yes to auto-accept config sync prompts (non-interactive)
             sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2",
+                "pc-switcher sync pc2 --yes",
                 timeout=300.0,  # Allow more time for fresh install
                 login_shell=True,
             )
@@ -521,8 +518,9 @@ class TestInstallOnTargetIntegration:
 
         try:
             # Run sync - this should upgrade pc-switcher on target
+            # Use --yes to auto-accept config sync prompts (non-interactive)
             sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2",
+                "pc-switcher sync pc2 --yes",
                 timeout=300.0,
                 login_shell=True,
             )
@@ -541,10 +539,7 @@ class TestInstallOnTargetIntegration:
                 timeout=10.0,
                 login_shell=True,
             )
-            assert post_check.success, (
-                f"pc-switcher should work on target after sync.\n"
-                f"Error: {post_check.stderr}"
-            )
+            assert post_check.success, f"pc-switcher should work on target after sync.\nError: {post_check.stderr}"
 
             # Verify version matches source floor release (not old version)
             source_release = get_this_version().get_release_floor()
@@ -553,8 +548,7 @@ class TestInstallOnTargetIntegration:
                 f"Target output: {post_check.stdout}"
             )
             assert "0.1.0-alpha.1" not in post_check.stdout, (
-                f"Target should not have old version after sync.\n"
-                f"Target output: {post_check.stdout}"
+                f"Target should not have old version after sync.\nTarget output: {post_check.stdout}"
             )
 
         finally:

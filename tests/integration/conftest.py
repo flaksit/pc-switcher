@@ -192,9 +192,7 @@ async def pc2_without_pcswitcher(
     other tests in the same test session.
     """
     # Check if pc-switcher was installed before we modify state
-    version_check = await pc2_executor.run_command(
-        "pc-switcher --version 2>/dev/null || true", timeout=10.0
-    )
+    version_check = await pc2_executor.run_command("pc-switcher --version 2>/dev/null || true", timeout=10.0)
     was_installed = version_check.success
 
     # Uninstall pc-switcher if it exists
@@ -237,9 +235,7 @@ async def pc2_with_old_pcswitcher(
     install_script_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
 
     # Check if pc-switcher was installed before we modify state
-    version_check = await pc2_executor.run_command(
-        "pc-switcher --version 2>/dev/null || true", timeout=10.0
-    )
+    version_check = await pc2_executor.run_command("pc-switcher --version 2>/dev/null || true", timeout=10.0)
     was_installed = version_check.success and "pc-switcher" in version_check.stdout.lower()
 
     # Uninstall and install older version
