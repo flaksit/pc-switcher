@@ -206,19 +206,19 @@ class TestSelfUpdateCommandExists:
 
     async def test_has_self_update(
         self,
-        pc1_with_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher: BashLoginRemoteExecutor,
     ) -> None:
         # Self update command should exist
-        result = await pc1_with_executor.run_command("pc-switcher self update --help", timeout=10.0)
+        result = await pc1_with_pcswitcher.run_command("pc-switcher self update --help", timeout=10.0)
         assert result.success, f"Self update help failed: {result.stderr}"
         assert "update" in result.stdout.lower()
 
     async def test_self_command_group_help(
         self,
-        pc1_with_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher: BashLoginRemoteExecutor,
     ) -> None:
         """Test that 'pc-switcher self --help' shows the command group."""
-        result = await pc1_with_executor.run_command("pc-switcher self --help", timeout=10.0)
+        result = await pc1_with_pcswitcher.run_command("pc-switcher self --help", timeout=10.0)
         assert result.success, f"Self help failed: {result.stderr}"
         # Should show "self" command group and list subcommands
         assert "update" in result.stdout.lower()
@@ -226,10 +226,10 @@ class TestSelfUpdateCommandExists:
 
     async def test_self_update_help_shows_prerelease_flag(
         self,
-        pc1_with_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher: BashLoginRemoteExecutor,
     ) -> None:
         """Test that 'pc-switcher self update --help' documents --prerelease flag."""
-        result = await pc1_with_executor.run_command("pc-switcher self update --help", timeout=10.0)
+        result = await pc1_with_pcswitcher.run_command("pc-switcher self update --help", timeout=10.0)
         assert result.success, f"Self update help failed: {result.stderr}"
         # Should document the --prerelease option
         assert "--prerelease" in result.stdout
