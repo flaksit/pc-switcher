@@ -97,16 +97,30 @@ class DummySuccessJob(SyncJob):
             await asyncio.sleep(2)
 
     async def _run_target_phase(self) -> None:
-        """Target phase: configurable duration, log every 2s, ERROR at 8s."""
-        iterations = self.target_duration // 2
-        halfway = self.target_duration // 2
+        """Target phase: execute real commands on target machine.
 
-        for tick in range(iterations):
-            elapsed = (tick + 1) * 2
+        Runs a bash loop on the target that outputs every 2 seconds.
+        This validates that job execution actually reaches the target machine.
+        """
+        iterations = self.target_duration // 2
+        halfway = iterations // 2
+
+        # Build bash command that outputs every 2 seconds
+        # Output format: "tick N" where N is 1-based iteration count
+        cmd = f'for i in $(seq 1 {iterations}); do echo "tick $i"; sleep 2; done'
+
+        process = await self.target.start_process(cmd)
+        tick = 0
+
+        async for raw_line in process.stdout():
+            tick += 1
+            line = raw_line.strip()
+            elapsed = tick * 2
+
             self._log(
                 Host.TARGET,
                 LogLevel.INFO,
-                f"Target phase: {elapsed}s elapsed",
+                f"Target phase: {elapsed}s elapsed (remote: {line})",
             )
 
             # ERROR at 8s
@@ -114,7 +128,10 @@ class DummySuccessJob(SyncJob):
                 self._log(Host.TARGET, LogLevel.ERROR, "Test error at 8s")
 
             # Progress: 75% at halfway through target phase
-            if elapsed == halfway * 2:
+            if tick == halfway:
                 self._report_progress(ProgressUpdate(percent=75))
 
-            await asyncio.sleep(2)
+        # Wait for process to complete
+        result = await process.wait()
+        if result.exit_code != 0:
+            raise RuntimeError(f"Target phase failed: {result.stderr}")

@@ -14,8 +14,9 @@ Tests verify:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any, Protocol
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -23,13 +24,33 @@ from pcswitcher.events import LogEvent, ProgressEvent
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.dummy_fail import DummyFailJob
 from pcswitcher.jobs.dummy_success import DummySuccessJob
-from pcswitcher.models import Host, LogLevel, ProgressUpdate
+from pcswitcher.models import CommandResult, Host, LogLevel, ProgressUpdate
 
 
 class JobContextFactory(Protocol):
     """Protocol for JobContext factory function."""
 
     def __call__(self, config: dict[str, Any] | None = None) -> JobContext: ...
+
+
+def create_mock_process(num_lines: int, terminate_at: int | None = None) -> MagicMock:
+    """Create a mock Process with streaming stdout.
+
+    Args:
+        num_lines: Number of lines to yield from stdout
+        terminate_at: If set, stdout will stop after this many lines (simulating termination)
+    """
+    mock_proc = MagicMock()
+    lines_to_yield = terminate_at if terminate_at is not None else num_lines
+
+    async def mock_stdout() -> AsyncIterator[str]:
+        for i in range(1, lines_to_yield + 1):
+            yield f"tick {i}\n"
+
+    mock_proc.stdout = mock_stdout
+    mock_proc.wait = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+    mock_proc.terminate = AsyncMock()
+    return mock_proc
 
 
 class TestDummyJobsExist:
@@ -59,19 +80,27 @@ class TestDummySuccessBehavior:
         Tests with default 20s duration:
         - Logs INFO every 2s on source phase
         - Logs WARNING at 6s on source
-        - Logs INFO every 2s on target phase
+        - Logs INFO every 2s on target phase (via remote execution)
         - Logs ERROR at 8s on target
         - Emits progress: 0%, 25%, 50%, 75%, 100%
         """
         context = mock_job_context_factory(config={"source_duration": 20, "target_duration": 20})
         job = DummySuccessJob(context)
 
-        # Mock asyncio.sleep to avoid waiting 20s
+        # Mock target.start_process to return mock process with streaming output
+        # target_duration=20 means 10 iterations (20/2)
+        mock_proc = create_mock_process(num_lines=10)
+        context.target.start_process = AsyncMock(return_value=mock_proc)
+
+        # Mock asyncio.sleep to avoid waiting on source phase
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             await job.execute()
 
-        # Verify asyncio.sleep was called multiple times (20s / 2s = 10 times per phase)
-        assert mock_sleep.call_count == 20  # 10 source + 10 target
+        # Verify asyncio.sleep was called for source phase only (20s / 2s = 10 times)
+        assert mock_sleep.call_count == 10  # Source phase only
+
+        # Verify target.start_process was called
+        context.target.start_process.assert_called_once()
 
         # Verify progress updates: 0%, 25%, 50%, 75%, 100%
         publish_calls = context.event_bus.publish.call_args_list  # type: ignore[attr-defined]
@@ -99,7 +128,7 @@ class TestDummySuccessBehavior:
         assert len(source_warning_logs) >= 1  # WARNING at 6s
         assert any("6s" in e.message for e in source_warning_logs)
 
-        # Check for target logs (INFO every 2s, ERROR at 8s)
+        # Check for target logs (INFO every 2s, ERROR at 8s) - now via remote execution
         target_logs = [e for e in log_events if e.host == Host.TARGET]
         assert len(target_logs) >= 10  # At least 10 target logs
 
@@ -121,6 +150,10 @@ class TestDummySuccessBehavior:
         """
         context = mock_job_context_factory(config={"source_duration": 20, "target_duration": 20})
         job = DummySuccessJob(context)
+
+        # Mock target.start_process for target phase
+        mock_proc = create_mock_process(num_lines=10)
+        context.target.start_process = AsyncMock(return_value=mock_proc)
 
         # Mock asyncio.sleep to avoid waiting
         with patch("asyncio.sleep", new_callable=AsyncMock):
@@ -145,11 +178,15 @@ class TestDummySuccessBehavior:
         context = mock_job_context_factory(config={"source_duration": 4, "target_duration": 4})
         job = DummySuccessJob(context)
 
+        # Mock target.start_process for target phase (4s/2 = 2 iterations)
+        mock_proc = create_mock_process(num_lines=2)
+        context.target.start_process = AsyncMock(return_value=mock_proc)
+
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             await job.execute()
 
-        # Verify sleep was called fewer times (4s / 2s = 2 times per phase)
-        assert mock_sleep.call_count == 4  # 2 source + 2 target
+        # Verify sleep was called for source phase only (4s / 2s = 2 times)
+        assert mock_sleep.call_count == 2  # Source phase only
 
 
 class TestDummyFailBehavior:
@@ -160,9 +197,15 @@ class TestDummyFailBehavior:
         """FR-041: dummy_fail raises unhandled exception at 60% progress.
 
         Verifies that dummy_fail simulates progress to 60%, then raises RuntimeError.
+        Source phase runs 0-50%, target phase runs 50-100% but fails at 60%.
         """
         context = mock_job_context_factory(config={"fail_at_percent": 60})
         job = DummyFailJob(context)
+
+        # Mock target.start_process for target phase
+        # Job will start target phase at 50%, fail at 60% (after 1 iteration)
+        mock_proc = create_mock_process(num_lines=5, terminate_at=1)
+        context.target.start_process = AsyncMock(return_value=mock_proc)
 
         # Mock asyncio.sleep to avoid waiting
         with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(RuntimeError) as exc_info:
@@ -176,7 +219,7 @@ class TestDummyFailBehavior:
         progress_events = [call[0][0] for call in publish_calls if isinstance(call[0][0], ProgressEvent)]
         progress_percents = [event.update.percent for event in progress_events]
 
-        # Should have progress 0%, 10%, 20%, ..., 60%
+        # Should have progress 0%, 10%, 20%, ..., 50% (source), then 60% (target)
         assert 0 in progress_percents
         assert 60 in progress_percents
         # Should not reach 100%
@@ -200,6 +243,10 @@ class TestDummyFailBehavior:
         context = mock_job_context_factory(config={})  # Default fail_at_percent=60
         job = DummyFailJob(context)
 
+        # Mock target.start_process for target phase
+        mock_proc = create_mock_process(num_lines=5, terminate_at=1)
+        context.target.start_process = AsyncMock(return_value=mock_proc)
+
         with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(RuntimeError) as exc_info:
             await job.execute()
 
@@ -212,11 +259,13 @@ class TestDummyFailBehavior:
         """FR-041: dummy_fail supports configurable fail_at_percent.
 
         Tests with different failure percentage to verify config is respected.
+        With fail_at_percent=30, failure occurs in source phase (before target phase).
         """
         # Fail at 30% instead of default 60%
         context = mock_job_context_factory(config={"fail_at_percent": 30})
         job = DummyFailJob(context)
 
+        # No need to mock target.start_process as failure happens in source phase
         with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(RuntimeError) as exc_info:
             await job.execute()
 
@@ -240,8 +289,12 @@ class TestDummyJobsTermination:
         Verifies that when a dummy job receives CancelledError (termination request),
         it logs "Dummy job termination requested" and re-raises the error.
         """
-        context = mock_job_context_factory(config={"source_duration": 20})
+        context = mock_job_context_factory(config={"source_duration": 20, "target_duration": 20})
         job = DummySuccessJob(context)
+
+        # Mock target.start_process in case we reach target phase (shouldn't happen)
+        mock_proc = create_mock_process(num_lines=10)
+        context.target.start_process = AsyncMock(return_value=mock_proc)
 
         # Mock asyncio.sleep to raise CancelledError after first call
         call_count = 0
@@ -249,7 +302,7 @@ class TestDummyJobsTermination:
         async def sleep_then_cancel(duration: float) -> None:
             nonlocal call_count
             call_count += 1
-            if call_count == 2:  # Cancel during execution
+            if call_count == 2:  # Cancel during source phase
                 raise asyncio.CancelledError()
 
         with patch("asyncio.sleep", side_effect=sleep_then_cancel), pytest.raises(asyncio.CancelledError):
@@ -275,7 +328,7 @@ class TestDummyJobsTermination:
         context = mock_job_context_factory(config={})
         job = DummyFailJob(context)
 
-        # Simulate termination during execution
+        # Simulate termination during source phase execution
         async def sleep_then_cancel(duration: float) -> None:
             raise asyncio.CancelledError()
 
@@ -299,6 +352,10 @@ class TestDummyJobsTermination:
         context = mock_job_context_factory(config={"source_duration": 20, "target_duration": 20})
         job = DummySuccessJob(context)
 
+        # Mock target.start_process in case we reach target phase (shouldn't happen)
+        mock_proc = create_mock_process(num_lines=10)
+        context.target.start_process = AsyncMock(return_value=mock_proc)
+
         # Cancel after 1 source iteration
         call_count = 0
 
@@ -318,6 +375,9 @@ class TestDummyJobsTermination:
         # Should have no target logs since we cancelled during source phase
         assert len(target_logs) == 0
 
+        # Verify target.start_process was NOT called since we cancelled before target phase
+        context.target.start_process.assert_not_called()
+
 
 class TestJobProgressEmission:
     """Test FR-043: jobs emit progress updates."""
@@ -329,8 +389,12 @@ class TestJobProgressEmission:
         Verifies that dummy jobs emit ProgressUpdate objects with valid percentages
         through the event bus.
         """
-        context = mock_job_context_factory(config={"source_duration": 4})
+        context = mock_job_context_factory(config={"source_duration": 4, "target_duration": 4})
         job = DummySuccessJob(context)
+
+        # Mock target.start_process for target phase (4s/2 = 2 iterations)
+        mock_proc = create_mock_process(num_lines=2)
+        context.target.start_process = AsyncMock(return_value=mock_proc)
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
             await job.execute()

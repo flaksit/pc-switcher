@@ -845,7 +845,7 @@ uv run pytest tests/integration -m "integration and not benchmark"
 # Only performance benchmarks
 uv run pytest tests/integration -m benchmark
 # Specific benchmark with output
-uv run pytest tests/integration/test_executor_overhead.py -m benchmark -v -s
+uv run pytest tests/integration/test_executor_overhead.py -m benchmark -s
 ```
 
 ### Fixture Scopes
