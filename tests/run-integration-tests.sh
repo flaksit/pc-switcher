@@ -262,7 +262,7 @@ SETUP_PHASE=0  # Mark setup as complete
 log_info "Running pytest..."
 cd "$PROJECT_ROOT"
 set +e
-uv run pytest -m "integration and not benchmark" -v -s "$@"
+uv run pytest -m "integration and not benchmark" -s "$@"
 pytest_exit_code=$?
 set -e
 
