@@ -54,7 +54,7 @@ properties:
       dummy_fail:
         type: boolean
         default: false
-        description: "Test job that fails at configurable progress %"
+        description: "Test job that fails at configurable time"
       # Future jobs (add when features 5-10 are implemented):
       # user_data:
       #   type: boolean
@@ -148,12 +148,21 @@ properties:
     type: object
     description: "Configuration for dummy-fail test job"
     properties:
-      fail_at_percent:
+      source_duration:
         type: integer
-        minimum: 1
-        maximum: 99
-        default: 60
-        description: "Progress percentage at which to fail"
+        minimum: 2
+        default: 10
+        description: "Seconds to run on source machine"
+      target_duration:
+        type: integer
+        minimum: 2
+        default: 10
+        description: "Seconds to run on target machine"
+      fail_at:
+        type: integer
+        minimum: 2
+        default: 12
+        description: "Elapsed seconds at which to fail"
     additionalProperties: false
 
 # =============================================================================

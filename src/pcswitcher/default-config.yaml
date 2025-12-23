@@ -94,6 +94,8 @@ dummy_success:
   target_duration: 20    # Seconds to run on target machine
 
 dummy_fail:
-  fail_at_percent: 60    # Progress percentage at which to fail (1-99)
+  source_duration: 10    # Seconds to run on source machine
+  target_duration: 10    # Seconds to run on target machine
+  fail_at: 12            # Elapsed seconds at which to fail
 
 # Future job configurations will be added here when features are implemented:

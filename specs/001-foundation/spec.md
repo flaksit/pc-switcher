@@ -259,7 +259,7 @@ log_cli_level: INFO
 # Jobs implemented in 001-foundation:
 sync_jobs:
   dummy_success: true   # Test job that completes successfully
-  dummy_fail: false     # Test job that fails at configurable progress %
+  dummy_fail: false     # Test job that fails at configurable time
 
 # Job-specific configuration
 btrfs_snapshots:
@@ -274,7 +274,9 @@ dummy_success:
   target_duration: 20   # Seconds to run on target
 
 dummy_fail:
-  fail_at_percent: 60   # Progress % at which to fail
+  source_duration: 10   # Seconds to run on source
+  target_duration: 10   # Seconds to run on target
+  fail_at: 12           # Elapsed seconds at which to fail
 ```
 
 **Configuration Schema**: The formal configuration schema structure (global settings, sync_jobs section, and per-job settings) is defined in `specs/001-foundation/contracts/config-schema.yaml`. Job-specific settings appear as top-level keys (e.g., `btrfs_snapshots`, `user_data`) outside of the `sync_jobs` section.
@@ -332,7 +334,7 @@ Two dummy jobs exist for testing infrastructure: `dummy_success` (completes succ
 
 2. *(Removed)*
 
-3. **Given** `dummy_fail` job is enabled, **When** sync runs and job reaches 60% progress, **Then** the job raises a RuntimeError, the orchestrator catches the exception, logs it at CRITICAL level, requests job termination with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), and halts sync
+3. **Given** `dummy_fail` job is enabled, **When** sync runs and job reaches the configured `fail_at` time, **Then** the job raises a RuntimeError, the orchestrator catches the exception, logs it at CRITICAL level, requests job termination with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), and halts sync
 
 4. **Given** any dummy job is running, **When** user presses Ctrl+C, **Then** the job receives termination request, it logs "Dummy job termination requested", stops its busy-wait loop within the grace period, and returns control to orchestrator
 
@@ -477,13 +479,13 @@ The terminal displays real-time sync progress including current job, operation p
 
 #### Testing Infrastructure
 
-- **FR-038** `[Deliberate Simplicity]`: System MUST include two dummy jobs: `dummy-success`, `dummy-fail`
+- **FR-038**: System MUST include two dummy jobs: `dummy-success`, `dummy-fail`
 
-- **FR-039** `[Deliberate Simplicity]`: `dummy-success` MUST simulate 20s operation on source (log every 2s, WARNING at 6s) and 20s on target (log every 2s, ERROR at 8s), emit progress updates, and complete successfully
+- **FR-039**: `dummy-success` and `dummy-fail` MUST simulate an operation of configurable duration on source (log every 2s, log WARNING at 6s) and of configurable duration on target (log every 2s, log ERROR at 8s), emit progress updates, and complete successfully
 
 - **FR-040** *(Removed)*
 
-- **FR-041** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at 60% progress to test orchestrator exception handling
+- **FR-041** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at configurable time to test orchestrator exception handling on both source and target
 
 - **FR-042** `[Reliability Without Compromise]`: All dummy jobs MUST handle termination requests by logging "Dummy job termination requested" and stopping execution within the grace period
 

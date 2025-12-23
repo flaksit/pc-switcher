@@ -3,11 +3,11 @@
 Tests verify:
 - FR-038: Two dummy jobs exist (dummy_success, dummy_fail)
 - FR-039: dummy_success behavior (20s, logs at levels, progress)
-- FR-041: dummy_fail raises exception at 60%
+- FR-041: dummy_fail raises exception at configurable time
 - FR-042: dummy jobs handle termination
 - FR-043: jobs emit progress updates
 - US8-AS1: dummy_success completes with logs/progress
-- US8-AS3: dummy_fail raises exception at 60%
+- US8-AS3: dummy_fail raises exception at configured time
 - US8-AS4: dummy job handles termination request
 """
 
@@ -194,16 +194,21 @@ class TestDummyFailBehavior:
 
     @pytest.mark.asyncio
     async def test_001_fr041_dummy_fail_exception(self, mock_job_context_factory: JobContextFactory) -> None:
-        """FR-041: dummy_fail raises unhandled exception at 60% progress.
+        """FR-041: dummy_fail raises unhandled exception at configured time.
 
-        Verifies that dummy_fail simulates progress to 60%, then raises RuntimeError.
-        Source phase runs 0-50%, target phase runs 50-100% but fails at 60%.
+        Verifies that dummy_fail simulates progress, then raises RuntimeError.
+        With source_duration=10, target_duration=10, fail_at=12:
+        - Source phase runs for 10s (0-50% progress)
+        - Target phase starts, fails at 12s (2s into target = 60% progress)
         """
-        context = mock_job_context_factory(config={"fail_at_percent": 60})
+        # source=10s, target=10s, fail_at=12s (2s into target phase)
+        context = mock_job_context_factory(
+            config={"source_duration": 10, "target_duration": 10, "fail_at": 12}
+        )
         job = DummyFailJob(context)
 
         # Mock target.start_process for target phase
-        # Job will start target phase at 50%, fail at 60% (after 1 iteration)
+        # target_duration=10 means 5 iterations, but we fail at 12s (1st tick = 12s)
         mock_proc = create_mock_process(num_lines=5, terminate_at=1)
         context.target.start_process = AsyncMock(return_value=mock_proc)
 
@@ -211,17 +216,20 @@ class TestDummyFailBehavior:
         with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(RuntimeError) as exc_info:
             await job.execute()
 
-        # Verify exception message mentions failure at 60%
-        assert "60%" in str(exc_info.value)
+        # Verify exception message mentions failure at 12s
+        assert "12s" in str(exc_info.value)
 
-        # Verify progress was reported up to 60%
+        # Verify progress was reported
         publish_calls = context.event_bus.publish.call_args_list  # type: ignore[attr-defined]
         progress_events = [call[0][0] for call in publish_calls if isinstance(call[0][0], ProgressEvent)]
         progress_percents = [event.update.percent for event in progress_events]
 
-        # Should have progress 0%, 10%, 20%, ..., 50% (source), then 60% (target)
+        # With source=10, target=10, total=20:
+        # - At 10s: 50% (end of source)
+        # - At 12s: 60% (first tick of target, where we fail)
         assert 0 in progress_percents
-        assert 60 in progress_percents
+        assert 50 in progress_percents  # 10s / 20s = 50%
+        assert 60 in progress_percents  # 12s / 20s = 60%
         # Should not reach 100%
         assert 100 not in progress_percents
 
@@ -229,18 +237,18 @@ class TestDummyFailBehavior:
         log_events = [call[0][0] for call in publish_calls if isinstance(call[0][0], LogEvent)]
         critical_logs = [e for e in log_events if e.level == LogLevel.CRITICAL]
         assert len(critical_logs) >= 1
-        assert any("Simulated failure at 60%" in e.message for e in critical_logs)
+        assert any("Simulated failure at 12s" in e.message for e in critical_logs)
 
     @pytest.mark.asyncio
     async def test_001_us8_as3_dummy_fail_raises_exception(self, mock_job_context_factory: JobContextFactory) -> None:
-        """US8-AS3: dummy_fail raises exception at 60% to test error handling.
+        """US8-AS3: dummy_fail raises exception at configured time to test error handling.
 
-        Given: dummy_fail job is enabled
-        When: sync runs and job reaches 60% progress
+        Given: dummy_fail job is enabled with defaults (fail_at=12s)
+        When: sync runs and job reaches 12s elapsed
         Then: job raises RuntimeError, orchestrator should catch it,
               log at CRITICAL, and halt sync
         """
-        context = mock_job_context_factory(config={})  # Default fail_at_percent=60
+        context = mock_job_context_factory(config={})  # Default fail_at=12s
         job = DummyFailJob(context)
 
         # Mock target.start_process for target phase
@@ -250,33 +258,36 @@ class TestDummyFailBehavior:
         with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(RuntimeError) as exc_info:
             await job.execute()
 
-        assert "Dummy job failed at 60%" in str(exc_info.value)
+        assert "Dummy job failed at 12s" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_001_fr041_dummy_fail_configurable_percent(
+    async def test_001_fr041_dummy_fail_configurable_time(
         self, mock_job_context_factory: JobContextFactory
     ) -> None:
-        """FR-041: dummy_fail supports configurable fail_at_percent.
+        """FR-041: dummy_fail supports configurable fail_at time.
 
-        Tests with different failure percentage to verify config is respected.
-        With fail_at_percent=30, failure occurs in source phase (before target phase).
+        Tests with different failure time to verify config is respected.
+        With fail_at=6, failure occurs in source phase (before target phase).
         """
-        # Fail at 30% instead of default 60%
-        context = mock_job_context_factory(config={"fail_at_percent": 30})
+        # Fail at 6s (during source phase which runs for 10s by default)
+        context = mock_job_context_factory(
+            config={"source_duration": 10, "target_duration": 10, "fail_at": 6}
+        )
         job = DummyFailJob(context)
 
         # No need to mock target.start_process as failure happens in source phase
         with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(RuntimeError) as exc_info:
             await job.execute()
 
-        assert "30%" in str(exc_info.value)
+        assert "6s" in str(exc_info.value)
 
-        # Verify progress stopped at 30%
+        # Verify progress stopped around 30% (6s out of 20s total)
         publish_calls = context.event_bus.publish.call_args_list  # type: ignore[attr-defined]
         progress_events = [call[0][0] for call in publish_calls if isinstance(call[0][0], ProgressEvent)]
         progress_percents = [event.update.percent for event in progress_events]
         assert 30 in progress_percents
-        assert 40 not in progress_percents  # Should fail before 40%
+        # Should not reach 50% (end of source phase)
+        assert 50 not in progress_percents
 
 
 class TestDummyJobsTermination:
@@ -475,17 +486,22 @@ class TestDummyJobsConfigSchema:
         assert schema["properties"]["target_duration"]["minimum"] == 1
 
     def test_001_dummy_fail_config_schema(self) -> None:
-        """DummyFailJob CONFIG_SCHEMA includes fail_at_percent."""
+        """DummyFailJob CONFIG_SCHEMA includes source_duration, target_duration, and fail_at."""
         schema = DummyFailJob.CONFIG_SCHEMA
         assert "properties" in schema
-        assert "fail_at_percent" in schema["properties"]
+        assert "source_duration" in schema["properties"]
+        assert "target_duration" in schema["properties"]
+        assert "fail_at" in schema["properties"]
 
-        # Verify default
-        assert schema["properties"]["fail_at_percent"]["default"] == 60
+        # Verify defaults
+        assert schema["properties"]["source_duration"]["default"] == 10
+        assert schema["properties"]["target_duration"]["default"] == 10
+        assert schema["properties"]["fail_at"]["default"] == 12
 
-        # Verify range
-        assert schema["properties"]["fail_at_percent"]["minimum"] == 0
-        assert schema["properties"]["fail_at_percent"]["maximum"] == 100
+        # Verify minimums
+        assert schema["properties"]["source_duration"]["minimum"] == 2
+        assert schema["properties"]["target_duration"]["minimum"] == 2
+        assert schema["properties"]["fail_at"]["minimum"] == 2
 
     def test_001_dummy_success_config_validation(self) -> None:
         """DummySuccessJob validates config correctly."""
@@ -502,11 +518,11 @@ class TestDummyJobsConfigSchema:
     def test_001_dummy_fail_config_validation(self) -> None:
         """DummyFailJob validates config correctly."""
         # Valid config
-        valid_config = {"fail_at_percent": 50}
+        valid_config = {"source_duration": 10, "target_duration": 10, "fail_at": 12}
         errors = DummyFailJob.validate_config(valid_config)
         assert errors == []
 
-        # Invalid: percent out of range
-        invalid_config = {"fail_at_percent": 150}
+        # Invalid: duration less than minimum
+        invalid_config = {"source_duration": 1, "target_duration": 10, "fail_at": 12}
         errors = DummyFailJob.validate_config(invalid_config)
         assert len(errors) > 0
