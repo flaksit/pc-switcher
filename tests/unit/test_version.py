@@ -370,12 +370,6 @@ class TestVersionComparison:
         v2 = Version.parse_semver("1.0.0-alpha.1")
         assert v1 == v2
 
-    def test_equal_with_pkg_version(self) -> None:
-        """Should compare equal to packaging.version.Version."""
-        v = Version.parse_pep440("1.0.0a1")
-        pv = PkgVersion("1.0.0a1")
-        assert v == pv
-
     def test_less_than(self) -> None:
         """Should compare less than correctly."""
         v1 = Version.parse_pep440("1.0.0a1")

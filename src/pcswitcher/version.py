@@ -67,15 +67,61 @@ _VERSION_REGEX = re.compile(
 class Release:
     """Immutable release information.
 
+    Compares based on Version.
+
     Attributes:
         version: The parsed version of the release
         is_prerelease: Whether the release is a prerelease
-        tag: The exact GitHub release tag (e.g., "v0.1.0", "v0.1.0-alpha.1"), or None if not from GitHub
+        tag: The exact GitHub release tag (e.g., "v0.1.0", "v0.1.0-alpha.1")
     """
 
     version: Version
     is_prerelease: bool
     tag: str
+
+    def __eq__(self, other: object) -> bool:
+        """Compare versions for equality."""
+        if isinstance(other, Release):
+            return self.version == other.version
+        if isinstance(other, Version):
+            return self.version == other
+        return NotImplemented
+
+    def __lt__(self, other: object) -> bool:
+        """Compare versions (less than)."""
+        if isinstance(other, Release):
+            return self.version < other.version
+        if isinstance(other, Version):
+            return self.version < other
+        return NotImplemented
+
+    def __le__(self, other: object) -> bool:
+        """Compare versions (less than or equal)."""
+        if isinstance(other, Release):
+            return self.version <= other.version
+        if isinstance(other, Version):
+            return self.version <= other
+        return NotImplemented
+
+    def __gt__(self, other: object) -> bool:
+        """Compare versions (greater than)."""
+        if isinstance(other, Release):
+            return self.version > other.version
+        if isinstance(other, Version):
+            return self.version > other
+        return NotImplemented
+
+    def __ge__(self, other: object) -> bool:
+        """Compare versions (greater than or equal)."""
+        if isinstance(other, Release):
+            return self.version >= other.version
+        if isinstance(other, Version):
+            return self.version >= other
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        """Return hash for use in sets and dicts."""
+        return hash(self.version)
 
 
 def get_releases(
@@ -558,40 +604,40 @@ class Version:
         """Compare versions for equality."""
         if isinstance(other, Version):
             return self._pkg_version == other._pkg_version
-        if isinstance(other, PkgVersion):
-            return self._pkg_version == other
+        if isinstance(other, Release):
+            return self._pkg_version == other.version._pkg_version
         return NotImplemented
 
     def __lt__(self, other: object) -> bool:
         """Compare versions (less than)."""
         if isinstance(other, Version):
             return self._pkg_version < other._pkg_version
-        if isinstance(other, PkgVersion):
-            return self._pkg_version < other
+        if isinstance(other, Release):
+            return self._pkg_version < other.version._pkg_version
         return NotImplemented
 
     def __le__(self, other: object) -> bool:
         """Compare versions (less than or equal)."""
         if isinstance(other, Version):
             return self._pkg_version <= other._pkg_version
-        if isinstance(other, PkgVersion):
-            return self._pkg_version <= other
+        if isinstance(other, Release):
+            return self._pkg_version <= other.version._pkg_version
         return NotImplemented
 
     def __gt__(self, other: object) -> bool:
         """Compare versions (greater than)."""
         if isinstance(other, Version):
             return self._pkg_version > other._pkg_version
-        if isinstance(other, PkgVersion):
-            return self._pkg_version > other
+        if isinstance(other, Release):
+            return self._pkg_version > other.version._pkg_version
         return NotImplemented
 
     def __ge__(self, other: object) -> bool:
         """Compare versions (greater than or equal)."""
         if isinstance(other, Version):
             return self._pkg_version >= other._pkg_version
-        if isinstance(other, PkgVersion):
-            return self._pkg_version >= other
+        if isinstance(other, Release):
+            return self._pkg_version >= other.version._pkg_version
         return NotImplemented
 
     def __hash__(self) -> int:
