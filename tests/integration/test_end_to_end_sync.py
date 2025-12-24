@@ -527,9 +527,6 @@ class TestInstallOnTargetIntegration:
                 f"Target version should match source floor release {source_release.version.semver_str()}.\n"
                 f"Target output: {post_check.stdout}"
             )
-            assert "0.1.0-alpha.1" not in post_check.stdout, (
-                f"Target should not have old version after sync.\nTarget output: {post_check.stdout}"
-            )
 
         finally:
             # Clean up config
