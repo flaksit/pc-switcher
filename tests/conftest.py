@@ -12,7 +12,7 @@ from pcswitcher.models import CommandResult
 
 
 @pytest.fixture(scope="session", autouse=True)
-def configure_test_logging() -> None:
+def _configure_test_logging() -> None:  # pyright: ignore[reportUnusedFunction]
     """Configure logging so test module logs show at INFO level.
 
     pytest's log_cli_level is set to WARNING to suppress verbose library logs

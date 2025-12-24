@@ -52,7 +52,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 @pytest.fixture(scope="session", autouse=True)
-def check_integration_env_vars() -> None:
+def _check_integration_env_vars() -> None:  # pyright: ignore[reportUnusedFunction]
     """Session-scoped fixture to check integration test environment variables.
 
     Exit the test session if any required environment variable is missing.
