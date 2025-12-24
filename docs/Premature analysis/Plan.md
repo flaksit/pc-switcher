@@ -521,16 +521,16 @@ echo "Ready for travel!"
 3. Open VS Code on XPS, verify extension auto-installs
 
 ## Success Criteria
-- [ ] Files sync bidirectionally without data loss
-- [ ] Package installations replicate correctly
-- [ ] /etc tracking rules persist and apply correctly
-- [ ] VM works on both machines after sync
-- [ ] Docker volumes restore correctly
-- [ ] k3s workloads deploy from synced manifests
-- [ ] VS Code identical on both machines
-- [ ] Dev tool caches work (no re-downloads)
-- [ ] Sync completes in <5 minutes on LAN
-- [ ] No permission/ownership issues on synced files
+- Files sync bidirectionally without data loss
+- Package installations replicate correctly
+- /etc tracking rules persist and apply correctly
+- VM works on both machines after sync
+- Docker volumes restore correctly
+- k3s workloads deploy from synced manifests
+- VS Code identical on both machines
+- Dev tool caches work (no re-downloads)
+- Sync completes in <5 minutes on LAN
+- No permission/ownership issues on synced files
 
 ## Maintenance Notes
 - Run `capture-state.sh` before leaving either machine

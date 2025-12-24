@@ -188,7 +188,7 @@ class TestEndToEndSync:
 
         # Clean up any existing snapshots from previous test runs to get clean state
         # Check both hosts in parallel
-        # TODO use btrfs subvolume delete instead of rm -rf
+        # TODO use btrfs subvolume delete instead of rm -rf (faster), like delete_subvol_recursive() in reset-vm.sh
         pc1_task = pc1_executor.run_command(
             "sudo rm -rf /.snapshots/pc-switcher* 2>/dev/null || true",
             timeout=30.0,
