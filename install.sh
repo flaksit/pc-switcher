@@ -181,7 +181,7 @@ elif git rev-parse --is-inside-work-tree &>/dev/null; then
     INSTALL_MODE="local checkout (${CURRENT_BRANCH})"
 else
     # Priority 4: Default to main branch
-    INSTALL_SOURCE="git+https://github.com/flaksit/pc-switcher@main"
+    INSTALL_SOURCE="git+https://github.com/flaksit/pc-switcher"
     INSTALL_MODE="main branch from GitHub"
 fi
 
