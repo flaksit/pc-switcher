@@ -37,8 +37,6 @@ REQUIRED_ENV_VARS = [
     "PC_SWITCHER_TEST_PC2_HOST",
     "PC_SWITCHER_TEST_USER",
 ]
-# Install script URL
-INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -114,10 +112,6 @@ async def pc1_executor(_pc1_connection: asyncssh.SSHClientConnection) -> BashLog
     return BashLoginRemoteExecutor(_pc1_connection)
 
 
-# Install script URL from main branch
-_INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
-
-
 @pytest.fixture(scope="module")
 async def pc2_executor(_pc2_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
     """Executor for running commands on pc2 with login shell enabled by default.
@@ -135,17 +129,28 @@ async def pc2_executor(_pc2_connection: asyncssh.SSHClientConnection) -> BashLog
 
 @pytest.fixture(scope="session")
 def current_git_branch() -> str:
-    """Get the current git branch name, defaulting to 'main' if not in a git repo."""
+    """Get the current git branch name, falling back to 'main' if not in a git repo."""
 
     try:
-        result = subprocess.run(
+        branch_result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
             text=True,
             check=True,
         )
-        return result.stdout.strip()
+        branch = branch_result.stdout.strip()
+        if branch == "HEAD":
+            pytest.fail("Detached HEAD state detected; please run tests from a branch.")
+            # commit_result = subprocess.run(
+            #     ["git", "rev-parse", "HEAD"],
+            #     capture_output=True,
+            #     text=True,
+            #     check=True,
+            # )
+            # return commit_result.stdout.strip()
+        return branch
     except (subprocess.CalledProcessError, FileNotFoundError):
+        # Not a git repository or git not installed; default to 'main'
         return "main"
 
 
@@ -210,7 +215,7 @@ async def install_pcswitcher_with_script(executor: BashLoginRemoteExecutor, *, v
 
 
 @overload
-async def install_pcswitcher_with_script(executor: BashLoginRemoteExecutor, *, ref: str) -> CommandResult: ...
+async def install_pcswitcher_with_script(executor: BashLoginRemoteExecutor, *, branch: str) -> CommandResult: ...
 
 
 async def install_pcswitcher_with_script(
@@ -218,22 +223,31 @@ async def install_pcswitcher_with_script(
     *,
     release: Release | None = None,
     version: Version | None = None,
-    ref: str | None = None,
+    branch: str | None = None,
 ) -> CommandResult:
     """Install a specific version of pc-switcher using the install script."""
-    if version:
-        set_version = f"VERSION='v{version.semver_str()}'"
-    elif release:
+    set_version = ""
+    set_ref = ""
+    if release:
+        url_ref = f"refs/tags/{release.tag}"
         set_version = f"VERSION='{release.tag}'"
+    elif version:
+        url_ref = f"refs/tags/v{version.semver_str()}"
+        set_version = f"VERSION='v{version.semver_str()}'"
+    elif branch:
+        url_ref = f"refs/heads/{branch}"
+        set_ref = f"-s -- --ref '{branch}'"
     else:
-        set_version = ""
-    set_ref = f"-s -- --ref '{ref}'" if ref else ""
+        url_ref = "refs/heads/main"
+
+    script_url = f"https://raw.githubusercontent.com/flaksit/pc-switcher/{url_ref}/install.sh"
+
     result = await executor.run_command(
-        f"curl -sSL {INSTALL_SCRIPT_URL} | {set_version} bash {set_ref}",
+        f"curl -sSL {script_url} | {set_version} bash {set_ref}",
         timeout=120.0,
         login_shell=False,
     )
-    assert result.success, f"Failed to install version {release or ref or '(main)'}: {result.stderr}"
+    assert result.success, f"Failed to install version {release or version or branch or '(main)'}: {result.stderr}"
     return result
 
 
@@ -335,7 +349,7 @@ async def pc1_with_pcswitcher_mod(
     await set_github_token_env_var(pc1_executor)
 
     # Always reinstall to ensure we have the latest code from current branch
-    await install_pcswitcher_with_script(pc1_executor, ref=branch)
+    await install_pcswitcher_with_script(pc1_executor, branch=branch)
 
     # Verify installation
     verify = await pc1_executor.run_command("pc-switcher --version", timeout=10.0)
