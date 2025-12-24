@@ -70,9 +70,7 @@ Example ADR: see [`002-postgresql-timescaledb.md`](docs/adr/002-postgresql-times
 ### AI agent integration strategy
 - AI agent reads `_index.md` first (always in context)
 - Loads specific ADRs only when relevant to current task
-- Use `conversation_search` to find relevant ADRs
-
-TODO Add this to the AI agent's context loading logic like AGENTS.md or CLAUDE.md.
+- Can search workspace files to find relevant ADRs
 
 ## Granularity Guidelines
 These guidelines help keep ADR maintenance overhead low while preserving meaningful decision boundaries for a solo project.
