@@ -298,9 +298,11 @@ async def uninstall_pcswitcher(executor: BashLoginRemoteExecutor) -> None:
 
 
 async def remove_config(executor: BashLoginRemoteExecutor) -> None:
-    """Remove pc-switcher configuration directory."""
-    await executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
-    # TODO Remove data directory if used
+    """Remove pc-switcher configuration and data directories."""
+    await executor.run_command(
+        "rm -rf ~/.config/pc-switcher ~/.local/share/pc-switcher",
+        timeout=10.0,
+    )
 
 async def uninstall_pcswitcher_and_config(executor: BashLoginRemoteExecutor) -> None:
     """Uninstall pc-switcher and remove its configuration."""
