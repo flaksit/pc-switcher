@@ -304,6 +304,7 @@ async def remove_config_and_data(executor: BashLoginRemoteExecutor) -> None:
         timeout=10.0,
     )
 
+
 async def uninstall_pcswitcher_and_config(executor: BashLoginRemoteExecutor) -> None:
     """Uninstall pc-switcher and remove its configuration."""
     await asyncio.gather(

@@ -84,4 +84,3 @@ class TestVerifyInstalledVersion:
             )
             result = cli._verify_installed_version()  # pyright: ignore[reportPrivateUsage]
             assert result is None
-

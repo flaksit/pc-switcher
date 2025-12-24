@@ -24,8 +24,7 @@ def new_release(highest_release: Release) -> Release:
     """
     if highest_release < _MIN_VERSION_WITH_SELF_UPDATE:
         pytest.skip(
-            f"Highest release ({highest_release}) is < {_MIN_VERSION_WITH_SELF_UPDATE};"
-            "skipping self-update tests"
+            f"Highest release ({highest_release}) is < {_MIN_VERSION_WITH_SELF_UPDATE}; skipping self-update tests"
         )
     return highest_release
 

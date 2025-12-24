@@ -202,9 +202,7 @@ class TestDummyFailBehavior:
         - Target phase starts, fails at 12s (2s into target = 60% progress)
         """
         # source=10s, target=10s, fail_at=12s (2s into target phase)
-        context = mock_job_context_factory(
-            config={"source_duration": 10, "target_duration": 10, "fail_at": 12}
-        )
+        context = mock_job_context_factory(config={"source_duration": 10, "target_duration": 10, "fail_at": 12})
         job = DummyFailJob(context)
 
         # Mock target.start_process for target phase
@@ -261,18 +259,14 @@ class TestDummyFailBehavior:
         assert "Dummy job failed at 12s" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_001_fr041_dummy_fail_configurable_time(
-        self, mock_job_context_factory: JobContextFactory
-    ) -> None:
+    async def test_001_fr041_dummy_fail_configurable_time(self, mock_job_context_factory: JobContextFactory) -> None:
         """FR-041: dummy_fail supports configurable fail_at time.
 
         Tests with different failure time to verify config is respected.
         With fail_at=6, failure occurs in source phase (before target phase).
         """
         # Fail at 6s (during source phase which runs for 10s by default)
-        context = mock_job_context_factory(
-            config={"source_duration": 10, "target_duration": 10, "fail_at": 6}
-        )
+        context = mock_job_context_factory(config={"source_duration": 10, "target_duration": 10, "fail_at": 6})
         job = DummyFailJob(context)
 
         # No need to mock target.start_process as failure happens in source phase
