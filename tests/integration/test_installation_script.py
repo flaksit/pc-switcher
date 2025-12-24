@@ -43,7 +43,7 @@ def floor_release() -> Release:
 
 
 async def test_001_fr035_install_script_no_prereqs(
-    pc2_without_pcswitcher: BashLoginRemoteExecutor,
+    pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
 ) -> None:
     """Test FR-035: install.sh works without prerequisites.
 
@@ -54,7 +54,7 @@ async def test_001_fr035_install_script_no_prereqs(
     - Does NOT create default config (user must run pc-switcher init)
     - Shows instructions to run pc-switcher init
     """
-    executor = pc2_without_pcswitcher
+    executor = pc2_without_pcswitcher_fn
 
     # Note: We assume uv is already installed on the test VM for test infrastructure.
     # The script should handle both cases (uv present and not present).
@@ -119,7 +119,7 @@ class TestInstallationScriptVersionParameter:
 
     async def test_001_install_release_version_on_clean_target(
         self,
-        pc2_without_pcswitcher: BashLoginRemoteExecutor,
+        pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
         highest_release: Release,
     ) -> None:
         """Test installing the release version on a clean target.
@@ -127,7 +127,7 @@ class TestInstallationScriptVersionParameter:
         Verifies that the install.sh script can install a specific version
         when pc-switcher is not already installed.
         """
-        executor = pc2_without_pcswitcher
+        executor = pc2_without_pcswitcher_fn
         release = highest_release
 
         # Install the release version using install.sh
@@ -147,22 +147,22 @@ class TestInstallationScriptVersionParameter:
 
     async def test_001_upgrade_from_older_version(
         self,
-        pc2_with_old_pcswitcher: BashLoginRemoteExecutor,
+        pc2_with_old_pcswitcher_fn: BashLoginRemoteExecutor,
         highest_release: Release,
     ) -> None:
         """Test upgrading from an older version to the release version.
 
         Verifies that the install.sh script can upgrade pc-switcher from an older version to a newer version.
 
-        Note: This uses the pc2_with_old_pcswitcher fixture, then we upgrade to the current release version.
+        Note: This uses the pc2_with_old_pcswitcher_fn fixture, then we upgrade to the current release version.
         """
         # Upgrade to the release version
         cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={highest_release.tag} bash"
-        result = await pc2_with_old_pcswitcher.run_command(cmd, timeout=120.0)
+        result = await pc2_with_old_pcswitcher_fn.run_command(cmd, timeout=120.0)
         assert result.success, f"Upgrade failed: {result.stderr}"
 
         # Verify version changed to release version
-        result = await pc2_with_old_pcswitcher.run_command("pc-switcher --version")
+        result = await pc2_with_old_pcswitcher_fn.run_command("pc-switcher --version")
         assert result.success, f"pc-switcher should be available: {result.stderr}"
         new_version = find_one_version(result.stdout)
 

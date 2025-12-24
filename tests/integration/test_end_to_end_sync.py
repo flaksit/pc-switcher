@@ -66,19 +66,19 @@ dummy_success:
 
 @pytest_asyncio.fixture
 async def sync_ready_source(
-    pc1_with_pcswitcher: BashLoginRemoteExecutor,
+    pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide pc1 configured and ready to run pc-switcher sync.
 
     This fixture:
-    1. Ensures pc-switcher is installed (via pc1_with_pcswitcher)
+    1. Ensures pc-switcher is installed (via pc1_with_pcswitcher_mod)
     2. Creates a test configuration with short-duration jobs
     3. Cleans up the test config after the test
 
     Yields:
         Executor for pc1, ready to run sync commands
     """
-    executor = pc1_with_pcswitcher
+    executor = pc1_with_pcswitcher_mod
 
     # Backup existing config if any
     await executor.run_command(
@@ -113,14 +113,14 @@ async def sync_ready_source(
 
 @pytest_asyncio.fixture
 async def sync_ready_source_long_duration(
-    pc1_with_pcswitcher: BashLoginRemoteExecutor,
+    pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide pc1 configured for sync with longer duration (for interrupt tests).
 
     Same as sync_ready_source but with 60-second durations to allow time
     for interrupt testing.
     """
-    executor = pc1_with_pcswitcher
+    executor = pc1_with_pcswitcher_mod
 
     # Backup existing config if any
     await executor.run_command(
@@ -411,8 +411,8 @@ class TestInstallOnTargetIntegration:
 
     async def test_install_on_target_fresh_machine(
         self,
-        pc1_with_pcswitcher: BashLoginRemoteExecutor,
-        pc2_without_pcswitcher: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
     ) -> None:
         """Verify InstallOnTargetJob installs pc-switcher on fresh target.
 
@@ -425,10 +425,10 @@ class TestInstallOnTargetIntegration:
         Unlike test_install_on_target_job.py which tests the job in isolation,
         this test verifies the job works correctly within the full sync pipeline.
         """
-        pc1_executor = pc1_with_pcswitcher
+        pc1_executor = pc1_with_pcswitcher_mod
 
         # Verify pc-switcher is NOT on target (fixture should have removed it)
-        pre_check = await pc2_without_pcswitcher.run_command(
+        pre_check = await pc2_without_pcswitcher_fn.run_command(
             "pc-switcher --version 2>/dev/null || echo 'not_installed'",
             timeout=10.0,
             login_shell=True,
@@ -463,7 +463,7 @@ class TestInstallOnTargetIntegration:
             )
 
             # Verify pc-switcher is now installed on target
-            post_check = await pc2_without_pcswitcher.run_command(
+            post_check = await pc2_without_pcswitcher_fn.run_command(
                 "pc-switcher --version",
                 timeout=10.0,
                 login_shell=True,
@@ -487,8 +487,8 @@ class TestInstallOnTargetIntegration:
 
     async def test_install_on_target_upgrade_older_version(
         self,
-        pc1_with_pcswitcher: BashLoginRemoteExecutor,
-        pc2_with_old_pcswitcher: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_old_pcswitcher_fn: BashLoginRemoteExecutor,
     ) -> None:
         """Verify InstallOnTargetJob upgrades older pc-switcher on target.
 
@@ -500,8 +500,8 @@ class TestInstallOnTargetIntegration:
         """
         # Create minimal test config
         test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=2, target_duration=2)
-        await pc1_with_pcswitcher.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
-        await pc1_with_pcswitcher.run_command(
+        await pc1_with_pcswitcher_mod.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+        await pc1_with_pcswitcher_mod.run_command(
             f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
             timeout=10.0,
         )
@@ -509,7 +509,7 @@ class TestInstallOnTargetIntegration:
         try:
             # Run sync - this should upgrade pc-switcher on target
             # Use --yes to auto-accept config sync prompts (non-interactive)
-            sync_result = await pc1_with_pcswitcher.run_command(
+            sync_result = await pc1_with_pcswitcher_mod.run_command(
                 "pc-switcher sync pc2 --yes",
                 timeout=300.0,
                 login_shell=True,
@@ -524,7 +524,7 @@ class TestInstallOnTargetIntegration:
             )
 
             # Verify pc-switcher was upgraded on target
-            post_check = await pc2_with_old_pcswitcher.run_command(
+            post_check = await pc2_with_old_pcswitcher_fn.run_command(
                 "pc-switcher --version",
                 timeout=10.0,
                 login_shell=True,
@@ -543,4 +543,4 @@ class TestInstallOnTargetIntegration:
 
         finally:
             # Clean up config
-            await pc1_with_pcswitcher.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
+            await pc1_with_pcswitcher_mod.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)

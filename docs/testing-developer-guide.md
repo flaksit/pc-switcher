@@ -416,8 +416,8 @@ If you create fixtures that modify VM state (like installing/uninstalling packag
 2. **Restore to initial state** after the test (in the cleanup/finally section)
 
 See `tests/integration/conftest.py` for examples:
-- `pc2_without_pcswitcher`: Uninstalls pc-switcher, then restores it if it was present
-- `pc2_with_old_pcswitcher`: Installs old version, then restores original state
+- `pc2_without_pcswitcher_fn`: Uninstalls pc-switcher, then restores it if it was present
+- `pc2_with_old_pcswitcher_fn`: Installs old version, then restores original state
 
 ### Directory Structure
 

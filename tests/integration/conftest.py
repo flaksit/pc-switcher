@@ -11,9 +11,9 @@ Fixtures provided:
 - pc2_connection: SSH connection to pc2 test VM
 - pc1_executor: BashLoginRemoteExecutor for pc1 (= RemoteExecutor with login shell environment)
 - pc2_executor: BashLoginRemoteExecutor for pc2 (= RemoteExecutor with login shell environment)
-- pc1_with_pcswitcher: pc1 executor with pc-switcher installed from current branch
-- pc2_without_pcswitcher: pc2 executor with pc-switcher uninstalled (clean target)
-- pc2_with_old_pcswitcher: pc2 executor with old pc-switcher version (upgrade testing)
+- pc1_with_pcswitcher_mod: pc1 executor with pc-switcher installed from current branch
+- pc2_without_pcswitcher_fn: pc2 executor with pc-switcher uninstalled (clean target)
+- pc2_with_old_pcswitcher_fn: pc2 executor with old pc-switcher version (upgrade testing)
 """
 
 from __future__ import annotations
@@ -297,7 +297,7 @@ async def uninstall_pcswitcher(executor: BashLoginRemoteExecutor) -> None:
     )
 
 
-async def remove_config(executor: BashLoginRemoteExecutor) -> None:
+async def remove_config_and_data(executor: BashLoginRemoteExecutor) -> None:
     """Remove pc-switcher configuration and data directories."""
     await executor.run_command(
         "rm -rf ~/.config/pc-switcher ~/.local/share/pc-switcher",
@@ -308,12 +308,12 @@ async def uninstall_pcswitcher_and_config(executor: BashLoginRemoteExecutor) -> 
     """Uninstall pc-switcher and remove its configuration."""
     await asyncio.gather(
         uninstall_pcswitcher(executor),
-        remove_config(executor),
+        remove_config_and_data(executor),
     )
 
 
 @pytest.fixture(scope="module")
-async def pc1_with_pcswitcher(
+async def pc1_with_pcswitcher_mod(
     pc1_executor: BashLoginRemoteExecutor, current_git_branch: str
 ) -> BashLoginRemoteExecutor:
     """Ensure pc-switcher is installed on pc1 from current branch.
@@ -344,7 +344,7 @@ async def pc1_with_pcswitcher(
 
 
 @pytest.fixture
-async def pc2_without_pcswitcher(
+async def pc2_without_pcswitcher_fn(
     pc2_executor: BashLoginRemoteExecutor,
 ) -> BashLoginRemoteExecutor:
     """Provide a clean environment on pc2 without pc-switcher installed.
@@ -364,8 +364,8 @@ async def pc2_without_pcswitcher(
 
 
 @pytest.fixture
-async def pc2_with_old_pcswitcher(
-    pc2_without_pcswitcher: BashLoginRemoteExecutor,
+async def pc2_with_old_pcswitcher_fn(
+    pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
     next_highest_release: Release,
 ) -> BashLoginRemoteExecutor:
     """Provide pc2 with an older version of pc-switcher.
@@ -381,6 +381,6 @@ async def pc2_with_old_pcswitcher(
     Cleanup: Captures initial state and restores it after the test to avoid affecting
     other tests in the same test session.
     """
-    await install_pcswitcher_with_script(pc2_without_pcswitcher, release=next_highest_release)
+    await install_pcswitcher_with_script(pc2_without_pcswitcher_fn, release=next_highest_release)
 
-    return pc2_without_pcswitcher
+    return pc2_without_pcswitcher_fn

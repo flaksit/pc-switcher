@@ -114,19 +114,19 @@ class TestSelfUpdateCommandExists:
 
     async def test_has_self_update(
         self,
-        pc1_with_pcswitcher: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
     ) -> None:
         # Self update command should exist
-        result = await pc1_with_pcswitcher.run_command("pc-switcher self update --help", timeout=10.0)
+        result = await pc1_with_pcswitcher_mod.run_command("pc-switcher self update --help", timeout=10.0)
         assert result.success, f"Self update help failed: {result.stderr}"
         assert "update" in result.stdout.lower()
 
     async def test_self_command_group_help(
         self,
-        pc1_with_pcswitcher: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
     ) -> None:
         """Test that 'pc-switcher self --help' shows the command group."""
-        result = await pc1_with_pcswitcher.run_command("pc-switcher self --help", timeout=10.0)
+        result = await pc1_with_pcswitcher_mod.run_command("pc-switcher self --help", timeout=10.0)
         assert result.success, f"Self help failed: {result.stderr}"
         # Should show "self" command group and list subcommands
         assert "update" in result.stdout.lower()
@@ -134,10 +134,10 @@ class TestSelfUpdateCommandExists:
 
     async def test_self_update_help_shows_prerelease_flag(
         self,
-        pc1_with_pcswitcher: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
     ) -> None:
         """Test that 'pc-switcher self update --help' documents --prerelease flag."""
-        result = await pc1_with_pcswitcher.run_command("pc-switcher self update --help", timeout=10.0)
+        result = await pc1_with_pcswitcher_mod.run_command("pc-switcher self update --help", timeout=10.0)
         assert result.success, f"Self update help failed: {result.stderr}"
         # Should document the --prerelease option
         assert "--prerelease" in result.stdout
@@ -242,19 +242,19 @@ class TestSelfUpdateErrorHandling:
 
     async def test_invalid_version_format(
         self,
-        pc1_with_pcswitcher: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
     ) -> None:
         """Test error handling for invalid version format."""
-        success, stdout, _stderr = await _run_self_update(pc1_with_pcswitcher, "not-a-version")
+        success, stdout, _stderr = await _run_self_update(pc1_with_pcswitcher_mod, "not-a-version")
         assert not success, "Should fail with invalid version"
         assert "invalid version format" in stdout.lower() or "error" in stdout.lower()
 
     async def test_nonexistent_version(
         self,
-        pc1_with_pcswitcher: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
     ) -> None:
         """Test error handling for non-existent version."""
-        success, stdout, stderr = await _run_self_update(pc1_with_pcswitcher, "99.99.99")
+        success, stdout, stderr = await _run_self_update(pc1_with_pcswitcher_mod, "99.99.99")
         assert not success, "Should fail with non-existent version"
         # Error could come from uv or from GitHub API
         assert len(stdout) > 0 or len(stderr) > 0
