@@ -7,7 +7,6 @@ from importlib.metadata import PackageNotFoundError
 from unittest.mock import MagicMock, patch
 
 import pytest
-from packaging.version import Version as PkgVersion
 
 from pcswitcher.version import (
     Release,
