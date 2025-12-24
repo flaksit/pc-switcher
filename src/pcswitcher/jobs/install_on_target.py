@@ -66,25 +66,19 @@ class InstallOnTargetJob(SystemJob):
 
     async def execute(self) -> None:
         """Install or upgrade pc-switcher on target if needed."""
-        # Get the GitHub release for this version (or the highest release <= this version).
-        # For dev versions like 0.1.0a3.post23.dev0, this returns the base release (e.g., 0.1.0a3).
-        # We compare against this floor release since dev versions aren't published to GitHub.
-        source_release = self.source_version.get_release_floor()
-
         # Check target version (already validated in validate phase)
         if self.target_version:
-            if self.target_version in (self.source_version, source_release.version):
+            if self.target_version == self.source_version:  # , source_release.version):
                 self._log(
                     Host.TARGET,
                     LogLevel.INFO,
-                    f"Target pc-switcher version matches source (real: {self.source_version} "
-                    f"or floor release: {source_release.version}), no install needed",
+                    f"Target pc-switcher version matches source: {self.source_version}, no install needed",
                 )
                 return
             self._log(
                 Host.TARGET,
                 LogLevel.INFO,
-                f"Upgrading pc-switcher on target from {self.target_version} to {source_release.version}",
+                f"Upgrading pc-switcher on target from {self.target_version} to {self.source_version}",
             )
         else:
             self._log(
@@ -95,23 +89,27 @@ class InstallOnTargetJob(SystemJob):
 
         # Run the same install.sh script used for initial installation
         # The script handles: uv bootstrap, dependencies, pc-switcher install
-        # Get the GitHub release for this version (or the highest release <= this version)
-        # For dev versions like 0.1.0a3.post23.dev0, this returns the base release (e.g., 0.1.0a3)
 
         # To minimize github lookups, we first try to install directly using the exact source version.
         # If that fails, we fall back to the release floor, which needs a GitHub API call to lookup the releases.
         result = await self._run_install(self.source_version)
-        if not result.success:
+        source_release = None
+        if result.success:
+            installed_version_str = f"v{self.source_version}"
+        else:
+            # Get the GitHub floor release for this version (the highest release <= this version).
+            # For dev versions like 0.1.0a3.post23.dev0, this returns the base release (e.g., 0.1.0a3).
+            source_release = self.source_version.get_release_floor()
             self._log(
                 Host.TARGET,
                 LogLevel.WARNING,
-                f"Installation with exact version tag v{self.source_version.semver_str()} failed, "
-                "falling back to release floor installation",
+                f"Installation with exact version v{self.source_version} failed, "
+                f"falling back to release floor {source_release.tag}",
             )
-            source_release = self.source_version.get_release_floor()
             result = await self._run_install(source_release)
             if not result.success:
                 raise RuntimeError(f"Failed to install pc-switcher on target: {result.stderr}")
+            installed_version_str = source_release.tag
 
         # Verify installation (login_shell ensures PATH includes ~/.local/bin)
         result = await self.target.run_command("pc-switcher --version", login_shell=True)
@@ -119,13 +117,13 @@ class InstallOnTargetJob(SystemJob):
             raise RuntimeError("Installation verification failed: pc-switcher not found")
         # Parse and compare versions properly (handles both PEP440 and SemVer formats)
         installed_version = find_one_version(result.stdout)
-        if installed_version != source_release.version:
+        if installed_version != (source_release or self.source_version):
             raise RuntimeError(
-                f"Installation verification failed: expected {source_release.version}, got {installed_version}"
+                f"Installation verification failed: expected {installed_version_str}, got v{installed_version}"
             )
 
         self._log(
             Host.TARGET,
             LogLevel.INFO,
-            f"Target pc-switcher installed/upgraded to {source_release.version}",
+            f"Target pc-switcher installed/upgraded to {installed_version_str}",
         )

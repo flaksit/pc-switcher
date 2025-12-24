@@ -23,32 +23,13 @@ User Stories covered:
 
 from __future__ import annotations
 
-import pytest
-
 from pcswitcher.events import EventBus
 from pcswitcher.executor import BashLoginRemoteExecutor, LocalExecutor
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
-from pcswitcher.version import find_one_version, get_this_version
+from pcswitcher.version import Release, find_one_version, get_this_version
 
 from ..conftest import get_installed_version
-
-
-def _is_dev_version() -> bool:
-    """Check if current version is a development version.
-
-    Development versions have .dev in their version string and don't have
-    corresponding release tags on GitHub.
-    """
-    version_str = get_this_version().pep440_str()
-    return ".dev" in version_str or ".post" in version_str
-
-
-# Skip marker for tests that require a released version
-requires_release_version = pytest.mark.skipif(
-    _is_dev_version(),
-    reason="Test requires a released version (not a development version)",
-)
 
 
 async def _create_integration_job_context(
@@ -87,11 +68,11 @@ async def _create_integration_job_context(
 class TestSelfInstallation:
     """Integration tests for automatic pc-switcher installation on target."""
 
-    @requires_release_version
     async def test_001_us2_as1_install_missing_pcswitcher(
         self,
         pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
         pc1_executor: BashLoginRemoteExecutor,
+        this_release_floor: Release,
     ) -> None:
         """US2-AS1: Install missing pc-switcher on target.
 
@@ -120,17 +101,16 @@ class TestSelfInstallation:
         assert result.success, f"pc-switcher should be installed on target: {result.stderr}"
 
         # Verify installed version matches source
-        source_version = get_this_version()
         target_version = find_one_version(result.stdout)
-        assert target_version == source_version, (
-            f"Target version {target_version} should match source {source_version}"
+        assert target_version == this_release_floor, (
+            f"Target version {target_version} should match source {this_release_floor}"
         )
 
-    @requires_release_version
     async def test_001_us2_as2_upgrade_outdated_target(
         self,
         pc2_with_old_pcswitcher_fn: BashLoginRemoteExecutor,
         pc1_executor: BashLoginRemoteExecutor,
+        this_release_floor: Release,
     ) -> None:
         """US2-AS2: Upgrade outdated target.
 
@@ -168,6 +148,6 @@ class TestSelfInstallation:
 
         # Verify upgraded version matches source
         target_version_new = find_one_version(result.stdout)
-        assert target_version_new == source_version, (
-            f"Target version {target_version_new} should match source {source_version} after upgrade"
+        assert target_version_new == this_release_floor, (
+            f"Target version {target_version_new} should match source {this_release_floor} after upgrade"
         )

@@ -30,7 +30,7 @@ import pytest
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.install import get_install_with_script_command_line
 from pcswitcher.models import CommandResult
-from pcswitcher.version import Release, Version, find_one_version, get_releases
+from pcswitcher.version import Release, Version, find_one_version, get_releases, get_this_version
 
 REQUIRED_ENV_VARS = [
     "HCLOUD_TOKEN",
@@ -167,6 +167,16 @@ async def get_installed_version(executor: BashLoginRemoteExecutor) -> Version:
 def github_releases_desc() -> list[Release]:
     """All non-draft GitHub releases, sorted highest-to-lowest."""
     return sorted(get_releases(include_prereleases=True), key=lambda r: r.version, reverse=True)
+
+
+@pytest.fixture(scope="session")
+def this_release_floor(github_releases_desc: list[Release]) -> Release:
+    """The highest GitHub release version."""
+    this_version = get_this_version()
+    for release in github_releases_desc:
+        if release.version <= this_version:
+            return release
+    pytest.skip("No GitHub release found for this version")
 
 
 @pytest.fixture(scope="session")
