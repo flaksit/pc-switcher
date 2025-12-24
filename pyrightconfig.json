@@ -1,6 +1,11 @@
 {
-    "include": ["src"],
-    "exclude": ["**/__pycache__", ".venv"],
+    "include": [
+        "src", "tests"
+    ],
+    "exclude": [
+        "**/__pycache__",
+        ".venv"
+    ],
     "pythonVersion": "3.14",
     "pythonPlatform": "Linux",
     "typeCheckingMode": "strict",
@@ -8,5 +13,12 @@
     "reportUnknownMemberType": false,
     "reportUnknownArgumentType": false,
     "reportUnknownVariableType": false,
-    "reportUnknownParameterType": false
+    "reportUnknownParameterType": false,
+    "verboseOutput": true,
+    "executionEnvironments": [
+        {
+            "root": "tests",
+            "reportPrivateUsage": false
+        }
+    ]
 }

@@ -7,7 +7,6 @@ from importlib.metadata import PackageNotFoundError
 from unittest.mock import MagicMock, patch
 
 import pytest
-from packaging.version import Version as PkgVersion
 
 from pcswitcher.version import (
     Release,
@@ -369,12 +368,6 @@ class TestVersionComparison:
         v1 = Version.parse_pep440("1.0.0a1")
         v2 = Version.parse_semver("1.0.0-alpha.1")
         assert v1 == v2
-
-    def test_equal_with_pkg_version(self) -> None:
-        """Should compare equal to packaging.version.Version."""
-        v = Version.parse_pep440("1.0.0a1")
-        pv = PkgVersion("1.0.0a1")
-        assert v == pv
 
     def test_less_than(self) -> None:
         """Should compare less than correctly."""

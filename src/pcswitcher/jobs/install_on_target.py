@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+from pcswitcher.install import get_install_with_script_command_line
 from pcswitcher.jobs.base import SystemJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.models import CommandResult, Host, LogLevel
-from pcswitcher.version import Version, find_one_version, get_this_version
+from pcswitcher.version import Release, Version, find_one_version, get_this_version
 
 if TYPE_CHECKING:
     from pcswitcher.models import ValidationError
@@ -58,21 +59,20 @@ class InstallOnTargetJob(SystemJob):
 
         return []
 
-    async def _run_install(self, tag: str) -> CommandResult:
-        """Run install script on target (login_shell ensures GITHUB_TOKEN is available)."""
-        install_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
-        cmd = f"curl -LsSf {install_url} | VERSION={tag} bash"
-        return await self.target.run_command(cmd, login_shell=True)
+    async def _run_install(self, v: Release | Version | str | None = None, /) -> CommandResult:
+        """Run install script on target."""
+        cmd = get_install_with_script_command_line(v)
+        return await self.target.run_command(cmd, login_shell=False)
 
     async def execute(self) -> None:
         """Install or upgrade pc-switcher on target if needed."""
         # Check target version (already validated in validate phase)
         if self.target_version:
-            if self.target_version == self.source_version:
+            if self.target_version == self.source_version:  # , source_release.version):
                 self._log(
                     Host.TARGET,
                     LogLevel.INFO,
-                    f"Target pc-switcher version matches source ({self.source_version})",
+                    f"Target pc-switcher version matches source: {self.source_version}, no install needed",
                 )
                 return
             self._log(
@@ -89,23 +89,27 @@ class InstallOnTargetJob(SystemJob):
 
         # Run the same install.sh script used for initial installation
         # The script handles: uv bootstrap, dependencies, pc-switcher install
-        # Get the GitHub release for this version (or the highest release <= this version)
-        # For dev versions like 0.1.0a3.post23.dev0, this returns the base release (e.g., 0.1.0a3)
 
         # To minimize github lookups, we first try to install directly using the exact source version.
         # If that fails, we fall back to the release floor, which needs a GitHub API call to lookup the releases.
-        result = await self._run_install(f"v{self.source_version.semver_str()}")
-        if not result.success:
+        result = await self._run_install(self.source_version)
+        source_release = None
+        if result.success:
+            installed_version_str = f"v{self.source_version}"
+        else:
+            # Get the GitHub floor release for this version (the highest release <= this version).
+            # For dev versions like 0.1.0a3.post23.dev0, this returns the base release (e.g., 0.1.0a3).
+            source_release = self.source_version.get_release_floor()
             self._log(
                 Host.TARGET,
                 LogLevel.WARNING,
-                f"Installation with exact version tag v{self.source_version.semver_str()} failed, "
-                "falling back to release floor installation",
+                f"Installation with exact version v{self.source_version} failed, "
+                f"falling back to release floor {source_release.tag}",
             )
-            source_release = self.source_version.get_release_floor()
-            result = await self._run_install(source_release.tag)
+            result = await self._run_install(source_release)
             if not result.success:
                 raise RuntimeError(f"Failed to install pc-switcher on target: {result.stderr}")
+            installed_version_str = source_release.tag
 
         # Verify installation (login_shell ensures PATH includes ~/.local/bin)
         result = await self.target.run_command("pc-switcher --version", login_shell=True)
@@ -113,13 +117,13 @@ class InstallOnTargetJob(SystemJob):
             raise RuntimeError("Installation verification failed: pc-switcher not found")
         # Parse and compare versions properly (handles both PEP440 and SemVer formats)
         installed_version = find_one_version(result.stdout)
-        if installed_version != self.source_version:
+        if installed_version != (source_release or self.source_version):
             raise RuntimeError(
-                f"Installation verification failed: expected {self.source_version}, got {installed_version}"
+                f"Installation verification failed: expected {installed_version_str}, got v{installed_version}"
             )
 
         self._log(
             Host.TARGET,
             LogLevel.INFO,
-            f"Target pc-switcher installed/upgraded to {self.source_version}",
+            f"Target pc-switcher installed/upgraded to {installed_version_str}",
         )

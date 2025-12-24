@@ -130,12 +130,13 @@ async def start_persistent_remote_lock(
     Returns:
         RemoteProcess object holding the lock, or None if lock is already held
     """
-    lock_path = f"~/.local/share/pc-switcher/{LOCK_FILE_NAME}"
+    lock_path = f"$HOME/.local/share/pc-switcher/{LOCK_FILE_NAME}"
     holder_info = f"target:{source_hostname}:{session_id}"
 
     # First create directory and write holder info to lock file
+    # Note: Use $HOME instead of ~ because ~ doesn't expand inside double quotes
     setup_result = await executor.run_command(
-        f'mkdir -p ~/.local/share/pc-switcher && echo "{holder_info}" > "{lock_path}"'
+        f'mkdir -p "$HOME/.local/share/pc-switcher" && echo "{holder_info}" > "{lock_path}"'
     )
     if not setup_result.success:
         return None

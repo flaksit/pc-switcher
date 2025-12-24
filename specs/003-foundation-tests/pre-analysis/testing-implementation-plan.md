@@ -165,7 +165,7 @@ For testing framework infrastructure (conftest fixtures, VM provisioning scripts
 
 | Test Class | Test Methods |
 |------------|--------------|
-| `TestDummyFailJobConfigSchema` | `test_schema_has_fail_at_percent`, `test_valid_config_passes`, `test_default_fail_percent` |
+| `TestDummyFailJobConfigSchema` | `test_schema_has_duration_and_fail_at`, `test_valid_config_passes`, `test_default_values` |
 
 ### tests/unit/test_jobs/test_context.py
 

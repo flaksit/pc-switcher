@@ -65,14 +65,16 @@ class Orchestrator:
     - Sync summary and session tracking
     """
 
-    def __init__(self, target: str, config: Configuration) -> None:
+    def __init__(self, target: str, config: Configuration, *, auto_accept: bool = False) -> None:
         """Initialize orchestrator with target and validated configuration.
 
         Args:
             target: Target hostname or SSH alias
             config: Validated configuration from YAML file
+            auto_accept: If True, auto-accept prompts (e.g., config sync)
         """
         self._config = config
+        self._auto_accept = auto_accept
         self._session_id = secrets.token_hex(4)
         self._session_folder = session_folder_name(self._session_id)
         self._source_hostname = get_local_hostname()
@@ -342,6 +344,7 @@ class Orchestrator:
             source_config_path=source_config_path,
             ui=self._ui,
             console=self._console,
+            auto_accept=self._auto_accept,
         )
 
         if not should_continue:

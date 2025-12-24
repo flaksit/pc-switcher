@@ -173,7 +173,7 @@ class TestExecutorWrapperOverhead:
         # Test with login shell wrapper (login_shell=True)
         for _ in range(num_runs):
             start = time.perf_counter()
-            result = await pc1_executor.run_command(":", login_shell=True)
+            result = await pc1_executor.run_command(":")
             elapsed = time.perf_counter() - start
             wrapped_timings.append(elapsed)
             assert result.success

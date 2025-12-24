@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -267,38 +268,41 @@ class TestEdgeCases:
     """Edge cases for orchestrator job lifecycle."""
 
     @pytest.mark.asyncio
-    async def test_001_edge_cleanup_exception(self, mock_job_context: JobContext) -> None:
-        """Edge: Job cleanup raises exception.
+    async def test_001_edge_cancelled_error_cleanup_and_reraise(self, mock_job_context: JobContext) -> None:
+        """Edge: Job cleanup on cancellation happens inside execute().
 
-        Validates behavior when a job's cleanup/termination raises an exception.
-        The orchestrator should handle this gracefully and continue cleanup.
+        Contract reference: specs/001-foundation/contracts/job-interface.md
+
+        Jobs MUST catch `asyncio.CancelledError`, perform cleanup, and re-raise.
+        This test verifies that pattern without relying on `__del__()`.
         """
 
-        class CleanupFailJob(SyncJob):
-            """Job that fails during cleanup."""
+        class CancelledCleanupJob(SyncJob):
+            name = "cancelled_cleanup_job"
 
-            name = "cleanup_fail_job"
+            def __init__(self, context: JobContext) -> None:
+                super().__init__(context)
+                self.cleanup_ran = False
 
             async def validate(self) -> list[ValidationError]:
                 return []
 
             async def execute(self) -> None:
-                # Normal execution
-                pass
+                try:
+                    await self.source.run_command("do-work")
+                    raise AssertionError("Expected cancellation")
+                except asyncio.CancelledError:
+                    self.cleanup_ran = True
+                    raise
 
-            def __del__(self) -> None:
-                # Simulate cleanup exception (in real code, this would be in a
-                # cleanup method called by orchestrator during cancellation)
-                raise RuntimeError("Cleanup failed")
+        source_run_command = cast(AsyncMock, mock_job_context.source.run_command)
+        source_run_command.side_effect = asyncio.CancelledError()
 
-        # This test documents the expectation that cleanup exceptions
-        # should not crash the orchestrator
-        job = CleanupFailJob(mock_job_context)
-        await job.validate()
-        await job.execute()
+        job = CancelledCleanupJob(mock_job_context)
+        with pytest.raises(asyncio.CancelledError):
+            await job.execute()
 
-        # Cleanup happens on deletion, but exceptions in __del__ are suppressed by Python
-        # In real orchestrator, cleanup would be explicit and exceptions would be caught
+        assert job.cleanup_ran
 
     @pytest.mark.asyncio
     async def test_001_edge_partial_job_failures(self, mock_job_context: JobContext) -> None:

@@ -46,7 +46,7 @@ _show_setup_output() {
 }
 trap '_show_setup_output' EXIT
 
-echo "Starting integration tests setup. This may take a few moments (often 30-60 seconds)..."
+echo "Starting integration tests setup"
 
 # Start buffering (save original FDs, redirect to buffer)
 exec 3>&1 4>&2
@@ -221,7 +221,7 @@ log_info "Test VMs are ready"
 
 # Reset VMs to baseline (unless skip flag is set)
 if [[ -z "${PC_SWITCHER_SKIP_RESET:-}" ]]; then
-    log_info "Resetting test VMs to baseline snapshots..."
+    log_info "Resetting test VMs to baseline snapshots. This may take a few moments (typically 25-60 seconds)..."
 
     # Reset both VMs in parallel
     export LOG_PREFIX="pc1:" && "$RESET_SCRIPT" "$PC_SWITCHER_TEST_PC1_HOST" &
@@ -262,7 +262,7 @@ SETUP_PHASE=0  # Mark setup as complete
 log_info "Running pytest..."
 cd "$PROJECT_ROOT"
 set +e
-uv run pytest -m "integration and not benchmark" -v -s "$@"
+uv run pytest -m "integration and not benchmark" -s "$@"
 pytest_exit_code=$?
 set -e
 

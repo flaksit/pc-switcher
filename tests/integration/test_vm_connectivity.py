@@ -132,6 +132,24 @@ async def test_inter_vm_connectivity_pc1_to_pc2(pc1_executor: RemoteExecutor) ->
     assert "inter-vm-success" in result.stdout
 
 
+async def test_inter_vm_connectivity_pc2_to_pc1(pc2_executor: RemoteExecutor) -> None:
+    """Test SSH connectivity from pc2 to pc1.
+
+    Verifies that pc2 can successfully SSH to pc1, ensuring bidirectional
+    connectivity between the VMs.
+    """
+    # Verify pc1 is reachable via hostname
+    pc1_ping_result = await pc2_executor.run_command("getent hosts pc1")
+    assert pc1_ping_result.success, "pc1 hostname not resolvable from pc2"
+
+    # From pc2, SSH to pc1 using hostname
+    ssh_cmd = "ssh testuser@pc1 'echo inter-vm-success'"
+    result = await pc2_executor.run_command(ssh_cmd, timeout=10.0)
+
+    assert result.success, f"Inter-VM SSH failed: {result.stderr}"
+    assert "inter-vm-success" in result.stdout
+
+
 async def test_working_directory_isolation(pc1_executor: RemoteExecutor) -> None:
     """Test that each command runs in the user's home directory.
 

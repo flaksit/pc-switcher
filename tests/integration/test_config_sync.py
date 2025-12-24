@@ -295,13 +295,13 @@ class TestConfigSyncIntegration:
             assert "/.local/bin/uv" in uv_result.stdout, "uv should be in ~/.local/bin"
 
             # Verify pc-switcher was installed
-            pc_result = await pc1_executor.run_command("pc-switcher --version", login_shell=True)
+            pc_result = await pc1_executor.run_command("pc-switcher --version")
             assert pc_result.success, "pc-switcher should be installed"
             assert "pc-switcher" in pc_result.stdout.lower(), "Version output should mention pc-switcher"
 
         finally:
             # Cleanup: uninstall pc-switcher
-            await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", login_shell=True)
+            await pc1_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true")
 
             # Restore uv if it wasn't there before (leave system as we found it)
             if not had_uv:

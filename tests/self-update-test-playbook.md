@@ -166,7 +166,7 @@ Execute these scenarios AFTER a new release containing the self-update feature i
 
 ```bash
 # 1. Clean slate
-uv tool uninstall pc-switcher 2>/dev/null || true
+uv tool uninstall pcswitcher 2>/dev/null || true
 
 # 2. Install the new release
 curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.2 bash
@@ -184,7 +184,7 @@ pc-switcher self update --help
 
 ```bash
 # 1. Clean slate
-uv tool uninstall pc-switcher 2>/dev/null || true
+uv tool uninstall pcswitcher 2>/dev/null || true
 
 # 2. Install the OLD release (which does NOT have self-update)
 curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.1 bash
@@ -290,7 +290,7 @@ pc-switcher self update --help
 
 ```bash
 # Remove pc-switcher completely
-uv tool uninstall pc-switcher
+uv tool uninstall pcswitcher
 
 # Verify removal
 which pc-switcher

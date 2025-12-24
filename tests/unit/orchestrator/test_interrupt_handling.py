@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
@@ -86,7 +87,7 @@ class QuickJob(SyncJob):
 
 
 @pytest.fixture
-def mock_config() -> Configuration:
+def mock_config() -> Iterator[Configuration]:
     """Create minimal mock configuration."""
     config_dict = {
         "log_file_level": "INFO",

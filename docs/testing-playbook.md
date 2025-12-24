@@ -741,7 +741,7 @@ pc-switcher sync localhost
 ```
 
 **Verify**:
-- [ ] Job progresses to configured fail_at_percent
+- [ ] Job progresses to configured fail_at time
 - [ ] ERROR or CRITICAL message logged when job fails
 - [ ] Error message is descriptive
 - [ ] Sync aborts gracefully

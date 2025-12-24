@@ -37,6 +37,8 @@ async def test_001_fr025_terminate_target_processes(
     test_id = f"test_fr025_{asyncio.get_event_loop().time():.0f}"
     marker_file = f"/tmp/{test_id}_marker"
 
+    pid = None
+
     try:
         # Clean up any previous markers
         await pc2_executor.run_command(f"rm -f {marker_file}")
@@ -73,7 +75,7 @@ async def test_001_fr025_terminate_target_processes(
 
     finally:
         # Cleanup - make sure to kill any leftover processes
-        if "pid" in dir():
+        if pid:
             await pc2_executor.run_command(f"kill -9 {pid} 2>/dev/null || true")
         await pc2_executor.run_command(f"rm -f {marker_file}")
 

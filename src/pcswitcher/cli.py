@@ -193,6 +193,14 @@ def sync(
             help="Path to config file (default: ~/.config/pc-switcher/config.yaml)",
         ),
     ] = None,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Auto-accept prompts (e.g., config sync confirmation)",
+        ),
+    ] = False,
 ) -> None:
     """Sync to target machine.
 
@@ -205,24 +213,25 @@ def sync(
     cfg = _load_configuration(config_path)
 
     # Run the sync operation
-    exit_code = _run_sync(target, cfg)
+    exit_code = _run_sync(target, cfg, auto_accept=yes)
     sys.exit(exit_code)
 
 
-def _run_sync(target: str, cfg: Configuration) -> int:
+def _run_sync(target: str, cfg: Configuration, *, auto_accept: bool = False) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
 
     Args:
         target: Target hostname
         cfg: Loaded configuration
+        auto_accept: If True, auto-accept prompts (e.g., config sync)
 
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
     """
-    return asyncio.run(_async_run_sync(target, cfg))
+    return asyncio.run(_async_run_sync(target, cfg, auto_accept=auto_accept))
 
 
-async def _async_run_sync(target: str, cfg: Configuration) -> int:
+async def _async_run_sync(target: str, cfg: Configuration, *, auto_accept: bool = False) -> int:
     """Async implementation of sync with interrupt handling.
 
     Interrupt behavior:
@@ -256,7 +265,7 @@ async def _async_run_sync(target: str, cfg: Configuration) -> int:
     loop.add_signal_handler(signal.SIGINT, sigint_handler)
 
     try:
-        orchestrator = Orchestrator(target=target, config=cfg)
+        orchestrator = Orchestrator(target=target, config=cfg, auto_accept=auto_accept)
         main_task = asyncio.create_task(orchestrator.run())
 
         try:
