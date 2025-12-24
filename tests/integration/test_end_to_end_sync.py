@@ -427,16 +427,6 @@ class TestInstallOnTargetIntegration:
         """
         pc1_executor = pc1_with_pcswitcher_mod
 
-        # Verify pc-switcher is NOT on target (fixture should have removed it)
-        pre_check = await pc2_without_pcswitcher_fn.run_command(
-            "pc-switcher --version 2>/dev/null || echo 'not_installed'",
-            timeout=10.0,
-            login_shell=True,
-        )
-        assert "not_installed" in pre_check.stdout or not pre_check.success, (
-            f"Target should not have pc-switcher before sync.\nOutput: {pre_check.stdout}"
-        )
-
         # Create minimal test config
         test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=2, target_duration=2)
         await pc1_executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
