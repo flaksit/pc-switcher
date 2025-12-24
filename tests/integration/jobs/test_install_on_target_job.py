@@ -24,13 +24,14 @@ User Stories covered:
 from __future__ import annotations
 
 import pytest
-from integration.conftest import get_installed_version
 
 from pcswitcher.events import EventBus
 from pcswitcher.executor import BashLoginRemoteExecutor, LocalExecutor
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.version import find_one_version, get_this_version
+
+from ..conftest import get_installed_version
 
 
 def _is_dev_version() -> bool:
