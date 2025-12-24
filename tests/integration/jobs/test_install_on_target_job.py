@@ -24,12 +24,13 @@ User Stories covered:
 from __future__ import annotations
 
 import pytest
+from integration.conftest import get_installed_version
 
 from pcswitcher.events import EventBus
 from pcswitcher.executor import BashLoginRemoteExecutor, LocalExecutor
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
-from pcswitcher.version import Version, find_one_version, get_this_version
+from pcswitcher.version import find_one_version, get_this_version
 
 
 def _is_dev_version() -> bool:
@@ -139,10 +140,10 @@ class TestSelfInstallation:
 
         Spec Reference: specs/001-foundation/spec.md - User Story 2, AS2
         """
-        # Fixture guarantees target has 0.1.0-alpha.1 installed
+        # Fixture guarantees target has old version installed
         # Verify source is newer
         source_version = get_this_version()
-        target_version_old = Version.parse("0.1.0-alpha.1")
+        target_version_old = await get_installed_version(pc2_with_old_pcswitcher)
         assert source_version > target_version_old, (
             f"Source {source_version} should be newer than target {target_version_old}"
         )

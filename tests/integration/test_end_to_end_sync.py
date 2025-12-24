@@ -493,27 +493,15 @@ class TestInstallOnTargetIntegration:
         """Verify InstallOnTargetJob upgrades older pc-switcher on target.
 
         This test runs a full pc-switcher sync to a target that has an older
-        version (0.1.0-alpha.1) installed, verifying that the InstallOnTargetJob:
+        version installed, verifying that the InstallOnTargetJob:
         1. Detects version mismatch
         2. Upgrades to source version
         3. Verifies upgrade succeeded
         """
-        pc1_executor = pc1_with_pcswitcher
-
-        # Verify target has old version (fixture should have installed 0.1.0-alpha.1)
-        pre_check = await pc2_with_old_pcswitcher.run_command(
-            "pc-switcher --version",
-            timeout=10.0,
-            login_shell=True,
-        )
-        assert pre_check.success and "0.1.0" in pre_check.stdout, (
-            f"Target should have old version before sync.\nOutput: {pre_check.stdout}"
-        )
-
         # Create minimal test config
         test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=2, target_duration=2)
-        await pc1_executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
-        await pc1_executor.run_command(
+        await pc1_with_pcswitcher.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+        await pc1_with_pcswitcher.run_command(
             f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
             timeout=10.0,
         )
@@ -521,7 +509,7 @@ class TestInstallOnTargetIntegration:
         try:
             # Run sync - this should upgrade pc-switcher on target
             # Use --yes to auto-accept config sync prompts (non-interactive)
-            sync_result = await pc1_executor.run_command(
+            sync_result = await pc1_with_pcswitcher.run_command(
                 "pc-switcher sync pc2 --yes",
                 timeout=300.0,
                 login_shell=True,
@@ -555,4 +543,4 @@ class TestInstallOnTargetIntegration:
 
         finally:
             # Clean up config
-            await pc1_executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
+            await pc1_with_pcswitcher.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)

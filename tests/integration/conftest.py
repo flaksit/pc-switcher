@@ -18,14 +18,18 @@ Fixtures provided:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 from collections.abc import AsyncIterator
+from typing import overload
 
 import asyncssh
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
+from pcswitcher.models import CommandResult
+from pcswitcher.version import Release, Version, find_one_version, get_releases
 
 REQUIRED_ENV_VARS = [
     "HCLOUD_TOKEN",
@@ -33,6 +37,8 @@ REQUIRED_ENV_VARS = [
     "PC_SWITCHER_TEST_PC2_HOST",
     "PC_SWITCHER_TEST_USER",
 ]
+# Install script URL
+INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -112,6 +118,21 @@ async def pc1_executor(_pc1_connection: asyncssh.SSHClientConnection) -> BashLog
 _INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
 
 
+@pytest.fixture(scope="module")
+async def pc2_executor(_pc2_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
+    """Executor for running commands on pc2 with login shell enabled by default.
+
+    Module-scoped: shared across all tests in a module.
+    Tests must clean up their own artifacts and not modify executor state.
+
+    Returns BashLoginRemoteExecutor which wraps all commands in bash login shell,
+    ensuring PATH includes ~/.local/bin for user-installed tools (uv, pc-switcher).
+    Commands use login_shell=True by default but can be overridden with login_shell=False
+    for system commands.
+    """
+    return BashLoginRemoteExecutor(_pc2_connection)
+
+
 @pytest.fixture(scope="session")
 def current_git_branch() -> str:
     """Get the current git branch name, defaulting to 'main' if not in a git repo."""
@@ -128,6 +149,167 @@ def current_git_branch() -> str:
         return "main"
 
 
+async def get_installed_version(executor: BashLoginRemoteExecutor) -> Version:
+    """Get the currently installed pc-switcher version."""
+    result = await executor.run_command("pc-switcher --version", timeout=10.0)
+    assert result.success, f"Failed to get version: {result.stderr}"
+    # Parse version from CLI output (handles both PEP440 and SemVer formats)
+    return find_one_version(result.stdout)
+
+
+@pytest.fixture(scope="session")
+def github_releases_desc() -> list[Release]:
+    """All non-draft GitHub releases, sorted highest-to-lowest."""
+    return sorted(get_releases(include_prereleases=True), key=lambda r: r.version, reverse=True)
+
+
+@pytest.fixture(scope="session")
+def highest_release(github_releases_desc: list[Release]) -> Release:
+    """The highest GitHub release version."""
+    try:
+        return github_releases_desc[0]
+    except IndexError:
+        pytest.skip("No GitHub releases found")
+
+
+@pytest.fixture(scope="session")
+def next_highest_release(github_releases_desc: list[Release]) -> Release:
+    """The next-highest GitHub release version."""
+    try:
+        return github_releases_desc[1]
+    except IndexError:
+        pytest.skip("Need at least two GitHub releases")
+
+
+async def set_github_token_env_var(executor: BashLoginRemoteExecutor) -> None:
+    """Set GITHUB_TOKEN environment variable on remote executor if available locally.
+
+    This helps avoid GitHub API rate limiting during version checks.
+    """
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if github_token:
+        # Add GITHUB_TOKEN to ~/.profile so it's available in login shells
+        await executor.run_command(
+            f'grep -q "export GITHUB_TOKEN=" ~/.profile 2>/dev/null || '
+            f"echo 'export GITHUB_TOKEN=\"{github_token}\"' >> ~/.profile",
+            timeout=10.0,
+            login_shell=False,
+        )
+
+
+@overload
+async def install_pcswitcher_with_script(executor: BashLoginRemoteExecutor) -> CommandResult: ...
+
+
+@overload
+async def install_pcswitcher_with_script(executor: BashLoginRemoteExecutor, *, release: Release) -> CommandResult: ...
+
+
+@overload
+async def install_pcswitcher_with_script(executor: BashLoginRemoteExecutor, *, version: Version) -> CommandResult: ...
+
+
+@overload
+async def install_pcswitcher_with_script(executor: BashLoginRemoteExecutor, *, ref: str) -> CommandResult: ...
+
+
+async def install_pcswitcher_with_script(
+    executor: BashLoginRemoteExecutor,
+    *,
+    release: Release | None = None,
+    version: Version | None = None,
+    ref: str | None = None,
+) -> CommandResult:
+    """Install a specific version of pc-switcher using the install script."""
+    if version:
+        set_version = f"VERSION='v{version.semver_str()}'"
+    elif release:
+        set_version = f"VERSION='{release.tag}'"
+    else:
+        set_version = ""
+    set_ref = f"-s -- --ref '{ref}'" if ref else ""
+    result = await executor.run_command(
+        f"curl -sSL {INSTALL_SCRIPT_URL} | {set_version} bash {set_ref}",
+        timeout=120.0,
+        login_shell=False,
+    )
+    assert result.success, f"Failed to install version {release or ref or '(main)'}: {result.stderr}"
+    return result
+
+
+@overload
+async def install_pcswitcher_with_uv(executor: BashLoginRemoteExecutor) -> CommandResult: ...
+
+
+@overload
+async def install_pcswitcher_with_uv(executor: BashLoginRemoteExecutor, *, release: Release) -> CommandResult: ...
+
+
+@overload
+async def install_pcswitcher_with_uv(executor: BashLoginRemoteExecutor, *, version: Version) -> CommandResult: ...
+
+
+@overload
+async def install_pcswitcher_with_uv(executor: BashLoginRemoteExecutor, *, ref: str) -> CommandResult: ...
+
+
+async def install_pcswitcher_with_uv(
+    executor: BashLoginRemoteExecutor,
+    *,
+    release: Release | None = None,
+    version: Version | None = None,
+    ref: str | None = None,
+) -> CommandResult:
+    """Install a specific version of pc-switcher using uv tool."""
+    if release:
+        version_arg = f"@{release.tag}"
+    elif version:
+        version_arg = f"@v{version.semver_str()}"
+    elif ref:
+        version_arg = f"@{ref}"
+    else:
+        version_arg = ""
+
+    result = await executor.run_command(
+        f"uv tool install --quiet --quiet git+https://github.com/flaksit/pc-switcher{version_arg}",
+        timeout=120.0,
+    )
+    assert result.success, f"Failed to install version {release} via uv: {result.stderr}"
+    return result
+
+
+async def uninstall_pcswitcher(executor: BashLoginRemoteExecutor) -> None:
+    """Uninstall pc-switcher."""
+    result = await executor.run_command("command -v uv && uv tool list | grep '^pcswitcher '", timeout=10.0)
+    if result.success:
+        result = await executor.run_command("uv tool uninstall pcswitcher", timeout=10.0)
+        assert result.success, f"Failed to uninstall pc-switcher:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+
+    # Verify pc-switcher is actually gone
+    result = await executor.run_command(
+        "command -v pc-switcher",
+        timeout=1.0,
+    )
+    assert not result.success, (
+        f"pc-switcher should be uninstalled but is still found.\n"
+        f"Try running: uv tool list; ls -la ~/.local/bin/pc-switcher\n"
+        f"stdout: {result.stdout}"
+    )
+
+
+async def remove_config(executor: BashLoginRemoteExecutor) -> None:
+    """Remove pc-switcher configuration directory."""
+    await executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
+    # TODO Remove data directory if used
+
+async def uninstall_pcswitcher_and_config(executor: BashLoginRemoteExecutor) -> None:
+    """Uninstall pc-switcher and remove its configuration."""
+    await asyncio.gather(
+        uninstall_pcswitcher(executor),
+        remove_config(executor),
+    )
+
+
 @pytest.fixture(scope="module")
 async def pc1_with_pcswitcher(
     pc1_executor: BashLoginRemoteExecutor, current_git_branch: str
@@ -141,37 +323,22 @@ async def pc1_with_pcswitcher(
 
     NOTE: This fixture installs from the current git branch to test in-development code.
     The branch must be pushed to origin for this to work.
+
+    Also sets up GITHUB_TOKEN on pc1 if available on the test runner to avoid
+    GitHub API rate limiting during version checks.
     """
     branch = current_git_branch
 
+    await set_github_token_env_var(pc1_executor)
+
     # Always reinstall to ensure we have the latest code from current branch
-    # This is important for testing in-development features
-    result = await pc1_executor.run_command(
-        f"curl -sSL {_INSTALL_SCRIPT_URL} | bash -s -- --ref {branch}",
-        timeout=120.0,
-    )
-    assert result.success, f"Failed to install pc-switcher on pc1 from branch {branch}: {result.stderr}"
+    await install_pcswitcher_with_script(pc1_executor, ref=branch)
 
     # Verify installation
     verify = await pc1_executor.run_command("pc-switcher --version", timeout=10.0)
     assert verify.success, f"pc-switcher not accessible after install: {verify.stderr}"
 
     return pc1_executor
-
-
-@pytest.fixture(scope="module")
-async def pc2_executor(_pc2_connection: asyncssh.SSHClientConnection) -> BashLoginRemoteExecutor:
-    """Executor for running commands on pc2 with login shell enabled by default.
-
-    Module-scoped: shared across all tests in a module.
-    Tests must clean up their own artifacts and not modify executor state.
-
-    Returns BashLoginRemoteExecutor which wraps all commands in bash login shell,
-    ensuring PATH includes ~/.local/bin for user-installed tools (uv, pc-switcher).
-    Commands use login_shell=True by default but can be overridden with login_shell=False
-    for system commands.
-    """
-    return BashLoginRemoteExecutor(_pc2_connection)
 
 
 @pytest.fixture
@@ -190,43 +357,28 @@ async def pc2_without_pcswitcher(
     Cleanup: Captures initial state and restores it after the test to avoid affecting
     other tests in the same test session.
     """
-    # Check if pc-switcher was installed before we modify state
-    # Uninstall pc-switcher if it exists
-    await pc2_executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
-    await pc2_executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
-
+    await uninstall_pcswitcher_and_config(pc2_executor)
     return pc2_executor
 
 
 @pytest.fixture
 async def pc2_with_old_pcswitcher(
     pc2_without_pcswitcher: BashLoginRemoteExecutor,
+    next_highest_release: Release,
 ) -> BashLoginRemoteExecutor:
-    """Provide pc2 with an older version of pc-switcher (0.1.0-alpha.1).
+    """Provide pc2 with an older version of pc-switcher.
 
     WARNING: This fixture wraps pc2_executor and modifies VM state by installing
     an older version of pc-switcher. Tests using this fixture MUST NOT use pc2_executor
     directly in parallel, as both operate on the same VM and will interfere with each
     other.
 
-    Uninstalls current pc-switcher and installs version 0.1.0-alpha.1.
+    Uninstalls current pc-switcher and installs an older release.
     Useful for testing upgrade scenarios.
 
     Cleanup: Captures initial state and restores it after the test to avoid affecting
     other tests in the same test session.
     """
-    executor = pc2_without_pcswitcher
+    await install_pcswitcher_with_script(pc2_without_pcswitcher, release=next_highest_release)
 
-    # Install script URL from main branch
-    install_script_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
-
-    # Uninstall and install older version
-    await executor.run_command("uv tool uninstall pc-switcher 2>/dev/null || true", timeout=30.0)
-    await executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
-    result = await executor.run_command(
-        f"curl -sSL {install_script_url} | VERSION=v0.1.0-alpha.1 bash",
-        timeout=120.0,
-    )
-    assert result.success, f"Failed to install old version: {result.stderr}"
-
-    return executor
+    return pc2_without_pcswitcher

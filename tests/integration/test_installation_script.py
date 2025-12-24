@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
-from pcswitcher.version import Release, Version, find_one_version, get_this_version
+from pcswitcher.version import Release, find_one_version, get_this_version
 
 # Install script URL from main branch
 INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
@@ -120,7 +120,7 @@ class TestInstallationScriptVersionParameter:
     async def test_001_install_release_version_on_clean_target(
         self,
         pc2_without_pcswitcher: BashLoginRemoteExecutor,
-        floor_release: Release,
+        highest_release: Release,
     ) -> None:
         """Test installing the release version on a clean target.
 
@@ -128,7 +128,7 @@ class TestInstallationScriptVersionParameter:
         when pc-switcher is not already installed.
         """
         executor = pc2_without_pcswitcher
-        release = floor_release
+        release = highest_release
 
         # Install the release version using install.sh
         cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={release.tag} bash"
@@ -148,25 +148,16 @@ class TestInstallationScriptVersionParameter:
     async def test_001_upgrade_from_older_version(
         self,
         pc2_with_old_pcswitcher: BashLoginRemoteExecutor,
-        floor_release: Release,
+        highest_release: Release,
     ) -> None:
         """Test upgrading from an older version to the release version.
 
-        Verifies that the install.sh script can upgrade pc-switcher from
-        an older version to a newer version.
+        Verifies that the install.sh script can upgrade pc-switcher from an older version to a newer version.
 
-        Note: This uses the pc2_with_old_pcswitcher fixture which installs
-        0.1.0-alpha.1, then we upgrade to the current release version.
+        Note: This uses the pc2_with_old_pcswitcher fixture, then we upgrade to the current release version.
         """
-        release = floor_release
-        old_version = Version.parse("0.1.0-alpha.1")
-
-        # Skip if release version is not newer than old version
-        if release.version <= old_version:
-            pytest.skip(f"Release version {release.version} is not newer than {old_version}")
-
         # Upgrade to the release version
-        cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={release.tag} bash"
+        cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={highest_release.tag} bash"
         result = await pc2_with_old_pcswitcher.run_command(cmd, timeout=120.0)
         assert result.success, f"Upgrade failed: {result.stderr}"
 
@@ -175,4 +166,4 @@ class TestInstallationScriptVersionParameter:
         assert result.success, f"pc-switcher should be available: {result.stderr}"
         new_version = find_one_version(result.stdout)
 
-        assert new_version == release.version, f"New version {new_version} should be {release.version}"
+        assert new_version == highest_release, f"New version {new_version} should be {highest_release.version}"
