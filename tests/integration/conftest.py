@@ -28,6 +28,7 @@ import asyncssh
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
+from pcswitcher.install import get_install_with_script_command_line
 from pcswitcher.models import CommandResult
 from pcswitcher.version import Release, Version, find_one_version, get_releases
 
@@ -202,52 +203,23 @@ async def set_github_token_env_var(executor: BashLoginRemoteExecutor) -> None:
         )
 
 
-@overload
-async def install_pcswitcher_with_script(executor: BashLoginRemoteExecutor) -> CommandResult: ...
-
-
-@overload
-async def install_pcswitcher_with_script(executor: BashLoginRemoteExecutor, *, release: Release) -> CommandResult: ...
-
-
-@overload
-async def install_pcswitcher_with_script(executor: BashLoginRemoteExecutor, *, version: Version) -> CommandResult: ...
-
-
-@overload
-async def install_pcswitcher_with_script(executor: BashLoginRemoteExecutor, *, branch: str) -> CommandResult: ...
-
-
 async def install_pcswitcher_with_script(
     executor: BashLoginRemoteExecutor,
-    *,
-    release: Release | None = None,
-    version: Version | None = None,
-    branch: str | None = None,
+    v: Release | Version | str | None = None,
 ) -> CommandResult:
-    """Install a specific version of pc-switcher using the install script."""
-    set_version = ""
-    set_ref = ""
-    if release:
-        url_ref = f"refs/tags/{release.tag}"
-        set_version = f"VERSION='{release.tag}'"
-    elif version:
-        url_ref = f"refs/tags/v{version.semver_str()}"
-        set_version = f"VERSION='v{version.semver_str()}'"
-    elif branch:
-        url_ref = f"refs/heads/{branch}"
-        set_ref = f"-s -- --ref '{branch}'"
-    else:
-        url_ref = "refs/heads/main"
+    """Install a specific version of pc-switcher using the install script.
 
-    script_url = f"https://raw.githubusercontent.com/flaksit/pc-switcher/{url_ref}/install.sh"
+    Args:
+        v: Release, Version, or branch name to install.
+    """
+    cmd = get_install_with_script_command_line(v)
 
     result = await executor.run_command(
-        f"curl -sSL {script_url} | {set_version} bash {set_ref}",
+        cmd,
         timeout=120.0,
         login_shell=False,
     )
-    assert result.success, f"Failed to install version {release or version or branch or '(main)'}: {result.stderr}"
+    assert result.success, f"Failed to install version {v or '(main)'}: {result.stderr}"
     return result
 
 
@@ -349,7 +321,7 @@ async def pc1_with_pcswitcher_mod(
     await set_github_token_env_var(pc1_executor)
 
     # Always reinstall to ensure we have the latest code from current branch
-    await install_pcswitcher_with_script(pc1_executor, branch=branch)
+    await install_pcswitcher_with_script(pc1_executor, branch)
 
     # Verify installation
     verify = await pc1_executor.run_command("pc-switcher --version", timeout=10.0)
@@ -396,6 +368,6 @@ async def pc2_with_old_pcswitcher_fn(
     Cleanup: Captures initial state and restores it after the test to avoid affecting
     other tests in the same test session.
     """
-    await install_pcswitcher_with_script(pc2_without_pcswitcher_fn, release=next_highest_release)
+    await install_pcswitcher_with_script(pc2_without_pcswitcher_fn, next_highest_release)
 
     return pc2_without_pcswitcher_fn

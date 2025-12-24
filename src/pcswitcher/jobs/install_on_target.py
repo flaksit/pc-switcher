@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+from pcswitcher.install import get_install_with_script_command_line
 from pcswitcher.jobs.base import SystemJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.models import CommandResult, Host, LogLevel
-from pcswitcher.version import Version, find_one_version, get_this_version
+from pcswitcher.version import Release, Version, find_one_version, get_this_version
 
 if TYPE_CHECKING:
     from pcswitcher.models import ValidationError
@@ -58,11 +59,10 @@ class InstallOnTargetJob(SystemJob):
 
         return []
 
-    async def _run_install(self, tag: str) -> CommandResult:
-        """Run install script on target (login_shell ensures GITHUB_TOKEN is available)."""
-        install_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
-        cmd = f"curl -LsSf {install_url} | VERSION={tag} bash"
-        return await self.target.run_command(cmd, login_shell=True)
+    async def _run_install(self, v: Release | Version | str | None = None, /) -> CommandResult:
+        """Run install script on target."""
+        cmd = get_install_with_script_command_line(v)
+        return await self.target.run_command(cmd, login_shell=False)
 
     async def execute(self) -> None:
         """Install or upgrade pc-switcher on target if needed."""
@@ -100,7 +100,7 @@ class InstallOnTargetJob(SystemJob):
 
         # To minimize github lookups, we first try to install directly using the exact source version.
         # If that fails, we fall back to the release floor, which needs a GitHub API call to lookup the releases.
-        result = await self._run_install(f"v{self.source_version.semver_str()}")
+        result = await self._run_install(self.source_version)
         if not result.success:
             self._log(
                 Host.TARGET,
@@ -109,7 +109,7 @@ class InstallOnTargetJob(SystemJob):
                 "falling back to release floor installation",
             )
             source_release = self.source_version.get_release_floor()
-            result = await self._run_install(source_release.tag)
+            result = await self._run_install(source_release)
             if not result.success:
                 raise RuntimeError(f"Failed to install pc-switcher on target: {result.stderr}")
 
