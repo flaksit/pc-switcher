@@ -276,7 +276,7 @@ class TestSelfUpdateNoStableRelease:
                 f"{[r.tag for r in stable_releases[:3]]}{'...' if len(stable_releases) > 3 else ''}"
             )
 
-        await install_pcswitcher_with_script(pc2_executor_with_new, release=old_release)
+        await install_pcswitcher_with_script(pc2_executor_with_new, old_release)
 
         # Without --prerelease, should fail (only prereleases exist)
         success, stdout, _stderr = await _run_self_update(pc2_executor_with_new)
