@@ -132,6 +132,14 @@ async def pc2_executor(_pc2_connection: asyncssh.SSHClientConnection) -> BashLog
 def current_git_branch() -> str:
     """Get the current git branch name, falling back to 'main' if not in a git repo."""
 
+    head_ref = os.environ.get("GITHUB_HEAD_REF")
+    if head_ref:
+        return head_ref
+
+    ref_name = os.environ.get("GITHUB_REF_NAME")
+    if ref_name:
+        return ref_name
+
     try:
         branch_result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
