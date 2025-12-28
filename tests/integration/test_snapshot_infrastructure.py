@@ -13,7 +13,7 @@ from specs/001-foundation/spec.md.
 
 from __future__ import annotations
 
-import time
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime
 
@@ -260,13 +260,18 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
         success, error_msg = await validate_snapshots_directory(pc1_executor, Host.SOURCE)
         assert success, f"Failed to validate snapshots directory: {error_msg}"
 
+        # Count pre-existing c1ea* snapshots (from interrupted previous test runs)
+        pre_existing_snapshots = await list_snapshots(pc1_executor, Host.SOURCE)
+        pre_existing_c1ea = [s for s in pre_existing_snapshots if s.session_id.startswith("c1ea")]
+        pre_existing_count = len(pre_existing_c1ea)
+
         # Create 5 test sessions (we'll keep 3 most recent)
         # Use hex session IDs to match the expected pattern (8 hex chars)
         for i in range(5):
             # Generate 8-char hex session ID (like real session IDs)
             session_id = f"c1ea{i:04x}"  # e.g., c1ea0000, c1ea0001, etc.
             # Use different timestamps to ensure ordering - add a small delay
-            time.sleep(1.1)  # Ensure unique timestamps
+            await asyncio.sleep(1.1)  # Ensure unique timestamps
             timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
             session_folder = f"{timestamp}-{session_id}"
             session_path = f"/.snapshots/pc-switcher/{session_folder}"
@@ -291,8 +296,10 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
         snapshots_before = await list_snapshots(pc1_executor, Host.SOURCE)
         # Filter by our test session IDs (hex patterns starting with c1ea)
         test_snapshots_before = [s for s in snapshots_before if s.session_id.startswith("c1ea")]
-        assert len(test_snapshots_before) == 10, (
-            f"Expected 10 snapshots (5 sessions x 2), got {len(test_snapshots_before)}"
+        expected_before = 10 + pre_existing_count
+        assert len(test_snapshots_before) == expected_before, (
+            f"Expected {expected_before} snapshots (5 sessions x 2 + {pre_existing_count} pre-existing), "
+            f"got {len(test_snapshots_before)}"
         )
 
         # Run cleanup keeping 3 most recent sessions
@@ -305,8 +312,13 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
 
         # Verify correct number of snapshots were deleted
         # Should delete 2 oldest sessions (4 snapshots total: 2 pre + 2 post)
+        # Plus any pre-existing c1ea* snapshots (older, so all get deleted)
         test_deleted = [s for s in deleted if s.session_id.startswith("c1ea")]
-        assert len(test_deleted) == 4, f"Expected 4 snapshots deleted, got {len(test_deleted)}"
+        expected_deleted = 4 + pre_existing_count
+        assert len(test_deleted) == expected_deleted, (
+            f"Expected {expected_deleted} snapshots deleted (4 + {pre_existing_count} pre-existing), "
+            f"got {len(test_deleted)}"
+        )
 
         # List snapshots after cleanup
         snapshots_after = await list_snapshots(pc1_executor, Host.SOURCE)

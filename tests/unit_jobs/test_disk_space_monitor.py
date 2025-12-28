@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -156,14 +156,16 @@ class TestDiskSpaceMonitorValidation:
         # No errors when mount point check succeeds
         assert errors == []
         # Verify test -d command was called
-        mock_job_context.source.run_command.assert_called_once_with("test -d /")
+        source_run_command = cast(AsyncMock, mock_job_context.source.run_command)
+        source_run_command.assert_called_once_with("test -d /")
 
     @pytest.mark.asyncio
     async def test_validate_reports_mount_point_error(self, mock_job_context: JobContext) -> None:
         """validate() should report error when mount point check fails."""
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/nonexistent")
         # Mock test -d command failure (exit code 1)
-        mock_job_context.source.run_command.return_value = CommandResult(exit_code=1, stdout="", stderr="")
+        source_run_command = cast(AsyncMock, mock_job_context.source.run_command)
+        source_run_command.return_value = CommandResult(exit_code=1, stdout="", stderr="")
         errors = await job.validate()
         assert len(errors) == 1
         assert "Mount point does not exist or is not accessible" in errors[0].message
@@ -256,7 +258,8 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         df_output = """Filesystem     1B-blocks        Used   Available Use% Mounted on
 /dev/sda1      107374182400 102005473280  5368709120  95% /"""
 
-        mock_job_context.source.run_command.return_value = CommandResult(exit_code=0, stdout=df_output, stderr="")
+        source_run_command = cast(AsyncMock, mock_job_context.source.run_command)
+        source_run_command.return_value = CommandResult(exit_code=0, stdout=df_output, stderr="")
 
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
 
@@ -347,7 +350,8 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         df_output = """Filesystem     1B-blocks        Used   Available Use% Mounted on
 /dev/sda1      107374182400 85899345920 21474836480  80% /"""
 
-        mock_job_context.source.run_command.return_value = CommandResult(exit_code=0, stdout=df_output, stderr="")
+        source_run_command = cast(AsyncMock, mock_job_context.source.run_command)
+        source_run_command.return_value = CommandResult(exit_code=0, stdout=df_output, stderr="")
 
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
 
@@ -378,7 +382,8 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         df_output = """Filesystem     1B-blocks        Used   Available Use% Mounted on
 /dev/sda1      107374182400 53687091200 53687091200  50% /"""
 
-        mock_job_context.source.run_command.return_value = CommandResult(exit_code=0, stdout=df_output, stderr="")
+        source_run_command = cast(AsyncMock, mock_job_context.source.run_command)
+        source_run_command.return_value = CommandResult(exit_code=0, stdout=df_output, stderr="")
 
         job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
 

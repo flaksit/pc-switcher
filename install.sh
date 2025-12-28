@@ -181,14 +181,14 @@ elif git rev-parse --is-inside-work-tree &>/dev/null; then
     INSTALL_MODE="local checkout (${CURRENT_BRANCH})"
 else
     # Priority 4: Default to main branch
-    INSTALL_SOURCE="git+https://github.com/flaksit/pc-switcher@main"
+    INSTALL_SOURCE="git+https://github.com/flaksit/pc-switcher"
     INSTALL_MODE="main branch from GitHub"
 fi
 
 info "Installing from ${INSTALL_MODE}..."
 
 # Install or upgrade using uv tool
-if uv tool list | grep -q "^pc-switcher "; then
+if uv tool list | grep -q "^pcswitcher "; then
     info "pc-switcher is already installed. Upgrading..."
     if uv tool install --force "${INSTALL_SOURCE}"; then
         success "pc-switcher upgraded successfully"

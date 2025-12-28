@@ -23,14 +23,14 @@ from pcswitcher.executor import BashLoginRemoteExecutor
 
 @pytest.fixture
 async def clean_config_environment(
-    pc1_with_pcswitcher: BashLoginRemoteExecutor,
+    pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide a clean environment for testing init command.
 
-    Requires pc-switcher to be installed (via pc1_with_pcswitcher fixture).
+    Requires pc-switcher to be installed (via pc1_with_pcswitcher_mod fixture).
     Removes existing config file before test, restores after test.
     """
-    pc1_executor = pc1_with_pcswitcher
+    pc1_executor = pc1_with_pcswitcher_mod
     # Backup existing config if it exists
     await pc1_executor.run_command(
         "if [ -f ~/.config/pc-switcher/config.yaml ]; then "
@@ -73,7 +73,7 @@ class TestInitCommand:
         executor = clean_config_environment
 
         # Run pc-switcher init
-        result = await executor.run_command("pc-switcher init", timeout=30.0, login_shell=True)
+        result = await executor.run_command("pc-switcher init", timeout=30.0)
         assert result.success, f"pc-switcher init failed: {result.stderr}"
         assert "Created configuration file" in result.stdout, f"Expected success message, got: {result.stdout}"
 
@@ -114,11 +114,11 @@ class TestInitCommand:
         executor = clean_config_environment
 
         # Verify pc-switcher is installed and accessible
-        version_result = await executor.run_command("pc-switcher --version", timeout=10.0, login_shell=True)
+        version_result = await executor.run_command("pc-switcher --version", timeout=10.0)
         assert version_result.success, f"pc-switcher not installed: {version_result.stderr}"
 
         # Run pc-switcher init
-        init_result = await executor.run_command("pc-switcher init", timeout=30.0, login_shell=True)
+        init_result = await executor.run_command("pc-switcher init", timeout=30.0)
         assert init_result.success, f"pc-switcher init failed: {init_result.stderr}"
 
         # Verify config was created at the expected path
@@ -142,7 +142,7 @@ class TestInitCommand:
 
     async def test_001_us7_as3_init_preserves_existing_config(
         self,
-        pc1_with_pcswitcher: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
     ) -> None:
         """US7-AS3: pc-switcher init refuses to overwrite existing config without --force.
 
@@ -151,7 +151,7 @@ class TestInitCommand:
         - Refuses to overwrite without --force flag
         - Leaves the original config intact
         """
-        executor = pc1_with_pcswitcher
+        executor = pc1_with_pcswitcher_mod
 
         # First ensure a config exists (either by init or creating one)
         await executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
@@ -171,7 +171,7 @@ class TestInitCommand:
         assert custom_marker in verify_marker.stdout, "Failed to create test config with marker"
 
         # Run pc-switcher init WITHOUT --force - should fail
-        init_result = await executor.run_command("pc-switcher init", timeout=30.0, login_shell=True)
+        init_result = await executor.run_command("pc-switcher init", timeout=30.0)
         assert not init_result.success, "pc-switcher init should fail when config exists"
         assert "already exists" in init_result.stdout or "Use --force" in init_result.stdout, (
             f"Should mention existing config: {init_result.stdout}"
@@ -207,7 +207,7 @@ class TestInitCommand:
         )
 
         # Run pc-switcher init WITH --force - should succeed
-        init_result = await executor.run_command("pc-switcher init --force", timeout=30.0, login_shell=True)
+        init_result = await executor.run_command("pc-switcher init --force", timeout=30.0)
         assert init_result.success, f"pc-switcher init --force failed: {init_result.stderr}"
         assert "Created configuration file" in init_result.stdout, f"Expected success message: {init_result.stdout}"
 
@@ -223,13 +223,13 @@ class TestInitCommand:
 
     async def test_001_init_creates_parent_directory(
         self,
-        pc1_with_pcswitcher: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
     ) -> None:
         """Test that pc-switcher init creates parent directory if missing.
 
         Verifies that init creates ~/.config/pc-switcher/ if it doesn't exist.
         """
-        executor = pc1_with_pcswitcher
+        executor = pc1_with_pcswitcher_mod
 
         # Backup and remove entire config directory
         await executor.run_command(
@@ -246,7 +246,7 @@ class TestInitCommand:
             assert "not_found" in dir_check.stdout, "Config directory should not exist"
 
             # Run pc-switcher init
-            init_result = await executor.run_command("pc-switcher init", timeout=30.0, login_shell=True)
+            init_result = await executor.run_command("pc-switcher init", timeout=30.0)
             assert init_result.success, f"pc-switcher init failed: {init_result.stderr}"
 
             # Verify directory was created

@@ -10,6 +10,9 @@
 - [ADR-006](adr-006-testing-framework.md): VM-Based Testing Framework
 - [ADR-007](adr-007-tdd-implementation.md): Test-Driven Development for Implementation
 
+### Instructions for AI agents
+Load specific ADRs only when relevant to current task: search workspace files to find relevant ADRs
+
 ## Superseded
 
 (None)

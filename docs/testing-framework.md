@@ -232,7 +232,7 @@ The baseline snapshots capture the following VM state (as configured by `configu
 
 **IMPORTANT**: The baseline does NOT include pc-switcher. Tests that need pc-switcher must:
 - Install it via `curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash`
-- OR use fixtures like `pc2_executor_without_pcswitcher_tool` or `pc2_executor_with_old_pcswitcher_tool` that handle installation/cleanup
+- OR use fixtures like `pc2_without_pcswitcher_fn` or `pc2_with_old_pcswitcher_fn` that handle installation/cleanup
 
 ### Test Isolation
 

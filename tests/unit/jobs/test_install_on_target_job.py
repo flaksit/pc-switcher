@@ -10,6 +10,7 @@ Tests cover US-2 (Self-Installation) requirements from specs/001-foundation/spec
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -83,9 +84,12 @@ class TestInstallOnTargetJobVersionCheck:
             calls = mock_install_context.target.run_command.call_args_list
             assert len(calls) == 3
             install_call = calls[1][0][0]
-            assert "curl -LsSf" in install_call
-            assert "main/install.sh" in install_call
-            assert "VERSION=v0.4.0" in install_call
+            assert "curl" in install_call
+            assert "install.sh" in install_call
+            # The VERSION env var should be passed to the install script
+            assert re.search(r"VERSION=(?:(?P<q>['\"])(v)?0\.4\.0(?P=q)|v0\.4\.0)", install_call), (
+                f"Should pass VERSION env var. Got: {install_call}"
+            )
 
     @pytest.mark.asyncio
     async def test_001_fr005_upgrade_when_target_older(self, mock_install_context: JobContext) -> None:
@@ -127,8 +131,11 @@ class TestInstallOnTargetJobVersionCheck:
             calls = mock_install_context.target.run_command.call_args_list
             assert len(calls) == 3
             install_call = calls[1][0][0]
-            assert "main/install.sh" in install_call
-            assert "VERSION=v0.4.0" in install_call
+            assert "install.sh" in install_call
+            # The VERSION env var should be passed to the install script
+            assert re.search(r"VERSION=(?:(?P<q>['\"])(v)?0\.4\.0(?P=q)|v0\.4\.0)", install_call), (
+                f"Should pass VERSION env var. Got: {install_call}"
+            )
 
 
 class TestInstallOnTargetJobNewerTargetVersion:
@@ -233,7 +240,13 @@ class TestInstallOnTargetJobInstallationFailure:
         Tests that even if install command succeeds, verification must confirm
         the correct version is installed.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
+        mock_version = Version.parse("0.4.0")
+        mock_release = Release(version=mock_version, is_prerelease=False, tag="v0.4.0")
+
+        with (
+            patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=mock_version),
+            patch.object(Version, "get_release_floor", return_value=mock_release),
+        ):
             # Mock install succeeds but verification fails
             mock_install_context.target.run_command = AsyncMock(
                 side_effect=[
@@ -270,7 +283,13 @@ class TestInstallOnTargetJobSkipWhenMatching:
         0.4.0, orchestrator logs "Target pc-switcher version matches source (0.4.0),
         skipping installation" and proceeds immediately to next phase.
         """
-        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
+        mock_version = Version.parse("0.4.0")
+        mock_release = Release(version=mock_version, is_prerelease=False, tag="v0.4.0")
+
+        with (
+            patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=mock_version),
+            patch.object(Version, "get_release_floor", return_value=mock_release),
+        ):
             # Mock target has matching version
             mock_install_context.target.run_command = AsyncMock(
                 return_value=CommandResult(exit_code=0, stdout="pc-switcher 0.4.0", stderr="")
@@ -392,17 +411,16 @@ class TestInstallOnTargetJobUS7AS2:
             install_call = calls[1][0][0]
 
             # The installation command should use install.sh from GitHub
-            assert "curl -LsSf" in install_call, "Should use curl to download install.sh"
-            assert "install.sh" in install_call, "Should execute install.sh script"
+            assert "curl" in install_call, f"Should use curl to download install.sh. Got: {install_call}"
+            assert "install.sh" in install_call, f"Should execute install.sh script. Got: {install_call}"
             assert "github.com" in install_call or "githubusercontent.com" in install_call, (
-                "Should download from GitHub"
+                f"Should download from GitHub. Got: {install_call}"
             )
 
             # The VERSION env var should be passed to the install script
-            assert "VERSION=v0.4.0" in install_call, "Should pass VERSION env var"
+            assert re.search(r"VERSION=(?:(?P<q>['\"])(v)?0\.4\.0(?P=q)|v0\.4\.0)", install_call), (
+                f"Should pass VERSION env var. Got: {install_call}"
+            )
 
             # Should use the same curl | bash pattern as user installation
-            assert "bash" in install_call, "Should pipe to bash like user installation"
-
-            # Should use main branch URL with VERSION env var (not version-specific branch)
-            assert "main/install.sh" in install_call, "Should use main branch install.sh"
+            assert "bash" in install_call, f"Should pipe to bash like user installation. Got: {install_call}"
