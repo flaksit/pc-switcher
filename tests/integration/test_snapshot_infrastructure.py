@@ -13,9 +13,8 @@ from specs/001-foundation/spec.md.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -267,12 +266,14 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
 
         # Create 5 test sessions (we'll keep 3 most recent)
         # Use hex session IDs to match the expected pattern (8 hex chars)
+        # Use fake timestamps (1 minute apart) to ensure ordering without sleeping
+        base_time = datetime.now()
         for i in range(5):
             # Generate 8-char hex session ID (like real session IDs)
             session_id = f"c1ea{i:04x}"  # e.g., c1ea0000, c1ea0001, etc.
-            # Use different timestamps to ensure ordering - add a small delay
-            await asyncio.sleep(1.1)  # Ensure unique timestamps
-            timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+            # Use fake timestamps 1 minute apart for deterministic ordering
+            fake_time = base_time + timedelta(minutes=i)
+            timestamp = fake_time.strftime("%Y%m%dT%H%M%S")
             session_folder = f"{timestamp}-{session_id}"
             session_path = f"/.snapshots/pc-switcher/{session_folder}"
             session_paths.append(session_path)
@@ -281,8 +282,9 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
             await pc1_executor.run_command(f"sudo mkdir -p {session_path}")
 
             # Create both pre and post snapshots for this session
-            pre_snap = snapshot_name("@test", SnapshotPhase.PRE)
-            post_snap = snapshot_name("@test", SnapshotPhase.POST)
+            # Use fake timestamps in snapshot names (cleanup uses these for ordering)
+            pre_snap = f"pre-@test-{timestamp}"
+            post_snap = f"post-@test-{timestamp}"
 
             pre_path = f"{session_path}/{pre_snap}"
             post_path = f"{session_path}/{post_snap}"
