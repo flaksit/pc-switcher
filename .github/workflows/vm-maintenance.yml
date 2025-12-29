@@ -27,7 +27,10 @@ jobs:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
           set -euo pipefail
-          VM_LIST=$(hcloud server list -o columns=name,ipv4 -o noheader)
+          if ! VM_LIST=$(hcloud server list -o columns=name,ipv4 -o noheader); then
+            echo "::error::Failed to list VMs via hcloud"
+            exit 1
+          fi
           PC1_IP=$(echo "$VM_LIST" | awk '$1 == "pc1" {print $2}')
           PC2_IP=$(echo "$VM_LIST" | awk '$1 == "pc2" {print $2}')
           if [[ -n "$PC1_IP" && -n "$PC2_IP" ]]; then
@@ -47,15 +50,16 @@ jobs:
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
           echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           echo "${{ secrets.SSH_AUTHORIZED_KEY_CI }}" > ~/.ssh/id_ed25519.pub
           chmod 600 ~/.ssh/id_ed25519
           if [[ -n "${{ steps.vm_ips.outputs.pc1_ip }}" ]]; then
-            ssh-keyscan -H "${{ steps.vm_ips.outputs.pc1_ip }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+            ssh-keyscan -H "${{ steps.vm_ips.outputs.pc1_ip }}" >> ~/.ssh/known_hosts 2>/dev/null
           fi
           if [[ -n "${{ steps.vm_ips.outputs.pc2_ip }}" ]]; then
-            ssh-keyscan -H "${{ steps.vm_ips.outputs.pc2_ip }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+            ssh-keyscan -H "${{ steps.vm_ips.outputs.pc2_ip }}" >> ~/.ssh/known_hosts 2>/dev/null
           fi
 
       - name: Checkout
