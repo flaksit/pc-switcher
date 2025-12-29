@@ -254,9 +254,9 @@ log_info "$VM2_NAME: $PC2_IP"
 
 # Reset VMs to baseline in parallel
 log_step "Resetting VMs to baseline state..."
-"$SCRIPT_DIR/reset-vm.sh" "$PC1_IP" &
+LOG_PREFIX="$VM1_NAME:" "$SCRIPT_DIR/reset-vm.sh" "$PC1_IP" &
 PID1=$!
-"$SCRIPT_DIR/reset-vm.sh" "$PC2_IP" &
+LOG_PREFIX="$VM2_NAME:" "$SCRIPT_DIR/reset-vm.sh" "$PC2_IP" &
 PID2=$!
 
 set +e
