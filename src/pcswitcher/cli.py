@@ -104,12 +104,11 @@ def main(
     ] = False,
 ) -> None:
     """PC-switcher synchronization system."""
-    # Configure logging: INFO level for third-party libs
+    # Configure logging: WARNING for third-party libs, DEBUG for pcswitcher
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.WARNING,
         format="%(name)s: %(message)s",
     )
-    # Set pcswitcher logger to DEBUG level
     logging.getLogger("pcswitcher").setLevel(logging.DEBUG)
 
 
