@@ -259,10 +259,19 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
         success, error_msg = await validate_snapshots_directory(pc1_executor, Host.SOURCE)
         assert success, f"Failed to validate snapshots directory: {error_msg}"
 
-        # Count pre-existing c1ea* snapshots (from interrupted previous test runs)
+        # Clean up ALL existing pc-switcher snapshots to ensure test isolation.
+        # Other tests (like test_end_to_end_sync) may leave behind snapshots that
+        # would interfere with keep_recent counting.
         pre_existing_snapshots = await list_snapshots(pc1_executor, Host.SOURCE)
-        pre_existing_c1ea = [s for s in pre_existing_snapshots if s.session_id.startswith("c1ea")]
-        pre_existing_count = len(pre_existing_c1ea)
+        for snap in pre_existing_snapshots:
+            await pc1_executor.run_command(
+                f"sudo btrfs subvolume delete {snap.path} 2>/dev/null || true",
+                timeout=10.0,
+            )
+        # Clean up empty session folders
+        session_folders = {"/".join(s.path.split("/")[:-1]) for s in pre_existing_snapshots}
+        for folder in session_folders:
+            await pc1_executor.run_command(f"sudo rmdir {folder} 2>/dev/null || true")
 
         # Create 5 test sessions (we'll keep 3 most recent)
         # Use hex session IDs to match the expected pattern (8 hex chars)
@@ -298,10 +307,8 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
         snapshots_before = await list_snapshots(pc1_executor, Host.SOURCE)
         # Filter by our test session IDs (hex patterns starting with c1ea)
         test_snapshots_before = [s for s in snapshots_before if s.session_id.startswith("c1ea")]
-        expected_before = 10 + pre_existing_count
-        assert len(test_snapshots_before) == expected_before, (
-            f"Expected {expected_before} snapshots (5 sessions x 2 + {pre_existing_count} pre-existing), "
-            f"got {len(test_snapshots_before)}"
+        assert len(test_snapshots_before) == 10, (
+            f"Expected 10 snapshots (5 sessions x 2), got {len(test_snapshots_before)}"
         )
 
         # Run cleanup keeping 3 most recent sessions
@@ -314,13 +321,8 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
 
         # Verify correct number of snapshots were deleted
         # Should delete 2 oldest sessions (4 snapshots total: 2 pre + 2 post)
-        # Plus any pre-existing c1ea* snapshots (older, so all get deleted)
         test_deleted = [s for s in deleted if s.session_id.startswith("c1ea")]
-        expected_deleted = 4 + pre_existing_count
-        assert len(test_deleted) == expected_deleted, (
-            f"Expected {expected_deleted} snapshots deleted (4 + {pre_existing_count} pre-existing), "
-            f"got {len(test_deleted)}"
-        )
+        assert len(test_deleted) == 4, f"Expected 4 snapshots deleted (2 oldest sessions x 2), got {len(test_deleted)}"
 
         # List snapshots after cleanup
         snapshots_after = await list_snapshots(pc1_executor, Host.SOURCE)
