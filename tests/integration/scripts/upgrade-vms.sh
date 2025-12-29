@@ -180,7 +180,7 @@ upgrade_vm() {
 }
 
 # Check if VM needs reboot
-# Returns 0 if reboot needed, 1 if no reboot needed
+# Returns 0 if reboot needed, 1 if no reboot needed, 2 on error
 check_reboot_required() {
     local vm_name="$1"
     local vm_ip="$2"
@@ -188,19 +188,20 @@ check_reboot_required() {
     log_info "Checking if $vm_name requires reboot..."
 
     # Check for reboot-required flag file (standard Ubuntu)
-    if ssh_run "${SSH_USER}@${vm_ip}" "test -f /var/run/reboot-required" 2>/dev/null; then
+    # Use || status=$? to capture exit code immediately (POSIX: $? after if-fi is 0 if no branch executed)
+    local status=0
+    ssh_run "${SSH_USER}@${vm_ip}" "test -f /var/run/reboot-required" 2>/dev/null || status=$?
+
+    if [[ $status -eq 0 ]]; then
         log_info "$vm_name: Reboot required (flag file exists)"
         return 0
-    fi
-
-    local status=$?
-    if [[ $status -ne 0 ]]; then
+    elif [[ $status -eq 1 ]]; then
         log_info "$vm_name: No reboot required"
         return 1
+    else
+        log_error "$vm_name: Failed to check reboot requirement (exit code: $status)"
+        return 2
     fi
-
-    log_error "$vm_name: Failed to check reboot requirement"
-    return 2
 }
 
 # Reboot a VM and wait for it to come back online
