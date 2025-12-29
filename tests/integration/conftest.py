@@ -109,8 +109,12 @@ async def pc1_executor(_pc1_connection: asyncssh.SSHClientConnection) -> BashLog
     ensuring PATH includes ~/.local/bin for user-installed tools (uv, pc-switcher).
     Commands use login_shell=True by default but can be overridden with login_shell=False
     for system commands.
+
+    Also sets up GITHUB_TOKEN on pc1 if available to avoid GitHub API rate limiting.
     """
-    return BashLoginRemoteExecutor(_pc1_connection)
+    executor = BashLoginRemoteExecutor(_pc1_connection)
+    await set_github_token_env_var(executor)
+    return executor
 
 
 @pytest.fixture(scope="module")
@@ -124,8 +128,12 @@ async def pc2_executor(_pc2_connection: asyncssh.SSHClientConnection) -> BashLog
     ensuring PATH includes ~/.local/bin for user-installed tools (uv, pc-switcher).
     Commands use login_shell=True by default but can be overridden with login_shell=False
     for system commands.
+
+    Also sets up GITHUB_TOKEN on pc2 if available to avoid GitHub API rate limiting.
     """
-    return BashLoginRemoteExecutor(_pc2_connection)
+    executor = BashLoginRemoteExecutor(_pc2_connection)
+    await set_github_token_env_var(executor)
+    return executor
 
 
 @pytest.fixture(scope="session")
@@ -330,13 +338,8 @@ async def pc1_with_pcswitcher_mod(
 
     NOTE: This fixture installs from the current git branch to test in-development code.
     The branch must be pushed to origin for this to work.
-
-    Also sets up GITHUB_TOKEN on pc1 if available on the test runner to avoid
-    GitHub API rate limiting during version checks.
     """
     branch = current_git_branch
-
-    await set_github_token_env_var(pc1_executor)
 
     # Always reinstall to ensure we have the latest code from current branch
     await install_pcswitcher_with_script(pc1_executor, branch)
