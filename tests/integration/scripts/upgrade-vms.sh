@@ -331,12 +331,12 @@ if [[ "$CHANGES_OCCURRED" == "true" ]]; then
     check_reboot_required "$VM2_NAME" "$PC2_IP" &
     PID2=$!
 
-    set +e
-    wait $PID1
-    EXIT1=$?
-    wait $PID2
-    EXIT2=$?
-    set -e
+    # Use || EXIT=$? to prevent ERR trap firing (set +e disables errexit but not ERR trap)
+    # check_reboot_required returns: 0=reboot needed, 1=no reboot, 2+=error
+    EXIT1=0
+    wait $PID1 || EXIT1=$?
+    EXIT2=0
+    wait $PID2 || EXIT2=$?
 
     if [[ $EXIT1 -eq 0 ]]; then
         PC1_NEEDS_REBOOT=true
