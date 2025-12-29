@@ -260,12 +260,11 @@ PID1=$!
 LOG_PREFIX="$VM2_NAME:" "$SCRIPT_DIR/reset-vm.sh" "$PC2_IP" &
 PID2=$!
 
-set +e
-wait $PID1
-EXIT1=$?
-wait $PID2
-EXIT2=$?
-set -e
+# Use || EXIT=$? to prevent ERR trap firing (set +e disables errexit but not ERR trap)
+EXIT1=0
+wait $PID1 || EXIT1=$?
+EXIT2=0
+wait $PID2 || EXIT2=$?
 
 if [[ $EXIT1 -ne 0 || $EXIT2 -ne 0 ]]; then
     log_error "VM reset failed"
@@ -279,28 +278,27 @@ TMPDIR=$(mktemp -d)
 
 # Run upgrades in parallel, prefix each line with VM name
 (
-    set +e
+    trap '' ERR  # Disable inherited ERR trap, we handle errors explicitly
     set -o pipefail
-    upgrade_vm "$VM1_NAME" "$PC1_IP" 2>&1 | sed "s/^/[$VM1_NAME] /" | tee "$TMPDIR/pc1.out"
-    exit_code=$?
+    exit_code=0
+    upgrade_vm "$VM1_NAME" "$PC1_IP" 2>&1 | sed "s/^/[$VM1_NAME] /" | tee "$TMPDIR/pc1.out" || exit_code=$?
     exit "$exit_code"
 ) &
 PID1=$!
 (
-    set +e
+    trap '' ERR  # Disable inherited ERR trap, we handle errors explicitly
     set -o pipefail
-    upgrade_vm "$VM2_NAME" "$PC2_IP" 2>&1 | sed "s/^/[$VM2_NAME] /" | tee "$TMPDIR/pc2.out"
-    exit_code=$?
+    exit_code=0
+    upgrade_vm "$VM2_NAME" "$PC2_IP" 2>&1 | sed "s/^/[$VM2_NAME] /" | tee "$TMPDIR/pc2.out" || exit_code=$?
     exit "$exit_code"
 ) &
 PID2=$!
 
-set +e
-wait $PID1
-EXIT1=$?
-wait $PID2
-EXIT2=$?
-set -e
+# Use || EXIT=$? to prevent ERR trap firing (set +e disables errexit but not ERR trap)
+EXIT1=0
+wait $PID1 || EXIT1=$?
+EXIT2=0
+wait $PID2 || EXIT2=$?
 
 if [[ $EXIT1 -ne 0 || $EXIT2 -ne 0 ]]; then
     log_error "Package upgrade failed"
@@ -401,12 +399,11 @@ if [[ "$CHANGES_OCCURRED" == "true" ]]; then
     ssh_run "${SSH_USER}@${PC2_IP}" "sudo apt-get clean" >/dev/null 2>&1 &
     PID2=$!
 
-    set +e
-    wait $PID1
-    EXIT1=$?
-    wait $PID2
-    EXIT2=$?
-    set -e
+    # Use || EXIT=$? to prevent ERR trap firing (set +e disables errexit but not ERR trap)
+    EXIT1=0
+    wait $PID1 || EXIT1=$?
+    EXIT2=0
+    wait $PID2 || EXIT2=$?
 
     if [[ $EXIT1 -ne 0 || $EXIT2 -ne 0 ]]; then
         log_error "Failed to clean apt cache on one or more VMs"
