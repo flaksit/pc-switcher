@@ -23,11 +23,16 @@ The CI pipeline uses GitHub Actions with a tiered approach:
 
 ### Integration Tests Workflow (`integration-tests.yml`)
 
-**Trigger**: Pull requests to `main` (non-draft only)
+**Trigger**: Pull requests to `main`
 
-**Conditions**:
+**Jobs**:
+1. **check-changes**: Determines if integration tests should run based on changed files
+2. **integration**: Runs actual tests (conditional on check-changes + non-draft PR)
+3. **status**: Always runs and reports final status (this is the required check)
+
+**Conditions for running tests**:
 - PR must not be a draft (`if: github.event.pull_request.draft == false`)
-- Only runs when relevant files change:
+- Relevant files must have changed:
   - `.github/workflows/integration-tests.yml`
   - `src/**`
   - `tests/integration/**`
@@ -43,7 +48,7 @@ The CI pipeline uses GitHub Actions with a tiered approach:
 
 **Concurrency**: Only one integration test run at a time (`cancel-in-progress: false`)
 
-**Duration**: 5-30 minutes depending on VM state
+**Duration**: 5-30 minutes depending on VM state (when tests run); <1 minute (when skipped)
 
 ### Other Workflows
 
@@ -58,10 +63,10 @@ The CI pipeline uses GitHub Actions with a tiered approach:
 ### Required Status Checks
 
 All must pass before merge:
-- `Lint`
-- `Unit Tests`
-- `Integration Tests`
-- `Requires issue closing keyword`
+- `CI / Lint (push)`
+- `CI / Unit Tests (push)`
+- `Integration Tests Status`
+- `PR metadata / Requires issue closing keyword (pull_request)`
 
 ### Settings
 
@@ -136,9 +141,13 @@ uv run pytest tests/unit tests/contract -v
 
 ### Integration Tests Not Running
 
-1. **PR is draft** - Mark as ready for review
-2. **No relevant file changes** - Only triggers on src/tests/config changes
+The `Integration Tests Status` check will always complete, but the actual integration tests may be skipped:
+
+1. **Tests skipped with ✓** - No relevant files changed (this is normal and expected)
+2. **PR is draft** - Mark as ready for review to run tests
 3. **Targeting wrong branch** - Must target `main`
+
+To check if tests ran or were skipped, view the workflow run details.
 
 ### Integration Tests Failing
 
@@ -148,7 +157,8 @@ uv run pytest tests/unit tests/contract -v
 
 ### Merge Blocked
 
-All three checks must pass:
+All required checks must pass:
 - If Lint fails: Run `uv run ruff check --fix && uv run ruff format`
 - If Unit Tests fail: Check test output, run locally to debug
-- If Integration Tests fail: Check logs artifact, may need VM reset
+- If Integration Tests Status fails: Check logs artifact, may need VM reset
+- If Issue closing keyword fails: Add "Fixes #123" or similar to PR description
