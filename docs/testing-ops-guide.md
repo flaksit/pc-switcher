@@ -47,7 +47,7 @@ The repository uses three GitHub Actions workflows for testing:
 |----------|------|----------|---------|
 | CI | `ci.yml` | Every push | Lint (basedpyright, ruff, codespell) and unit tests |
 | Integration Tests | `integration-tests.yml` | PR ready for review | Full integration tests on Hetzner VMs |
-| VM Maintenance | `vm-maintenance.yml` | Weekly (Monday 2am UTC) | Keep test VMs updated with OS patches |
+| VM Updates | `vm-updates.yml` | Daily (2am UTC) | Keep test VMs updated with OS patches |
 
 ### Integration Tests Trigger Strategy
 
@@ -112,18 +112,20 @@ The `main` branch requires these status checks before merging:
 
 **Note**: The merge queue feature is **not used**. Integration tests run directly on PR branches, gated by the draft/ready status.
 
-### VM Maintenance Workflow
+### VM Updates Workflow
 
-The `vm-maintenance.yml` workflow keeps test VMs updated with OS security patches:
+The `vm-updates.yml` workflow keeps test VMs updated with OS security patches:
 
-- **Schedule**: Runs weekly on Monday at 2am UTC
+- **Schedule**: Runs daily at 2am UTC
+- **Why daily?**: Ubuntu's `unattended-upgrades` runs automatically on VMs after boot and may install security updates before our upgrade script. Daily upgrades incorporate these changes promptly into baseline snapshots.
 - **Manual trigger**: Available via `workflow_dispatch`
+- **Retry on lock**: If VMs are locked (e.g., integration tests running), retries up to 5 times with 10-minute intervals
 - **Behavior**:
   - Checks if VMs exist before attempting upgrade
   - Runs `tests/integration/scripts/upgrade-vms.sh` on both VMs
   - Skips gracefully if VMs don't exist (with warning)
 
-This ensures VMs stay patched without manual intervention. The baseline snapshots are **not** updated by this workflow - they preserve the original provisioned state for consistent test resets.
+This ensures VMs stay patched without manual intervention. The baseline snapshots **are** updated when package changes occur, ensuring tests run against the latest patched system.
 
 ---
 
@@ -790,9 +792,10 @@ hcloud server poweron pc2
 - Update `hcloud` CLI if new version available
 
 ### As Needed
-- Update OS (when Ubuntu 24.04 LTS has security patches)
 - Reprovision VMs (after major infrastructure changes)
 - Update documentation (when procedures change)
+
+**Note**: OS security patches are applied automatically by the daily VM Updates workflow.
 
 ---
 
@@ -896,5 +899,5 @@ All infrastructure scripts are in `tests/integration/scripts/`:
 
 ---
 
-**Last Updated**: 2025-12-18
-**Document Version**: 1.3 (Added CI Workflow Configuration section)
+**Last Updated**: 2025-12-30
+**Document Version**: 1.4 (Updated VM Updates workflow: daily schedule with retry logic)

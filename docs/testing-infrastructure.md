@@ -310,14 +310,12 @@ conftest.py (test runner - may have empty known_hosts)
 
 ### Upgrading Test VMs
 
-Test VMs should be upgraded periodically to receive security updates and package fixes. This is a maintenance operation that runs separately from integration tests to keep test runs fast and predictable.
+Test VMs are upgraded daily to receive apt updates. This is a maintenance operation that runs separately from integration tests to keep test runs fast and predictable.
 
-**When to upgrade:**
-- Weekly or monthly (recommended)
-- When security advisories affect your packages
-- If tests fail due to suspected outdated system packages
+**Why daily upgrades?**
+Ubuntu's `unattended-upgrades` runs automatically on the VMs after each boot and may install security updates (including kernel updates) before our upgrade script runs. However, they are not incorporated in the baseline snapshots until the upgrade script runs. This means that a run of the integration tests removes the updates again from the VM. Daily upgrades ensure these changes are promptly incorporated into the baseline snapshots, preventing issues where the baseline becomes stale.
 
-**How to upgrade:**
+**How to upgrade manually:**
 
 ```bash
 export HCLOUD_TOKEN=your_hcloud_token
@@ -337,8 +335,9 @@ export HCLOUD_TOKEN=your_hcloud_token
 
 **Runtime:** A few minutes (or ~1 minute if no updates available)
 
-**Automated updates:** A weekly scheduled GitHub Actions job (`vm-maintenance.yml`) automatically runs this script every Monday at 2am UTC. This job:
+**Automated updates:** A daily scheduled GitHub Actions job (`vm-updates.yml`) automatically runs this script at 2am UTC. This job:
 - Only runs if the VMs exist (non-blocking if they don't)
+- Retries up to 5 times with 10-minute intervals if VMs are locked (e.g., integration tests running)
 - Can be triggered manually via workflow_dispatch
 - Shows a warning if VMs are not available (doesn't fail the workflow)
 

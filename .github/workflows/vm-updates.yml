@@ -2,8 +2,10 @@ name: VM Updates
 
 on:
   schedule:
-    # Run weekly on Monday at 2am UTC
-    - cron: '0 2 * * 1'
+    # Run daily at 2am UTC
+    # Daily schedule ensures unattended-upgrades changes are incorporated into
+    # baseline snapshots promptly (see issue #109 for rationale)
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
 jobs:
@@ -66,11 +68,59 @@ jobs:
         if: steps.vm_ips.outputs.vms_exist == 'true'
         uses: actions/checkout@v4
 
-      - name: Upgrade VMs
+      - name: Upgrade VMs (with retry on lock)
         if: steps.vm_ips.outputs.vms_exist == 'true'
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-        run: tests/integration/scripts/upgrade-vms.sh
+        run: |
+          # Retry logic: if VMs are locked (e.g., integration tests running),
+          # wait and retry. Integration tests take ~7 minutes, so 10-minute
+          # intervals with 5 retries (50 min max wait) should be sufficient.
+          MAX_RETRIES=5
+          RETRY_INTERVAL=600  # 10 minutes in seconds
+
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "=== Attempt $attempt of $MAX_RETRIES ==="
+
+            # Check if lock is currently held
+            LOCK_HOLDER=$(hcloud server describe pc1 -o json | jq -r '.labels.lock_holder // empty')
+            if [[ -n "$LOCK_HOLDER" ]]; then
+              echo "VMs are locked by: $LOCK_HOLDER"
+              if [[ $attempt -lt $MAX_RETRIES ]]; then
+                echo "Waiting ${RETRY_INTERVAL}s before retry..."
+                sleep $RETRY_INTERVAL
+                continue
+              else
+                echo "::error::VMs still locked after $MAX_RETRIES attempts. Giving up."
+                exit 1
+              fi
+            fi
+
+            # Try to run the upgrade script
+            if tests/integration/scripts/upgrade-vms.sh; then
+              echo "VM upgrade completed successfully"
+              exit 0
+            fi
+
+            # Check if failure was due to lock acquisition
+            # (script may have failed to acquire lock if someone grabbed it between check and acquire)
+            LOCK_HOLDER=$(hcloud server describe pc1 -o json | jq -r '.labels.lock_holder // empty')
+            if [[ -n "$LOCK_HOLDER" ]]; then
+              echo "Lock was acquired by $LOCK_HOLDER during upgrade attempt"
+              if [[ $attempt -lt $MAX_RETRIES ]]; then
+                echo "Waiting ${RETRY_INTERVAL}s before retry..."
+                sleep $RETRY_INTERVAL
+                continue
+              else
+                echo "::error::VMs still locked after $MAX_RETRIES attempts. Giving up."
+                exit 1
+              fi
+            fi
+
+            # Non-lock-related failure
+            echo "::error::VM upgrade failed (not due to locking)"
+            exit 1
+          done
 
       - name: VMs not available
         if: steps.vm_ips.outputs.vms_exist == 'false'
