@@ -77,4 +77,6 @@ jobs:
                   "See docs/developer-workflow.md for details."
                 ].join("\n")
               );
+            } else {
+              core.info("All issue closing patterns found in commit messages are included in the PR title/description.");
             }
