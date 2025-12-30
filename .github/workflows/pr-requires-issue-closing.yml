@@ -31,9 +31,9 @@ jobs:
             // We enforce: if any commit message contains closing keywords, the PR must contain matching ones.
             const closingPattern = /(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#(?<num>[0-9]+)/gi;
 
-            const prClosingNums = new Set();
+            const prClosingPatterns = new Map();
             for (const match of prHaystack.matchAll(closingPattern)) {
-              prClosingNums.add(match.groups.num);
+              prClosingPatterns.set(match.groups.num, match[0]);
             }
 
             const commits = await github.paginate(
@@ -46,28 +46,34 @@ jobs:
               }
             );
 
-            const commitClosingNums = new Set();
+            const commitClosingPatterns = new Map();
+            core.info("Closing patterns found in commits:");
             for (const c of commits) {
               const message = c.commit?.message || "";
               for (const match of message.matchAll(closingPattern)) {
-                commitClosingNums.add(match.groups.num);
+                commitClosingPatterns.set(match.groups.num, match[0]);
+                const shortSha = c.sha.substring(0, 7);
+                core.info(`  ${shortSha}: ${match[0]}`);
               }
             }
 
-            if (commitClosingNums.size === 0) {
-              // No closing keywords in commits; nothing to enforce.
+            if (commitClosingPatterns.size === 0) {
+              core.info("  None found.");
               return;
             }
 
-            const missing = [...commitClosingNums].filter((n) => !prClosingNums.has(n));
+            const missing = [];
+            for (const [num, pattern] of commitClosingPatterns) {
+              if (!prClosingPatterns.has(num)) {
+                missing.push(pattern);
+              }
+            }
 
             if (missing.length > 0) {
               core.setFailed(
                 [
                   "PR commit messages contain issue closing keywords, but the PR description/title does not.",
-                  `Missing in PR: ${missing.map((n) => `#${n}`).join(", ")}`,
-                  "Add one line per issue to the PR description, e.g.:",
-                  "  Fixes #123",
+                  `Missing in PR (add one line per issue to the PR description):\n${missing.map(p => `${p}`).join("\n")}`,
                   "See docs/developer-workflow.md for details."
                 ].join("\n")
               );
