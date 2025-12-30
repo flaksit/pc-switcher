@@ -1,8 +1,10 @@
 # ADR-004: Dynamic Package Versioning from GitHub Releases
 
 Status: Accepted
+
 Date: 2025-11-15
 - 2025-12-04: Added clarification for pre-release versions
+- 2025-12-30: Decision: no build during GitHub Release creation because not needed with current installation method
 
 ## TL;DR
 Use dynamic versioning: GitHub Release tags are the single source of truth for package version, detected automatically during build via `uv-dynamic-versioning` plugin with `hatchling` backend.
@@ -32,10 +34,10 @@ For pre-release versions (alpha, beta, rc), we follow Semantic Versioning (SemVe
 - GitHub and most version control tools use SemVer conventions
 
 ## Decision
-- Adopt Path A (dynamic versioning) from adr-004-versioning-uv-github.md
+- Adopt dynamic versioning (Path A from adr-004-versioning-uv-github.md)
 - Version is NOT stored in `pyproject.toml`
 - Build system uses `hatchling` (not `uv`'s native backend) with `uv-dynamic-versioning` plugin
-- GitHub Release creation triggers `uv build`, which automatically reads the tag and injects version during build
+- No build is done during GitHub Release creation as we don't need a pre-built wheel with the current installation method
 - This workflow eliminates the need to manually update `pyproject.toml` when releasing
 - Use Semantic Versioning (SemVer) format for all version tags, including pre-releases
 - Version parsing code must support SemVer pre-release identifiers (format: `MAJOR.MINOR.PATCH-prerelease.number`)
@@ -44,7 +46,7 @@ For pre-release versions (alpha, beta, rc), we follow Semantic Versioning (SemVe
 **Positive:**
 - Single source of truth: Git tag is the only version reference
 - No manual version bumping in `pyproject.toml`
-- Clean release workflow: create Release on GitHub → Actions builds and publishes automatically
+- Clean release workflow: create Release on GitHub → Actions can build and publish automatically
 - Works seamlessly with `uv` for dependency management (only build backend differs)
 - SemVer pre-release format is widely recognized and readable
 - Python's `packaging` library automatically normalizes SemVer to PEP 440 for compatibility

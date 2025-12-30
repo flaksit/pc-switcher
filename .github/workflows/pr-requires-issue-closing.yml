@@ -1,0 +1,80 @@
+name: PR metadata
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  requires-issue-closing-keyword:
+    name: Requires issue closing keyword
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - name: Validate PR references issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const prHaystack = `${pr.title}\n\n${pr.body || ""}`;
+
+            // "Fixes #123" style lines are the standard practice.
+            // We enforce: if any commit message contains closing keywords, the PR must contain matching ones.
+            const closingPattern = /(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#(?<num>[0-9]+)/gi;
+
+            const prClosingPatterns = new Map();
+            for (const match of prHaystack.matchAll(closingPattern)) {
+              prClosingPatterns.set(match.groups.num, match[0]);
+            }
+
+            const commits = await github.paginate(
+              github.rest.pulls.listCommits,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100,
+              }
+            );
+
+            const commitClosingPatterns = new Map();
+            core.info("Closing patterns found in commits:");
+            for (const c of commits) {
+              const message = c.commit?.message || "";
+              for (const match of message.matchAll(closingPattern)) {
+                commitClosingPatterns.set(match.groups.num, match[0]);
+                const shortSha = c.sha.substring(0, 7);
+                core.info(`  ${shortSha}: ${match[0]}`);
+              }
+            }
+
+            if (commitClosingPatterns.size === 0) {
+              core.info("  None found.");
+              return;
+            }
+
+            const missing = [];
+            for (const [num, pattern] of commitClosingPatterns) {
+              if (!prClosingPatterns.has(num)) {
+                missing.push(pattern);
+              }
+            }
+
+            if (missing.length > 0) {
+              core.setFailed(
+                [
+                  "PR commit messages contain issue closing keywords, but the PR description/title does not.",
+                  `Missing in PR (add one line per issue to the PR description):\n${missing.map(p => `${p}`).join("\n")}`,
+                  "See docs/developer-workflow.md for details."
+                ].join("\n")
+              );
+            }
