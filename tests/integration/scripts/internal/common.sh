@@ -122,7 +122,7 @@ acquire_lock() {
         # Not called from parent with lock - acquire our own
         local holder=$(_generate_lock_holder "$name")
 
-        # Set up cleanup trap only if we own the lock
+        # Set up cleanup trap to release lock on exit
         cleanup_lock() {
             local exit_code=$?
             # Use ${VAR:-} to handle unset variable (lock acquisition may have failed)
@@ -131,9 +131,7 @@ acquire_lock() {
             fi
             return $exit_code
         }
-        trap "cleanup_lock; $(trap -p EXIT | cut -f2 -d \')" EXIT
-        trap "cleanup_lock; $(trap -p INT | cut -f2 -d \')" INT
-        trap "cleanup_lock; $(trap -p TERM | cut -f2 -d \')" TERM
+        trap 'cleanup_lock' EXIT INT TERM
 
         # Acquire lock
         if ! "$LOCK_SCRIPT" acquire "$holder"; then

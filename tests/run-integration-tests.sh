@@ -23,40 +23,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Output buffering for setup phase - only show on failure
-SETUP_OUTPUT=$(mktemp)
-SETUP_PHASE=1  # Flag: 1 during setup, 0 after setup completes
-RED='\033[0;31m'
-NC='\033[0m'
-
-_show_setup_output() {
-    # Restore stdout/stderr if still redirected (setup failed mid-way)
-    # Test if FD 3 is still open before trying to use it
-    if { : >&3; } 2>/dev/null; then
-        exec 1>&3 2>&4
-    fi
-
-    # Show buffer if we failed during setup phase
-    # (pytest failures are handled separately after pytest runs)
-    if [[ "$SETUP_PHASE" == "1" ]] && [[ -f "$SETUP_OUTPUT" ]] && [[ -s "$SETUP_OUTPUT" ]]; then
-        echo -e "${RED}==> Setup output (shown due to failure):${NC}"
-        cat "$SETUP_OUTPUT"
-    fi
-    rm -f "$SETUP_OUTPUT"
-}
-trap '_show_setup_output' EXIT
-
 echo "Starting integration tests setup"
-
-# Start buffering (save original FDs, redirect to buffer)
-exec 3>&1 4>&2
-exec >>"$SETUP_OUTPUT" 2>&1
 
 COMMON_SCRIPT="$SCRIPT_DIR/integration/scripts/internal/common.sh"
 RESET_SCRIPT="$SCRIPT_DIR/integration/scripts/reset-vm.sh"
 
 # Source common helpers (colors, logging, lock helpers)
-# This must be included after setting up output buffering trap!
 source "$COMMON_SCRIPT"
 
 # Check GITHUB_TOKEN
@@ -251,11 +223,6 @@ fi
 # Run pytest
 # =============================================================================
 
-# Stop buffering - restore original stdout/stderr
-exec 1>&3 2>&4
-exec 3>&- 4>&-
-SETUP_PHASE=0  # Mark setup as complete
-
 # Run pytest with all provided arguments
 # Note: We don't use exec here because we need the EXIT trap to release the lock.
 # We disable errexit temporarily to capture pytest's exit code.
@@ -265,11 +232,5 @@ set +e
 uv run pytest -m "integration and not benchmark" -s "$@"
 pytest_exit_code=$?
 set -e
-
-# Show setup output if pytest failed (for debugging environment issues)
-if [[ $pytest_exit_code -ne 0 ]] && [[ -f "$SETUP_OUTPUT" ]] && [[ -s "$SETUP_OUTPUT" ]]; then
-    echo -e "\n${RED}==> Setup output (for debugging):${NC}"
-    cat "$SETUP_OUTPUT"
-fi
 
 exit $pytest_exit_code
