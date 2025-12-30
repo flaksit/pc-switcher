@@ -88,13 +88,19 @@ mkdir -p "$SNAPSHOT_BASE_DIR"
 mkdir -p "$OLD_SNAPSHOT_DIR"
 
 # Move existing baseline snapshots to old/ with timestamp (instead of deleting)
+# Note: btrfs read-only snapshots cannot be moved directly, so we temporarily
+# clear the readonly flag, move, then restore it.
 if btrfs subvolume show "$ROOT_SNAPSHOT" >/dev/null 2>&1; then
     echo "Archiving existing baseline: $ROOT_SNAPSHOT -> ${OLD_SNAPSHOT_DIR}/baseline_@_${TIMESTAMP}"
+    btrfs property set "$ROOT_SNAPSHOT" ro false
     mv "$ROOT_SNAPSHOT" "${OLD_SNAPSHOT_DIR}/baseline_@_${TIMESTAMP}"
+    btrfs property set "${OLD_SNAPSHOT_DIR}/baseline_@_${TIMESTAMP}" ro true
 fi
 if btrfs subvolume show "$HOME_SNAPSHOT" >/dev/null 2>&1; then
     echo "Archiving existing baseline: $HOME_SNAPSHOT -> ${OLD_SNAPSHOT_DIR}/baseline_@home_${TIMESTAMP}"
+    btrfs property set "$HOME_SNAPSHOT" ro false
     mv "$HOME_SNAPSHOT" "${OLD_SNAPSHOT_DIR}/baseline_@home_${TIMESTAMP}"
+    btrfs property set "${OLD_SNAPSHOT_DIR}/baseline_@home_${TIMESTAMP}" ro true
 fi
 
 # Create new read-only snapshots

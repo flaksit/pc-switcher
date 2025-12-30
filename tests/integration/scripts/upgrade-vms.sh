@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+shopt -s inherit_errexit
 
 # Upgrade apt packages on test VMs and update baseline snapshots.
 # This script:
@@ -22,6 +23,7 @@ set -euo pipefail
 # Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/internal/common.sh"
+trap 'log_error "Unhandled error on line $LINENO"; exit 1' ERR
 
 # Help
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -140,25 +142,25 @@ upgrade_vm() {
     # Upgrade packages non-interactively
     echo "--- apt-get upgrade ---"
     local upgrade_output
-    upgrade_output=$(ssh_run "${SSH_USER}@${vm_ip}" \
+    if ! upgrade_output=$(ssh_run "${SSH_USER}@${vm_ip}" \
         "DEBIAN_FRONTEND=noninteractive sudo apt-get upgrade -y \
          -o Dpkg::Options::='--force-confold' \
-         -o Dpkg::Options::='--force-confdef' 2>&1") || {
+         -o Dpkg::Options::='--force-confdef' 2>&1"); then
         echo "$upgrade_output"
         echo "ERROR: Package upgrade failed on $vm_name"
         exit 1
-    }
+    fi
     echo "$upgrade_output"
 
     # Run autoremove to clean unused dependencies
     echo "--- apt-get autoremove ---"
     local autoremove_output
-    autoremove_output=$(ssh_run "${SSH_USER}@${vm_ip}" \
-        "DEBIAN_FRONTEND=noninteractive sudo apt-get autoremove -y 2>&1") || {
+    if ! autoremove_output=$(ssh_run "${SSH_USER}@${vm_ip}" \
+        "DEBIAN_FRONTEND=noninteractive sudo apt-get autoremove -y 2>&1"); then
         echo "$autoremove_output"
         echo "ERROR: Autoremove failed on $vm_name"
         exit 1
-    }
+    fi
     echo "$autoremove_output"
 
     # Detect if changes occurred (check each output separately)
@@ -178,7 +180,7 @@ upgrade_vm() {
 }
 
 # Check if VM needs reboot
-# Returns 0 if reboot needed, 1 if no reboot needed
+# Returns 0 if reboot needed, 1 if no reboot needed, 2 on error
 check_reboot_required() {
     local vm_name="$1"
     local vm_ip="$2"
@@ -186,13 +188,20 @@ check_reboot_required() {
     log_info "Checking if $vm_name requires reboot..."
 
     # Check for reboot-required flag file (standard Ubuntu)
-    if ssh_run "${SSH_USER}@${vm_ip}" "test -f /var/run/reboot-required" 2>/dev/null; then
+    # Use || status=$? to capture exit code immediately (POSIX: $? after if-fi is 0 if no branch executed)
+    local status=0
+    ssh_run "${SSH_USER}@${vm_ip}" "test -f /var/run/reboot-required" 2>/dev/null || status=$?
+
+    if [[ $status -eq 0 ]]; then
         log_info "$vm_name: Reboot required (flag file exists)"
         return 0
+    elif [[ $status -eq 1 ]]; then
+        log_info "$vm_name: No reboot required"
+        return 1
+    else
+        log_error "$vm_name: Failed to check reboot requirement (exit code: $status)"
+        return 2
     fi
-
-    log_info "$vm_name: No reboot required"
-    return 1
 }
 
 # Reboot a VM and wait for it to come back online
@@ -225,7 +234,10 @@ acquire_lock "upgrade-vms"
 
 # Get VM IP addresses (single API call)
 log_step "Resolving VM IP addresses..."
-VM_LIST=$(hcloud server list -o columns=name,ipv4 -o noheader)
+if ! VM_LIST=$(hcloud server list -o columns=name,ipv4 -o noheader); then
+    log_error "Failed to list VMs via hcloud"
+    exit 1
+fi
 PC1_IP=$(echo "$VM_LIST" | awk -v name="$VM1_NAME" '$1 == name {print $2}')
 PC2_IP=$(echo "$VM_LIST" | awk -v name="$VM2_NAME" '$1 == name {print $2}')
 
@@ -243,15 +255,16 @@ log_info "$VM2_NAME: $PC2_IP"
 
 # Reset VMs to baseline in parallel
 log_step "Resetting VMs to baseline state..."
-"$SCRIPT_DIR/reset-vm.sh" "$PC1_IP" &
+LOG_PREFIX="$VM1_NAME:" "$SCRIPT_DIR/reset-vm.sh" "$PC1_IP" &
 PID1=$!
-"$SCRIPT_DIR/reset-vm.sh" "$PC2_IP" &
+LOG_PREFIX="$VM2_NAME:" "$SCRIPT_DIR/reset-vm.sh" "$PC2_IP" &
 PID2=$!
 
-wait $PID1
-EXIT1=$?
-wait $PID2
-EXIT2=$?
+# Use || EXIT=$? to prevent ERR trap firing (set +e disables errexit but not ERR trap)
+EXIT1=0
+wait $PID1 || EXIT1=$?
+EXIT2=0
+wait $PID2 || EXIT2=$?
 
 if [[ $EXIT1 -ne 0 || $EXIT2 -ne 0 ]]; then
     log_error "VM reset failed"
@@ -264,18 +277,30 @@ log_step "Upgrading packages on both VMs..."
 TMPDIR=$(mktemp -d)
 
 # Run upgrades in parallel, prefix each line with VM name
-upgrade_vm "$VM1_NAME" "$PC1_IP" 2>&1 | sed "s/^/[$VM1_NAME] /" | tee "$TMPDIR/pc1.out" &
+(
+    trap '' ERR  # Disable inherited ERR trap, we handle errors explicitly
+    set -o pipefail
+    exit_code=0
+    upgrade_vm "$VM1_NAME" "$PC1_IP" 2>&1 | sed "s/^/[$VM1_NAME] /" | tee "$TMPDIR/pc1.out" || exit_code=$?
+    exit "$exit_code"
+) &
 PID1=$!
-upgrade_vm "$VM2_NAME" "$PC2_IP" 2>&1 | sed "s/^/[$VM2_NAME] /" | tee "$TMPDIR/pc2.out" &
+(
+    trap '' ERR  # Disable inherited ERR trap, we handle errors explicitly
+    set -o pipefail
+    exit_code=0
+    upgrade_vm "$VM2_NAME" "$PC2_IP" 2>&1 | sed "s/^/[$VM2_NAME] /" | tee "$TMPDIR/pc2.out" || exit_code=$?
+    exit "$exit_code"
+) &
 PID2=$!
 
-wait $PID1
-EXIT1=${PIPESTATUS[0]}
-wait $PID2
-EXIT2=${PIPESTATUS[0]}
+# Use || EXIT=$? to prevent ERR trap firing (set +e disables errexit but not ERR trap)
+EXIT1=0
+wait $PID1 || EXIT1=$?
+EXIT2=0
+wait $PID2 || EXIT2=$?
 
-# Check for errors (grep for ERROR in output since exit codes don't propagate through pipes reliably)
-if grep -q "ERROR:" "$TMPDIR/pc1.out" || grep -q "ERROR:" "$TMPDIR/pc2.out"; then
+if [[ $EXIT1 -ne 0 || $EXIT2 -ne 0 ]]; then
     log_error "Package upgrade failed"
     exit 1
 fi
@@ -304,8 +329,30 @@ if [[ "$CHANGES_OCCURRED" == "true" ]]; then
     check_reboot_required "$VM2_NAME" "$PC2_IP" &
     PID2=$!
 
-    wait $PID1 && PC1_NEEDS_REBOOT=true || PC1_NEEDS_REBOOT=false
-    wait $PID2 && PC2_NEEDS_REBOOT=true || PC2_NEEDS_REBOOT=false
+    # Use || EXIT=$? to prevent ERR trap firing (set +e disables errexit but not ERR trap)
+    # check_reboot_required returns: 0=reboot needed, 1=no reboot, 2+=error
+    EXIT1=0
+    wait $PID1 || EXIT1=$?
+    EXIT2=0
+    wait $PID2 || EXIT2=$?
+
+    if [[ $EXIT1 -eq 0 ]]; then
+        PC1_NEEDS_REBOOT=true
+    elif [[ $EXIT1 -eq 1 ]]; then
+        PC1_NEEDS_REBOOT=false
+    else
+        log_error "Failed to check reboot requirement on $VM1_NAME"
+        exit 1
+    fi
+
+    if [[ $EXIT2 -eq 0 ]]; then
+        PC2_NEEDS_REBOOT=true
+    elif [[ $EXIT2 -eq 1 ]]; then
+        PC2_NEEDS_REBOOT=false
+    else
+        log_error "Failed to check reboot requirement on $VM2_NAME"
+        exit 1
+    fi
 
     # Reboot if needed
     if [[ "$PC1_NEEDS_REBOOT" == "true" || "$PC2_NEEDS_REBOOT" == "true" ]]; then
@@ -352,8 +399,15 @@ if [[ "$CHANGES_OCCURRED" == "true" ]]; then
     ssh_run "${SSH_USER}@${PC2_IP}" "sudo apt-get clean" >/dev/null 2>&1 &
     PID2=$!
 
-    if ! wait $PID1 || ! wait $PID2; then
-        log_warn "Failed to clean apt cache on one or more VMs"
+    # Use || EXIT=$? to prevent ERR trap firing (set +e disables errexit but not ERR trap)
+    EXIT1=0
+    wait $PID1 || EXIT1=$?
+    EXIT2=0
+    wait $PID2 || EXIT2=$?
+
+    if [[ $EXIT1 -ne 0 || $EXIT2 -ne 0 ]]; then
+        log_error "Failed to clean apt cache on one or more VMs"
+        exit 1
     fi
     log_info "Apt cache cleaned"
 
