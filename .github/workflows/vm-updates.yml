@@ -1,0 +1,79 @@
+name: VM Updates
+
+on:
+  schedule:
+    # Run weekly on Monday at 2am UTC
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+jobs:
+  upgrade-vms:
+    name: Upgrade Test VMs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets
+        run: |
+          if [[ -z "${{ secrets.HCLOUD_TOKEN }}" ]] || [[ -z "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" ]]; then
+            echo "::error::VM maintenance cannot run: Required secrets (HCLOUD_TOKEN, HETZNER_SSH_PRIVATE_KEY) are not available"
+            exit 1
+          fi
+
+      - name: Install Hetzner Cloud CLI
+        uses: hetznercloud/setup-hcloud@v1
+
+      - name: Resolve VM IPs
+        id: vm_ips
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! VM_LIST=$(hcloud server list -o columns=name,ipv4 -o noheader); then
+            echo "::error::Failed to list VMs via hcloud"
+            exit 1
+          fi
+          PC1_IP=$(echo "$VM_LIST" | awk '$1 == "pc1" {print $2}')
+          PC2_IP=$(echo "$VM_LIST" | awk '$1 == "pc2" {print $2}')
+          if [[ -n "$PC1_IP" && -n "$PC2_IP" ]]; then
+            echo "vms_exist=true" >> $GITHUB_OUTPUT
+          else
+            echo "vms_exist=false" >> $GITHUB_OUTPUT
+          fi
+          if [[ -n "$PC1_IP" ]]; then
+            echo "pc1_ip=$PC1_IP" >> $GITHUB_OUTPUT
+          fi
+          if [[ -n "$PC2_IP" ]]; then
+            echo "pc2_ip=$PC2_IP" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup SSH key
+        if: steps.vm_ips.outputs.vms_exist == 'true'
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.SSH_AUTHORIZED_KEY_CI }}" > ~/.ssh/id_ed25519.pub
+          chmod 600 ~/.ssh/id_ed25519
+          if [[ -n "${{ steps.vm_ips.outputs.pc1_ip }}" ]]; then
+            ssh-keyscan -H "${{ steps.vm_ips.outputs.pc1_ip }}" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          if [[ -n "${{ steps.vm_ips.outputs.pc2_ip }}" ]]; then
+            ssh-keyscan -H "${{ steps.vm_ips.outputs.pc2_ip }}" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+      - name: Checkout
+        if: steps.vm_ips.outputs.vms_exist == 'true'
+        uses: actions/checkout@v4
+
+      - name: Upgrade VMs
+        if: steps.vm_ips.outputs.vms_exist == 'true'
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: tests/integration/scripts/upgrade-vms.sh
+
+      - name: VMs not available
+        if: steps.vm_ips.outputs.vms_exist == 'false'
+        run: |
+          echo "::warning::Test VMs (pc1, pc2) do not exist. Skipping upgrade."
+          echo "VMs are created on-demand when integration tests run."

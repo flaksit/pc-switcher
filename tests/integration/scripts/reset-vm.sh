@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+shopt -s inherit_errexit
 
 # Source common helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -72,7 +73,10 @@ log_info_prefixed "SSH User: $SSH_USER"
 # Establish SSH connection (accept new key if not in known_hosts)
 # Test runner may have empty known_hosts or correct key from provisioning
 log_info_prefixed "Establishing SSH connection..."
-ssh_accept_new "${SSH_USER}@${VM_HOST}" true
+if ! ssh_accept_new "${SSH_USER}@${VM_HOST}" true; then
+    log_error_prefixed "SSH connection failed for ${SSH_USER}@${VM_HOST}"
+    exit 1
+fi
 
 # Step 1: Validate baseline snapshots exist
 log_step_prefixed "Validating baseline snapshots..."
