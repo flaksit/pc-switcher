@@ -325,7 +325,7 @@ export HCLOUD_TOKEN=your_hcloud_token
 **What the upgrade script does:**
 1. Acquires lock to prevent concurrent integration tests
 2. Resets VMs to current baseline state
-3. Upgrades all apt packages non-interactively
+3. Upgrades all apt packages non-interactively (using `apt-get full-upgrade` to handle kernel updates)
 4. Runs `apt-get autoremove` to clean unused dependencies
 5. Detects if reboot is needed (kernel or critical package updates)
 6. Reboots VMs if necessary (in parallel)
