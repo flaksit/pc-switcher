@@ -26,7 +26,7 @@ jobs:
             integration:
               - '.github/workflows/integration-tests.yml'
               - 'src/**'
-              - 'tests/integration/**'
+              - 'tests/integration/**/!(upgrade-vms.sh)'
               - 'install.sh'
               - 'pyproject.toml'
               - 'uv.lock'

@@ -6,7 +6,7 @@ shopt -s inherit_errexit
 # This script:
 #   1. Acquires lock to prevent concurrent test runs
 #   2. Resets VMs to baseline state
-#   3. Upgrades all apt packages
+#   3. Upgrades all apt packages (using full-upgrade for kernel updates)
 #   4. Detects if reboot is needed
 #   5. Reboots if necessary
 #   6. Updates baseline snapshots (only if changes occurred)
@@ -35,7 +35,7 @@ Upgrade apt packages on test VMs and update baseline snapshots.
 This script:
   1. Acquires lock to prevent concurrent integration tests
   2. Resets VMs to baseline state (removes test artifacts)
-  3. Upgrades all apt packages non-interactively
+  3. Upgrades all apt packages non-interactively (using full-upgrade for kernel updates)
   4. Runs apt-get autoremove to clean unused dependencies
   5. Detects if reboot is required
   6. Reboots VMs if needed (in parallel)
@@ -49,7 +49,7 @@ Lock Behavior:
   - Automatically releases lock on success or error (via trap)
 
 Upgrade Behavior:
-  - Uses conservative 'apt-get upgrade' (won't remove packages)
+  - Uses 'apt-get full-upgrade' to handle all upgrades including kernel updates
   - Preserves existing configuration files
   - Removes unused dependencies with autoremove
   - Only updates baselines if changes occurred
@@ -139,11 +139,11 @@ upgrade_vm() {
         exit 1
     fi
 
-    # Upgrade packages non-interactively
-    echo "--- apt-get upgrade ---"
+    # Upgrade packages non-interactively (using full-upgrade to handle kernel upgrades)
+    echo "--- apt-get full-upgrade ---"
     local upgrade_output
     if ! upgrade_output=$(ssh_run "${SSH_USER}@${vm_ip}" \
-        "DEBIAN_FRONTEND=noninteractive sudo apt-get upgrade -y \
+        "DEBIAN_FRONTEND=noninteractive sudo apt-get full-upgrade -y \
          -o Dpkg::Options::='--force-confold' \
          -o Dpkg::Options::='--force-confdef' 2>&1"); then
         echo "$upgrade_output"
