@@ -49,10 +49,9 @@ The CI pipeline uses GitHub Actions with a tiered approach:
 
 | Workflow | Trigger | Purpose |
 | -------- | ------- | ------- |
-| `release.yml` | Release published | Build and upload wheel |
-| `vm-maintenance.yml` | Weekly (Monday 2 AM UTC) | Upgrade test VMs |
 | `claude.yml` | @claude mentions | AI assistant |
 | `pr-requires-issue-closing.yml` | PR opened/edited/synchronized | Enforce that issues are closed via PR description/title |
+| `vm-updates.yml` | Weekly (Monday 2 AM UTC) | Upgrade test VMs |
 
 ## Branch Protection Rules (main)
 
