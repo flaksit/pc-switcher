@@ -121,35 +121,25 @@ class TestGetLastRoleWithError:
 class TestRecordRole:
     """Tests for record_role function."""
 
-    def test_creates_history_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """record_role() should create the history file."""
+    def test_creates_history_file_and_directories(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """record_role() should create the history file and parent directories."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         record_role(SyncRole.SOURCE)
         history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
         assert history_path.exists()
-
-    def test_creates_parent_directories(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """record_role() should create parent directories if needed."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        record_role(SyncRole.SOURCE)
-        parent_dir = tmp_path / ".local/share/pc-switcher"
-        assert parent_dir.is_dir()
+        assert history_path.parent.is_dir()
 
     def test_writes_source_role(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """record_role(SOURCE) should write source role to file."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         record_role(SyncRole.SOURCE)
-        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
-        content = history_path.read_text()
-        assert '"last_role": "source"' in content
+        assert get_last_role() == SyncRole.SOURCE
 
     def test_writes_target_role(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """record_role(TARGET) should write target role to file."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         record_role(SyncRole.TARGET)
-        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
-        content = history_path.read_text()
-        assert '"last_role": "target"' in content
+        assert get_last_role() == SyncRole.TARGET
 
     def test_overwrites_previous_role(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """record_role() should overwrite previous role."""
@@ -158,30 +148,6 @@ class TestRecordRole:
         assert get_last_role() == SyncRole.SOURCE
         record_role(SyncRole.TARGET)
         assert get_last_role() == SyncRole.TARGET
-
-    def test_round_trip_source(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """record_role(SOURCE) followed by get_last_role() should return SOURCE."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        record_role(SyncRole.SOURCE)
-        assert get_last_role() == SyncRole.SOURCE
-
-    def test_round_trip_target(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """record_role(TARGET) followed by get_last_role() should return TARGET."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        record_role(SyncRole.TARGET)
-        assert get_last_role() == SyncRole.TARGET
-
-
-class TestSyncRole:
-    """Tests for SyncRole enum."""
-
-    def test_source_value(self) -> None:
-        """SyncRole.SOURCE should have value 'source'."""
-        assert SyncRole.SOURCE.value == "source"
-
-    def test_target_value(self) -> None:
-        """SyncRole.TARGET should have value 'target'."""
-        assert SyncRole.TARGET.value == "target"
 
 
 class TestGetRecordRoleCommand:
@@ -200,14 +166,3 @@ class TestGetRecordRoleCommand:
         assert f"mkdir -p {HISTORY_DIR}" in cmd
         assert '"last_role": "target"' in cmd
         assert HISTORY_PATH in cmd
-
-    def test_command_creates_directory(self) -> None:
-        """Command should include mkdir -p to create parent directories."""
-        cmd = get_record_role_command(SyncRole.SOURCE)
-        assert "mkdir -p" in cmd
-
-    def test_command_uses_echo_redirect(self) -> None:
-        """Command should use echo with redirect to write file."""
-        cmd = get_record_role_command(SyncRole.SOURCE)
-        assert "echo" in cmd
-        assert ">" in cmd
