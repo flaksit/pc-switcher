@@ -449,18 +449,15 @@ class Orchestrator:
         """
         # Update local (source) history
         record_role(SyncRole.SOURCE)
-        self._logger.log(LogLevel.DEBUG, Host.SOURCE, "Update sync history: role=source: success")
+        self._logger.log(LogLevel.DEBUG, Host.SOURCE, "Updated sync history: role=source")
 
         # Update remote (target) history via SSH
         if self._remote_executor is not None:
             cmd = get_record_role_command(SyncRole.TARGET)
             result = await self._remote_executor.run_command(cmd)
             if not result.success:
-                self._logger.log(
-                    LogLevel.ERROR, Host.TARGET, f"Update sync history: role=target: FAILED - {result.stderr}"
-                )
                 raise RuntimeError(f"Failed to update sync history on target: {result.stderr}")
-            self._logger.log(LogLevel.DEBUG, Host.TARGET, "Update sync history: role=target: success")
+            self._logger.log(LogLevel.DEBUG, Host.TARGET, "Updated sync history: role=target")
 
     async def _discover_and_validate_jobs(self) -> list[Job]:
         """Discover enabled jobs from config and validate their configuration.
