@@ -200,6 +200,13 @@ def sync(
             help="Auto-accept prompts (e.g., config sync confirmation)",
         ),
     ] = False,
+    allow_consecutive: Annotated[
+        bool,
+        typer.Option(
+            "--allow-consecutive",
+            help="Skip warning about consecutive syncs without receiving a sync back first",
+        ),
+    ] = False,
 ) -> None:
     """Sync to target machine.
 
@@ -212,25 +219,38 @@ def sync(
     cfg = _load_configuration(config_path)
 
     # Run the sync operation
-    exit_code = _run_sync(target, cfg, auto_accept=yes)
+    exit_code = _run_sync(target, cfg, auto_accept=yes, allow_consecutive=allow_consecutive)
     sys.exit(exit_code)
 
 
-def _run_sync(target: str, cfg: Configuration, *, auto_accept: bool = False) -> int:
+def _run_sync(
+    target: str,
+    cfg: Configuration,
+    *,
+    auto_accept: bool = False,
+    allow_consecutive: bool = False,
+) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
 
     Args:
         target: Target hostname
         cfg: Loaded configuration
         auto_accept: If True, auto-accept prompts (e.g., config sync)
+        allow_consecutive: If True, skip warning about consecutive syncs
 
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
     """
-    return asyncio.run(_async_run_sync(target, cfg, auto_accept=auto_accept))
+    return asyncio.run(_async_run_sync(target, cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive))
 
 
-async def _async_run_sync(target: str, cfg: Configuration, *, auto_accept: bool = False) -> int:
+async def _async_run_sync(
+    target: str,
+    cfg: Configuration,
+    *,
+    auto_accept: bool = False,
+    allow_consecutive: bool = False,
+) -> int:
     """Async implementation of sync with interrupt handling.
 
     Interrupt behavior:
@@ -264,7 +284,9 @@ async def _async_run_sync(target: str, cfg: Configuration, *, auto_accept: bool 
     loop.add_signal_handler(signal.SIGINT, sigint_handler)
 
     try:
-        orchestrator = Orchestrator(target=target, config=cfg, auto_accept=auto_accept)
+        orchestrator = Orchestrator(
+            target=target, config=cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive
+        )
         main_task = asyncio.create_task(orchestrator.run())
 
         try:

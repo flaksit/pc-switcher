@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt
 
 from pcswitcher.btrfs_snapshots import session_folder_name
 from pcswitcher.config import Configuration
@@ -46,6 +48,12 @@ from pcswitcher.models import (
     SyncSession,
     ValidationError,
 )
+from pcswitcher.sync_history import (
+    SyncRole,
+    get_last_role_with_error,
+    get_record_role_command,
+    record_role,
+)
 from pcswitcher.ui import TerminalUI
 
 __all__ = ["Orchestrator"]
@@ -65,16 +73,25 @@ class Orchestrator:
     - Sync summary and session tracking
     """
 
-    def __init__(self, target: str, config: Configuration, *, auto_accept: bool = False) -> None:
+    def __init__(
+        self,
+        target: str,
+        config: Configuration,
+        *,
+        auto_accept: bool = False,
+        allow_consecutive: bool = False,
+    ) -> None:
         """Initialize orchestrator with target and validated configuration.
 
         Args:
             target: Target hostname or SSH alias
             config: Validated configuration from YAML file
             auto_accept: If True, auto-accept prompts (e.g., config sync)
+            allow_consecutive: If True, skip warning about consecutive syncs
         """
         self._config = config
         self._auto_accept = auto_accept
+        self._allow_consecutive = allow_consecutive
         self._session_id = secrets.token_hex(4)
         self._session_folder = session_folder_name(self._session_id)
         self._source_hostname = get_local_hostname()
@@ -189,6 +206,12 @@ class Orchestrator:
         self._ui.start()
 
         try:
+            # Pre-Phase: Check for consecutive sync (before any operations)
+            if not self._allow_consecutive:
+                should_continue = await self._check_consecutive_sync()
+                if not should_continue:
+                    raise RuntimeError("Sync aborted: consecutive sync without receiving a sync back first")
+
             # Phase 1: Acquire source lock
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Acquiring source lock")
             await self._acquire_source_lock()
@@ -239,10 +262,13 @@ class Orchestrator:
             await self._create_snapshots(SnapshotPhase.POST)
             self._ui.set_current_step(8 + len(jobs) + 1)
 
-            # Success
+            # Success - update sync history on both machines
             session.status = SessionStatus.COMPLETED
             session.ended_at = datetime.now(UTC)
             self._logger.log(LogLevel.INFO, Host.SOURCE, "Sync completed successfully")
+
+            # Update sync history: this machine was SOURCE, target was TARGET
+            await self._update_sync_history()
 
             return session
 
@@ -351,6 +377,97 @@ class Orchestrator:
             raise RuntimeError("Config sync aborted by user")
 
         self._logger.log(LogLevel.INFO, Host.TARGET, "Configuration sync completed")
+
+    async def _check_consecutive_sync(self) -> bool:
+        """Check if this is a consecutive sync and prompt user if so.
+
+        A consecutive sync is when this machine tries to be a SOURCE again
+        without having been a TARGET first. This usually means the user forgot
+        to sync back from the other machine.
+
+        Returns:
+            True if sync should continue, False if user aborted.
+        """
+        assert self._console is not None
+        assert self._ui is not None
+
+        last_role, had_error = get_last_role_with_error()
+
+        # No warning needed if:
+        # - No history exists (first sync)
+        # - Last role was TARGET (received a sync, now sending - normal flow)
+        if last_role is None and not had_error:
+            return True
+        if last_role == SyncRole.TARGET:
+            return True
+
+        # Warning needed if:
+        # - Last role was SOURCE (consecutive sync from same machine)
+        # - History file was corrupted (safety-first: treat as consecutive)
+        self._ui.stop()
+
+        try:
+            self._console.print()
+            self._console.print(
+                Panel(
+                    "[yellow]Warning: You are syncing FROM this machine again "
+                    "without receiving a sync back first.[/yellow]\n\n"
+                    "The normal workflow is:\n"
+                    "  1. Sync FROM this machine TO another\n"
+                    "  2. Work on the other machine\n"
+                    "  3. Sync FROM the other machine BACK to this one\n"
+                    "  4. Then sync FROM this machine again\n\n"
+                    "You appear to be at step 4 without completing step 3.\n"
+                    "Continuing may overwrite changes made on the target machine.",
+                    title="Consecutive Sync Warning",
+                    border_style="yellow",
+                )
+            )
+            self._console.print()
+
+            response = Prompt.ask(
+                "[bold]Continue anyway?[/bold]",
+                choices=["y", "n"],
+                default="n",
+            )
+
+            return response.lower() == "y"
+        finally:
+            self._ui.start()
+
+    async def _update_sync_history(self) -> None:
+        """Update sync history on both source and target machines.
+
+        After a successful sync:
+        - Source machine's history: last_role = SOURCE
+        - Target machine's history: last_role = TARGET
+
+        This enables the consecutive sync warning to work correctly.
+        """
+        # Update local (source) history
+        record_role(SyncRole.SOURCE)
+        self._logger.log(LogLevel.DEBUG, Host.SOURCE, "Updated sync history: role=source")
+
+        # Update remote (target) history via SSH
+        if self._remote_executor is not None:
+            try:
+                cmd = get_record_role_command(SyncRole.TARGET)
+                result = await self._remote_executor.run_command(cmd)
+                if result.success:
+                    self._logger.log(LogLevel.DEBUG, Host.TARGET, "Updated sync history: role=target")
+                else:
+                    self._logger.log(
+                        LogLevel.WARNING,
+                        Host.TARGET,
+                        f"Failed to update sync history on target: {result.stderr}",
+                    )
+            except Exception as e:
+                # Don't fail the sync if history update fails
+                self._logger.log(
+                    LogLevel.WARNING,
+                    Host.TARGET,
+                    f"Failed to update sync history on target: {e}",
+                )
 
     async def _discover_and_validate_jobs(self) -> list[Job]:
         """Discover enabled jobs from config and validate their configuration.
