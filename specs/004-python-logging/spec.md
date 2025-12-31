@@ -14,7 +14,10 @@
 
 - Q: Should invalid log level strings in config cause startup failure or warn and continue with defaults? → A: Fail on invalid config (consistent with other config errors).
 - Q: Is the 4-setting model over-engineering? → A: Yes. Simplified to 3-setting model: `file` (floor for file output), `tui` (floor for TUI output), `external` (additional floor for non-pcswitcher libraries, applies to both destinations). This covers 95% of use cases with simpler config and implementation.
-- Q: For print() capture: should it include stdout, stderr, or both? What log level should such output be assigned? → A: Both. stdout → INFO level, stderr → ERROR level. Captured output respects `file`/`tui` thresholds.
+
+### Session 2026-01-01
+
+- Q: Should we capture stdout/stderr from third-party libraries that use print()? → A: No. Dropped FR-012. Well-maintained libraries (asyncssh, typer, rich) use proper logging. For an interactive CLI tool, raw print() output is visible to the user anyway. Stdout/stderr capture adds complexity (infinite loop risk, encoding issues, interference with Rich TUI) for minimal benefit. YAGNI.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -85,7 +88,7 @@ As a pc-switcher user, I want the TUI and file log output to maintain the curren
 ### Edge Cases
 
 - What happens when the config file contains an invalid log level string? System MUST fail with a configuration error (consistent with other config validation).
-- What happens when a third-party library uses print() instead of logging? stdout is captured and logged at INFO level; stderr is captured and logged at ERROR level. Both respect `file`/`tui` thresholds.
+- What happens when a third-party library uses print() instead of logging? Ignored. Well-maintained libraries use proper logging. No stdout/stderr capture (YAGNI for an interactive CLI tool).
 - What happens when log levels are omitted from config? System should use sensible defaults (file: DEBUG, tui: INFO, external: WARNING).
 - What happens when log volume is very high (e.g., FULL level during large sync)? Performance should not degrade significantly; the logging pipeline should remain async.
 
@@ -104,7 +107,6 @@ As a pc-switcher user, I want the TUI and file log output to maintain the curren
 - **FR-009**: System MUST apply sensible defaults when log levels are not specified in config (file: DEBUG, tui: INFO, external: WARNING).
 - **FR-010**: System MUST fail with a configuration error when invalid log level strings are provided in config.
 - **FR-011**: System MUST preserve structured context (key=value pairs) in log output.
-- **FR-012**: System SHOULD capture stdout (at INFO level) and stderr (at ERROR level) and include them in log output, respecting `file`/`tui` thresholds.
 
 ### Key Entities
 

@@ -2,7 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2025-12-31
-**Updated**: 2025-12-31 (simplified to 3-setting model)
+**Updated**: 2026-01-01 (dropped FR-012 stdout/stderr capture)
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -32,10 +32,11 @@
 
 ## Notes
 
-- FR-012 (capture print statements) is marked as SHOULD, not MUST, acknowledging this is a nice-to-have that may be complex to implement
 - The spec acknowledges the need for a planning phase decision on "standard python logging vs structlog" per user request
 - User Story 3 is developer-focused (P2) since it's architectural, but the user stories are prioritized with user-facing needs first
 - **Clarification Session 2025-12-31**:
   - Simplified from 4-setting to 3-setting model (`file`, `tui`, `external`)
   - Invalid config should fail (not warn and continue)
+- **Clarification Session 2026-01-01**:
+  - Dropped FR-012 (stdout/stderr capture) - YAGNI for interactive CLI; well-maintained libs use logging
 - All items pass validation - ready for `/speckit.plan`
