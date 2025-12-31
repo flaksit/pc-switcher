@@ -5,7 +5,7 @@
 
 ## Summary
 
-Migrate pc-switcher from its custom `Logger`/`EventBus` logging infrastructure to Python's standard `logging` module. The 3-setting model (`file`, `tui`, `external`) will control log level floors for file output, TUI output, and external library filtering. The migration uses `QueueHandler`/`QueueListener` for async handling and custom formatters for JSON and Rich output. See [ADR-010](../../docs/adr/adr-010-logging-infrastructure.md) for the decision rationale.
+Migrate pc-switcher from its custom `Logger`/`EventBus` logging infrastructure to Python's standard `logging` module. The 3-setting model (`file`, `tui`, `external`) will control log level floors for file output, TUI output, and external library filtering. The migration uses `QueueHandler`/`QueueListener` for async handling and custom formatters for JSON and Rich output. The `QueueListener` lifecycle is managed via `atexit` handler to ensure log flushing on exit. See [ADR-010](../../docs/adr/adr-010-logging-infrastructure.md) for the decision rationale.
 
 ## Technical Context
 
@@ -23,7 +23,7 @@ Migrate pc-switcher from its custom `Logger`/`EventBus` logging infrastructure t
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- **Reliability Without Compromise**: ✅ No impact on data integrity. Logging is observability-only. Log file writes use append-mode with explicit flush to ensure durability. Invalid config causes startup failure (fail-fast).
+- **Reliability Without Compromise**: ✅ No impact on data integrity. Logging is observability-only. Log file writes use append-mode with explicit flush to ensure durability. `QueueListener.stop()` called via `atexit` handler to flush remaining log records on exit. Invalid config causes startup failure (fail-fast).
 - **Frictionless Command UX**: ✅ No change to CLI commands. Configuration adds 3 optional settings to existing config file. Sensible defaults (file: DEBUG, tui: INFO, external: WARNING) ensure zero-config works.
 - **Well-supported tools and best practices**: ✅ Uses Python's stdlib `logging` module exclusively. `QueueHandler`/`QueueListener` is the recommended async pattern per Python Logging Cookbook. See [ADR-010](../../docs/adr/adr-010-logging-infrastructure.md).
 - **Minimize SSD Wear**: ✅ No change to logging frequency or volume. Existing async queue-based write pattern preserved. File writes are append-only (no rewrites).

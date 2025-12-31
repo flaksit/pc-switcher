@@ -174,35 +174,35 @@ logging.getLogger("pcswitcher").setLevel(min(file, tui))  # Let pcswitcher throu
 │                          │  stdlib logging.Logger  │◄─── External libs        │
 │                          │     (root logger)       │     (asyncssh, etc.)     │
 │                          └───────────┬─────────────┘                          │
-│                                      │                                         │
-│                                      ▼                                         │
+│                                      │                                        │
+│                                      ▼                                        │
 │                          ┌─────────────────────────┐                          │
 │                          │     QueueHandler        │                          │
 │                          │    (non-blocking)       │                          │
 │                          └───────────┬─────────────┘                          │
-│                                      │                                         │
-│                                      ▼                                         │
+│                                      │                                        │
+│                                      ▼                                        │
 │                          ┌─────────────────────────┐                          │
 │                          │    QueueListener        │                          │
 │                          │  (background thread)    │                          │
 │                          └─────┬───────────┬───────┘                          │
-│                                │           │                                   │
+│                                │           │                                  │
 │              ┌─────────────────┘           └─────────────────┐                │
 │              ▼                                               ▼                │
 │    ┌──────────────────┐                           ┌──────────────────┐        │
 │    │  FileHandler     │                           │  StreamHandler   │        │
 │    │ level=file_level │                           │ level=tui_level  │        │
 │    └────────┬─────────┘                           └────────┬─────────┘        │
-│             │                                              │                   │
-│             ▼                                              ▼                   │
+│             │                                              │                  │
+│             ▼                                              ▼                  │
 │    ┌──────────────────┐                           ┌──────────────────┐        │
 │    │  JsonFormatter   │                           │  RichFormatter   │        │
 │    └────────┬─────────┘                           └────────┬─────────┘        │
-│             │                                              │                   │
-│             ▼                                              ▼                   │
+│             │                                              │                  │
+│             ▼                                              ▼                  │
 │      JSON Lines File                                 Rich TUI Output          │
-│                                                                                │
-└────────────────────────────────────────────────────────────────────────────────┘
+│                                                                               │
+└───────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Log Record Lifecycle
@@ -215,6 +215,45 @@ logging.getLogger("pcswitcher").setLevel(min(file, tui))  # Let pcswitcher throu
 6. **Filtering**: Each handler applies level check + ExternalLibraryFilter
 7. **Formatting**: JsonFormatter or RichFormatter renders
 8. **Output**: Written to file or console
+
+### QueueListener Lifecycle Management
+
+The `QueueListener` runs in a background thread and must be properly stopped on application exit to ensure all pending log records are flushed. Without explicit teardown, the last few log lines (often critical error details) may be lost.
+
+**Lifecycle Strategy**: `atexit` handler registered during logging setup.
+
+```python
+import atexit
+from logging.handlers import QueueHandler, QueueListener
+
+def setup_logging(config: LogConfig) -> None:
+    """Set up logging infrastructure with guaranteed cleanup."""
+    queue: Queue[logging.LogRecord] = Queue(-1)
+
+    # Create handlers
+    file_handler = FileHandler(log_path)
+    tui_handler = StreamHandler(sys.stderr)
+
+    # Create and start listener
+    listener = QueueListener(queue, file_handler, tui_handler, respect_handler_level=True)
+    listener.start()
+
+    # Register cleanup - guaranteed to run on normal exit, sys.exit(), or unhandled exception
+    atexit.register(listener.stop)
+
+    # Attach QueueHandler to root logger
+    root = logging.getLogger()
+    root.addHandler(QueueHandler(queue))
+```
+
+**Why `atexit` over alternatives**:
+- **`try...finally` in main()**: Doesn't cover all exit paths (e.g., `sys.exit()` from deep call stack)
+- **Context manager**: Would require restructuring CLI entry point; less idiomatic for logging setup
+- **`atexit`**: Simple, reliable, covers normal exit, `sys.exit()`, and unhandled exceptions. Standard pattern for logging cleanup per Python Logging Cookbook.
+
+**Edge Cases**:
+- **SIGTERM/SIGKILL**: `atexit` handlers do NOT run on forced signals. This is acceptable—hard kills will always lose buffered data. Users can configure signal handlers separately if needed.
+- **Multiple `setup_logging()` calls**: Each call registers a new handler. The design should either prevent multiple calls or track/cleanup previous listeners.
 
 ---
 
