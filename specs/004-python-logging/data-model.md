@@ -79,22 +79,29 @@ logging.addLevelName(15, "FULL")
 
 ### LogContext
 
-Structured context added to every log record from pcswitcher code via `extra` dict.
+Structured context added to log records from pcswitcher code via `extra` dict.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `job` | `str` | Yes | Job name (e.g., `"btrfs"`, `"orchestrator"`) |
-| `host` | `str` | Yes | Logical role (`"source"` or `"target"`) |
+| `job` | `str` | No | Job name (e.g., `"btrfs"`, `"orchestrator"`). Omitted during startup/shutdown. |
+| `host` | `str` | No | Logical role (`"source"` or `"target"`). Omitted during startup/shutdown. |
 | `**context` | `dict[str, Any]` | No | Additional key=value pairs |
+
+**Fallback Behavior**: When `job` or `host` are missing (e.g., during startup, configuration loading, shutdown):
+- `JsonFormatter`: Omits the field from JSON output (no empty string or null)
+- `RichFormatter`: Omits the bracketed segment from output (e.g., `10:30:45 [INFO    ] Starting up` instead of `10:30:45 [INFO    ] [] () Starting up`)
 
 **Implementation**: Added via `logging.LoggerAdapter` or `extra` parameter:
 ```python
-# Option 1: LoggerAdapter (recommended for bound context)
+# Option 1: LoggerAdapter (recommended for bound context during sync)
 adapter = logging.LoggerAdapter(logger, {"job": "btrfs", "host": "source"})
 adapter.info("Starting sync", extra={"subvolume": "@home"})
 
 # Option 2: extra dict (for one-off context)
 logger.info("Starting sync", extra={"job": "btrfs", "host": "source", "subvolume": "@home"})
+
+# Option 3: No context (for startup/shutdown logs)
+logger.info("Configuration loaded")
 ```
 
 ---
