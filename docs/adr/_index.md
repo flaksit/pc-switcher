@@ -11,6 +11,7 @@
 - [ADR-007](adr-007-tdd-implementation.md): Test-Driven Development for Implementation
 - [ADR-008](adr-008-ci-pipeline.md): CI Pipeline with Draft-Aware Integration Tests
 - [ADR-009](adr-009-ai-readiness-labels.md): AI Readiness Labels for Issue Triage
+- [ADR-010](adr-010-logging-infrastructure.md): Standard Library Logging Infrastructure
 
 ### Instructions for AI agents
 Load specific ADRs only when relevant to current task: search workspace files to find relevant ADRs
