@@ -65,16 +65,20 @@ class Orchestrator:
     - Sync summary and session tracking
     """
 
-    def __init__(self, target: str, config: Configuration, *, auto_accept: bool = False) -> None:
+    def __init__(
+        self, target: str, config: Configuration, *, auto_accept: bool = False, dry_run: bool = False
+    ) -> None:
         """Initialize orchestrator with target and validated configuration.
 
         Args:
             target: Target hostname or SSH alias
             config: Validated configuration from YAML file
             auto_accept: If True, auto-accept prompts (e.g., config sync)
+            dry_run: If True, preview sync without making changes
         """
         self._config = config
         self._auto_accept = auto_accept
+        self._dry_run = dry_run
         self._session_id = secrets.token_hex(4)
         self._session_folder = session_folder_name(self._session_id)
         self._source_hostname = get_local_hostname()
@@ -118,6 +122,7 @@ class Orchestrator:
             session_id=self._session_id,
             source_hostname=self._source_hostname,
             target_hostname=self._target_hostname,
+            dry_run=self._dry_run,
         )
 
     async def run(self) -> SyncSession:  # noqa: PLR0915
@@ -187,6 +192,10 @@ class Orchestrator:
 
         # Start UI live display
         self._ui.start()
+
+        # Log dry-run mode banner
+        if self._dry_run:
+            self._logger.log(LogLevel.INFO, Host.SOURCE, "[DRY-RUN] Preview mode - no changes will be made")
 
         try:
             # Phase 1: Acquire source lock
@@ -345,6 +354,7 @@ class Orchestrator:
             ui=self._ui,
             console=self._console,
             auto_accept=self._auto_accept,
+            dry_run=self._dry_run,
         )
 
         if not should_continue:

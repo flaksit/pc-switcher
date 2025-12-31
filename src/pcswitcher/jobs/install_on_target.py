@@ -68,7 +68,7 @@ class InstallOnTargetJob(SystemJob):
         """Install or upgrade pc-switcher on target if needed."""
         # Check target version (already validated in validate phase)
         if self.target_version:
-            if self.target_version == self.source_version:  # , source_release.version):
+            if self.target_version == self.source_version:
                 self._log(
                     Host.TARGET,
                     LogLevel.INFO,
@@ -86,6 +86,10 @@ class InstallOnTargetJob(SystemJob):
                 LogLevel.INFO,
                 f"Installing pc-switcher {self.source_version} on target",
             )
+
+        # In dry-run mode, skip actual installation
+        if self.context.dry_run:
+            return
 
         # Run the same install.sh script used for initial installation
         # The script handles: uv bootstrap, dependencies, pc-switcher install
