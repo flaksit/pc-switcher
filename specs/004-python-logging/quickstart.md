@@ -97,24 +97,23 @@ The 3-setting model works as follows:
 ## Programmatic Usage
 
 ```python
-import structlog
+import logging
 
 # Get a logger for your module
-log = structlog.get_logger("pcswitcher.jobs.btrfs")
+logger = logging.getLogger("pcswitcher.jobs.btrfs")
 
-# Basic logging
-log.info("Starting sync", target="laptop-02")
-log.warning("Slow connection", latency_ms=250)
-log.error("Transfer failed", file="/path/to/file", reason="permission denied")
+# Basic logging with context via extra dict
+logger.info("Starting sync", extra={"job": "btrfs", "host": "source", "target": "laptop-02"})
+logger.warning("Slow connection", extra={"job": "btrfs", "host": "source", "latency_ms": 250})
+logger.error("Transfer failed", extra={"job": "btrfs", "host": "source", "file": "/path/to/file", "reason": "permission denied"})
 
-# FULL level (operational details)
-log.log(15, "File transferred", path="/home/user/doc.txt", bytes=1024)
-# Or with helper method:
-log.full("File transferred", path="/home/user/doc.txt", bytes=1024)
+# FULL level (operational details) - value 15
+logger.log(15, "File transferred", extra={"job": "btrfs", "host": "source", "path": "/home/user/doc.txt", "bytes": 1024})
 
-# Bind context for all subsequent logs
-bound_log = log.bind(job="btrfs", host="source")
-bound_log.info("Operation complete")  # Includes job and host automatically
+# Use LoggerAdapter for bound context (recommended)
+adapter = logging.LoggerAdapter(logger, {"job": "btrfs", "host": "source"})
+adapter.info("Operation complete")  # Includes job and host automatically
+adapter.info("Snapshot created", extra={"subvolume": "@home"})  # Additional context
 ```
 
 ## Troubleshooting

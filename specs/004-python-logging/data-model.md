@@ -2,10 +2,11 @@
 
 **Branch**: `004-python-logging`
 **Date**: 2025-12-31
+**Related ADR**: [ADR-010](../../docs/adr/adr-010-logging-infrastructure.md)
 
 ## Overview
 
-This document defines the key entities for pc-switcher's logging infrastructure migration to stdlib + structlog.
+This document defines the key entities for pc-switcher's logging infrastructure migration to Python's standard `logging` module.
 
 ## Entities
 
@@ -36,7 +37,7 @@ logging:
 
 ### LogLevel (Extended)
 
-The existing `LogLevel` IntEnum from `models.py` extended with the custom FULL level.
+The existing `LogLevel` IntEnum from `models.py` aligned with stdlib logging values.
 
 | Level | Value | stdlib Equivalent | Description |
 |-------|-------|-------------------|-------------|
@@ -76,29 +77,9 @@ logging.addLevelName(15, "FULL")
 
 ---
 
-### ExternalLibraryFilter
-
-A `logging.Filter` subclass that implements the `external` level floor for non-pcswitcher loggers.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `external_level` | `int` | Floor level for external libraries |
-
-**Filter Logic**:
-```
-IF logger.name starts with "pcswitcher":
-    PASS (defer to handler's base level)
-ELSE:
-    PASS only if record.levelno >= external_level
-```
-
-**Attachment**: Instance attached to each handler (file, TUI).
-
----
-
 ### LogContext
 
-Structured context added to every log record from pcswitcher code.
+Structured context added to every log record from pcswitcher code via `extra` dict.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -106,28 +87,57 @@ Structured context added to every log record from pcswitcher code.
 | `host` | `str` | Yes | Logical role (`"source"` or `"target"`) |
 | `**context` | `dict[str, Any]` | No | Additional key=value pairs |
 
-**Implementation**: Added via structlog processor.
+**Implementation**: Added via `logging.LoggerAdapter` or `extra` parameter:
+```python
+# Option 1: LoggerAdapter (recommended for bound context)
+adapter = logging.LoggerAdapter(logger, {"job": "btrfs", "host": "source"})
+adapter.info("Starting sync", extra={"subvolume": "@home"})
+
+# Option 2: extra dict (for one-off context)
+logger.info("Starting sync", extra={"job": "btrfs", "host": "source", "subvolume": "@home"})
+```
 
 ---
 
-### ProcessorChain
+### JsonFormatter
 
-The shared processor chain applied to all log records (structlog and stdlib).
+Custom `logging.Formatter` for JSON lines file output.
 
-| Processor | Purpose |
-|-----------|---------|
-| `structlog.stdlib.add_log_level` | Add `level` key from record |
-| `structlog.processors.TimeStamper(fmt="iso")` | Add ISO timestamp |
-| `add_job_and_host` | Custom: Add job/host context |
-| `structlog.processors.EventRenamer("message")` | Rename `event` to `message` |
-| `structlog.processors.StackInfoRenderer()` | Format stack traces |
-| `structlog.processors.ExceptionRenderer()` | Format exceptions |
+| Output Field | Source | Description |
+|--------------|--------|-------------|
+| `timestamp` | `record.created` | ISO format timestamp |
+| `level` | `record.levelname` | Log level name |
+| `job` | `record.job` | Job name from extra |
+| `host` | `record.host` | Host role from extra |
+| `message` | `record.getMessage()` | Log message |
+| `*context` | `record.__dict__` | Additional context fields |
 
-**Final Processor** (structlog-originated logs):
-- `structlog.stdlib.ProcessorFormatter.wrap_for_formatter`
+---
 
-**Foreign Pre-chain** (stdlib-originated logs):
-- Same processors as above
+### RichFormatter
+
+Custom `logging.Formatter` for Rich-colored TUI output.
+
+**Output Format**: `HH:MM:SS [LEVEL   ] [job] (host) message context`
+
+| Component | Source | Style |
+|-----------|--------|-------|
+| Timestamp | `record.created` | `dim` |
+| Level | `record.levelname` | Level-specific color |
+| Job | `record.job` | `blue` |
+| Host | `record.host` | `magenta` |
+| Message | `record.getMessage()` | default |
+| Context | Extra fields | `dim` |
+
+**Level Colors**:
+| Level | Color |
+|-------|-------|
+| DEBUG | `dim` |
+| FULL | `cyan` |
+| INFO | `green` |
+| WARNING | `yellow` |
+| ERROR | `red` |
+| CRITICAL | `bold red` |
 
 ---
 
@@ -135,10 +145,16 @@ The shared processor chain applied to all log records (structlog and stdlib).
 
 Configuration for each log output handler.
 
-| Handler | Level Source | Filter | Formatter |
-|---------|-------------|--------|-----------|
-| File | `LogConfig.file` | `ExternalLibraryFilter(external_level)` | `ProcessorFormatter` + `JSONRenderer` |
-| TUI | `LogConfig.tui` | `ExternalLibraryFilter(external_level)` | `ProcessorFormatter` + `ConsoleRenderer` |
+| Handler | Type | Level | Formatter |
+|---------|------|-------|-----------|
+| File | `FileHandler` | `LogConfig.file` | `JsonFormatter` |
+| TUI | `StreamHandler` | `LogConfig.tui` | `RichFormatter` |
+
+**Logger hierarchy** (handles 3-setting model without custom filters):
+```python
+logging.getLogger().setLevel(external)                    # Root filters external libs
+logging.getLogger("pcswitcher").setLevel(min(file, tui))  # Let pcswitcher through
+```
 
 ---
 
@@ -147,89 +163,80 @@ Configuration for each log output handler.
 ### Logging Pipeline Flow
 
 ```
-                              ┌────────────────────────┐
-                              │   pcswitcher code      │
-                              │   log.info("msg", k=v) │
-                              └──────────┬─────────────┘
-                                         │
-                                         ▼
-                              ┌────────────────────────┐
-                              │  structlog bound       │
-                              │  logger (processing)   │
-                              └──────────┬─────────────┘
-                                         │
-                    ┌────────────────────┼────────────────────┐
-                    │                    │                    │
-                    ▼                    ▼                    ▼
-          ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-          │   asyncssh      │  │  other stdlib   │  │   stdlib root   │
-          │    logger       │  │    loggers      │  │     logger      │
-          └────────┬────────┘  └────────┬────────┘  └────────┬────────┘
-                   │                    │                    │
-                   └────────────────────┼────────────────────┘
+                    ┌─────────────────────────────────────────┐
+                    │         Application Code                │
+                    │  logging.getLogger("pcswitcher.xxx")    │
+                    └───────────────────┬─────────────────────┘
                                         │
-                                        ▼
-                              ┌────────────────────────┐
-                              │     QueueHandler       │
-                              │     (non-blocking)     │
-                              └──────────┬─────────────┘
-                                         │
-                                         ▼
-                              ┌────────────────────────┐
-                              │     QueueListener      │
-                              │   (background thread)  │
-                              └──────────┬─────────────┘
-                                         │
-                    ┌────────────────────┴────────────────────┐
-                    │                                         │
-                    ▼                                         ▼
-          ┌─────────────────────┐               ┌─────────────────────┐
-          │   FileHandler       │               │   StreamHandler     │
-          │  level=file_level   │               │   level=tui_level   │
-          │ +ExternalFilter     │               │  +ExternalFilter    │
-          └──────────┬──────────┘               └──────────┬──────────┘
-                     │                                      │
-                     ▼                                      ▼
-          ┌─────────────────────┐               ┌─────────────────────┐
-          │ ProcessorFormatter  │               │ ProcessorFormatter  │
-          │  + JSONRenderer     │               │ + ConsoleRenderer   │
-          └──────────┬──────────┘               └──────────┬──────────┘
-                     │                                      │
-                     ▼                                      ▼
-              JSON Lines File                         Rich TUI Output
+┌───────────────────────────────────────┼───────────────────────────────────────┐
+│                                       ▼                                       │
+│                          ┌─────────────────────────┐                          │
+│                          │  stdlib logging.Logger  │◄─── External libs        │
+│                          │     (root logger)       │     (asyncssh, etc.)     │
+│                          └───────────┬─────────────┘                          │
+│                                      │                                         │
+│                                      ▼                                         │
+│                          ┌─────────────────────────┐                          │
+│                          │     QueueHandler        │                          │
+│                          │    (non-blocking)       │                          │
+│                          └───────────┬─────────────┘                          │
+│                                      │                                         │
+│                                      ▼                                         │
+│                          ┌─────────────────────────┐                          │
+│                          │    QueueListener        │                          │
+│                          │  (background thread)    │                          │
+│                          └─────┬───────────┬───────┘                          │
+│                                │           │                                   │
+│              ┌─────────────────┘           └─────────────────┐                │
+│              ▼                                               ▼                │
+│    ┌──────────────────┐                           ┌──────────────────┐        │
+│    │  FileHandler     │                           │  StreamHandler   │        │
+│    │ level=file_level │                           │ level=tui_level  │        │
+│    └────────┬─────────┘                           └────────┬─────────┘        │
+│             │                                              │                   │
+│             ▼                                              ▼                   │
+│    ┌──────────────────┐                           ┌──────────────────┐        │
+│    │  JsonFormatter   │                           │  RichFormatter   │        │
+│    └────────┬─────────┘                           └────────┬─────────┘        │
+│             │                                              │                   │
+│             ▼                                              ▼                   │
+│      JSON Lines File                                 Rich TUI Output          │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Log Record Lifecycle
 
-1. **Creation**: Application calls `log.info("msg", key=value)`
-2. **Binding**: structlog adds bound context (job, host)
-3. **Processing**: Processor chain adds timestamp, formats exceptions
-4. **Wrapping**: `wrap_for_formatter` prepares for stdlib
-5. **Routing**: stdlib Logger dispatches to QueueHandler
-6. **Queueing**: QueueHandler enqueues (non-blocking)
-7. **Dispatch**: QueueListener dequeues in background thread
-8. **Filtering**: Each handler applies level check + ExternalLibraryFilter
-9. **Formatting**: ProcessorFormatter renders (JSON or Rich)
-10. **Output**: Written to file or console
+1. **Creation**: Application calls `logger.info("msg", extra={...})`
+2. **Context**: LoggerAdapter adds bound context (job, host) or via `extra`
+3. **Routing**: stdlib Logger dispatches to QueueHandler
+4. **Queueing**: QueueHandler enqueues (non-blocking)
+5. **Dispatch**: QueueListener dequeues in background thread
+6. **Filtering**: Each handler applies level check + ExternalLibraryFilter
+7. **Formatting**: JsonFormatter or RichFormatter renders
+8. **Output**: Written to file or console
 
 ---
 
 ## Relationships
 
 ```
-LogConfig ────1:N────► Handler (file, tui)
-    │                      │
-    │                      ├── level (from file/tui setting)
-    │                      └── ExternalLibraryFilter (from external setting)
-    │
-    └── external ─────────► ExternalLibraryFilter.external_level
+LogConfig
+    ├── file ──────────────► FileHandler.level
+    ├── tui ───────────────► StreamHandler.level
+    └── external ──────────► Root logger level
 
 LogLevel ←──────────────── LogConfig.file, .tui, .external (values)
 
-ProcessorChain ───────────► ProcessorFormatter (file handler)
-                          └► ProcessorFormatter (tui handler)
+Logger hierarchy:
+    Root logger (level=external) ◄── asyncssh, other external
+         │
+         └── pcswitcher (level=min(file,tui)) ◄── pcswitcher.*
 
-LogContext ───────────────► Attached to LogRecord by processor
+JsonFormatter ────────────► FileHandler
+RichFormatter ────────────► StreamHandler (TUI)
+
+LogContext ───────────────► Attached to LogRecord via extra dict
 ```
 
 ---
@@ -242,10 +249,10 @@ LogContext ───────────────► Attached to LogRecor
 |--------|------|--------|
 | `LogLevel` | `models.py` | Update values from 0-5 to 10-50 scale |
 | `Configuration` | `config.py` | Add `logging: LogConfig` field |
-| `LogEvent` | `events.py` | May be deprecated (replaced by stdlib LogRecord) |
-| `Logger` | `logger.py` | Replace with structlog configuration |
-| `FileLogger` | `logger.py` | Replace with ProcessorFormatter + JSONRenderer |
-| `ConsoleLogger` | `logger.py` | Replace with ProcessorFormatter + ConsoleRenderer |
+| `LogEvent` | `events.py` | Deprecated (replaced by stdlib LogRecord) |
+| `Logger` | `logger.py` | Replace with stdlib logging setup |
+| `FileLogger` | `logger.py` | Replace with JsonFormatter + FileHandler |
+| `ConsoleLogger` | `logger.py` | Replace with RichFormatter + StreamHandler |
 
 ### Preserved Entities
 

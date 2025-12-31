@@ -5,12 +5,12 @@
 
 ## Summary
 
-Migrate pc-switcher from its custom `Logger`/`EventBus` logging infrastructure to Python's standard `logging` module with structlog integration. The 3-setting model (`file`, `tui`, `external`) will control log level floors for file output, TUI output, and external library filtering. The migration must preserve the current log format (JSON lines for file, Rich-colored for TUI) and integrate external library logs (asyncssh, etc.) into the unified logging pipeline.
+Migrate pc-switcher from its custom `Logger`/`EventBus` logging infrastructure to Python's standard `logging` module. The 3-setting model (`file`, `tui`, `external`) will control log level floors for file output, TUI output, and external library filtering. The migration uses `QueueHandler`/`QueueListener` for async handling and custom formatters for JSON and Rich output. See [ADR-010](../../docs/adr/adr-010-logging-infrastructure.md) for the decision rationale.
 
 ## Technical Context
 
 **Language/Version**: Python 3.14
-**Primary Dependencies**: structlog (25.5.0+), rich (14.2.0+), asyncssh (2.21.1+), typer (0.20.0+)
+**Primary Dependencies**: stdlib logging, rich (14.2.0+), asyncssh (2.21.1+), typer (0.20.0+)
 **Storage**: JSON lines log files in `~/.local/share/pc-switcher/logs/`
 **Testing**: pytest + pytest-asyncio
 **Target Platform**: Ubuntu 24.04 LTS
@@ -25,13 +25,13 @@ Migrate pc-switcher from its custom `Logger`/`EventBus` logging infrastructure t
 
 - **Reliability Without Compromise**: ✅ No impact on data integrity. Logging is observability-only. Log file writes use append-mode with explicit flush to ensure durability. Invalid config causes startup failure (fail-fast).
 - **Frictionless Command UX**: ✅ No change to CLI commands. Configuration adds 3 optional settings to existing config file. Sensible defaults (file: DEBUG, tui: INFO, external: WARNING) ensure zero-config works.
-- **Well-supported tools and best practices**: ✅ `structlog` is already listed in ADR-003 as an approved library. It's actively maintained (25.5.0 released 2025), widely adopted, and provides best-practice structured logging patterns. Standard `logging` module is stdlib.
+- **Well-supported tools and best practices**: ✅ Uses Python's stdlib `logging` module exclusively. `QueueHandler`/`QueueListener` is the recommended async pattern per Python Logging Cookbook. See [ADR-010](../../docs/adr/adr-010-logging-infrastructure.md).
 - **Minimize SSD Wear**: ✅ No change to logging frequency or volume. Existing async queue-based write pattern preserved. File writes are append-only (no rewrites).
 - **Throughput-Focused Syncing**: ✅ Logging overhead unchanged. Async handler pattern from existing implementation preserved.
-- **Deliberate Simplicity**: ✅ Replaces ~200 lines of custom logging code with stdlib + structlog. Simpler filter logic (3-setting model vs. previous 2-setting). Standard Python logging patterns enable external library integration.
+- **Deliberate Simplicity**: ✅ Replaces ~180 lines of custom logging code with ~105 lines of stdlib logging. Simpler mental model (standard Python patterns, no custom filters). See [ADR-010 analysis](../../docs/adr/considerations/adr-010-logging-infrastructure-analysis.md).
 - **Up-to-date Documentation**:
   - Update: `README.md` (configuration section)
-  - Update: `docs/adr/adr-003-implementation-language.md` if structlog integration patterns warrant
+  - New: ADR-010 (logging infrastructure decision)
   - New: docstrings in logging module
 
 ## Project Structure
@@ -41,7 +41,7 @@ Migrate pc-switcher from its custom `Logger`/`EventBus` logging infrastructure t
 ```text
 specs/004-python-logging/
 ├── plan.md              # This file
-├── research.md          # Phase 0: structlog vs stdlib analysis
+├── research.md          # Phase 0: logging approach analysis
 ├── data-model.md        # Phase 1: LogConfig, handler, filter entities
 ├── quickstart.md        # Phase 1: Quick setup guide
 └── tasks.md             # Phase 2 output (created by /speckit.tasks)
@@ -51,10 +51,10 @@ specs/004-python-logging/
 
 ```text
 src/pcswitcher/
-├── logger.py            # MODIFY: Replace custom Logger with stdlib+structlog
+├── logger.py            # MODIFY: Replace custom Logger with stdlib logging setup
 ├── config.py            # MODIFY: Add logging section parsing (file/tui/external)
-├── models.py            # RETAIN: LogLevel enum (already compatible)
-├── events.py            # MODIFY: LogEvent may adapt to structlog
+├── models.py            # MODIFY: Align LogLevel values with stdlib (10-50 scale)
+├── events.py            # MODIFY: Deprecate LogEvent (replaced by LogRecord)
 ├── ui.py                # MODIFY: TerminalUI log consumption
 ├── orchestrator.py      # MODIFY: Logger instantiation
 ├── cli.py               # MODIFY: Logging setup on startup
