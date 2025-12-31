@@ -200,6 +200,13 @@ def sync(
             help="Auto-accept prompts (e.g., config sync confirmation)",
         ),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Preview sync without making changes",
+        ),
+    ] = False,
 ) -> None:
     """Sync to target machine.
 
@@ -212,26 +219,33 @@ def sync(
     cfg = _load_configuration(config_path)
 
     # Run the sync operation
-    exit_code = _run_sync(target, cfg, auto_accept=yes)
+    exit_code = _run_sync(target, cfg, auto_accept=yes, dry_run=dry_run)
     sys.exit(exit_code)
 
 
-def _run_sync(target: str, cfg: Configuration, *, auto_accept: bool = False) -> int:
+def _run_sync(target: str, cfg: Configuration, *, auto_accept: bool = False, dry_run: bool = False) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
 
     Args:
         target: Target hostname
         cfg: Loaded configuration
         auto_accept: If True, auto-accept prompts (e.g., config sync)
+        dry_run: If True, preview sync without making changes
 
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
     """
-    return asyncio.run(_async_run_sync(target, cfg, auto_accept=auto_accept))
+    return asyncio.run(_async_run_sync(target, cfg, auto_accept=auto_accept, dry_run=dry_run))
 
 
-async def _async_run_sync(target: str, cfg: Configuration, *, auto_accept: bool = False) -> int:
+async def _async_run_sync(target: str, cfg: Configuration, *, auto_accept: bool = False, dry_run: bool = False) -> int:
     """Async implementation of sync with interrupt handling.
+
+    Args:
+        target: Target hostname
+        cfg: Loaded configuration
+        auto_accept: If True, auto-accept prompts (e.g., config sync)
+        dry_run: If True, preview sync without making changes
 
     Interrupt behavior:
     - First SIGINT: Cancel sync task, allow CLEANUP_TIMEOUT_SECONDS for cleanup
@@ -264,7 +278,7 @@ async def _async_run_sync(target: str, cfg: Configuration, *, auto_accept: bool 
     loop.add_signal_handler(signal.SIGINT, sigint_handler)
 
     try:
-        orchestrator = Orchestrator(target=target, config=cfg, auto_accept=auto_accept)
+        orchestrator = Orchestrator(target=target, config=cfg, auto_accept=auto_accept, dry_run=dry_run)
         main_task = asyncio.create_task(orchestrator.run())
 
         try:

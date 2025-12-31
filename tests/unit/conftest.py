@@ -86,15 +86,16 @@ def mock_job_context_factory(
     mock_local_executor: MagicMock,
     mock_remote_executor: MagicMock,
     mock_event_bus: MagicMock,
-) -> Callable[[dict[str, Any] | None], JobContext]:
+) -> Callable[[dict[str, Any] | None, bool], JobContext]:
     """Factory fixture to create JobContext with custom config.
 
     Usage:
         def test_something(mock_job_context_factory):
             context = mock_job_context_factory(config={"key": "value"})
+            context_dry_run = mock_job_context_factory(config={}, dry_run=True)
     """
 
-    def create_context(config: dict[str, Any] | None = None) -> JobContext:
+    def create_context(config: dict[str, Any] | None = None, dry_run: bool = False) -> JobContext:
         return JobContext(
             config=config or {},
             source=mock_local_executor,
@@ -103,6 +104,7 @@ def mock_job_context_factory(
             session_id="test-session-12345678",
             source_hostname="source-host",
             target_hostname="target-host",
+            dry_run=dry_run,
         )
 
     return create_context

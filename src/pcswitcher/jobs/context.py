@@ -21,3 +21,4 @@ class JobContext:
     session_id: str
     source_hostname: str
     target_hostname: str
+    dry_run: bool = False  # If True, skip state-modifying operations
