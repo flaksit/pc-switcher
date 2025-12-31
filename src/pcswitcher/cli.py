@@ -193,6 +193,13 @@ def sync(
             help="Path to config file (default: ~/.config/pc-switcher/config.yaml)",
         ),
     ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Preview sync without making changes",
+        ),
+    ] = False,
     yes: Annotated[
         bool,
         typer.Option(
@@ -220,7 +227,7 @@ def sync(
     cfg = _load_configuration(config_path)
 
     # Run the sync operation
-    exit_code = _run_sync(target, cfg, auto_accept=yes, allow_consecutive=allow_consecutive)
+    exit_code = _run_sync(target, cfg, auto_accept=yes, allow_consecutive=allow_consecutive, dry_run=dry_run)
     sys.exit(exit_code)
 
 
@@ -230,6 +237,7 @@ def _run_sync(
     *,
     auto_accept: bool = False,
     allow_consecutive: bool = False,
+    dry_run: bool = False,
 ) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
 
@@ -238,11 +246,14 @@ def _run_sync(
         cfg: Loaded configuration
         auto_accept: If True, auto-accept prompts (e.g., config sync)
         allow_consecutive: If True, skip warning about consecutive syncs
+        dry_run: If True, preview sync without making changes
 
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
     """
-    return asyncio.run(_async_run_sync(target, cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive))
+    return asyncio.run(
+        _async_run_sync(target, cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive, dry_run=dry_run)
+    )
 
 
 async def _async_run_sync(
@@ -251,8 +262,15 @@ async def _async_run_sync(
     *,
     auto_accept: bool = False,
     allow_consecutive: bool = False,
+    dry_run: bool = False,
 ) -> int:
     """Async implementation of sync with interrupt handling.
+
+    Args:
+        target: Target hostname
+        cfg: Loaded configuration
+        auto_accept: If True, auto-accept prompts (e.g., config sync)
+        dry_run: If True, preview sync without making changes
 
     Interrupt behavior:
     - First SIGINT: Cancel sync task, allow CLEANUP_TIMEOUT_SECONDS for cleanup
@@ -284,7 +302,7 @@ async def _async_run_sync(
 
     try:
         orchestrator = Orchestrator(
-            target=target, config=cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive
+            target=target, config=cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive, dry_run=dry_run
         )
         main_task = asyncio.create_task(orchestrator.run())
 

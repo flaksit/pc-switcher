@@ -136,9 +136,6 @@ class BtrfsSnapshotJob(SystemJob):
             snap_name = snapshot_name(subvol_name, phase)
             snap_path = f"/.snapshots/pc-switcher/{session_folder}/{snap_name}"
 
-            # Create session folder if it doesn't exist
-            await self.source.run_command(f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}")
-
             self._log(
                 Host.SOURCE,
                 LogLevel.FULL,
@@ -147,16 +144,20 @@ class BtrfsSnapshotJob(SystemJob):
                 mount_point=mount_point,
             )
 
-            result = await create_snapshot(self.source, mount_point, snap_path)
+            if not self.context.dry_run:
+                # Create session folder if it doesn't exist
+                await self.source.run_command(f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}")
 
-            if result.exit_code != 0:
-                self._log(
-                    Host.SOURCE,
-                    LogLevel.CRITICAL,
-                    f"Failed to create snapshot {snap_name}",
-                    error=result.stderr,
-                )
-                raise RuntimeError(f"Snapshot creation failed: {result.stderr}")
+                result = await create_snapshot(self.source, mount_point, snap_path)
+
+                if result.exit_code != 0:
+                    self._log(
+                        Host.SOURCE,
+                        LogLevel.CRITICAL,
+                        f"Failed to create snapshot {snap_name}",
+                        error=result.stderr,
+                    )
+                    raise RuntimeError(f"Snapshot creation failed: {result.stderr}")
 
             self._log(
                 Host.SOURCE,
@@ -170,9 +171,6 @@ class BtrfsSnapshotJob(SystemJob):
             snap_name = snapshot_name(subvol_name, phase)
             snap_path = f"/.snapshots/pc-switcher/{session_folder}/{snap_name}"
 
-            # Create session folder if it doesn't exist
-            await self.target.run_command(f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}")
-
             self._log(
                 Host.TARGET,
                 LogLevel.FULL,
@@ -181,16 +179,20 @@ class BtrfsSnapshotJob(SystemJob):
                 mount_point=mount_point,
             )
 
-            result = await create_snapshot(self.target, mount_point, snap_path)
+            if not self.context.dry_run:
+                # Create session folder if it doesn't exist
+                await self.target.run_command(f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}")
 
-            if result.exit_code != 0:
-                self._log(
-                    Host.TARGET,
-                    LogLevel.CRITICAL,
-                    f"Failed to create snapshot {snap_name}",
-                    error=result.stderr,
-                )
-                raise RuntimeError(f"Snapshot creation failed: {result.stderr}")
+                result = await create_snapshot(self.target, mount_point, snap_path)
+
+                if result.exit_code != 0:
+                    self._log(
+                        Host.TARGET,
+                        LogLevel.CRITICAL,
+                        f"Failed to create snapshot {snap_name}",
+                        error=result.stderr,
+                    )
+                    raise RuntimeError(f"Snapshot creation failed: {result.stderr}")
 
             self._log(
                 Host.TARGET,

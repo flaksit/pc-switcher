@@ -155,6 +155,7 @@ async def _handle_config_sync(
     target_content: str | None,
     console: Console,
     auto_accept: bool,
+    dry_run: bool,
 ) -> bool:
     """Handle config sync logic based on target state.
 
@@ -162,7 +163,9 @@ async def _handle_config_sync(
     """
     # Scenario 1: No config on target
     if target_content is None:
-        return await _handle_no_target_config(target, source_config_path, source_content, console, auto_accept)
+        return await _handle_no_target_config(
+            target, source_config_path, source_content, console, auto_accept, dry_run
+        )
 
     # Scenario 2: Configs match
     if source_content.strip() == target_content.strip():
@@ -170,7 +173,9 @@ async def _handle_config_sync(
         return True
 
     # Scenario 3: Configs differ
-    return await _handle_config_diff(target, source_config_path, source_content, target_content, console, auto_accept)
+    return await _handle_config_diff(
+        target, source_config_path, source_content, target_content, console, auto_accept, dry_run
+    )
 
 
 async def _handle_no_target_config(
@@ -179,11 +184,15 @@ async def _handle_no_target_config(
     source_content: str,
     console: Console,
     auto_accept: bool,
+    dry_run: bool,
 ) -> bool:
     """Handle case when target has no config."""
     if auto_accept or _prompt_new_config(console, source_content):
-        await _copy_config_to_target(target, source_config_path)
-        console.print("[green]Configuration copied to target.[/green]")
+        if dry_run:
+            console.print("[dim]Configuration would be copied to target.[/dim]")
+        else:
+            await _copy_config_to_target(target, source_config_path)
+            console.print("[green]Configuration copied to target.[/green]")
         return True
     console.print("[red]Sync aborted: configuration required on target.[/red]")
     return False
@@ -196,19 +205,26 @@ async def _handle_config_diff(
     target_content: str,
     console: Console,
     auto_accept: bool,
+    dry_run: bool,
 ) -> bool:
     """Handle case when configs differ."""
     if auto_accept:
-        await _copy_config_to_target(target, source_config_path)
-        console.print("[green]Configuration copied to target (auto-accepted).[/green]")
+        if dry_run:
+            console.print("[dim]Configuration would be copied to target (auto-accepted).[/dim]")
+        else:
+            await _copy_config_to_target(target, source_config_path)
+            console.print("[green]Configuration copied to target (auto-accepted).[/green]")
         return True
 
     diff = _generate_diff(source_content, target_content)
     action = _prompt_config_diff(console, source_content, target_content, diff)
 
     if action == ConfigSyncAction.ACCEPT_SOURCE:
-        await _copy_config_to_target(target, source_config_path)
-        console.print("[green]Configuration copied to target.[/green]")
+        if dry_run:
+            console.print("[dim]Configuration would be copied to target.[/dim]")
+        else:
+            await _copy_config_to_target(target, source_config_path)
+            console.print("[green]Configuration copied to target.[/green]")
         return True
     if action == ConfigSyncAction.KEEP_TARGET:
         console.print("[yellow]Keeping existing target configuration.[/yellow]")
@@ -225,6 +241,7 @@ async def sync_config_to_target(
     console: Console,
     *,
     auto_accept: bool = False,
+    dry_run: bool = False,
 ) -> bool:
     """Sync configuration from source to target machine.
 
@@ -239,6 +256,7 @@ async def sync_config_to_target(
         ui: TerminalUI instance (will be paused during prompts)
         console: Rich console for display
         auto_accept: If True, auto-accept source config without prompting
+        dry_run: If True, show diff preview without copying file
 
     Returns:
         True if sync should continue, False if sync should abort
@@ -261,7 +279,7 @@ async def sync_config_to_target(
 
     try:
         should_continue = await _handle_config_sync(
-            target, source_config_path, source_content, target_content, console, auto_accept
+            target, source_config_path, source_content, target_content, console, auto_accept, dry_run
         )
         return should_continue
     finally:
