@@ -54,7 +54,7 @@ src/pcswitcher/
 ├── logger.py            # MODIFY: Replace custom Logger with stdlib logging setup
 ├── config.py            # MODIFY: Add logging section parsing (file/tui/external)
 ├── models.py            # MODIFY: Align LogLevel values with stdlib (10-50 scale)
-├── events.py            # MODIFY: Deprecate LogEvent (replaced by LogRecord)
+├── events.py            # MODIFY: Deprecate LogEvent (replaced by stdlib LogRecord)
 ├── ui.py                # MODIFY: TerminalUI log consumption
 ├── orchestrator.py      # MODIFY: Logger instantiation
 ├── cli.py               # MODIFY: Logging setup on startup
