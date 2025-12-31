@@ -696,7 +696,7 @@ class TestConsecutiveSyncWarning:
         # Step 2: pc2 syncs back to pc1
         # pc2 has pc-switcher installed (from first sync) and config synced
         back_sync = await pc2_executor.run_command(
-            "pc-switcher sync pc1 --yes --allow-consecutive",
+            "pc-switcher sync pc1 --yes",
             timeout=180.0,
             login_shell=True,
         )
