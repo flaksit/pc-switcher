@@ -132,7 +132,10 @@ jobs:
     steps:
       - name: Report status
         run: |
-          if [[ "${{ needs.check-changes.outputs.should-run }}" != "true" ]]; then
+          if [[ "${{ github.event.pull_request.draft }}" == "true" ]]; then
+            echo "✓ Integration tests skipped (draft PR)"
+            exit 0
+          elif [[ "${{ needs.check-changes.outputs.should-run }}" != "true" ]]; then
             echo "✓ Integration tests skipped (no relevant changes)"
             exit 0
           elif [[ "${{ needs.integration.result }}" == "success" ]]; then
