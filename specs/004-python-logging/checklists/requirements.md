@@ -2,6 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2025-12-31
+**Updated**: 2025-12-31 (simplified to 3-setting model)
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -34,4 +35,7 @@
 - FR-012 (capture print statements) is marked as SHOULD, not MUST, acknowledging this is a nice-to-have that may be complex to implement
 - The spec acknowledges the need for a planning phase decision on "standard python logging vs structlog" per user request
 - User Story 3 is developer-focused (P2) since it's architectural, but the user stories are prioritized with user-facing needs first
-- All items pass validation - ready for `/speckit.clarify` or `/speckit.plan`
+- **Clarification Session 2025-12-31**:
+  - Simplified from 4-setting to 3-setting model (`file`, `tui`, `external`)
+  - Invalid config should fail (not warn and continue)
+- All items pass validation - ready for `/speckit.plan`
