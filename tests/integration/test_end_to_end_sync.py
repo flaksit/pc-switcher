@@ -661,3 +661,62 @@ class TestConsecutiveSyncWarning:
             f"Second sync with --allow-consecutive should succeed.\n"
             f"Exit code: {second_sync.exit_code}\nStderr: {second_sync.stderr}"
         )
+
+    async def test_back_sync_clears_warning(
+        self,
+        sync_ready_source: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+    ) -> None:
+        """After receiving a back-sync, machine can sync again without warning.
+
+        Full workflow:
+        1. pc1 syncs to pc2 → pc1=source, pc2=target
+        2. pc2 syncs back to pc1 → pc2=source, pc1=target
+        3. pc1 syncs to pc2 again → should succeed WITHOUT --allow-consecutive
+           because pc1 was last a target (received sync from pc2)
+        """
+        pc1_executor = sync_ready_source
+
+        # Clean up any existing history files
+        await pc1_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
+        await pc2_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
+
+        # Step 1: pc1 syncs to pc2
+        first_sync = await pc1_executor.run_command(
+            "pc-switcher sync pc2 --yes --allow-consecutive",
+            timeout=180.0,
+            login_shell=True,
+        )
+        assert first_sync.success, f"First sync (pc1→pc2) should succeed: {first_sync.stderr}"
+
+        # Verify state: pc1=source, pc2=target
+        pc1_history = await pc1_executor.run_command("cat ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
+        assert '"last_role": "source"' in pc1_history.stdout, "pc1 should be source after first sync"
+
+        # Step 2: pc2 syncs back to pc1
+        # pc2 has pc-switcher installed (from first sync) and config synced
+        back_sync = await pc2_executor.run_command(
+            "pc-switcher sync pc1 --yes --allow-consecutive",
+            timeout=180.0,
+            login_shell=True,
+        )
+        assert back_sync.success, (
+            f"Back sync (pc2→pc1) should succeed.\n"
+            f"Exit code: {back_sync.exit_code}\nStdout: {back_sync.stdout}\nStderr: {back_sync.stderr}"
+        )
+
+        # Verify state: pc1=target (received sync), pc2=source
+        pc1_history = await pc1_executor.run_command("cat ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
+        assert '"last_role": "target"' in pc1_history.stdout, "pc1 should be target after back-sync"
+
+        # Step 3: pc1 syncs to pc2 again - should succeed WITHOUT --allow-consecutive
+        # because pc1 was last a target
+        third_sync = await pc1_executor.run_command(
+            "pc-switcher sync pc2 --yes",  # No --allow-consecutive!
+            timeout=180.0,
+            login_shell=True,
+        )
+        assert third_sync.success, (
+            f"Third sync should succeed without --allow-consecutive (pc1 was target).\n"
+            f"Exit code: {third_sync.exit_code}\nStderr: {third_sync.stderr}"
+        )
