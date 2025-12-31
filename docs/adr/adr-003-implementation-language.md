@@ -88,7 +88,7 @@ See `docs/adr/considerations/adr-003-implementation-language-analysis.md` for de
 - **Python version selection (as of 2025-11-29):**
   - Target: Python 3.14
   - Python 3.14 support status for selected libraries:
-    - ✅ Rich, Textual, Typer, Click, structlog
+    - ✅ Rich, Textual, Typer, Click
     - ✅ AsyncSSH
 
 **Rationale:**

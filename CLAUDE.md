@@ -164,14 +164,11 @@ uv run basedpyright                           # Type check
 ```
 
 ## Active Technologies
-- Python 3.14 (per ADR-003) via uv env + pytest, pytest-asyncio, asyncssh (existing testing framework from 002-testing-framework) (003-foundation-tests)
-- N/A (tests verify code behavior, not storage) (003-foundation-tests)
+- Python 3.14 (per ADR-003) via uv env + pytest, pytest-asyncio, asyncssh
 - **Typer** - CLI framework
 - **Rich** - Terminal UI with progress bars
 - **asyncssh** - SSH communication (per ADR-002)
-- **structlog** - Structured logging
 - **pytest + pytest-asyncio** - Testing framework
-- Python 3.14 + structlog (25.5.0+), rich (14.2.0+), asyncssh (2.21.1+), typer (0.20.0+) (004-python-logging)
 - JSON lines log files in `~/.local/share/pc-switcher/logs/` (004-python-logging)
 
 ## Remember!
@@ -189,6 +186,3 @@ uv run basedpyright                           # Type check
 - If your confidence is below 0.9, analyze what's wrong or missing and try again.
 
 Take a deep breath and work on this step by step.
-
-## Recent Changes
-- 004-python-logging: Added Python 3.14 + structlog (25.5.0+), rich (14.2.0+), asyncssh (2.21.1+), typer (0.20.0+)

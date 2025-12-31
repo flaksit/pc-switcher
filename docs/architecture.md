@@ -20,7 +20,7 @@ graph TD
     LocalExec[LocalExecutor<br/>Source Commands]
     RemoteExec[RemoteExecutor<br/>Target Commands]
 
-    Logger[Logger<br/>structlog]
+    Logger[Logger]
     TerminalUI[TerminalUI<br/>Rich Live]
 
     Jobs[Jobs<br/>Pluggable Sync Operations]
