@@ -74,11 +74,17 @@ async def _pc1_connection() -> AsyncIterator[asyncssh.SSHClientConnection]:  # p
     Each test module gets its own connection instance.
 
     Uses default ~/.ssh/known_hosts - key is established by reset-vm.sh via ssh_accept_new.
+    Uses keepalive to prevent connection going stale during long-running operations.
     """
     host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
     user = os.environ["PC_SWITCHER_TEST_USER"]
 
-    async with asyncssh.connect(host, username=user) as conn:
+    async with asyncssh.connect(
+        host,
+        username=user,
+        keepalive_interval=15,
+        keepalive_count_max=3,
+    ) as conn:
         yield conn
 
 
@@ -90,11 +96,17 @@ async def _pc2_connection() -> AsyncIterator[asyncssh.SSHClientConnection]:  # p
     Each test module gets its own connection instance.
 
     Uses default ~/.ssh/known_hosts - key is established by reset-vm.sh via ssh_accept_new.
+    Uses keepalive to prevent connection going stale during long-running operations.
     """
     host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
     user = os.environ["PC_SWITCHER_TEST_USER"]
 
-    async with asyncssh.connect(host, username=user) as conn:
+    async with asyncssh.connect(
+        host,
+        username=user,
+        keepalive_interval=15,
+        keepalive_count_max=3,
+    ) as conn:
         yield conn
 
 
