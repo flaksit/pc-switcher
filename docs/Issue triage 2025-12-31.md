@@ -13,12 +13,13 @@
 
 **Total open issues analyzed:** 33
 
-**Critical issues blocking user features:** 2
+**Critical issues blocking user features:** 3
 
 - #103 - Integrate standard Python logging
 - #37 - Implement --dry-run flag
+- #47 - Warning on consecutive syncs from same source
 
-**Non-critical issues that can be deferred:** 31
+**Non-critical issues that can be deferred:** 30
 
 ## Critical Issues (MUST Resolve Before User Features)
 
@@ -37,6 +38,14 @@
 **Work started:** NO
 
 **Reasoning:** Dry-run is critical for reliability (priority #1 in project requirements) and preventing data loss. The issue specifically notes "each Job should have a dry-run mode," indicating this is an architectural requirement that must be built into the Job base class infrastructure BEFORE implementing user feature sync jobs (items 5-10 in Feature breakdown.md). Currently, the `sync` command has no `--dry-run` flag, and the Job interface has no dry-run support.
+
+### #47 - Warning on consecutive syncs from same source
+
+**Labels:** prio:medium, comp:core
+**Critical before user features:** YES
+**Work started:** NO
+
+**Reasoning:** Without this warning, users could accidentally sync from the same machine twice in a row, potentially overwriting changes made on the target. This is a safety-critical feature that must be in place before users start relying on the sync functionality for their daily workflow.
 
 ## Non-Critical Issues (Can Be Deferred)
 
@@ -120,13 +129,11 @@
 
 | Issue | Title | Labels | Work Started |
 | ----- | ----- | ------ | ------------ |
-| #47 | Warning on consecutive syncs from same source | prio:medium, comp:core | NO |
 | #46 | Sync VSCode | none | NO |
 | #31 | Rollback cli command | comp:core | NO |
 
 **Notes:**
 
-- #47: Explicitly deferred to Feature 5 implementation per Issue triage 2025-12-11.md
 - #46: Sub-task of Feature 5 (User Data Sync) per Issue triage 2025-12-11.md
 - #31: Deferred to Feature 4 (Rollback) per Issue triage 2025-12-11.md
 
@@ -176,9 +183,14 @@ The following issues were excluded from analysis as they are in "Done" or "In Re
    - Action: Add --dry-run flag to sync command and implement Job base class dry-run infrastructure
    - Impact: Critical for reliability and preventing data loss during development and testing
 
+3. **#47 - Consecutive sync warning**
+   - Priority: HIGH
+   - Action: Implement warning when syncing from the same source consecutively
+   - Impact: Prevents accidental data loss from overwriting target changes
+
 ### Can Proceed in Parallel
 
-All other 31 issues can be addressed in parallel with or after user feature implementation:
+All other 30 issues can be addressed in parallel with or after user feature implementation:
 
 - Testing framework improvements enhance DX but don't block development
 - Documentation improvements support maintainability
@@ -187,4 +199,4 @@ All other 31 issues can be addressed in parallel with or after user feature impl
 
 ## Conclusion
 
-Only 2 critical issues block user feature implementation. The foundation infrastructure is solid and complete, with integration tests validated (PR #90, #99). Once #103 and #37 are resolved, the project is ready to proceed with implementing sync jobs (Features 5-10).
+Only 3 critical issues block user feature implementation. The foundation infrastructure is solid and complete, with integration tests validated (PR #90, #99). Once #103, #37, and #47 are resolved, the project is ready to proceed with implementing sync jobs (Features 5-10).
