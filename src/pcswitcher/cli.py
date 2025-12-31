@@ -20,6 +20,7 @@ from rich.text import Text
 from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
+from pcswitcher.models import SyncSession
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
 
@@ -257,8 +258,6 @@ async def _async_run_sync(
     - First SIGINT: Cancel sync task, allow CLEANUP_TIMEOUT_SECONDS for cleanup
     - Second SIGINT or timeout: Force terminate immediately
     """
-    from pcswitcher.models import SyncSession  # noqa: PLC0415
-
     loop = asyncio.get_running_loop()
     main_task: asyncio.Task[SyncSession] | None = None
     sigint_count = [0]  # Use list to allow mutation in nested function
