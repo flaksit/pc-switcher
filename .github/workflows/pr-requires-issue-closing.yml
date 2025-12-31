@@ -1,4 +1,4 @@
-name: PR metadata
+name: Require issue closing
 
 on:
   pull_request:
