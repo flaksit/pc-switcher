@@ -200,3 +200,114 @@ All other 30 issues can be addressed in parallel with or after user feature impl
 ## Conclusion
 
 Only 3 critical issues block user feature implementation. The foundation infrastructure is solid and complete, with integration tests validated (PR #90, #99). Once #103, #37, and #47 are resolved, the project is ready to proceed with implementing sync jobs (Features 5-10).
+
+
+## Implementation DAG
+
+```mermaid
+flowchart TD
+    subgraph phase1["Phase 1: Critical Infrastructure"]
+        I103[#103 Python logging]
+        I37[#37 Dry-run mode]
+        I47[#47 Consecutive sync warning]
+    end
+
+    subgraph phase2["Phase 2: User Features"]
+        I117[#117 User Data Sync]
+        I118[#118 Package Sync]
+        I119[#119 System Config Sync]
+    end
+
+    subgraph phase2b["Phase 2b: Feature Sub-tasks"]
+        I46[#46 Sync VSCode]
+    end
+
+    subgraph logging["Independent: Logging"]
+        I104[#104 Standard logging refactor]
+        I102[#102 Config log levels]
+        I75[#75 Use structlog]
+    end
+
+    %% Critical path
+    I103 --> logging
+    I103 --> phase2
+    I37 --> phase2
+
+    %% Feature dependencies
+    I117 --> I46
+
+    %% Logging chain
+    I104 <-.->|mutually exclusive| I75
+```
+
+```mermaid
+flowchart TD
+    subgraph phased["Phase D: Future Architecture"]
+        I28[#28 Job DAG]
+        I29[#29 Forever-running Jobs]
+        I24[#24 Optional DiskSpaceMonitor]
+        I26[#26 Non-Ubuntu support]
+        I23[#23 Non-BTRFS support]
+    end
+
+    %% Architecture chain
+    I28 --> I29
+    I29 --> I24
+```
+
+### Phase 3: Rollback
+
+- #31 Rollback CLI
+
+### Independent: Testing DX
+
+- #116 CI path filtering
+- #87 SSH host checking
+- #86 Skip VM reset flag
+- #85 DummyJob cleanup tests
+- #80 Network failure test
+- #78 Lock on workflow cancel
+- #76 Smart VM reset skip
+- #69 Split VM/non-VM tests
+- #68 Fixture state
+- #65 Faster tests
+- #64 IPv6 only VMs
+- #40 Auto-delete VMs
+
+### Independent: Documentation
+
+- #89 Python ADR
+- #88 MADR template
+- #84 Rename to Core
+
+### Independent: Core Refactoring
+
+- #82 Remove GitHub API
+- #48 CLI flags
+- #30 Multi-job modules
+
+### Parallel Execution Groups
+
+Issues that can be worked on simultaneously:
+
+| Group | Issues | Notes |
+| ----- | ------ | ----- |
+| **Critical (do first)** | #103, #37, #47 | Can run in parallel, all must complete before Phase 2 |
+| **User Features** | #117, #118, #119 | Can run in parallel after Critical complete |
+| **Testing DX** | #116, #87, #86, #85, #80, #78, #76, #69, #68, #65, #64, #40 | All independent, any time |
+| **Documentation** | #89, #88, #84 | All independent, any time |
+| **Core Refactoring** | #82, #48, #30 | All independent, any time |
+| **Logging Follow-up** | #104, #102 | After #103; #75 is alternative to #104 |
+| **Phase D** | #28 first, then #29, then #24 | Sequential chain; #26, #23 independent |
+
+### Recommended Execution Order
+
+```text
+1: #103 ──┬── #37 ──┬── #47
+          │         │
+2: #117 ──┼── #118 ─┼── #119
+          │         │
+    (parallel: any testing/docs/refactoring issues)
+          │         │
+3:  #46 ──┴─────────┴── #31
+```
