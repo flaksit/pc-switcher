@@ -443,31 +443,24 @@ class Orchestrator:
         - Target machine's history: last_role = TARGET
 
         This enables the consecutive sync warning to work correctly.
+
+        Raises:
+            RuntimeError: If history update fails on either machine.
         """
         # Update local (source) history
         record_role(SyncRole.SOURCE)
-        self._logger.log(LogLevel.DEBUG, Host.SOURCE, "Updated sync history: role=source")
+        self._logger.log(LogLevel.DEBUG, Host.SOURCE, "Update sync history: role=source: success")
 
         # Update remote (target) history via SSH
         if self._remote_executor is not None:
-            try:
-                cmd = get_record_role_command(SyncRole.TARGET)
-                result = await self._remote_executor.run_command(cmd)
-                if result.success:
-                    self._logger.log(LogLevel.DEBUG, Host.TARGET, "Updated sync history: role=target")
-                else:
-                    self._logger.log(
-                        LogLevel.WARNING,
-                        Host.TARGET,
-                        f"Failed to update sync history on target: {result.stderr}",
-                    )
-            except Exception as e:
-                # Don't fail the sync if history update fails
+            cmd = get_record_role_command(SyncRole.TARGET)
+            result = await self._remote_executor.run_command(cmd)
+            if not result.success:
                 self._logger.log(
-                    LogLevel.WARNING,
-                    Host.TARGET,
-                    f"Failed to update sync history on target: {e}",
+                    LogLevel.ERROR, Host.TARGET, f"Update sync history: role=target: FAILED - {result.stderr}"
                 )
+                raise RuntimeError(f"Failed to update sync history on target: {result.stderr}")
+            self._logger.log(LogLevel.DEBUG, Host.TARGET, "Update sync history: role=target: success")
 
     async def _discover_and_validate_jobs(self) -> list[Job]:
         """Discover enabled jobs from config and validate their configuration.

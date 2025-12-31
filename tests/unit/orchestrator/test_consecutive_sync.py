@@ -217,10 +217,10 @@ class TestUpdateSyncHistory:
         assert '"last_role": "target"' in cmd
 
     @pytest.mark.asyncio
-    async def test_remote_history_failure_logs_warning(
+    async def test_remote_history_failure_raises_error(
         self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Remote history update failure should log warning, not raise."""
+        """Remote history update failure should raise RuntimeError."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         orchestrator = Orchestrator(target="test-target", config=mock_config)
@@ -238,11 +238,9 @@ class TestUpdateSyncHistory:
         orchestrator._event_bus = mock_event_bus  # pyright: ignore[reportPrivateUsage]
         orchestrator._logger = Logger(mock_event_bus, "test")  # pyright: ignore[reportPrivateUsage]
 
-        # Should not raise
-        await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]
-
-        # Verify warning was logged
-        mock_event_bus.publish.assert_called()
+        # Should raise RuntimeError
+        with pytest.raises(RuntimeError, match="Failed to update sync history on target"):
+            await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]
 
 
 class TestWarningMessageContent:
