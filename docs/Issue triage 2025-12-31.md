@@ -3,24 +3,22 @@
 **Objective:** Identify which open GitHub issues must be resolved before implementing user features (sync jobs: items 5-10 from Feature breakdown.md).
 
 **Scope:** All open issues excluding those in "Done" or "In Review" status in:
+
 - PC-switcher Kanban (Project #3)
 - PC-switcher: Testing framework beta (Project #1)
 
 **Date:** December 31, 2025
-
----
 
 ## Executive Summary
 
 **Total open issues analyzed:** 33
 
 **Critical issues blocking user features:** 2
+
 - #103 - Integrate standard Python logging
 - #37 - Implement --dry-run flag
 
 **Non-critical issues that can be deferred:** 31
-
----
 
 ## Critical Issues (MUST Resolve Before User Features)
 
@@ -32,8 +30,6 @@
 
 **Reasoning:** PC-switcher currently uses a custom EventBus-based logging system, but Python's standard `logging` module is not integrated with it—messages from third-party libraries or jobs using standard logging won't appear in pc-switcher's log files or TUI. Since user feature jobs (Docker sync, package sync, etc.) will likely use third-party libraries that emit standard logging, this integration is foundational infrastructure needed before building features, otherwise critical diagnostics will be missing during development and troubleshooting.
 
----
-
 ### #37 - Add --dry-run to sync
 
 **Labels:** comp:core
@@ -42,40 +38,36 @@
 
 **Reasoning:** Dry-run is critical for reliability (priority #1 in project requirements) and preventing data loss. The issue specifically notes "each Job should have a dry-run mode," indicating this is an architectural requirement that must be built into the Job base class infrastructure BEFORE implementing user feature sync jobs (items 5-10 in Feature breakdown.md). Currently, the `sync` command has no `--dry-run` flag, and the Job interface has no dry-run support.
 
----
-
 ## Non-Critical Issues (Can Be Deferred)
 
 ### Logging Infrastructure (Can proceed with current system)
 
 | Issue | Title | Labels | Work Started |
-|-------|-------|--------|--------------|
+| ----- | ----- | ------ | ------------ |
 | #104 | Use standard python logging | comp:core:logging | NO |
 | #102 | Ability to configure the log levels in config file | comp:core:logging | NO |
 | #75 | Refactoring: Use structlog | prio:low, comp:core | NO |
 
 **Notes:**
+
 - #104: Project already has functional custom logging; this is a refactoring to build it on top of Python's standard logging
 - #102: Internal logging levels are already configurable; this is about making third-party library log levels configurable
 - #75: structlog is listed as dependency but not used; existing JSON logging works correctly
 
----
-
 ### CI/CD Infrastructure (Already functional)
 
 | Issue | Title | Labels | Work Started |
-|-------|-------|--------|--------------|
+| ----- | ----- | ------ | ------------ |
 | #116 | Run lint and unit tests only if relevant files changes | none | NO |
 
 **Notes:**
-- CI/CD workflows are functional; this is a performance optimization to skip tests when only docs change
 
----
+- CI/CD workflows are functional; this is a performance optimization to skip tests when only docs change
 
 ### Testing Framework Enhancements (DX improvements, not blockers)
 
 | Issue | Title | Labels | Work Started |
-|-------|-------|--------|--------------|
+| ----- | ----- | ------ | ------------ |
 | #87 | More strict ssh host checking in run-integration-tests.sh | prio:medium, comp:testing-framework | NO |
 | #86 | Command-line flag to skip reset of VM on running integration tests | prio:medium, comp:testing-framework | NO |
 | #85 | Extend DummyJobs to test cleanup on source and target when interrupted | prio:medium, comp:testing-framework | NO |
@@ -89,90 +81,86 @@
 | #40 | Automatic deletion of test-VMs when not in use for x time | comp:testing-framework | NO |
 
 **Notes:**
+
 - All testing infrastructure is functional
 - These are developer experience improvements and test optimizations
 - #62 (real integration tests) was critical but is now COMPLETE (PR #90, #99 merged)
 - #79 (GitHub API rate limits) is also COMPLETE (commit 155d7d1)
 
----
-
 ### Documentation (Organizational improvements)
 
 | Issue | Title | Labels | Work Started |
-|-------|-------|--------|--------------|
+| ----- | ----- | ------ | ------------ |
 | #89 | Add ADR with python tool and conventions instead of having it in the user CLAUDE.md/AGENTS.md | documentation, prio:medium | NO |
 | #88 | Follow official MADR instead of our own ADR .md template | documentation, prio:low | NO |
 | #84 | Rename "Foundations" to "Core" | prio:low | NO |
 
 **Notes:**
+
 - Documentation exists and is usable
 - These are organizational/standardization improvements
-
----
 
 ### Core Refactoring (Enhancements, not blockers)
 
 | Issue | Title | Labels | Work Started |
-|-------|-------|--------|--------------|
+| ----- | ----- | ------ | ------------ |
 | #82 | Remove the dependency on GitHub API from core | prio:low, comp:core | NO |
 | #48 | Command line options/flags for all interactive questions/confirmations | prio:low, comp:core | YES |
 | #30 | Remove the strict 1 job_module = 1 Job class constraint | enhancement, comp:core | NO |
 | #24 | Make DiskSpaceMonitor optional and a config-controlled Job | comp:core | NO |
 
 **Notes:**
+
 - #82: GitHub API only used in InstallOnTargetJob fallback path
 - #48: --yes flag already implemented; issue remains open for additional prompts
 - #30: Organizational constraint, not functional blocker
 - #24: DiskSpaceMonitor works correctly as-is
 
----
-
 ### User Features (Deferred to Phase C per triage)
 
 | Issue | Title | Labels | Work Started |
-|-------|-------|--------|--------------|
+| ----- | ----- | ------ | ------------ |
 | #47 | Warning on consecutive syncs from same source | prio:medium, comp:core | NO |
 | #46 | Sync VSCode | none | NO |
 | #31 | Rollback cli command | comp:core | NO |
 
 **Notes:**
+
 - #47: Explicitly deferred to Feature 5 implementation per Issue triage 2025-12-11.md
 - #46: Sub-task of Feature 5 (User Data Sync) per Issue triage 2025-12-11.md
 - #31: Deferred to Feature 4 (Rollback) per Issue triage 2025-12-11.md
 
----
-
 ### Future Architectural Enhancements (Phase D)
 
 | Issue | Title | Labels | Work Started |
-|-------|-------|--------|--------------|
+| ----- | ----- | ------ | ------------ |
 | #29 | "Forever running" Jobs | comp:core | NO |
 | #28 | DAG for Jobs | comp:core | NO |
 | #26 | Remove constraint to be on Ubuntu 24.04 | comp:core | NO |
 | #23 | Don't require BTRFS | comp:core | NO |
 
 **Notes:**
+
 - All classified as "Phase D: Future architectural enhancements" per Issue triage 2025-12-11.md
 - #29: Low priority, not needed for basic sync
 - #28: Parallel execution optimization (sequential execution already works)
 - #26, #23: Future requirement relaxations
-
----
 
 ## Issues Excluded (In Done/In Review Status)
 
 The following issues were excluded from analysis as they are in "Done" or "In Review" status in GitHub Projects:
 
 **From PC-switcher: Testing framework beta (Project #1):**
+
 - #81, #83, #91, #93, #94, #105, #109, #110, #114
 
 **From PC-switcher Kanban (Project #3):**
+
 - #92, #93, #94, #98, #100, #101, #105, #106, #108, #109, #110, #114
 
 **Additional:**
-- #66 (labeled "status:done")
 
----
+- #66 (labeled "status:done")
 
 ## Recommendations
 
@@ -191,12 +179,11 @@ The following issues were excluded from analysis as they are in "Done" or "In Re
 ### Can Proceed in Parallel
 
 All other 31 issues can be addressed in parallel with or after user feature implementation:
+
 - Testing framework improvements enhance DX but don't block development
 - Documentation improvements support maintainability
 - CI/CD optimizations improve efficiency
 - Architectural enhancements are explicitly deferred to future phases
-
----
 
 ## Conclusion
 
