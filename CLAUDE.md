@@ -171,6 +171,8 @@ uv run basedpyright                           # Type check
 - **asyncssh** - SSH communication (per ADR-002)
 - **structlog** - Structured logging
 - **pytest + pytest-asyncio** - Testing framework
+- Python 3.14 + structlog (25.5.0+), rich (14.2.0+), asyncssh (2.21.1+), typer (0.20.0+) (004-python-logging)
+- JSON lines log files in `~/.local/share/pc-switcher/logs/` (004-python-logging)
 
 ## Remember!
 - You MUST ALWAYS use `uv run` for running Python or python packages: `uv run python`, `uv run ruff`, `uv run basedpyright`, etc.
@@ -187,3 +189,6 @@ uv run basedpyright                           # Type check
 - If your confidence is below 0.9, analyze what's wrong or missing and try again.
 
 Take a deep breath and work on this step by step.
+
+## Recent Changes
+- 004-python-logging: Added Python 3.14 + structlog (25.5.0+), rich (14.2.0+), asyncssh (2.21.1+), typer (0.20.0+)
