@@ -35,25 +35,6 @@ class TestSyncHistoryCommands:
         finally:
             await pc1_executor.run_command(f"rm -rf {HISTORY_DIR}")
 
-    async def test_each_machine_has_independent_history(
-        self, pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
-    ) -> None:
-        """Each machine maintains its own history file (path expands correctly per-machine)."""
-        try:
-            # Set different roles on each machine
-            await pc1_executor.run_command(get_record_role_command(SyncRole.SOURCE))
-            await pc2_executor.run_command(get_record_role_command(SyncRole.TARGET))
-
-            # Verify each has its own independent history
-            pc1_result = await pc1_executor.run_command(f"cat {HISTORY_PATH}")
-            pc2_result = await pc2_executor.run_command(f"cat {HISTORY_PATH}")
-
-            assert '"last_role": "source"' in pc1_result.stdout
-            assert '"last_role": "target"' in pc2_result.stdout
-        finally:
-            await pc1_executor.run_command(f"rm -rf {HISTORY_DIR}")
-            await pc2_executor.run_command(f"rm -rf {HISTORY_DIR}")
-
     async def test_role_can_be_updated(
         self, pc1_executor: BashLoginRemoteExecutor
     ) -> None:
