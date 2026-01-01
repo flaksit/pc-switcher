@@ -3,7 +3,7 @@
 **Input**: Design documents from `/specs/004-python-logging/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, quickstart.md
 
-**Tests**: Not explicitly requested in specification; tests will be part of polish phase for regression validation.
+**Tests**: Tests will be part of polish phase for regression validation.
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
@@ -74,9 +74,9 @@
 
 ### Implementation for User Story 4
 
-- [ ] T015 [P] [US4] Implement JsonFormatter class in src/pcswitcher/logger.py with same JSON structure as FileLogger
-- [ ] T016 [P] [US4] Implement RichFormatter class in src/pcswitcher/logger.py with same Rich output as ConsoleLogger
-- [ ] T017 [US4] Handle optional job/host context in formatters (omit when missing, not empty brackets) in src/pcswitcher/logger.py
+- [ ] T015 [P] [US4] Implement JsonFormatter class in src/pcswitcher/logger.py with same JSON structure as FileLogger (FR-011: include all extra dict key-value pairs as context fields)
+- [ ] T016 [P] [US4] Implement RichFormatter class in src/pcswitcher/logger.py with same Rich output as ConsoleLogger (FR-011: append extra dict key-value pairs as dim text)
+- [ ] T017 [US4] Handle optional job/host context in formatters (omit when missing, not empty brackets); generic extra fields always appended in src/pcswitcher/logger.py
 - [ ] T018 [US4] Wire formatters to FileHandler and StreamHandler in setup_logging() in src/pcswitcher/logger.py
 
 **Checkpoint**: Log output format is preserved (JSON lines for file, Rich for TUI)
@@ -122,7 +122,7 @@
 - [ ] T025 [P] Remove unused Logger, FileLogger, ConsoleLogger classes from src/pcswitcher/logger.py
 - [ ] T026 Update module __all__ exports in src/pcswitcher/logger.py
 - [ ] T027 Update orchestrator.py to use stdlib logging instead of custom Logger class in src/pcswitcher/orchestrator.py
-- [ ] T028 [P] Update all job modules to use stdlib logging (getLogger pattern) in src/pcswitcher/jobs/
+- [ ] T028 [P] Update job modules to use stdlib logging (getLogger pattern): src/pcswitcher/jobs/base.py, btrfs.py, context.py, disk_space_monitor.py, dummy_fail.py, dummy_success.py, install_on_target.py
 - [ ] T029 Update ui.py TUI log consumption to work with new logging pipeline in src/pcswitcher/ui.py
 - [ ] T030 [P] Create unit tests for logging setup and filtering in tests/unit/test_logging.py (covers SC-003, SC-004, SC-007, SC-008; includes test case for invalid log level causing ConfigurationError per FR-010)
 - [ ] T031 [P] Create contract tests for log format in tests/contract/test_logging_contract.py (covers SC-005: TUI visual format, SC-006: JSON structure)
