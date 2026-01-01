@@ -323,7 +323,7 @@ async def uninstall_pcswitcher(executor: BashLoginRemoteExecutor) -> None:
     )
 
 
-async def remove_config_and_data(executor: BashLoginRemoteExecutor) -> None:
+async def _remove_config_and_data(executor: BashLoginRemoteExecutor) -> None:
     """Remove pc-switcher configuration and data directories."""
     await executor.run_command(
         "rm -rf ~/.config/pc-switcher ~/.local/share/pc-switcher",
@@ -335,7 +335,7 @@ async def uninstall_pcswitcher_and_config(executor: BashLoginRemoteExecutor) -> 
     """Uninstall pc-switcher and remove its configuration."""
     await asyncio.gather(
         uninstall_pcswitcher(executor),
-        remove_config_and_data(executor),
+        _remove_config_and_data(executor),
     )
 
 
@@ -451,6 +451,6 @@ async def reset_pcswitcher_state(
     Tests/fixtures that need config should create it after this runs.
     """
     await asyncio.gather(
-        remove_config_and_data(pc1_executor),
-        remove_config_and_data(pc2_executor),
+        _remove_config_and_data(pc1_executor),
+        _remove_config_and_data(pc2_executor),
     )
