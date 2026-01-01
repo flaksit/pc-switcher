@@ -504,19 +504,23 @@ class TestEndToEndSync:
         )
         sync_pid = pid_result.stdout.strip()
 
-        # Monitor output for "target phase" indicator, then block network
+        # Monitor log file for "Target phase:" indicator, then block network
+        # The TUI "Recent Logs" only shows FULL level messages, but DummySuccessJob
+        # logs at INFO level. We check the log file directly for reliable detection.
         network_blocked = False
-        last_output = ""
+        last_log_content = ""
         for _ in range(60):  # Wait up to 60 seconds for target phase
             await asyncio.sleep(1)
-            output_check = await pc1_executor.run_command(
-                f"cat {output_file} 2>/dev/null || true",
+
+            # Check the log file for "Target phase:" messages
+            log_check = await pc1_executor.run_command(
+                "cat ~/.local/share/pc-switcher/logs/sync-*.log 2>/dev/null | grep -i 'target phase' || true",
                 timeout=10.0,
             )
-            last_output = output_check.stdout
+            last_log_content = log_check.stdout
 
-            # Check if target phase has started (looks for "Target phase:" log messages)
-            if "target phase:" in last_output.lower():
+            # Check if target phase has started
+            if "target phase" in last_log_content.lower():
                 # Block pc1→pc2 traffic
                 await pc1_to_pc2_traffic_blocker["block"]()
                 network_blocked = True
@@ -531,9 +535,16 @@ class TestEndToEndSync:
             if not ps_check.stdout.strip():
                 break  # Process exited early
 
+        # Read TUI output for debugging if assertion fails
+        tui_output = await pc1_executor.run_command(
+            f"cat {output_file} 2>/dev/null || true",
+            timeout=10.0,
+        )
+
         assert network_blocked, (
             f"Target phase not detected before process exited.\n"
-            f"Output:\n{last_output}"
+            f"Log content:\n{last_log_content}\n"
+            f"TUI output:\n{tui_output.stdout}"
         )
 
         # Wait for sync to fail due to keepalive timeout (~45 seconds)
