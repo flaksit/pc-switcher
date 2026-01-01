@@ -15,6 +15,7 @@ Fixtures provided:
 - pc2_with_pcswitcher: pc2 executor with pc-switcher installed from current branch (for back-sync tests)
 - pc2_without_pcswitcher_fn: pc2 executor with pc-switcher uninstalled (clean target)
 - pc2_with_old_pcswitcher_fn: pc2 executor with old pc-switcher version (upgrade testing)
+- clean_sync_history: cleans sync history on both VMs (for test isolation)
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from typing import overload
 
 import asyncssh
 import pytest
+import pytest_asyncio
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.install import get_install_with_script_command_line
@@ -434,3 +436,22 @@ async def pc2_with_pcswitcher(
     assert verify.success, f"pc-switcher not accessible after install: {verify.stderr}"
 
     return pc2_executor
+
+
+@pytest_asyncio.fixture
+async def clean_sync_history(
+    pc1_executor: BashLoginRemoteExecutor,
+    pc2_executor: BashLoginRemoteExecutor,
+) -> None:
+    """Clean up sync history on both VMs before each test.
+
+    Function-scoped fixture that ensures test isolation by removing any
+    leftover sync-history.json files that could trigger consecutive sync
+    warnings and cause tests to fail unexpectedly.
+
+    This fixture should be used by all tests that run `pc-switcher sync`.
+    """
+    await asyncio.gather(
+        pc1_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0),
+        pc2_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0),
+    )

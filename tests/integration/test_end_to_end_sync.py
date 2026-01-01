@@ -35,26 +35,6 @@ import pytest_asyncio
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import get_this_version
 
-
-@pytest_asyncio.fixture
-async def clean_sync_history(
-    pc1_executor: BashLoginRemoteExecutor,
-    pc2_executor: BashLoginRemoteExecutor,
-) -> None:
-    """Clean up sync history on both VMs before each test.
-
-    Function-scoped fixture that ensures test isolation by removing any
-    leftover sync-history.json files that could trigger consecutive sync
-    warnings and cause tests to fail unexpectedly.
-
-    This fixture should be used by all tests that run `pc-switcher sync`.
-    """
-    await asyncio.gather(
-        pc1_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0),
-        pc2_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0),
-    )
-
-
 # Test config with short durations for faster tests
 _TEST_CONFIG_TEMPLATE = """# Test configuration for end-to-end sync tests
 # Short durations to keep tests fast
