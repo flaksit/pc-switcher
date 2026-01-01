@@ -35,6 +35,26 @@ import pytest_asyncio
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import get_this_version
 
+
+@pytest_asyncio.fixture
+async def clean_sync_history(
+    pc1_executor: BashLoginRemoteExecutor,
+    pc2_executor: BashLoginRemoteExecutor,
+) -> None:
+    """Clean up sync history on both VMs before each test.
+
+    Function-scoped fixture that ensures test isolation by removing any
+    leftover sync-history.json files that could trigger consecutive sync
+    warnings and cause tests to fail unexpectedly.
+
+    This fixture should be used by all tests that run `pc-switcher sync`.
+    """
+    await asyncio.gather(
+        pc1_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0),
+        pc2_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0),
+    )
+
+
 # Test config with short durations for faster tests
 _TEST_CONFIG_TEMPLATE = """# Test configuration for end-to-end sync tests
 # Short durations to keep tests fast
@@ -67,22 +87,21 @@ dummy_success:
 @pytest_asyncio.fixture
 async def sync_ready_source(
     pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+    clean_sync_history: None,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide pc1 configured and ready to run pc-switcher sync.
 
     This fixture:
     1. Ensures pc-switcher is installed (via pc1_with_pcswitcher_mod)
-    2. Cleans up any existing sync history (ensures test isolation)
+    2. Cleans up any existing sync history (via clean_sync_history)
     3. Creates a test configuration with short-duration jobs
     4. Cleans up the test config after the test
 
     Yields:
         Executor for pc1, ready to run sync commands
     """
+    _ = clean_sync_history  # Ensures cleanup runs before test
     executor = pc1_with_pcswitcher_mod
-
-    # Clean up any existing sync history to ensure test isolation
-    await executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
 
     # Backup existing config if any
     await executor.run_command(
@@ -118,16 +137,15 @@ async def sync_ready_source(
 @pytest_asyncio.fixture
 async def sync_ready_source_long_duration(
     pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+    clean_sync_history: None,
 ) -> AsyncIterator[BashLoginRemoteExecutor]:
     """Provide pc1 configured for sync with longer duration (for interrupt tests).
 
     Same as sync_ready_source but with 60-second durations to allow time
     for interrupt testing.
     """
+    _ = clean_sync_history  # Ensures cleanup runs before test
     executor = pc1_with_pcswitcher_mod
-
-    # Clean up any existing sync history to ensure test isolation
-    await executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
 
     # Backup existing config if any
     await executor.run_command(
@@ -420,6 +438,7 @@ class TestInstallOnTargetIntegration:
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
+        clean_sync_history: None,
     ) -> None:
         """Verify InstallOnTargetJob installs pc-switcher on fresh target.
 
@@ -432,6 +451,7 @@ class TestInstallOnTargetIntegration:
         Unlike test_install_on_target_job.py which tests the job in isolation,
         this test verifies the job works correctly within the full sync pipeline.
         """
+        _ = clean_sync_history  # Ensures test isolation
         pc1_executor = pc1_with_pcswitcher_mod
 
         # Create minimal test config
@@ -486,6 +506,7 @@ class TestInstallOnTargetIntegration:
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_old_pcswitcher_fn: BashLoginRemoteExecutor,
+        clean_sync_history: None,
     ) -> None:
         """Verify InstallOnTargetJob upgrades older pc-switcher on target.
 
@@ -495,10 +516,7 @@ class TestInstallOnTargetIntegration:
         2. Upgrades to source version
         3. Verifies upgrade succeeded
         """
-        # Clean up any existing sync history to ensure test isolation
-        await pc1_with_pcswitcher_mod.run_command(
-            "rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0
-        )
+        _ = clean_sync_history  # Ensures test isolation
 
         # Create minimal test config
         test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=2, target_duration=2)
@@ -568,9 +586,7 @@ class TestConsecutiveSyncWarning:
         """
         pc1_executor = sync_ready_source
 
-        # Clean up any existing history files
-        await pc1_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
-        await pc2_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
+        # History cleanup done by clean_sync_history fixture (via sync_ready_source)
 
         # Run sync with --allow-consecutive to avoid any existing state issues
         sync_result = await pc1_executor.run_command(
@@ -615,9 +631,7 @@ class TestConsecutiveSyncWarning:
         """
         pc1_executor = sync_ready_source
 
-        # Clean up and do first sync
-        await pc1_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
-        await pc2_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
+        # History cleanup done by clean_sync_history fixture (via sync_ready_source)
 
         first_sync = await pc1_executor.run_command(
             "pc-switcher sync pc2 --yes --allow-consecutive",
@@ -652,9 +666,7 @@ class TestConsecutiveSyncWarning:
         """Consecutive sync should succeed with --allow-consecutive flag."""
         pc1_executor = sync_ready_source
 
-        # Clean up and do first sync
-        await pc1_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
-        await pc2_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
+        # History cleanup done by clean_sync_history fixture (via sync_ready_source)
 
         first_sync = await pc1_executor.run_command(
             "pc-switcher sync pc2 --yes --allow-consecutive",
@@ -694,9 +706,7 @@ class TestConsecutiveSyncWarning:
         pc1_executor = sync_ready_source
         pc2_executor = pc2_with_pcswitcher
 
-        # Clean up any existing history files
-        await pc1_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
-        await pc2_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
+        # History cleanup done by clean_sync_history fixture (via sync_ready_source)
 
         # Step 1: pc1 syncs to pc2
         first_sync = await pc1_executor.run_command(
