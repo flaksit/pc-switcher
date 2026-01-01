@@ -70,15 +70,3 @@ We solve the "FR-001 collision" and "reference rot" problems by using **Semantic
 2. **Implement:** Update code and tests to match the modified spec.
 3. **Commit:** Link the commit to the spec change (e.g., `Update retry logic (ref REQ-NET-RETRY)`).
 4. **Skip SpecKit:** Do not create a `specs/` folder. Do not update old `plan.md` files.
-
-## Migration Strategy
-
-We will adopt a **Lazy Migration** approach. We do not need to refactor the entire history immediately.
-
-1. **Initialize:** Create `docs/system/` and move the current `architecture.md` and `data-model.md` there (likely from `specs/001-foundation` or the most recent source).
-2. **On-Demand Creation:** The next time we touch a specific domain (e.g., Testing):
-    * Create `docs/system/testing.md`.
-    * Copy the *relevant, current* parts from `specs/002-testing/spec.md`.
-    * Assign Semantic IDs to the requirements we are touching.
-    * Update code comments to match.
-3. **Legacy Folders:** Leave existing `specs/` folders as they are. They serve as the history of how we got here.
