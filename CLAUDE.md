@@ -164,13 +164,12 @@ uv run basedpyright                           # Type check
 ```
 
 ## Active Technologies
-- Python 3.14 (per ADR-003) via uv env + pytest, pytest-asyncio, asyncssh (existing testing framework from 002-testing-framework) (003-foundation-tests)
-- N/A (tests verify code behavior, not storage) (003-foundation-tests)
+- Python 3.14 (per ADR-003) via uv env + pytest, pytest-asyncio, asyncssh
 - **Typer** - CLI framework
 - **Rich** - Terminal UI with progress bars
 - **asyncssh** - SSH communication (per ADR-002)
-- **structlog** - Structured logging
 - **pytest + pytest-asyncio** - Testing framework
+- JSON lines log files in `~/.local/share/pc-switcher/logs/` (004-python-logging)
 
 ## Remember!
 - You MUST ALWAYS use `uv run` for running Python or python packages: `uv run python`, `uv run ruff`, `uv run basedpyright`, etc.

@@ -29,6 +29,7 @@ from typing import overload
 import asyncssh
 import pytest
 
+from pcswitcher.btrfs_snapshots import delete_all_snapshots
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.install import get_install_with_script_command_line
 from pcswitcher.models import CommandResult
@@ -441,16 +442,32 @@ async def pc2_with_pcswitcher(
 async def reset_pcswitcher_state(
     pc1_executor: BashLoginRemoteExecutor,
     pc2_executor: BashLoginRemoteExecutor,
-) -> None:
-    """Reset pc-switcher state on both VMs before each test.
+) -> AsyncIterator[None]:
+    """Reset pc-switcher state on both VMs before and after each test.
 
-    Function-scoped fixture that ensures test isolation by removing config
-    and data directories (including sync-history.json, logs, etc.).
+    Function-scoped fixture that ensures test isolation by:
+    - Removing config and data directories (sync-history.json, logs, etc.)
+    - Deleting all pc-switcher btrfs snapshots
 
     This fixture should be used by all tests that run `pc-switcher sync`.
     Tests/fixtures that need config should create it after this runs.
+
+    Cleanup runs both BEFORE (setup) and AFTER (teardown) the test to ensure
+    clean state and proper cleanup even if tests fail.
     """
-    await asyncio.gather(
-        _remove_config_and_data(pc1_executor),
-        _remove_config_and_data(pc2_executor),
-    )
+
+    async def cleanup() -> None:
+        await asyncio.gather(
+            _remove_config_and_data(pc1_executor),
+            _remove_config_and_data(pc2_executor),
+            delete_all_snapshots(pc1_executor),
+            delete_all_snapshots(pc2_executor),
+        )
+
+    # Setup: clean before test
+    await cleanup()
+
+    yield
+
+    # Teardown: clean after test
+    await cleanup()

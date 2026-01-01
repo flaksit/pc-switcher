@@ -13,8 +13,8 @@ from rich.progress import BarColumn, Progress, TaskID, TaskProgressColumn, TextC
 from rich.table import Table
 from rich.text import Text
 
-from pcswitcher.events import ConnectionEvent, LogEvent, ProgressEvent
-from pcswitcher.models import Host, LogLevel, ProgressUpdate
+from pcswitcher.events import ConnectionEvent, ProgressEvent
+from pcswitcher.models import ProgressUpdate
 
 __all__ = ["TerminalUI"]
 
@@ -236,81 +236,29 @@ class TerminalUI:
     async def consume_events(
         self,
         queue: asyncio.Queue[Any],
-        hostname_map: dict[Host, str] | None = None,
-        log_level: LogLevel = LogLevel.INFO,
     ) -> None:
         """Consume events from EventBus queue and update UI.
 
-        This runs as a background task, processing events and updating
-        the display accordingly.
+        This runs as a background task, processing ProgressEvent and
+        ConnectionEvent and updating the display accordingly.
+
+        Note: LogEvent is no longer processed here. After the logging
+        infrastructure migration (ADR-010), logs go through stdlib logging
+        to file handlers. The TUI log panel is not populated by this method.
 
         Args:
             queue: EventBus queue to consume from
-            hostname_map: Mapping from Host enum to actual hostnames
-            log_level: Minimum log level to display in UI
         """
-        hostname_map = hostname_map or {}
-
         while True:
             event = await queue.get()
             if event is None:  # Shutdown sentinel
                 break
 
-            if isinstance(event, LogEvent):
-                # Filter by log level
-                if event.level >= log_level:
-                    message = self._format_log_event(event, hostname_map)
-                    self.add_log_message(message)
-
-            elif isinstance(event, ProgressEvent):
+            if isinstance(event, ProgressEvent):
                 self.update_job_progress(event.job, event.update)
 
             elif isinstance(event, ConnectionEvent):
                 self.set_connection_status(event.status, event.latency)
 
-    def _format_log_event(
-        self,
-        event: LogEvent,
-        hostname_map: dict[Host, str],
-    ) -> str:
-        """Format a log event for display in the log panel.
-
-        Args:
-            event: Log event to format
-            hostname_map: Mapping from Host enum to actual hostnames
-
-        Returns:
-            Formatted string with Rich markup
-        """
-        # Resolve hostname
-        hostname = hostname_map.get(event.host, event.host.value)
-
-        # Color based on level
-        level_colors = {
-            LogLevel.DEBUG: "dim",
-            LogLevel.FULL: "cyan",
-            LogLevel.INFO: "green",
-            LogLevel.WARNING: "yellow",
-            LogLevel.ERROR: "red",
-            LogLevel.CRITICAL: "bold red",
-        }
-        color = level_colors.get(event.level, "white")
-
-        # Format timestamp
-        timestamp = event.timestamp.strftime("%H:%M:%S")
-
-        # Build message
-        parts = [
-            f"[dim]{timestamp}[/dim]",
-            f"[{color}]{event.level.name:8}[/{color}]",
-            f"[blue]{event.job}[/blue]",
-            f"[magenta]({hostname})[/magenta]",
-            event.message,
-        ]
-
-        # Add context if present
-        if event.context:
-            ctx = " ".join(f"{k}={v}" for k, v in event.context.items())
-            parts.append(f"[dim]{ctx}[/dim]")
-
-        return " ".join(parts)
+            # LogEvent is intentionally not handled here.
+            # See ADR-010 for the logging infrastructure migration.

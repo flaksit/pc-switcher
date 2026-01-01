@@ -37,7 +37,7 @@ Based on the requirements, the implementation needs to:
 
 **Pros:**
 - **Excellent SSH libraries**: `asyncssh` for remote execution
-- **Rich ecosystem**: `rich`/`textual` for TUI, `click`/`typer` for CLI, `structlog` for logging
+- **Rich ecosystem**: `rich`/`textual` for TUI, `click`/`typer` for CLI
 - **Robust error handling**: Try/except, proper exception types
 - **Data structures**: Easy to model sync state, conflicts, file metadata
 - **Testable**: `pytest`, mocking, fixtures
@@ -177,7 +177,7 @@ Phase 1: Pure Python orchestrator
 - Main CLI with Click/Typer
 - SSH orchestration with AsyncSSH
 - Progress display with Rich
-- Logging with structlog
+- Logging with standard Python logging
 
 Phase 2: Delegate to bash when appropriate
 - Individual sync operations (apt, docker, etc.) as bash scripts

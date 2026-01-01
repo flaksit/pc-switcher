@@ -878,7 +878,6 @@ uv run pc-switcher --help
 - pytimeparse2: Human-readable duration parsing
 - pyyaml: Configuration file parsing
 - rich: Terminal UI and colored output
-- structlog: Structured logging
 - typer: CLI framework
 
 **Development**:

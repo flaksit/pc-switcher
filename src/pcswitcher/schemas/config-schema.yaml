@@ -40,6 +40,25 @@ properties:
     default: "INFO"
     description: "Minimum log level displayed in terminal"
 
+  # Logging configuration (new 3-setting model)
+  logging:
+    type: object
+    description: "Logging level configuration for the 3-setting model"
+    properties:
+      file:
+        $ref: "#/definitions/log_level"
+        default: "DEBUG"
+        description: "Minimum log level for file output"
+      tui:
+        $ref: "#/definitions/log_level"
+        default: "INFO"
+        description: "Minimum log level for TUI output"
+      external:
+        $ref: "#/definitions/log_level"
+        default: "WARNING"
+        description: "Minimum log level for external library logs"
+    additionalProperties: false
+
   # Job enable/disable flags
   # NOTE: Only explicitly listed job names are valid. Unknown job names will cause validation to fail.
   sync_jobs:
