@@ -27,13 +27,77 @@ Test VM Requirements:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Coroutine
+from typing import Any
 
 import pytest
 import pytest_asyncio
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import get_this_version
+
+# Type alias for pc1_to_pc2_traffic_blocker fixture
+Pc1ToPc2TrafficBlocker = dict[str, Callable[[], Coroutine[Any, Any, None]]]
+
+
+@pytest.fixture
+async def pc1_to_pc2_traffic_blocker(
+    pc2_executor: BashLoginRemoteExecutor,
+) -> AsyncIterator[Pc1ToPc2TrafficBlocker]:
+    """Blocks SSH traffic from pc1 to pc2 for network failure simulation.
+
+    This fixture allows tests to simulate network failures by blocking SSH
+    traffic from pc1 to pc2 using iptables on pc2. The block only affects
+    pc1→pc2 traffic; the test runner retains full access to both VMs.
+
+    Yields a dict with:
+        - block: async callable to block pc1→pc2 SSH traffic
+        - unblock: async callable to restore connectivity
+
+    Cleanup is automatic on fixture teardown, even if test fails.
+    """
+    pc1_ip: str | None = None
+    blocked = False
+
+    async def block_pc1() -> None:
+        nonlocal pc1_ip, blocked
+        if blocked:
+            return
+        # Resolve pc1's IP from /etc/hosts on pc2
+        result = await pc2_executor.run_command(
+            "getent hosts pc1 | awk '{print $1}'",
+            timeout=10.0,
+            login_shell=False,
+        )
+        pc1_ip = result.stdout.strip()
+        assert pc1_ip, f"Failed to resolve pc1 IP: {result.stderr}"
+
+        # Block all TCP traffic from pc1 to port 22 (SSH)
+        block_result = await pc2_executor.run_command(
+            f"sudo iptables -I INPUT -s {pc1_ip} -p tcp --dport 22 -j DROP",
+            timeout=10.0,
+            login_shell=False,
+        )
+        assert block_result.success, f"Failed to add iptables rule: {block_result.stderr}"
+        blocked = True
+
+    async def unblock_pc1() -> None:
+        nonlocal blocked
+        if not blocked or not pc1_ip:
+            return
+        # Remove the blocking rule
+        await pc2_executor.run_command(
+            f"sudo iptables -D INPUT -s {pc1_ip} -p tcp --dport 22 -j DROP",
+            timeout=10.0,
+            login_shell=False,
+        )
+        blocked = False
+
+    yield {"block": block_pc1, "unblock": unblock_pc1}
+
+    # Cleanup: ensure network is unblocked even if test fails
+    await unblock_pc1()
+
 
 # Test config with short durations for faster tests
 _TEST_CONFIG_TEMPLATE = """# Test configuration for end-to-end sync tests
@@ -379,36 +443,145 @@ class TestEndToEndSync:
 
     async def test_001_edge_target_unreachable_mid_sync(
         self,
-        sync_ready_source: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+        pc1_to_pc2_traffic_blocker: Pc1ToPc2TrafficBlocker,
     ) -> None:
         """Test edge case: Target becomes unreachable mid-sync.
 
         Spec reference: specs/001-foundation/spec.md - Edge Cases
 
-        This test is intentionally limited because simulating network failure
-        requires destructive operations (stopping SSH daemon, blocking with iptables)
-        that could leave the test VM in an inconsistent state.
+        Simulates network failure by blocking pc1→pc2 traffic with iptables
+        during the target phase of DummySuccessJob. Verifies that:
+        - Sync detects the connection failure
+        - Sync exits with non-zero code
+        - Error output indicates connection/network failure
 
-        For now, we just verify that if the target becomes unreachable, the sync
-        properly detects and reports the connection failure. A full implementation
-        would require:
-        - VM snapshot before test
-        - Coordinated network disruption
-        - VM restore after test
+        Test approach:
+        1. Configure DummySuccessJob with short source phase (4s) and longer target (30s)
+        2. Start sync in background, capturing output to temp file
+        3. Monitor output for "target phase" indicator
+        4. When detected, block pc1→pc2 traffic via iptables
+        5. Wait for sync to fail (keepalive timeout ~45s)
+        6. Verify error message indicates connection failure
 
-        This is marked as a placeholder for future enhancement when the test
-        infrastructure supports safe network disruption testing.
+        Safety:
+        - iptables rule only blocks pc1→pc2, test runner retains full access
+        - network_blocker fixture ensures cleanup even on test failure
         """
-        # This test is intentionally not implemented as it requires
-        # destructive operations that are difficult to safely automate.
-        # The behavior is verified indirectly through:
-        # - Unit tests for connection error handling
-        # - Manual testing during development
-        pytest.skip(
-            "Network failure simulation requires destructive operations. "
-            "Verified manually and through unit tests for connection handling."
+        _ = reset_pcswitcher_state  # Ensures test isolation
+        pc1_executor = pc1_with_pcswitcher_mod
+
+        # Create test config with short source phase but longer target phase
+        # Source: 4s (quick to get to target phase)
+        # Target: 30s (long enough for us to inject failure and observe timeout)
+        test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=4, target_duration=30)
+        await pc1_executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+        await pc1_executor.run_command(
+            f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
+            timeout=10.0,
         )
+
+        # Start sync in background, capturing output to temp file
+        output_file = "/tmp/pcswitcher-network-failure-test-output.txt"
+        pid_file = "/tmp/pcswitcher-network-failure-test-pid.txt"
+        await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
+
+        # Start sync in background
+        start_result = await pc1_executor.run_command(
+            f"nohup bash -c 'echo $$ > {pid_file}; exec pc-switcher sync pc2 --yes 2>&1' > {output_file} &",
+            timeout=10.0,
+            login_shell=True,
+        )
+        assert start_result.success, f"Failed to start background sync: {start_result.stderr}"
+
+        # Wait for PID file and get PID
+        await asyncio.sleep(2)
+        pid_result = await pc1_executor.run_command(f"cat {pid_file}", timeout=10.0)
+        assert pid_result.success and pid_result.stdout.strip(), (
+            f"Failed to get sync process PID: {pid_result.stderr}"
+        )
+        sync_pid = pid_result.stdout.strip()
+
+        # Monitor output for "target phase" indicator, then block network
+        network_blocked = False
+        last_output = ""
+        for _ in range(60):  # Wait up to 60 seconds for target phase
+            await asyncio.sleep(1)
+            output_check = await pc1_executor.run_command(
+                f"cat {output_file} 2>/dev/null || true",
+                timeout=10.0,
+            )
+            last_output = output_check.stdout
+
+            # Check if target phase has started (looks for "Target phase:" log messages)
+            if "target phase:" in last_output.lower():
+                # Block pc1→pc2 traffic
+                await pc1_to_pc2_traffic_blocker["block"]()
+                network_blocked = True
+                break
+
+            # Check if process is still running
+            ps_check = await pc1_executor.run_command(
+                f"ps -p {sync_pid} -o pid= 2>/dev/null || true",
+                timeout=5.0,
+                login_shell=False,
+            )
+            if not ps_check.stdout.strip():
+                break  # Process exited early
+
+        assert network_blocked, (
+            f"Target phase not detected before process exited.\n"
+            f"Output:\n{last_output}"
+        )
+
+        # Wait for sync to fail due to keepalive timeout (~45 seconds)
+        # Total wait: up to 90 seconds to be safe
+        process_exited = False
+        for _ in range(90):
+            await asyncio.sleep(1)
+            ps_check = await pc1_executor.run_command(
+                f"ps -p {sync_pid} -o pid= 2>/dev/null || echo 'exited'",
+                timeout=5.0,
+                login_shell=False,
+            )
+            if "exited" in ps_check.stdout or not ps_check.stdout.strip():
+                process_exited = True
+                break
+
+        assert process_exited, (
+            f"Sync process {sync_pid} did not exit after network failure"
+        )
+
+        # Read final output
+        output_result = await pc1_executor.run_command(f"cat {output_file}", timeout=10.0)
+        output_text = output_result.stdout
+
+        # Verify sync failed with connection-related error
+        # Look for various error indicators
+        error_indicators = [
+            "connection",
+            "timeout",
+            "unreachable",
+            "lost",
+            "closed",
+            "failed",
+            "error",
+            "ssh",
+        ]
+        output_lower = output_text.lower()
+        has_error_indicator = any(ind in output_lower for ind in error_indicators)
+
+        assert has_error_indicator, (
+            f"Output should indicate connection failure.\n"
+            f"Output:\n{output_text}"
+        )
+
+        # Clean up temp files
+        await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
+
+        # Note: pc1_to_pc2_traffic_blocker fixture handles unblocking automatically
 
 
 class TestInstallOnTargetIntegration:
