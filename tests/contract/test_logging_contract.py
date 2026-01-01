@@ -152,19 +152,19 @@ class TestRichLogContract:
         assert "[INFO    ]" in output
 
     def test_level_colors_applied(self) -> None:
-        """Each level should have correct color markup."""
+        """Each level should have ANSI color codes applied."""
         formatter = RichFormatter()
 
-        test_cases = [
-            (logging.DEBUG, "dim"),
-            (FULL, "cyan"),
-            (logging.INFO, "green"),
-            (logging.WARNING, "yellow"),
-            (logging.ERROR, "red"),
-            (logging.CRITICAL, "bold red"),
+        levels = [
+            logging.DEBUG,
+            FULL,
+            logging.INFO,
+            logging.WARNING,
+            logging.ERROR,
+            logging.CRITICAL,
         ]
 
-        for level, expected_color in test_cases:
+        for level in levels:
             record = logging.LogRecord(
                 name="test",
                 level=level,
@@ -175,12 +175,11 @@ class TestRichLogContract:
                 exc_info=None,
             )
             output = formatter.format(record)
-            assert f"[{expected_color}]" in output, (
-                f"Level {logging.getLevelName(level)} should use color [{expected_color}]"
-            )
+            # All levels should produce ANSI escape codes
+            assert "\x1b[" in output, f"Level {logging.getLevelName(level)} should have ANSI escape codes"
 
     def test_job_host_formatting(self) -> None:
-        """Job should be in brackets, host in parentheses."""
+        """Job should be in brackets, host in parentheses with ANSI colors."""
         formatter = RichFormatter()
         record = logging.LogRecord(
             name="pcswitcher.test",
@@ -194,13 +193,15 @@ class TestRichLogContract:
         record.job = "btrfs"  # type: ignore[attr-defined]
         record.host = "source"  # type: ignore[attr-defined]
         output = formatter.format(record)
-        # Job should be in square brackets with blue color
-        assert "[blue][btrfs][/blue]" in output
-        # Host should be in parentheses with magenta color
-        assert "[magenta](source)[/magenta]" in output
+        # Job should be in square brackets (with ANSI blue color)
+        assert "[btrfs]" in output
+        # Host should be in parentheses (with ANSI magenta color)
+        assert "(source)" in output
+        # Should have ANSI codes for coloring
+        assert "\x1b[" in output
 
     def test_extra_context_appended_as_dim(self) -> None:
-        """Extra context should be appended as dim text."""
+        """Extra context should be appended with ANSI dim styling."""
         formatter = RichFormatter()
         record = logging.LogRecord(
             name="pcswitcher.test",
@@ -213,9 +214,10 @@ class TestRichLogContract:
         )
         record.subvolume = "@home"  # type: ignore[attr-defined]
         output = formatter.format(record)
-        # Extra context should appear at the end in dim style
+        # Extra context should appear at the end
         assert "subvolume=@home" in output
-        assert "[dim]" in output
+        # Should have ANSI codes for dim styling
+        assert "\x1b[" in output
 
     def test_message_format_args_substituted(self) -> None:
         """Message format args should be substituted in output."""

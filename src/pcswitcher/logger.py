@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import io
 import json
 import logging
 import sys
@@ -11,6 +12,9 @@ from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from queue import Queue
 from typing import Any, ClassVar
+
+from rich.console import Console
+from rich.text import Text
 
 from pcswitcher.config import LogConfig
 
@@ -106,9 +110,12 @@ class JsonFormatter(logging.Formatter):
 
 
 class RichFormatter(logging.Formatter):
-    """Format log records with Rich markup for TUI display.
+    """Format log records with ANSI escape codes for TUI display.
 
     Output format: HH:MM:SS [LEVEL   ] [job] (host) message context
+
+    Uses Rich Text objects to build styled output and exports to ANSI escape
+    sequences for direct rendering by StreamHandler.
 
     Additional context from the extra dict is appended as dim text (FR-011).
     Job and host are omitted when missing (e.g., during startup/shutdown).
@@ -151,31 +158,37 @@ class RichFormatter(logging.Formatter):
         }
     )
 
+    def __init__(self) -> None:
+        """Initialize formatter with a console for ANSI export."""
+        super().__init__()
+        # Console for exporting Text to ANSI. force_terminal=True ensures ANSI
+        # codes are always emitted. The file is a StringIO we don't use.
+        self._console = Console(file=io.StringIO(), force_terminal=True, width=200)
+
     def format(self, record: logging.LogRecord) -> str:
-        """Format a log record with Rich markup."""
+        """Format a log record with ANSI escape codes."""
         # Format timestamp
         timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
 
         # Get level color
         color = self.LEVEL_COLORS.get(record.levelname, "white")
 
-        # Build parts list
-        parts = [
-            f"[dim]{timestamp}[/dim]",
-            f"[{color}][{record.levelname:8}][/{color}]",
-        ]
+        # Build Text object with styles (like original ConsoleLogger)
+        text = Text()
+        text.append(f"{timestamp} ", style="dim")
+        text.append(f"[{record.levelname:8}]", style=color)
 
         # Add job/host only if present (omit during startup/shutdown)
         job = getattr(record, "job", None)
         if job is not None:
-            parts.append(f"[blue][{job}][/blue]")
+            text.append(f" [{job}]", style="blue")
 
         host = getattr(record, "host", None)
         if host is not None:
-            parts.append(f"[magenta]({host})[/magenta]")
+            text.append(f" ({host})", style="magenta")
 
         # Add message
-        parts.append(record.getMessage())
+        text.append(f" {record.getMessage()}")
 
         # Add extra context as dim text (FR-011)
         extra_context = []
@@ -184,9 +197,14 @@ class RichFormatter(logging.Formatter):
                 extra_context.append(f"{key}={value}")
 
         if extra_context:
-            parts.append(f"[dim]{' '.join(extra_context)}[/dim]")
+            text.append(f" {' '.join(extra_context)}", style="dim")
 
-        return " ".join(parts)
+        # Export Text object to ANSI string using Console
+        # We need to render the text through the console to get ANSI codes
+        with self._console.capture() as capture:
+            self._console.print(text, end="")
+
+        return capture.get()
 
 
 def generate_log_filename(session_id: str) -> str:

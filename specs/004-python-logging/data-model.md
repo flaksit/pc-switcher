@@ -127,6 +127,8 @@ Custom `logging.Formatter` for Rich-colored TUI output.
 
 **Output Format**: `HH:MM:SS [LEVEL   ] [job] (host) message context`
 
+**Implementation**: Uses `rich.text.Text` to build styled output, then exports to ANSI escape codes. This ensures colors render correctly when written to stderr via `StreamHandler`.
+
 | Component | Source | Style |
 |-----------|--------|-------|
 | Timestamp | `record.created` | `dim` |

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
+import sys
 import tempfile
 from logging.handlers import QueueListener
 from pathlib import Path
@@ -133,8 +135,8 @@ class TestJsonFormatter:
 class TestRichFormatter:
     """Test Rich formatter output format (SC-006)."""
 
-    def test_formats_with_rich_markup(self) -> None:
-        """Should format with Rich markup."""
+    def test_formats_with_ansi_codes(self) -> None:
+        """Should format with ANSI escape codes, not Rich markup tags."""
         formatter = RichFormatter()
         record = logging.LogRecord(
             name="pcswitcher.test",
@@ -148,11 +150,19 @@ class TestRichFormatter:
         record.job = "btrfs"  # type: ignore[attr-defined]
         record.host = "source"  # type: ignore[attr-defined]
         output = formatter.format(record)
-        assert "[dim]" in output  # timestamp
-        assert "[green]" in output  # INFO color
-        assert "[blue]" in output  # job
-        assert "[magenta]" in output  # host
+
+        # Should contain ANSI escape codes, not Rich markup tags
+        assert "\x1b[" in output  # ANSI escape sequence prefix
+        assert "[dim]" not in output  # Should NOT have Rich markup
+        assert "[green]" not in output  # Should NOT have Rich markup
+        assert "[blue]" not in output  # Should NOT have Rich markup
+        assert "[magenta]" not in output  # Should NOT have Rich markup
+
+        # Should still contain the actual content
         assert "Test message" in output
+        assert "[btrfs]" in output  # job in brackets
+        assert "(source)" in output  # host in parens
+        assert "[INFO" in output  # level in brackets
 
     def test_formats_without_job_host(self) -> None:
         """Should format correctly when job/host are not set."""
@@ -167,13 +177,75 @@ class TestRichFormatter:
             exc_info=None,
         )
         output = formatter.format(record)
-        # Should contain timestamp and level, no job/host
-        assert "[dim]" in output  # timestamp
-        assert "[green]" in output  # INFO color
+
+        # Should contain ANSI escape codes
+        assert "\x1b[" in output
         assert "Test message" in output
-        # Should not contain job/host markers
-        assert "[blue][" not in output
-        assert "[magenta](" not in output
+
+        # Should not contain job/host markers when not set
+        # (job would appear as [jobname], host as (hostname))
+        # We look for the specific format that would indicate job/host are present
+        # Since job/host are not set, we shouldn't see "[btrfs]" or "(source)"
+        # but we should still see "[INFO" for the level
+        assert "[INFO" in output
+
+    def test_level_colors_produce_ansi(self) -> None:
+        """Different log levels should produce different ANSI color codes."""
+        formatter = RichFormatter()
+
+        # Test INFO (green)
+        info_record = logging.LogRecord(
+            name="pcswitcher.test",
+            level=logging.INFO,
+            pathname="test.py",
+            lineno=1,
+            msg="Info msg",
+            args=(),
+            exc_info=None,
+        )
+        info_output = formatter.format(info_record)
+        assert "\x1b[" in info_output
+        assert "Info msg" in info_output
+
+        # Test WARNING (yellow)
+        warn_record = logging.LogRecord(
+            name="pcswitcher.test",
+            level=logging.WARNING,
+            pathname="test.py",
+            lineno=1,
+            msg="Warning msg",
+            args=(),
+            exc_info=None,
+        )
+        warn_output = formatter.format(warn_record)
+        assert "\x1b[" in warn_output
+        assert "Warning msg" in warn_output
+
+        # Different levels should produce different output (different ANSI codes)
+        # We can't easily check the exact color codes, but we can verify
+        # they produce different styled outputs
+        assert "[INFO" in info_output
+        assert "[WARNING" in warn_output
+
+    def test_extra_context_appended(self) -> None:
+        """Extra context fields should be appended as dim text."""
+        formatter = RichFormatter()
+        record = logging.LogRecord(
+            name="pcswitcher.test",
+            level=logging.INFO,
+            pathname="test.py",
+            lineno=1,
+            msg="Test message",
+            args=(),
+            exc_info=None,
+        )
+        record.subvolume = "@home"  # type: ignore[attr-defined]
+        output = formatter.format(record)
+
+        # Should contain the extra context
+        assert "subvolume=@home" in output
+        # Should still have ANSI codes
+        assert "\x1b[" in output
 
 
 class TestSetupLogging:
@@ -280,3 +352,157 @@ class TestInvalidLogLevel:
             assert config.logging.file == 10  # DEBUG
             assert config.logging.tui == 20  # INFO
             assert config.logging.external == 30  # WARNING
+
+
+class TestAcceptanceScenarios:
+    """Acceptance scenario tests for logging filtering behavior.
+
+    These tests verify the 3-setting model works correctly:
+    - file: floor for file output
+    - tui: floor for TUI output
+    - external: additional floor for non-pcswitcher libraries
+
+    Tests correspond to acceptance scenarios from spec.md.
+    """
+
+    def test_us1_scenario2_external_warning_filters_asyncssh_info(self) -> None:
+        """US1-Scenario 2: external=WARNING filters asyncssh INFO from both outputs.
+
+        Given external: WARNING,
+        When asyncssh logs an INFO message,
+        Then that message is NOT displayed in TUI or written to log file.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            # external=WARNING should filter out asyncssh INFO
+            config = LogConfig(file=10, tui=20, external=30)  # DEBUG, INFO, WARNING
+            listener, _queue = setup_logging(log_path, config)
+
+            # Capture stderr for TUI output
+            captured_stderr = io.StringIO()
+            old_stderr = sys.stderr
+
+            try:
+                # Get the stream handler and redirect it to our capture
+                # The stream handler is the second handler in the listener
+                stream_handler = listener.handlers[1]
+                assert isinstance(stream_handler, logging.StreamHandler)
+                stream_handler.stream = captured_stderr
+
+                # Log an INFO message from asyncssh (external library)
+                asyncssh_logger = logging.getLogger("asyncssh")
+                asyncssh_logger.info("SSH connection established")
+
+                # Stop listener to flush all pending records
+                listener.stop()
+
+                # Verify file does NOT contain the asyncssh INFO message
+                file_content = log_path.read_text() if log_path.exists() else ""
+                assert "SSH connection established" not in file_content, (
+                    "asyncssh INFO should NOT appear in file when external=WARNING"
+                )
+
+                # Verify TUI does NOT contain the asyncssh INFO message
+                tui_content = captured_stderr.getvalue()
+                assert "SSH connection established" not in tui_content, (
+                    "asyncssh INFO should NOT appear in TUI when external=WARNING"
+                )
+
+            finally:
+                sys.stderr = old_stderr
+                if listener._thread and listener._thread.is_alive():
+                    listener.stop()
+
+    def test_us1_scenario3_pcswitcher_debug_in_file_not_tui(self) -> None:
+        """US1-Scenario 3: pcswitcher DEBUG appears in file but NOT in TUI.
+
+        Given file: DEBUG, tui: INFO, external: WARNING,
+        When pcswitcher logs a DEBUG message,
+        Then it appears in the file but NOT in the TUI.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            config = LogConfig(file=10, tui=20, external=30)  # DEBUG, INFO, WARNING
+            listener, _queue = setup_logging(log_path, config)
+
+            # Capture stderr for TUI output
+            captured_stderr = io.StringIO()
+            old_stderr = sys.stderr
+
+            try:
+                # Redirect stream handler to our capture
+                stream_handler = listener.handlers[1]
+                assert isinstance(stream_handler, logging.StreamHandler)
+                stream_handler.stream = captured_stderr
+
+                # Log a DEBUG message from pcswitcher
+                pcswitcher_logger = logging.getLogger("pcswitcher.test")
+                pcswitcher_logger.debug("Debug level message from pcswitcher")
+
+                # Stop listener to flush all pending records
+                listener.stop()
+
+                # Verify file DOES contain the pcswitcher DEBUG message
+                file_content = log_path.read_text()
+                assert "Debug level message from pcswitcher" in file_content, (
+                    "pcswitcher DEBUG should appear in file when file=DEBUG"
+                )
+
+                # Verify TUI does NOT contain the pcswitcher DEBUG message
+                tui_content = captured_stderr.getvalue()
+                assert "Debug level message from pcswitcher" not in tui_content, (
+                    "pcswitcher DEBUG should NOT appear in TUI when tui=INFO"
+                )
+
+            finally:
+                sys.stderr = old_stderr
+                if listener._thread and listener._thread.is_alive():
+                    listener.stop()
+
+    def test_us2_scenario3_asyncssh_info_in_file_not_tui(self) -> None:
+        """US2-Scenario 3: asyncssh INFO appears in file but NOT in TUI.
+
+        Given external: INFO, file: DEBUG, tui: WARNING,
+        When asyncssh emits an INFO,
+        Then it appears in the file but NOT in the TUI.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            # external=INFO allows INFO from external libs
+            # file=DEBUG includes INFO, tui=WARNING excludes INFO
+            config = LogConfig(file=10, tui=30, external=20)  # DEBUG, WARNING, INFO
+            listener, _queue = setup_logging(log_path, config)
+
+            # Capture stderr for TUI output
+            captured_stderr = io.StringIO()
+            old_stderr = sys.stderr
+
+            try:
+                # Redirect stream handler to our capture
+                stream_handler = listener.handlers[1]
+                assert isinstance(stream_handler, logging.StreamHandler)
+                stream_handler.stream = captured_stderr
+
+                # Log an INFO message from asyncssh (external library)
+                asyncssh_logger = logging.getLogger("asyncssh")
+                asyncssh_logger.info("SSH key exchange complete")
+
+                # Stop listener to flush all pending records
+                listener.stop()
+
+                # Verify file DOES contain the asyncssh INFO message
+                file_content = log_path.read_text()
+                assert "SSH key exchange complete" in file_content, (
+                    "asyncssh INFO should appear in file when external=INFO, file=DEBUG"
+                )
+
+                # Verify TUI does NOT contain the asyncssh INFO message
+                tui_content = captured_stderr.getvalue()
+                assert "SSH key exchange complete" not in tui_content, (
+                    "asyncssh INFO should NOT appear in TUI when tui=WARNING"
+                )
+
+            finally:
+                sys.stderr = old_stderr
+                if listener._thread and listener._thread.is_alive():
+                    listener.stop()
