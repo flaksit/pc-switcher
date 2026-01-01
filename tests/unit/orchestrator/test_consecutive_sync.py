@@ -14,7 +14,6 @@ import pytest
 from rich.panel import Panel
 
 from pcswitcher.config import Configuration
-from pcswitcher.logger import Logger
 from pcswitcher.orchestrator import Orchestrator
 
 
@@ -227,7 +226,7 @@ class TestUpdateSyncHistory:
 
         # Create mock event_bus and logger
         orchestrator._event_bus = MagicMock()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._logger = Logger(orchestrator._event_bus, "test")  # pyright: ignore[reportPrivateUsage]
+        orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
 
         await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]
 
@@ -255,7 +254,7 @@ class TestUpdateSyncHistory:
 
         # Create mock event_bus and logger
         orchestrator._event_bus = MagicMock()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._logger = Logger(orchestrator._event_bus, "test")  # pyright: ignore[reportPrivateUsage]
+        orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
 
         await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]
 
@@ -285,7 +284,7 @@ class TestUpdateSyncHistory:
         # Create mock event_bus and logger
         mock_event_bus = MagicMock()
         orchestrator._event_bus = mock_event_bus  # pyright: ignore[reportPrivateUsage]
-        orchestrator._logger = Logger(mock_event_bus, "test")  # pyright: ignore[reportPrivateUsage]
+        orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
 
         # Should raise RuntimeError
         with pytest.raises(RuntimeError, match="Failed to update sync history on target"):

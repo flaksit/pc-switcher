@@ -192,7 +192,10 @@ class Orchestrator:
 
         # Log dry-run mode banner
         if self._dry_run:
-            self._logger.log(LogLevel.INFO, Host.SOURCE, "[DRY-RUN] Preview mode - no changes will be made")
+            self._logger.info(
+                "[DRY-RUN] Preview mode - no changes will be made",
+                extra={"job": "orchestrator", "host": "source"},
+            )
 
         try:
             # Pre-Phase: Check for consecutive sync (before any operations)
@@ -452,7 +455,7 @@ class Orchestrator:
         """
         # Update local (source) history
         record_role(SyncRole.SOURCE)
-        self._logger.log(LogLevel.DEBUG, Host.SOURCE, "Updated sync history: role=source")
+        self._logger.debug("Updated sync history: role=source", extra={"job": "orchestrator", "host": "source"})
 
         # Update remote (target) history via SSH
         if self._remote_executor is not None:
@@ -460,7 +463,7 @@ class Orchestrator:
             result = await self._remote_executor.run_command(cmd)
             if not result.success:
                 raise RuntimeError(f"Failed to update sync history on target: {result.stderr}")
-            self._logger.log(LogLevel.DEBUG, Host.TARGET, "Updated sync history: role=target")
+            self._logger.debug("Updated sync history: role=target", extra={"job": "orchestrator", "host": "target"})
 
     async def _discover_and_validate_jobs(self) -> list[Job]:
         """Discover enabled jobs from config and validate their configuration.
