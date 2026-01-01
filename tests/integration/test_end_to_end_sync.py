@@ -665,7 +665,7 @@ class TestConsecutiveSyncWarning:
     async def test_back_sync_clears_warning(
         self,
         sync_ready_source: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
     ) -> None:
         """After receiving a back-sync, machine can sync again without warning.
 
@@ -674,8 +674,13 @@ class TestConsecutiveSyncWarning:
         2. pc2 syncs back to pc1 → pc2=source, pc1=target
         3. pc1 syncs to pc2 again → should succeed WITHOUT --allow-consecutive
            because pc1 was last a target (received sync from pc2)
+
+        NOTE: pc2_with_pcswitcher is used instead of pc2_executor to ensure
+        pc2 has the exact same version as pc1 (from current branch), which is
+        required for back-sync version validation to pass.
         """
         pc1_executor = sync_ready_source
+        pc2_executor = pc2_with_pcswitcher
 
         # Clean up any existing history files
         await pc1_executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)

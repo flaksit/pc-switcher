@@ -12,6 +12,7 @@ Fixtures provided:
 - pc1_executor: BashLoginRemoteExecutor for pc1 (= RemoteExecutor with login shell environment)
 - pc2_executor: BashLoginRemoteExecutor for pc2 (= RemoteExecutor with login shell environment)
 - pc1_with_pcswitcher_mod: pc1 executor with pc-switcher installed from current branch
+- pc2_with_pcswitcher: pc2 executor with pc-switcher installed from current branch (for back-sync tests)
 - pc2_without_pcswitcher_fn: pc2 executor with pc-switcher uninstalled (clean target)
 - pc2_with_old_pcswitcher_fn: pc2 executor with old pc-switcher version (upgrade testing)
 """
@@ -404,3 +405,32 @@ async def pc2_with_old_pcswitcher_fn(
     await install_pcswitcher_with_script(pc2_without_pcswitcher_fn, next_highest_release)
 
     return pc2_without_pcswitcher_fn
+
+
+@pytest.fixture
+async def pc2_with_pcswitcher(
+    pc2_executor: BashLoginRemoteExecutor, current_git_branch: str
+) -> BashLoginRemoteExecutor:
+    """Ensure pc-switcher is installed on pc2 from current branch.
+
+    Function-scoped: installs pc-switcher for each test that uses this fixture.
+    This ensures pc2 has the exact same version as pc1 (from current branch),
+    which is required for back-sync tests.
+
+    WARNING: This fixture wraps pc2_executor and modifies VM state.
+    Tests using this fixture MUST NOT use pc2_executor directly in parallel,
+    as both operate on the same VM and will interfere with each other.
+
+    NOTE: This fixture installs from the current git branch to test in-development code.
+    The branch must be pushed to origin for this to work.
+    """
+    branch = current_git_branch
+
+    # Install from the same branch as pc1 to ensure version match
+    await install_pcswitcher_with_script(pc2_executor, branch)
+
+    # Verify installation
+    verify = await pc2_executor.run_command("pc-switcher --version", timeout=10.0)
+    assert verify.success, f"pc-switcher not accessible after install: {verify.stderr}"
+
+    return pc2_executor
