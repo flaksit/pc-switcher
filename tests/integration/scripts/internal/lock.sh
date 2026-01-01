@@ -53,8 +53,24 @@ EOF
 fi
 
 
-# Verify HCLOUD_TOKEN is set
-: "${HCLOUD_TOKEN:?HCLOUD_TOKEN environment variable must be set}"
+# Check HCLOUD_TOKEN, retrieve from pass if not set
+if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+    if command -v pass &> /dev/null; then
+        HCLOUD_TOKEN=$(pass show dev/pc-switcher/testing/hcloud_token_rw 2>/dev/null) || {
+            log_error "HCLOUD_TOKEN not set and could not retrieve from pass"
+            echo "Please set your Hetzner Cloud API token:" >&2
+            echo "  export HCLOUD_TOKEN='your-token-here'" >&2
+            echo "Or ensure you have the token set in pass 'dev/pc-switcher/testing/hcloud_token_rw'" >&2
+            exit 1
+        }
+        export HCLOUD_TOKEN
+    else
+        log_error "HCLOUD_TOKEN not set and pass not available"
+        echo "Please set your Hetzner Cloud API token:" >&2
+        echo "  export HCLOUD_TOKEN='your-token-here'" >&2
+        exit 1
+    fi
+fi
 
 # Parse arguments
 if [[ $# -lt 1 ]]; then
