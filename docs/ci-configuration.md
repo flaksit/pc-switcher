@@ -5,8 +5,10 @@ This document describes the Continuous Integration setup for pc-switcher.
 ## Overview
 
 The CI pipeline uses GitHub Actions with a tiered approach:
-- **Fast checks** (Lint, Unit Tests) run on every push
-- **Slow checks** (Integration Tests) run only on non-draft PRs to main
+- **Fast checks** (Lint, Unit Tests) run on every push, but only when relevant files change
+- **Slow checks** (Integration Tests) run only on non-draft PRs to main, when relevant files change
+
+Both workflows use path filtering to skip checks when only unrelated files change (e.g., documentation-only changes skip all tests).
 
 ## Workflows
 
@@ -16,10 +18,25 @@ The CI pipeline uses GitHub Actions with a tiered approach:
 
 **Jobs**:
 
-| Job | Checks | Duration |
+| Job | Purpose | Duration |
 | ----- | -------- | ---------- |
+| check-changes | Determines if lint/tests should run based on changed files | ~5s |
 | Lint | basedpyright, ruff check, ruff format, codespell | ~30s |
 | Unit Tests | pytest tests/unit tests/contract | ~30s |
+| CI Status | Reports final status (pass/skip/fail) - this is the required check | ~5s |
+
+**Conditions for running lint and unit tests**:
+
+Relevant files must have changed:
+- `.github/workflows/ci.yml`
+- `src/**`
+- `tests/unit/**`
+- `tests/contract/**`
+- `pyproject.toml`
+- `uv.lock`
+- `ruff.toml`
+
+If no relevant files changed, the `CI Status` check reports success with "skipped" and the PR can still be merged.
 
 ### Integration Tests Workflow (`integration-tests.yml`)
 
@@ -65,9 +82,8 @@ The VM Updates workflow runs daily to incorporate security updates into the base
 ### Required Status Checks
 
 All must pass before merge:
-- `CI / Lint (push)`
-- `CI / Unit Tests (push)`
-- `Integration Tests Status`
+- `CI / CI Status` - Reports lint and unit test results (passes if tests pass OR are skipped due to no relevant changes)
+- `Integration Tests / Integration Tests Status` - Reports integration test results (passes if tests pass OR are skipped)
 - `PR metadata / Requires issue closing keyword (pull_request)`
 
 ### Settings
@@ -77,41 +93,42 @@ All must pass before merge:
 
 ## Draft PR Workflow
 
-The integration test strategy optimizes for developer experience:
+The CI strategy optimizes for developer experience with conditional test execution:
 
 ```mermaid
 flowchart TD
-    subgraph draft["Draft PR"]
-        d1["Lint: ✓"]
-        d2["Unit Tests: ✓"]
+    subgraph code_change["Code Change PR"]
+        c1["Lint: ✓ runs"]
+        c2["Unit Tests: ✓ runs"]
+        c3["Integration: ✓ runs<br/>(if not draft)"]
+
+        %% Layout constraint only (made invisible via `linkStyle` below).
+        c1 --> c2
+        c2 --> c3
+    end
+    subgraph docs_change["Docs-Only PR"]
+        d1["Lint: ⏭ skipped"]
+        d2["Unit Tests: ⏭ skipped"]
         d3["Integration: ⏭ skipped"]
 
         %% Layout constraint only (made invisible via `linkStyle` below).
         d1 --> d2
         d2 --> d3
     end
-    subgraph ready["Ready PR"]
-        r1["Lint: ✓"]
-        r2["Unit Tests: ✓"]
-        r3["Integration: ✓ runs"]
-
-        %% Layout constraint only (made invisible via `linkStyle` below).
-        r1 --> r2
-        r2 --> r3
-    end
     subgraph merge["Merge"]
-        m1["All checks ✓"]
+        m1["All status checks ✓"]
     end
-    draft -->|"Mark ready"| ready
-    ready -->|"Checks pass"| merge
+    code_change -->|"Checks pass"| merge
+    docs_change -->|"Skipped = pass"| merge
 
     %% Hide the internal layout-only links (the first 4 links in this diagram).
     linkStyle 0,1,2,3 stroke:transparent,stroke-width:0
 ```
 
 **Benefits**:
-- Iterate quickly on draft PRs without waiting for slow integration tests
-- Integration tests run automatically when PR is ready for review
+- Documentation-only changes merge quickly without waiting for tests
+- Code changes still get full test coverage
+- Draft PRs skip integration tests (but run lint/unit tests if code changed)
 - No merge queue complexity
 
 ## Required Secrets
@@ -141,6 +158,15 @@ uv run pytest tests/unit tests/contract -v
 
 ## Troubleshooting
 
+### Lint/Unit Tests Not Running
+
+The `CI Status` check will always complete, but the actual lint and unit tests may be skipped:
+
+1. **Tests skipped with ✓** - No relevant files changed (this is normal and expected)
+2. Only files outside `src/`, `tests/unit/`, `tests/contract/`, `pyproject.toml`, `uv.lock`, `ruff.toml` were modified
+
+To check if tests ran or were skipped, view the workflow run details.
+
 ### Integration Tests Not Running
 
 The `Integration Tests Status` check will always complete, but the actual integration tests may be skipped:
@@ -160,7 +186,7 @@ To check if tests ran or were skipped, view the workflow run details.
 ### Merge Blocked
 
 All required checks must pass:
-- If Lint fails: Run `uv run ruff check --fix && uv run ruff format`
-- If Unit Tests fail: Check test output, run locally to debug
+- If CI Status fails due to Lint: Run `uv run ruff check --fix && uv run ruff format`
+- If CI Status fails due to Unit Tests: Check test output, run locally to debug
 - If Integration Tests Status fails: Check logs artifact, may need VM reset
 - If Issue closing keyword fails: Add "Fixes #123" or similar to PR description

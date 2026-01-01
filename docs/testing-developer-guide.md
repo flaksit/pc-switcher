@@ -23,8 +23,8 @@ PC-switcher uses a three-tier testing approach:
 
 | Tier | Purpose | Speed | Environment | When to Run |
 |------|---------|-------|-------------|-------------|
-| **Tier 1: Unit & Contract Tests** | Test pure logic, business rules, mocked I/O, job interface compliance | Fast (< 30s) | Any machine | Every commit |
-| **Tier 2: Integration Tests** | Test real SSH, btrfs operations, full workflows | Slow (5-15 min) | Dedicated VMs only | PRs to main, on-demand |
+| **Tier 1: Unit & Contract Tests** | Test pure logic, business rules, mocked I/O, job interface compliance | Fast (< 30s) | Any machine | Every commit (if relevant files changed) |
+| **Tier 2: Integration Tests** | Test real SSH, btrfs operations, full workflows | Slow (5-15 min) | Dedicated VMs only | PRs to main (if relevant files changed), on-demand |
 | **Tier 3: Manual Playbook** | Visual verification of TUI, colors, progress bars, UX.  | 45-60 min | Developer machine | Before releases |
 
 ### When to Use Each Tier
