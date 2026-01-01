@@ -13,10 +13,16 @@
 #   GITHUB_TOKEN - GitHub API token (optional, for rate limit increase)
 #
 # Usage:
-#   ./run-integration-tests.sh tests/integration -m integration          # Run all integration tests
+#   ./run-integration-tests.sh [--skip-reset] [pytest args...]
+#
+# Options:
+#   --skip-reset  Skip resetting VMs to baseline (faster for iterative development)
+#
+# Examples:
+#   ./run-integration-tests.sh                                           # Run all integration tests
 #   ./run-integration-tests.sh tests/integration/test_vm_connectivity.py # Run specific test file
 #   ./run-integration-tests.sh -k "test_ssh" -v                          # Run tests matching pattern
-#   ./run-integration-tests.sh tests/integration/test_executor_overhead.py::TestRemoteExecutorOverhead::test_no_op_command_overhead -s
+#   ./run-integration-tests.sh --skip-reset -k "test_ssh"                # Skip VM reset, run matching tests
 #
 set -euo pipefail
 
@@ -30,6 +36,32 @@ RESET_SCRIPT="$SCRIPT_DIR/integration/scripts/reset-vm.sh"
 
 # Source common helpers (colors, logging, lock helpers)
 source "$COMMON_SCRIPT"
+
+# Help
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    echo "Usage: $0 [--skip-reset] [pytest args...]"
+    echo ""
+    echo "Options:"
+    echo "  --skip-reset    Skip resetting VMs to baseline (faster for iterative development)"
+    echo ""
+    echo "All other arguments are forwarded to pytest."
+    exit 0
+fi
+
+# Parse our own flags (before forwarding remaining args to pytest)
+SKIP_RESET=false
+PYTEST_ARGS=()
+
+for arg in "$@"; do
+    case "$arg" in
+        --skip-reset)
+            SKIP_RESET=true
+            ;;
+        *)
+            PYTEST_ARGS+=("$arg")
+            ;;
+    esac
+done
 
 # Check GITHUB_TOKEN
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
@@ -191,8 +223,8 @@ fi
 
 log_info "Test VMs are ready"
 
-# Reset VMs to baseline (unless skip flag is set)
-if [[ -z "${PC_SWITCHER_SKIP_RESET:-}" ]]; then
+# Reset VMs to baseline (unless --skip-reset flag is set)
+if [[ "$SKIP_RESET" == "false" ]]; then
     log_info "Resetting test VMs to baseline snapshots. This may take a few moments (typically 25-60 seconds)..."
 
     # Reset both VMs in parallel
@@ -216,7 +248,7 @@ if [[ -z "${PC_SWITCHER_SKIP_RESET:-}" ]]; then
 
     log_info "Test VMs reset complete"
 else
-    log_info "Skipping VM reset (PC_SWITCHER_SKIP_RESET is set)"
+    log_info "Skipping VM reset (--skip-reset flag)"
 fi
 
 # =============================================================================
@@ -229,7 +261,7 @@ fi
 log_info "Running pytest..."
 cd "$PROJECT_ROOT"
 set +e
-uv run pytest -m "integration and not benchmark" -s "$@"
+uv run pytest -m "integration and not benchmark" -s "${PYTEST_ARGS[@]}"
 pytest_exit_code=$?
 set -e
 
