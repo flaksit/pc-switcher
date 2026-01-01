@@ -190,21 +190,7 @@ class TestEndToEndSync:
         7. Verify snapshots were created
         """
         pc1_executor = sync_ready_source
-
-        # Clean up any existing snapshots from previous test runs to get clean state
-        # Check both hosts in parallel
-        # TODO use btrfs subvolume delete instead of rm -rf (faster), like delete_subvol_recursive() in reset-vm.sh
-        pc1_task = pc1_executor.run_command(
-            "sudo rm -rf /.snapshots/pc-switcher* 2>/dev/null || true",
-            timeout=30.0,
-            login_shell=False,
-        )
-        pc2_task = pc2_executor.run_command(
-            "sudo rm -rf /.snapshots/pc-switcher* 2>/dev/null || true",
-            timeout=30.0,
-            login_shell=False,
-        )
-        await asyncio.gather(pc1_task, pc2_task)
+        # Snapshot cleanup is handled by reset_pcswitcher_state fixture (via sync_ready_source)
 
         # Run pc-switcher sync from pc1 to pc2
         # Timeout: ~60s for SSH + install + snapshots + job execution (4+4 seconds)
