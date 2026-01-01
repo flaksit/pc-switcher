@@ -72,13 +72,17 @@ async def sync_ready_source(
 
     This fixture:
     1. Ensures pc-switcher is installed (via pc1_with_pcswitcher_mod)
-    2. Creates a test configuration with short-duration jobs
-    3. Cleans up the test config after the test
+    2. Cleans up any existing sync history (ensures test isolation)
+    3. Creates a test configuration with short-duration jobs
+    4. Cleans up the test config after the test
 
     Yields:
         Executor for pc1, ready to run sync commands
     """
     executor = pc1_with_pcswitcher_mod
+
+    # Clean up any existing sync history to ensure test isolation
+    await executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
 
     # Backup existing config if any
     await executor.run_command(
@@ -121,6 +125,9 @@ async def sync_ready_source_long_duration(
     for interrupt testing.
     """
     executor = pc1_with_pcswitcher_mod
+
+    # Clean up any existing sync history to ensure test isolation
+    await executor.run_command("rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
 
     # Backup existing config if any
     await executor.run_command(
@@ -488,6 +495,11 @@ class TestInstallOnTargetIntegration:
         2. Upgrades to source version
         3. Verifies upgrade succeeded
         """
+        # Clean up any existing sync history to ensure test isolation
+        await pc1_with_pcswitcher_mod.run_command(
+            "rm -f ~/.local/share/pc-switcher/sync-history.json", timeout=10.0
+        )
+
         # Create minimal test config
         test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=2, target_duration=2)
         await pc1_with_pcswitcher_mod.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
