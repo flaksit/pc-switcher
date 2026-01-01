@@ -34,4 +34,4 @@ We will adopt a hybrid workflow that distinguishes between "Artifacts of Work" a
 - **Negative**: Two ID systems (temporary vs. permanent) may cause confusion during the transition of a feature.
 
 ## References
-- [Final Proposal](../considerations/011-spec-driven-dev+living-specs/final-proposal.md)
+- [Final Proposal](considerations/011-spec-driven-dev+living-specs/final-proposal.md)
