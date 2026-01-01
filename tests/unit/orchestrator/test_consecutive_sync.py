@@ -6,6 +6,7 @@ consecutive syncs from the same source machine without receiving a sync back.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +16,16 @@ from rich.panel import Panel
 from pcswitcher.config import Configuration
 from pcswitcher.logger import Logger
 from pcswitcher.orchestrator import Orchestrator
+
+
+def _mock_isatty() -> MagicMock:
+    """Create a mock for sys.stdin that returns True for isatty().
+
+    Used to simulate interactive TTY mode in tests.
+    """
+    mock_stdin = MagicMock()
+    mock_stdin.isatty.return_value = True
+    return mock_stdin
 
 
 @pytest.fixture
@@ -90,8 +101,11 @@ class TestCheckConsecutiveSync:
         orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
         orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
 
-        # Mock user input to decline
-        with patch("rich.prompt.Prompt.ask", return_value="n"):
+        # Mock user input to decline and simulate TTY mode
+        with (
+            patch("rich.prompt.Prompt.ask", return_value="n"),
+            patch.object(sys, "stdin", _mock_isatty()),
+        ):
             result = await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
 
         assert result is False
@@ -116,8 +130,11 @@ class TestCheckConsecutiveSync:
         orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
         orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
 
-        # Mock user input to accept
-        with patch("rich.prompt.Prompt.ask", return_value="y"):
+        # Mock user input to accept and simulate TTY mode
+        with (
+            patch("rich.prompt.Prompt.ask", return_value="y"),
+            patch.object(sys, "stdin", _mock_isatty()),
+        ):
             result = await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
 
         assert result is True
@@ -138,11 +155,43 @@ class TestCheckConsecutiveSync:
         orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
         orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
 
-        with patch("rich.prompt.Prompt.ask", return_value="n"):
+        # Simulate TTY mode for the prompt
+        with (
+            patch("rich.prompt.Prompt.ask", return_value="n"),
+            patch.object(sys, "stdin", _mock_isatty()),
+        ):
             result = await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
 
         assert result is False
         orchestrator._ui.stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_non_interactive_mode_returns_false_immediately(
+        self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When stdin is not a TTY, should return False without prompting."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        # Create history file showing last role was source
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text('{"last_role": "source"}')
+
+        orchestrator = Orchestrator(target="test-target", config=mock_config)
+        orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
+        orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
+
+        # Simulate non-interactive mode (no TTY)
+        mock_stdin = MagicMock()
+        mock_stdin.isatty.return_value = False
+        with patch.object(sys, "stdin", mock_stdin):
+            result = await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is False
+        # UI should NOT have been stopped (no interactive prompt)
+        orchestrator._ui.stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        # Warning message should have been printed
+        orchestrator._console.print.assert_called()  # pyright: ignore[reportPrivateUsage]
 
 
 class TestAllowConsecutiveFlag:
@@ -262,7 +311,11 @@ class TestWarningMessageContent:
         orchestrator._console = mock_console  # pyright: ignore[reportPrivateUsage]
         orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
 
-        with patch("rich.prompt.Prompt.ask", return_value="n"):
+        # Simulate TTY mode for the prompt
+        with (
+            patch("rich.prompt.Prompt.ask", return_value="n"),
+            patch.object(sys, "stdin", _mock_isatty()),
+        ):
             await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
 
         # Check that the warning message was printed

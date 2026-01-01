@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import secrets
+import sys
 from datetime import UTC, datetime
 from typing import Any
 
@@ -413,6 +414,16 @@ class Orchestrator:
         # Warning needed if:
         # - Last role was SOURCE (consecutive sync from same machine)
         # - History file was corrupted (safety-first: treat as consecutive)
+
+        # In non-interactive mode (no TTY), use the default "n" response
+        # to avoid hanging on Prompt.ask()
+        if not sys.stdin.isatty():
+            self._console.print(
+                "[yellow]Warning: Consecutive sync detected (no back-sync received).[/yellow]\n"
+                "Use --allow-consecutive to override in non-interactive mode."
+            )
+            return False
+
         self._ui.stop()
 
         try:
