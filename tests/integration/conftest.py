@@ -12,8 +12,10 @@ Fixtures provided:
 - pc1_executor: BashLoginRemoteExecutor for pc1 (= RemoteExecutor with login shell environment)
 - pc2_executor: BashLoginRemoteExecutor for pc2 (= RemoteExecutor with login shell environment)
 - pc1_with_pcswitcher_mod: pc1 executor with pc-switcher installed from current branch
+- pc2_with_pcswitcher: pc2 executor with pc-switcher installed from current branch (for back-sync tests)
 - pc2_without_pcswitcher_fn: pc2 executor with pc-switcher uninstalled (clean target)
 - pc2_with_old_pcswitcher_fn: pc2 executor with old pc-switcher version (upgrade testing)
+- reset_pcswitcher_state: resets pc-switcher state on both VMs (config + data, for test isolation)
 """
 
 from __future__ import annotations
@@ -74,11 +76,17 @@ async def _pc1_connection() -> AsyncIterator[asyncssh.SSHClientConnection]:  # p
     Each test module gets its own connection instance.
 
     Uses default ~/.ssh/known_hosts - key is established by reset-vm.sh via ssh_accept_new.
+    Uses keepalive to prevent connection going stale during long-running operations.
     """
     host = os.environ["PC_SWITCHER_TEST_PC1_HOST"]
     user = os.environ["PC_SWITCHER_TEST_USER"]
 
-    async with asyncssh.connect(host, username=user) as conn:
+    async with asyncssh.connect(
+        host,
+        username=user,
+        keepalive_interval=15,
+        keepalive_count_max=3,
+    ) as conn:
         yield conn
 
 
@@ -90,11 +98,17 @@ async def _pc2_connection() -> AsyncIterator[asyncssh.SSHClientConnection]:  # p
     Each test module gets its own connection instance.
 
     Uses default ~/.ssh/known_hosts - key is established by reset-vm.sh via ssh_accept_new.
+    Uses keepalive to prevent connection going stale during long-running operations.
     """
     host = os.environ["PC_SWITCHER_TEST_PC2_HOST"]
     user = os.environ["PC_SWITCHER_TEST_USER"]
 
-    async with asyncssh.connect(host, username=user) as conn:
+    async with asyncssh.connect(
+        host,
+        username=user,
+        keepalive_interval=15,
+        keepalive_count_max=3,
+    ) as conn:
         yield conn
 
 
@@ -309,7 +323,7 @@ async def uninstall_pcswitcher(executor: BashLoginRemoteExecutor) -> None:
     )
 
 
-async def remove_config_and_data(executor: BashLoginRemoteExecutor) -> None:
+async def _remove_config_and_data(executor: BashLoginRemoteExecutor) -> None:
     """Remove pc-switcher configuration and data directories."""
     await executor.run_command(
         "rm -rf ~/.config/pc-switcher ~/.local/share/pc-switcher",
@@ -321,7 +335,7 @@ async def uninstall_pcswitcher_and_config(executor: BashLoginRemoteExecutor) -> 
     """Uninstall pc-switcher and remove its configuration."""
     await asyncio.gather(
         uninstall_pcswitcher(executor),
-        remove_config_and_data(executor),
+        _remove_config_and_data(executor),
     )
 
 
@@ -392,3 +406,51 @@ async def pc2_with_old_pcswitcher_fn(
     await install_pcswitcher_with_script(pc2_without_pcswitcher_fn, next_highest_release)
 
     return pc2_without_pcswitcher_fn
+
+
+@pytest.fixture
+async def pc2_with_pcswitcher(
+    pc2_executor: BashLoginRemoteExecutor, current_git_branch: str
+) -> BashLoginRemoteExecutor:
+    """Ensure pc-switcher is installed on pc2 from current branch.
+
+    Function-scoped: installs pc-switcher for each test that uses this fixture.
+    This ensures pc2 has the exact same version as pc1 (from current branch),
+    which is required for back-sync tests.
+
+    WARNING: This fixture wraps pc2_executor and modifies VM state.
+    Tests using this fixture MUST NOT use pc2_executor directly in parallel,
+    as both operate on the same VM and will interfere with each other.
+
+    NOTE: This fixture installs from the current git branch to test in-development code.
+    The branch must be pushed to origin for this to work.
+    """
+    branch = current_git_branch
+
+    # Install from the same branch as pc1 to ensure version match
+    await install_pcswitcher_with_script(pc2_executor, branch)
+
+    # Verify installation
+    verify = await pc2_executor.run_command("pc-switcher --version", timeout=10.0)
+    assert verify.success, f"pc-switcher not accessible after install: {verify.stderr}"
+
+    return pc2_executor
+
+
+@pytest.fixture
+async def reset_pcswitcher_state(
+    pc1_executor: BashLoginRemoteExecutor,
+    pc2_executor: BashLoginRemoteExecutor,
+) -> None:
+    """Reset pc-switcher state on both VMs before each test.
+
+    Function-scoped fixture that ensures test isolation by removing config
+    and data directories (including sync-history.json, logs, etc.).
+
+    This fixture should be used by all tests that run `pc-switcher sync`.
+    Tests/fixtures that need config should create it after this runs.
+    """
+    await asyncio.gather(
+        _remove_config_and_data(pc1_executor),
+        _remove_config_and_data(pc2_executor),
+    )

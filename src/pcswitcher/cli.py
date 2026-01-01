@@ -19,6 +19,7 @@ from rich.text import Text
 from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
+from pcswitcher.models import SyncSession
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
 
@@ -189,12 +190,26 @@ def sync(
             help="Path to config file (default: ~/.config/pc-switcher/config.yaml)",
         ),
     ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Preview sync without making changes",
+        ),
+    ] = False,
     yes: Annotated[
         bool,
         typer.Option(
             "--yes",
             "-y",
             help="Auto-accept prompts (e.g., config sync confirmation)",
+        ),
+    ] = False,
+    allow_consecutive: Annotated[
+        bool,
+        typer.Option(
+            "--allow-consecutive",
+            help="Skip warning about consecutive syncs without receiving a sync back first",
         ),
     ] = False,
 ) -> None:
@@ -209,33 +224,55 @@ def sync(
     cfg = _load_configuration(config_path)
 
     # Run the sync operation
-    exit_code = _run_sync(target, cfg, auto_accept=yes)
+    exit_code = _run_sync(target, cfg, auto_accept=yes, allow_consecutive=allow_consecutive, dry_run=dry_run)
     sys.exit(exit_code)
 
 
-def _run_sync(target: str, cfg: Configuration, *, auto_accept: bool = False) -> int:
+def _run_sync(
+    target: str,
+    cfg: Configuration,
+    *,
+    auto_accept: bool = False,
+    allow_consecutive: bool = False,
+    dry_run: bool = False,
+) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
 
     Args:
         target: Target hostname
         cfg: Loaded configuration
         auto_accept: If True, auto-accept prompts (e.g., config sync)
+        allow_consecutive: If True, skip warning about consecutive syncs
+        dry_run: If True, preview sync without making changes
 
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
     """
-    return asyncio.run(_async_run_sync(target, cfg, auto_accept=auto_accept))
+    return asyncio.run(
+        _async_run_sync(target, cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive, dry_run=dry_run)
+    )
 
 
-async def _async_run_sync(target: str, cfg: Configuration, *, auto_accept: bool = False) -> int:
+async def _async_run_sync(
+    target: str,
+    cfg: Configuration,
+    *,
+    auto_accept: bool = False,
+    allow_consecutive: bool = False,
+    dry_run: bool = False,
+) -> int:
     """Async implementation of sync with interrupt handling.
+
+    Args:
+        target: Target hostname
+        cfg: Loaded configuration
+        auto_accept: If True, auto-accept prompts (e.g., config sync)
+        dry_run: If True, preview sync without making changes
 
     Interrupt behavior:
     - First SIGINT: Cancel sync task, allow CLEANUP_TIMEOUT_SECONDS for cleanup
     - Second SIGINT or timeout: Force terminate immediately
     """
-    from pcswitcher.models import SyncSession  # noqa: PLC0415
-
     loop = asyncio.get_running_loop()
     main_task: asyncio.Task[SyncSession] | None = None
     sigint_count = [0]  # Use list to allow mutation in nested function
@@ -261,7 +298,9 @@ async def _async_run_sync(target: str, cfg: Configuration, *, auto_accept: bool 
     loop.add_signal_handler(signal.SIGINT, sigint_handler)
 
     try:
-        orchestrator = Orchestrator(target=target, config=cfg, auto_accept=auto_accept)
+        orchestrator = Orchestrator(
+            target=target, config=cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive, dry_run=dry_run
+        )
         main_task = asyncio.create_task(orchestrator.run())
 
         try:
