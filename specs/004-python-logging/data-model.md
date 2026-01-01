@@ -159,8 +159,15 @@ Configuration for each log output handler.
 
 **Logger hierarchy** (handles 3-setting model without custom filters):
 ```python
-logging.getLogger().setLevel(external)                    # Root filters external libs
-logging.getLogger("pcswitcher").setLevel(min(file, tui))  # Let pcswitcher through
+# pcswitcher logger - separate handler, bypasses root filter
+pcswitcher = logging.getLogger("pcswitcher")
+pcswitcher.setLevel(min(file, tui))
+pcswitcher.addHandler(QueueHandler(queue))
+pcswitcher.propagate = False  # Critical: don't propagate to root
+
+# Root logger - external libs only
+logging.getLogger().setLevel(external)
+logging.getLogger().addHandler(QueueHandler(queue))
 ```
 
 ---
@@ -274,10 +281,12 @@ LogConfig
 
 LogLevel ←──────────────── LogConfig.file, .tui, .external (values)
 
-Logger hierarchy:
+Logger hierarchy (separate handlers, no propagation):
     Root logger (level=external) ◄── asyncssh, other external
-         │
-         └── pcswitcher (level=min(file,tui)) ◄── pcswitcher.*
+         └─► QueueHandler ─► queue
+
+    pcswitcher (level=min(file,tui), propagate=False) ◄── pcswitcher.*
+         └─► QueueHandler ─► queue (same queue)
 
 JsonFormatter ────────────► FileHandler
 RichFormatter ────────────► StreamHandler (TUI)

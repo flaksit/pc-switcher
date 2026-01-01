@@ -2,176 +2,191 @@
 
 from __future__ import annotations
 
-import asyncio
+import atexit
 import json
+import logging
+import sys
 from datetime import datetime
+from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
+from queue import Queue
 from typing import Any, ClassVar
 
-from rich.console import Console
-from rich.text import Text
+from pcswitcher.config import LogConfig
 
-from pcswitcher.events import EventBus, LogEvent, ProgressEvent
-from pcswitcher.models import Host, LogLevel
+# Register custom FULL level (15) with stdlib logging
+FULL = 15
+logging.addLevelName(FULL, "FULL")
+
+
+def _full(self: logging.Logger, message: str, *args: object, **kwargs: Any) -> None:
+    """Log a message at the FULL level (between DEBUG and INFO)."""
+    if self.isEnabledFor(FULL):
+        self._log(FULL, message, args, **kwargs)
+
+
+logging.Logger.full = _full  # type: ignore[method-assign]
 
 __all__ = [
-    "ConsoleLogger",
-    "FileLogger",
-    "Logger",
+    "FULL",
+    "JsonFormatter",
+    "RichFormatter",
     "generate_log_filename",
     "get_latest_log_file",
     "get_logs_directory",
+    "setup_logging",
 ]
 
 
-class Logger:
-    """Main logger that publishes to EventBus."""
+class JsonFormatter(logging.Formatter):
+    """Format log records as JSON lines for file output.
 
-    def __init__(self, event_bus: EventBus, job_name: str = "orchestrator") -> None:
-        self._event_bus = event_bus
-        self._job_name = job_name
-
-    def log(
-        self,
-        level: LogLevel,
-        host: Host,
-        message: str,
-        **context: Any,
-    ) -> None:
-        """Log a message at the specified level.
-
-        Args:
-            level: Log level
-            host: Which machine this log relates to
-            message: Human-readable message
-            **context: Additional structured context
-        """
-        self._event_bus.publish(
-            LogEvent(
-                level=level,
-                job=self._job_name,
-                host=host,
-                message=message,
-                context=context,
-            )
-        )
-
-
-class FileLogger:
-    """Consumes LogEvents and writes JSON lines to file.
-
-    Uses JSON serialization for consistent JSON output format (FR-022).
-    Each line is a complete JSON object with no nesting of context fields.
+    Output format matches the existing FileLogger JSON structure for
+    backwards compatibility. Additional context from the extra dict
+    is included as top-level fields (FR-011).
     """
 
-    def __init__(
-        self,
-        log_file: Path,
-        level: LogLevel,
-        queue: asyncio.Queue[Any],
-        hostname_map: dict[Host, str],
-    ) -> None:
-        self._log_file = log_file
-        self._level = level
-        self._queue = queue
-        self._hostname_map = hostname_map
-        # Ensure log directory exists
-        self._log_file.parent.mkdir(parents=True, exist_ok=True)
+    # Standard LogRecord attributes to exclude from extra context
+    _STANDARD_ATTRS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "name",
+            "msg",
+            "args",
+            "created",
+            "filename",
+            "funcName",
+            "levelname",
+            "levelno",
+            "lineno",
+            "module",
+            "msecs",
+            "pathname",
+            "process",
+            "processName",
+            "relativeCreated",
+            "stack_info",
+            "exc_info",
+            "exc_text",
+            "thread",
+            "threadName",
+            "taskName",
+            "message",
+        }
+    )
 
-    async def consume(self) -> None:
-        """Run as background task to consume and write log events."""
-        with self._log_file.open("a", encoding="utf-8") as f:
-            while True:
-                event = await self._queue.get()
-                if event is None:  # Shutdown sentinel
-                    break
-                if isinstance(event, LogEvent) and event.level >= self._level:
-                    # Convert to dict and add resolved hostname
-                    event_dict = event.to_dict()
-                    event_dict["hostname"] = self._hostname_map.get(event.host, event.host.value)
-                    json_line = json.dumps(event_dict, default=str)
-                    f.write(json_line + "\n")
-                    f.flush()
-                elif isinstance(event, ProgressEvent) and self._level >= LogLevel.FULL:
-                    # Write progress updates at FULL level (FR-045)
-                    progress_dict = {
-                        "timestamp": event.timestamp.isoformat(),
-                        "level": "FULL",
-                        "job": event.job,
-                        "event": "progress_update",
-                        "percent": event.update.percent,
-                        "current": event.update.current,
-                        "total": event.update.total,
-                        "item": event.update.item,
-                        "heartbeat": event.update.heartbeat,
-                    }
-                    json_line = json.dumps(progress_dict, default=str)
-                    f.write(json_line + "\n")
-                    f.flush()
+    def format(self, record: logging.LogRecord) -> str:
+        """Format a log record as a JSON line."""
+        # Build base log dict
+        log_dict: dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(record.created).isoformat(),
+            "level": record.levelname,
+        }
+
+        # Add optional job/host fields (omit when missing per data-model.md)
+        job = getattr(record, "job", None)
+        if job is not None:
+            log_dict["job"] = job
+
+        host = getattr(record, "host", None)
+        if host is not None:
+            log_dict["host"] = host
+
+        # Add message
+        log_dict["event"] = record.getMessage()
+
+        # Add all extra context fields (FR-011)
+        extra_fields = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key not in self._STANDARD_ATTRS and key not in {"job", "host"}
+        }
+        log_dict.update(extra_fields)
+
+        return json.dumps(log_dict, default=str)
 
 
-class ConsoleLogger:
-    """Consumes LogEvents and writes colored output to terminal.
+class RichFormatter(logging.Formatter):
+    """Format log records with Rich markup for TUI display.
 
-    Uses Rich for colored console output.
+    Output format: HH:MM:SS [LEVEL   ] [job] (host) message context
+
+    Additional context from the extra dict is appended as dim text (FR-011).
+    Job and host are omitted when missing (e.g., during startup/shutdown).
     """
 
-    # Color mapping for log levels
-    LEVEL_COLORS: ClassVar[dict[LogLevel, str]] = {
-        LogLevel.DEBUG: "dim",
-        LogLevel.FULL: "cyan",
-        LogLevel.INFO: "green",
-        LogLevel.WARNING: "yellow",
-        LogLevel.ERROR: "red",
-        LogLevel.CRITICAL: "bold red",
+    LEVEL_COLORS: ClassVar[dict[str, str]] = {
+        "DEBUG": "dim",
+        "FULL": "cyan",
+        "INFO": "green",
+        "WARNING": "yellow",
+        "ERROR": "red",
+        "CRITICAL": "bold red",
     }
 
-    def __init__(
-        self,
-        console: Console,
-        level: LogLevel,
-        queue: asyncio.Queue[Any],
-        hostname_map: dict[Host, str] | None = None,
-    ) -> None:
-        self._console = console
-        self._level = level
-        self._queue = queue
-        self._hostname_map = hostname_map or {}
+    # Standard LogRecord attributes to exclude from extra context
+    _STANDARD_ATTRS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "name",
+            "msg",
+            "args",
+            "created",
+            "filename",
+            "funcName",
+            "levelname",
+            "levelno",
+            "lineno",
+            "module",
+            "msecs",
+            "pathname",
+            "process",
+            "processName",
+            "relativeCreated",
+            "stack_info",
+            "exc_info",
+            "exc_text",
+            "thread",
+            "threadName",
+            "taskName",
+            "message",
+        }
+    )
 
-    async def consume(self) -> None:
-        """Run as background task to consume and display log events."""
-        while True:
-            event = await self._queue.get()
-            if event is None:  # Shutdown sentinel
-                break
-            if isinstance(event, LogEvent) and event.level >= self._level:
-                self._render_event(event)
-
-    def _render_event(self, event: LogEvent) -> None:
-        """Render a log event to the console with colors."""
-        # Resolve hostname from Host enum
-        hostname = self._hostname_map.get(event.host, event.host.value)
-
+    def format(self, record: logging.LogRecord) -> str:
+        """Format a log record with Rich markup."""
         # Format timestamp
-        timestamp = event.timestamp.strftime("%H:%M:%S")
+        timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
 
-        # Get color for level
-        color = self.LEVEL_COLORS.get(event.level, "white")
+        # Get level color
+        color = self.LEVEL_COLORS.get(record.levelname, "white")
 
-        # Build formatted line
-        text = Text()
-        text.append(f"{timestamp} ", style="dim")
-        text.append(f"[{event.level.name:8}]", style=color)
-        text.append(f" [{event.job}]", style="blue")
-        text.append(f" ({hostname})", style="magenta")
-        text.append(f" {event.message}")
+        # Build parts list
+        parts = [
+            f"[dim]{timestamp}[/dim]",
+            f"[{color}][{record.levelname:8}][/{color}]",
+        ]
 
-        # Add context if present
-        if event.context:
-            ctx_str = " ".join(f"{k}={v}" for k, v in event.context.items())
-            text.append(f" {ctx_str}", style="dim")
+        # Add job/host only if present (omit during startup/shutdown)
+        job = getattr(record, "job", None)
+        if job is not None:
+            parts.append(f"[blue][{job}][/blue]")
 
-        self._console.print(text)
+        host = getattr(record, "host", None)
+        if host is not None:
+            parts.append(f"[magenta]({host})[/magenta]")
+
+        # Add message
+        parts.append(record.getMessage())
+
+        # Add extra context as dim text (FR-011)
+        extra_context = []
+        for key, value in record.__dict__.items():
+            if key not in self._STANDARD_ATTRS and key not in {"job", "host"}:
+                extra_context.append(f"{key}={value}")
+
+        if extra_context:
+            parts.append(f"[dim]{' '.join(extra_context)}[/dim]")
+
+        return " ".join(parts)
 
 
 def generate_log_filename(session_id: str) -> str:
@@ -196,3 +211,78 @@ def get_latest_log_file() -> Path | None:
 
     log_files = sorted(logs_dir.glob("sync-*.log"), reverse=True)
     return log_files[0] if log_files else None
+
+
+def setup_logging(
+    log_file_path: Path,
+    log_config: LogConfig,
+) -> tuple[QueueListener, Queue[logging.LogRecord]]:
+    """Set up stdlib logging infrastructure with QueueHandler/QueueListener.
+
+    Creates a non-blocking logging setup using a queue to decouple log emission
+    from log writing. This ensures logging calls don't block on I/O operations.
+
+    The logger hierarchy implements a 3-setting model:
+    - Root logger level = external (filters external libs at this level)
+    - pcswitcher logger level = min(file, tui) (allows pcswitcher logs to handlers)
+    - Each handler applies its own level filter (file vs tui)
+
+    Args:
+        log_file_path: Path to the JSON log file
+        log_config: Logging level configuration with file, tui, and external settings
+
+    Returns:
+        Tuple of (QueueListener, queue) for lifecycle management.
+        The listener is auto-stopped via atexit, but callers can stop it
+        earlier for explicit cleanup.
+    """
+    # Ensure log directory exists
+    log_file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create unbounded queue for log records
+    queue: Queue[logging.LogRecord] = Queue(-1)
+
+    # Create file handler with JSON formatter for structured log output
+    file_handler = logging.FileHandler(log_file_path, encoding="utf-8")
+    file_handler.setLevel(log_config.file)
+    file_handler.setFormatter(JsonFormatter())
+
+    # Create stream handler with Rich formatter for TUI output
+    stream_handler = logging.StreamHandler(sys.stderr)
+    stream_handler.setLevel(log_config.tui)
+    stream_handler.setFormatter(RichFormatter())
+
+    # Create and start listener with respect_handler_level=True
+    # This ensures each handler's level is used as an additional filter
+    listener = QueueListener(
+        queue,
+        file_handler,
+        stream_handler,
+        respect_handler_level=True,
+    )
+    listener.start()
+
+    # Register cleanup for guaranteed log flushing on exit
+    atexit.register(listener.stop)
+
+    # Configure logger hierarchy for 3-setting model
+    #
+    # The pcswitcher logger gets its own handler and propagate=False to bypass
+    # the root logger's level filter. This allows pcswitcher logs at DEBUG/FULL/INFO
+    # to reach the handlers even when external is set to WARNING.
+    #
+    # Root logger handles external library logs (asyncssh, etc.) and filters
+    # them at the external level.
+
+    # pcswitcher logger - direct handler, no propagation to root
+    pcswitcher_logger = logging.getLogger("pcswitcher")
+    pcswitcher_logger.setLevel(min(log_config.file, log_config.tui))
+    pcswitcher_logger.addHandler(QueueHandler(queue))
+    pcswitcher_logger.propagate = False  # Don't propagate to root (avoids external filter)
+
+    # Root logger for external libs only (pcswitcher logs don't reach here)
+    root = logging.getLogger()
+    root.setLevel(log_config.external)
+    root.addHandler(QueueHandler(queue))
+
+    return listener, queue

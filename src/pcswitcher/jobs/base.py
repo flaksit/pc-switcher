@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import jsonschema
 
-from pcswitcher.events import LogEvent, ProgressEvent
+from pcswitcher.events import ProgressEvent
 from pcswitcher.models import ConfigError, Host, LogLevel, ProgressUpdate, ValidationError
 
 from .context import JobContext
+
+logger = logging.getLogger("pcswitcher.jobs.base")
 
 if TYPE_CHECKING:
     from pcswitcher.executor import LocalExecutor, RemoteExecutor
@@ -106,7 +109,7 @@ class Job(ABC):
         message: str,
         **extra: Any,
     ) -> None:
-        """Log a message through EventBus.
+        """Log a message through stdlib logging.
 
         Args:
             host: Which machine this log relates to (SOURCE or TARGET)
@@ -114,14 +117,10 @@ class Job(ABC):
             message: Human-readable message
             **extra: Additional structured context
         """
-        self.context.event_bus.publish(
-            LogEvent(
-                level=level,
-                job=self.name,
-                host=host,
-                message=message,
-                context=extra,
-            )
+        logger.log(
+            level.value,
+            message,
+            extra={"job": self.name, "host": host.value, **extra},
         )
 
     def _report_progress(

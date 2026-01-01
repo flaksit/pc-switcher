@@ -23,9 +23,9 @@
 
 **Purpose**: Project structure preparation and ADR documentation
 
-- [ ] T001 Create ADR-010 for logging infrastructure decision in docs/adr/adr-010-logging-infrastructure.md
-- [ ] T002 [P] Create ADR-010 considerations document in docs/adr/considerations/adr-010-logging-infrastructure-analysis.md
-- [ ] T003 Update docs/adr/_index.md to include ADR-010 reference
+- [X] T001 Create ADR-010 for logging infrastructure decision in docs/adr/adr-010-logging-infrastructure.md
+- [X] T002 [P] Create ADR-010 considerations document in docs/adr/considerations/adr-010-logging-infrastructure-analysis.md
+- [X] T003 Update docs/adr/_index.md to include ADR-010 reference
 
 ---
 
@@ -35,11 +35,11 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T004 Update LogLevel enum values in src/pcswitcher/models.py to align with stdlib (10, 15, 20, 30, 40, 50)
-- [ ] T005 Register custom FULL log level (15) with stdlib logging in src/pcswitcher/logger.py
-- [ ] T006 Create LogConfig dataclass for 3-setting model (file, tui, external) in src/pcswitcher/config.py
-- [ ] T007 Add logging section to config schema in src/pcswitcher/schemas/config-schema.yaml
-- [ ] T008 Implement LogConfig parsing with validation and defaults in src/pcswitcher/config.py (FR-009: defaults, FR-010: raise ConfigurationError on invalid level strings)
+- [X] T004 Update LogLevel enum values in src/pcswitcher/models.py to align with stdlib (10, 15, 20, 30, 40, 50)
+- [X] T005 Register custom FULL log level (15) with stdlib logging in src/pcswitcher/logger.py
+- [X] T006 Create LogConfig dataclass for 3-setting model (file, tui, external) in src/pcswitcher/config.py
+- [X] T007 Add logging section to config schema in src/pcswitcher/schemas/config-schema.yaml
+- [X] T008 Implement LogConfig parsing with validation and defaults in src/pcswitcher/config.py (FR-009: defaults, FR-010: raise ConfigurationError on invalid level strings)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -55,12 +55,12 @@
 
 ### Implementation for User Story 3
 
-- [ ] T009 [US3] Implement QueueHandler/QueueListener setup in src/pcswitcher/logger.py
-- [ ] T010 [US3] Register atexit handler for QueueListener.stop() in src/pcswitcher/logger.py
-- [ ] T011 [US3] Create setup_logging() function that configures root and pcswitcher loggers in src/pcswitcher/logger.py
-- [ ] T012 [US3] Implement logger hierarchy: root level=external, pcswitcher level=min(file,tui) in src/pcswitcher/logger.py
-- [ ] T013 [US3] Update cli.py main callback to call setup_logging() with LogConfig in src/pcswitcher/cli.py
-- [ ] T014 [US3] Deprecate LogEvent class with comment in src/pcswitcher/events.py (keep for reference, mark deprecated)
+- [X] T009 [US3] Implement QueueHandler/QueueListener setup in src/pcswitcher/logger.py
+- [X] T010 [US3] Register atexit handler for QueueListener.stop() in src/pcswitcher/logger.py
+- [X] T011 [US3] Create setup_logging() function that configures root and pcswitcher loggers in src/pcswitcher/logger.py
+- [X] T012 [US3] Implement logger hierarchy: root level=external, pcswitcher level=min(file,tui) in src/pcswitcher/logger.py
+- [X] T013 [US3] Update cli.py main callback to call setup_logging() with LogConfig in src/pcswitcher/cli.py
+- [X] T014 [US3] Deprecate LogEvent class with comment in src/pcswitcher/events.py (keep for reference, mark deprecated)
 
 **Checkpoint**: At this point, logging flows through stdlib infrastructure
 
@@ -74,10 +74,10 @@
 
 ### Implementation for User Story 4
 
-- [ ] T015 [P] [US4] Implement JsonFormatter class in src/pcswitcher/logger.py with same JSON structure as FileLogger (FR-011: include all extra dict key-value pairs as context fields)
-- [ ] T016 [P] [US4] Implement RichFormatter class in src/pcswitcher/logger.py with same Rich output as ConsoleLogger (FR-011: append extra dict key-value pairs as dim text)
-- [ ] T017 [US4] Handle optional job/host context in formatters (omit when missing, not empty brackets); generic extra fields always appended in src/pcswitcher/logger.py
-- [ ] T018 [US4] Wire formatters to FileHandler and StreamHandler in setup_logging() in src/pcswitcher/logger.py
+- [X] T015 [P] [US4] Implement JsonFormatter class in src/pcswitcher/logger.py with same JSON structure as FileLogger (FR-011: include all extra dict key-value pairs as context fields)
+- [X] T016 [P] [US4] Implement RichFormatter class in src/pcswitcher/logger.py with same Rich output as ConsoleLogger (FR-011: append extra dict key-value pairs as dim text)
+- [X] T017 [US4] Handle optional job/host context in formatters (omit when missing, not empty brackets); generic extra fields always appended in src/pcswitcher/logger.py
+- [X] T018 [US4] Wire formatters to FileHandler and StreamHandler in setup_logging() in src/pcswitcher/logger.py
 
 **Checkpoint**: Log output format is preserved (JSON lines for file, Rich for TUI)
 
@@ -91,10 +91,10 @@
 
 ### Implementation for User Story 1
 
-- [ ] T019 [US1] Pass LogConfig from Configuration to setup_logging() in src/pcswitcher/cli.py
-- [ ] T020 [US1] Apply file level to FileHandler in setup_logging() in src/pcswitcher/logger.py
-- [ ] T021 [US1] Apply tui level to StreamHandler in setup_logging() in src/pcswitcher/logger.py
-- [ ] T022 [US1] Update README.md with logging configuration section
+- [X] T019 [US1] Pass LogConfig from Configuration to setup_logging() in src/pcswitcher/cli.py
+- [X] T020 [US1] Apply file level to FileHandler in setup_logging() in src/pcswitcher/logger.py
+- [X] T021 [US1] Apply tui level to StreamHandler in setup_logging() in src/pcswitcher/logger.py
+- [X] T022 [US1] Update README.md with logging configuration section
 
 **Checkpoint**: Users can configure log levels via config file
 
@@ -108,8 +108,8 @@
 
 ### Implementation for User Story 2
 
-- [ ] T023 [US2] Set root logger level to external_level in setup_logging() in src/pcswitcher/logger.py
-- [ ] T024 [US2] Verify asyncssh logs are captured when external level is DEBUG/INFO in integration test scenario
+- [X] T023 [US2] Set root logger level to external_level in setup_logging() in src/pcswitcher/logger.py
+- [X] T024 [US2] Verify asyncssh logs are captured when external level is DEBUG/INFO in integration test scenario
 
 **Checkpoint**: External library logs appear in output when levels permit
 
@@ -119,15 +119,15 @@
 
 **Purpose**: Cleanup, migration completion, and validation
 
-- [ ] T025 [P] Remove unused Logger, FileLogger, ConsoleLogger classes from src/pcswitcher/logger.py
-- [ ] T026 Update module __all__ exports in src/pcswitcher/logger.py
-- [ ] T027 Update orchestrator.py to use stdlib logging instead of custom Logger class in src/pcswitcher/orchestrator.py
-- [ ] T028 [P] Update job modules to use stdlib logging (getLogger pattern): src/pcswitcher/jobs/base.py, btrfs.py, context.py, disk_space_monitor.py, dummy_fail.py, dummy_success.py, install_on_target.py
-- [ ] T029 Update ui.py TUI log consumption to work with new logging pipeline in src/pcswitcher/ui.py
-- [ ] T030 [P] Create unit tests for logging setup and filtering in tests/unit/test_logging.py (covers SC-003, SC-004, SC-007, SC-008; includes test case for invalid log level causing ConfigurationError per FR-010)
-- [ ] T031 [P] Create contract tests for log format in tests/contract/test_logging_contract.py (covers SC-005: TUI visual format, SC-006: JSON structure)
-- [ ] T032 Run existing test suite (`uv run pytest`) to verify no regressions (SC-007); all tests must pass before proceeding
-- [ ] T033 Validate quickstart.md scenarios work as documented
+- [X] T025 [P] Remove unused Logger, FileLogger, ConsoleLogger classes from src/pcswitcher/logger.py
+- [X] T026 Update module __all__ exports in src/pcswitcher/logger.py
+- [X] T027 Update orchestrator.py to use stdlib logging instead of custom Logger class in src/pcswitcher/orchestrator.py
+- [X] T028 [P] Update job modules to use stdlib logging (getLogger pattern): src/pcswitcher/jobs/base.py, btrfs.py, context.py, disk_space_monitor.py, dummy_fail.py, dummy_success.py, install_on_target.py
+- [X] T029 Update ui.py TUI log consumption to work with new logging pipeline in src/pcswitcher/ui.py
+- [X] T030 [P] Create unit tests for logging setup and filtering in tests/unit/test_logging.py (covers SC-003, SC-004, SC-007, SC-008; includes test case for invalid log level causing ConfigurationError per FR-010)
+- [X] T031 [P] Create contract tests for log format in tests/contract/test_logging_contract.py (covers SC-005: TUI visual format, SC-006: JSON structure)
+- [X] T032 Run existing test suite (`uv run pytest`) to verify no regressions (SC-007); all tests must pass before proceeding
+- [X] T033 Validate quickstart.md scenarios work as documented
 
 ---
 

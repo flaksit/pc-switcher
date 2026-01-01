@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, ClassVar
 from unittest.mock import MagicMock
 
@@ -115,11 +116,16 @@ class TestJobContract:
         await job.execute()
 
     @pytest.mark.asyncio
-    async def test_log_helper_publishes_event(self, mock_job_context: JobContext) -> None:
-        """_log() should publish LogEvent to EventBus."""
+    async def test_log_helper_logs_to_stdlib(
+        self, mock_job_context: JobContext, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """_log() should log via stdlib logging."""
         job = ExampleTestJob(mock_job_context)
-        job._log(Host.SOURCE, LogLevel.INFO, "Test message")  # pyright: ignore[reportPrivateUsage]
-        mock_job_context.event_bus.publish.assert_called_once()  # type: ignore[union-attr]
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"):
+            job._log(Host.SOURCE, LogLevel.INFO, "Test message")  # pyright: ignore[reportPrivateUsage]
+        assert len(caplog.records) == 1
+        assert caplog.records[0].message == "Test message"
+        assert caplog.records[0].levelno == LogLevel.INFO
 
     @pytest.mark.asyncio
     async def test_progress_helper_publishes_event(self, mock_job_context: JobContext) -> None:
@@ -183,7 +189,9 @@ class TestJobContract:
         assert "required_field" in errors[0].message
 
     @pytest.mark.asyncio
-    async def test_001_us1_as3_job_logging_at_all_levels(self, mock_job_context: JobContext) -> None:
+    async def test_001_us1_as3_job_logging_at_all_levels(
+        self, mock_job_context: JobContext, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """US1-AS3: Job emits log messages at six levels.
 
         Verifies that jobs can emit logs at all six levels:
@@ -192,26 +200,29 @@ class TestJobContract:
         job = ExampleTestJob(mock_job_context)
 
         # Test each log level
-        for level in [
-            LogLevel.DEBUG,
-            LogLevel.FULL,
-            LogLevel.INFO,
-            LogLevel.WARNING,
-            LogLevel.ERROR,
-            LogLevel.CRITICAL,
-        ]:
-            mock_job_context.event_bus.publish.reset_mock()  # type: ignore[union-attr]
-            job._log(Host.SOURCE, level, f"Test message at {level.name}")  # pyright: ignore[reportPrivateUsage]
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"):
+            for level in [
+                LogLevel.DEBUG,
+                LogLevel.FULL,
+                LogLevel.INFO,
+                LogLevel.WARNING,
+                LogLevel.ERROR,
+                LogLevel.CRITICAL,
+            ]:
+                job._log(Host.SOURCE, level, f"Test message at {level.name}")  # pyright: ignore[reportPrivateUsage]
 
-            # Verify event was published
-            mock_job_context.event_bus.publish.assert_called_once()  # type: ignore[union-attr]
-            call_args = mock_job_context.event_bus.publish.call_args  # type: ignore[union-attr]
-            event = call_args[0][0]
+        # Verify all 6 log records were created
+        assert len(caplog.records) == 6
 
-            # Verify event has correct level
-            assert event.level == level
-            assert event.job == "example_test"
-            assert event.host == Host.SOURCE
+        # Verify each level was logged correctly
+        for i, level in enumerate(
+            [LogLevel.DEBUG, LogLevel.FULL, LogLevel.INFO, LogLevel.WARNING, LogLevel.ERROR, LogLevel.CRITICAL]
+        ):
+            record = caplog.records[i]
+            assert record.levelno == level.value
+            assert record.message == f"Test message at {level.name}"
+            assert record.__dict__.get("job") == "example_test"
+            assert record.__dict__.get("host") == "source"
 
     @pytest.mark.asyncio
     async def test_001_us1_as4_job_progress_reporting(self, mock_job_context: JobContext) -> None:

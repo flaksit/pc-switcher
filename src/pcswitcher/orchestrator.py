@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import secrets
 from datetime import UTC, datetime
+from logging.handlers import QueueListener
 from typing import Any
 
 from rich.console import Console
@@ -30,17 +32,15 @@ from pcswitcher.lock import (
     start_persistent_remote_lock,
 )
 from pcswitcher.logger import (
-    FileLogger,
-    Logger,
     generate_log_filename,
     get_logs_directory,
+    setup_logging,
 )
 from pcswitcher.models import (
     ConfigError,
     Host,
     JobResult,
     JobStatus,
-    LogLevel,
     SessionStatus,
     SnapshotPhase,
     SyncSession,
@@ -82,7 +82,7 @@ class Orchestrator:
 
         # Core components
         self._event_bus = EventBus()
-        self._logger = Logger(self._event_bus, job_name="orchestrator")
+        self._logger = logging.getLogger("pcswitcher.orchestrator")
         self._connection: Connection | None = None
         self._local_executor: LocalExecutor | None = None
         self._remote_executor: RemoteExecutor | None = None
@@ -96,10 +96,9 @@ class Orchestrator:
         self._cleanup_in_progress = False
 
         # Logging infrastructure (initialized in run())
-        self._file_logger: FileLogger | None = None
+        self._queue_listener: QueueListener | None = None
         self._ui: TerminalUI | None = None
         self._console: Console | None = None
-        self._file_logger_task: asyncio.Task[None] | None = None
         self._ui_task: asyncio.Task[None] | None = None
 
     def _create_job_context(self, config: dict[str, Any]) -> JobContext:
@@ -146,25 +145,13 @@ class Orchestrator:
         if not self._target_hostname:
             raise RuntimeError("Target hostname is not set")
 
-        hostname_map = {
-            Host.SOURCE: self._source_hostname,
-            Host.TARGET: self._target_hostname,
-        }
-
-        # Create log file path
+        # Create log file path and set up stdlib logging infrastructure
         log_file_path = get_logs_directory() / generate_log_filename(self._session_id)
+        self._queue_listener, _ = setup_logging(log_file_path, self._config.logging)
 
-        # Subscribe to event bus
-        file_queue = self._event_bus.subscribe()
+        # Subscribe to event bus for UI (ProgressEvent, ConnectionEvent only)
         ui_queue = self._event_bus.subscribe()
 
-        # Instantiate loggers and UI
-        self._file_logger = FileLogger(
-            log_file=log_file_path,
-            level=self._config.log_file_level,
-            queue=file_queue,
-            hostname_map=hostname_map,
-        )
         # Calculate total steps: 8 system phases + sync jobs + 1 post-snapshot
         # System phases: 1=source lock, 2=SSH, 3=target lock, 4=validation,
         # 5=disk check, 6=pre-snapshots, 7=install on target, 8=config sync
@@ -175,38 +162,35 @@ class Orchestrator:
             total_steps=total_steps,
         )
 
-        # Start consumers as background tasks
-        self._file_logger_task = asyncio.create_task(self._file_logger.consume())
-        self._ui_task = asyncio.create_task(
-            self._ui.consume_events(
-                queue=ui_queue,
-                hostname_map=hostname_map,
-                log_level=self._config.log_cli_level,
-            )
-        )
+        # Start UI event consumer as background task (ProgressEvent, ConnectionEvent)
+        self._ui_task = asyncio.create_task(self._ui.consume_events(queue=ui_queue))
 
         # Start UI live display
         self._ui.start()
 
         try:
             # Phase 1: Acquire source lock
-            self._logger.log(LogLevel.INFO, Host.SOURCE, "Acquiring source lock")
+            self._logger.info("Acquiring source lock", extra={"job": "orchestrator", "host": "source"})
             await self._acquire_source_lock()
             self._ui.set_current_step(1)
 
             # Phase 2: Establish SSH connection
-            self._logger.log(LogLevel.INFO, Host.SOURCE, f"Connecting to target: {self._target_hostname}")
+            self._logger.info(
+                "Connecting to target: %s",
+                self._target_hostname,
+                extra={"job": "orchestrator", "host": "source"},
+            )
             await self._establish_connection()
             assert self._remote_executor is not None
             self._ui.set_current_step(2)
 
             # Phase 3: Acquire target lock
-            self._logger.log(LogLevel.INFO, Host.TARGET, "Acquiring target lock")
+            self._logger.info("Acquiring target lock", extra={"job": "orchestrator", "host": "target"})
             await self._acquire_target_lock()
             self._ui.set_current_step(3)
 
             # Phase 4: Job discovery and validation
-            self._logger.log(LogLevel.INFO, Host.SOURCE, "Discovering and validating jobs")
+            self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator", "host": "source"})
             jobs = await self._discover_and_validate_jobs()
             self._ui.set_current_step(4)
 
@@ -215,34 +199,37 @@ class Orchestrator:
             self._ui.set_current_step(5)
 
             # Phase 6: Pre-sync snapshots
-            self._logger.log(LogLevel.INFO, Host.SOURCE, "Creating pre-sync snapshots")
+            self._logger.info("Creating pre-sync snapshots", extra={"job": "orchestrator", "host": "source"})
             await self._create_snapshots(SnapshotPhase.PRE)
             self._ui.set_current_step(6)
 
             # Phase 7: Install/upgrade pc-switcher on target (after snapshots for rollback safety)
-            self._logger.log(LogLevel.INFO, Host.TARGET, "Ensuring pc-switcher is installed on target")
+            self._logger.info(
+                "Ensuring pc-switcher is installed on target",
+                extra={"job": "orchestrator", "host": "target"},
+            )
             await self._install_on_target_job()
             self._ui.set_current_step(7)
 
             # Phase 8: Sync config from source to target
-            self._logger.log(LogLevel.INFO, Host.TARGET, "Syncing configuration to target")
+            self._logger.info("Syncing configuration to target", extra={"job": "orchestrator", "host": "target"})
             await self._sync_config_to_target()
             self._ui.set_current_step(8)
 
             # Phase 9: Execute sync jobs with background monitoring
-            self._logger.log(LogLevel.INFO, Host.SOURCE, "Starting sync operations")
+            self._logger.info("Starting sync operations", extra={"job": "orchestrator", "host": "source"})
             job_results = await self._execute_jobs(jobs)
             session.job_results = job_results
 
             # Phase 10: Post-sync snapshots
-            self._logger.log(LogLevel.INFO, Host.SOURCE, "Creating post-sync snapshots")
+            self._logger.info("Creating post-sync snapshots", extra={"job": "orchestrator", "host": "source"})
             await self._create_snapshots(SnapshotPhase.POST)
             self._ui.set_current_step(8 + len(jobs) + 1)
 
             # Success
             session.status = SessionStatus.COMPLETED
             session.ended_at = datetime.now(UTC)
-            self._logger.log(LogLevel.INFO, Host.SOURCE, "Sync completed successfully")
+            self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
 
             return session
 
@@ -250,14 +237,14 @@ class Orchestrator:
             session.status = SessionStatus.INTERRUPTED
             session.ended_at = datetime.now(UTC)
             session.error_message = "Sync interrupted by user (SIGINT)"
-            self._logger.log(LogLevel.WARNING, Host.SOURCE, "Sync interrupted by user")
+            self._logger.warning("Sync interrupted by user", extra={"job": "orchestrator", "host": "source"})
             raise
 
         except Exception as e:
             session.status = SessionStatus.FAILED
             session.ended_at = datetime.now(UTC)
             session.error_message = str(e)
-            self._logger.log(LogLevel.CRITICAL, Host.SOURCE, f"Sync failed: {e}")
+            self._logger.critical("Sync failed: %s", e, extra={"job": "orchestrator", "host": "source"})
             raise
 
         finally:
@@ -286,11 +273,7 @@ class Orchestrator:
         self._local_executor = LocalExecutor()
         self._remote_executor = RemoteExecutor(self._connection.ssh_connection)
 
-        self._logger.log(
-            LogLevel.INFO,
-            Host.TARGET,
-            f"Connected to {self._target_hostname}",
-        )
+        self._logger.info("Connected to %s", self._target_hostname, extra={"job": "orchestrator", "host": "target"})
 
     async def _acquire_target_lock(self) -> None:
         """Acquire exclusive lock on target machine via SSH.
@@ -350,7 +333,7 @@ class Orchestrator:
         if not should_continue:
             raise RuntimeError("Config sync aborted by user")
 
-        self._logger.log(LogLevel.INFO, Host.TARGET, "Configuration sync completed")
+        self._logger.info("Configuration sync completed", extra={"job": "orchestrator", "host": "target"})
 
     async def _discover_and_validate_jobs(self) -> list[Job]:
         """Discover enabled jobs from config and validate their configuration.
@@ -368,29 +351,31 @@ class Orchestrator:
         config_errors: list[ConfigError] = []
 
         # Log entire config at DEBUG level
-        self._logger.log(
-            LogLevel.DEBUG,
-            Host.SOURCE,
+        self._logger.debug(
             "Configuration loaded",
-            log_file_level=self._config.log_file_level.name,
-            log_cli_level=self._config.log_cli_level.name,
-            sync_jobs=self._config.sync_jobs,
-            disk_preflight_minimum=self._config.disk.preflight_minimum,
-            disk_runtime_minimum=self._config.disk.runtime_minimum,
-            disk_warning_threshold=self._config.disk.warning_threshold,
-            disk_check_interval=self._config.disk.check_interval,
-            btrfs_subvolumes=self._config.btrfs_snapshots.subvolumes,
-            btrfs_keep_recent=self._config.btrfs_snapshots.keep_recent,
-            btrfs_max_age_days=self._config.btrfs_snapshots.max_age_days,
+            extra={
+                "job": "orchestrator",
+                "host": "source",
+                "log_file_level": self._config.log_file_level.name,
+                "log_cli_level": self._config.log_cli_level.name,
+                "sync_jobs": self._config.sync_jobs,
+                "disk_preflight_minimum": self._config.disk.preflight_minimum,
+                "disk_runtime_minimum": self._config.disk.runtime_minimum,
+                "disk_warning_threshold": self._config.disk.warning_threshold,
+                "disk_check_interval": self._config.disk.check_interval,
+                "btrfs_subvolumes": self._config.btrfs_snapshots.subvolumes,
+                "btrfs_keep_recent": self._config.btrfs_snapshots.keep_recent,
+                "btrfs_max_age_days": self._config.btrfs_snapshots.max_age_days,
+            },
         )
 
         # Lazy load only enabled jobs (job_name == module_name)
         for job_name, enabled in self._config.sync_jobs.items():
             if not enabled:
-                self._logger.log(
-                    LogLevel.DEBUG,
-                    Host.SOURCE,
-                    f"Job {job_name} is disabled in config",
+                self._logger.debug(
+                    "Job %s is disabled in config",
+                    job_name,
+                    extra={"job": "orchestrator", "host": "source"},
                 )
                 continue
 
@@ -398,10 +383,10 @@ class Orchestrator:
             try:
                 module = importlib.import_module(f"pcswitcher.jobs.{job_name}")
             except ModuleNotFoundError:
-                self._logger.log(
-                    LogLevel.WARNING,
-                    Host.SOURCE,
-                    f"Job module pcswitcher.jobs.{job_name} not found",
+                self._logger.warning(
+                    "Job module pcswitcher.jobs.%s not found",
+                    job_name,
+                    extra={"job": "orchestrator", "host": "source"},
                 )
                 continue
 
@@ -419,10 +404,11 @@ class Orchestrator:
                     break
 
             if job_class is None:
-                self._logger.log(
-                    LogLevel.WARNING,
-                    Host.SOURCE,
-                    f"No SyncJob with name={job_name} found in module pcswitcher.jobs.{job_name}",
+                self._logger.warning(
+                    "No SyncJob with name=%s found in module pcswitcher.jobs.%s",
+                    job_name,
+                    job_name,
+                    extra={"job": "orchestrator", "host": "source"},
                 )
                 continue
 
@@ -465,7 +451,7 @@ class Orchestrator:
         assert self._local_executor is not None
         assert self._remote_executor is not None
 
-        self._logger.log(LogLevel.INFO, Host.SOURCE, "Checking disk space on both hosts")
+        self._logger.info("Checking disk space on both hosts", extra={"job": "orchestrator", "host": "source"})
 
         # Parse threshold once (same for both hosts)
         threshold_type, threshold_value = parse_threshold(self._config.disk.preflight_minimum)
@@ -511,7 +497,7 @@ class Orchestrator:
             free_space_desc = format_free_space(source_disk)
             threshold_desc = format_threshold(threshold_type, threshold_value)
             error_msg = f"Source disk space {free_space_desc} below threshold {threshold_desc}"
-            self._logger.log(LogLevel.CRITICAL, Host.SOURCE, error_msg)
+            self._logger.critical(error_msg, extra={"job": "orchestrator", "host": "source"})
             raise RuntimeError(error_msg)
 
         # Check target
@@ -519,14 +505,22 @@ class Orchestrator:
             free_space_desc = format_free_space(target_disk)
             threshold_desc = format_threshold(threshold_type, threshold_value)
             error_msg = f"Target disk space {free_space_desc} below threshold {threshold_desc}"
-            self._logger.log(LogLevel.CRITICAL, Host.TARGET, error_msg)
+            self._logger.critical(error_msg, extra={"job": "orchestrator", "host": "target"})
             raise RuntimeError(error_msg)
 
         # Both checks passed - log success
         source_free = format_free_space(source_disk)
         target_free = format_free_space(target_disk)
-        self._logger.log(LogLevel.INFO, Host.SOURCE, f"Source disk space check passed: {source_free} free")
-        self._logger.log(LogLevel.INFO, Host.TARGET, f"Target disk space check passed: {target_free} free")
+        self._logger.info(
+            "Source disk space check passed: %s free",
+            source_free,
+            extra={"job": "orchestrator", "host": "source"},
+        )
+        self._logger.info(
+            "Target disk space check passed: %s free",
+            target_free,
+            extra={"job": "orchestrator", "host": "target"},
+        )
 
     async def _create_snapshots(self, phase: SnapshotPhase) -> None:
         """Create btrfs snapshots on both source and target.
@@ -599,10 +593,10 @@ class Orchestrator:
                                 ended_at=ended_at,
                             )
                         )
-                        self._logger.log(
-                            LogLevel.INFO,
-                            Host.SOURCE,
-                            f"Job {job.name} completed successfully",
+                        self._logger.info(
+                            "Job %s completed successfully",
+                            job.name,
+                            extra={"job": "orchestrator", "host": "source"},
                         )
 
                     except Exception as e:
@@ -616,10 +610,11 @@ class Orchestrator:
                                 error_message=str(e),
                             )
                         )
-                        self._logger.log(
-                            LogLevel.CRITICAL,
-                            Host.SOURCE,
-                            f"Job {job.name} failed: {e}",
+                        self._logger.critical(
+                            "Job %s failed: %s",
+                            job.name,
+                            e,
+                            extra={"job": "orchestrator", "host": "source"},
                         )
                         raise
             finally:
@@ -659,9 +654,11 @@ class Orchestrator:
         # Close event bus (sends None sentinel to all consumers)
         self._event_bus.close()
 
-        # Wait for logger tasks to finish draining their queues
-        if self._file_logger_task is not None:
-            await self._file_logger_task
+        # Stop QueueListener for stdlib logging (flushes pending log records)
+        if self._queue_listener is not None:
+            self._queue_listener.stop()
+
+        # Wait for UI task to finish draining its queue
         if self._ui_task is not None:
             await self._ui_task
 

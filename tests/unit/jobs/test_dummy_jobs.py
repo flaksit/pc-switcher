@@ -14,17 +14,18 @@ Tests verify:
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pcswitcher.events import LogEvent, ProgressEvent
+from pcswitcher.events import ProgressEvent
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.dummy_fail import DummyFailJob
 from pcswitcher.jobs.dummy_success import DummySuccessJob
-from pcswitcher.models import CommandResult, Host, LogLevel, ProgressUpdate
+from pcswitcher.models import CommandResult, LogLevel, ProgressUpdate
 
 
 class JobContextFactory(Protocol):
@@ -74,7 +75,9 @@ class TestDummySuccessBehavior:
     """Test FR-039, US8-AS1: dummy_success job behavior."""
 
     @pytest.mark.asyncio
-    async def test_001_fr039_dummy_success_behavior(self, mock_job_context_factory: JobContextFactory) -> None:
+    async def test_001_fr039_dummy_success_behavior(
+        self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """FR-039: dummy_success simulates 20s operation with logs and progress.
 
         Tests with default 20s duration:
@@ -93,7 +96,10 @@ class TestDummySuccessBehavior:
         context.target.start_process = AsyncMock(return_value=mock_proc)
 
         # Mock asyncio.sleep to avoid waiting on source phase
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with (
+            caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"),
+            patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
             await job.execute()
 
         # Verify asyncio.sleep was called for source phase only (20s / 2s = 10 times)
@@ -114,30 +120,28 @@ class TestDummySuccessBehavior:
         assert 75 in progress_percents
         assert 100 in progress_percents
 
-        # Verify log events
-        log_events = [call[0][0] for call in publish_calls if isinstance(call[0][0], LogEvent)]
-
+        # Verify log records (using caplog for stdlib logging)
         # Check for source logs (INFO every 2s, WARNING at 6s)
-        source_logs = [e for e in log_events if e.host == Host.SOURCE]
+        source_logs = [r for r in caplog.records if r.__dict__.get("host") == "source"]
         assert len(source_logs) >= 10  # At least 10 source logs
 
-        source_info_logs = [e for e in source_logs if e.level == LogLevel.INFO]
+        source_info_logs = [r for r in source_logs if r.levelno == LogLevel.INFO]
         assert len(source_info_logs) >= 9  # INFO every 2s
 
-        source_warning_logs = [e for e in source_logs if e.level == LogLevel.WARNING]
+        source_warning_logs = [r for r in source_logs if r.levelno == LogLevel.WARNING]
         assert len(source_warning_logs) >= 1  # WARNING at 6s
-        assert any("6s" in e.message for e in source_warning_logs)
+        assert any("6s" in r.message for r in source_warning_logs)
 
         # Check for target logs (INFO every 2s, ERROR at 8s) - now via remote execution
-        target_logs = [e for e in log_events if e.host == Host.TARGET]
+        target_logs = [r for r in caplog.records if r.__dict__.get("host") == "target"]
         assert len(target_logs) >= 10  # At least 10 target logs
 
-        target_info_logs = [e for e in target_logs if e.level == LogLevel.INFO]
+        target_info_logs = [r for r in target_logs if r.levelno == LogLevel.INFO]
         assert len(target_info_logs) >= 9  # INFO every 2s
 
-        target_error_logs = [e for e in target_logs if e.level == LogLevel.ERROR]
+        target_error_logs = [r for r in target_logs if r.levelno == LogLevel.ERROR]
         assert len(target_error_logs) >= 1  # ERROR at 8s
-        assert any("8s" in e.message for e in target_error_logs)
+        assert any("8s" in r.message for r in target_error_logs)
 
     @pytest.mark.asyncio
     async def test_001_us8_as1_dummy_success_completes(self, mock_job_context_factory: JobContextFactory) -> None:
@@ -193,7 +197,9 @@ class TestDummyFailBehavior:
     """Test FR-041, US8-AS3: dummy_fail job behavior."""
 
     @pytest.mark.asyncio
-    async def test_001_fr041_dummy_fail_exception(self, mock_job_context_factory: JobContextFactory) -> None:
+    async def test_001_fr041_dummy_fail_exception(
+        self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """FR-041: dummy_fail raises unhandled exception at configured time.
 
         Verifies that dummy_fail simulates progress, then raises RuntimeError.
@@ -211,7 +217,11 @@ class TestDummyFailBehavior:
         context.target.start_process = AsyncMock(return_value=mock_proc)
 
         # Mock asyncio.sleep to avoid waiting
-        with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(RuntimeError) as exc_info:
+        with (
+            caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(RuntimeError) as exc_info,
+        ):
             await job.execute()
 
         # Verify exception message mentions failure at 12s
@@ -231,11 +241,10 @@ class TestDummyFailBehavior:
         # Should not reach 100%
         assert 100 not in progress_percents
 
-        # Verify CRITICAL log was emitted before exception
-        log_events = [call[0][0] for call in publish_calls if isinstance(call[0][0], LogEvent)]
-        critical_logs = [e for e in log_events if e.level == LogLevel.CRITICAL]
+        # Verify CRITICAL log was emitted before exception (using caplog for stdlib logging)
+        critical_logs = [r for r in caplog.records if r.levelno == LogLevel.CRITICAL]
         assert len(critical_logs) >= 1
-        assert any("Simulated failure at 12s" in e.message for e in critical_logs)
+        assert any("Simulated failure at 12s" in r.message for r in critical_logs)
 
     @pytest.mark.asyncio
     async def test_001_us8_as3_dummy_fail_raises_exception(self, mock_job_context_factory: JobContextFactory) -> None:
@@ -288,7 +297,9 @@ class TestDummyJobsTermination:
     """Test FR-042, US8-AS4: dummy jobs handle termination."""
 
     @pytest.mark.asyncio
-    async def test_001_fr042_dummy_jobs_termination(self, mock_job_context_factory: JobContextFactory) -> None:
+    async def test_001_fr042_dummy_jobs_termination(
+        self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """FR-042: Dummy jobs handle termination requests.
 
         Verifies that when a dummy job receives CancelledError (termination request),
@@ -310,19 +321,23 @@ class TestDummyJobsTermination:
             if call_count == 2:  # Cancel during source phase
                 raise asyncio.CancelledError()
 
-        with patch("asyncio.sleep", side_effect=sleep_then_cancel), pytest.raises(asyncio.CancelledError):
+        with (
+            caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"),
+            patch("asyncio.sleep", side_effect=sleep_then_cancel),
+            pytest.raises(asyncio.CancelledError),
+        ):
             await job.execute()
 
-        # Verify termination log was emitted
-        publish_calls = context.event_bus.publish.call_args_list  # type: ignore[attr-defined]
-        log_events = [call[0][0] for call in publish_calls if isinstance(call[0][0], LogEvent)]
+        # Verify termination log was emitted (using caplog for stdlib logging)
         termination_logs = [
-            e for e in log_events if e.level == LogLevel.WARNING and "termination requested" in e.message.lower()
+            r for r in caplog.records if r.levelno == LogLevel.WARNING and "termination requested" in r.message.lower()
         ]
         assert len(termination_logs) >= 1
 
     @pytest.mark.asyncio
-    async def test_001_us8_as4_dummy_job_termination(self, mock_job_context_factory: JobContextFactory) -> None:
+    async def test_001_us8_as4_dummy_job_termination(
+        self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """US8-AS4: Dummy job handles termination request gracefully.
 
         Given: any dummy job is running
@@ -337,18 +352,20 @@ class TestDummyJobsTermination:
         async def sleep_then_cancel(duration: float) -> None:
             raise asyncio.CancelledError()
 
-        with patch("asyncio.sleep", side_effect=sleep_then_cancel), pytest.raises(asyncio.CancelledError):
+        with (
+            caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"),
+            patch("asyncio.sleep", side_effect=sleep_then_cancel),
+            pytest.raises(asyncio.CancelledError),
+        ):
             await job.execute()
 
-        # Verify cancellation was caught and logged
-        publish_calls = context.event_bus.publish.call_args_list  # type: ignore[attr-defined]
-        log_events = [call[0][0] for call in publish_calls if isinstance(call[0][0], LogEvent)]
-        cancel_logs = [e for e in log_events if e.level == LogLevel.WARNING and "cancelled" in e.message.lower()]
+        # Verify cancellation was caught and logged (using caplog for stdlib logging)
+        cancel_logs = [r for r in caplog.records if r.levelno == LogLevel.WARNING and "cancelled" in r.message.lower()]
         assert len(cancel_logs) >= 1
 
     @pytest.mark.asyncio
     async def test_001_fr042_dummy_success_termination_cleanup(
-        self, mock_job_context_factory: JobContextFactory
+        self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
         """FR-042: dummy_success cleans up on termination.
 
@@ -370,13 +387,15 @@ class TestDummyJobsTermination:
             if call_count == 2:
                 raise asyncio.CancelledError()
 
-        with patch("asyncio.sleep", side_effect=sleep_then_cancel), pytest.raises(asyncio.CancelledError):
+        with (
+            caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"),
+            patch("asyncio.sleep", side_effect=sleep_then_cancel),
+            pytest.raises(asyncio.CancelledError),
+        ):
             await job.execute()
 
-        # Verify only source logs exist, no target logs
-        publish_calls = context.event_bus.publish.call_args_list  # type: ignore[attr-defined]
-        log_events = [call[0][0] for call in publish_calls if isinstance(call[0][0], LogEvent)]
-        target_logs = [e for e in log_events if e.host == Host.TARGET]
+        # Verify only source logs exist, no target logs (using caplog for stdlib logging)
+        target_logs = [r for r in caplog.records if r.__dict__.get("host") == "target"]
         # Should have no target logs since we cancelled during source phase
         assert len(target_logs) == 0
 
