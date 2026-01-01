@@ -312,9 +312,11 @@ uv run pytest -v
 
 The CI pipeline runs:
 
-1. **On every push:** Lint + unit tests
-2. **On PRs to main:** Lint + unit tests + integration tests
+1. **On every push:** Lint + unit tests (only if relevant files changed: `src/**`, `tests/unit/**`, `tests/contract/**`, `pyproject.toml`, `uv.lock`, `ruff.toml`)
+2. **On PRs to main:** Lint + unit tests + integration tests (each only if their relevant files changed)
 3. **On-demand:** Integration tests via `workflow_dispatch`
+
+Both workflows use path filtering (`dorny/paths-filter`) to skip checks when only unrelated files change, allowing documentation-only PRs to merge quickly.
 
 ### Required Secrets
 
