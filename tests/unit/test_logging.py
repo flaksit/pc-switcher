@@ -1,4 +1,7 @@
-"""Unit tests for logging infrastructure (SC-003, SC-004, SC-007, SC-008)."""
+"""Unit tests for logging infrastructure.
+
+Tests cover LOG-SC-FILE-DEBUG, LOG-SC-EXT-FILTER, LOG-SC-NO-REGRESS, LOG-SC-INVALID-FAIL.
+"""
 
 from __future__ import annotations
 
@@ -23,7 +26,7 @@ from pcswitcher.logger import (
 
 
 class TestLogLevelRegistration:
-    """Test FULL level registration with stdlib logging (SC-003)."""
+    """Test FULL level registration with stdlib logging (LOG-SC-FILE-DEBUG)."""
 
     def test_full_level_is_registered(self) -> None:
         """FULL level (15) should be registered with logging module."""
@@ -38,7 +41,7 @@ class TestLogLevelRegistration:
 
 
 class TestLogConfig:
-    """Test LogConfig defaults and validation (SC-004)."""
+    """Test LogConfig defaults and validation (LOG-SC-EXT-FILTER)."""
 
     def test_default_values(self) -> None:
         """LogConfig should have sensible defaults."""
@@ -56,7 +59,7 @@ class TestLogConfig:
 
 
 class TestJsonFormatter:
-    """Test JSON formatter output structure (SC-005)."""
+    """Test JSON formatter output structure (LOG-SC-TUI-VISUAL)."""
 
     def test_formats_basic_record(self) -> None:
         """Should format log record as JSON line."""
@@ -113,7 +116,7 @@ class TestJsonFormatter:
         assert "host" not in data
 
     def test_includes_extra_context_fields(self) -> None:
-        """Should include extra context as top-level fields (FR-011)."""
+        """Should include extra context as top-level fields (LOG-FR-CONTEXT)."""
         formatter = JsonFormatter()
         record = logging.LogRecord(
             name="pcswitcher.test",
@@ -133,7 +136,7 @@ class TestJsonFormatter:
 
 
 class TestRichFormatter:
-    """Test Rich formatter output format (SC-006)."""
+    """Test Rich formatter output format (LOG-SC-JSON-STRUCT)."""
 
     def test_formats_with_ansi_codes(self) -> None:
         """Should format with ANSI escape codes, not Rich markup tags."""
@@ -249,7 +252,7 @@ class TestRichFormatter:
 
 
 class TestSetupLogging:
-    """Test logging infrastructure setup (SC-007, SC-008)."""
+    """Test logging infrastructure setup (LOG-SC-NO-REGRESS, LOG-SC-INVALID-FAIL)."""
 
     def test_creates_queue_listener(self) -> None:
         """setup_logging should return a QueueListener."""
@@ -326,7 +329,7 @@ class TestSetupLogging:
 
 
 class TestInvalidLogLevel:
-    """Test invalid log level handling (FR-010)."""
+    """Test invalid log level handling (LOG-SC-INVALID-FAIL)."""
 
     def test_invalid_level_string_raises_error(self) -> None:
         """Invalid log level string should raise ConfigurationError."""

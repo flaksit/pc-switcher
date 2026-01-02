@@ -429,10 +429,10 @@ class TestSyncConfigToTarget:
         call_args = [str(call) for call in console.print.call_args_list]
         assert any("skipping" in str(arg).lower() for arg in call_args)
 
-    async def test_001_fr007a_config_sync_prompt_if_missing(
+    async def test_001_fnd_fr_config_sync(
         self, mock_remote_executor: MagicMock, tmp_path: Path
     ) -> None:
-        """FR-007a: Sync config after install, prompt if missing.
+        """FND-FR-CONFIG-SYNC: Sync config after install, prompt if missing.
 
         Verifies that when no config exists on target, user is prompted
         to accept the source config for initial setup.
@@ -459,8 +459,8 @@ class TestSyncConfigToTarget:
         assert result is True
         mock_remote_executor.send_file.assert_called_once()
 
-    async def test_001_fr007b_config_diff_and_prompt(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
-        """FR-007b: Show diff and prompt if configs differ.
+    async def test_001_fnd_fr_config_diff(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+        """FND-FR-CONFIG-DIFF: Show diff and prompt if configs differ.
 
         Verifies that when target config differs from source, a diff
         is shown and user is prompted to choose an action.
@@ -490,8 +490,8 @@ class TestSyncConfigToTarget:
         assert result is True
         mock_remote_executor.send_file.assert_called_once()
 
-    async def test_001_fr007c_skip_if_configs_match(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
-        """FR-007c: Skip config sync if configs match.
+    async def test_001_fnd_fr_config_match(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+        """FND-FR-CONFIG-MATCH: Skip config sync if configs match.
 
         Verifies that when source and target configs are identical,
         config sync is skipped without prompting.

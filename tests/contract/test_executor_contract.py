@@ -3,7 +3,7 @@
 Ensures MockExecutor (used in unit tests) matches the behavior of
 LocalExecutor and RemoteExecutor (used in integration tests).
 
-Per FR-003a: Verify mock/real executor interface parity.
+Per TST-FR-CONTRACT: Verify mock/real executor interface parity.
 """
 
 from __future__ import annotations

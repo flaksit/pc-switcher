@@ -51,7 +51,7 @@ async def test_command_with_stdout_and_stderr(pc1_executor: RemoteExecutor) -> N
 async def test_command_failure_nonzero_exit(pc1_executor: RemoteExecutor) -> None:
     """Test command failure handling with non-zero exit code.
 
-    Per spec FR-003a, we must verify failure paths. This ensures that
+    Per spec TST-FR-CONTRACT, we must verify failure paths. This ensures that
     commands returning non-zero exit codes are properly reported.
     """
     result = await pc1_executor.run_command("exit 42")

@@ -572,7 +572,7 @@ class Orchestrator:
     async def _check_disk_space_preflight(self) -> None:
         """Check disk space on both source and target before creating snapshots.
 
-        Per FR-016, verifies both hosts have sufficient free disk space
+        Per FND-FR-DISK-PRE, verifies both hosts have sufficient free disk space
         based on the configured preflight_minimum threshold.
 
         Raises:

@@ -1,4 +1,4 @@
-"""Contract tests for log format compatibility (SC-005, SC-006)."""
+"""Contract tests for log format compatibility (LOG-SC-TUI-VISUAL, LOG-SC-JSON-STRUCT)."""
 
 from __future__ import annotations
 
