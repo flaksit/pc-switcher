@@ -90,8 +90,11 @@ class QuickJob(SyncJob):
 def mock_config() -> Iterator[Configuration]:
     """Create minimal mock configuration."""
     config_dict = {
-        "log_file_level": "INFO",
-        "log_cli_level": "INFO",
+        "logging": {
+            "file": "INFO",
+            "tui": "INFO",
+            "external": "WARNING",
+        },
         "sync_jobs": {
             "dummy_success": True,
         },
@@ -183,8 +186,11 @@ class TestInterruptHandling:
         """
         # Create minimal mock config
         config_dict = {
-            "log_file_level": "INFO",
-            "log_cli_level": "INFO",
+            "logging": {
+                "file": "INFO",
+                "tui": "INFO",
+                "external": "WARNING",
+            },
             "sync_jobs": {
                 "dummy_success": True,
             },

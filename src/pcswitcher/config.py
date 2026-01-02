@@ -58,8 +58,6 @@ class LogConfig:
 class Configuration:
     """Parsed and validated configuration from YAML file."""
 
-    log_file_level: LogLevel = LogLevel.FULL
-    log_cli_level: LogLevel = LogLevel.INFO
     logging: LogConfig = field(default_factory=LogConfig)
     sync_jobs: dict[str, bool] = field(default_factory=dict)  # job_name -> enabled
     disk: DiskConfig = field(default_factory=DiskConfig)
@@ -135,33 +133,7 @@ class Configuration:
         if errors:
             raise ConfigurationError(errors)
 
-        # Step 4: Parse log levels from strings to LogLevel enum
-        log_file_level = LogLevel.FULL  # Default value
-        log_cli_level = LogLevel.INFO  # Default value
-
-        try:
-            log_file_level = _parse_log_level(data.get("log_file_level", "FULL"))
-        except ValueError as e:
-            errors.append(
-                ConfigError(
-                    job=None,
-                    path="log_file_level",
-                    message=str(e),
-                )
-            )
-
-        try:
-            log_cli_level = _parse_log_level(data.get("log_cli_level", "INFO"))
-        except ValueError as e:
-            errors.append(
-                ConfigError(
-                    job=None,
-                    path="log_cli_level",
-                    message=str(e),
-                )
-            )
-
-        # Step 5: Parse new logging section (3-setting model)
+        # Step 4: Parse logging section (3-setting model)
         log_config = _parse_log_config(data.get("logging", {}), errors)
 
         if errors:
@@ -187,11 +159,9 @@ class Configuration:
             max_age_days=btrfs_data.get("max_age_days"),
         )
 
-        # Step 7: Extract job configs from top-level keys matching job names
+        # Step 6: Extract job configs from top-level keys matching job names
         # Job configs are top-level keys except for the known global config keys
         global_keys = {
-            "log_file_level",
-            "log_cli_level",
             "logging",
             "sync_jobs",
             "disk_space_monitor",
@@ -200,8 +170,6 @@ class Configuration:
         job_configs = {key: value for key, value in data.items() if key not in global_keys and isinstance(value, dict)}
 
         return cls(
-            log_file_level=log_file_level,
-            log_cli_level=log_cli_level,
             logging=log_config,
             sync_jobs=sync_jobs,
             disk=disk_config,
