@@ -2,7 +2,7 @@
 
 **Feature Branch**: `004-python-logging`
 **Created**: 2025-12-31
-**Status**: Draft
+**Status**: Final
 
 **Input**: User description: "Migrate pc-switcher to use standard Python logging facility instead of custom logging infrastructure. Enable configurable log levels for pcswitcher modules and external libraries, with distinct settings for file and TUI handlers."
 
