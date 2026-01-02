@@ -42,15 +42,16 @@ class TestConfigLoading:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             """
-log_file_level: FULL
-log_cli_level: INFO
+logging:
+  file: DEBUG
+  tui: INFO
 """
         )
 
         config = Configuration.from_yaml(config_file)
 
-        assert config.log_file_level == LogLevel.FULL
-        assert config.log_cli_level == LogLevel.INFO
+        assert config.logging.file == LogLevel.DEBUG.value
+        assert config.logging.tui == LogLevel.INFO.value
 
     def test_001_fr028_get_default_config_path(self) -> None:
         """FR-028: Default config path is ~/.config/pc-switcher/config.yaml."""
@@ -72,8 +73,9 @@ log_cli_level: INFO
         config_file.write_text(
             """
 # Global settings
-log_file_level: DEBUG
-log_cli_level: WARNING
+logging:
+  file: DEBUG
+  tui: WARNING
 
 # Job enable/disable
 sync_jobs:
@@ -95,8 +97,8 @@ dummy_success:
         config = Configuration.from_yaml(config_file)
 
         # Global settings
-        assert config.log_file_level == LogLevel.DEBUG
-        assert config.log_cli_level == LogLevel.WARNING
+        assert config.logging.file == LogLevel.DEBUG.value
+        assert config.logging.tui == LogLevel.WARNING.value
 
         # sync_jobs section
         assert config.sync_jobs == {"dummy_success": True, "dummy_fail": False}
@@ -233,9 +235,10 @@ btrfs_snapshots:
 
         config = Configuration.from_yaml(config_file)
 
-        # Global defaults
-        assert config.log_file_level == LogLevel.FULL
-        assert config.log_cli_level == LogLevel.INFO
+        # Logging defaults
+        assert config.logging.file == LogLevel.DEBUG.value
+        assert config.logging.tui == LogLevel.INFO.value
+        assert config.logging.external == LogLevel.WARNING.value
 
         # sync_jobs defaults to empty dict
         assert config.sync_jobs == {}
@@ -262,8 +265,9 @@ btrfs_snapshots:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             """
-log_cli_level: WARNING
-# log_file_level omitted - should default to FULL
+logging:
+  tui: WARNING
+  # file and external omitted - should use defaults
 
 sync_jobs:
   dummy_success: true
@@ -280,13 +284,14 @@ dummy_success:
         config = Configuration.from_yaml(config_file)
 
         # Loaded values
-        assert config.log_cli_level == LogLevel.WARNING
+        assert config.logging.tui == LogLevel.WARNING.value
         assert config.sync_jobs["dummy_success"] is True
         assert config.get_job_config("dummy_success")["source_duration"] == 25
         assert config.btrfs_snapshots.subvolumes == ["@", "@home"]
 
         # Applied defaults
-        assert config.log_file_level == LogLevel.FULL
+        assert config.logging.file == LogLevel.DEBUG.value
+        assert config.logging.external == LogLevel.WARNING.value
         assert config.btrfs_snapshots.keep_recent == 3
 
 
@@ -294,25 +299,26 @@ class TestLogLevels:
     """Tests for independent log level configuration."""
 
     def test_001_us6_as2_independent_log_levels(self, tmp_path: Path) -> None:
-        """US6-AS2: Independent file and CLI log levels.
+        """US6-AS2: Independent file and TUI log levels.
 
-        Verifies that log_file_level and log_cli_level can be set independently
+        Verifies that logging.file and logging.tui can be set independently
         and control different log outputs.
         """
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             """
-log_file_level: DEBUG
-log_cli_level: ERROR
+logging:
+  file: DEBUG
+  tui: ERROR
 """
         )
 
         config = Configuration.from_yaml(config_file)
 
-        assert config.log_file_level == LogLevel.DEBUG
-        assert config.log_cli_level == LogLevel.ERROR
+        assert config.logging.file == LogLevel.DEBUG.value
+        assert config.logging.tui == LogLevel.ERROR.value
         # Verify they are independent
-        assert config.log_file_level != config.log_cli_level
+        assert config.logging.file != config.logging.tui
 
     def test_001_fr020_invalid_log_level(self, tmp_path: Path) -> None:
         """Test that invalid log level values are rejected.
@@ -323,7 +329,8 @@ log_cli_level: ERROR
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             """
-log_file_level: INVALID_LEVEL
+logging:
+  file: INVALID_LEVEL
 """
         )
 
@@ -417,8 +424,9 @@ class TestYAMLErrorHandling:
         # Invalid YAML: improper indentation
         config_file.write_text(
             """
-log_file_level: FULL
-  invalid_indent: true
+logging:
+  file: DEBUG
+    invalid_indent: true
 """
         )
 
@@ -441,7 +449,8 @@ log_file_level: FULL
         # Invalid YAML: unclosed bracket
         config_file.write_text(
             """
-log_file_level: FULL
+logging:
+  file: DEBUG
 btrfs_snapshots:
   subvolumes: ["@", "@home"
 """
@@ -536,7 +545,8 @@ btrfs_snapshots:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             """
-log_file_level: INFO
+logging:
+  file: INFO
 """
         )
 
@@ -591,8 +601,9 @@ class TestEmptyConfig:
         config = Configuration.from_yaml(config_file)
 
         # Should use all defaults
-        assert config.log_file_level == LogLevel.FULL
-        assert config.log_cli_level == LogLevel.INFO
+        assert config.logging.file == LogLevel.DEBUG.value
+        assert config.logging.tui == LogLevel.INFO.value
+        assert config.logging.external == LogLevel.WARNING.value
         assert config.sync_jobs == {}
         assert config.disk.preflight_minimum == "20%"
         assert config.btrfs_snapshots.subvolumes == ["@", "@home"]
@@ -611,8 +622,8 @@ class TestEmptyConfig:
         config = Configuration.from_yaml(config_file)
 
         # Should use all defaults
-        assert config.log_file_level == LogLevel.FULL
-        assert config.log_cli_level == LogLevel.INFO
+        assert config.logging.file == LogLevel.DEBUG.value
+        assert config.logging.tui == LogLevel.INFO.value
 
 
 class TestDiskSpaceConfig:

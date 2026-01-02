@@ -39,8 +39,10 @@ from pcswitcher.version import get_this_version
 _TEST_CONFIG_TEMPLATE = """# Test configuration for end-to-end sync tests
 # Short durations to keep tests fast
 
-log_file_level: DEBUG
-log_cli_level: DEBUG
+logging:
+  file: DEBUG
+  tui: DEBUG
+  external: DEBUG
 
 sync_jobs:
   dummy_success: true

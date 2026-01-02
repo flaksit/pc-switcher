@@ -3,21 +3,32 @@
 # Documentation: https://github.com/flaksit/pc-switcher
 
 # =============================================================================
-# Logging Configuration
+# Logging Configuration (3-setting model)
 # =============================================================================
-# Log levels: DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL
-# - DEBUG: Most verbose, includes all operations and decisions
-# - FULL: Detailed execution logs including all job operations
-# - INFO: High-level progress and status updates
-# - WARNING: Warnings and recoverable issues
-# - ERROR: Errors that may cause job failures
-# - CRITICAL: Critical failures that halt sync operations
+# Controls where log messages appear based on their severity level.
+#
+# Log levels (from most to least verbose):
+#   DEBUG (10)    - Internal diagnostics, very verbose
+#   FULL (15)     - Operational details (file-level sync info)
+#   INFO (20)     - High-level progress and status updates
+#   WARNING (30)  - Unexpected but non-fatal conditions
+#   ERROR (40)    - Recoverable errors
+#   CRITICAL (50) - Unrecoverable errors, sync must abort
 
-# Minimum log level written to log file (~/.local/share/pc-switcher/logs/)
-log_file_level: FULL
+logging:
+  # file: Floor level for log FILE output (~/.local/share/pc-switcher/logs/)
+  #       Messages at or above this level are written to the log file.
+  file: DEBUG
 
-# Minimum log level displayed in terminal during sync
-log_cli_level: INFO
+  # tui: Floor level for TERMINAL output during sync
+  #      Messages at or above this level are shown in the terminal UI.
+  tui: INFO
+
+  # external: Additional floor for THIRD-PARTY libraries (asyncssh, etc.)
+  #           External library logs must pass BOTH this floor AND the
+  #           destination floor (file or tui) to appear in output.
+  #           Use DEBUG to see SSH connection details, WARNING to suppress noise.
+  external: WARNING
 
 # =============================================================================
 # Sync Jobs Configuration

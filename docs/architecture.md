@@ -206,8 +206,10 @@ sequenceDiagram
 Configuration loaded from `~/.config/pc-switcher/config.yaml`:
 
 ```yaml
-log_file_level: FULL
-log_cli_level: INFO
+logging:
+  file: DEBUG       # Floor level for file output
+  tui: INFO         # Floor level for terminal output
+  external: WARNING # Floor for third-party libraries
 
 sync_jobs:
   dummy_success: true

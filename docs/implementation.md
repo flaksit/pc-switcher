@@ -594,10 +594,16 @@ keep_recent: int = 3
 max_age_days: int | None = None   # None = no age limit
 ```
 
+**LogConfig**:
+```python
+file: int = 10       # DEBUG - Floor level for file output
+tui: int = 20        # INFO - Floor level for terminal output
+external: int = 30   # WARNING - Floor for third-party libraries
+```
+
 **Configuration**:
 ```python
-log_file_level: LogLevel = LogLevel.FULL
-log_cli_level: LogLevel = LogLevel.INFO
+logging: LogConfig                          # 3-setting log level model
 sync_jobs: dict[str, bool]                  # job_name -> enabled
 disk: DiskConfig
 btrfs_snapshots: BtrfsConfig

@@ -76,9 +76,11 @@ After sync completes, power off the source machine and resume work on target.
 Run `pc-switcher init` to create the default configuration file at `~/.config/pc-switcher/config.yaml`, or create it manually:
 
 ```yaml
-# Logging configuration
-log_file_level: FULL      # DEBUG | FULL | INFO | WARNING | ERROR | CRITICAL
-log_cli_level: INFO       # DEBUG | FULL | INFO | WARNING | ERROR | CRITICAL
+# Logging configuration (see Logging Configuration section below for details)
+logging:
+  file: DEBUG      # Floor level for file output
+  tui: INFO        # Floor level for terminal output
+  external: WARNING  # Floor for third-party libraries
 
 # Sync jobs (true = enabled, false = disabled)
 sync_jobs:
