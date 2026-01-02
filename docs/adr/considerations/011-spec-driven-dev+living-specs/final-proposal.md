@@ -32,41 +32,57 @@ We will introduce a `docs/system/` folder to hold the Golden Copies, separating 
 │   └── system/                 # TRUTH (Living Golden Copy)
 │       ├── _index.md           # Entry point
 │       ├── architecture.md     # Current high-level design & component map
-│       ├── data-model.md       # Current schemas and data flows
-│       ├── logging.md          # Domain-specific spec
-│       ├── testing.md          # Domain-specific spec
-│       └── orchestration.md    # Domain-specific spec
+│       ├── data-model.md       # Consolidated data model
+│       ├── logging.md          # Consolidated domain spec
+│       ├── testing.md          # Consolidated domain spec
+│       └── foundation.md       # Consolidated domain spec
 ```
+
+## The "Simple Merge" Strategy
+
+We avoid the burden of "translating" specs into new formats (like "Capabilities"). Instead, we treat the domain spec files in `docs/system/` as direct consolidations of the `spec.md` files produced by SpecKit.
+
+1. **Content:** We merge everything from the User Stories and down: Acceptance Criteria, Requirements, Edge Cases and other sections *verbatim* (or nearly so) from the `spec.md` files into the corresponding `docs/system/` file. Merge changes with existing content as needed.
+2. **Lineage:** We maintain references to the original spec. E.g. "Lineage: 004-US-1 → 005-US-7", which means the item originated in SpecKit run 004 as User Story 1 and was modified by User Story 7 from run 005.
+3. **Updates:** When a new feature modifies existing behavior, we edit the *existing* User Story in the living doc, rather than appending a new one. This ensures the document always reads as a coherent specification of the *current* system.
+4. **Removals:** If an item is removed, we do not delete it. Instead, we bar it out and mark it clearly as deprecated or superseded.
+
+**Data Model:** `docs/system/data-model.md` is a merge of all `data-model.md` files produced by SpecKit.
+
+**Architecture:** `docs/system/architecture.md` is updated as needed to reflect the current high-level design. It does NOT contain low-level implementation details, but refers to the SpecKit `architecture.md` files for that.
 
 ## The ID Strategy: Semantic over Sequential
 
 We solve the "FR-001 collision" and "reference rot" problems by using **Semantic IDs** in the Living Truth, while allowing SpecKit to use temporary sequential IDs during development.
 
-1. **In SpecKit (`specs/00x`):** Use whatever the tool generates (e.g., `FR-01`, `AC-01`). These are **temporary, local IDs**.
+1. **In SpecKit (`specs/00x`):** Use whatever the tool generates (e.g., `FR-001`, `SC-001`). These are **temporary, local IDs**.
 2. **In Living Docs (`docs/system`):** Use stable, **Semantic IDs**.
-    * Instead of `FR-005`, use `REQ-LOG-ROTATION`.
-    * Instead of `AC-002`, use `CON-SYNC-ATOMICITY`.
+    * Instead of `US-2`, use `US-LOG-EXT`.
+    * Instead of `FR-005`, use `FR-LOG-ROTATION`.
+    * Instead of `SC-002`, use `SC-FOUNDATION-ATOMICITY`.
 3. **In Code:** Always reference the **Semantic ID**.
-    * `# Implements REQ-LOG-ROTATION`
+    * `# Implements FR-LOG-ROTATION`
 
 ## Workflows
 
 ### Scenario A: The "Big Feature" (Standard SDD)
 
 1. **Run SpecKit:** Create `specs/005-feature`. Generate `spec.md`, `plan.md`, `tasks.md`.
-2. **Implement:** Write code. You may use temporary IDs (`FR-01`) in comments during the heat of development if needed.
-3. **The "Consolidation" Step (Crucial):**
-    * Before closing the feature, open the relevant `docs/system/<topic>.md` (and `architecture.md`/`data-model.md`).
-    * Copy the *outcome* requirements from `specs/005/spec.md` into the system docs.
-    * **Convert IDs:** Change `FR-01` to `REQ-FEATURE-NAME`.
-    * **Update Code:** Find/Replace any temporary `FR-01` references in code/tests with `REQ-FEATURE-NAME`.
+2. **Implement:** Write code. Speckit may use temporary IDs (`FR-001`) in comments during development.
+3. **The "Consolidation" Step:**  Upon feature completion,
+    * Open the relevant `docs/system/<topic>.md`. This can be multiple files!
+    * Merge the contents from `specs/005/spec.md` into these domain spec files, modifying existing content as needed.
+    * If an element was removed, don't delete it; bar it and mark it clearly as deprecated or superseded.
+    * Add lineage note for each item, e.g. "Lineage: 005-FR-013".
+    * Convert IDs to Semantic IDs.
+    * Find/Replace any speckit IDs referenced in code/tests/docs with their Semantic IDs counterpart.
+    * Update `docs/system/data-model.md` with new entities.
 4. **Commit:** The feature is done. `specs/005` is now frozen history.
 
 ### Scenario B: The "Small Fix" (Fast Track)
 
 1. **Edit Truth First:** Open `docs/system/<topic>.md`.
-    * Modify the text of an existing `REQ-EXISTING-FEATURE`.
-    * Or add a new `REQ-NEW-TWEAK`.
+    * Modify the text or add new content.
+    * Add lineage notes for each change.
 2. **Implement:** Update code and tests to match the modified spec.
-3. **Commit:** Link the commit to the spec change (e.g., `Update retry logic (ref REQ-NET-RETRY)`).
-4. **Skip SpecKit:** Do not create a `specs/` folder. Do not update old `plan.md` files.
+3. **Commit:** Link the commit to the spec change: mention the Semantic ID in the commit message.
