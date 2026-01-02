@@ -245,9 +245,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
     """Test runtime disk space monitoring - FND-FR-DISK-RUNTIME."""
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_disk_runtime_detects_critical_threshold(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_001_fnd_fr_disk_runtime_detects_critical_threshold(self, mock_job_context: JobContext) -> None:
         """FND-FR-DISK-RUNTIME: Monitor must abort with CRITICAL when free space falls below runtime_minimum.
 
         Spec requirement: FND-FR-DISK-RUNTIME states orchestrator MUST monitor free disk space
@@ -273,9 +271,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         assert "15%" in exc_info.value.threshold
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_disk_runtime_percentage_threshold(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_001_fnd_fr_disk_runtime_percentage_threshold(self, mock_job_context: JobContext) -> None:
         """FND-FR-DISK-RUNTIME: Runtime monitoring must support percentage-based runtime_minimum.
 
         Spec requirement: FND-FR-DISK-RUNTIME requires runtime_minimum to be specified as
@@ -324,9 +320,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         assert job._runtime_threshold[1] == 40 * (2**30)
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_disk_runtime_configurable_interval(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_001_fnd_fr_disk_runtime_configurable_interval(self, mock_job_context: JobContext) -> None:
         """FND-FR-DISK-RUNTIME: Monitoring must use configurable check interval.
 
         Spec requirement: FND-FR-DISK-RUNTIME requires monitoring at a configurable interval
@@ -338,9 +332,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         assert job._check_interval == 30
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_disk_runtime_warns_at_warning_threshold(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_001_fnd_fr_disk_runtime_warns_at_warning_threshold(self, mock_job_context: JobContext) -> None:
         """FND-FR-DISK-RUNTIME: Monitor must warn when disk space approaches warning threshold.
 
         While FND-FR-DISK-RUNTIME focuses on CRITICAL abort, the implementation includes
@@ -370,9 +362,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         # Note: actual logging verification depends on event_bus mock implementation
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_disk_runtime_continues_when_above_threshold(
-        self, mock_job_context: JobContext
-    ) -> None:
+    async def test_001_fnd_fr_disk_runtime_continues_when_above_threshold(self, mock_job_context: JobContext) -> None:
         """FND-FR-DISK-RUNTIME: Monitor must continue monitoring when disk space is sufficient.
 
         Spec requirement: FND-FR-DISK-RUNTIME requires continuous monitoring - only abort when

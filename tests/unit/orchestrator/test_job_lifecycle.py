@@ -88,9 +88,7 @@ class TestFR019CriticalOnException:
     """LOG-FR-EXCEPTION: Orchestrator must log CRITICAL and halt on job exceptions."""
 
     @pytest.mark.asyncio
-    async def test_001_log_fr_exception(
-        self, mock_job_context: JobContext, mock_event_bus: MagicMock
-    ) -> None:
+    async def test_001_log_fr_exception(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
         """LOG-FR-EXCEPTION: Job exception triggers CRITICAL log and halts sync.
 
         Validates that when a job raises an exception during execution:
@@ -120,9 +118,7 @@ class TestFR044OrchestratorForwardsProgress:
     """FND-FR-PROGRESS-FWD: Orchestrator forwards job progress to UI."""
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_progress_fwd(
-        self, mock_job_context: JobContext, mock_event_bus: MagicMock
-    ) -> None:
+    async def test_001_fnd_fr_progress_fwd(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
         """FND-FR-PROGRESS-FWD: Job progress updates are published to event bus.
 
         Validates that when a job reports progress via _report_progress(),

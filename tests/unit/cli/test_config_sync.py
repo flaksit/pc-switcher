@@ -429,9 +429,7 @@ class TestSyncConfigToTarget:
         call_args = [str(call) for call in console.print.call_args_list]
         assert any("skipping" in str(arg).lower() for arg in call_args)
 
-    async def test_001_fnd_fr_config_sync(
-        self, mock_remote_executor: MagicMock, tmp_path: Path
-    ) -> None:
+    async def test_001_fnd_fr_config_sync(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
         """FND-FR-CONFIG-SYNC: Sync config after install, prompt if missing.
 
         Verifies that when no config exists on target, user is prompted
