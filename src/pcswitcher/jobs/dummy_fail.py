@@ -1,4 +1,4 @@
-"""Dummy fail job for infrastructure validation (FR-039)."""
+"""Dummy fail job for infrastructure validation (FND-FR-DUMMY-SIM)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class DummyFailJob(SyncJob):
-    """Dummy job that fails at configurable time (FR-039).
+    """Dummy job that fails at configurable time (FND-FR-DUMMY-SIM).
 
     Used to test error handling and UI behavior during job failures.
     Supports configurable source/target durations and failure time.

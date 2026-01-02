@@ -1,9 +1,9 @@
 """Unit tests for orchestrator interrupt handling.
 
-Tests verify FR-003, FR-024, and US5-AS2 from specs/001-foundation/spec.md:
-- FR-003: Termination request with cleanup timeout
-- FR-024: SIGINT handler, log, exit 130
-- US5-AS2: Interrupt between jobs skips remaining jobs
+Tests verify FND-FR-TERM-CTRLC, FND-FR-SIGINT, and FND-US-INTERRUPT-AS2 from specs/001-foundation/spec.md:
+- FND-FR-TERM-CTRLC: Termination request with cleanup timeout
+- FND-FR-SIGINT: SIGINT handler, log, exit 130
+- FND-US-INTERRUPT-AS2: Interrupt between jobs skips remaining jobs
 """
 
 from __future__ import annotations
@@ -129,10 +129,10 @@ class TestInterruptHandling:
     """Test interrupt handling in orchestrator and CLI."""
 
     @pytest.mark.asyncio
-    async def test_001_fr003_termination_request_on_interrupt(self) -> None:
-        """FR-003: System must request termination with cleanup timeout when interrupted.
+    async def test_001_fnd_fr_term_ctrlc(self) -> None:
+        """FND-FR-TERM-CTRLC: System must request termination with cleanup timeout when interrupted.
 
-        Spec requirement: FR-003 states that system MUST request termination of
+        Spec requirement: FND-FR-TERM-CTRLC states that system MUST request termination of
         currently-executing job when Ctrl+C is pressed, allowing cleanup timeout
         for graceful cleanup. If job does not complete cleanup within timeout,
         orchestrator MUST force-terminate connections and the job.
@@ -171,10 +171,10 @@ class TestInterruptHandling:
         assert slow_job.cleanup_called, "Job should have performed cleanup before re-raising CancelledError"
 
     @pytest.mark.asyncio
-    async def test_001_fr024_sigint_handler_exit_130(self) -> None:
-        """FR-024: SIGINT handler must log and exit with code 130.
+    async def test_001_fnd_fr_sigint(self) -> None:
+        """FND-FR-SIGINT: SIGINT handler must log and exit with code 130.
 
-        Spec requirement: FR-024 states that system MUST install SIGINT handler
+        Spec requirement: FND-FR-SIGINT states that system MUST install SIGINT handler
         that requests current job termination, logs "Sync interrupted by user" at
         WARNING level, and exits with code 130.
 
@@ -272,8 +272,8 @@ class TestInterruptHandling:
             config_path.unlink(missing_ok=True)
 
     @pytest.mark.asyncio
-    async def test_001_us5_as2_interrupt_between_jobs_skips_remaining(self) -> None:
-        """US5-AS2: Interrupt between jobs skips remaining jobs and exits cleanly.
+    async def test_001_fnd_us_interrupt_as2(self) -> None:
+        """FND-US-INTERRUPT-AS2: Interrupt between jobs skips remaining jobs and exits cleanly.
 
         Spec requirement: US5 Acceptance Scenario 2 states that when sync is in
         the orchestrator phase between jobs (no job actively running) and user

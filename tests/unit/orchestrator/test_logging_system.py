@@ -11,8 +11,8 @@ tests/contract/test_logging_contract.py.
 References:
 - specs/001-foundation/spec.md - User Story 4 (Logging System)
 - specs/004-python-logging - Standard Python Logging Integration
-- FR-018: Six log levels with correct ordering
-- FR-021: Timestamped log files
+- LOG-FR-LEVELS: Six log levels with correct ordering
+- LOG-FR-FILE-PATH: Timestamped log files
 """
 
 from __future__ import annotations
@@ -24,10 +24,10 @@ from pcswitcher.models import LogLevel
 
 
 class TestLogLevelOrdering:
-    """Test FR-018: Six log levels with correct ordering."""
+    """Test LOG-FR-LEVELS: Six log levels with correct ordering."""
 
-    def test_001_fr018_log_level_ordering(self) -> None:
-        """FR-018: Six log levels with correct ordering.
+    def test_001_log_fr_levels(self) -> None:
+        """LOG-FR-LEVELS: Six log levels with correct ordering.
 
         Verifies that LogLevel enum has exactly six levels with the ordering:
         DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL
@@ -59,10 +59,10 @@ class TestLogLevelOrdering:
 
 
 class TestFileLoggerTimestampedFile:
-    """Test FR-021: Logs written to timestamped file."""
+    """Test LOG-FR-FILE-PATH: Logs written to timestamped file."""
 
-    def test_001_fr021_timestamped_log_file(self) -> None:
-        """FR-021: Log filename includes timestamp and session ID.
+    def test_001_log_fr_file_path(self) -> None:
+        """LOG-FR-FILE-PATH: Log filename includes timestamp and session ID.
 
         Verifies generate_log_filename() creates filenames with format:
         sync-<timestamp>-<session_id>.log

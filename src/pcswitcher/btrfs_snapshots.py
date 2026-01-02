@@ -36,7 +36,7 @@ __all__ = [
 
 
 def snapshot_name(subvolume: str, phase: SnapshotPhase) -> str:
-    """Generate snapshot name per FR-010.
+    """Generate snapshot name per FND-FR-SNAP-NAME.
 
     Args:
         subvolume: Subvolume name (e.g., "@home")
