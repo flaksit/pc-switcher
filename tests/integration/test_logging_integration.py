@@ -1,7 +1,7 @@
 """Integration tests for logging system.
 
 Tests the comprehensive logging infrastructure including:
-- FR-023: Aggregation of source and target logs into unified log stream
+- LOG-FR-AGGREGATE: Aggregation of source and target logs into unified log stream
 - US4-AS6: Logs command displays most recent sync log file
 
 These tests verify that the logging system correctly aggregates logs from
@@ -16,13 +16,13 @@ import pytest
 from pcswitcher.executor import RemoteExecutor
 
 
-async def test_001_fr023_aggregate_source_target_logs(
+async def test_001_log_fr_aggregate(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
 ) -> None:
-    """Test FR-023: System aggregates logs from both source and target into unified log stream.
+    """Test LOG-FR-AGGREGATE: System aggregates logs from both source and target into unified log stream.
 
-    Spec reference: specs/001-foundation/spec.md - Functional Requirement FR-023
+    Spec reference: specs/001-foundation/spec.md - Functional Requirement LOG-FR-AGGREGATE
 
     Verifies that during a sync operation, logs from both source-side orchestrator
     and target-side operations are aggregated into a single unified log file with

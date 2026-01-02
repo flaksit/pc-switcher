@@ -87,7 +87,7 @@ A single spec requirement typically needs multiple tests at different levels:
 ```python
 # Unit test (fast, mocked executor)
 def test_001_fr008_create_presync_snapshots_logic() -> None:
-    """FR-008: Test snapshot creation logic with mocked executor."""
+    """FND-FR-TEST-NAMING: Test snapshot creation logic with mocked executor."""
     mock_executor = AsyncMock()
     mock_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, ...))
 
@@ -100,7 +100,7 @@ def test_001_fr008_create_presync_snapshots_logic() -> None:
 # Integration test (slow, real VM)
 @pytest.mark.integration
 async def test_001_fr008_create_presync_snapshots_real(pc1_executor) -> None:
-    """FR-008: Test snapshot creation on real btrfs filesystem."""
+    """FND-FR-TEST-NAMING: Test snapshot creation on real btrfs filesystem."""
     result = await pc1_executor.run_command("sudo btrfs subvolume snapshot -r ...")
 
     # Verify snapshot actually exists and is read-only
@@ -108,17 +108,17 @@ async def test_001_fr008_create_presync_snapshots_real(pc1_executor) -> None:
     assert "ro=true" in verify.stdout
 ```
 
-Both tests validate FR-008, but at different levels. The unit test is fast and tests logic; the integration test is slow and verifies real btrfs behavior.
+Both tests validate FND-FR-TEST-NAMING, but at different levels. The unit test is fast and tests logic; the integration test is slow and verifies real btrfs behavior.
 
 **Compatibility with TDD (Test-Driven Development)**:
 
 Spec-driven naming is **fully compatible** with TDD workflow:
 
-1. **Read the spec requirement** (e.g., FR-028: "System MUST load config from ~/.config/pc-switcher/config.yaml")
+1. **Read the spec requirement** (e.g., FND-FR-CONFIG-LOAD: "System MUST load config from ~/.config/pc-switcher/config.yaml")
 2. **Write failing test** with spec-driven name:
    ```python
    def test_001_fr028_load_from_config_path() -> None:  # RED - fails
-       """FR-028: System MUST load configuration from ~/.config/pc-switcher/config.yaml."""
+       """FND-FR-CONFIG-LOAD: System MUST load configuration from ~/.config/pc-switcher/config.yaml."""
        config = Config.load_from_default_path()
        assert config is not None
    ```
@@ -762,23 +762,23 @@ For tests that validate specific requirements from feature specs, use the **feat
 **Examples**:
 ```python
 def test_001_fr028_load_from_config_path() -> None:
-    """FR-028: System MUST load configuration from ~/.config/pc-switcher/config.yaml."""
+    """FND-FR-CONFIG-LOAD: System MUST load configuration from ~/.config/pc-switcher/config.yaml."""
     config = Config.load_from_default_path()
     assert config is not None
 
 async def test_001_us2_as1_install_missing_pcswitcher() -> None:
-    """US-2 AS-1: Target missing pc-switcher, orchestrator installs from GitHub."""
+    """FND-US-SELF-INSTALL-AS1: Target missing pc-switcher, orchestrator installs from GitHub."""
     # Test implementation
 
 def test_001_fr018_log_level_ordering() -> None:
-    """FR-018: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL."""
+    """LOG-FR-LEVELS: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL."""
     assert LogLevel.DEBUG > LogLevel.FULL
     assert LogLevel.FULL > LogLevel.INFO
 ```
 
 **Benefits**:
 - **Unique across features**: Feature number ensures no naming conflicts across SpecKit features
-- **Grep-able**: `pytest -k "001_fr028"` runs all FR-028 tests for feature 001
+- **Grep-able**: `pytest -k "001_fr028"` runs all FND-FR-CONFIG-LOAD tests for feature 001
 - **CI-friendly**: Test failures show feature + requirement: `test_001_us3_as2_create_presync_snapshots FAILED`
 - **Immediate traceability**: Function name alone shows which feature and requirement is being tested
 

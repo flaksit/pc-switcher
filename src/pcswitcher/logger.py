@@ -47,7 +47,7 @@ class JsonFormatter(logging.Formatter):
 
     Output format matches the existing FileLogger JSON structure for
     backwards compatibility. Additional context from the extra dict
-    is included as top-level fields (FR-011).
+    is included as top-level fields (LOG-FR-CONTEXT).
     """
 
     # Standard LogRecord attributes to exclude from extra context
@@ -98,7 +98,7 @@ class JsonFormatter(logging.Formatter):
         # Add message
         log_dict["event"] = record.getMessage()
 
-        # Add all extra context fields (FR-011)
+        # Add all extra context fields (LOG-FR-CONTEXT)
         extra_fields = {
             key: value
             for key, value in record.__dict__.items()
@@ -117,7 +117,7 @@ class RichFormatter(logging.Formatter):
     Uses Rich Text objects to build styled output and exports to ANSI escape
     sequences for direct rendering by StreamHandler.
 
-    Additional context from the extra dict is appended as dim text (FR-011).
+    Additional context from the extra dict is appended as dim text (LOG-FR-CONTEXT).
     Job and host are omitted when missing (e.g., during startup/shutdown).
     """
 
@@ -190,7 +190,7 @@ class RichFormatter(logging.Formatter):
         # Add message
         text.append(f" {record.getMessage()}")
 
-        # Add extra context as dim text (FR-011)
+        # Add extra context as dim text (LOG-FR-CONTEXT)
         extra_context = []
         for key, value in record.__dict__.items():
             if key not in self._STANDARD_ATTRS and key not in {"job", "host"}:

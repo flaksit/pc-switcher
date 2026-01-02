@@ -1,10 +1,10 @@
 """Unit tests for orchestrator job lifecycle management.
 
 Tests cover:
-- FR-002: Validate-then-execute ordering
-- FR-019: CRITICAL log and halt on exception
-- FR-044: Progress forwarding to UI
-- FR-048: Overall result and job summary logging
+- FND-FR-LIFECYCLE: Validate-then-execute ordering
+- LOG-FR-EXCEPTION: CRITICAL log and halt on exception
+- FND-FR-PROGRESS-FWD: Progress forwarding to UI
+- FND-FR-SUMMARY: Overall result and job summary logging
 - US1-AS5: Validation errors halt sync
 - US1-AS6: Exception handling in orchestrator
 - Edge cases: cleanup exceptions, partial failures
@@ -59,11 +59,11 @@ class MockSyncJob(SyncJob):
 
 
 class TestFR002ValidateThenExecuteOrder:
-    """FR-002: Jobs must run validate() before execute() in correct order."""
+    """FND-FR-LIFECYCLE: Jobs must run validate() before execute() in correct order."""
 
     @pytest.mark.asyncio
-    async def test_001_fr002_lifecycle_validate_then_execute(self, mock_job_context: JobContext) -> None:
-        """FR-002: Orchestrator calls validate() before execute() for each job.
+    async def test_001_fnd_fr_lifecycle(self, mock_job_context: JobContext) -> None:
+        """FND-FR-LIFECYCLE: Orchestrator calls validate() before execute() for each job.
 
         Validates that the orchestrator follows the validate-then-execute contract
         for all jobs, ensuring validation happens before any state modification.
@@ -85,13 +85,11 @@ class TestFR002ValidateThenExecuteOrder:
 
 
 class TestFR019CriticalOnException:
-    """FR-019: Orchestrator must log CRITICAL and halt on job exceptions."""
+    """LOG-FR-EXCEPTION: Orchestrator must log CRITICAL and halt on job exceptions."""
 
     @pytest.mark.asyncio
-    async def test_001_fr019_critical_on_exception(
-        self, mock_job_context: JobContext, mock_event_bus: MagicMock
-    ) -> None:
-        """FR-019: Job exception triggers CRITICAL log and halts sync.
+    async def test_001_log_fr_exception(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
+        """LOG-FR-EXCEPTION: Job exception triggers CRITICAL log and halts sync.
 
         Validates that when a job raises an exception during execution:
         1. The orchestrator logs at CRITICAL level
@@ -117,13 +115,11 @@ class TestFR019CriticalOnException:
 
 
 class TestFR044OrchestratorForwardsProgress:
-    """FR-044: Orchestrator forwards job progress to UI."""
+    """FND-FR-PROGRESS-FWD: Orchestrator forwards job progress to UI."""
 
     @pytest.mark.asyncio
-    async def test_001_fr044_orchestrator_forwards_progress(
-        self, mock_job_context: JobContext, mock_event_bus: MagicMock
-    ) -> None:
-        """FR-044: Job progress updates are published to event bus.
+    async def test_001_fnd_fr_progress_fwd(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
+        """FND-FR-PROGRESS-FWD: Job progress updates are published to event bus.
 
         Validates that when a job reports progress via _report_progress(),
         the update is published to the EventBus for UI consumption.
@@ -167,11 +163,11 @@ class TestFR044OrchestratorForwardsProgress:
 
 
 class TestFR048LogSyncSummary:
-    """FR-048: Orchestrator logs overall result and job summary."""
+    """FND-FR-SUMMARY: Orchestrator logs overall result and job summary."""
 
     @pytest.mark.asyncio
-    async def test_001_fr048_log_sync_summary(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
-        """FR-048: Orchestrator logs sync completion summary.
+    async def test_001_fnd_fr_summary(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
+        """FND-FR-SUMMARY: Orchestrator logs sync completion summary.
 
         Validates that the orchestrator can construct a summary of job results
         (success/failed status, timing) for logging at the end of sync.

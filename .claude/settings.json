@@ -1,12 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git fetch:*)",
-      "Bash(git mv:*)",
-      "Bash(git pull:*)",
-      "Bash(git reset:*)",
-      "Bash(mkdir:*)",
-      "Bash(rmdir:*)"
+      "Bash(tests/run-integration-tests.sh)"
     ],
     "deny": [],
     "ask": []

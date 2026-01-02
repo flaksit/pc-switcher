@@ -132,7 +132,7 @@ class Snapshot:
     """Metadata for a btrfs snapshot.
 
     Represents a btrfs snapshot created during a sync session. The `name` property
-    is computed from the subvolume, phase, and timestamp per FR-010.
+    is computed from the subvolume, phase, and timestamp per FND-FR-SNAP-NAME.
     """
 
     subvolume: str  # e.g., "@home"
@@ -144,7 +144,7 @@ class Snapshot:
 
     @property
     def name(self) -> str:
-        """Snapshot name per FR-010: pre-@home-20251129T143022."""
+        """Snapshot name per FND-FR-SNAP-NAME: pre-@home-20251129T143022."""
         ts = self.timestamp.strftime("%Y%m%dT%H%M%S")
         return f"{self.phase.value}-{self.subvolume}-{ts}"
 

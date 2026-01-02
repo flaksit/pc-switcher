@@ -21,13 +21,13 @@ from pcswitcher.models import CommandResult
 class TestBtrfsSnapshotJobCreation:
     """Tests for snapshot creation functionality."""
 
-    async def test_001_fr008_create_presync_snapshots(
+    async def test_001_fnd_fr_snap_pre(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
         mock_remote_executor: MagicMock,
     ) -> None:
-        """FR-008: System MUST create read-only btrfs snapshots before any job executes.
+        """FND-FR-SNAP-PRE: System MUST create read-only btrfs snapshots before any job executes.
 
         Verifies:
         - Pre-sync snapshots are created on both source and target
@@ -59,13 +59,13 @@ class TestBtrfsSnapshotJobCreation:
         assert any("sudo btrfs subvolume snapshot -r /" in call for call in target_calls)
         assert any("sudo btrfs subvolume snapshot -r /home" in call for call in target_calls)
 
-    async def test_001_fr009_create_postsync_snapshots(
+    async def test_001_fnd_fr_snap_post(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
         mock_remote_executor: MagicMock,
     ) -> None:
-        """FR-009: System MUST create post-sync snapshots after all jobs complete.
+        """FND-FR-SNAP-POST: System MUST create post-sync snapshots after all jobs complete.
 
         Verifies:
         - Post-sync snapshots are created on both source and target
@@ -92,13 +92,13 @@ class TestBtrfsSnapshotJobCreation:
         assert not any("pre-@-" in call for call in source_calls)
 
     @freeze_time("2025-01-15T10:30:00")
-    async def test_001_fr010_snapshot_naming_pattern(
+    async def test_001_fnd_fr_snap_name(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
         mock_remote_executor: MagicMock,
     ) -> None:
-        """FR-010: Snapshot naming MUST follow pattern {pre|post}-<subvolume>-<timestamp>.
+        """FND-FR-SNAP-NAME: Snapshot naming MUST follow pattern {pre|post}-<subvolume>-<timestamp>.
 
         Verifies:
         - Snapshot names include phase (pre/post)
@@ -125,11 +125,11 @@ class TestBtrfsSnapshotJobCreation:
         # Should contain snapshot with format: pre-@home-20250115T103000
         assert any("pre-@home-20250115T103000" in call for call in source_calls)
 
-    async def test_001_fr011_snapshots_always_active(
+    async def test_001_fnd_fr_snap_always(
         self,
         mock_job_context_factory: type,
     ) -> None:
-        """FR-011: Snapshot management MUST be always active (not configurable).
+        """FND-FR-SNAP-ALWAYS: Snapshot management MUST be always active (not configurable).
 
         Verifies:
         - Snapshot job does not have an 'enabled' configuration option
@@ -161,13 +161,13 @@ class TestBtrfsSnapshotJobCreation:
 class TestBtrfsSnapshotJobErrorHandling:
     """Tests for snapshot error handling and validation."""
 
-    async def test_001_fr012_abort_on_snapshot_failure(
+    async def test_001_fnd_fr_snap_fail(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
         mock_remote_executor: MagicMock,
     ) -> None:
-        """FR-012: If pre-sync snapshot creation fails, system MUST abort.
+        """FND-FR-SNAP-FAIL: If pre-sync snapshot creation fails, system MUST abort.
 
         Verifies:
         - Snapshot creation failure raises RuntimeError
@@ -198,8 +198,8 @@ class TestBtrfsSnapshotJobErrorHandling:
         with pytest.raises(RuntimeError, match="Snapshot creation failed"):
             await job.execute()
 
-    async def test_001_fr014_cleanup_with_retention(self) -> None:
-        """FR-014: System MUST provide snapshot cleanup with retention policy.
+    async def test_001_fnd_fr_snap_cleanup(self) -> None:
+        """FND-FR-SNAP-CLEANUP: System MUST provide snapshot cleanup with retention policy.
 
         Note: This test verifies that cleanup functionality exists and is testable.
         Detailed cleanup logic is tested in test_btrfs_snapshots.py.
@@ -218,13 +218,13 @@ class TestBtrfsSnapshotJobErrorHandling:
 class TestBtrfsSnapshotJobValidation:
     """Tests for snapshot validation functionality."""
 
-    async def test_001_fr015_validate_subvolumes_exist(
+    async def test_001_fnd_fr_subvol_exist(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
         mock_remote_executor: MagicMock,
     ) -> None:
-        """FR-015: System MUST verify configured subvolumes exist before snapshots.
+        """FND-FR-SUBVOL-EXIST: System MUST verify configured subvolumes exist before snapshots.
 
         Verifies:
         - Validation checks all configured subvolumes
@@ -265,13 +265,13 @@ class TestBtrfsSnapshotJobValidation:
         assert len(errors) > 0
         assert any("@home" in str(error) and "source" in str(error).lower() for error in errors)
 
-    async def test_001_fr015b_validate_snapshots_is_subvolume(
+    async def test_001_fnd_fr_snapdir(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
         mock_remote_executor: MagicMock,
     ) -> None:
-        """FR-015b: System MUST verify /.snapshots/ is a subvolume.
+        """FND-FR-SNAPDIR: System MUST verify /.snapshots/ is a subvolume.
 
         Verifies:
         - Validation checks if /.snapshots exists

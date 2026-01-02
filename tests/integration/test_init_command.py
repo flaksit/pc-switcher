@@ -6,8 +6,8 @@ with comments and that it handles existing config files appropriately.
 Tests verify real behavior on VMs.
 
 User Stories covered:
-- FR-035: One-liner install using curl and Bash
-- FR-036: Default config includes helpful inline comments
+- FND-FR-INSTALL-SCRIPT: One-liner install using curl and Bash
+- FND-FR-DEFAULT-CONFIG: Default config includes helpful inline comments
 - US7-AS1: curl install.sh installs pc-switcher, then user runs 'pc-switcher init'
 - US7-AS3: Preserve existing config file (unless --force is used)
 """
@@ -61,11 +61,11 @@ async def clean_config_environment(
 class TestInitCommand:
     """Integration tests for pc-switcher init command."""
 
-    async def test_001_fr036_init_creates_default_config(
+    async def test_001_fnd_fr_default_config(
         self,
         clean_config_environment: BashLoginRemoteExecutor,
     ) -> None:
-        """FR-036: pc-switcher init creates default config with inline comments.
+        """FND-FR-DEFAULT-CONFIG: pc-switcher init creates default config with inline comments.
 
         Verifies that running 'pc-switcher init' creates a default configuration
         file at ~/.config/pc-switcher/config.yaml with helpful inline comments.

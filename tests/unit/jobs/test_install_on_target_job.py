@@ -1,9 +1,9 @@
 """Unit tests for InstallOnTargetJob.
 
-Tests cover US-2 (Self-Installation) requirements from specs/001-foundation/spec.md:
-- FR-005: Check version, install from GitHub
-- FR-006: Abort if target newer
-- FR-007: Abort on installation failure
+Tests cover FND-US-SELF-INSTALL (Self-Installation) requirements from specs/001-foundation/spec.md:
+- FND-FR-VERSION-CHECK: Check version, install from GitHub
+- FND-FR-VERSION-NEWER: Abort if target newer
+- FND-FR-INSTALL-FAIL: Abort on installation failure
 - US2-AS3: Skip when versions match
 - US2-AS4: Abort on install failure
 """
@@ -40,13 +40,13 @@ def mock_install_context(
 
 
 class TestInstallOnTargetJobVersionCheck:
-    """Test version checking and installation logic - FR-005."""
+    """Test version checking and installation logic - FND-FR-VERSION-CHECK."""
 
     @pytest.mark.asyncio
-    async def test_001_fr005_version_check_and_install(self, mock_install_context: JobContext) -> None:
-        """FR-005: System must check target version and install from GitHub if missing.
+    async def test_001_fnd_fr_version_check(self, mock_install_context: JobContext) -> None:
+        """FND-FR-VERSION-CHECK: System must check target version and install from GitHub if missing.
 
-        Spec requirement: FR-005 states system MUST check target machine's pc-switcher
+        Spec requirement: FND-FR-VERSION-CHECK states system MUST check target machine's pc-switcher
         version before any other operations; if missing, MUST install from public
         GitHub repository using uv tool install.
         """
@@ -92,10 +92,10 @@ class TestInstallOnTargetJobVersionCheck:
             )
 
     @pytest.mark.asyncio
-    async def test_001_fr005_upgrade_when_target_older(self, mock_install_context: JobContext) -> None:
-        """FR-005: System must upgrade target when version is older than source.
+    async def test_001_fnd_fr_version_check_upgrade(self, mock_install_context: JobContext) -> None:
+        """FND-FR-VERSION-CHECK: System must upgrade target when version is older than source.
 
-        Spec requirement: FR-005 requires installation/upgrade when target is
+        Spec requirement: FND-FR-VERSION-CHECK requires installation/upgrade when target is
         missing or mismatched with source version.
         """
         # Mock source version and release
@@ -139,13 +139,13 @@ class TestInstallOnTargetJobVersionCheck:
 
 
 class TestInstallOnTargetJobNewerTargetVersion:
-    """Test abort when target has newer version - FR-006."""
+    """Test abort when target has newer version - FND-FR-VERSION-NEWER."""
 
     @pytest.mark.asyncio
-    async def test_001_fr006_abort_on_newer_target_version(self, mock_install_context: JobContext) -> None:
-        """FR-006: System must abort sync if target version is newer than source.
+    async def test_001_fnd_fr_version_newer(self, mock_install_context: JobContext) -> None:
+        """FND-FR-VERSION-NEWER: System must abort sync if target version is newer than source.
 
-        Spec requirement: FR-006 states system MUST abort sync with CRITICAL log
+        Spec requirement: FND-FR-VERSION-NEWER states system MUST abort sync with CRITICAL log
         if the target machine's pc-switcher version is newer than the source version
         (preventing accidental downgrades).
         """
@@ -192,13 +192,13 @@ class TestInstallOnTargetJobNewerTargetVersion:
 
 
 class TestInstallOnTargetJobInstallationFailure:
-    """Test abort on installation failure - FR-007."""
+    """Test abort on installation failure - FND-FR-INSTALL-FAIL."""
 
     @pytest.mark.asyncio
-    async def test_001_fr007_abort_on_install_failure(self, mock_install_context: JobContext) -> None:
-        """FR-007: System must abort if installation/upgrade fails.
+    async def test_001_fnd_fr_install_fail(self, mock_install_context: JobContext) -> None:
+        """FND-FR-INSTALL-FAIL: System must abort if installation/upgrade fails.
 
-        Spec requirement: FR-007 states if installation/upgrade fails, system MUST
+        Spec requirement: FND-FR-INSTALL-FAIL states if installation/upgrade fails, system MUST
         log CRITICAL error and abort sync.
         """
         mock_version = Version.parse("0.4.0")
@@ -234,8 +234,8 @@ class TestInstallOnTargetJobInstallationFailure:
             assert "disk full" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_001_fr007_abort_on_verification_failure(self, mock_install_context: JobContext) -> None:
-        """FR-007: System must abort if installation verification fails.
+    async def test_001_fnd_fr_install_fail_verification(self, mock_install_context: JobContext) -> None:
+        """FND-FR-INSTALL-FAIL: System must abort if installation verification fails.
 
         Tests that even if install command succeeds, verification must confirm
         the correct version is installed.
@@ -273,11 +273,11 @@ class TestInstallOnTargetJobInstallationFailure:
 
 
 class TestInstallOnTargetJobSkipWhenMatching:
-    """Test skip when versions match - US2-AS3."""
+    """Test skip when versions match - FND-US-SELF-INSTALL-AS3."""
 
     @pytest.mark.asyncio
-    async def test_001_us2_as3_skip_when_versions_match(self, mock_install_context: JobContext) -> None:
-        """US2-AS3: System must skip installation when versions match.
+    async def test_001_fnd_us_self_install_as3(self, mock_install_context: JobContext) -> None:
+        """FND-US-SELF-INSTALL-AS3: System must skip installation when versions match.
 
         Spec requirement: US2-AS3 states when source and target both have version
         0.4.0, orchestrator logs "Target pc-switcher version matches source (0.4.0),
@@ -312,11 +312,11 @@ class TestInstallOnTargetJobSkipWhenMatching:
 
 
 class TestInstallOnTargetJobAS4:
-    """Test US2-AS4: Abort on install failure."""
+    """Test FND-US-SELF-INSTALL-AS4: Abort on install failure."""
 
     @pytest.mark.asyncio
-    async def test_001_us2_as4_abort_on_install_failure(self, mock_install_context: JobContext) -> None:
-        """US2-AS4: System must abort sync when installation fails.
+    async def test_001_fnd_us_self_install_as4(self, mock_install_context: JobContext) -> None:
+        """FND-US-SELF-INSTALL-AS4: System must abort sync when installation fails.
 
         Spec requirement: US2-AS4 states when installation/upgrade fails on target
         (e.g., disk full, permissions issue), orchestrator logs CRITICAL error and

@@ -192,7 +192,7 @@ async def test_snapshot_creation_failure_invalid_source(
 ) -> None:
     """Test snapshot creation failure with invalid source path.
 
-    Per spec FR-003a, we must verify failure paths. This tests that
+    Per spec TST-FR-CONTRACT, we must verify failure paths. This tests that
     attempting to snapshot a non-existent path fails appropriately.
     """
     result = await pc1_executor.run_command("sudo btrfs subvolume snapshot -r /nonexistent/path /tmp/bad-snapshot")
@@ -225,7 +225,7 @@ async def test_delete_snapshot_failure_nonexistent(
 ) -> None:
     """Test snapshot deletion failure when snapshot doesn't exist.
 
-    Per spec FR-003a, we must verify failure paths. Tests that attempting
+    Per spec TST-FR-CONTRACT, we must verify failure paths. Tests that attempting
     to delete a non-existent snapshot fails gracefully.
     """
     result = await pc1_executor.run_command(
