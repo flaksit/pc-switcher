@@ -1,10 +1,10 @@
-# ADR-011: Hybrid Specification-Driven Development with Living Documentation
+# ADR-011: Specification-Driven Development with Living Specs
 
 Status: Accepted
 Date: 2026-01-02
 
 ## TL;DR
-Adopt a hybrid SDD workflow where `specs/` folders are immutable history and `docs/system/` is the living "Golden Copy" using semantic IDs to prevent reference rot.
+Adopt a hybrid SDD workflow where `specs/` folders are immutable history and `docs/system/` is the living "Golden Copy", using semantic IDs to prevent reference rot.
 
 ## Implementation Rules
 - **Immutable History**: `specs/` folders (e.g., `specs/001-foundation`) are frozen after feature completion. Never edit them to reflect current state.

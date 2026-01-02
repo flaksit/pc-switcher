@@ -1,4 +1,4 @@
-# Proposal: Hybrid Specification-Driven Development with Living Documentation
+# Proposal: Specification-Driven Development with Living Specs
 
 ## Context and Motivation
 
