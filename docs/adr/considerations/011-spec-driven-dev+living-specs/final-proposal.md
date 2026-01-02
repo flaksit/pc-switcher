@@ -57,11 +57,15 @@ We solve the "FR-001 collision" and "reference rot" problems by using **Semantic
 
 1. **In SpecKit (`specs/00x`):** Use whatever the tool generates (e.g., `FR-001`, `SC-001`). These are **temporary, local IDs**.
 2. **In Living Docs (`docs/system`):** Use stable, **Semantic IDs**.
-    * Instead of `US-2`, use `US-LOG-EXT`.
-    * Instead of `FR-005`, use `FR-LOG-ROTATION`.
-    * Instead of `SC-002`, use `SC-FOUNDATION-ATOMICITY`.
+    * A Semantic ID has format `<DOMAIN>-<TYPE>-<DESCRIPTOR>`.
+        * `<DOMAIN>` is a short code for the domain (e.g., `LOG` for Logging, `FND` for Foundation).
+        * `<TYPE>` is the type of item (e.g., `US` for User Story, `FR` for Functional Requirement, `SC` for Success Criterion).
+        * `<DESCRIPTOR>` is a concise, human-readable description (e.g., `EXT` for "External Systems", `ROTATION` for "Log Rotation", `ATOMICITY` for "Atomicity").
+    * Instead of `US-2`, use `LOG-US-EXT`.
+    * Instead of `FR-005`, use `LOG-FR-ROTATION`.
+    * Instead of `SC-002`, use `FND-SC-ATOMICITY`.
 3. **In Code:** Always reference the **Semantic ID**.
-    * `# Implements FR-LOG-ROTATION`
+    * `# Implements LOG-FR-ROTATION`
 
 ## Workflows
 

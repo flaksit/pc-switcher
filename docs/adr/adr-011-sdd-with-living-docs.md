@@ -13,7 +13,7 @@ Adopt a hybrid SDD workflow where `specs/` folders are immutable history and `do
   - Merge everything from the User Stories and down: Acceptance Criteria, Requirements, Edge Cases and other sections *verbatim* (or nearly so). Modify existing content as needed.
   - Do not remove items; bar them out and mark as deprecated or superseded.
 - **Lineage**: Maintain references to the original spec in the living docs. E.g., "Lineage: 004-US-1 → 005-US-7", which means the item originated in SpecKit run 004 as User Story 1 and was modified by User Story 7 from run 005. Do this for all items, not only user stories.
-- **Semantic IDs**: Use stable, semantic IDs (e.g., `FR-LOG-ROTATION`) in `docs/system/` and in code comments.
+- **Semantic IDs**: Use stable, semantic IDs (e.g., `LOG-FR-ROTATION`) in `docs/system/` and in code comments. A Semantic ID has format `<DOMAIN>-<TYPE>-<DESCRIPTOR>`.
 - **Temporary IDs**: Use sequential IDs (e.g., `FR-001`) only within active SpecKit runs (`specs/00x`).
 - **Consolidation**: Upon completing a SpecKit run, requirements must be merged into `docs/system/` and IDs converted to semantic ones. Any references in code, tests or documentation must be updated accordingly.
 - **Data Model Centralization**: The contents of `data-model.md` is merged into `docs/system/data-model.md`.
@@ -28,7 +28,7 @@ The project currently uses SpecKit for all changes. While effective for large fo
 We will adopt a hybrid workflow that distinguishes between "Artifacts of Work" and "Artifacts of Knowledge":
 
 1. **Establish `docs/system/`**: This directory will hold the "Golden Copy" of the system documentation (Architecture, Data Model, Domain Specs).
-2. **Semantic ID Strategy**: Requirements in the Golden Copy will use semantic identifiers (e.g., `FR-FOUNDATION-NET-RETRY`) instead of sequential numbers. Code must reference these semantic IDs.
+2. **Semantic ID Strategy**: Requirements in the Golden Copy will use semantic identifiers (e.g., `FND-FR-NET-RETRY`) instead of sequential numbers. Code must reference these semantic IDs.
 3. **Workflow Split**:
     - **Big Features**: Continue using SpecKit (`specs/00x`). Add a final "Consolidation" step to merge outcomes into `docs/system/` and update code references.
     - **Small Fixes**: Edit `docs/system/` directly, then implement the change.
