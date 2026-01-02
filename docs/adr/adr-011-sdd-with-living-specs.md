@@ -16,7 +16,7 @@ Adopt a hybrid SDD workflow where `specs/` folders are immutable history and `do
 Domain specs (`docs/system/*.md`) are direct consolidations of `spec.md` files:
 - Merge everything from the User Stories and down: Acceptance Criteria, Requirements, Edge Cases and other sections *verbatim* (or nearly so). Modify existing content as needed.
 - When a new feature modifies existing behavior, edit the *existing* items in the living doc, rather than appending new ones. This ensures the document always reads as a coherent specification of the *current* system.
-- Do not remove items; bar them out and mark as deprecated or superseded.
+- Do not remove items: bar them out, mark as deprecated (removed and nothing replaces it) or superseded (removed and replaced by something completely different that we should not cover by a change of the current item) and replace the content text with a one-liner summary of the old content.
 
 **Data Model**: Merge `specs/00x/data-model.md` files into `docs/system/data-model.md`, so it is a consolidation of all `data-model.md` files produced by SpecKit.
 

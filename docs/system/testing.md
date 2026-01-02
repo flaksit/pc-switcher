@@ -4,7 +4,9 @@ This document defines the current testing framework requirements and architectur
 
 ## User Scenarios & Testing
 
-### User Story 1 - Unit Test Suite for Fast Feedback (TST-US-UNIT)
+### Unit Test Suite for Fast Feedback (TST-US-UNIT)
+
+Lineage: 002-US-1
 
 As a pc-switcher developer, I can run unit tests locally to verify my changes before pushing code. These tests execute quickly, require no external infrastructure, and are safe to run on any development machine. The tests cover all pure logic and business rules without requiring real external systems.
 
@@ -22,9 +24,9 @@ As a pc-switcher developer, I can run unit tests locally to verify my changes be
 
 4. **Given** unit tests exist for a module, **When** I run them, **Then** both success paths and failure paths (error handling, edge cases) are tested
 
-Lineage: 002-US-1
+### Integration Test Suite with VM Isolation (TST-US-INTEGRATION)
 
-### User Story 2 - Integration Test Suite with VM Isolation (TST-US-INTEGRATION)
+Lineage: 002-US-2
 
 As a pc-switcher developer, I can run integration tests that exercise real system operations (btrfs snapshots, SSH connections, full workflows) on isolated test VMs. The VMs are automatically provisioned when needed (including OS installation with btrfs filesystem) and reset to a clean baseline before each test session, ensuring tests cannot damage my machine and each run starts fresh.
 
@@ -42,9 +44,9 @@ As a pc-switcher developer, I can run integration tests that exercise real syste
 
 4. **Given** integration tests exist for a feature, **When** I run them, **Then** both success paths and failure paths (error handling, edge cases) are tested
 
-Lineage: 002-US-2
+### CI/CD Integration (TST-US-CI)
 
-### User Story 3 - CI/CD Integration (TST-US-CI)
+Lineage: 002-US-3
 
 As a pc-switcher developer, I can rely on CI to automatically run tests on my code changes. Unit tests run on every push for immediate feedback. Integration tests run on PRs to main and can be manually triggered on feature branches when I need to verify integration behavior before merging.
 
@@ -62,9 +64,9 @@ As a pc-switcher developer, I can rely on CI to automatically run tests on my co
 
 4. **Given** multiple integration test runs could occur simultaneously, **When** concurrency is detected, **Then** the framework ensures only one integration test run executes at a time
 
-Lineage: 002-US-3
+### Manual Testing Playbook (TST-US-PLAYBOOK)
 
-### User Story 4 - Manual Testing Playbook (TST-US-PLAYBOOK)
+Lineage: 002-US-4
 
 As a pc-switcher developer, I have a documented playbook that serves two purposes: (1) verifying visual elements that cannot be automated (terminal colors, progress bars, rich formatting), and (2) providing a guided tour of pc-switcher features so I understand how the system works in practice.
 
@@ -80,9 +82,9 @@ As a pc-switcher developer, I have a documented playbook that serves two purpose
 
 3. **Given** the playbook is documented, **When** preparing for a release, **Then** I can systematically verify all visual elements and feature behaviors without missing any major cases
 
-Lineage: 002-US-4
+### Developer Guide for Integration Testing (TST-US-DEV-GUIDE)
 
-### User Story 5 - Developer Guide for Integration Testing (TST-US-DEV-GUIDE)
+Lineage: 002-US-5
 
 As a pc-switcher developer writing tests, I have comprehensive documentation that explains how to write integration tests, work with test VMs, use fixtures, handle test isolation, and follow established patterns. This enables me to contribute tests without reverse-engineering existing code.
 
@@ -100,9 +102,9 @@ As a pc-switcher developer writing tests, I have comprehensive documentation tha
 
 4. **Given** I need to debug a failing integration test, **When** I consult the troubleshooting section, **Then** I find guidance on common failure modes, how to inspect VM state, and how to manually reproduce issues
 
-Lineage: 002-US-5
+### Operational Guide for Test Infrastructure (TST-US-OPS-GUIDE)
 
-### User Story 6 - Operational Guide for Test Infrastructure (TST-US-OPS-GUIDE)
+Lineage: 002-US-6
 
 As a sysadmin/maintainer/devops engineer, I have comprehensive documentation for configuring and maintaining the test framework infrastructure. This includes secrets management, environment variables, VM provisioning configuration, and CI pipeline setup, and cost monitoring.
 
@@ -122,9 +124,9 @@ As a sysadmin/maintainer/devops engineer, I have comprehensive documentation for
 
 5. **Given** test infrastructure fails, **When** I consult the troubleshooting section, **Then** I find runbooks for common failure scenarios (VM unreachable, provisioning failures, lock stuck)
 
-Lineage: 002-US-6
+### Architecture Documentation (TST-US-ARCH-DOC)
 
-### User Story 7 - Architecture Documentation (TST-US-ARCH-DOC)
+Lineage: 002-US-7
 
 As a pc-switcher developer or maintainer, I have architecture documentation that explains the testing framework design decisions, component interactions, and rationale. This enables me to understand why the system is structured as it is and make informed decisions when extending or modifying it.
 
@@ -142,153 +144,153 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 4. **Given** the testing framework references ADR-006, **When** I navigate from architecture docs, **Then** I find clear links to the ADR and related decision records
 
-Lineage: 002-US-7
-
 ## Requirements
 
 ### Functional Requirements
 
 #### Test Structure
 
-- **TST-FR-THREE-TIER**: System MUST provide three-tier test structure: unit tests (fast, no external dependencies), integration tests (require isolated VMs), and manual playbook (visual verification and feature tour)
+- **TST-FR-THREE-TIER**: System MUST provide three-tier test structure: unit tests (fast, no external dependencies), integration tests (require isolated VMs), and manual playbook (visual verification and feature tour)  
   Lineage: 002-FR-001
 
-- **TST-FR-UNIT-SAFE**: Unit tests MUST be safe to run on any machine; they MUST NOT execute real system-modifying commands, require network access to external services, or depend on specific filesystem types
+- **TST-FR-UNIT-SAFE**: Unit tests MUST be safe to run on any machine; they MUST NOT execute real system-modifying commands, require network access to external services, or depend on specific filesystem types  
   Lineage: 002-FR-002
 
-- **TST-FR-INT-ISOLATED**: Integration tests MUST run on isolated test infrastructure that is separate from developer machines and CI runners, preventing any possibility of damaging production systems
+- **TST-FR-INT-ISOLATED**: Integration tests MUST run on isolated test infrastructure that is separate from developer machines and CI runners, preventing any possibility of damaging production systems  
   Lineage: 002-FR-003
 
-- **TST-FR-CONTRACT**: Contract tests MUST verify that MockExecutor and real executor implementations (LocalExecutor, RemoteExecutor) adhere to the same behavioral interface, ensuring mocks remain reliable representations of production behavior
+- **TST-FR-CONTRACT**: Contract tests MUST verify that MockExecutor and real executor implementations (LocalExecutor, RemoteExecutor) adhere to the same behavioral interface, ensuring mocks remain reliable representations of production behavior  
   Lineage: 002-FR-003a
 
-- **TST-FR-RESET**: Test VMs MUST be reset to a clean baseline state before each integration test session, ensuring test isolation and reproducibility; reset MUST fail with an actionable error if baseline snapshots are missing or invalid
+- **TST-FR-RESET**: Test VMs MUST be reset to a clean baseline state before each integration test session, ensuring test isolation and reproducibility; reset MUST fail with an actionable error if baseline snapshots are missing or invalid  
   Lineage: 002-FR-004
 
-- **TST-FR-LOCK**: Concurrent test runs MUST be prevented via a locking mechanism that stores holder identity and acquisition time; stuck locks require manual cleanup (documented in operational guide)
+- **TST-FR-LOCK**: Concurrent test runs MUST be prevented via a locking mechanism that stores holder identity and acquisition time; stuck locks require manual cleanup (documented in operational guide)  
   Lineage: 002-FR-005
 
-- **TST-FR-PROVISION**: Test VMs MUST be automatically provisioned when integration tests are run and VMs do not exist; provisioning includes cloud VM creation and OS installation with btrfs filesystem; baseline snapshots MUST be created at provisioning time; concurrent provisioning is prevented by CI concurrency controls (local concurrent provisioning is not supported and not checked)
+- **TST-FR-PROVISION**: Test VMs MUST be automatically provisioned when integration tests are run and VMs do not exist; provisioning includes cloud VM creation and OS installation with btrfs filesystem; baseline snapshots MUST be created at provisioning time; concurrent provisioning is prevented by CI concurrency controls (local concurrent provisioning is not supported and not checked)  
   Lineage: 002-FR-006
 
-- **TST-FR-SSH-INJECT**: During auto-provisioning, SSH keys MUST be injected from CI secrets; the test user accounts on both VMs MUST have the public key in authorized_keys to enable CI access. Keys for inter-VM communication can be generated during provisioning because not needed by anyone.
+- **TST-FR-SSH-INJECT**: During auto-provisioning, SSH keys MUST be injected from CI secrets; the test user accounts on both VMs MUST have the public key in authorized_keys to enable CI access. Keys for inter-VM communication can be generated during provisioning because not needed by anyone.  
   Lineage: 002-FR-006a
 
 #### Unit Test Requirements
 
-- **TST-FR-UNIT-CMD**: Unit tests MUST be runnable with single command `uv run pytest tests/unit tests/contract -v`
+- **TST-FR-UNIT-CMD**: Unit tests MUST be runnable with single command `uv run pytest tests/unit tests/contract -v`  
   Lineage: 002-FR-007
 
-- **TST-FR-INT-MARKER**: Integration tests MUST be selectable via pytest marker (`-m integration`) for running separately from unit tests
+- **TST-FR-INT-MARKER**: Integration tests MUST be selectable via pytest marker (`-m integration`) for running separately from unit tests  
   Lineage: 002-FR-008
 
-- **TST-FR-INT-DEFAULT**: Integration tests MUST NOT run by default; `uv run pytest` (without explicit `-m integration` marker) MUST NOT run integration tests even if VM environment variables are configured
+- **TST-FR-INT-DEFAULT**: Integration tests MUST NOT run by default; `uv run pytest` (without explicit `-m integration` marker) MUST NOT run integration tests even if VM environment variables are configured  
   Lineage: 002-FR-008a
 
-- **TST-FR-INT-SKIP**: When integration tests are explicitly requested (`-m integration`) but VM environment variables are not configured, tests MUST be skipped (not failed) with a clear message
+- **TST-FR-INT-SKIP**: When integration tests are explicitly requested (`-m integration`) but VM environment variables are not configured, tests MUST be skipped (not failed) with a clear message  
   Lineage: 002-FR-008b
 
 #### Test VM Requirements
 
-- **TST-FR-VM-OS**: Test VMs MUST be configured with the same OS and filesystem type that pc-switcher targets (Ubuntu 24.04 LTS, btrfs)
+- **TST-FR-VM-OS**: Test VMs MUST be configured with the same OS and filesystem type that pc-switcher targets (Ubuntu 24.04 LTS, btrfs)  
   Lineage: 002-FR-009
 
-- **TST-FR-VM-SUDO**: Test VMs MUST have a test user account with sudo access for running privileged operations during tests
+- **TST-FR-VM-SUDO**: Test VMs MUST have a test user account with sudo access for running privileged operations during tests  
   Lineage: 002-FR-010
 
-- **TST-FR-VM-SSH**: Test VMs MUST be able to communicate with each other via SSH to simulate source-to-target sync scenarios
+- **TST-FR-VM-SSH**: Test VMs MUST be able to communicate with each other via SSH to simulate source-to-target sync scenarios  
   Lineage: 002-FR-011
 
-- **TST-FR-VM-TWO**: Test infrastructure MUST consist of exactly two VMs (pc1 and pc2) to mirror the real pc-switcher sync architecture; each VM MUST have btrfs root filesystem with `@` and `@home` subvolumes
+- **TST-FR-VM-TWO**: Test infrastructure MUST consist of exactly two VMs (pc1 and pc2) to mirror the real pc-switcher sync architecture; each VM MUST have btrfs root filesystem with `@` and `@home` subvolumes  
   Lineage: 002-FR-011a
 
-- **TST-FR-COST**: VMs and related test infrastructure costs MUST remain under EUR 10/month on continuous run basis; VMs are expected to remain running persistently (reset via btrfs snapshots, not reprovisioning); manual destruction is acceptable when extended downtime is expected
+- **TST-FR-COST**: VMs and related test infrastructure costs MUST remain under EUR 10/month on continuous run basis; VMs are expected to remain running persistently (reset via btrfs snapshots, not reprovisioning); manual destruction is acceptable when extended downtime is expected  
   Lineage: 002-FR-012
 
 #### CI/CD Requirements
 
-- **TST-FR-CI-PUSH**: CI MUST run type checks (basedpyright), lint checks (ruff), and unit tests (pytest) on every push to any branch
+- **TST-FR-CI-PUSH**: CI MUST run type checks (basedpyright), lint checks (ruff), and unit tests (pytest) on every push to any branch  
   Lineage: 002-FR-013
 
-- **TST-FR-CI-PR**: CI MUST run integration tests on PRs to main branch (from the main repository only)
+- **TST-FR-CI-PR**: CI MUST run integration tests on PRs to main branch (from the main repository only)  
   Lineage: 002-FR-014
 
-- **TST-FR-CI-MANUAL**: CI MUST support manual trigger for running integration tests on any branch
+- **TST-FR-CI-MANUAL**: CI MUST support manual trigger for running integration tests on any branch  
   Lineage: 002-FR-015
 
-- **TST-FR-CI-CONCUR**: CI MUST prevent parallel integration test runs through concurrency control
+- **TST-FR-CI-CONCUR**: CI MUST prevent parallel integration test runs through concurrency control  
   Lineage: 002-FR-016
 
-- **TST-FR-CI-RESET**: CI MUST reset test VMs before running integration tests
+- **TST-FR-CI-RESET**: CI MUST reset test VMs before running integration tests  
   Lineage: 002-FR-017
 
-- **TST-FR-CI-SKIP-FORK**: CI MUST skip integration tests with a clear notice when secrets are unavailable (e.g., forked PRs); unit tests MUST still run in this case
+- **TST-FR-CI-SKIP-FORK**: CI MUST skip integration tests with a clear notice when secrets are unavailable (e.g., forked PRs); unit tests MUST still run in this case  
   Lineage: 002-FR-017a
 
-- **TST-FR-FORK-NOTICE**: Integration tests on forked PRs are NOT supported; CI MUST skip (not fail) integration tests and clearly indicate this when a fork PR is detected
+- **TST-FR-FORK-NOTICE**: Integration tests on forked PRs are NOT supported; CI MUST skip (not fail) integration tests and clearly indicate this when a fork PR is detected  
   Lineage: 002-FR-017b
 
-- **TST-FR-CI-ARTIFACTS**: CI MUST preserve test logs and artifacts (pytest output, provisioning logs, reset logs) to enable debugging of failed runs
+- **TST-FR-CI-ARTIFACTS**: CI MUST preserve test logs and artifacts (pytest output, provisioning logs, reset logs) to enable debugging of failed runs  
   Lineage: 002-FR-017c
 
 #### Manual Playbook Requirements
 
-- **TST-FR-PLAY-VISUAL**: Manual playbook MUST document steps to verify all visual UI elements (progress bars, colors, formatting)
+- **TST-FR-PLAY-VISUAL**: Manual playbook MUST document steps to verify all visual UI elements (progress bars, colors, formatting)  
   Lineage: 002-FR-018
 
-- **TST-FR-PLAY-TOUR**: Manual playbook MUST provide a guided tour of all major pc-switcher features with expected behavior explanations
+- **TST-FR-PLAY-TOUR**: Manual playbook MUST provide a guided tour of all major pc-switcher features with expected behavior explanations  
   Lineage: 002-FR-019
 
-- **TST-FR-PLAY-DUAL**: Manual playbook MUST be usable for both release verification and developer onboarding
+- **TST-FR-PLAY-DUAL**: Manual playbook MUST be usable for both release verification and developer onboarding  
   Lineage: 002-FR-020
 
 #### Documentation Requirements
 
-- **TST-FR-DOC-WRITE**: Developer guide MUST document how to write integration tests including test file creation, VM fixture usage, and assertion patterns
+- **TST-FR-DOC-WRITE**: Developer guide MUST document how to write integration tests including test file creation, VM fixture usage, and assertion patterns  
   Lineage: 002-FR-021
 
-- **TST-FR-DOC-VM**: Developer guide MUST document VM interaction patterns for SSH execution, file transfers, btrfs operations, and snapshot management
+- **TST-FR-DOC-VM**: Developer guide MUST document VM interaction patterns for SSH execution, file transfers, btrfs operations, and snapshot management  
   Lineage: 002-FR-022
 
-- **TST-FR-DOC-ORG**: Developer guide MUST document test organization including directory structure, naming conventions, and pytest markers
+- **TST-FR-DOC-ORG**: Developer guide MUST document test organization including directory structure, naming conventions, and pytest markers  
   Lineage: 002-FR-023
 
-- **TST-FR-DOC-DEBUG**: Developer guide MUST include troubleshooting section for common integration test failures
+- **TST-FR-DOC-DEBUG**: Developer guide MUST include troubleshooting section for common integration test failures  
   Lineage: 002-FR-024
 
-- **TST-FR-OPS-SECRETS**: Operational guide MUST document all required CI secrets, their purposes, and how to obtain/generate them; Developer guide MUST document how to configure equivalent secrets for local integration test runs (e.g., environment variables or config file)
+- **TST-FR-OPS-SECRETS**: Operational guide MUST document all required CI secrets, their purposes, and how to obtain/generate them; Developer guide MUST document how to configure equivalent secrets for local integration test runs (e.g., environment variables or config file)  
   Lineage: 002-FR-025
 
-- **TST-FR-OPS-PROVISION**: Operational guide MUST provide step-by-step VM provisioning instructions including cloud provider configuration and SSH key management
+- **TST-FR-OPS-PROVISION**: Operational guide MUST provide step-by-step VM provisioning instructions including cloud provider configuration and SSH key management  
   Lineage: 002-FR-026
 
-- **TST-FR-OPS-ENV**: Operational guide MUST document all environment variables, their defaults, and effects on test behavior
+- **TST-FR-OPS-ENV**: Operational guide MUST document all environment variables, their defaults, and effects on test behavior  
   Lineage: 002-FR-027
 
-- **TST-FR-OPS-COST**: Operational guide MUST document cost monitoring procedures and infrastructure destruction/reprovisioning
+- **TST-FR-OPS-COST**: Operational guide MUST document cost monitoring procedures and infrastructure destruction/reprovisioning  
   Lineage: 002-FR-028
 
-- **TST-FR-OPS-RUNBOOK**: Operational guide MUST include runbooks for common infrastructure failure scenarios
+- **TST-FR-OPS-RUNBOOK**: Operational guide MUST include runbooks for common infrastructure failure scenarios  
   Lineage: 002-FR-029
 
-- **TST-FR-ARCH-DIAGRAM**: Architecture documentation MUST include diagrams describing the three-tier test structure and component interactions; all diagrams MUST be in Mermaid format (per repository documentation standards)
+- **TST-FR-ARCH-DIAGRAM**: Architecture documentation MUST include diagrams describing the three-tier test structure and component interactions; all diagrams MUST be in Mermaid format (per repository documentation standards)  
   Lineage: 002-FR-030
 
-- **TST-FR-ARCH-RATIONALE**: Architecture documentation MUST explain rationale for key design decisions (VM isolation, locking, baseline reset)
+- **TST-FR-ARCH-RATIONALE**: Architecture documentation MUST explain rationale for key design decisions (VM isolation, locking, baseline reset)  
   Lineage: 002-FR-031
 
-- **TST-FR-ARCH-ADR**: Architecture documentation MUST provide links to ADR-006 and related decision records
+- **TST-FR-ARCH-ADR**: Architecture documentation MUST provide links to ADR-006 and related decision records  
   Lineage: 002-FR-032
 
-- **TST-FR-DOC-FILES**: Documentation MUST be organized as separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md` (developer guide), `docs/testing-ops-guide.md` (operational guide), `docs/testing-playbook.md` (manual playbook)
+- **TST-FR-DOC-FILES**: Documentation MUST be organized as separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md` (developer guide), `docs/testing-ops-guide.md` (operational guide), `docs/testing-playbook.md` (manual playbook)  
   Lineage: 002-FR-033
 
 #### Test Fixture Requirements
 
-- **TST-FR-FIXTURES**: Testing framework MUST provide minimal pytest fixtures for VM command execution, enabling integration tests to run commands on test VMs via a RemoteExecutor-like interface
+- **TST-FR-FIXTURES**: Testing framework MUST provide minimal pytest fixtures for VM command execution, enabling integration tests to run commands on test VMs via a RemoteExecutor-like interface  
   Lineage: 002-FR-034
 
 ### Key Entities
+
+Lineage: 002-Key-Entities
 
 - **TestVM**: Represents an isolated VM for integration testing; has network identity, SSH access, required filesystem and subvolume configuration, and baseline state for reset
 - **TestLock**: Represents the mechanism preventing concurrent test runs; has holder identity and acquisition time
@@ -296,8 +298,6 @@ Lineage: 002-US-7
 - **MockExecutor**: Represents a mocked executor for unit tests; provides predictable command responses without real execution
 - **TestFixture**: Represents a pytest fixture providing test resources; includes VM connections, event buses, temporary files, and cleanup logic
 - **VMExecutor**: Represents a fixture for executing commands on test VMs; provides a RemoteExecutor-like interface for integration tests to run commands on source/target VMs
-
-Lineage: 002-Key-Entities
 
 ## Success Criteria
 
@@ -351,15 +351,17 @@ Lineage: 002-Edge-Cases
 
 ## Assumptions
 
+Lineage: 002-Assumptions
+
 - Cloud provider account is available with sufficient credits for VM provisioning
 - GitHub repository has GitHub Actions enabled
 - Developers have SSH key pairs for VM access
 - Network connectivity allows SSH to cloud provider IPs
 - Python 3.14 is used (per ADR-003)
 
-Lineage: 002-Assumptions
-
 ## Out of Scope
+
+Lineage: 002-Out-of-Scope
 
 - Writing actual tests for specific features
 - Automated visual testing (terminal colors, progress bars require manual verification)
@@ -368,5 +370,3 @@ Lineage: 002-Assumptions
 - Automated VM cost optimization (manual destruction when not needed)
 - Test coverage for third-party libraries (only test project code)
 - Test data generation fixtures (helpers for creating specific file patterns, permissions, etc. for sync tests) - to be added when actual tests are written; note: minimal fixtures for VM command execution ARE in scope (see TST-FR-FIXTURES)
-
-Lineage: 002-Out-of-Scope
