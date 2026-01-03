@@ -280,8 +280,8 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - **TST-FR-ARCH-ADR**: Architecture documentation MUST provide links to ADR-006 and related decision records  
   Lineage: 002-FR-032
 
-- **TST-FR-DOC-FILES**: Documentation MUST be organized as separate files: `docs/testing-framework.md` (architecture), `docs/testing-developer-guide.md` (developer guide), `docs/testing-ops-guide.md` (operational guide), `docs/testing-playbook.md` (manual playbook)  
-  Lineage: 002-FR-033
+- **TST-FR-DOC-FILES**: Documentation MUST be organized as separate files: `docs/ops/testing-architecture.md` (architecture), `docs/dev/testing-guide.md` (developer guide), `docs/ops/testing-ops.md` (operational guide), `tests/manual-playbook.md` (manual playbook)
+  Lineage: 002-FR-033, ADR-012, #134
 
 #### Test Fixture Requirements
 

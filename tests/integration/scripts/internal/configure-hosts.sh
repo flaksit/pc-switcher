@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 # Configure /etc/hosts and SSH keys for inter-VM communication.
 # Sets up bidirectional SSH trust between pc1 and pc2.
 #
-# See docs/testing-infrastructure.md for the full provisioning flow diagram.
+# See docs/ops/testing-architecture.md for the full provisioning flow diagram.
 #
 # Usage: ./configure-hosts.sh
 #

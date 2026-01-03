@@ -10,7 +10,7 @@ source "$SCRIPT_DIR/common.sh"
 # Creates a single Hetzner Cloud VM and installs Ubuntu 24.04 with btrfs filesystem
 # using Hetzner's rescue mode and installimage tool.
 #
-# See docs/testing-infrastructure.md for the full provisioning flow diagram.
+# See docs/ops/testing-architecture.md for the full provisioning flow diagram.
 #
 # Usage:
 #   ./create-vm.sh <VM_NAME>

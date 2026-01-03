@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 # Create baseline btrfs snapshots on both test VMs.
 # These snapshots are used by reset-vm.sh to restore VMs to a known-good state between tests.
 #
-# See docs/testing-infrastructure.md for the full provisioning flow diagram.
+# See docs/ops/testing-architecture.md for the full provisioning flow diagram.
 #
 # Usage: ./create-baseline-snapshots.sh
 #

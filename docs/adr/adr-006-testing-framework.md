@@ -49,5 +49,5 @@ PC-switcher executes system commands as root, modifies filesystems, creates/dele
 - Small ongoing infrastructure cost
 
 ## References
-- [Testing Framework Documentation](../testing-framework.md)
+- [Testing Architecture](../ops/testing-architecture.md)
 - [Architecture Discussion](considerations/testing-framework-architecture-conversation.txt)

@@ -9,7 +9,7 @@ source "$SCRIPT_DIR/internal/common.sh"
 # Configures a single VM after btrfs installation: creates testuser, injects SSH keys,
 # hardens SSH, and configures firewall.
 #
-# See docs/testing-infrastructure.md for the full provisioning flow diagram.
+# See docs/ops/testing-architecture.md for the full provisioning flow diagram.
 #
 # Usage: ./configure-vm.sh <VM_HOST> <SSH_AUTHORIZED_KEYS> [VM_NAME]
 #

@@ -10,7 +10,7 @@
 #   From scripts/: source "$SCRIPT_DIR/internal/common.sh"
 #   From scripts/internal/: source "$SCRIPT_DIR/common.sh"
 #
-# See docs/testing-infrastructure.md for the SSH host key management strategy.
+# See docs/ops/testing-architecture.md for the SSH host key management strategy.
 
 LOCK_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lock.sh"
 

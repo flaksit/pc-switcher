@@ -4,7 +4,7 @@ set -euo pipefail
 # Main orchestrator script for provisioning pc-switcher test infrastructure.
 # Creates two VMs, configures them, sets up networking, and creates baseline snapshots.
 #
-# See docs/testing-infrastructure.md for the full provisioning flow diagram and details.
+# See docs/ops/testing-architecture.md for the full provisioning flow diagram and details.
 #
 # IMPORTANT: This script can only be run from GitHub CI. Local provisioning is blocked
 # to ensure all authorized SSH keys are properly configured from secrets.
@@ -155,7 +155,7 @@ if [[ -n "$PC1_IP" && -n "$PC2_IP" ]]; then
         log_error "  hcloud server delete pc2"
         log_error ""
         log_error "Then trigger the workflow again to reprovision from scratch."
-        log_error "See docs/testing-infrastructure.md for more details."
+        log_error "See docs/ops/testing-architecture.md for more details."
         exit 1
     fi
 

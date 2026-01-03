@@ -73,7 +73,7 @@ jobs:
                 [
                   "PR commit messages contain issue closing keywords, but the PR description/title does not.",
                   `Missing in PR (add one line per issue to the PR description):\n${missing.map(p => `${p}`).join("\n")}`,
-                  "See docs/developer-workflow.md for details."
+                  "See docs/dev/development-guide.md for details."
                 ].join("\n")
               );
             } else {
