@@ -12,7 +12,7 @@
 - [ADR-008](adr-008-ci-pipeline.md): CI Pipeline with Draft-Aware Integration Tests
 - [ADR-009](adr-009-ai-readiness-labels.md): AI Readiness Labels for Issue Triage
 - [ADR-010](adr-010-logging-infrastructure.md): Standard Library Logging Infrastructure
-- [ADR-011](adr-011-sdd-with-living-docs.md): Specification-Driven Development with Living Specs
+- [ADR-011](adr-011-sdd-with-living-specs.md): Specification-Driven Development with Living Specs
 - [ADR-012](adr-012-documentation-structure.md): Documentation Structure and Strategy
 
 ### Instructions for AI agents
