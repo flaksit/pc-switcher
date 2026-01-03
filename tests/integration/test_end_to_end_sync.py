@@ -27,8 +27,8 @@ Test VM Requirements:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Coroutine
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 
 import pytest
 import pytest_asyncio
@@ -36,8 +36,17 @@ import pytest_asyncio
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import get_this_version
 
-# Type alias for pc1_to_pc2_traffic_blocker fixture
-Pc1ToPc2TrafficBlocker = dict[str, Callable[[], Coroutine[Any, Any, None]]]
+
+# Dataclass for pc1_to_pc2_traffic_blocker fixture
+@dataclass
+class Pc1ToPc2TrafficBlocker:
+    """Provides async callables to block/unblock pc1->pc2 SSH traffic.
+
+    Both `block` and `unblock` are callables returning an awaitable that
+    resolves to None when complete.
+    """
+    block: Callable[[], Awaitable[None]]
+    unblock: Callable[[], Awaitable[None]]
 
 
 @pytest.fixture
@@ -93,7 +102,7 @@ async def pc1_to_pc2_traffic_blocker(
         )
         blocked = False
 
-    yield {"block": block_pc1, "unblock": unblock_pc1}
+    yield Pc1ToPc2TrafficBlocker(block=block_pc1, unblock=unblock_pc1)
 
     # Cleanup: ensure network is unblocked even if test fails
     await unblock_pc1()
@@ -510,7 +519,7 @@ class TestEndToEndSync:
             # Check if target phase has started
             if "target phase" in last_log_content.lower():
                 # Block pc1→pc2 traffic
-                await pc1_to_pc2_traffic_blocker["block"]()
+                await pc1_to_pc2_traffic_blocker.block()
                 network_blocked = True
                 break
 
