@@ -22,11 +22,11 @@ async def test_001_log_fr_aggregate(
 ) -> None:
     """Test LOG-FR-AGGREGATE: System aggregates logs from both source and target into unified log stream.
 
-    Spec reference: specs/001-foundation/spec.md - Functional Requirement LOG-FR-AGGREGATE
+    Spec reference: LOG-FR-AGGREGATE, LOG-FR-SESSION-HOSTNAMES
 
     Verifies that during a sync operation, logs from both source-side orchestrator
     and target-side operations are aggregated into a single unified log file with
-    proper host identification (source/target and resolved hostnames).
+    proper host identification.
 
     Expected behavior:
     1. Run a sync operation from pc1 to pc2
@@ -34,17 +34,17 @@ async def test_001_log_fr_aggregate(
     3. All logs are written to single log file in JSON Lines format
     4. Each log entry includes:
        - host: "source" or "target"
-       - hostname: resolved machine name (e.g., "pc1", "pc2")
        - timestamp, level, job, event fields
-    5. Log file contains entries from both machines in chronological order
-    6. Verify log aggregation worked by parsing the log file
+    5. Hostname mapping (source and target machine names) logged once at session start
+    6. Log file contains entries from both hosts in chronological order
+    7. Verify log aggregation worked by parsing the log file
 
     Test approach:
     - Configure pc-switcher on pc1 with dummy jobs
     - Run pc-switcher sync from pc1 to pc2
     - Retrieve the generated log file from pc1
     - Parse JSON Lines and verify entries from both source and target hosts
-    - Verify hostname fields correctly identify pc1 and pc2
+    - Verify session start contains hostname mapping
     """
     pytest.skip("Integration test requires full pc-switcher installation and sync workflow implementation")
 

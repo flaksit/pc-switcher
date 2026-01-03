@@ -186,7 +186,7 @@ class TestRichFormatter:
         assert "Test message" in output
 
         # Should not contain job/host markers when not set
-        # (job would appear as [jobname], host as (hostname))
+        # (job would appear as [jobname], host as (source/target))
         # We look for the specific format that would indicate job/host are present
         # Since job/host are not set, we shouldn't see "[btrfs]" or "(source)"
         # but we should still see "[INFO" for the level

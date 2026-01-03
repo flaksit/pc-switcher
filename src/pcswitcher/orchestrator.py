@@ -171,6 +171,18 @@ class Orchestrator:
         log_file_path = get_logs_directory() / generate_log_filename(self._session_id)
         self._queue_listener, _ = setup_logging(log_file_path, self._config.logging)
 
+        # Log session start with hostname mapping (LOG-FR-SESSION-HOSTNAMES)
+        self._logger.info(
+            "Starting sync session",
+            extra={
+                "job": "orchestrator",
+                "host": "source",
+                "source_hostname": self._source_hostname,
+                "target_hostname": self._target_hostname,
+                "session_id": self._session_id,
+            },
+        )
+
         # Subscribe to event bus for UI (ProgressEvent, ConnectionEvent only)
         ui_queue = self._event_bus.subscribe()
 
@@ -210,11 +222,7 @@ class Orchestrator:
             self._ui.set_current_step(1)
 
             # Phase 2: Establish SSH connection
-            self._logger.info(
-                "Connecting to target: %s",
-                self._target_hostname,
-                extra={"job": "orchestrator", "host": "source"},
-            )
+            self._logger.info("Connecting to target", extra={"job": "orchestrator", "host": "source"})
             await self._establish_connection()
             assert self._remote_executor is not None
             self._ui.set_current_step(2)
@@ -311,7 +319,7 @@ class Orchestrator:
         self._local_executor = LocalExecutor()
         self._remote_executor = RemoteExecutor(self._connection.ssh_connection)
 
-        self._logger.info("Connected to %s", self._target_hostname, extra={"job": "orchestrator", "host": "target"})
+        self._logger.info("Connected to target", extra={"job": "orchestrator", "host": "target"})
 
     async def _acquire_target_lock(self) -> None:
         """Acquire exclusive lock on target machine via SSH.
