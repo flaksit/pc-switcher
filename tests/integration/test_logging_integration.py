@@ -21,8 +21,10 @@ from pcswitcher.executor import BashLoginRemoteExecutor
 
 # Test config for logging integration tests
 _TEST_CONFIG = """# Test configuration for logging integration tests
-log_file_level: DEBUG
-log_cli_level: INFO
+logging:
+  file: DEBUG
+  tui: INFO
+  external: WARNING
 
 sync_jobs:
   dummy_success: true
