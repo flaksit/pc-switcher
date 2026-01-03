@@ -13,6 +13,7 @@ import tempfile
 from logging.handlers import QueueListener
 from pathlib import Path
 from queue import Queue
+from unittest.mock import patch
 
 import pytest
 
@@ -21,6 +22,7 @@ from pcswitcher.logger import (
     FULL,
     JsonFormatter,
     RichFormatter,
+    get_latest_log_file,
     setup_logging,
 )
 
@@ -186,7 +188,7 @@ class TestRichFormatter:
         assert "Test message" in output
 
         # Should not contain job/host markers when not set
-        # (job would appear as [jobname], host as (hostname))
+        # (job would appear as [jobname], host as (source/target))
         # We look for the specific format that would indicate job/host are present
         # Since job/host are not set, we shouldn't see "[btrfs]" or "(source)"
         # but we should still see "[INFO" for the level
@@ -509,3 +511,73 @@ class TestAcceptanceScenarios:
                 sys.stderr = old_stderr
                 if listener._thread and listener._thread.is_alive():
                     listener.stop()
+
+
+class TestGetLatestLogFile:
+    """Tests for get_latest_log_file() function.
+
+    Spec reference: docs/system/logging.md - LOG-US-SYSTEM-AS6
+    """
+
+    def test_log_us_system_as6_returns_most_recent_by_filename(self, tmp_path: Path) -> None:
+        """Test LOG-US-SYSTEM-AS6: get_latest_log_file returns the most recent file.
+
+        Log files are named sync-<timestamp>-<session_id>.log, so sorting by
+        filename in reverse order gives the most recent file.
+        """
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+
+        # Create log files with different timestamps in filename
+        older_log = logs_dir / "sync-20240101T100000-abc12345.log"
+        older_log.write_text('{"event": "older"}\n')
+
+        middle_log = logs_dir / "sync-20240115T120000-def67890.log"
+        middle_log.write_text('{"event": "middle"}\n')
+
+        newest_log = logs_dir / "sync-20240201T080000-ghi11111.log"
+        newest_log.write_text('{"event": "newest"}\n')
+
+        # Mock get_logs_directory to return our temp directory
+        with patch("pcswitcher.logger.get_logs_directory", return_value=logs_dir):
+            result = get_latest_log_file()
+
+        # Should return the file with the latest timestamp in filename
+        assert result == newest_log, f"Expected {newest_log}, got {result}"
+
+    def test_log_us_system_as6_returns_none_when_no_logs(self, tmp_path: Path) -> None:
+        """Test LOG-US-SYSTEM-AS6: get_latest_log_file returns None when no logs exist."""
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+
+        with patch("pcswitcher.logger.get_logs_directory", return_value=logs_dir):
+            result = get_latest_log_file()
+
+        assert result is None
+
+    def test_log_us_system_as6_returns_none_when_dir_missing(self, tmp_path: Path) -> None:
+        """Test LOG-US-SYSTEM-AS6: get_latest_log_file returns None when logs dir doesn't exist."""
+        nonexistent = tmp_path / "nonexistent"
+
+        with patch("pcswitcher.logger.get_logs_directory", return_value=nonexistent):
+            result = get_latest_log_file()
+
+        assert result is None
+
+    def test_log_us_system_as6_ignores_non_sync_files(self, tmp_path: Path) -> None:
+        """Test LOG-US-SYSTEM-AS6: get_latest_log_file only considers sync-*.log files."""
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+
+        # Create a non-sync file (should be ignored)
+        other_file = logs_dir / "zync-other-file.log"
+        other_file.write_text("not a sync log\n")
+
+        # Create a sync log file
+        sync_log = logs_dir / "sync-20240101T100000-abc12345.log"
+        sync_log.write_text('{"event": "sync"}\n')
+
+        with patch("pcswitcher.logger.get_logs_directory", return_value=logs_dir):
+            result = get_latest_log_file()
+
+        assert result == sync_log
