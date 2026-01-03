@@ -162,12 +162,9 @@ async def test_log_fr_aggregate(
     assert log_entries, "Log file is empty"
 
     # Verify LOG-FR-SESSION-HOSTNAMES: session start contains hostname mapping
-    session_start_entries = [
-        e for e in log_entries if "source_hostname" in e and "target_hostname" in e
-    ]
+    session_start_entries = [e for e in log_entries if "source_hostname" in e and "target_hostname" in e]
     assert session_start_entries, (
-        "No session start entry found with hostname mapping.\n"
-        f"First 5 entries: {log_entries[:5]}"
+        f"No session start entry found with hostname mapping.\nFirst 5 entries: {log_entries[:5]}"
     )
 
     # Verify the hostname mapping contains actual hostnames (not empty)
@@ -180,12 +177,10 @@ async def test_log_fr_aggregate(
     target_entries = [e for e in log_entries if e.get("host") == "target"]
 
     assert source_entries, (
-        "No log entries with host='source' found.\n"
-        f"Sample entries: {[e.get('host') for e in log_entries[:10]]}"
+        f"No log entries with host='source' found.\nSample entries: {[e.get('host') for e in log_entries[:10]]}"
     )
     assert target_entries, (
-        "No log entries with host='target' found.\n"
-        f"Sample entries: {[e.get('host') for e in log_entries[:10]]}"
+        f"No log entries with host='target' found.\nSample entries: {[e.get('host') for e in log_entries[:10]]}"
     )
 
     # Verify required fields in log entries (LOG-FR-JSON)

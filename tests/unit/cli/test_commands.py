@@ -118,9 +118,7 @@ class TestLogsCommand:
         """
         # Create log file with test content
         log_file = tmp_path / "sync-20240102T100000-def67890.log"
-        log_file.write_text(
-            '{"timestamp": "2024-01-02T10:00:00", "level": "INFO", "event": "Newer log - latest"}\n'
-        )
+        log_file.write_text('{"timestamp": "2024-01-02T10:00:00", "level": "INFO", "event": "Newer log - latest"}\n')
 
         # Mock get_latest_log_file to return our test file
         with patch("pcswitcher.cli.get_latest_log_file", return_value=log_file):
@@ -146,6 +144,4 @@ class TestLogsCommand:
 
         # Should exit with non-zero and show "no log" message
         assert result.exit_code == 1, f"Expected exit code 1, got {result.exit_code}"
-        assert "no log" in result.stdout.lower(), (
-            f"Expected 'no log' message.\nstdout: {result.stdout}"
-        )
+        assert "no log" in result.stdout.lower(), f"Expected 'no log' message.\nstdout: {result.stdout}"
