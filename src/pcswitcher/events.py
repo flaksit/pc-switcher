@@ -19,7 +19,12 @@ __all__ = [
 
 @dataclass(frozen=True)
 class LogEvent:
-    """Event published to EventBus for logging."""
+    """Event published to EventBus for logging.
+
+    DEPRECATED: This class is deprecated and will be removed in a future version.
+    Use stdlib logging with logging.getLogger("pcswitcher.xxx") instead.
+    See ADR-010 for the migration plan.
+    """
 
     level: LogLevel
     job: str  # Job name or "orchestrator"
@@ -29,7 +34,7 @@ class LogEvent:
     timestamp: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dict for JSON serialization via structlog."""
+        """Convert to dict for JSON serialization."""
         return {
             "timestamp": self.timestamp.isoformat(),
             "level": self.level.name,

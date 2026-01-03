@@ -33,17 +33,18 @@ class Host(StrEnum):
 
 
 class LogLevel(IntEnum):
-    """Six-level logging hierarchy with explicit ordering.
+    """Six-level logging hierarchy aligned with stdlib logging levels.
 
-    Lower value = more verbose. Level N includes all messages at level N and above.
+    Values match Python's logging module (10-50 range). Level N includes all
+    messages at level N and above. FULL is a custom level between DEBUG and INFO.
     """
 
-    DEBUG = 0  # Most verbose, internal diagnostics
-    FULL = 1  # Operational details (file-level)
-    INFO = 2  # High-level operations
-    WARNING = 3  # Unexpected but non-fatal
-    ERROR = 4  # Recoverable errors
-    CRITICAL = 5  # Unrecoverable, sync must abort
+    DEBUG = 10  # Most verbose, internal diagnostics
+    FULL = 15  # Operational details (file-level), custom level
+    INFO = 20  # High-level operations
+    WARNING = 30  # Unexpected but non-fatal
+    ERROR = 40  # Recoverable errors
+    CRITICAL = 50  # Unrecoverable, sync must abort
 
 
 @dataclass(frozen=True)
@@ -131,7 +132,7 @@ class Snapshot:
     """Metadata for a btrfs snapshot.
 
     Represents a btrfs snapshot created during a sync session. The `name` property
-    is computed from the subvolume, phase, and timestamp per FR-010.
+    is computed from the subvolume, phase, and timestamp per FND-FR-SNAP-NAME.
     """
 
     subvolume: str  # e.g., "@home"
@@ -143,7 +144,7 @@ class Snapshot:
 
     @property
     def name(self) -> str:
-        """Snapshot name per FR-010: pre-@home-20251129T143022."""
+        """Snapshot name per FND-FR-SNAP-NAME: pre-@home-20251129T143022."""
         ts = self.timestamp.strftime("%Y%m%dT%H%M%S")
         return f"{self.phase.value}-{self.subvolume}-{ts}"
 

@@ -31,8 +31,8 @@ from io import StringIO
 
 from rich.console import Console
 
-from pcswitcher.events import ConnectionEvent, EventBus, LogEvent, ProgressEvent
-from pcswitcher.models import Host, LogLevel, ProgressUpdate
+from pcswitcher.events import ConnectionEvent, EventBus, ProgressEvent
+from pcswitcher.models import ProgressUpdate
 from pcswitcher.ui import TerminalUI
 
 
@@ -176,14 +176,16 @@ async def test_001_us9_as2_multi_job_progress() -> None:
         ui.stop()
 
 
-async def test_001_us9_as3_logs_with_progress() -> None:
-    """Test US9-AS3: Logs displayed below progress indicators.
+async def test_001_us9_as3_progress_and_connection_events() -> None:
+    """Test progress and connection event handling via EventBus.
 
-    Verifies that when a job emits log messages:
-    - Logs appear below progress bars
-    - Logs are formatted with level, job name, host
-    - Logs respect the configured CLI log level
-    - Log panel scrolls (only shows recent N messages)
+    After ADR-010 logging migration, LogEvent is no longer processed by
+    consume_events(). This test verifies that ProgressEvent and ConnectionEvent
+    are still handled correctly.
+
+    Note: US9-AS3 (logs displayed below progress indicators) now applies to
+    the log panel, which is populated via add_log_message() directly or
+    through stdlib logging. This test focuses on EventBus event handling.
 
     This test verifies the UI behavior exists. Visual appearance is
     verified manually per playbook.
@@ -200,15 +202,9 @@ async def test_001_us9_as3_logs_with_progress() -> None:
         queue = event_bus.subscribe()
 
         # Create background task to consume events
-        consume_task = asyncio.create_task(
-            ui.consume_events(
-                queue,
-                hostname_map={Host.SOURCE: "pc1.local", Host.TARGET: "pc2.local"},
-                log_level=LogLevel.INFO,
-            )
-        )
+        consume_task = asyncio.create_task(ui.consume_events(queue))
 
-        # Simulate job execution with both progress and log events
+        # Simulate job execution with progress and connection events
         job_name = "Package Sync"
 
         # Connection event
@@ -222,49 +218,11 @@ async def test_001_us9_as3_logs_with_progress() -> None:
             )
         )
 
-        # Log events at various levels
-        event_bus.publish(
-            LogEvent(
-                level=LogLevel.INFO,
-                job=job_name,
-                host=Host.TARGET,
-                message="Installing package nginx",
-            )
-        )
-
-        event_bus.publish(
-            LogEvent(
-                level=LogLevel.WARNING,
-                job=job_name,
-                host=Host.TARGET,
-                message="Package nginx has pending updates",
-            )
-        )
-
         # Progress event
         event_bus.publish(
             ProgressEvent(
                 job=job_name,
                 update=ProgressUpdate(percent=75, item="Configuring packages"),
-            )
-        )
-
-        # More log events (to test scrolling - max_log_lines=3)
-        event_bus.publish(
-            LogEvent(
-                level=LogLevel.INFO,
-                job=job_name,
-                host=Host.TARGET,
-                message="Configuring package nginx",
-            )
-        )
-
-        event_bus.publish(
-            LogEvent(
-                level=LogLevel.INFO,
-                job=job_name,
-                host=Host.TARGET,
-                message="Package sync complete",
             )
         )
 
@@ -288,20 +246,11 @@ async def test_001_us9_as3_logs_with_progress() -> None:
         # Verify progress elements are present
         assert job_name in rendered or "package" in rendered.lower(), "Job name should appear"
 
-        # Verify log messages are present
-        # At least one of the log messages should appear
-        log_fragments = ["Installing", "package", "nginx", "complete"]
-        logs_found = sum(1 for fragment in log_fragments if fragment.lower() in rendered.lower())
-        assert logs_found >= 1, "Log messages should appear in output"
-
         # Verify connection status appears
         assert "connect" in rendered.lower(), "Connection status should appear"
 
-        # Verify log panel exists and has content
-        assert len(ui._log_panel) > 0, "Log panel should contain messages"
-
-        # Verify log panel scrolling (max 3 lines)
-        assert len(ui._log_panel) <= 3, "Log panel should respect max_log_lines limit"
+        # Verify job is tracked internally
+        assert job_name in ui._job_tasks, "UI should track job in internal state"
 
     finally:
         ui.stop()

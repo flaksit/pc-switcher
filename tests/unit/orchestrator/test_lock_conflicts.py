@@ -22,8 +22,10 @@ from pcswitcher.orchestrator import Orchestrator
 def mock_config() -> MagicMock:
     """Create a mock Configuration for orchestrator initialization."""
     config = MagicMock(spec=Configuration)
-    config.log_file_level = MagicMock()
-    config.log_cli_level = MagicMock()
+    config.logging = MagicMock()
+    config.logging.file = 10  # DEBUG
+    config.logging.tui = 20  # INFO
+    config.logging.external = 30  # WARNING
     config.sync_jobs = {}
     config.job_configs = {}
     config.btrfs_snapshots = MagicMock()
@@ -37,10 +39,8 @@ class TestSourceLockConflictMessages:
     """Test error messages when source lock acquisition fails."""
 
     @pytest.mark.asyncio
-    async def test_001_fr047_source_lock_error_includes_holder_info(
-        self, mock_config: MagicMock, tmp_path: Path
-    ) -> None:
-        """FR-047: Source lock error message includes holder information.
+    async def test_001_fnd_fr_lock(self, mock_config: MagicMock, tmp_path: Path) -> None:
+        """FND-FR-LOCK: Source lock error message includes holder information.
 
         When source lock acquisition fails because another sync holds the lock,
         the error message should include the holder info for debugging.

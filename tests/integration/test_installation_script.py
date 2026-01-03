@@ -42,10 +42,10 @@ def floor_release() -> Release:
     return current.get_release_floor()
 
 
-async def test_001_fr035_install_script_no_prereqs(
+async def test_001_fnd_fr_install_script(
     pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
 ) -> None:
-    """Test FR-035: install.sh works without prerequisites.
+    """Test FND-FR-INSTALL-SCRIPT: install.sh works without prerequisites.
 
     Verifies that the install.sh script can run on a fresh machine and:
     - Installs uv if not present (or uses existing uv)

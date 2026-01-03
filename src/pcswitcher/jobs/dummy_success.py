@@ -1,4 +1,4 @@
-"""Dummy success job for infrastructure validation (FR-039)."""
+"""Dummy success job for infrastructure validation (FND-FR-DUMMY-SIM)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class DummySuccessJob(SyncJob):
-    """Dummy job for testing infrastructure (FR-039).
+    """Dummy job for testing infrastructure (FND-FR-DUMMY-SIM).
 
     Simulates configurable duration operation on source (log every 2s, WARNING at 6s)
     and target (log every 2s, ERROR at 8s).

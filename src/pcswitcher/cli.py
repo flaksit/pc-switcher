@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import signal
 import subprocess
 import sys
@@ -105,12 +104,10 @@ def main(
     ] = False,
 ) -> None:
     """PC-switcher synchronization system."""
-    # Configure logging: WARNING for third-party libs, DEBUG for pcswitcher
-    logging.basicConfig(
-        level=logging.WARNING,
-        format="%(name)s: %(message)s",
-    )
-    logging.getLogger("pcswitcher").setLevel(logging.DEBUG)
+    # Logging is configured by setup_logging() in orchestrator.py when a sync runs.
+    # No basicConfig here - it would install a plain handler that bypasses the
+    # queue-based pipeline and breaks TUI formatting (see ADR-010).
+    pass
 
 
 def _display_log_file(log_file: Path) -> None:

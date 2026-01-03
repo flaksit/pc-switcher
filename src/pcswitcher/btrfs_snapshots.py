@@ -24,6 +24,7 @@ type PrintFunction = Callable[[str], None]
 __all__ = [
     "cleanup_snapshots",
     "create_snapshot",
+    "delete_all_snapshots",
     "list_snapshots",
     "parse_older_than",
     "run_snapshot_cleanup",
@@ -35,7 +36,7 @@ __all__ = [
 
 
 def snapshot_name(subvolume: str, phase: SnapshotPhase) -> str:
-    """Generate snapshot name per FR-010.
+    """Generate snapshot name per FND-FR-SNAP-NAME.
 
     Args:
         subvolume: Subvolume name (e.g., "@home")
@@ -277,6 +278,64 @@ async def cleanup_snapshots(
             await executor.run_command(f"rmdir {folder_path} 2>/dev/null || true")
 
     return deleted
+
+
+# Shell script to delete all pc-switcher btrfs subvolumes recursively.
+# Uses btrfs subvolume delete (fast) instead of rm -rf (slow for subvolumes).
+# Must delete children before parents since btrfs subvolume delete is not recursive
+# in btrfs-progs < 6.12.
+# Based on pattern from tests/integration/scripts/reset-vm.sh
+_DELETE_ALL_SNAPSHOTS_SCRIPT = r"""
+delete_subvol_recursive() {
+    local path="$1"
+    local child
+    # btrfs subvolume list -o shows child subvolumes
+    # Output paths like @snapshots/pc-switcher/..., convert to /.snapshots/...
+    btrfs subvolume list -o "$path" 2>/dev/null | awk '{print $NF}' \
+        | sed 's/^@snapshots/\/.snapshots/' \
+        | while read -r child; do
+        # Safety: only delete paths under /.snapshots/pc-switcher
+        if [[ "$child" != /.snapshots/pc-switcher* ]]; then
+            echo "ERROR: Unexpected subvolume path: '$child', skipping" >&2
+            continue
+        fi
+        delete_subvol_recursive "$child"
+    done
+    # Verify it's still a subvolume before deleting (may have been deleted already)
+    if btrfs subvolume show "$path" >/dev/null 2>&1; then
+        btrfs subvolume delete "$path" 2>/dev/null || true
+    fi
+}
+
+# Find and delete all pc-switcher subvolumes
+btrfs subvolume list / 2>/dev/null | awk '{print $NF}' | grep '^@snapshots/pc-switcher' \
+    | sed 's/^@snapshots/\/.snapshots/' \
+    | while read -r abs_path; do
+    delete_subvol_recursive "$abs_path"
+done
+"""
+
+
+async def delete_all_snapshots(executor: Executor) -> CommandResult:
+    """Delete all pc-switcher snapshots using btrfs subvolume delete.
+
+    This function forcefully deletes ALL snapshots under /.snapshots/pc-switcher/,
+    handling nested subvolumes by deleting children before parents. It uses
+    `btrfs subvolume delete` which is much faster than `rm -rf` for subvolumes.
+
+    Use cases:
+    - Test cleanup between test runs
+    - Emergency reset of snapshot state
+
+    For normal cleanup based on retention policies, use cleanup_snapshots() instead.
+
+    Args:
+        executor: Executor for the target machine (local or remote)
+
+    Returns:
+        CommandResult with exit code, stdout, stderr
+    """
+    return await executor.run_command(f"sudo bash -c {_DELETE_ALL_SNAPSHOTS_SCRIPT!r}")
 
 
 def parse_older_than(value: str) -> int:

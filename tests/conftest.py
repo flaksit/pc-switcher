@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,6 +23,27 @@ def _configure_test_logging() -> None:  # pyright: ignore[reportUnusedFunction]
     logging.getLogger().setLevel(logging.WARNING)  # Keep root at WARNING to suppress libs
     logging.getLogger("pcswitcher").setLevel(logging.DEBUG)
     logging.getLogger("tests").setLevel(logging.DEBUG)
+
+
+@pytest.fixture(autouse=True)
+def _reset_logging_after_test() -> Generator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Reset logging configuration after each test.
+
+    Tests that call setup_logging() modify the pcswitcher logger (setting
+    propagate=False and adding handlers). This fixture ensures those changes
+    don't leak into other tests, which would break caplog-based assertions.
+    """
+    yield
+    # Reset pcswitcher logger after test
+    pcswitcher_logger = logging.getLogger("pcswitcher")
+    pcswitcher_logger.handlers.clear()
+    pcswitcher_logger.propagate = True
+    pcswitcher_logger.setLevel(logging.DEBUG)
+
+    # Reset root logger handlers (setup_logging adds a QueueHandler)
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.setLevel(logging.WARNING)
 
 
 @pytest.fixture

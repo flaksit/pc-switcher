@@ -100,8 +100,8 @@ class TestSyncLock:
         assert target_lock.acquire("target:hostB:session2")
         target_lock.release()
 
-    def test_001_fr047_lock_prevents_concurrent_sync(self, tmp_path: Path) -> None:
-        """FR-047: Locking prevents concurrent execution.
+    def test_001_fnd_fr_lock(self, tmp_path: Path) -> None:
+        """FND-FR-LOCK: Locking prevents concurrent execution.
 
         System MUST implement locking mechanism to prevent concurrent sync executions.
         When a sync operation holds the lock, any attempt to start another sync should

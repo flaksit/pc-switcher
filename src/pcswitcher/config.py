@@ -16,6 +16,7 @@ __all__ = [
     "Configuration",
     "ConfigurationError",
     "DiskConfig",
+    "LogConfig",
 ]
 
 
@@ -39,11 +40,25 @@ class BtrfsConfig:
 
 
 @dataclass
+class LogConfig:
+    """Configuration for logging levels.
+
+    The 3-setting model controls log level floors:
+    - file: Floor level for file output (JSON lines)
+    - tui: Floor level for TUI output (Rich console)
+    - external: Additional floor for non-pcswitcher loggers
+    """
+
+    file: int = 10  # DEBUG
+    tui: int = 20  # INFO
+    external: int = 30  # WARNING
+
+
+@dataclass
 class Configuration:
     """Parsed and validated configuration from YAML file."""
 
-    log_file_level: LogLevel = LogLevel.FULL
-    log_cli_level: LogLevel = LogLevel.INFO
+    logging: LogConfig = field(default_factory=LogConfig)
     sync_jobs: dict[str, bool] = field(default_factory=dict)  # job_name -> enabled
     disk: DiskConfig = field(default_factory=DiskConfig)
     btrfs_snapshots: BtrfsConfig = field(default_factory=BtrfsConfig)
@@ -118,36 +133,13 @@ class Configuration:
         if errors:
             raise ConfigurationError(errors)
 
-        # Step 4: Parse log levels from strings to LogLevel enum
-        log_file_level = LogLevel.FULL  # Default value
-        log_cli_level = LogLevel.INFO  # Default value
-
-        try:
-            log_file_level = _parse_log_level(data.get("log_file_level", "FULL"))
-        except ValueError as e:
-            errors.append(
-                ConfigError(
-                    job=None,
-                    path="log_file_level",
-                    message=str(e),
-                )
-            )
-
-        try:
-            log_cli_level = _parse_log_level(data.get("log_cli_level", "INFO"))
-        except ValueError as e:
-            errors.append(
-                ConfigError(
-                    job=None,
-                    path="log_cli_level",
-                    message=str(e),
-                )
-            )
+        # Step 4: Parse logging section (3-setting model)
+        log_config = _parse_log_config(data.get("logging", {}), errors)
 
         if errors:
             raise ConfigurationError(errors)
 
-        # Step 5: Apply defaults for missing fields and build dataclass instances
+        # Step 6: Apply defaults for missing fields and build dataclass instances
         sync_jobs = data.get("sync_jobs", {})
 
         # Parse disk config (key is disk_space_monitor in YAML, maps to disk in dataclass)
@@ -170,8 +162,7 @@ class Configuration:
         # Step 6: Extract job configs from top-level keys matching job names
         # Job configs are top-level keys except for the known global config keys
         global_keys = {
-            "log_file_level",
-            "log_cli_level",
+            "logging",
             "sync_jobs",
             "disk_space_monitor",
             "btrfs_snapshots",
@@ -179,8 +170,7 @@ class Configuration:
         job_configs = {key: value for key, value in data.items() if key not in global_keys and isinstance(value, dict)}
 
         return cls(
-            log_file_level=log_file_level,
-            log_cli_level=log_cli_level,
+            logging=log_config,
             sync_jobs=sync_jobs,
             disk=disk_config,
             btrfs_snapshots=btrfs_config,
@@ -220,3 +210,36 @@ def _parse_log_level(value: str) -> LogLevel:
     except KeyError as e:
         valid_levels = ", ".join(level.name for level in LogLevel)
         raise ValueError(f"Invalid log level: {value}. Valid levels: {valid_levels}") from e
+
+
+def _parse_log_config(data: dict[str, Any], errors: list[ConfigError]) -> LogConfig:
+    """Parse the logging section into a LogConfig instance.
+
+    Args:
+        data: The logging section from YAML (may be empty dict)
+        errors: List to append any parsing errors to
+
+    Returns:
+        LogConfig instance with parsed values (or defaults)
+    """
+    log_config = LogConfig()  # Start with defaults
+
+    if "file" in data:
+        try:
+            log_config.file = _parse_log_level(data["file"]).value
+        except ValueError as e:
+            errors.append(ConfigError(job=None, path="logging.file", message=str(e)))
+
+    if "tui" in data:
+        try:
+            log_config.tui = _parse_log_level(data["tui"]).value
+        except ValueError as e:
+            errors.append(ConfigError(job=None, path="logging.tui", message=str(e)))
+
+    if "external" in data:
+        try:
+            log_config.external = _parse_log_level(data["external"]).value
+        except ValueError as e:
+            errors.append(ConfigError(job=None, path="logging.external", message=str(e)))
+
+    return log_config

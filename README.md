@@ -76,9 +76,11 @@ After sync completes, power off the source machine and resume work on target.
 Run `pc-switcher init` to create the default configuration file at `~/.config/pc-switcher/config.yaml`, or create it manually:
 
 ```yaml
-# Logging configuration
-log_file_level: FULL      # DEBUG | FULL | INFO | WARNING | ERROR | CRITICAL
-log_cli_level: INFO       # DEBUG | FULL | INFO | WARNING | ERROR | CRITICAL
+# Logging configuration (see Logging Configuration section below for details)
+logging:
+  file: DEBUG      # Floor level for file output
+  tui: INFO        # Floor level for terminal output
+  external: WARNING  # Floor for third-party libraries
 
 # Sync jobs (true = enabled, false = disabled)
 sync_jobs:
@@ -102,6 +104,54 @@ btrfs_snapshots:
 ```
 
 See default configuration in `src/pcswitcher/default-config.yaml`.
+
+## Logging Configuration
+
+Configure log levels in your `~/.config/pc-switcher/config.yaml`:
+
+```yaml
+logging:
+  file: DEBUG      # Log level floor for file output (default: DEBUG)
+  tui: INFO        # Log level floor for TUI output (default: INFO)
+  external: WARNING  # Log level floor for external libraries (default: WARNING)
+```
+
+### Log Levels
+
+| Level | Value | Description |
+|-------|-------|-------------|
+| DEBUG | 10 | Internal diagnostics |
+| FULL | 15 | Operational details (file-level sync info) |
+| INFO | 20 | High-level operations (job start/complete) |
+| WARNING | 30 | Unexpected but non-fatal conditions |
+| ERROR | 40 | Recoverable errors |
+| CRITICAL | 50 | Unrecoverable errors, sync must abort |
+
+### Default Behavior
+
+- `file: DEBUG` - All log levels written to file
+- `tui: INFO` - Only INFO and above shown in terminal
+- `external: WARNING` - External library logs (asyncssh, etc.) filtered to WARNING+
+
+Log files are written to `~/.local/share/pc-switcher/logs/` in JSON lines format.
+
+### Common Configurations
+
+**Debug SSH connection issues:**
+```yaml
+logging:
+  file: DEBUG
+  tui: INFO
+  external: DEBUG  # Show asyncssh debug logs
+```
+
+**Quiet mode (errors only):**
+```yaml
+logging:
+  file: DEBUG     # Still log everything to file
+  tui: ERROR      # Only show errors in terminal
+  external: ERROR
+```
 
 ## Available Commands
 

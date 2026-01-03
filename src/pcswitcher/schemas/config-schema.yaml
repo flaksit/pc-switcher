@@ -1,7 +1,7 @@
 # PC-switcher Configuration Schema (JSON Schema draft-07)
 # This schema defines the structure of ~/.config/pc-switcher/config.yaml
 #
-# Reference: FR-029, FR-030
+# Reference: FND-FR-CONFIG-FORMAT, FND-FR-CONFIG-VALIDATE
 
 $schema: "http://json-schema.org/draft-07/schema#"
 $id: "https://pc-switcher/config-schema.yaml"
@@ -29,16 +29,24 @@ definitions:
     description: "Btrfs subvolume name (must start with @)"
 
 properties:
-  # Global logging configuration
-  log_file_level:
-    $ref: "#/definitions/log_level"
-    default: "FULL"
-    description: "Minimum log level written to log file"
-
-  log_cli_level:
-    $ref: "#/definitions/log_level"
-    default: "INFO"
-    description: "Minimum log level displayed in terminal"
+  # Logging configuration (3-setting model)
+  logging:
+    type: object
+    description: "Logging level configuration for the 3-setting model"
+    properties:
+      file:
+        $ref: "#/definitions/log_level"
+        default: "DEBUG"
+        description: "Minimum log level for file output"
+      tui:
+        $ref: "#/definitions/log_level"
+        default: "INFO"
+        description: "Minimum log level for TUI output"
+      external:
+        $ref: "#/definitions/log_level"
+        default: "WARNING"
+        description: "Minimum log level for external library logs"
+    additionalProperties: false
 
   # Job enable/disable flags
   # NOTE: Only explicitly listed job names are valid. Unknown job names will cause validation to fail.
