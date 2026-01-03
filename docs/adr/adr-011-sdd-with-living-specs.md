@@ -25,6 +25,10 @@ Domain specs (`docs/system/*.md`) are direct consolidations of `spec.md` files:
 ### Lineage Tracking
 Maintain references to the original spec in the living docs. E.g., "Lineage: 004-US-1 → 005-US-7", which means the item originated in SpecKit run 004 as User Story 1 and was modified by User Story 7 from run 005. Do this for all items, not only user stories.
 
+**GitHub Issue References**:
+- **Workflow B (Small Fix)**: MUST include the GitHub issue number in the lineage (e.g., "Lineage: #140" for new items, or "Lineage: 001-FR-022 → #140" for modifications).
+- **Workflow A (Big Feature)**: MAY include the GitHub issue number in parentheses after the SpecKit ID if there is a clear corresponding issue (e.g., "Lineage: 001-FR-022 (#123)").
+
 ### Semantic ID Strategy
 Use stable, semantic IDs in `docs/system/` and in code comments. Format: `<DOMAIN>-<TYPE>-<DESCRIPTOR>`:
 - `<DOMAIN>`: Short code for the domain (e.g., `LOG` for Logging, `FND` for Foundation)
@@ -47,7 +51,7 @@ In code: `# Implements LOG-FR-ROTATION`
    - Open the relevant `docs/system/<topic>.md` (can be multiple files)
    - Merge the contents from `specs/005/spec.md` into these domain spec files, modifying existing content as needed
    - If an element was removed, don't delete it; bar it and mark it clearly as deprecated or superseded
-   - Add lineage note for each item, e.g., "Lineage: 001-FR-002" for first-time items and "Lineage: 002-FR-007 → 005-FR-013" for modified items
+   - Add lineage note for each item, e.g., "Lineage: 001-FR-002" for first-time items and "Lineage: 002-FR-007 → 005-FR-013" for modified items. Optionally include GitHub issue number: "Lineage: 001-FR-002 (#123)"
    - Convert IDs to Semantic IDs
    - Find/Replace any SpecKit IDs referenced in code/tests/docs with their Semantic ID counterpart
    - Update `docs/system/data-model.md` with new entities
@@ -56,7 +60,7 @@ In code: `# Implements LOG-FR-ROTATION`
 ### Workflow B: Small Fix (Fast Track)
 1. **Edit Truth First**: Open `docs/system/<topic>.md`.
    - Modify the text or add new content
-   - Add lineage notes for each change (e.g., referencing a GitHub issue ID)
+   - Add lineage notes referencing the GitHub issue (REQUIRED), e.g., "Lineage: #140" for new items or "Lineage: 001-FR-022 → #140" for modifications
 2. **Implement**: Update code and tests to match the modified spec.
 3. **Commit**: Mention the Semantic ID(s) in the commit message.
 
