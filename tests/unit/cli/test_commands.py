@@ -100,3 +100,48 @@ class TestSyncCommand:
 
             # Verify that _load_configuration was called with the custom config path
             mock_load.assert_called_once_with(custom_config_path)
+
+
+class TestLogsCommand:
+    """Tests for the 'pc-switcher logs' command.
+
+    Spec reference: docs/system/logging.md - LOG-US-SYSTEM-AS6
+    """
+
+    def test_log_us_system_as6_logs_last_displays_most_recent(self, tmp_path: Path) -> None:
+        """Test LOG-US-SYSTEM-AS6: logs --last displays the most recent log file.
+
+        Verifies that `pc-switcher logs --last`:
+        1. Identifies the most recent log file by filename (timestamp in name)
+        2. Displays the log file content
+        3. Returns exit code 0
+        """
+        # Create log file with test content
+        log_file = tmp_path / "sync-20240102T100000-def67890.log"
+        log_file.write_text('{"timestamp": "2024-01-02T10:00:00", "level": "INFO", "event": "Newer log - latest"}\n')
+
+        # Mock get_latest_log_file to return our test file
+        with patch("pcswitcher.cli.get_latest_log_file", return_value=log_file):
+            result = runner.invoke(app, ["logs", "--last"])
+
+        # Verify command succeeded
+        assert result.exit_code == 0, f"logs --last failed: {result.stdout}"
+
+        # Verify log content is displayed
+        assert "Newer log" in result.stdout or "latest" in result.stdout, (
+            f"Expected log content.\nOutput: {result.stdout}"
+        )
+
+    def test_log_us_system_as6_logs_last_no_logs_shows_message(self) -> None:
+        """Test LOG-US-SYSTEM-AS6: logs --last shows message when no logs exist.
+
+        Verifies that when no log files exist, the command shows an appropriate
+        message rather than crashing.
+        """
+        # Mock get_latest_log_file to return None (no logs)
+        with patch("pcswitcher.cli.get_latest_log_file", return_value=None):
+            result = runner.invoke(app, ["logs", "--last"])
+
+        # Should exit with non-zero and show "no log" message
+        assert result.exit_code == 1, f"Expected exit code 1, got {result.exit_code}"
+        assert "no log" in result.stdout.lower(), f"Expected 'no log' message.\nstdout: {result.stdout}"

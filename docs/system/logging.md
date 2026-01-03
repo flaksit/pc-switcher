@@ -25,7 +25,8 @@ The system implements a six-level logging hierarchy (DEBUG, FULL, INFO, WARNING,
 
 3. *(Removed)*
 
-4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`, **Then** the file contains structured log entries in JSON Lines format (one JSON object per line) with fields: timestamp (ISO8601), level, job, host (enum: "source"/"target"), hostname (resolved machine name), event, plus additional context fields as needed, for all operations from both source and target machines
+4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`, **Then** the file contains structured log entries in JSON Lines format (one JSON object per line) with fields: timestamp (ISO8601), level, job, host (enum: "source"/"target"), event, plus additional context fields as needed, for all operations from both source and target machines. The hostname mapping (source hostname and target hostname) is logged once at session start, not in every entry.
+   Lineage: 001-US-4-AS-4 → #140
 
 5. *(Removed - target-side logging is Job implementation detail, not a spec-level concern)*
 
@@ -157,8 +158,11 @@ As a pc-switcher user, I want the TUI and file log output to maintain the curren
 - **LOG-FR-FILE-PATH**: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`.  
   Lineage: 001-FR-021
 
-- **LOG-FR-JSON**: System MUST preserve the current log file format: JSON Lines format (one JSON object per line with keys: timestamp in ISO8601 format, level, job, host, hostname, event, plus any additional context fields) for machine-readability.  
-  Lineage: 001-FR-022 -> 004-FR-007
+- **LOG-FR-JSON**: System MUST preserve the current log file format: JSON Lines format (one JSON object per line with keys: timestamp in ISO8601 format, level, job, host, event, plus any additional context fields) for machine-readability. ~~hostname~~ removed from per-entry requirements; see LOG-FR-SESSION-HOSTNAMES.
+  Lineage: 001-FR-022 → 004-FR-007 → #140
+
+- **LOG-FR-SESSION-HOSTNAMES**: System MUST log the source and target hostnames at session start, establishing the mapping between host roles ("source"/"target") and actual machine names.
+  Lineage: #140
 
 - **LOG-FR-TUI-FORMAT**: System MUST preserve the current TUI format (colored, timestamped, structured) for human-readability. Format: `HH:MM:SS [LEVEL   ] [job] (host) message`.  
   Lineage: 001-FR-022 -> 004-FR-008

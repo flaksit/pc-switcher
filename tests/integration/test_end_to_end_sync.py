@@ -45,6 +45,7 @@ class Pc1ToPc2TrafficBlocker:
     Both `block` and `unblock` are callables returning an awaitable that
     resolves to None when complete.
     """
+
     block: Callable[[], Awaitable[None]]
     unblock: Callable[[], Awaitable[None]]
 
@@ -496,9 +497,7 @@ class TestEndToEndSync:
         # Wait for PID file and get PID
         await asyncio.sleep(2)
         pid_result = await pc1_executor.run_command(f"cat {pid_file}", timeout=10.0)
-        assert pid_result.success and pid_result.stdout.strip(), (
-            f"Failed to get sync process PID: {pid_result.stderr}"
-        )
+        assert pid_result.success and pid_result.stdout.strip(), f"Failed to get sync process PID: {pid_result.stderr}"
         sync_pid = pid_result.stdout.strip()
 
         # Monitor log file for "Target phase:" indicator, then block network
@@ -558,9 +557,7 @@ class TestEndToEndSync:
                 process_exited = True
                 break
 
-        assert process_exited, (
-            f"Sync process {sync_pid} did not exit after network failure"
-        )
+        assert process_exited, f"Sync process {sync_pid} did not exit after network failure"
 
         # Read final output
         output_result = await pc1_executor.run_command(f"cat {output_file}", timeout=10.0)
@@ -581,10 +578,7 @@ class TestEndToEndSync:
         output_lower = output_text.lower()
         has_error_indicator = any(ind in output_lower for ind in error_indicators)
 
-        assert has_error_indicator, (
-            f"Output should indicate connection failure.\n"
-            f"Output:\n{output_text}"
-        )
+        assert has_error_indicator, f"Output should indicate connection failure.\nOutput:\n{output_text}"
 
         # Clean up temp files
         await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
