@@ -14,41 +14,33 @@ This playbook verifies **visual and UX elements** that automated tests cannot ch
 
 ## Prerequisites
 
-1. Install pc-switcher from the version you want to test:
+1. Two test VMs available (pc1 and pc2) with SSH access between them
+
+2. Install pc-switcher on both machines from the version you want to test:
    ```bash
    curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=<version> bash
    ```
 
-2. Initialize config and enable the dummy job:
+3. Initialize config on pc1:
    ```bash
    pc-switcher init
    # Edit ~/.config/pc-switcher/config.yaml
-   # Set: sync_jobs.dummy_success: true
+   # Set target_machine.hostname to pc2
    ```
 
-3. Verify terminal supports 256 colors:
+4. Verify terminal supports 256 colors:
    ```bash
    tput colors  # Should be >= 256
    ```
 
 ## Visual Verification
 
-### 1. Rich Library Rendering
+Run all tests from pc1, syncing to pc2.
+
+### 1. TUI Layout and Progress Bars
 
 ```bash
-uv run python -m rich.diagnose
-```
-
-**Pass criteria:**
-- [ ] Color blocks show distinct colors
-- [ ] Box-drawing characters render correctly (solid borders, no broken lines)
-- [ ] Unicode symbols display properly
-- [ ] No garbled text or rendering artifacts
-
-### 2. TUI Layout and Progress Bars
-
-```bash
-pc-switcher sync localhost
+pc-switcher sync pc2
 ```
 
 **Observe the display during sync:**
@@ -70,7 +62,7 @@ pc-switcher sync localhost
 - [ ] Logs scroll up as new ones arrive
 - [ ] No visual artifacts during scrolling
 
-### 3. Log Level Colors
+### 2. Log Level Colors
 
 During sync, observe log messages. Each level should have a distinct color:
 
@@ -81,23 +73,10 @@ During sync, observe log messages. Each level should have a distinct color:
 - [ ] `ERROR` - red
 - [ ] `CRITICAL` - bold red
 
-### 4. Log Message Formatting
-
-Individual log lines should follow this format:
-```
-HH:MM:SS LEVEL    job_name (hostname) message [context]
-```
-
-**Verify:**
-- [ ] Timestamp in dim gray
-- [ ] Level is color-coded and aligned
-- [ ] Job name in blue, hostname in magenta
-- [ ] Context key-value pairs in dim gray (if present)
-
-### 5. Interrupt Display
+### 3. Interrupt Display
 
 ```bash
-pc-switcher sync localhost
+pc-switcher sync pc2
 # Press Ctrl+C once during sync
 ```
 
@@ -106,7 +85,7 @@ pc-switcher sync localhost
 - [ ] Second Ctrl+C warning appears
 - [ ] Exit is clean (no stack trace)
 
-### 6. CLI Messages Outside TUI
+### 4. CLI Messages Outside TUI
 
 **Version display:**
 ```bash
@@ -117,7 +96,7 @@ pc-switcher --version
 **Configuration error:**
 ```bash
 mv ~/.config/pc-switcher/config.yaml ~/.config/pc-switcher/config.yaml.bak
-pc-switcher sync localhost
+pc-switcher sync pc2
 mv ~/.config/pc-switcher/config.yaml.bak ~/.config/pc-switcher/config.yaml
 ```
 - [ ] "Configuration error:" in bold red
@@ -130,12 +109,16 @@ pc-switcher logs --last
 - [ ] Log entries are color-coded (same colors as TUI)
 - [ ] Timestamps and context fields readable
 
-### 7. Config Sync UI (if testing with a target machine)
+### 5. Config Sync UI
 
-To test config sync display, ensure target config differs from source:
+To test config sync display, ensure pc2 config differs from pc1:
 
 ```bash
-pc-switcher sync <target-hostname>
+# On pc2, modify a setting
+ssh pc2 "sed -i 's/INFO/WARNING/' ~/.config/pc-switcher/config.yaml"
+
+# Run sync from pc1
+pc-switcher sync pc2
 ```
 
 **When configs differ:**
@@ -144,22 +127,22 @@ pc-switcher sync <target-hostname>
 - [ ] Lines starting with `-` and `+` are distinguishable
 - [ ] Choices (a/k/x) displayed clearly
 
-### 8. Terminal Size Adaptability
+### 6. Terminal Size Adaptability
 
 **Small terminal (80×24):**
 - Resize terminal to minimum size
-- Run `pc-switcher sync localhost`
+- Run `pc-switcher sync pc2`
 - [ ] All elements visible (may be compressed)
 - [ ] No horizontal scrolling needed
 - [ ] No overlapping or broken layout
 
 **Large terminal (120×40+):**
 - Resize terminal to large size
-- Run `pc-switcher sync localhost`
+- Run `pc-switcher sync pc2`
 - [ ] Progress bars scale appropriately
 - [ ] Layout uses space efficiently
 
-### 9. Theme Compatibility
+### 7. Theme Compatibility
 
 Test on your terminal's light and dark modes (if applicable):
 - [ ] All text readable on dark background
@@ -172,10 +155,8 @@ Test on your terminal's light and dark modes (if applicable):
 Before release, verify all pass:
 
 **Visual Elements:**
-- [ ] Rich library renders correctly
 - [ ] Progress bars animate smoothly
 - [ ] Log level colors are distinct
-- [ ] Log messages format correctly
 - [ ] Status bar updates properly
 
 **CLI Output:**
@@ -190,7 +171,7 @@ Before release, verify all pass:
 
 **Interactions:**
 - [ ] Interrupt handling shows correct messages
-- [ ] Config sync UI displays correctly (if applicable)
+- [ ] Config sync UI displays correctly
 
 ## Reporting Issues
 
