@@ -33,6 +33,6 @@ Integration tests are slow (5-30 min) and use shared VM infrastructure. Original
 - Concurrent PRs compete for shared VM infrastructure (mitigated by concurrency group)
 
 ## References
-- [CI Configuration Details](../ci-configuration.md)
-- [Testing Developer Guide](../testing-developer-guide.md)
+- [CI Configuration Details](../ops/ci-setup.md)
+- [Testing Guide](../dev/testing-guide.md)
 - [ADR-006: VM-Based Testing Framework](adr-006-testing-framework.md)

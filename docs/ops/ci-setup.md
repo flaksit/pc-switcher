@@ -181,7 +181,7 @@ To check if tests ran or were skipped, view the workflow run details.
 
 1. Check test logs artifact for details
 2. Verify VM state: `hcloud server list`
-3. See [Testing Ops Guide](testing-ops-guide.md) for VM troubleshooting
+3. See [Testing Ops Guide](testing-ops.md) for VM troubleshooting
 
 ### Merge Blocked
 

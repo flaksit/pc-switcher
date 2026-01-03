@@ -211,12 +211,13 @@ With a token, the rate limit increases to 5,000 requests/hour.
 
 ## Documentation
 
-- **[High level requirements](docs/High%20level%20requirements.md)** - Project vision, scope, workflow
-- **[Architecture](docs/architecture.md)** - High-level architecture and design
-- **[Implementation](docs/implementation.md)** - Implementation details and patterns
+See [docs/README.md](docs/README.md) for the documentation index.
+
+Key documents:
+- **[High level requirements](docs/planning/High%20level%20requirements.md)** - Project vision, scope, workflow
+- **[Architecture](docs/system/architecture.md)** - System architecture and design
 - **[Architecture Decision Records](docs/adr/_index.md)** - Design decisions and rationale
-- **[Developer workflow](docs/developer-workflow.md)** - Contribution workflow and PR conventions
-- **[Feature specifications](specs/001-foundation/)** - Detailed feature specs and plans
+- **[Development Guide](docs/dev/development-guide.md)** - Development workflow and guidelines
 
 ## Development
 
@@ -233,7 +234,7 @@ uv sync
 
 PR workflow:
 - If a PR fixes an issue, include `Fixes #<issue>` (or `Closes` / `Resolves`) in the PR description/title so GitHub closes the issue on merge.
-- See [docs/developer-workflow.md](docs/developer-workflow.md).
+- See [docs/dev/development-guide.md](docs/dev/development-guide.md).
 
 Install the tool from your local checkout (for testing):
 ```bash
