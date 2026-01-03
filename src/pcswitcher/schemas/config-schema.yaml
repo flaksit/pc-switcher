@@ -29,18 +29,7 @@ definitions:
     description: "Btrfs subvolume name (must start with @)"
 
 properties:
-  # Global logging configuration
-  log_file_level:
-    $ref: "#/definitions/log_level"
-    default: "FULL"
-    description: "Minimum log level written to log file"
-
-  log_cli_level:
-    $ref: "#/definitions/log_level"
-    default: "INFO"
-    description: "Minimum log level displayed in terminal"
-
-  # Logging configuration (new 3-setting model)
+  # Logging configuration (3-setting model)
   logging:
     type: object
     description: "Logging level configuration for the 3-setting model"

@@ -31,8 +31,10 @@ def _mock_isatty() -> MagicMock:
 def mock_config() -> MagicMock:
     """Create a mock Configuration for orchestrator initialization."""
     config = MagicMock(spec=Configuration)
-    config.log_file_level = MagicMock()
-    config.log_cli_level = MagicMock()
+    config.logging = MagicMock()
+    config.logging.file = 10  # DEBUG
+    config.logging.tui = 20  # INFO
+    config.logging.external = 30  # WARNING
     config.sync_jobs = {}
     config.job_configs = {}
     config.btrfs_snapshots = MagicMock()

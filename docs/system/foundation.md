@@ -191,7 +191,7 @@ The system loads configuration from `~/.config/pc-switcher/config.yaml` covering
 
 1. **Given** config file contains global settings and job sections, **When** orchestrator starts, **Then** it loads config, validates structure, applies defaults for missing values, and makes settings available to jobs via `job.config` accessor
 
-2. **Given** config includes `log_file_level: DEBUG` and `log_cli_level: INFO`, **When** sync runs, **Then** file logging captures all events at DEBUG and above, while terminal UI shows only INFO and above
+2. **Given** config includes `logging: { file: DEBUG, tui: INFO, external: WARNING }`, **When** sync runs, **Then** file logging captures all events at DEBUG and above, while terminal UI shows only INFO and above, and external library logs are filtered at WARNING
 
 3. **Given** config includes `sync_jobs: { dummy_success: true, dummy_fail: false }`, **When** sync runs, **Then** dummy_success job executes and dummy_fail job is skipped (with INFO log: "dummy_fail job disabled by configuration")
 
@@ -202,8 +202,11 @@ The system loads configuration from `~/.config/pc-switcher/config.yaml` covering
 **Example Configuration**:
 ```yaml
 # ~/.config/pc-switcher/config.yaml
-log_file_level: FULL
-log_cli_level: INFO
+# Logging configuration (3-setting model)
+logging:
+  file: FULL      # Floor level for log file output
+  tui: INFO       # Floor level for terminal output
+  external: WARNING  # Floor for third-party libraries
 
 # Jobs implemented in 001-foundation:
 sync_jobs:

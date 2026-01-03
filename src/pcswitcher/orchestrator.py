@@ -494,8 +494,9 @@ class Orchestrator:
             extra={
                 "job": "orchestrator",
                 "host": "source",
-                "log_file_level": self._config.log_file_level.name,
-                "log_cli_level": self._config.log_cli_level.name,
+                "logging_file": self._config.logging.file,
+                "logging_tui": self._config.logging.tui,
+                "logging_external": self._config.logging.external,
                 "sync_jobs": self._config.sync_jobs,
                 "disk_preflight_minimum": self._config.disk.preflight_minimum,
                 "disk_runtime_minimum": self._config.disk.runtime_minimum,
