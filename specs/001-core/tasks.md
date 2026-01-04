@@ -1,6 +1,6 @@
 # Tasks: Foundation Infrastructure Complete
 
-**Input**: Design documents from `/specs/001-foundation/`
+**Input**: Design documents from `/specs/001-core/`
 **Prerequisites**: plan.md (required), spec.md (required), architecture.md (required), research.md, data-model.md, contracts/
 
 **Tests**: No explicit test-first workflow requested in specification. Tests are included where they provide contract verification value.
@@ -85,7 +85,7 @@
 - [X] T024 [US6] Implement log level parsing (string to LogLevel enum) in src/pcswitcher/config.py
 - [X] T025 [US6] Implement disk threshold parsing (percentage or absolute) in src/pcswitcher/config.py
 - [X] T026 [US6] Add error handling for invalid YAML syntax with line numbers in src/pcswitcher/config.py
-- [X] T027 [US6] Copy config-schema.yaml from specs/001-foundation/contracts/ to src/pcswitcher/schemas/
+- [X] T027 [US6] Copy config-schema.yaml from specs/001-core/contracts/ to src/pcswitcher/schemas/
 
 **Checkpoint**: Configuration system is fully functional and testable
 

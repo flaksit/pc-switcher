@@ -100,7 +100,7 @@ async def test_001_fnd_fr_install_script(
 # - install.sh does NOT create a default config file
 # - Users must run "pc-switcher init" to create the config
 # - Tests for "pc-switcher init" belong in tests/unit/test_cli.py or similar
-# See specs/001-foundation/spec.md for the documented workflow.
+# See specs/001-core/spec.md for the documented workflow.
 
 
 class TestInstallationScriptVersionParameter:

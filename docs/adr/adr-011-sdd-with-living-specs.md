@@ -9,7 +9,7 @@ Adopt a hybrid SDD workflow where `specs/` folders are immutable history and `do
 ## Implementation Rules
 
 ### Core Principles
-- **Immutable History**: `specs/` folders (e.g., `specs/001-foundation`) are frozen after feature completion. Never edit them to reflect current state.
+- **Immutable History**: `specs/` folders (e.g., `specs/001-core`) are frozen after feature completion. Never edit them to reflect current state.
 - **Living Truth**: `docs/system/` must always reflect the current state of the code in `main`.
 
 ### Simple Merge Strategy
@@ -88,7 +88,7 @@ This directory will hold the "Golden Copy" of the system specification.
    ```text
    /
    ├── specs/                      # HISTORY (Immutable)
-   │   ├── 001-foundation/         # Old run (frozen)
+   │   ├── 001-core/         # Old run (frozen)
    │   ├── 002-testing/            # Old run (frozen)
    │   └── 005-new-feature/        # Active SpecKit run
    │
@@ -99,7 +99,7 @@ This directory will hold the "Golden Copy" of the system specification.
    │       ├── data-model.md       # Consolidated data model
    │       ├── logging.md          # Consolidated domain spec
    │       ├── testing.md          # Consolidated domain spec
-   │       └── foundation.md       # Consolidated domain spec
+   │       └── core.md       # Consolidated domain spec
    ```
 
 ### 2. Semantic ID Strategy

@@ -8,7 +8,7 @@ Tests the complete snapshot infrastructure including:
 - Error handling when btrfs is not available
 
 These tests verify User Story 3 (Safety Infrastructure with Btrfs Snapshots)
-from specs/001-foundation/spec.md.
+from specs/001-core/spec.md.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ async def test_001_us3_as2_create_presync_snapshots(
 ) -> None:
     """Test US3-AS2: Create pre-sync snapshots before any sync operations.
 
-    Spec: specs/001-foundation/spec.md - User Story 3, Acceptance Scenario 2
+    Spec: specs/001-core/spec.md - User Story 3, Acceptance Scenario 2
     Verifies that the system creates read-only btrfs snapshots in
     /.snapshots/pc-switcher/<session-folder>/ with naming pattern
     pre-<subvol>-<timestamp>.
@@ -127,7 +127,7 @@ async def test_001_us3_as3_create_postsync_snapshots(
 ) -> None:
     """Test US3-AS3: Create post-sync snapshots after successful sync.
 
-    Spec: specs/001-foundation/spec.md - User Story 3, Acceptance Scenario 3
+    Spec: specs/001-core/spec.md - User Story 3, Acceptance Scenario 3
     Verifies that the system creates read-only btrfs snapshots in the same
     session folder with naming pattern post-<subvol>-<timestamp>.
     """
@@ -180,7 +180,7 @@ async def test_001_us3_as4_create_snapshots_subvolume(
 ) -> None:
     """Test US3-AS4: Create /.snapshots/ as btrfs subvolume if missing.
 
-    Spec: specs/001-foundation/spec.md - User Story 3, Acceptance Scenario 4
+    Spec: specs/001-core/spec.md - User Story 3, Acceptance Scenario 4
     Verifies that if /.snapshots/ doesn't exist, the system creates it as a
     btrfs subvolume (not a regular directory).
 
@@ -245,7 +245,7 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
 ) -> None:
     """Test US3-AS7: Cleanup snapshots with retention policy.
 
-    Spec: specs/001-foundation/spec.md - User Story 3, Acceptance Scenario 7
+    Spec: specs/001-core/spec.md - User Story 3, Acceptance Scenario 7
     Verifies that cleanup_snapshots respects retention policies:
     - Keeps the most recent N sessions regardless of age
     - Deletes snapshots older than max_age_days (if specified)
@@ -358,7 +358,7 @@ async def test_001_us3_as9_runtime_disk_space_monitoring(
 ) -> None:
     """Test US3-AS9: Runtime disk space monitoring during sync.
 
-    Spec: specs/001-foundation/spec.md - User Story 3, Acceptance Scenario 9
+    Spec: specs/001-core/spec.md - User Story 3, Acceptance Scenario 9
     Verifies that the system can check available disk space during runtime
     and detect when it falls below configured thresholds.
 
@@ -401,7 +401,7 @@ async def test_001_edge_btrfs_not_available(
 ) -> None:
     """Test edge case: btrfs tools not available on the system.
 
-    Spec: specs/003-foundation-tests/tasks.md - T015 edge case
+    Spec: specs/003-core-tests/tasks.md - T015 edge case
     Verifies that the system handles gracefully when btrfs is not available
     or when trying to snapshot a non-btrfs filesystem.
     """

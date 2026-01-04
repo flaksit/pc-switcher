@@ -1,6 +1,6 @@
 """Unit tests for orchestrator interrupt handling.
 
-Tests verify FND-FR-TERM-CTRLC, FND-FR-SIGINT, and FND-US-INTERRUPT-AS2 from specs/001-foundation/spec.md:
+Tests verify FND-FR-TERM-CTRLC, FND-FR-SIGINT, and FND-US-INTERRUPT-AS2 from specs/001-core/spec.md:
 - FND-FR-TERM-CTRLC: Termination request with cleanup timeout
 - FND-FR-SIGINT: SIGINT handler, log, exit 130
 - FND-US-INTERRUPT-AS2: Interrupt between jobs skips remaining jobs

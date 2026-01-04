@@ -7,7 +7,7 @@ A synchronization system for seamless switching between Linux desktop machines (
 **Related Documentation:**
 - [Architecture Decision Records (ADRs)](adr/_index.md) - Architectural decisions with rationale
 - [Feature Specifications](../specs/) - Feature-level specs, plans, and implementation details
-  - [001-foundation](../specs/001-foundation/) - Core sync engine architecture
+  - [001-core](../specs/001-core/) - Core sync engine architecture
 
 ## Vision
 

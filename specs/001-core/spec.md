@@ -1,20 +1,28 @@
-# Foundation Infrastructure
+# Feature Specification: Foundation Infrastructure Complete
 
-This document is the **Living Truth** for pc-switcher's foundation infrastructure. It consolidates specifications from SpecKit runs into the authoritative, current definition of the system.
+**Feature Branch**: `001-core`
+**Created**: 2025-11-15
+**Status**: Final
+**Input**: User description: "(1) Basic CLI & Infrastructure - Command parser, config system, connection, logging, terminal UI skeleton, architecture for modular features; (2) Safety Infrastructure - Pre-sync validation framework, btrfs snapshot management, rollback capability; (3) Installation & Setup - Deploy to machines, dependency installation"
 
-**Domain Code**: `FND` (Foundation)
+## Navigation
 
-## User Scenarios & Testing
+**Documentation Hierarchy:**
+- [High level requirements](../../docs/High%20level%20requirements.md) - Project vision and scope
+- [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
+- Specification (this document) - Detailed requirements for this feature
+- [Architecture](architecture.md) - Component design and interactions
+- [Data model](data-model.md) - Data structures and schemas
+- [Implementation plan](plan.md) - Implementation approach and phases
+- [Tasks](tasks.md) - Actionable implementation tasks
 
-### Job Architecture and Integration Contract (FND-US-JOB-ARCH)
+## User Scenarios & Testing *(mandatory)*
 
-Lineage: 001-US-1
-
-Priority: P1
+### User Story 1 - Job Architecture and Integration Contract (Priority: P1)
 
 The system defines a precise contract for how sync jobs integrate with the core orchestration system. Each job (representing a discrete sync capability like package sync, Docker sync, or user data sync) implements a standardized interface covering configuration, validation, execution, logging, progress reporting, and error handling. This contract is detailed enough that all feature jobs can be developed independently and concurrently once the core infrastructure exists.
 
-**Why this priority**: This is P1 because it's the architectural foundation. Without a clear, detailed job contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future job developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as jobs. The btrfs snapshots safety infrastructure (FND-US-BTRFS) is orchestrator-level infrastructure (not configurable via sync_jobs). Self-installation (FND-US-SELF-INSTALL) is NOT a job—it is pre-job orchestrator logic that runs before any job execution.
+**Why this priority**: This is P1 because it's the architectural foundation. Without a clear, detailed job contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future job developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as jobs. The btrfs snapshots safety infrastructure (User Story 3) is orchestrator-level infrastructure (not configurable via sync_jobs). Self-installation (User Story 2) is NOT a job—it is pre-job orchestrator logic that runs before any job execution.
 
 **Independent Test**: Can be fully tested by:
 1. Defining the job interface contract
@@ -22,12 +30,14 @@ The system defines a precise contract for how sync jobs integrate with the core 
 3. Registering it with the core orchestrator
 4. Running sync and verifying the orchestrator correctly:
    - Loads the job configuration
-   - Calls lifecycle methods in correct order (validate -> execute)
+   - Calls lifecycle methods in correct order (validate → execute)
    - Handles job logging at all six levels
    - Processes progress updates
    - Handles job errors (exceptions)
    - Requests job termination on interrupts
 5. Demonstrating that a developer can implement a new job by only implementing the contract
+
+This delivers immediate value by establishing the development pattern for all 6 user-facing features (features 4-9 in the breakdown).
 
 **Constitution Alignment**:
 - Deliberate Simplicity (clear interface reduces complexity)
@@ -50,11 +60,9 @@ The system defines a precise contract for how sync jobs integrate with the core 
 
 7. **Given** user presses Ctrl+C during job execution, **When** signal is caught, **Then** orchestrator requests termination of the currently-executing job with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), logs interruption at WARNING level, and exits gracefully with code 130
 
-### Self-Installing Sync Orchestrator (FND-US-SELF-INSTALL)
+---
 
-Lineage: 001-US-2
-
-Priority: P1
+### User Story 2 - Self-Installing Sync Orchestrator (Priority: P1)
 
 When a user initiates sync from source to target, the orchestrator ensures the pc-switcher package on the target machine is at the same version as the source machine. If versions differ or pc-switcher is not installed on target, the system automatically installs or upgrades the target installation. Additionally, the orchestrator ensures the target has the source's configuration file, prompting the user for confirmation before applying it. This installation/upgrade happens after pre-sync snapshots are created, providing rollback capability if installation fails.
 
@@ -69,6 +77,8 @@ When a user initiates sync from source to target, the orchestrator ensures the p
 6. Repeating with version mismatch (older version on target) to test upgrade path
 7. Verifying config is copied to target after user confirmation
 8. Testing config diff display when target has existing different config
+
+This delivers value by enabling zero-touch target setup and ensuring version consistency.
 
 **Constitution Alignment**:
 - Frictionless Command UX (automated installation, no manual setup)
@@ -91,11 +101,9 @@ When a user initiates sync from source to target, the orchestrator ensures the p
 
 7. **Given** target config matches source config exactly, **When** sync reaches config sync phase, **Then** orchestrator logs "Target config matches source, skipping config sync" and proceeds without prompting
 
-### Safety Infrastructure with Btrfs Snapshots (FND-US-BTRFS)
+---
 
-Lineage: 001-US-3
-
-Priority: P1
+### User Story 3 - Safety Infrastructure with Btrfs Snapshots (Priority: P1)
 
 Before any sync operations modify state, the system creates read-only btrfs snapshots of critical subvolumes on both source and target machines. These "pre-sync" snapshots serve as recovery points. After all sync jobs complete successfully, the system creates "post-sync" snapshots capturing the final state. This safety mechanism is implemented as orchestrator-level infrastructure (not a SyncJob) that is always active and cannot be disabled by users.
 
@@ -110,6 +118,8 @@ Before any sync operations modify state, the system creates read-only btrfs snap
 6. Simulating sync failure and verifying pre-sync snapshot can be used for manual recovery
 7. Confirming post-sync snapshots are created after successful completion of all SyncJobs
 8. Verifying that snapshot infrastructure is always active (no config option to disable)
+
+This delivers value by providing the foundation for all recovery operations.
 
 **Constitution Alignment**:
 - Reliability Without Compromise (transactional safety via snapshots)
@@ -135,11 +145,51 @@ Before any sync operations modify state, the system creates read-only btrfs snap
 
 9. **Given** orchestrator configuration includes `disk_space_monitor.check_interval` (seconds, default: 30) and `disk_space_monitor.runtime_minimum` (percentage like "15%" or absolute value like "40GiB", default: "15%"), **When** sync is running, **Then** orchestrator MUST periodically check free disk space at the configured interval and log CRITICAL and abort if available free space falls below the configured runtime minimum on either side
 
-### Graceful Interrupt Handling (FND-US-INTERRUPT)
+---
 
-Lineage: 001-US-5
+### User Story 4 - Comprehensive Logging System (Priority: P1)
 
-Priority: P1
+The system implements a six-level logging hierarchy (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL) with independent level configuration for file logging and terminal UI display. Log levels follow the ordering DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL: DEBUG is the most verbose and includes all messages, while FULL is a high-verbosity operational level that does NOT include DEBUG-level diagnostics. Logs are written to timestamped files in `~/.local/share/pc-switcher/logs/` on the source machine. All operations (core orchestrator, individual jobs, target-side scripts) contribute to the unified log stream.
+
+**Why this priority**: This is P1 because comprehensive logging is essential for development, troubleshooting, and reliability verification.
+
+**Independent Test**: Can be fully tested by:
+1. Running sync with various log level configurations
+2. Verifying file contains events at configured level and above
+3. Confirming terminal shows only events at CLI log level and above
+4. Checking log format includes timestamp, level, job name, and message
+5. Validating that both source and target operations contribute to unified log
+
+This delivers value by enabling developers to diagnose issues and providing audit trails for sync operations.
+
+**Constitution Alignment**:
+- Reliability Without Compromise (detailed audit trail)
+
+**Acceptance Scenarios**:
+
+1. **Given** user configures `log_file_level: FULL` and `log_cli_level: INFO`, **When** sync runs and a job logs at DEBUG level, **Then** the message does NOT appear in the log file nor in the terminal UI (DEBUG is excluded by FULL)
+
+2. **Given** user configures `log_file_level: INFO`, **When** sync runs and a job logs at FULL level (e.g., "Copying /home/user/file.txt"), **Then** the message does not appear in either log file or terminal UI
+
+3. *(Removed)*
+
+4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`, **Then** the file contains structured log entries in JSON Lines format (one JSON object per line) with fields: timestamp (ISO8601), level, job, host (enum: "source"/"target"), hostname (resolved machine name), event, plus additional context fields as needed, for all operations from both source and target machines
+
+5. *(Removed - target-side logging is Job implementation detail, not a spec-level concern)*
+
+6. **Given** user runs `pc-switcher logs --last`, **When** command executes, **Then** the system displays the most recent sync log file in the terminal using rich console with syntax highlighting for improved readability
+
+**Log Level Definitions** (from most to least verbose):
+- **DEBUG**: Most verbose level for internal diagnostics, including command outputs, detailed timings, internal state transitions, and all messages from lower levels (FULL, INFO, WARNING, ERROR, CRITICAL). Intended for deep troubleshooting and development.
+- **FULL**: High-verbosity operational details including file-level operations (e.g., "Copying /home/user/document.txt", "Created snapshot pre-@home-20251115T143022") and all messages from lower levels (INFO, WARNING, ERROR, CRITICAL). Excludes DEBUG-level internal diagnostics.
+- **INFO**: High-level operation reporting for normal user visibility (e.g., "Starting job X", "Job X completed successfully", "Connection established") and all messages from lower levels (WARNING, ERROR, CRITICAL).
+- **WARNING**: Unexpected conditions that should be reviewed but don't indicate failure (e.g., config value using deprecated format, unusually large transfer size) and all messages from lower levels (ERROR, CRITICAL).
+- **ERROR**: Recoverable errors that may impact sync quality but don't require abort (e.g., individual file copy failed, optional feature unavailable) and CRITICAL messages.
+- **CRITICAL**: Unrecoverable errors requiring immediate sync abort (e.g., snapshot creation failed, target unreachable mid-sync, data corruption detected). Triggered when jobs raise an unhandled exception.
+
+---
+
+### User Story 5 - Graceful Interrupt Handling (Priority: P1)
 
 When the user presses Ctrl+C during sync, the system catches the SIGINT signal, notifies the currently-executing job, logs the interruption, sends cleanup commands to the target machine, closes the connection cleanly, and exits with appropriate status code. The system does not leave orphaned processes. This does not issue a rollback automatically; rollback capability is a separate feature.
 
@@ -154,6 +204,8 @@ When the user presses Ctrl+C during sync, the system catches the SIGINT signal, 
 6. Validating no orphaned processes remain on source or target
 7. Ensuring log file contains interruption event
 
+This delivers value by giving users confidence they can safely stop operations.
+
 **Constitution Alignment**:
 - Frictionless Command UX (user maintains control)
 - Reliability Without Compromise (clean shutdown prevents inconsistent state)
@@ -165,12 +217,9 @@ When the user presses Ctrl+C during sync, the system catches the SIGINT signal, 
 2. **Given** sync is in the orchestrator phase between jobs (no job actively running), **When** user presses Ctrl+C, **Then** orchestrator logs interruption, skips remaining jobs, and exits cleanly
 
 3. **Given** user presses Ctrl+C multiple times rapidly, **When** the second SIGINT arrives before cleanup completes, **Then** orchestrator immediately force-terminates (kills connection, exits with code 130) without waiting for graceful cleanup
+---
 
-### Configuration System (FND-US-CONFIG)
-
-Lineage: 001-US-6
-
-Priority: P1
+### User Story 6 - Configuration System (Priority: P1)
 
 The system loads configuration from `~/.config/pc-switcher/config.yaml` covering global settings (log levels, enabled jobs) and job-specific settings. Each job declares its configuration schema; the core validates job configs against schemas and provides validated settings to jobs. Configuration supports enabling/disabling optional jobs, setting separate log levels for file and CLI, and job-specific parameters.
 
@@ -183,6 +232,8 @@ The system loads configuration from `~/.config/pc-switcher/config.yaml` covering
 4. Confirming log levels are applied correctly
 5. Disabling an optional job and verifying it's skipped
 
+This delivers value by enabling user customization and job parameterization.
+
 **Constitution Alignment**:
 - Frictionless Command UX (reasonable defaults, easy customization)
 - Deliberate Simplicity (single config file, clear structure)
@@ -191,7 +242,7 @@ The system loads configuration from `~/.config/pc-switcher/config.yaml` covering
 
 1. **Given** config file contains global settings and job sections, **When** orchestrator starts, **Then** it loads config, validates structure, applies defaults for missing values, and makes settings available to jobs via `job.config` accessor
 
-2. **Given** config includes `logging: { file: DEBUG, tui: INFO, external: WARNING }`, **When** sync runs, **Then** file logging captures all events at DEBUG and above, while terminal UI shows only INFO and above, and external library logs are filtered at WARNING
+2. **Given** config includes `log_file_level: DEBUG` and `log_cli_level: INFO`, **When** sync runs, **Then** file logging captures all events at DEBUG and above, while terminal UI shows only INFO and above
 
 3. **Given** config includes `sync_jobs: { dummy_success: true, dummy_fail: false }`, **When** sync runs, **Then** dummy_success job executes and dummy_fail job is skipped (with INFO log: "dummy_fail job disabled by configuration")
 
@@ -202,13 +253,10 @@ The system loads configuration from `~/.config/pc-switcher/config.yaml` covering
 **Example Configuration**:
 ```yaml
 # ~/.config/pc-switcher/config.yaml
-# Logging configuration (3-setting model)
-logging:
-  file: FULL      # Floor level for log file output
-  tui: INFO       # Floor level for terminal output
-  external: WARNING  # Floor for third-party libraries
+log_file_level: FULL
+log_cli_level: INFO
 
-# Jobs implemented in 001-foundation:
+# Jobs implemented in 001-core:
 sync_jobs:
   dummy_success: true   # Test job that completes successfully
   dummy_fail: false     # Test job that fails at configurable time
@@ -231,13 +279,11 @@ dummy_fail:
   fail_at: 12           # Elapsed seconds at which to fail
 ```
 
-**Configuration Schema**: The formal configuration schema structure (global settings, sync_jobs section, and per-job settings) is defined in `specs/001-foundation/contracts/config-schema.yaml`. Job-specific settings appear as top-level keys (e.g., `btrfs_snapshots`, `user_data`) outside of the `sync_jobs` section.
+**Configuration Schema**: The formal configuration schema structure (global settings, sync_jobs section, and per-job settings) is defined in `specs/001-core/contracts/config-schema.yaml`. Job-specific settings appear as top-level keys (e.g., `btrfs_snapshots`, `user_data`) outside of the `sync_jobs` section.
 
-### Installation and Setup Infrastructure (FND-US-INSTALL)
+---
 
-Lineage: 001-US-7
-
-Priority: P2
+### User Story 7 - Installation and Setup Infrastructure (Priority: P2)
 
 The system provides installation and setup tooling to deploy pc-switcher to new machines and configure required infrastructure (packages, configuration). A setup script handles initial installation, dependency checking (including `uv` and `btrfs-progs`), and subvolume creation guidance.
 
@@ -253,6 +299,8 @@ The system provides installation and setup tooling to deploy pc-switcher to new 
 5. Checking that config directory is created with default config
 6. Validating btrfs subvolume structure guidance is provided
 
+This delivers value by streamlining initial deployment.
+
 **Constitution Alignment**:
 - Frictionless Command UX (simple installation process, no prerequisites)
 - Proven Tooling Only (uses standard package managers)
@@ -266,11 +314,9 @@ The system provides installation and setup tooling to deploy pc-switcher to new 
 
 3. **Given** `~/.config/pc-switcher/config.yaml` already exists, **When** user runs the installation script, **Then** the script prompts "Configuration file already exists. Overwrite? [y/N]" and preserves the existing file unless user confirms overwrite
 
-### Dummy Test Jobs (FND-US-DUMMY)
+---
 
-Lineage: 001-US-8
-
-Priority: P1
+### User Story 8 - Dummy Test Jobs (Priority: P1)
 
 Two dummy jobs exist for testing infrastructure: `dummy_success` (completes successfully with INFO/WARNING/ERROR logs) and `dummy_fail` (raises unhandled exception to test exception handling). Each simulates long-running operations on both source and target with progress reporting.
 
@@ -286,15 +332,15 @@ Two dummy jobs exist for testing infrastructure: `dummy_success` (completes succ
 
 1. **Given** `dummy_success` job is enabled, **When** sync runs, **Then** the job performs 20-second busy-wait on source (logging INFO message every 2s), emits WARNING at 6s, performs 20-second busy-wait on target (logging INFO message every 2s), emits ERROR at 8s, reports progress updates (0%, 25%, 50%, 75%, 100%), and completes successfully
 
-2. **Given** `dummy_fail` job is enabled, **When** sync runs and job reaches the configured `fail_at` time, **Then** the job raises a RuntimeError, the orchestrator catches the exception, logs it at CRITICAL level, requests job termination with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), and halts sync
+2. *(Removed)*
 
-3. **Given** any dummy job is running, **When** user presses Ctrl+C, **Then** the job receives termination request, it logs "Dummy job termination requested", stops its busy-wait loop within the grace period, and returns control to orchestrator
+3. **Given** `dummy_fail` job is enabled, **When** sync runs and job reaches the configured `fail_at` time, **Then** the job raises a RuntimeError, the orchestrator catches the exception, logs it at CRITICAL level, requests job termination with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), and halts sync
 
-### Terminal UI with Progress Reporting (FND-US-TUI)
+4. **Given** any dummy job is running, **When** user presses Ctrl+C, **Then** the job receives termination request, it logs "Dummy job termination requested", stops its busy-wait loop within the grace period, and returns control to orchestrator
 
-Lineage: 001-US-9
+---
 
-Priority: P2
+### User Story 9 - Terminal UI with Progress Reporting (Priority: P2)
 
 The terminal displays real-time sync progress including current job, operation phase (validate/sync/cleanup), progress percentage, current item being processed, and log messages at configured CLI log level. UI updates smoothly without excessive redraws and gracefully handles terminal resize.
 
@@ -313,371 +359,188 @@ The terminal displays real-time sync progress including current job, operation p
 
 3. **Given** a job emits log at INFO level or higher, **When** log reaches terminal UI, **Then** it's displayed below progress indicators with appropriate formatting (color-coded by level if terminal supports colors)
 
-### Spec-Driven Test Coverage for Foundation (FND-US-TEST-COVERAGE)
-
-Lineage: 003-US-1
-
-Priority: P1
-
-As a pc-switcher developer, I have comprehensive tests that verify 100% of the specifications defined in the foundation specification. Tests are written based on the spec (user stories, acceptance scenarios, functional requirements), not the implementation code. If any part of the spec was not implemented or implemented incorrectly, the tests fail.
-
-**Why this priority**: P1 because the existing foundation code is critical infrastructure. Bugs could break entire systems. Spec-driven tests ensure the implementation matches the documented requirements and catch gaps or deviations.
-
-**Independent Test**: Can be verified by running the full test suite and confirming tests exist for every user story, acceptance scenario, and functional requirement in the foundation spec.
-
-**Acceptance Scenarios**:
-
-1. **Given** tests are implemented based on foundation spec, **When** I run the full test suite, **Then** 100% of user stories have corresponding test coverage
-
-2. **Given** tests are implemented based on foundation spec, **When** I run the full test suite, **Then** 100% of acceptance scenarios have corresponding test cases
-
-3. **Given** tests are implemented based on foundation spec, **When** I run the full test suite, **Then** 100% of functional requirements have corresponding test assertions
-
-4. **Given** a part of the spec was not implemented or implemented incorrectly, **When** I run the tests, **Then** the relevant tests fail, exposing the gap or bug
-
-5. **Given** tests cover both success and failure paths, **When** I run the full test suite, **Then** error handling, edge cases, and boundary conditions from the spec are all verified
-
-### Traceability from Tests to Spec (FND-US-TEST-TRACE)
-
-Lineage: 003-US-2
-
-Priority: P2
-
-As a pc-switcher developer, I can trace each test back to the specific requirement it validates. When a test fails, I can quickly identify which part of the foundation spec is affected.
-
-**Why this priority**: P2 because traceability improves debugging and maintenance but the tests themselves are more critical.
-
-**Independent Test**: Can be verified by examining test names/docstrings and confirming they reference specific requirements from foundation spec.
-
-**Acceptance Scenarios**:
-
-1. **Given** I look at any test for foundation, **When** I read the test name or docstring, **Then** I can identify the specific user story, acceptance scenario, or FR being tested
-
-2. **Given** a test fails in CI, **When** I review the failure output, **Then** I can immediately navigate to the corresponding spec requirement
+---
 
 ### Edge Cases
 
-Lineage: 001-foundation edge cases, 003-foundation-tests edge cases
-
-- **What happens when target machine becomes unreachable mid-sync?**
+- What happens when target machine becomes unreachable mid-sync?
   - Orchestrator detects connection loss, logs CRITICAL error with diagnostic information, and aborts sync (no reconnection attempt)
-
-- **What happens when source machine crashes or powers off?**
+- What happens when source machine crashes or powers off?
   - Target-side operations should timeout and cleanup after 5 minutes of no communication; next sync will detect inconsistent state via validation
-
-- **What happens when btrfs snapshots cannot be created due to insufficient space?**
+- What happens when btrfs snapshots cannot be created due to insufficient space?
   - Snapshot job logs CRITICAL error with space usage details, orchestrator aborts before any state modification
-
-- **What happens when a job's cleanup logic raises an exception during termination?**
+- What happens when a job's cleanup logic raises an exception during termination?
   - Orchestrator logs the exception, continues with shutdown sequence (cleanup is best-effort)
-
-- **What happens when user runs multiple sync commands concurrently?**
+- What happens when user runs multiple sync commands concurrently?
   - Second invocation detects lock, displays "Another sync is in progress (PID: 12345)", gives instructions on how to remove a stale lock and exits
-
-- **What happens when config file contains unknown job names?**
+- What happens when config file contains unknown job names?
   - Orchestrator logs ERROR "Unknown job 'xyz' in configuration, aborting" and aborts sync
-
-- **How does the system handle partial failures (some jobs succeed, some fail)?**
+- How does the system handle partial failures (some jobs succeed, some fail)?
   - Each job's success/failure is tracked independently; orchestrator logs summary at end showing which jobs succeeded/failed; overall sync is considered failed if any job fails
-
-- **What happens when target has newer pc-switcher version than source?**
+- What happens when target has newer pc-switcher version than source?
   - Orchestrator detects version mismatch, logs CRITICAL "Target version 0.5.0 is newer than source 0.4.0, this is unusual", and aborts sync to prevent accidental downgrade
 
-- **What happens when tests find a gap between spec and implementation?**
-  - Tests fail with clear assertion messages indicating which spec requirement is not met
-
-- **What happens when a spec requirement is ambiguous?**
-  - Test documents the interpretation used; if implementation differs, test fails and forces clarification
-
-- **What happens when implementation has functionality not in spec?**
-  - Such functionality should be tested as well, but a warning should be raised to the user to consider updating the spec
-
-## Requirements
+## Requirements *(mandatory)*
 
 ### Functional Requirements
 
 #### Job Architecture
 
-- **FND-FR-JOB-IFACE** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized Job interface specifying how the orchestrator interacts with jobs, including how logging is done, how a job reports progress to the user, methods, error handling, termination request handling, timeout handling; the interface MUST include at least `validate()` and `execute()` methods, a mechanism to declare configuration schema, and property: `name: str`  
-  Lineage: 001-FR-001
+- **FR-001** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized Job interface specifying how the orchestrator interacts with jobs, including how logging is done, how a job reports progress to the user, methods, error handling, termination request handling, timeout handling; the interface MUST include at least `validate()` and `execute()` methods, a mechanism to declare configuration schema, and property: `name: str`
 
-- **FND-FR-LIFECYCLE** `[Reliability Without Compromise]`: System MUST call job lifecycle methods in order: `validate()` (all jobs), then `execute()` for each job in the specified order; on shutdown, errors, or user interrupt the system requests termination of the currently-executing job  
-  Lineage: 001-FR-002
 
-- **FND-FR-TERM-CTRLC** `[Reliability Without Compromise]`: System MUST request termination of currently-executing job when Ctrl+C is pressed, allowing cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful cleanup; if job does not complete cleanup within timeout, orchestrator MUST force-terminate connections and the job, then proceed with exit  
-  Lineage: 001-FR-003
+- **FR-002** `[Reliability Without Compromise]`: System MUST call job lifecycle methods in order: `validate()` (all jobs), then `execute()` for each job in the specified order; on shutdown, errors, or user interrupt the system requests termination of the currently-executing job
 
-- **FND-FR-JOB-LOAD** `[Deliberate Simplicity]`: Jobs MUST be loaded from the configuration file section `sync_jobs` in the order they appear and instantiated by the orchestrator; job execution order is strictly sequential from config (no dependency resolution is provided—simplicity over flexibility)  
-  Lineage: 001-FR-004
+- **FR-003** `[Reliability Without Compromise]`: System MUST request termination of currently-executing job when Ctrl+C is pressed, allowing cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful cleanup; if job does not complete cleanup within timeout, orchestrator MUST force-terminate connections and the job, then proceed with exit
+
+- **FR-004** `[Deliberate Simplicity]`: Jobs MUST be loaded from the configuration file section `sync_jobs` in the order they appear and instantiated by the orchestrator; job execution order is strictly sequential from config (no dependency resolution is provided—simplicity over flexibility)
 
 #### Self-Installation
 
-- **FND-FR-VERSION-CHECK** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version from public GitHub repository using `uv tool install git+https://github.com/[owner]/pc-switcher@v<version>` (no authentication required for public repository)  
-  Lineage: 001-FR-005
+- **FR-005** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version from public GitHub repository using `uv tool install git+https://github.com/[owner]/pc-switcher@v<version>` (no authentication required for public repository)
 
-- **FND-FR-VERSION-NEWER** `[Reliability Without Compromise]`: System MUST abort sync with CRITICAL log if the target machine's pc-switcher version is newer than the source version (preventing accidental downgrades)  
-  Lineage: 001-FR-006
+- **FR-006** `[Reliability Without Compromise]`: System MUST abort sync with CRITICAL log if the target machine's pc-switcher version is newer than the source version (preventing accidental downgrades)
 
-- **FND-FR-INSTALL-FAIL** `[Frictionless Command UX]`: If installation/upgrade fails, system MUST log CRITICAL error and abort sync  
-  Lineage: 001-FR-007
+- **FR-007** `[Frictionless Command UX]`: If installation/upgrade fails, system MUST log CRITICAL error and abort sync
 
-- **FND-FR-CONFIG-SYNC** `[Reliability Without Compromise]`: After pc-switcher installation/upgrade, system MUST sync configuration from source to target; if target has no config, system MUST display source config and prompt user for confirmation before copying; if user declines, system MUST abort sync  
-  Lineage: 001-FR-007a
+- **FR-007a** `[Reliability Without Compromise]`: After pc-switcher installation/upgrade, system MUST sync configuration from source to target; if target has no config, system MUST display source config and prompt user for confirmation before copying; if user declines, system MUST abort sync
 
-- **FND-FR-CONFIG-DIFF** `[Frictionless Command UX]`: If target has existing config that differs from source, system MUST display a diff and prompt user with three options: (a) Accept config from source, (b) Keep current config on target, (c) Abort sync  
-  Lineage: 001-FR-007b
+- **FR-007b** `[Frictionless Command UX]`: If target has existing config that differs from source, system MUST display a diff and prompt user with three options: (a) Accept config from source, (b) Keep current config on target, (c) Abort sync
 
-- **FND-FR-CONFIG-MATCH** `[Frictionless Command UX]`: If target config matches source config exactly, system MUST skip config sync with INFO log and proceed without prompting  
-  Lineage: 001-FR-007c
+- **FR-007c** `[Frictionless Command UX]`: If target config matches source config exactly, system MUST skip config sync with INFO log and proceed without prompting
 
-#### Safety Infrastructure (Btrfs Snapshots)
+#### Safety Infrastructure
 
-- **FND-FR-SNAP-PRE** `[Reliability Without Compromise]`: System MUST create read-only btrfs snapshots of configured subvolumes on both source and target before any job executes (after version check and pre-checks)  
-  Lineage: 001-FR-008
+- **FR-008** `[Reliability Without Compromise]`: System MUST create read-only btrfs snapshots of configured subvolumes on both source and target before any job executes (after version check and pre-checks)
 
-- **FND-FR-SNAP-POST** `[Reliability Without Compromise]`: System MUST create post-sync snapshots after all jobs complete successfully  
-  Lineage: 001-FR-009
+- **FR-009** `[Reliability Without Compromise]`: System MUST create post-sync snapshots after all jobs complete successfully
 
-- **FND-FR-SNAP-NAME** `[Minimize SSD Wear]`: Snapshot naming MUST follow pattern `{pre|post}-<subvolume>-<timestamp>` for clear identification and cleanup (e.g., `pre-@home-20251116T143022`); session folder provides session context  
-  Lineage: 001-FR-010
+- **FR-010** `[Minimize SSD Wear]`: Snapshot naming MUST follow pattern `{pre|post}-<subvolume>-<timestamp>` for clear identification and cleanup (e.g., `pre-@home-20251116T143022`); session folder provides session context
 
-- **FND-FR-SNAP-ALWAYS** `[Reliability Without Compromise]`: Snapshot management MUST be implemented as orchestrator-level infrastructure (not a SyncJob) that is always active; there is no configuration option to disable snapshot creation  
-  Lineage: 001-FR-011
+- **FR-011** `[Reliability Without Compromise]`: Snapshot management MUST be implemented as orchestrator-level infrastructure (not a SyncJob) that is always active; there is no configuration option to disable snapshot creation
 
-- **FND-FR-SNAP-FAIL** `[Frictionless Command UX]`: If pre-sync snapshot creation fails, system MUST log CRITICAL error and abort before any state modifications occur  
-  Lineage: 001-FR-012
+- **FR-012** `[Frictionless Command UX]`: If pre-sync snapshot creation fails, system MUST log CRITICAL error and abort before any state modifications occur
 
-- **FND-FR-SNAP-CLEANUP** `[Minimize SSD Wear]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs; default retention policy (keep_recent count and max_age_days) MUST be configurable in the btrfs_snapshots job section of config.yaml  
-  Lineage: 001-FR-014
+- **FR-013** *(Removed - rollback capability is deferred to a separate feature after foundation infrastructure)*
 
-- **FND-FR-SUBVOL-EXIST** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort  
-  Lineage: 001-FR-015
+- **FR-014** `[Minimize SSD Wear]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs; default retention policy (keep_recent count and max_age_days) MUST be configurable in the btrfs_snapshots job section of config.yaml
 
-- **FND-FR-SNAPDIR** `[Reliability Without Compromise]`: System MUST verify that `/.snapshots/` is a btrfs subvolume (not a regular directory); if it does not exist, system MUST create it as a subvolume and inform the user; if it exists but is not a subvolume, system MUST log CRITICAL error and abort (to prevent recursive snapshots)  
-  Lineage: 001-FR-015b
+- **FR-015** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort
 
-- **FND-FR-DISK-PRE** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold is configured via `disk_space_monitor.preflight_minimum` and MUST be specified as a percentage (e.g., "20%") or absolute value (e.g., "50GiB"); values without explicit units are invalid; default is "20%"  
-  Lineage: 001-FR-016
+- **FR-015b** `[Reliability Without Compromise]`: System MUST verify that `/.snapshots/` is a btrfs subvolume (not a regular directory); if it does not exist, system MUST create it as a subvolume and inform the user; if it exists but is not a subvolume, system MUST log CRITICAL error and abort (to prevent recursive snapshots)
 
-- **FND-FR-DISK-RUNTIME** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured runtime minimum via `disk_space_monitor.runtime_minimum` (e.g., "15%" or "40GiB"); values without explicit units are invalid; default is "15%"  
-  Lineage: 001-FR-017
+- **FR-016** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold is configured via `disk_space_monitor.preflight_minimum` and MUST be specified as a percentage (e.g., "20%") or absolute value (e.g., "50GiB"); values without explicit units are invalid; default is "20%"
+
+- **FR-017** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured runtime minimum via `disk_space_monitor.runtime_minimum` (e.g., "15%" or "40GiB"); values without explicit units are invalid; default is "15%"
+
+#### Logging System
+
+- **FR-018**: System MUST implement six log levels with the following ordering and semantics: DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL, where DEBUG is the most verbose. DEBUG includes all messages (FULL, INFO, WARNING, ERROR, CRITICAL, plus internal diagnostics). FULL includes all messages from INFO and below plus operational details, but excludes DEBUG-level internal diagnostics.
+
+- **FR-019** `[Reliability Without Compromise]`: When a job raises an exception, the orchestrator MUST log the error at CRITICAL level, request termination of the currently-executing job (queued jobs never execute and do not receive termination requests), and halt sync immediately
+
+- **FR-020** `[Frictionless Command UX]`: System MUST support independent log level configuration for file output (`log_file_level`) and terminal display (`log_cli_level`)
+
+- **FR-021**: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`
+
+- **FR-022**: Log entries MUST use structlog's JSONRenderer for file output in JSON Lines format (one JSON object per line with keys: timestamp in ISO8601 format, level, job, host, hostname, event, plus any additional context fields) and ConsoleRenderer for terminal output (human-readable format with ISO8601 timestamp, level, job@hostname, and message)
+
+- **FR-023** `[Reliability Without Compromise]`: System MUST aggregate logs from both source-side orchestrator and target-side operations into unified log stream
 
 #### Interrupt Handling
 
-- **FND-FR-SIGINT** `[Reliability Without Compromise]`: System MUST install SIGINT handler that requests current job termination with cleanup timeout grace period (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), logs "Sync interrupted by user" at WARNING level, and exits with code 130  
-  Lineage: 001-FR-024
+- **FR-024** `[Reliability Without Compromise]`: System MUST install SIGINT handler that requests current job termination with cleanup timeout grace period (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), logs "Sync interrupted by user" at WARNING level, and exits with code 130
 
-- **FND-FR-TARGET-TERM** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful shutdown  
-  Lineage: 001-FR-025
+- **FR-025** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful shutdown
 
-- **FND-FR-FORCE-TERM** `[Reliability Without Compromise]`: Force-terminate on second SIGINT - When a second SIGINT arrives before cleanup completes, the system immediately force-terminates without waiting for graceful cleanup.  
-  Lineage: 001-FR-026
+- **FR-026** `[Reliability Without Compromise]`: Force-terminate on second SIGINT - When a second SIGINT arrives before cleanup completes, the system immediately force-terminates without waiting for graceful cleanup.
 
-- **FND-FR-NO-ORPHAN** `[Reliability Without Compromise]`: System MUST ensure no orphaned processes remain on source or target after interrupt  
-  Lineage: 001-FR-027
+- **FR-027** `[Reliability Without Compromise]`: System MUST ensure no orphaned processes remain on source or target after interrupt
 
 #### Configuration System
 
-- **FND-FR-CONFIG-LOAD** `[Frictionless Command UX]`: System MUST load configuration from `~/.config/pc-switcher/config.yaml` on startup  
-  Lineage: 001-FR-028
+- **FR-028** `[Frictionless Command UX]`: System MUST load configuration from `~/.config/pc-switcher/config.yaml` on startup
 
-- **FND-FR-CONFIG-FORMAT** `[Deliberate Simplicity]`: Configuration MUST use YAML format with sections: global settings, `sync_jobs` (enable/disable), and per-job settings  
-  Lineage: 001-FR-029
+- **FR-029** `[Deliberate Simplicity]`: Configuration MUST use YAML format with sections: global settings, `sync_jobs` (enable/disable), and per-job settings
 
-- **FND-FR-CONFIG-VALIDATE** `[Reliability Without Compromise]`: System MUST validate configuration structure and job-specific settings against job-declared schemas (Python dicts conforming to JSON Schema draft-07, validated using jsonschema library) before execution  
-  Lineage: 001-FR-030
+- **FR-030** `[Reliability Without Compromise]`: System MUST validate configuration structure and job-specific settings against job-declared schemas (Python dicts conforming to JSON Schema draft-07, validated using jsonschema library) before execution
 
-- **FND-FR-CONFIG-DEFAULTS** `[Frictionless Command UX]`: System MUST apply reasonable defaults for missing configuration values  
-  Lineage: 001-FR-031
+- **FR-031** `[Frictionless Command UX]`: System MUST apply reasonable defaults for missing configuration values
 
-- **FND-FR-JOB-ENABLE** `[Frictionless Command UX]`: System MUST allow enabling/disabling optional jobs via `sync_jobs: { module_name: true/false }`  
-  Lineage: 001-FR-032
+- **FR-032** `[Frictionless Command UX]`: System MUST allow enabling/disabling optional jobs via `sync_jobs: { module_name: true/false }`
 
-- **FND-FR-CONFIG-ERROR** `[Reliability Without Compromise]`: If configuration file has syntax errors or invalid values, system MUST display clear error message with location and exit before sync  
-  Lineage: 001-FR-033
+- **FR-033** `[Reliability Without Compromise]`: If configuration file has syntax errors or invalid values, system MUST display clear error message with location and exit before sync
 
 #### Installation & Setup
 
-- **FND-FR-INSTALL-SCRIPT** `[Frictionless Command UX]`: System MUST provide installation script (`install.sh`) that can be run via `curl | sh` without prerequisites; the script installs uv (if not present) via `curl -LsSf https://astral.sh/uv/install.sh | sh`, installs btrfs-progs via apt-get (if not present), installs pc-switcher package via `uv tool install`, and creates default configuration; the installation logic MUST be shared with `InstallOnTargetJob` to ensure DRY compliance (btrfs filesystem is a documented prerequisite checked at runtime, not during installation)  
-  Lineage: 001-FR-035
+- **FR-035** `[Frictionless Command UX]`: System MUST provide installation script (`install.sh`) that can be run via `curl | sh` without prerequisites; the script installs uv (if not present) via `curl -LsSf https://astral.sh/uv/install.sh | sh`, installs btrfs-progs via apt-get (if not present), installs pc-switcher package via `uv tool install`, and creates default configuration; the installation logic MUST be shared with `InstallOnTargetJob` to ensure DRY compliance (btrfs filesystem is a documented prerequisite checked at runtime, not during installation)
 
-- **FND-FR-DEFAULT-CONFIG** `[Up-to-date Documentation]`: Setup script MUST create default config file with inline comments explaining each setting  
-  Lineage: 001-FR-036
+- **FR-036** `[Up-to-date Documentation]`: Setup script MUST create default config file with inline comments explaining each setting
 
-#### Testing Infrastructure (Dummy Jobs)
+#### Testing Infrastructure
 
-- **FND-FR-DUMMY-JOBS**: System MUST include two dummy jobs: `dummy-success`, `dummy-fail`  
-  Lineage: 001-FR-038
+- **FR-038**: System MUST include two dummy jobs: `dummy-success`, `dummy-fail`
 
-- **FND-FR-DUMMY-SIM**: `dummy-success` and `dummy-fail` MUST simulate an operation of configurable duration on source (log every 2s, log WARNING at 6s) and of configurable duration on target (log every 2s, log ERROR at 8s), emit progress updates, and complete successfully  
-  Lineage: 001-FR-039
+- **FR-039**: `dummy-success` and `dummy-fail` MUST simulate an operation of configurable duration on source (log every 2s, log WARNING at 6s) and of configurable duration on target (log every 2s, log ERROR at 8s), emit progress updates, and complete successfully
 
-- **FND-FR-DUMMY-EXCEPTION** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at configurable time to test orchestrator exception handling on both source and target  
-  Lineage: 001-FR-041
+- **FR-040** *(Removed)*
 
-- **FND-FR-DUMMY-TERM** `[Reliability Without Compromise]`: All dummy jobs MUST handle termination requests by logging "Dummy job termination requested" and stopping execution within the grace period  
-  Lineage: 001-FR-042
+- **FR-041** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at configurable time to test orchestrator exception handling on both source and target
+
+- **FR-042** `[Reliability Without Compromise]`: All dummy jobs MUST handle termination requests by logging "Dummy job termination requested" and stopping execution within the grace period
 
 #### Progress Reporting
 
-- **FND-FR-PROGRESS-EMIT** `[Frictionless Command UX]`: Jobs CAN emit progress updates including percentage (0-100), current item description, and estimated completion time (progress updates are optional for jobs, but recommended for long-running operations; dummy test jobs emit progress for infrastructure testing)  
-  Lineage: 001-FR-043
+- **FR-043** `[Frictionless Command UX]`: Jobs CAN emit progress updates including percentage (0-100), current item description, and estimated completion time (progress updates are optional for jobs, but recommended for long-running operations; dummy test jobs emit progress for infrastructure testing)
 
-- **FND-FR-PROGRESS-FWD** `[Frictionless Command UX]`: Orchestrator MUST forward progress updates to terminal UI system for display  
-  Lineage: 001-FR-044
+- **FR-044** `[Frictionless Command UX]`: Orchestrator MUST forward progress updates to terminal UI system for display
 
-- **FND-FR-PROGRESS-LOG**: Progress updates MUST be written to log file at FULL log level  
-  Lineage: 001-FR-045
+- **FR-045**: Progress updates MUST be written to log file at FULL log level
 
 #### Core Orchestration
 
-- **FND-FR-SYNC-CMD** `[Frictionless Command UX]`: System MUST provide single command `pc-switcher sync <target>` that executes complete workflow  
-  Lineage: 001-FR-046
+- **FR-046** `[Frictionless Command UX]`: System MUST provide single command `pc-switcher sync <target>` that executes complete workflow
 
-- **FND-FR-LOCK** `[Reliability Without Compromise]`: System MUST implement locking mechanism to prevent concurrent sync executions  
-  Lineage: 001-FR-047
+- **FR-047** `[Reliability Without Compromise]`: System MUST implement locking mechanism to prevent concurrent sync executions
 
-- **FND-FR-SUMMARY**: System MUST log overall sync result (success/failure) and summary of job outcomes; summary MUST list each job with its result (SUCCESS/SKIPPED/FAILED), total duration, error count, and names of any jobs that failed  
-  Lineage: 001-FR-048
-
-### Foundation Test Requirements
-
-#### Test Coverage Requirements
-
-- **FND-FR-TEST-US**: Tests MUST cover 100% of user stories defined in foundation specification  
-  Lineage: 003-FR-001
-
-- **FND-FR-TEST-AS**: Tests MUST cover 100% of acceptance scenarios defined in foundation specification  
-  Lineage: 003-FR-002
-
-- **FND-FR-TEST-FR**: Tests MUST cover 100% of functional requirements defined in foundation specification  
-  Lineage: 003-FR-003
-
-- **FND-FR-TEST-PATHS**: Tests MUST verify both success paths and failure paths (error handling, edge cases, boundary conditions) for each requirement  
-  Lineage: 003-FR-004
-
-#### Test Organization Requirements
-
-- **FND-FR-TEST-UNIT-DIR**: Unit tests for foundation MUST be placed in `tests/unit/` directory following module structure  
-  Lineage: 003-FR-005
-
-- **FND-FR-TEST-INT-DIR**: Integration tests for foundation MUST be placed in `tests/integration/` directory  
-  Lineage: 003-FR-006
-
-- **FND-FR-TEST-DOCSTRING**: Each test file MUST include docstrings or comments referencing the spec requirements being tested  
-  Lineage: 003-FR-007
-
-- **FND-FR-TEST-NAMING**: Test function names MUST indicate the requirement being tested (e.g., `test_fr001_connection_ssh_authentication`)  
-  Lineage: 003-FR-008
-
-#### Test Quality Requirements
-
-- **FND-FR-TEST-INDEP**: Tests MUST be independent and not rely on execution order or shared mutable state between tests  
-  Lineage: 003-FR-009
-
-- **FND-FR-TEST-FIXTURES**: Tests MUST use fixtures from the testing framework for VM access, event buses, and cleanup  
-  Lineage: 003-FR-010
-
-- **FND-FR-TEST-MOCK**: Unit tests MUST use mock executors to avoid real system operations  
-  Lineage: 003-FR-011
-
-- **FND-FR-TEST-REAL**: Integration tests MUST execute real operations on test VMs  
-  Lineage: 003-FR-012
-
-#### Test Performance Requirements
-
-- **FND-FR-TEST-SPEED**: Unit tests MUST complete full suite execution in under 30 seconds  
-  Lineage: 003-FR-013
+- **FR-048**: System MUST log overall sync result (success/failure) and summary of job outcomes; summary MUST list each job with its result (SUCCESS/SKIPPED/FAILED), total duration, error count, and names of any jobs that failed
 
 ### Key Entities
 
-Lineage: 001-foundation Key Entities, 003-foundation-tests Key Entities
-
 - **Job**: Abstract base class for all sync components implementing the job interface; has name, config schema, and lifecycle methods. Concrete subclasses: **SystemJob** (required, always runs), **SyncJob** (configurable via `sync_jobs`), **BackgroundJob** (runs concurrently)
-
 - **SyncSession**: Represents a single sync operation including session ID, timestamp, source/target machines, enabled jobs, and execution state
-
 - **Snapshot**: Represents a btrfs snapshot including subvolume name, timestamp, session ID, type (pre/post), and location (source/target)
-
 - **LogEntry**: Represents a logged event with timestamp, level, job name, message, and structured context data
-
 - **ProgressUpdate**: Represents job progress including percentage, current item, estimated remaining time, and job name
-
 - **Configuration**: Represents parsed and validated config including global settings, job enable/disable flags, and per-job settings
-
 - **TargetConnection**: Represents the connection with methods for command execution, file transfer, process management, and connection loss detection/recovery
-
 - **RemoteExecutor**: Represents the interface injected into jobs wrapping TargetConnection with simplified run_command(), send_file(), and get_hostname() methods
 
-- **SpecRequirement**: Represents a requirement from foundation spec; has ID (FR-xxx, US-xxx, AS-xxx), description, and test status
+## Success Criteria *(mandatory)*
 
-- **TestMapping**: Represents the mapping between a spec requirement and its corresponding tests; enables traceability
+### Measurable Outcomes
 
-- **CoverageReport**: Represents the summary of which spec requirements have tests and which are missing
+- **SC-001** `[Frictionless Command UX]`: User executes complete sync with single command `pc-switcher sync <target>` without additional manual steps
 
-## Success Criteria
+- **SC-002** `[Reliability Without Compromise]`: System creates snapshots before and after sync in 100% of successful sync runs
 
-### Core Infrastructure
+- **SC-003** `[Reliability Without Compromise]`: System successfully aborts sync within the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) when CRITICAL error occurs, with no state modifications after abort
 
-- **FND-SC-SINGLE-CMD** `[Frictionless Command UX]`: User executes complete sync with single command `pc-switcher sync <target>` without additional manual steps
-  Lineage: 001-SC-001
+- **SC-004** `[Frictionless Command UX]`: System completes version check and installation/upgrade on target within 30 seconds
 
-- **FND-SC-SNAPSHOTS** `[Reliability Without Compromise]`: System creates snapshots before and after sync in 100% of successful sync runs
-  Lineage: 001-SC-002
+- **SC-005**: Log files contain complete audit trail of all operations with timestamps, levels, and job attribution in 100% of sync runs
 
-- **FND-SC-ABORT** `[Reliability Without Compromise]`: System successfully aborts sync within the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) when CRITICAL error occurs, with no state modifications after abort
-  Lineage: 001-SC-003
+- **SC-006** `[Reliability Without Compromise]`: User interrupt (Ctrl+C) results in graceful shutdown with no orphaned processes in 100% of tests
 
-- **FND-SC-VERSION-TIME** `[Frictionless Command UX]`: System completes version check and installation/upgrade on target within 30 seconds
-  Lineage: 001-SC-004
+- **SC-007** `[Deliberate Simplicity]`: New feature job implementation requires only implementing job interface (< 200 lines of code for basic job) with no changes to core orchestrator
 
-- **FND-SC-AUDIT**: Log files contain complete audit trail of all operations with timestamps, levels, and job attribution in 100% of sync runs
-  Lineage: 001-SC-005
+- **SC-008** `[Minimize SSD Wear]`: Btrfs snapshots use copy-on-write with zero initial write amplification (verified via btrfs filesystem usage commands)
 
-- **FND-SC-GRACEFUL** `[Reliability Without Compromise]`: User interrupt (Ctrl+C) results in graceful shutdown with no orphaned processes in 100% of tests
-  Lineage: 001-SC-006
+- **SC-009** `[Frictionless Command UX]`: Installation script completes setup on fresh Ubuntu 24.04 machine in under 2 minutes with network connection
 
-- **FND-SC-JOB-SIMPLE** `[Deliberate Simplicity]`: New feature job implementation requires only implementing job interface (< 200 lines of code for basic job) with no changes to core orchestrator
-  Lineage: 001-SC-007
-
-- **FND-SC-COW** `[Minimize SSD Wear]`: Btrfs snapshots use copy-on-write with zero initial write amplification (verified via btrfs filesystem usage commands)
-  Lineage: 001-SC-008
-
-- **FND-SC-INSTALL-TIME** `[Frictionless Command UX]`: Installation script completes setup on fresh Ubuntu 24.04 machine in under 2 minutes with network connection
-  Lineage: 001-SC-009
-
-- **FND-SC-DUMMY-DEMO** `[Reliability Without Compromise]`: All dummy jobs correctly demonstrate their expected behaviors (success, CRITICAL abort, exception handling) in 100% of test runs
-  Lineage: 001-SC-010
-
-### Test Success Criteria
-
-- **FND-SC-TEST-US**: 100% of user stories in foundation spec have corresponding test coverage
-  Lineage: 003-SC-001
-
-- **FND-SC-TEST-AS**: 100% of acceptance scenarios in foundation spec have corresponding test cases
-  Lineage: 003-SC-002
-
-- **FND-SC-TEST-FR**: 100% of functional requirements in foundation spec have corresponding test assertions
-  Lineage: 003-SC-003
-
-- **FND-SC-TEST-PATHS**: All tests verify both success and failure paths as specified in the requirements
-  Lineage: 003-SC-004
-
-- **FND-SC-TEST-TRACE**: All test files include traceability references to spec requirements
-  Lineage: 003-SC-005
-
-- **FND-SC-TEST-GAPS**: Running the test suite surfaces any gaps between spec and implementation through failing tests
-  Lineage: 003-SC-006
-
-- **FND-SC-TEST-UNIT-SPEED**: Unit test suite executes completely in under 30 seconds on a standard development machine
-  Lineage: 003-SC-007
-
-- **FND-SC-TEST-INT-SPEED**: Integration tests complete full VM-based testing in under 15 minutes
-  Lineage: 003-SC-008
+- **SC-010** `[Reliability Without Compromise]`: All three dummy jobs correctly demonstrate their expected behaviors (success, CRITICAL abort, exception handling) in 100% of test runs
 
 ## Assumptions
-
-Lineage: 001-foundation Assumptions, 003-foundation-tests Assumptions
 
 - Source and target machines run Ubuntu 24.04 LTS with btrfs filesystems
 - User has sudo privileges on both machines for operations requiring elevation
@@ -686,12 +549,8 @@ Lineage: 001-foundation Assumptions, 003-foundation-tests Assumptions
 - User's `~/.ssh/config` contains target machine configurations if using aliases
 - Sufficient disk space exists on target for package installation
 - No other tools are simultaneously modifying the same system state during sync
-- Testing framework infrastructure from specs/002-testing-framework/spec.md is implemented and operational
-- Foundation implementation exists and is testable
 
 ## Out of Scope
-
-Lineage: 001-foundation Out of Scope, 003-foundation-tests Out of Scope
 
 - Implementation of user-facing sync features (user data, packages, Docker, VMs, k3s) - those are separate feature specs (features 4-9)
 - Bi-directional sync or conflict resolution between divergent states
@@ -701,8 +560,3 @@ Lineage: 001-foundation Out of Scope, 003-foundation-tests Out of Scope
 - Non-btrfs filesystems
 - Multi-user concurrent usage
 - Automated testing infrastructure (CI/CD) - though dummy jobs enable manual testing
-- Tests for features beyond foundation (those will have their own test specs)
-- Testing implementation details not specified in foundation spec
-- Fixing bugs found by these tests (separate bug fix tasks)
-- Updating foundation spec if gaps are found (separate spec update task)
-- Test coverage for third-party libraries (only test project code)

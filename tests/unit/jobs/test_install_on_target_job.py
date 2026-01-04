@@ -1,6 +1,6 @@
 """Unit tests for InstallOnTargetJob.
 
-Tests cover FND-US-SELF-INSTALL (Self-Installation) requirements from specs/001-foundation/spec.md:
+Tests cover FND-US-SELF-INSTALL (Self-Installation) requirements from specs/001-core/spec.md:
 - FND-FR-VERSION-CHECK: Check version, install from GitHub
 - FND-FR-VERSION-NEWER: Abort if target newer
 - FND-FR-INSTALL-FAIL: Abort on installation failure

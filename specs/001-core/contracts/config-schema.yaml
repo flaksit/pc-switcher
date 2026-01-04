@@ -46,7 +46,7 @@ properties:
     type: object
     description: "Enable or disable optional sync jobs. Unknown job names are rejected."
     properties:
-      # Jobs implemented in 001-foundation:
+      # Jobs implemented in 001-core:
       dummy_success:
         type: boolean
         default: true

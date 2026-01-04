@@ -267,7 +267,7 @@ class TestEdgeCases:
     async def test_001_edge_cancelled_error_cleanup_and_reraise(self, mock_job_context: JobContext) -> None:
         """Edge: Job cleanup on cancellation happens inside execute().
 
-        Contract reference: specs/001-foundation/contracts/job-interface.md
+        Contract reference: specs/001-core/contracts/job-interface.md
 
         Jobs MUST catch `asyncio.CancelledError`, perform cleanup, and re-raise.
         This test verifies that pattern without relying on `__del__()`.

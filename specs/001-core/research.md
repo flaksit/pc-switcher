@@ -1,6 +1,6 @@
 # Research: Foundation Infrastructure
 
-**Feature**: 001-foundation
+**Feature**: 001-core
 **Date**: 2025-11-29
 
 This document consolidates research findings for implementation decisions. All technology choices are informed by ADRs and the architecture defined in `architecture.md`.
@@ -310,7 +310,7 @@ def validate_job_config(
 ```
 
 ### Schema Location
-- Global config schema: `specs/001-foundation/contracts/config-schema.yaml`
+- Global config schema: `specs/001-core/contracts/config-schema.yaml`
 - Job schemas: Embedded in job classes as `CONFIG_SCHEMA` class attribute
 
 ### Alternatives Considered

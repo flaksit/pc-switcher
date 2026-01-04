@@ -9,7 +9,7 @@ This folder contains the "Golden Copy" of the system specification. It represent
 
 ## Domain Specifications
 
-- [Foundation](foundation.md): Core infrastructure, CLI, and orchestration.
+- [Core](core.md): Core infrastructure, CLI, and orchestration.
 - [Testing Framework](testing.md): Testing framework, infrastructure, and strategy.
 - [Logging](logging.md): Logging infrastructure and configuration.
 

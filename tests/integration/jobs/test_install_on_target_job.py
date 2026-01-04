@@ -81,7 +81,7 @@ class TestSelfInstallation:
         missing installation, installs pc-switcher on target from GitHub repository,
         verifies installation succeeded, and proceeds with sync.
 
-        Spec Reference: specs/001-foundation/spec.md - User Story 2, AS1
+        Spec Reference: specs/001-core/spec.md - User Story 2, AS1
         """
         # Create job context for integration test
         context = await _create_integration_job_context(pc1_executor, pc2_without_pcswitcher_fn)
@@ -119,7 +119,7 @@ class TestSelfInstallation:
         upgrades pc-switcher on target from GitHub repository, and verifies upgrade
         completed successfully.
 
-        Spec Reference: specs/001-foundation/spec.md - User Story 2, AS2
+        Spec Reference: specs/001-core/spec.md - User Story 2, AS2
         """
         # Fixture guarantees target has old version installed
         # Verify source is newer

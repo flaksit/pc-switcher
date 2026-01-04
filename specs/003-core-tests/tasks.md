@@ -1,16 +1,16 @@
-# Tasks: Retroactive Tests for 001-Foundation
+# Tasks: Retroactive Tests for 001-Core
 
-**Input**: Design documents from `/specs/003-foundation-tests/`
+**Input**: Design documents from `/specs/003-core-tests/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md
 
 **Purpose**: This feature IS test implementation - all tasks are test creation tasks.
 
-**Organization**: Tasks are grouped by 001-foundation user story to enable independent implementation and testing. Each phase delivers complete test coverage for one user story from the 001-foundation spec.
+**Organization**: Tasks are grouped by 001-core user story to enable independent implementation and testing. Each phase delivers complete test coverage for one user story from the 001-core spec.
 
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: Which 001-foundation user story these tests cover (e.g., US1, US2, US3)
+- **[Story]**: Which 001-core user story these tests cover (e.g., US1, US2, US3)
 - Include exact file paths in descriptions
 
 ## Path Conventions
@@ -47,9 +47,9 @@
 
 ---
 
-## Phase 3: Tests for 001-Foundation US-1 (Job Architecture) - Priority: P1
+## Phase 3: Tests for 001-Core US-1 (Job Architecture) - Priority: P1
 
-**Goal**: Complete test coverage for 001-foundation User Story 1 - Job Architecture and Integration Contract
+**Goal**: Complete test coverage for 001-core User Story 1 - Job Architecture and Integration Contract
 
 **Independent Test**: Run `uv run pytest tests/unit/orchestrator/test_job_lifecycle.py tests/contract/test_job_interface.py -v`
 
@@ -79,9 +79,9 @@
 
 ---
 
-## Phase 4: Tests for 001-Foundation US-2 (Self-Installing Orchestrator) - Priority: P1
+## Phase 4: Tests for 001-Core US-2 (Self-Installing Orchestrator) - Priority: P1
 
-**Goal**: Complete test coverage for 001-foundation User Story 2 - Self-Installing Sync Orchestrator
+**Goal**: Complete test coverage for 001-core User Story 2 - Self-Installing Sync Orchestrator
 
 **Independent Test**: Run `uv run pytest tests/unit/jobs/test_install_job.py tests/integration/test_self_installation.py -v`
 
@@ -106,9 +106,9 @@
 
 ---
 
-## Phase 5: Tests for 001-Foundation US-3 (Btrfs Snapshots) - Priority: P1
+## Phase 5: Tests for 001-Core US-3 (Btrfs Snapshots) - Priority: P1
 
-**Goal**: Complete test coverage for 001-foundation User Story 3 - Safety Infrastructure with Btrfs Snapshots
+**Goal**: Complete test coverage for 001-core User Story 3 - Safety Infrastructure with Btrfs Snapshots
 
 **Independent Test**: Run `uv run pytest tests/unit/jobs/test_snapshot_job.py tests/integration/test_snapshot_infrastructure.py -v`
 
@@ -143,9 +143,9 @@
 
 ---
 
-## Phase 6: Tests for 001-Foundation US-4 (Logging System) - Priority: P1
+## Phase 6: Tests for 001-Core US-4 (Logging System) - Priority: P1
 
-**Goal**: Complete test coverage for 001-foundation User Story 4 - Comprehensive Logging System
+**Goal**: Complete test coverage for 001-core User Story 4 - Comprehensive Logging System
 
 **Independent Test**: Run `uv run pytest tests/unit/orchestrator/test_logging_system.py tests/integration/test_logging_integration.py -v`
 
@@ -171,9 +171,9 @@
 
 ---
 
-## Phase 7: Tests for 001-Foundation US-5 (Interrupt Handling) - Priority: P1
+## Phase 7: Tests for 001-Core US-5 (Interrupt Handling) - Priority: P1
 
-**Goal**: Complete test coverage for 001-foundation User Story 5 - Graceful Interrupt Handling
+**Goal**: Complete test coverage for 001-core User Story 5 - Graceful Interrupt Handling
 
 **Independent Test**: Run `uv run pytest tests/unit/orchestrator/test_interrupt_handling.py tests/integration/test_interrupt_integration.py -v`
 
@@ -198,9 +198,9 @@
 
 ---
 
-## Phase 8: Tests for 001-Foundation US-6 (Configuration System) - Priority: P1
+## Phase 8: Tests for 001-Core US-6 (Configuration System) - Priority: P1
 
-**Goal**: Complete test coverage for 001-foundation User Story 6 - Configuration System
+**Goal**: Complete test coverage for 001-core User Story 6 - Configuration System
 
 **Independent Test**: Run `uv run pytest tests/unit/orchestrator/test_config_system.py -v`
 
@@ -226,9 +226,9 @@
 
 ---
 
-## Phase 9: Tests for 001-Foundation US-7 (Installation Script) - Priority: P2
+## Phase 9: Tests for 001-Core US-7 (Installation Script) - Priority: P2
 
-**Goal**: Complete test coverage for 001-foundation User Story 7 - Installation and Setup Infrastructure
+**Goal**: Complete test coverage for 001-core User Story 7 - Installation and Setup Infrastructure
 
 **Independent Test**: Run `uv run pytest tests/integration/test_installation_script.py -v -m integration`
 
@@ -249,9 +249,9 @@
 
 ---
 
-## Phase 10: Tests for 001-Foundation US-8 (Dummy Jobs) - Priority: P1
+## Phase 10: Tests for 001-Core US-8 (Dummy Jobs) - Priority: P1
 
-**Goal**: Complete test coverage for 001-foundation User Story 8 - Dummy Test Jobs
+**Goal**: Complete test coverage for 001-core User Story 8 - Dummy Test Jobs
 
 **Independent Test**: Run `uv run pytest tests/unit/jobs/test_dummy_jobs.py -v`
 
@@ -271,9 +271,9 @@
 
 ---
 
-## Phase 11: Tests for 001-Foundation US-9 (Terminal UI) - Priority: P2
+## Phase 11: Tests for 001-Core US-9 (Terminal UI) - Priority: P2
 
-**Goal**: Complete test coverage for 001-foundation User Story 9 - Terminal UI with Progress Reporting
+**Goal**: Complete test coverage for 001-core User Story 9 - Terminal UI with Progress Reporting
 
 **Independent Test**: Run `uv run pytest tests/integration/test_terminal_ui.py -v -m integration`
 
@@ -345,7 +345,7 @@
 
 ### Coverage Verification
 
-- [ ] T031 Verify all 9 user stories from 001-foundation spec have corresponding tests. If gaps found: create tasks to add missing coverage
+- [ ] T031 Verify all 9 user stories from 001-core spec have corresponding tests. If gaps found: create tasks to add missing coverage
 - [ ] T032 Verify all 44 active acceptance scenarios have corresponding test cases (3 removed: US4-AS3, US4-AS5, US8-AS2). If gaps found: create tasks to add missing coverage
 - [ ] T033 Verify all 44 active functional requirements have corresponding test assertions (4 removed: FR-013, FR-034, FR-037, FR-040). If gaps found: create tasks to add missing coverage
 - [ ] T034 Verify all 9 edge cases have test coverage. If gaps found: create tasks to add missing coverage
@@ -477,7 +477,7 @@ Task: "Create tests/integration/test_end_to_end_sync.py"
 ## Notes
 
 - [P] tasks = different files, no dependencies
-- [Story] label maps task to specific 001-foundation user story being tested
+- [Story] label maps task to specific 001-core user story being tested
 - Each user story phase can be independently completed and verified
 - Test naming convention: `test_001_<req-id>_<description>` (001 = foundation feature) — verified by T039
 - All tests must include docstrings referencing spec requirements — verified by T035

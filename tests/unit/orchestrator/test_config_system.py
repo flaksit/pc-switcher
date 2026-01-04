@@ -1,7 +1,7 @@
 """Unit tests for Configuration System (FND-US-CONFIG).
 
 Tests configuration loading, validation, defaults, and error handling
-as specified in specs/001-foundation/spec.md User Story 6.
+as specified in specs/001-core/spec.md User Story 6.
 
 Test Coverage:
 - FND-FR-JOB-LOAD: Jobs loaded in config order

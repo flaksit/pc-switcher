@@ -1,6 +1,6 @@
 # Quickstart: Foundation Infrastructure Development
 
-**Feature**: 001-foundation
+**Feature**: 001-core
 **Date**: 2025-11-29
 
 This guide provides the essential commands and patterns for developing the foundation infrastructure.

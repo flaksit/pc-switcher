@@ -1,12 +1,12 @@
-# Research: Testing Approach for 001-Foundation
+# Research: Testing Approach for 001-Core
 
-**Feature**: Retroactive Tests for 001-Foundation
+**Feature**: Retroactive Tests for 001-Core
 **Date**: 2025-12-11
 **Status**: Complete
 
 ## Overview
 
-This document captures research findings for implementing comprehensive spec-driven tests for all 001-foundation functionality. The tests validate 100% of user stories, acceptance scenarios, and functional requirements from specs/001-foundation/spec.md.
+This document captures research findings for implementing comprehensive spec-driven tests for all 001-core functionality. The tests validate 100% of user stories, acceptance scenarios, and functional requirements from specs/001-core/spec.md.
 
 ## Key Decisions
 
@@ -18,7 +18,7 @@ This document captures research findings for implementing comprehensive spec-dri
 - Tests validate **what** the system should do (from spec), not **how** it does it (from implementation)
 - If spec and implementation disagree, tests fail, forcing alignment
 - Tests remain valid even when implementation changes
-- Directly supports FR-001 through FR-004 from 003-foundation-tests spec
+- Directly supports FR-001 through FR-004 from 003-core-tests spec
 
 **Alternatives Considered**:
 - **Implementation-driven**: Write tests by reading code → Rejected because this validates existing behavior without checking if it matches requirements. Can miss gaps where spec requirements weren't implemented.
@@ -31,7 +31,7 @@ This document captures research findings for implementing comprehensive spec-dri
 **Rationale**:
 - Unit tests organized by component (orchestrator/, jobs/, cli/) for developer convenience when working on specific modules
 - Integration tests organized by user story (test_self_installation.py for US-2, etc.) for direct traceability to spec requirements
-- Supports FR-005 through FR-008 from 003-foundation-tests spec
+- Supports FR-005 through FR-008 from 003-core-tests spec
 - Matches existing pytest structure from 002-testing-framework
 
 **Alternatives Considered**:
@@ -62,7 +62,7 @@ async def test_001_us3_edge_insufficient_space_for_snapshots() -> None: ...
 **Rationale**:
 - **Feature number prefix ensures uniqueness**: FR/US/AS IDs are only unique within a SpecKit feature. Adding the feature number (001, 002, 003, etc.) ensures test names are unique across all features in the project.
 - **Immediate traceability**: From failing test to specific feature and requirement
-- **Supports FR-008** from 003-foundation-tests spec
+- **Supports FR-008** from 003-core-tests spec
 - **Test name alone shows feature + requirement**: Developer immediately knows which feature and which requirement is failing
 - **Grep-able**: `pytest -k "001_fr028"` runs all FR-028 tests for feature 001
 - **CI-friendly**: Pytest output is self-documenting: `test_001_us3_as2_create_presync_snapshots FAILED`
@@ -96,7 +96,7 @@ context = JobContext(
 ```
 
 **Rationale**:
-- Matches 001-foundation architecture (FR-001 defines job contract with executor injection)
+- Matches 001-core architecture (FR-001 defines job contract with executor injection)
 - Unit tests validate job logic without real system operations (FR-011 from 003 spec)
 - Consistent with existing test patterns (see tests/unit/test_jobs/test_disk_space_monitor.py)
 - Executors are the clean architectural boundary between business logic and system operations
@@ -396,7 +396,7 @@ Based on constitution principle "Deliberate Simplicity" and existing codebase pa
 
 ## Performance Budgets
 
-From 003-foundation-tests spec:
+From 003-core-tests spec:
 
 - **Unit test suite**: Must complete in <30 seconds (FR-013 from 003 spec)
 - **Integration test suite**: Should complete in <15 minutes (SC-008 from 003 spec)
@@ -417,7 +417,7 @@ All testing dependencies already present from 002-testing-framework:
 - **unittest.mock**: Mocking and spy utilities
 - **asyncssh**: SSH library (same as production code)
 
-No new dependencies required for 003-foundation-tests.
+No new dependencies required for 003-core-tests.
 
 ## Next Steps
 

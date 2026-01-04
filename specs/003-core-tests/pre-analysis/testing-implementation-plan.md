@@ -1,4 +1,4 @@
-# Testing Implementation Plan for 001-Foundation
+# Testing Implementation Plan for 001-Core
 
 This document provides the detailed implementation plan for comprehensive testing of the foundation feature.
 
@@ -364,8 +364,8 @@ These tests exist and need verification for spec compliance:
 ### Out of Scope
 - `tests/integration/test_vm_connectivity.py` - Framework smoke test
 - `tests/integration/test_btrfs_operations.py` - Framework smoke test
-- `tests/unit/test_cli_self_update.py` - PR #42, not 001-foundation scope
-- `tests/test_version.py` (PEP 440/SemVer portion) - PR #42, not 001-foundation scope
+- `tests/unit/test_cli_self_update.py` - PR #42, not 001-core scope
+- `tests/test_version.py` (PEP 440/SemVer portion) - PR #42, not 001-core scope
 - `tests/conftest.py`, `tests/unit/conftest.py`, `tests/integration/conftest.py` - Framework infrastructure
 
 ### Remaining Work

@@ -269,7 +269,7 @@ class TestConfigSyncIntegration:
         InstallOnTargetJob) successfully installs uv first, then pc-switcher.
         This confirms target install and initial install share the same logic.
 
-        Reference: specs/001-foundation/spec.md - User Story 7, Acceptance Scenario 2
+        Reference: specs/001-core/spec.md - User Story 7, Acceptance Scenario 2
         """
         # Save current uv installation state
         uv_check = await pc1_executor.run_command("command -v uv")

@@ -7,7 +7,7 @@
 
 Implement the **testing framework infrastructure** for pc-switcher: VM provisioning and reset scripts, locking mechanism, CI/CD workflows, pytest fixtures, and documentation structure. The framework supports three tiers of testing: (1) fast unit tests safe for any machine, (2) VM-isolated integration tests for destructive btrfs/SSH operations, and (3) a manual playbook for visual verification.
 
-**Scope Note**: This feature covers only the framework infrastructure and documentation. Writing actual tests for specific features (e.g., 001-foundation tests) is out of scope and tracked separately in feature `003-foundation-tests`.
+**Scope Note**: This feature covers only the framework infrastructure and documentation. Writing actual tests for specific features (e.g., 001-core tests) is out of scope and tracked separately in feature `003-core-tests`.
 
 ## Technical Context
 

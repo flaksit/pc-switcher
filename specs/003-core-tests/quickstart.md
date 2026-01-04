@@ -1,4 +1,4 @@
-# Quickstart: Running and Writing Tests for 001-Foundation
+# Quickstart: Running and Writing Tests for 001-Core
 
 **Audience**: pc-switcher developers writing or running tests
 **Last Updated**: 2025-12-11
@@ -64,7 +64,7 @@ grep -r "FR-018" tests/
 grep -r "US3-AS2" tests/
 ```
 
-Or consult `specs/003-foundation-tests/contracts/coverage-map.yaml` for machine-readable mapping.
+Or consult `specs/003-core-tests/contracts/coverage-map.yaml` for machine-readable mapping.
 
 ## Writing New Tests
 
@@ -86,7 +86,7 @@ Or consult `specs/003-foundation-tests/contracts/coverage-map.yaml` for machine-
 
 ### 2. Choose Test File Location
 
-Follow the structure from `specs/003-foundation-tests/data-model.md`:
+Follow the structure from `specs/003-core-tests/data-model.md`:
 
 - **Unit tests**: `tests/unit/<component>/test_<module>.py`
   - Example: `tests/unit/orchestrator/test_job_lifecycle.py`
@@ -254,7 +254,7 @@ mock_asyncssh.connect = AsyncMock()
 
 ### 8. Test Both Success and Failure Paths
 
-Per FR-004 from 003-foundation-tests spec, every requirement must have tests covering both success and failure paths.
+Per FR-004 from 003-core-tests spec, every requirement must have tests covering both success and failure paths.
 
 **Approach is flexible** - choose what's cleaner for each case:
 
@@ -357,7 +357,7 @@ After writing tests, verify they appear in the coverage map:
 
 ```bash
 # Check coverage-map.yaml includes your test
-grep "test_001_fr###" specs/003-foundation-tests/contracts/coverage-map.yaml
+grep "test_001_fr###" specs/003-core-tests/contracts/coverage-map.yaml
 ```
 
 ## Common Patterns
@@ -515,7 +515,7 @@ uv run pytest tests/unit -v --durations=10
 # Time the full unit test suite
 time uv run pytest tests/unit tests/contract -v
 
-# Should complete in <30 seconds per FR-013 of 003-foundation-tests spec
+# Should complete in <30 seconds per FR-013 of 003-core-tests spec
 ```
 
 ### Profile Slow Tests
@@ -634,4 +634,4 @@ After writing tests:
 3. **Update data-model.md**: If adding new requirements, update the mapping
 4. **Submit PR**: CI will run all tests automatically
 
-For detailed requirement-to-test mapping, see `specs/003-foundation-tests/data-model.md`.
+For detailed requirement-to-test mapping, see `specs/003-core-tests/data-model.md`.

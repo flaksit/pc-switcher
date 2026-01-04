@@ -1697,7 +1697,7 @@ log_cli_level: INFO     # Displayed in terminal
 
 # Enable/disable sync jobs (true = enabled, false = skipped)
 sync_jobs:
-  # Jobs implemented in 001-foundation (for testing the sync infrastructure):
+  # Jobs implemented in 001-core (for testing the sync infrastructure):
   dummy_success: true   # Test job that completes successfully
   dummy_fail: false     # Test job that fails at configurable progress %
   # Future sync jobs (not yet implemented - add when features 5-10 are built):

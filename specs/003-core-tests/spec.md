@@ -1,16 +1,16 @@
-# Feature Specification: Retroactive Tests for 001-Foundation
+# Feature Specification: Retroactive Tests for 001-Core
 
 **Feature Branch**: `003-retroactive-tests`  
 **Created**: 2025-12-05  
 **Status**: Final  
-**Input**: User description: "Create retroactive tests for all existing 001-foundation functionality"
+**Input**: User description: "Create retroactive tests for all existing 001-core functionality"
 
 ## Navigation
 
 Documentation Hierarchy:
 - [High level requirements](../../High%20level%20requirements.md) - Project vision and scope
 - [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
-- [001-Foundation Specification](../001-foundation/spec.md) - Requirements being tested
+- [001-Core Specification](../001-core/spec.md) - Requirements being tested
 - Specification (this document) - Detailed requirements for retroactive tests
 
 Related Features:
@@ -26,25 +26,25 @@ Pre-analysis References:
 
 ### Session 2025-12-05
 
-(No clarifications needed - scope is clearly defined by the 001-foundation spec)
+(No clarifications needed - scope is clearly defined by the 001-core spec)
 
 ## User Scenarios & Testing
 
-### User Story 1 - Spec-Driven Test Coverage for 001-Foundation (Priority: P1)
+### User Story 1 - Spec-Driven Test Coverage for 001-Core (Priority: P1)
 
-As a pc-switcher developer, I have comprehensive tests that verify 100% of the specifications defined in specs/001-foundation/spec.md. Tests are written based on the spec (user stories, acceptance scenarios, functional requirements), not the implementation code. If any part of the spec was not implemented or implemented incorrectly, the tests fail.
+As a pc-switcher developer, I have comprehensive tests that verify 100% of the specifications defined in specs/001-core/spec.md. Tests are written based on the spec (user stories, acceptance scenarios, functional requirements), not the implementation code. If any part of the spec was not implemented or implemented incorrectly, the tests fail.
 
 **Why this priority**: P1 because the existing foundation code is critical infrastructure. Bugs could break entire systems. Spec-driven tests ensure the implementation matches the documented requirements and catch gaps or deviations.
 
-**Independent Test**: Can be verified by running the full test suite and confirming tests exist for every user story, acceptance scenario, and functional requirement in the 001-foundation spec.
+**Independent Test**: Can be verified by running the full test suite and confirming tests exist for every user story, acceptance scenario, and functional requirement in the 001-core spec.
 
 **Acceptance Scenarios**:
 
-1. **Given** tests are implemented based on specs/001-foundation/spec.md, **When** I run the full test suite, **Then** 100% of user stories have corresponding test coverage
+1. **Given** tests are implemented based on specs/001-core/spec.md, **When** I run the full test suite, **Then** 100% of user stories have corresponding test coverage
 
-2. **Given** tests are implemented based on specs/001-foundation/spec.md, **When** I run the full test suite, **Then** 100% of acceptance scenarios have corresponding test cases
+2. **Given** tests are implemented based on specs/001-core/spec.md, **When** I run the full test suite, **Then** 100% of acceptance scenarios have corresponding test cases
 
-3. **Given** tests are implemented based on specs/001-foundation/spec.md, **When** I run the full test suite, **Then** 100% of functional requirements have corresponding test assertions
+3. **Given** tests are implemented based on specs/001-core/spec.md, **When** I run the full test suite, **Then** 100% of functional requirements have corresponding test assertions
 
 4. **Given** a part of the spec was not implemented or implemented incorrectly, **When** I run the tests, **Then** the relevant tests fail, exposing the gap or bug
 
@@ -54,15 +54,15 @@ As a pc-switcher developer, I have comprehensive tests that verify 100% of the s
 
 ### User Story 2 - Traceability from Tests to Spec (Priority: P2)
 
-As a pc-switcher developer, I can trace each test back to the specific requirement it validates. When a test fails, I can quickly identify which part of the 001-foundation spec is affected.
+As a pc-switcher developer, I can trace each test back to the specific requirement it validates. When a test fails, I can quickly identify which part of the 001-core spec is affected.
 
 **Why this priority**: P2 because traceability improves debugging and maintenance but the tests themselves are more critical.
 
-**Independent Test**: Can be verified by examining test names/docstrings and confirming they reference specific requirements from 001-foundation spec.
+**Independent Test**: Can be verified by examining test names/docstrings and confirming they reference specific requirements from 001-core spec.
 
 **Acceptance Scenarios**:
 
-1. **Given** I look at any test for 001-foundation, **When** I read the test name or docstring, **Then** I can identify the specific user story, acceptance scenario, or FR being tested
+1. **Given** I look at any test for 001-core, **When** I read the test name or docstring, **Then** I can identify the specific user story, acceptance scenario, or FR being tested
 
 2. **Given** a test fails in CI, **When** I review the failure output, **Then** I can immediately navigate to the corresponding spec requirement
 
@@ -83,19 +83,19 @@ As a pc-switcher developer, I can trace each test back to the specific requireme
 
 #### Test Coverage Requirements
 
-- **FR-001**: Tests MUST cover 100% of user stories defined in specs/001-foundation/spec.md
+- **FR-001**: Tests MUST cover 100% of user stories defined in specs/001-core/spec.md
 
-- **FR-002**: Tests MUST cover 100% of acceptance scenarios defined in specs/001-foundation/spec.md
+- **FR-002**: Tests MUST cover 100% of acceptance scenarios defined in specs/001-core/spec.md
 
-- **FR-003**: Tests MUST cover 100% of functional requirements defined in specs/001-foundation/spec.md
+- **FR-003**: Tests MUST cover 100% of functional requirements defined in specs/001-core/spec.md
 
 - **FR-004**: Tests MUST verify both success paths and failure paths (error handling, edge cases, boundary conditions) for each requirement
 
 #### Test Organization Requirements
 
-- **FR-005**: Unit tests for 001-foundation MUST be placed in `tests/unit/` directory following module structure
+- **FR-005**: Unit tests for 001-core MUST be placed in `tests/unit/` directory following module structure
 
-- **FR-006**: Integration tests for 001-foundation MUST be placed in `tests/integration/` directory
+- **FR-006**: Integration tests for 001-core MUST be placed in `tests/integration/` directory
 
 - **FR-007**: Each test file MUST include docstrings or comments referencing the spec requirements being tested
 
@@ -117,7 +117,7 @@ As a pc-switcher developer, I can trace each test back to the specific requireme
 
 ### Key Entities
 
-- **SpecRequirement**: Represents a requirement from 001-foundation spec; has ID (FR-xxx, US-xxx, AS-xxx), description, and test status
+- **SpecRequirement**: Represents a requirement from 001-core spec; has ID (FR-xxx, US-xxx, AS-xxx), description, and test status
 - **TestMapping**: Represents the mapping between a spec requirement and its corresponding tests; enables traceability
 - **CoverageReport**: Represents the summary of which spec requirements have tests and which are missing
 
@@ -125,11 +125,11 @@ As a pc-switcher developer, I can trace each test back to the specific requireme
 
 ### Measurable Outcomes
 
-- **SC-001**: 100% of user stories in specs/001-foundation/spec.md have corresponding test coverage
+- **SC-001**: 100% of user stories in specs/001-core/spec.md have corresponding test coverage
 
-- **SC-002**: 100% of acceptance scenarios in specs/001-foundation/spec.md have corresponding test cases
+- **SC-002**: 100% of acceptance scenarios in specs/001-core/spec.md have corresponding test cases
 
-- **SC-003**: 100% of functional requirements in specs/001-foundation/spec.md have corresponding test assertions
+- **SC-003**: 100% of functional requirements in specs/001-core/spec.md have corresponding test assertions
 
 - **SC-004**: All tests verify both success and failure paths as specified in the requirements
 
@@ -144,8 +144,8 @@ As a pc-switcher developer, I can trace each test back to the specific requireme
 ## Assumptions
 
 - Testing framework infrastructure from [../002-testing-framework/spec.md](../002-testing-framework/spec.md) is implemented and operational
-- specs/001-foundation/spec.md is the authoritative source for what needs testing
-- 001-foundation implementation exists and is testable
+- specs/001-core/spec.md is the authoritative source for what needs testing
+- 001-core implementation exists and is testable
 
 ## Constitution Alignment
 
@@ -165,8 +165,8 @@ This feature aligns with the following constitution principles:
 
 ## Out of Scope
 
-- Tests for features beyond 001-foundation (those will have their own test specs)
-- Testing implementation details not specified in 001-foundation spec
+- Tests for features beyond 001-core (those will have their own test specs)
+- Testing implementation details not specified in 001-core spec
 - Fixing bugs found by these tests (separate bug fix tasks)
-- Updating 001-foundation spec if gaps are found (separate spec update task)
+- Updating 001-core spec if gaps are found (separate spec update task)
 - Test coverage for third-party libraries (only test project code)

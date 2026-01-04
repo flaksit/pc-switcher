@@ -1,7 +1,7 @@
 """Unit tests for BtrfsSnapshotJob.
 
-Tests verify snapshot creation, validation, and error handling per 001-foundation spec.
-Reference: specs/001-foundation/spec.md (User Story 3 - Safety Infrastructure with Btrfs Snapshots)
+Tests verify snapshot creation, validation, and error handling per 001-core spec.
+Reference: specs/001-core/spec.md (User Story 3 - Safety Infrastructure with Btrfs Snapshots)
 """
 
 from __future__ import annotations

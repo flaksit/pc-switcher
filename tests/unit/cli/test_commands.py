@@ -1,7 +1,7 @@
 """Tests for CLI commands.
 
 Tests verify that the CLI commands defined in src/pcswitcher/cli.py exist and
-accept the correct arguments as specified in specs/001-foundation/spec.md.
+accept the correct arguments as specified in specs/001-core/spec.md.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ class TestSyncCommand:
         3. The command structure matches the spec requirement
 
         References:
-        - FND-FR-SYNC-CMD in specs/001-foundation/spec.md
+        - FND-FR-SYNC-CMD in specs/001-core/spec.md
         """
         # Mock Configuration to avoid needing actual config file
         mock_config = MagicMock(spec=Configuration)
@@ -56,7 +56,7 @@ class TestSyncCommand:
         results in an error, ensuring the command structure is enforced.
 
         References:
-        - FND-FR-SYNC-CMD in specs/001-foundation/spec.md
+        - FND-FR-SYNC-CMD in specs/001-core/spec.md
         """
         # Invoke the sync command without a target argument
         result = runner.invoke(app, ["sync"])
@@ -77,7 +77,7 @@ class TestSyncCommand:
         for specifying a custom configuration file path.
 
         References:
-        - FND-FR-SYNC-CMD in specs/001-foundation/spec.md
+        - FND-FR-SYNC-CMD in specs/001-core/spec.md
         - sync command implementation in src/pcswitcher/cli.py
         """
         # Mock Configuration to avoid needing actual config file

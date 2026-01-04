@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Retroactive Tests for 001-Foundation
+# Specification Quality Checklist: Retroactive Tests for 001-Core
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2025-12-05
@@ -35,6 +35,6 @@
 - All items pass validation
 - Specification is ready for `/speckit.clarify` or `/speckit.plan`
 - This spec depends on the testing framework infrastructure being implemented first (see [spec.md](../spec.md))
-- Scope is clearly bounded to 001-foundation only - future features will have their own test specs
+- Scope is clearly bounded to 001-core only - future features will have their own test specs
 - Key focus: spec-driven testing where tests validate the specification, not just the implementation
 - Added US2 for traceability from tests back to spec requirements
