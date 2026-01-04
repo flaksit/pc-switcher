@@ -26,6 +26,10 @@ This audit analyzed 14 integration test files containing approximately 70 test m
 
 **Estimated time savings**: 1-2 minutes per CI run (current run: ~8.5 min).
 
+### Key Principle
+
+**One expensive scenario → multiple assertions**: Don't run the same sync 3 times to test 3 things. Run it once, assert all 3. The main E2E test demonstrates this pattern.
+
 ## Test File Overview
 
 ```mermaid
@@ -118,9 +122,9 @@ graph TD
 | `test_001_us7_as1_init_after_install` | 🔄 MERGE | ~90% identical to FR036 test |
 | `test_001_us7_as3_init_preserves_existing_config` | 🔄 MERGE | Combine with --force test |
 | `test_001_us7_as3_init_force_overwrites` | 🔄 MERGE | Combine with preserve test |
-| `test_001_init_creates_parent_directory` | ⚠️ UNIT? | Could be unit test |
+| `test_001_init_creates_parent_directory` | 📦 UNIT | Could be unit test |
 
-**Recommendation**: Consolidate 5 tests → 2 tests.
+**Recommendation**: Consolidate 5 tests → 2 tests. Move "creates parent directory" to unit tests.
 
 ### 6. test_btrfs_operations.py (10 tests)
 
@@ -215,8 +219,7 @@ but the implementation only tests asyncio task cancellation locally. It:
 
 **Resolution**:
 - **GH Issue #132** created: Implement proper FR-026 integration test with real SIGINT handling
-- **Current test is useful**: It tests asyncio double-cancellation pattern (not covered by existing unit tests)
-- **Action**: Move current test to `tests/unit/orchestrator/test_interrupt_handling.py` and rename to clarify scope
+- **Current test**: Leave as-is for now. It's a no-op (doesn't use VMs) but also doesn't cost time. Not worth the effort to move it.
 
 ### 11. test_terminal_ui.py (3 tests)
 
@@ -407,16 +410,18 @@ graph TD
 
 ### Immediate Actions (Remove/Delete)
 
-1. **Remove `test_btrfs_filesystem_present`** - Trivial smoke test
-2. **Remove `test_create_writable_snapshot`** - Tests unused capability
-3. **Remove `test_basic_command_execution_pc1/pc2`** - Implicitly tested
-4. **Remove `test_001_us3_as9_runtime_disk_space_monitoring`** - Tests `df`, not app
+| Test to Remove | Unique Assertion | Covered By |
+| -------------- | ---------------- | ---------- |
+| `test_btrfs_filesystem_present` | btrfs mounted | Every snapshot test fails fast if btrfs missing |
+| `test_create_writable_snapshot` | ro=false works | Unused capability - no coverage needed |
+| `test_basic_command_execution_pc1/pc2` | SSH works | Every other test; asyncssh errors are already clear |
+| `test_001_us3_as9_runtime_disk_space_monitoring` | `df` output | Tests shell command, not app logic |
 
 ### Fix/Investigate
 
 | Test | Issue |
 | ---- | ----- |
-| `test_001_fr026_second_sigint_force_terminate` | Move to unit tests; proper integration test tracked in **#132** |
+| `test_001_fr026_second_sigint_force_terminate` | No-op (never uses VMs). Proper test tracked in **#132**. Leave as-is. |
 | `test_001_us1_as7_interrupt_terminates_job` | Claims to verify exit code 130 but doesn't |
 | `test_nonexistent_version` | Weak assertion |
 
@@ -424,8 +429,8 @@ graph TD
 
 | Integration Test | Reason |
 | ---------------- | ------ |
-| `test_001_fr026_second_sigint_force_terminate` | Tests asyncio patterns, not real SIGINT; rename to clarify scope |
 | `test_terminal_ui.py` (all 3 tests) | Docstring says "do not require VM" - tests component integration |
+| `test_init_creates_parent_directory` | Tests mkdir -p behavior, not VM-specific |
 | `test_logging_contract.py` (all) | Merge into `test_logging.py` |
 
 ### Organize/Move
@@ -471,6 +476,11 @@ Total integration test run: **~8.5 minutes** currently. As sync jobs are added, 
 | Uninstall + reinstall old version | 40-70s | Per test needing old version |
 | `reset_pcswitcher_state` (delete config+data+snapshots) | 5-10s | Every test using it |
 | Run `pc-switcher sync` | 10-60s | ~22 times across all tests |
+
+### ⚠️ Risks of Fixture Optimization
+
+1. **State leakage**: Session-scoped installs and shared state can increase flakiness if cleanup isn't precise.
+2. **Measure first**: Treat estimated savings as hypotheses. Time before/after each change.
 
 ### Strategy 1: Session-Scoped Installation (High Impact)
 
@@ -571,6 +581,8 @@ def test_sync_full_workflow():
 
 The main E2E test already does this. Apply same pattern to other test groups.
 
+**How to merge well**: Use small assertion helpers with crisp names (`assert_history_recorded()`, `assert_snapshots_created()`). This keeps tests readable while getting the runtime benefit.
+
 ### Strategy 7: Parameterize Similar Tests
 
 **Problem**: Separate tests for SemVer vs PEP440 format run identical setup.
@@ -601,3 +613,8 @@ When adding new sync jobs:
 - New job tests should use existing sync infrastructure, not run separate syncs
 - One comprehensive sync (with all jobs enabled) validates job integration
 - Individual job logic tested via unit tests with mocked executor
+
+## Before Implementing
+
+1. **Measure** CI timing before/after each optimization
+2. **Verify** removed tests have their unique assertion covered elsewhere (see table in Action Items)
