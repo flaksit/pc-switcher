@@ -353,49 +353,6 @@ async def test_core_us_btrfs_as7_cleanup_snapshots_with_retention(
             await pc1_executor.run_command(f"sudo rmdir {session_path} 2>/dev/null || true")
 
 
-async def test_core_us_btrfs_as9_runtime_disk_space_monitoring(
-    pc1_executor: RemoteExecutor,
-) -> None:
-    """Test CORE-US-BTRFS-AS9: Runtime disk space monitoring during sync.
-
-    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenario 9
-    Verifies that the system can check available disk space during runtime
-    and detect when it falls below configured thresholds.
-
-    Note: This test verifies the disk space checking mechanism works.
-    The actual monitoring job and abort logic is tested in
-    tests/unit_jobs/test_disk_space_monitor.py.
-    """
-    # Check current disk space on /
-    df_result = await pc1_executor.run_command("df -h / | tail -1")
-    assert df_result.success, f"Failed to check disk space: {df_result.stderr}"
-
-    # Parse df output to verify we can extract disk space information
-    df_output = df_result.stdout.strip()
-    assert df_output, "df command returned no output"
-
-    # Verify output format (should have columns: Filesystem, Size, Used, Avail, Use%, Mounted)
-    columns = df_output.split()
-    assert len(columns) >= 5, f"Unexpected df output format: {df_output}"
-
-    # Extract available space (4th column, e.g., "50G")
-    avail_space = columns[3]
-    assert avail_space, "Could not extract available space from df output"
-
-    # Verify available space is a valid size string (ends with K, M, G, or T)
-    assert any(avail_space.endswith(unit) for unit in ["K", "M", "G", "T"]), (
-        f"Unexpected available space format: {avail_space}"
-    )
-
-    # Verify we can check disk space on /.snapshots (if it exists)
-    snapshots_df_result = await pc1_executor.run_command("df -h /.snapshots 2>/dev/null || df -h /")
-    assert snapshots_df_result.success, "Failed to check snapshots directory disk space"
-
-    # Verify the command can be used to monitor disk space changes
-    # (actual monitoring frequency and abort logic is in DiskSpaceMonitorJob)
-    assert snapshots_df_result.stdout, "Disk space monitoring command returned no output"
-
-
 async def test_core_edge_btrfs_not_available(
     pc1_executor: RemoteExecutor,
 ) -> None:

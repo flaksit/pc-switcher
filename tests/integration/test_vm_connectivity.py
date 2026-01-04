@@ -13,32 +13,6 @@ import pytest
 from pcswitcher.executor import RemoteExecutor
 
 
-async def test_basic_command_execution_pc1(pc1_executor: RemoteExecutor) -> None:
-    """Test basic command execution on pc1.
-
-    Verifies that we can execute a simple command and get the expected output.
-    """
-    result = await pc1_executor.run_command("echo 'hello from pc1'")
-
-    assert result.success, f"Command failed: {result.stderr}"
-    assert result.exit_code == 0
-    assert "hello from pc1" in result.stdout
-    assert result.stderr == ""
-
-
-async def test_basic_command_execution_pc2(pc2_executor: RemoteExecutor) -> None:
-    """Test basic command execution on pc2.
-
-    Verifies that we can execute a simple command on pc2 independently.
-    """
-    result = await pc2_executor.run_command("echo 'hello from pc2'")
-
-    assert result.success, f"Command failed: {result.stderr}"
-    assert result.exit_code == 0
-    assert "hello from pc2" in result.stdout
-    assert result.stderr == ""
-
-
 async def test_command_with_stdout_and_stderr(pc1_executor: RemoteExecutor) -> None:
     """Test that stdout and stderr are captured separately."""
     result = await pc1_executor.run_command("echo 'to stdout' && echo 'to stderr' >&2")

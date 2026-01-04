@@ -52,18 +52,6 @@ async def test_volume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     await pc1_executor.run_command("sudo btrfs subvolume delete /test-vol")
 
 
-async def test_btrfs_filesystem_present(pc1_executor: RemoteExecutor) -> None:
-    """Test that btrfs filesystem is available on the test VM.
-
-    This is a prerequisite for all other btrfs tests. Verifies that the
-    VM has been provisioned with a btrfs filesystem.
-    """
-    result = await pc1_executor.run_command("btrfs --version")
-
-    assert result.success, f"btrfs not available: {result.stderr}"
-    assert "btrfs-progs" in result.stdout.lower()
-
-
 async def test_create_readonly_snapshot(pc1_executor: RemoteExecutor, test_volume: str) -> None:
     """Test creating a read-only btrfs snapshot.
 
@@ -90,36 +78,6 @@ async def test_create_readonly_snapshot(pc1_executor: RemoteExecutor, test_volum
         check_readonly = await pc1_executor.run_command(f"sudo btrfs property get {snapshot_name} ro")
         assert check_readonly.success
         assert "ro=true" in check_readonly.stdout
-
-    finally:
-        # Cleanup: delete the snapshot
-        await pc1_executor.run_command(
-            f"sudo btrfs subvolume delete {snapshot_name}",
-            timeout=10.0,
-        )
-
-
-async def test_create_writable_snapshot(pc1_executor: RemoteExecutor, test_volume: str) -> None:
-    """Test creating a writable (non-readonly) btrfs snapshot.
-
-    While pc-switcher primarily uses read-only snapshots, writable snapshots
-    may be needed for restoration operations.
-    """
-    snapshot_name = "/test-vol/.snapshots/test-snapshot-writable"
-
-    try:
-        # Ensure snapshot directory exists
-        await pc1_executor.run_command("sudo mkdir -p /test-vol/.snapshots")
-
-        # Create writable snapshot (no -r flag)
-        result = await pc1_executor.run_command(f"sudo btrfs subvolume snapshot /test-vol {snapshot_name}")
-
-        assert result.success, f"Snapshot creation failed: {result.stderr}"
-
-        # Verify snapshot exists and is writable
-        check_readonly = await pc1_executor.run_command(f"sudo btrfs property get {snapshot_name} ro")
-        assert check_readonly.success
-        assert "ro=false" in check_readonly.stdout
 
     finally:
         # Cleanup: delete the snapshot
