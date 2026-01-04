@@ -69,18 +69,22 @@ async def test_subvolume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     await pc1_executor.run_command(f"sudo btrfs subvolume delete {subvolume_path}")
 
 
-async def test_core_us_btrfs_as2_create_presync_snapshots(
+@pytest.mark.parametrize("phase", [SnapshotPhase.PRE, SnapshotPhase.POST])
+async def test_core_us_btrfs_create_snapshots(
     pc1_executor: RemoteExecutor,
     test_subvolume: str,
+    phase: SnapshotPhase,
 ) -> None:
-    """Test CORE-US-BTRFS-AS2: Create pre-sync snapshots before any sync operations.
+    """Test CORE-US-BTRFS-AS2/AS3: Create pre-sync and post-sync snapshots.
 
-    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenario 2
+    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenarios 2 & 3
     Verifies that the system creates read-only btrfs snapshots in
-    /.snapshots/pc-switcher/<session-folder>/ with naming pattern
-    pre-<subvol>-<timestamp>.
+    /.snapshots/pc-switcher/<session-folder>/ with correct naming patterns:
+    - PRE: pre-<subvol>-<timestamp>
+    - POST: post-<subvol>-<timestamp>
     """
-    session_id = "test-presync-001"
+    phase_name = "pre" if phase == SnapshotPhase.PRE else "post"
+    session_id = f"test-{phase_name}sync-001"
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     session_folder = f"{timestamp}-{session_id}"
     session_path = f"/.snapshots/pc-switcher/{session_folder}"
@@ -95,12 +99,12 @@ async def test_core_us_btrfs_as2_create_presync_snapshots(
         mkdir_result = await pc1_executor.run_command(f"sudo mkdir -p {session_path}")
         assert mkdir_result.success, f"Failed to create session folder: {mkdir_result.stderr}"
 
-        # Create pre-sync snapshot
-        snap_name = snapshot_name("@test", SnapshotPhase.PRE)
+        # Create snapshot with appropriate phase
+        snap_name = snapshot_name("@test", phase)
         snap_path = f"{session_path}/{snap_name}"
 
         result = await create_snapshot(pc1_executor, test_subvolume, snap_path)
-        assert result.success, f"Failed to create pre-sync snapshot: {result.stderr}"
+        assert result.success, f"Failed to create {phase_name}-sync snapshot: {result.stderr}"
 
         # Verify snapshot exists and is read-only
         verify_result = await pc1_executor.run_command(f"sudo btrfs subvolume show {snap_path}")
@@ -111,62 +115,12 @@ async def test_core_us_btrfs_as2_create_presync_snapshots(
         assert readonly_result.success
         assert "ro=true" in readonly_result.stdout, "Snapshot is not read-only"
 
-        # Verify naming pattern matches spec (pre-<subvol>-<timestamp>)
-        assert snap_name.startswith("pre-@test-"), f"Snapshot name doesn't match pattern: {snap_name}"
+        # Verify naming pattern matches spec (<phase>-<subvol>-<timestamp>)
+        expected_prefix = f"{phase_name}-@test-"
+        assert snap_name.startswith(expected_prefix), f"Snapshot name doesn't match pattern: {snap_name}"
         assert len(snap_name.split("-")) >= 3, f"Snapshot name missing timestamp: {snap_name}"
 
-    finally:
-        # Cleanup
-        await pc1_executor.run_command(f"sudo btrfs subvolume delete {snap_path} 2>/dev/null || true", timeout=10.0)
-        await pc1_executor.run_command(f"sudo rmdir {session_path} 2>/dev/null || true")
-
-
-async def test_core_us_btrfs_as3_create_postsync_snapshots(
-    pc1_executor: RemoteExecutor,
-    test_subvolume: str,
-) -> None:
-    """Test CORE-US-BTRFS-AS3: Create post-sync snapshots after successful sync.
-
-    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenario 3
-    Verifies that the system creates read-only btrfs snapshots in the same
-    session folder with naming pattern post-<subvol>-<timestamp>.
-    """
-    session_id = "test-postsync-001"
-    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    session_folder = f"{timestamp}-{session_id}"
-    session_path = f"/.snapshots/pc-switcher/{session_folder}"
-    snap_path = ""  # Initialize to avoid type checker warning
-
-    try:
-        # Ensure snapshots directory exists
-        success, error_msg = await validate_snapshots_directory(pc1_executor, Host.SOURCE)
-        assert success, f"Failed to validate snapshots directory: {error_msg}"
-
-        # Create session folder
-        mkdir_result = await pc1_executor.run_command(f"sudo mkdir -p {session_path}")
-        assert mkdir_result.success, f"Failed to create session folder: {mkdir_result.stderr}"
-
-        # Create post-sync snapshot
-        snap_name = snapshot_name("@test", SnapshotPhase.POST)
-        snap_path = f"{session_path}/{snap_name}"
-
-        result = await create_snapshot(pc1_executor, test_subvolume, snap_path)
-        assert result.success, f"Failed to create post-sync snapshot: {result.stderr}"
-
-        # Verify snapshot exists and is read-only
-        verify_result = await pc1_executor.run_command(f"sudo btrfs subvolume show {snap_path}")
-        assert verify_result.success, f"Snapshot not found: {snap_path}"
-
-        # Verify read-only property
-        readonly_result = await pc1_executor.run_command(f"sudo btrfs property get {snap_path} ro")
-        assert readonly_result.success
-        assert "ro=true" in readonly_result.stdout, "Snapshot is not read-only"
-
-        # Verify naming pattern matches spec (post-<subvol>-<timestamp>)
-        assert snap_name.startswith("post-@test-"), f"Snapshot name doesn't match pattern: {snap_name}"
-        assert len(snap_name.split("-")) >= 3, f"Snapshot name missing timestamp: {snap_name}"
-
-        # Verify post-sync snapshot is in same session folder as pre-sync would be
+        # Verify snapshot is in session-specific folder
         assert session_id in snap_path, "Snapshot not in session-specific folder"
 
     finally:

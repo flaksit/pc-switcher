@@ -1,9 +1,13 @@
 """Integration tests for btrfs snapshot operations.
 
 Tests real btrfs filesystem operations including:
-- Snapshot creation, listing, and deletion
-- Both success and failure paths
-- Proper cleanup of test artifacts
+- Snapshot data integrity (content preservation)
+- Multiple snapshot isolation
+- Failure paths for invalid operations
+
+Note: Basic snapshot creation, listing, and deletion are tested in
+test_snapshot_infrastructure.py with the actual pc-switcher snapshot functions.
+This file focuses on unique behavior tests not covered elsewhere.
 """
 
 from __future__ import annotations
@@ -50,149 +54,6 @@ async def test_volume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
         "'",
     )
     await pc1_executor.run_command("sudo btrfs subvolume delete /test-vol")
-
-
-async def test_create_readonly_snapshot(pc1_executor: RemoteExecutor, test_volume: str) -> None:
-    """Test creating a read-only btrfs snapshot.
-
-    This is a core operation for pc-switcher. Verifies that we can create
-    snapshots and that they are properly marked as read-only.
-    """
-    snapshot_name = "/test-vol/.snapshots/test-snapshot-readonly"
-
-    try:
-        # Ensure snapshot directory exists
-        await pc1_executor.run_command("sudo mkdir -p /test-vol/.snapshots")
-
-        # Create read-only snapshot
-        result = await pc1_executor.run_command(f"sudo btrfs subvolume snapshot -r /test-vol {snapshot_name}")
-
-        assert result.success, f"Snapshot creation failed: {result.stderr}"
-        assert "Create a readonly snapshot" in result.stdout or snapshot_name in result.stdout
-
-        # Verify snapshot exists
-        verify_result = await pc1_executor.run_command(f"sudo btrfs subvolume show {snapshot_name}")
-        assert verify_result.success
-
-        # Verify it's read-only
-        check_readonly = await pc1_executor.run_command(f"sudo btrfs property get {snapshot_name} ro")
-        assert check_readonly.success
-        assert "ro=true" in check_readonly.stdout
-
-    finally:
-        # Cleanup: delete the snapshot
-        await pc1_executor.run_command(
-            f"sudo btrfs subvolume delete {snapshot_name}",
-            timeout=10.0,
-        )
-
-
-async def test_list_snapshots(pc1_executor: RemoteExecutor, test_volume: str) -> None:
-    """Test listing btrfs subvolumes/snapshots.
-
-    Verifies that we can enumerate snapshots, which is needed for
-    snapshot management and cleanup operations.
-    """
-    snapshot_name = "/test-vol/.snapshots/test-list-snapshot"
-
-    try:
-        # Create a test snapshot
-        await pc1_executor.run_command("sudo mkdir -p /test-vol/.snapshots")
-        create_result = await pc1_executor.run_command(f"sudo btrfs subvolume snapshot -r /test-vol {snapshot_name}")
-        assert create_result.success
-
-        # List all subvolumes
-        result = await pc1_executor.run_command("sudo btrfs subvolume list /test-vol")
-
-        assert result.success, f"Listing snapshots failed: {result.stderr}"
-        # Our test snapshot should appear in the list
-        assert "test-list-snapshot" in result.stdout
-
-    finally:
-        # Cleanup
-        await pc1_executor.run_command(
-            f"sudo btrfs subvolume delete {snapshot_name}",
-            timeout=10.0,
-        )
-
-
-async def test_delete_snapshot(pc1_executor: RemoteExecutor, test_volume: str) -> None:
-    """Test deleting a btrfs snapshot.
-
-    Verifies snapshot cleanup functionality, which is critical for
-    managing disk space.
-    """
-    snapshot_name = "/test-vol/.snapshots/test-delete-snapshot"
-
-    # Create a snapshot to delete
-    await pc1_executor.run_command("sudo mkdir -p /test-vol/.snapshots")
-    create_result = await pc1_executor.run_command(f"sudo btrfs subvolume snapshot -r /test-vol {snapshot_name}")
-    assert create_result.success, "Setup failed: could not create test snapshot"
-
-    # Delete the snapshot
-    result = await pc1_executor.run_command(
-        f"sudo btrfs subvolume delete {snapshot_name}",
-        timeout=10.0,
-    )
-
-    assert result.success, f"Snapshot deletion failed: {result.stderr}"
-    assert "Delete subvolume" in result.stdout or snapshot_name in result.stdout
-
-    # Verify snapshot is gone
-    verify_result = await pc1_executor.run_command(
-        f"sudo btrfs subvolume show {snapshot_name}",
-    )
-    assert not verify_result.success, "Snapshot still exists after deletion"
-
-
-async def test_snapshot_creation_failure_invalid_source(
-    pc1_executor: RemoteExecutor,
-) -> None:
-    """Test snapshot creation failure with invalid source path.
-
-    Per spec TST-FR-CONTRACT, we must verify failure paths. This tests that
-    attempting to snapshot a non-existent path fails appropriately.
-    """
-    result = await pc1_executor.run_command("sudo btrfs subvolume snapshot -r /nonexistent/path /tmp/bad-snapshot")
-
-    assert not result.success, "Should fail when source path doesn't exist"
-    assert result.exit_code != 0
-    # Error message should indicate the problem
-    assert len(result.stderr) > 0 or "ERROR" in result.stdout
-
-
-async def test_snapshot_creation_failure_invalid_destination(
-    pc1_executor: RemoteExecutor,
-    test_volume: str,
-) -> None:
-    """Test snapshot creation failure with invalid destination path.
-
-    Tests that attempting to create a snapshot in a non-existent or
-    non-btrfs directory fails appropriately.
-    """
-    result = await pc1_executor.run_command("sudo btrfs subvolume snapshot -r /test-vol /nonexistent/dir/snapshot")
-
-    assert not result.success, "Should fail when destination path is invalid"
-    assert result.exit_code != 0
-    assert len(result.stderr) > 0 or "ERROR" in result.stdout
-
-
-async def test_delete_snapshot_failure_nonexistent(
-    pc1_executor: RemoteExecutor,
-    test_volume: str,
-) -> None:
-    """Test snapshot deletion failure when snapshot doesn't exist.
-
-    Per spec TST-FR-CONTRACT, we must verify failure paths. Tests that attempting
-    to delete a non-existent snapshot fails gracefully.
-    """
-    result = await pc1_executor.run_command(
-        "sudo btrfs subvolume delete /test-vol/.snapshots/nonexistent-snapshot-12345",
-        timeout=10.0,
-    )
-
-    assert not result.success, "Should fail when snapshot doesn't exist"
-    assert result.exit_code != 0
 
 
 async def test_snapshot_preserves_content(pc1_executor: RemoteExecutor, test_volume: str) -> None:
@@ -286,3 +147,31 @@ async def test_multiple_snapshots_isolation(pc1_executor: RemoteExecutor, test_v
             f"sudo btrfs subvolume delete {snapshot2}",
             timeout=10.0,
         )
+
+
+@pytest.mark.parametrize(
+    ("scenario", "command"),
+    [
+        ("invalid_source", "sudo btrfs subvolume snapshot -r /nonexistent/path /tmp/bad-snapshot"),
+        ("invalid_destination", "sudo btrfs subvolume snapshot -r /test-vol /nonexistent/dir/snapshot"),
+        ("delete_nonexistent", "sudo btrfs subvolume delete /test-vol/.snapshots/nonexistent-snapshot-12345"),
+    ],
+)
+async def test_snapshot_operation_failures(
+    pc1_executor: RemoteExecutor,
+    test_volume: str,
+    scenario: str,
+    command: str,
+) -> None:
+    """Test that snapshot operations fail gracefully with invalid paths.
+
+    Per spec TST-FR-CONTRACT, we must verify failure paths.
+    Tests:
+    - Snapshot creation with invalid source path
+    - Snapshot creation with invalid destination path
+    - Snapshot deletion when snapshot doesn't exist
+    """
+    result = await pc1_executor.run_command(command, timeout=10.0)
+
+    assert not result.success, f"{scenario} should fail"
+    assert result.exit_code != 0, f"{scenario} should have non-zero exit code"

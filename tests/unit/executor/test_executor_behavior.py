@@ -23,9 +23,7 @@ from pcswitcher.models import CommandResult
 class TestExecutorOutputCapture:
     """Tests for stdout/stderr capture behavior."""
 
-    async def test_stdout_and_stderr_captured_separately(
-        self, mock_executor: MagicMock
-    ) -> None:
+    async def test_stdout_and_stderr_captured_separately(self, mock_executor: MagicMock) -> None:
         """Test that stdout and stderr are captured in separate fields."""
         mock_executor.run_command = AsyncMock(
             return_value=CommandResult(

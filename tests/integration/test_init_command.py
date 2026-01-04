@@ -61,16 +61,22 @@ async def clean_config_environment(
 class TestInitCommand:
     """Integration tests for pc-switcher init command."""
 
-    async def test_core_fr_default_config(
+    async def test_init_creates_default_config_with_comments(
         self,
         clean_config_environment: BashLoginRemoteExecutor,
     ) -> None:
-        """CORE-FR-DEFAULT-CONFIG: pc-switcher init creates default config with inline comments.
+        """CORE-FR-DEFAULT-CONFIG + CORE-US-INSTALL-AS1: Init creates config with comments.
 
-        Verifies that running 'pc-switcher init' creates a default configuration
-        file at ~/.config/pc-switcher/config.yaml with helpful inline comments.
+        Verifies the complete init workflow:
+        1. pc-switcher init creates ~/.config/pc-switcher/config.yaml
+        2. Config file contains inline comments
+        3. Config file contains expected sections (log/btrfs/sync)
         """
         executor = clean_config_environment
+
+        # Verify pc-switcher is installed
+        version_result = await executor.run_command("pc-switcher --version", timeout=10.0)
+        assert version_result.success, f"pc-switcher not installed: {version_result.stderr}"
 
         # Run pc-switcher init
         result = await executor.run_command("pc-switcher init", timeout=30.0)
@@ -84,15 +90,15 @@ class TestInitCommand:
         )
         assert check_after.success and "exists" in check_after.stdout, "Config file not created"
 
-        # Verify config contains comments
+        # Read and verify config content
         config_content = await executor.run_command(
             "cat ~/.config/pc-switcher/config.yaml",
             timeout=10.0,
         )
         assert config_content.success, "Failed to read config file"
-
-        # Check for comment lines (lines starting with #)
         content = config_content.stdout
+
+        # Check for comment lines
         comment_lines = [line for line in content.split("\n") if line.strip().startswith("#")]
         assert len(comment_lines) > 0, "Config file should contain inline comments"
 
@@ -100,126 +106,70 @@ class TestInitCommand:
         non_comment_lines = [line for line in content.split("\n") if line.strip() and not line.strip().startswith("#")]
         assert len(non_comment_lines) > 0, "Config file should contain configuration"
 
-    async def test_core_us_install_as1_init_after_install(
-        self,
-        clean_config_environment: BashLoginRemoteExecutor,
-    ) -> None:
-        """CORE-US-INSTALL-AS1: Full workflow - install.sh followed by pc-switcher init.
-
-        This test verifies the expected user workflow:
-        1. Run install.sh (already done on test VM)
-        2. Run pc-switcher init to create config
-        3. Config is created with comments
-        """
-        executor = clean_config_environment
-
-        # Verify pc-switcher is installed and accessible
-        version_result = await executor.run_command("pc-switcher --version", timeout=10.0)
-        assert version_result.success, f"pc-switcher not installed: {version_result.stderr}"
-
-        # Run pc-switcher init
-        init_result = await executor.run_command("pc-switcher init", timeout=30.0)
-        assert init_result.success, f"pc-switcher init failed: {init_result.stderr}"
-
-        # Verify config was created at the expected path
-        config_path_result = await executor.run_command(
-            "test -f ~/.config/pc-switcher/config.yaml && echo 'yes'",
-            timeout=10.0,
-        )
-        assert "yes" in config_path_result.stdout, "Config not at expected path"
-
-        # Verify the config is valid YAML with expected structure
-        config_content = await executor.run_command(
-            "cat ~/.config/pc-switcher/config.yaml",
-            timeout=10.0,
-        )
-        content = config_content.stdout
-
-        # Should contain common config sections or settings
-        assert "log" in content.lower() or "btrfs" in content.lower() or "sync" in content.lower(), (
+        # Check for expected config sections
+        assert any(section in content.lower() for section in ["log", "btrfs", "sync"]), (
             "Config should contain expected sections"
         )
 
-    async def test_core_us_install_as3_init_preserves_existing_config(
+    async def test_init_handles_existing_config(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
     ) -> None:
-        """CORE-US-INSTALL-AS3: pc-switcher init refuses to overwrite existing config without --force.
+        """CORE-US-INSTALL-AS3: Init preserves existing config unless --force is used.
 
-        Verifies that when a config file already exists, 'pc-switcher init':
-        - Detects the existing config
-        - Refuses to overwrite without --force flag
-        - Leaves the original config intact
+        Verifies that:
+        1. 'pc-switcher init' fails when config exists (without --force)
+        2. Original config is preserved
+        3. 'pc-switcher init --force' overwrites the existing config
         """
         executor = pc1_with_pcswitcher_mod
 
-        # First ensure a config exists (either by init or creating one)
-        await executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+        try:
+            # Setup: create config directory and file with marker
+            await executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+            custom_marker = "# CUSTOM_CONFIG_MARKER_FOR_TESTING_12345"
+            await executor.run_command(
+                f"echo '{custom_marker}' > ~/.config/pc-switcher/config.yaml",
+                timeout=10.0,
+            )
 
-        # Create a config with a unique marker
-        custom_marker = "# CUSTOM_CONFIG_MARKER_FOR_TESTING_12345"
-        await executor.run_command(
-            f"echo '{custom_marker}' > ~/.config/pc-switcher/config.yaml",
-            timeout=10.0,
-        )
+            # Verify marker was written
+            verify_marker = await executor.run_command(
+                "cat ~/.config/pc-switcher/config.yaml",
+                timeout=10.0,
+            )
+            assert custom_marker in verify_marker.stdout, "Failed to create test config with marker"
 
-        # Verify marker was written
-        verify_marker = await executor.run_command(
-            "cat ~/.config/pc-switcher/config.yaml",
-            timeout=10.0,
-        )
-        assert custom_marker in verify_marker.stdout, "Failed to create test config with marker"
+            # Test 1: Init WITHOUT --force should fail
+            init_result = await executor.run_command("pc-switcher init", timeout=30.0)
+            assert not init_result.success, "pc-switcher init should fail when config exists"
+            assert "already exists" in init_result.stdout or "Use --force" in init_result.stdout, (
+                f"Should mention existing config: {init_result.stdout}"
+            )
 
-        # Run pc-switcher init WITHOUT --force - should fail
-        init_result = await executor.run_command("pc-switcher init", timeout=30.0)
-        assert not init_result.success, "pc-switcher init should fail when config exists"
-        assert "already exists" in init_result.stdout or "Use --force" in init_result.stdout, (
-            f"Should mention existing config: {init_result.stdout}"
-        )
+            # Verify original config is preserved
+            check_marker = await executor.run_command(
+                "cat ~/.config/pc-switcher/config.yaml",
+                timeout=10.0,
+            )
+            assert custom_marker in check_marker.stdout, "Original config was overwritten without --force"
 
-        # Verify the marker is still present (config was not overwritten)
-        check_marker = await executor.run_command(
-            "cat ~/.config/pc-switcher/config.yaml",
-            timeout=10.0,
-        )
-        assert custom_marker in check_marker.stdout, "Original config was overwritten without --force"
+            # Test 2: Init WITH --force should succeed
+            force_result = await executor.run_command("pc-switcher init --force", timeout=30.0)
+            assert force_result.success, f"pc-switcher init --force failed: {force_result.stderr}"
+            assert "Created configuration file" in force_result.stdout
 
-        # Clean up
-        await executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
+            # Verify marker is gone (config was overwritten)
+            check_content = await executor.run_command(
+                "cat ~/.config/pc-switcher/config.yaml",
+                timeout=10.0,
+            )
+            assert custom_marker not in check_content.stdout, "Config was not overwritten with --force"
+            assert "#" in check_content.stdout, "New config should have comments"
 
-    async def test_core_us_install_as3_init_force_overwrites(
-        self,
-        clean_config_environment: BashLoginRemoteExecutor,
-    ) -> None:
-        """CORE-US-INSTALL-AS3: pc-switcher init --force overwrites existing config.
-
-        Verifies that 'pc-switcher init --force' successfully overwrites
-        an existing configuration file.
-        """
-        executor = clean_config_environment
-
-        # Create a config with a unique marker
-        await executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
-        custom_marker = "# OLD_CONFIG_MARKER_TO_BE_OVERWRITTEN"
-        await executor.run_command(
-            f"echo '{custom_marker}' > ~/.config/pc-switcher/config.yaml",
-            timeout=10.0,
-        )
-
-        # Run pc-switcher init WITH --force - should succeed
-        init_result = await executor.run_command("pc-switcher init --force", timeout=30.0)
-        assert init_result.success, f"pc-switcher init --force failed: {init_result.stderr}"
-        assert "Created configuration file" in init_result.stdout, f"Expected success message: {init_result.stdout}"
-
-        # Verify the marker is no longer present (config was overwritten)
-        check_content = await executor.run_command(
-            "cat ~/.config/pc-switcher/config.yaml",
-            timeout=10.0,
-        )
-        assert custom_marker not in check_content.stdout, "Config was not overwritten with --force"
-
-        # Verify new config has expected content (comments from default config)
-        assert "#" in check_content.stdout, "New config should have comments"
+        finally:
+            # Clean up
+            await executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
 
     async def test_core_init_creates_parent_directory(
         self,

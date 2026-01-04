@@ -111,35 +111,28 @@ class TestSelfUpdateCommandExists:
         assert result.success, f"Self update help failed: {result.stderr}"
         assert "update" in result.stdout.lower()
 
-    async def test_has_self_update(
+    async def test_self_update_cli_help(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
     ) -> None:
-        # Self update command should exist
-        result = await pc1_with_pcswitcher_mod.run_command("pc-switcher self update --help", timeout=10.0)
-        assert result.success, f"Self update help failed: {result.stderr}"
-        assert "update" in result.stdout.lower()
+        """Test CLI help documentation for self update command.
 
-    async def test_self_command_group_help(
-        self,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-    ) -> None:
-        """Test that 'pc-switcher self --help' shows the command group."""
-        result = await pc1_with_pcswitcher_mod.run_command("pc-switcher self --help", timeout=10.0)
-        assert result.success, f"Self help failed: {result.stderr}"
-        # Should show "self" command group and list subcommands
-        assert "update" in result.stdout.lower()
-        assert "manage" in result.stdout.lower() and "self" in result.stdout.lower()
+        Verifies:
+        - 'pc-switcher self update --help' shows the command
+        - 'pc-switcher self --help' shows the command group
+        - --prerelease flag is documented
+        """
+        # Test: self update --help shows the command and --prerelease option
+        update_help = await pc1_with_pcswitcher_mod.run_command("pc-switcher self update --help", timeout=10.0)
+        assert update_help.success, f"Self update help failed: {update_help.stderr}"
+        assert "update" in update_help.stdout.lower()
+        assert "--prerelease" in update_help.stdout, "Help should document --prerelease option"
 
-    async def test_self_update_help_shows_prerelease_flag(
-        self,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-    ) -> None:
-        """Test that 'pc-switcher self update --help' documents --prerelease flag."""
-        result = await pc1_with_pcswitcher_mod.run_command("pc-switcher self update --help", timeout=10.0)
-        assert result.success, f"Self update help failed: {result.stderr}"
-        # Should document the --prerelease option
-        assert "--prerelease" in result.stdout
+        # Test: self --help shows command group
+        group_help = await pc1_with_pcswitcher_mod.run_command("pc-switcher self --help", timeout=10.0)
+        assert group_help.success, f"Self help failed: {group_help.stderr}"
+        assert "update" in group_help.stdout.lower()
+        assert "manage" in group_help.stdout.lower() and "self" in group_help.stdout.lower()
 
 
 async def test_upgrade_to_specific_version(
@@ -208,31 +201,24 @@ class TestSelfUpdateSameVersion:
 class TestSelfUpdateVersionFormats:
     """Tests for version format acceptance (SemVer vs PEP 440)."""
 
-    async def test_semver_format(
+    @pytest.mark.parametrize("format_type", ["semver", "pep440"])
+    async def test_version_format_accepted(
         self,
         pc2_executor_with_new: BashLoginRemoteExecutor,
         old_release: Release,
+        format_type: str,
     ) -> None:
-        """Test that SemVer format is accepted (e.g., 0.1.0-alpha.N)."""
-        # Use SemVer format for downgrade (passing raw string, not Version).
-        success, _stdout, stderr = await _run_self_update(pc2_executor_with_new, old_release.version.semver_str())
-        assert success, f"SemVer format failed: {stderr}"
+        """Test that both SemVer and PEP 440 formats are accepted.
+
+        SemVer: 0.1.0-alpha.N
+        PEP 440: 0.1.0aN
+        """
+        version_str = old_release.version.semver_str() if format_type == "semver" else old_release.version.pep440_str()
+
+        success, _stdout, stderr = await _run_self_update(pc2_executor_with_new, version_str)
+        assert success, f"{format_type} format failed: {stderr}"
 
         version = await get_installed_version(pc2_executor_with_new)
-        assert version == old_release
-
-    async def test_pep440_format(
-        self,
-        pc2_executor_with_new: BashLoginRemoteExecutor,
-        old_release: Release,
-    ) -> None:
-        """Test that PEP 440 format is accepted (e.g., 0.1.0aN)."""
-        # Use PEP 440 format for downgrade (passing raw string, not Version)
-        success, _stdout, stderr = await _run_self_update(pc2_executor_with_new, old_release.version.pep440_str())
-        assert success, f"PEP 440 format failed: {stderr}"
-
-        version = await get_installed_version(pc2_executor_with_new)
-        # Version comparison handles format differences
         assert version == old_release
 
 
