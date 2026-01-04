@@ -58,9 +58,13 @@ def test_validate_config_rejects_invalid_format(self) -> None:
 tests/unit/
 ├── test_lock.py
 ├── test_config.py
-├── test_jobs/
+├── jobs/
 │   ├── test_disk_space_monitor.py
 │   └── test_btrfs.py
+├── executor/                    # Executor behavior tests (mocked)
+│   └── test_executor_behavior.py
+└── ui/                          # Terminal UI tests (mocked)
+    └── test_terminal_ui.py
 ```
 
 ### Available Fixtures
@@ -250,12 +254,24 @@ class TestJobContract:
 4. `validate()` returns list of `ValidationError`
 5. `execute()` completes without error
 
+## Integration Test Structure
+
+```text
+tests/integration/
+├── test_end_to_end_sync.py      # Full sync workflow tests
+├── test_snapshot_infrastructure.py
+├── test_btrfs_operations.py
+├── test_vm_connectivity.py      # VM infrastructure validation
+└── benchmarks/                  # Performance benchmarks (excluded from CI)
+    └── test_executor_overhead.py
+```
+
 ## Markers
 
 ```python
 @pytest.mark.integration  # Requires VM infrastructure (auto-applied in tests/integration/)
 @pytest.mark.slow         # Takes >5 seconds
-@pytest.mark.benchmark    # Performance benchmarks (not run by default)
+@pytest.mark.benchmark    # Performance benchmarks (in benchmarks/ folder, not run by default)
 ```
 
 ## Common Pitfalls

@@ -642,3 +642,51 @@ When adding new sync jobs:
 1. **Re-measure** CI timing if significant changes are made to test structure
 2. **Verify** removed tests have their unique assertion covered elsewhere (see table in Action Items)
 3. Focus on **avoiding redundant sync operations** - that's where the time goes
+
+## Implementation Status (Phase 1)
+
+**Completed**: 2026-01-04 (PR #XXX - update after PR created)
+
+### Removals
+
+- ✅ `test_btrfs_filesystem_present` - removed from test_btrfs_operations.py
+- ✅ `test_create_writable_snapshot` - removed (tests unused capability)
+- ✅ `test_create_readonly_snapshot` - removed (overlaps with test_snapshot_infrastructure.py)
+- ✅ `test_list_snapshots` - removed (overlaps with cleanup test)
+- ✅ `test_delete_snapshot` - removed (tested in cleanup)
+- ✅ `test_basic_command_execution_pc1/pc2` - removed from test_vm_connectivity.py
+- ✅ `test_core_us_btrfs_as9_runtime_disk_space_monitoring` - removed (tests `df` command, not app logic)
+
+### Moves
+
+- ✅ `test_terminal_ui.py` (3 tests) → `tests/unit/ui/test_terminal_ui.py`
+- ✅ `test_executor_overhead.py` → `tests/integration/benchmarks/test_executor_overhead.py`
+- ✅ Executor behavior tests (7 tests) from test_vm_connectivity.py → `tests/unit/executor/test_executor_behavior.py`
+
+### Consolidations
+
+- ✅ `test_self_update.py`: Merged 3 CLI help tests → 1 `test_self_update_cli_help`
+- ✅ `test_self_update.py`: Parameterized semver/pep440 format tests → 1 `test_version_format_accepted`
+- ✅ `test_init_command.py`: Merged 2 init tests → `test_init_creates_default_config_with_comments`
+- ✅ `test_init_command.py`: Merged preserve/force tests → `test_init_handles_existing_config`
+- ✅ `test_btrfs_operations.py`: Parameterized 3 failure tests → `test_snapshot_operation_failures`
+- ✅ `test_snapshot_infrastructure.py`: Parameterized pre/post snapshot → `test_core_us_btrfs_create_snapshots`
+- ✅ `test_end_to_end_sync.py`: Merged 3 consecutive sync tests → `test_consecutive_sync_warning_workflow`
+
+### Documentation
+
+- ✅ Updated `docs/dev/testing-guide.md` with new test locations
+
+### Deferred to Phase 2
+
+- ⏳ Priority 3: Session-scoped installation (~16-20s savings)
+- ⏳ Priority 4: Ordered test execution (~8-12s savings)
+
+### Expected Impact
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Integration test files | 13 | 11 (+ 1 benchmarks subfolder) |
+| Integration test methods | ~87 | ~55-60 |
+| Unit test files | ~15 | ~17 |
+| Estimated CI time savings | - | ~80-120 seconds |
