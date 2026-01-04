@@ -10,7 +10,7 @@ PC-switcher enables a simple workflow: work on one machine, sync before switchin
 Work on source machine → Trigger sync → Resume on target machine
 ```
 
-**Status**: Foundation infrastructure complete. Core sync functionality in development.
+**Status**: Core infrastructure complete. Core sync functionality in development.
 
 ## What Gets Synced
 

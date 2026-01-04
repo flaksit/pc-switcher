@@ -135,8 +135,8 @@ class TestJobContract:
         mock_job_context.event_bus.publish.assert_called_once()  # type: ignore[union-attr]
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_job_iface(self, mock_job_context: JobContext) -> None:
-        """FND-FR-JOB-IFACE: Job interface defines standardized methods.
+    async def test_001_core_fr_job_iface(self, mock_job_context: JobContext) -> None:
+        """CORE-FR-JOB-IFACE: Job interface defines standardized methods.
 
         Verifies that the Job interface includes:
         - validate() method

@@ -1,12 +1,12 @@
 # Data Model: Requirement-to-Test Mapping
 
-**Feature**: Retroactive Tests for 001-Foundation
+**Feature**: Retroactive Tests for 001-Core
 **Date**: 2025-12-11
 **Purpose**: Complete mapping of spec requirements to test coverage
 
 ## Overview
 
-This document provides explicit traceability from every requirement in specs/001-foundation/spec.md to the specific test(s) that validate it. This ensures 100% spec coverage per FR-001 through FR-003 of specs/003-foundation-tests/spec.md.
+This document provides explicit traceability from every requirement in specs/001-core/spec.md to the specific test(s) that validate it. This ensures 100% spec coverage per FR-001 through FR-003 of specs/003-core-tests/spec.md.
 
 ## Coverage Summary
 
@@ -25,7 +25,7 @@ This document provides explicit traceability from every requirement in specs/001
 
 ### US-1: Job Architecture and Integration Contract
 
-**Spec Location**: specs/001-foundation/spec.md lines 21-63
+**Spec Location**: specs/001-core/spec.md lines 21-63
 
 **Test Files**:
 - `tests/contract/test_job_interface.py` - Job interface contract tests (existing, needs expansion)
@@ -46,7 +46,7 @@ This document provides explicit traceability from every requirement in specs/001
 
 ### US-2: Self-Installing Sync Orchestrator
 
-**Spec Location**: specs/001-foundation/spec.md lines 65-103
+**Spec Location**: specs/001-core/spec.md lines 65-103
 
 **Test Files**:
 - `tests/unit/jobs/test_install_job.py` - InstallOnTargetJob logic tests (new)
@@ -68,7 +68,7 @@ This document provides explicit traceability from every requirement in specs/001
 
 ### US-3: Safety Infrastructure with Btrfs Snapshots
 
-**Spec Location**: specs/001-foundation/spec.md lines 105-147
+**Spec Location**: specs/001-core/spec.md lines 105-147
 
 **Test Files**:
 - `tests/unit/jobs/test_snapshot_job.py` - Btrfs job logic tests (new)
@@ -91,7 +91,7 @@ This document provides explicit traceability from every requirement in specs/001
 
 ### US-4: Comprehensive Logging System
 
-**Spec Location**: specs/001-foundation/spec.md lines 149-189
+**Spec Location**: specs/001-core/spec.md lines 149-189
 
 **Test Files**:
 - `tests/unit/orchestrator/test_logging_system.py` - Log level filtering and routing (new)
@@ -106,11 +106,11 @@ This document provides explicit traceability from every requirement in specs/001
 | US4-AS4 | Log file contains JSON Lines format | `test_001_us4_as4_log_file_json_lines_format` | unit |
 | US4-AS6 | `pc-switcher logs --last` displays recent log | `test_001_us4_as6_logs_command_displays_last_log` | integration |
 
-**Note**: US4-AS3 and US4-AS5 were removed from 001-foundation spec (marked as "Removed").
+**Note**: US4-AS3 and US4-AS5 were removed from 001-core spec (marked as "Removed").
 
 ### US-5: Graceful Interrupt Handling
 
-**Spec Location**: specs/001-foundation/spec.md lines 191-220
+**Spec Location**: specs/001-core/spec.md lines 191-220
 
 **Test Files**:
 - `tests/unit/orchestrator/test_interrupt_handling.py` - SIGINT handler logic (new)
@@ -126,7 +126,7 @@ This document provides explicit traceability from every requirement in specs/001
 
 ### US-6: Configuration System
 
-**Spec Location**: specs/001-foundation/spec.md lines 222-280
+**Spec Location**: specs/001-core/spec.md lines 222-280
 
 **Test Files**:
 - `tests/unit/orchestrator/test_config_system.py` - Config loading and validation (new)
@@ -143,7 +143,7 @@ This document provides explicit traceability from every requirement in specs/001
 
 ### US-7: Installation and Setup Infrastructure
 
-**Spec Location**: specs/001-foundation/spec.md lines 282-314
+**Spec Location**: specs/001-core/spec.md lines 282-314
 
 **Test Files**:
 - `tests/integration/test_installation_script.py` - Real install.sh execution (new)
@@ -158,7 +158,7 @@ This document provides explicit traceability from every requirement in specs/001
 
 ### US-8: Dummy Test Jobs
 
-**Spec Location**: specs/001-foundation/spec.md lines 316-338
+**Spec Location**: specs/001-core/spec.md lines 316-338
 
 **Test Files**:
 - `tests/unit/jobs/test_dummy_jobs.py` - Dummy job behaviors (new)
@@ -171,11 +171,11 @@ This document provides explicit traceability from every requirement in specs/001
 | US8-AS3 | dummy_fail raises exception at 60% | `test_001_us8_as3_dummy_fail_raises_exception` | unit |
 | US8-AS4 | Dummy job handles termination request | `test_001_us8_as4_dummy_job_termination` | unit |
 
-**Note**: US8-AS2 was removed from 001-foundation spec (marked as "Removed").
+**Note**: US8-AS2 was removed from 001-core spec (marked as "Removed").
 
 ### US-9: Terminal UI with Progress Reporting
 
-**Spec Location**: specs/001-foundation/spec.md lines 340-359
+**Spec Location**: specs/001-core/spec.md lines 340-359
 
 **Test Files**:
 - `tests/integration/test_terminal_ui.py` - Progress bar rendering (new, visual verification)
@@ -274,7 +274,7 @@ This document provides explicit traceability from every requirement in specs/001
 | FR-041 | dummy_fail raises exception at 60% | `test_001_fr041_dummy_fail_exception` | tests/unit/jobs/test_dummy_jobs.py |
 | FR-042 | Dummy jobs handle termination | `test_001_fr042_dummy_jobs_termination` | tests/unit/jobs/test_dummy_jobs.py |
 
-**Note**: FR-040 was removed from 001-foundation spec (marked as "Removed").
+**Note**: FR-040 was removed from 001-core spec (marked as "Removed").
 
 ### Progress Reporting (FR-043 through FR-045)
 

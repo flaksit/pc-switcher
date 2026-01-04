@@ -1,6 +1,6 @@
-# Foundation Architecture
+# Core Architecture
 
-This document describes the architecture for the pc-switcher foundation infrastructure, covering the core components, their relationships, and key interaction patterns.
+This document describes the architecture for the pc-switcher core infrastructure, covering the core components, their relationships, and key interaction patterns.
 
 ## Navigation
 
@@ -1676,7 +1676,7 @@ async def sync_config_to_target(
 
 ## Rollback Workflow
 
-**Note**: Rollback capability is deferred to a separate feature after foundation infrastructure. Pre-sync snapshots created during sync operations can be used for manual rollback if needed, and the full rollback command (`pc-switcher rollback`) will be implemented in a later feature.
+**Note**: Rollback capability is deferred to a separate feature after core infrastructure. Pre-sync snapshots created during sync operations can be used for manual rollback if needed, and the full rollback command (`pc-switcher rollback`) will be implemented in a later feature.
 
 ---
 
@@ -1697,7 +1697,7 @@ log_cli_level: INFO     # Displayed in terminal
 
 # Enable/disable sync jobs (true = enabled, false = skipped)
 sync_jobs:
-  # Jobs implemented in 001-foundation (for testing the sync infrastructure):
+  # Jobs implemented in 001-core (for testing the sync infrastructure):
   dummy_success: true   # Test job that completes successfully
   dummy_fail: false     # Test job that fails at configurable progress %
   # Future sync jobs (not yet implemented - add when features 5-10 are built):

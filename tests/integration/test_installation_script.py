@@ -42,10 +42,10 @@ def floor_release() -> Release:
     return current.get_release_floor()
 
 
-async def test_001_fnd_fr_install_script(
+async def test_001_core_fr_install_script(
     pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
 ) -> None:
-    """Test FND-FR-INSTALL-SCRIPT: install.sh works without prerequisites.
+    """Test CORE-FR-INSTALL-SCRIPT: install.sh works without prerequisites.
 
     Verifies that the install.sh script can run on a fresh machine and:
     - Installs uv if not present (or uses existing uv)
@@ -100,7 +100,7 @@ async def test_001_fnd_fr_install_script(
 # - install.sh does NOT create a default config file
 # - Users must run "pc-switcher init" to create the config
 # - Tests for "pc-switcher init" belong in tests/unit/test_cli.py or similar
-# See specs/001-foundation/spec.md for the documented workflow.
+# See specs/001-core/spec.md for the documented workflow.
 
 
 class TestInstallationScriptVersionParameter:

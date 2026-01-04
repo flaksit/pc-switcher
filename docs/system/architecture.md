@@ -6,7 +6,7 @@ This document describes the architecture for the pc-switcher system, covering th
 
 - [System Documentation](_index.md)
 - [Data Model](data-model.md)
-- [Foundation Spec](foundation.md)
+- [Core Spec](core.md)
 - [Logging Spec](logging.md)
 
 ## Design Principles

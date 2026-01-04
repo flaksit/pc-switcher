@@ -2,7 +2,7 @@
 
 **Date**: 2025-11-26
 **Status**: Architectural Decision Documented
-**Context**: Foundation Infrastructure (001-foundation)
+**Context**: Core Infrastructure (001-core)
 
 ## Summary
 
@@ -185,10 +185,10 @@ This is a design-phase decision before implementation was completed, so migratio
 
 ## Related Documents
 
-- `specs/001-foundation/contracts/job-interface.py` - Updated interface definition
-- `specs/001-foundation/contracts/orchestrator-job-protocol.md` - Updated protocol
-- `specs/001-foundation/data-model.md` - Updated entity definitions
-- `specs/001-foundation/spec.md` - Functional requirements (will need update)
+- `specs/001-core/contracts/job-interface.py` - Updated interface definition
+- `specs/001-core/contracts/orchestrator-job-protocol.md` - Updated protocol
+- `specs/001-core/data-model.md` - Updated entity definitions
+- `specs/001-core/spec.md` - Functional requirements (will need update)
 
 ## Principles Aligned
 

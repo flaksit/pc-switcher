@@ -1,14 +1,14 @@
-"""Unit tests for dummy jobs (FND-US-DUMMY).
+"""Unit tests for dummy jobs (CORE-US-DUMMY).
 
 Tests verify:
-- FND-FR-DUMMY-JOBS: Two dummy jobs exist (dummy_success, dummy_fail)
-- FND-FR-DUMMY-SIM: dummy_success behavior (20s, logs at levels, progress)
-- FND-FR-DUMMY-EXCEPTION: dummy_fail raises exception at configurable time
-- FND-FR-DUMMY-TERM: dummy jobs handle termination
-- FND-FR-PROGRESS-EMIT: jobs emit progress updates
-- FND-US-DUMMY-AS1: dummy_success completes with logs/progress
-- FND-US-DUMMY-AS3: dummy_fail raises exception at configured time
-- FND-US-DUMMY-AS4: dummy job handles termination request
+- CORE-FR-DUMMY-JOBS: Two dummy jobs exist (dummy_success, dummy_fail)
+- CORE-FR-DUMMY-SIM: dummy_success behavior (20s, logs at levels, progress)
+- CORE-FR-DUMMY-EXCEPTION: dummy_fail raises exception at configurable time
+- CORE-FR-DUMMY-TERM: dummy jobs handle termination
+- CORE-FR-PROGRESS-EMIT: jobs emit progress updates
+- CORE-US-DUMMY-AS1: dummy_success completes with logs/progress
+- CORE-US-DUMMY-AS3: dummy_fail raises exception at configured time
+- CORE-US-DUMMY-AS4: dummy job handles termination request
 """
 
 from __future__ import annotations
@@ -55,10 +55,10 @@ def create_mock_process(num_lines: int, terminate_at: int | None = None) -> Magi
 
 
 class TestDummyJobsExist:
-    """Test FND-FR-DUMMY-JOBS: two dummy jobs exist."""
+    """Test CORE-FR-DUMMY-JOBS: two dummy jobs exist."""
 
-    def test_001_fnd_fr_dummy_jobs(self) -> None:
-        """FND-FR-DUMMY-JOBS: System MUST include two dummy jobs: dummy_success, dummy_fail.
+    def test_001_core_fr_dummy_jobs(self) -> None:
+        """CORE-FR-DUMMY-JOBS: System MUST include two dummy jobs: dummy_success, dummy_fail.
 
         Verifies that both dummy job classes exist and can be imported.
         """
@@ -72,13 +72,13 @@ class TestDummyJobsExist:
 
 
 class TestDummySuccessBehavior:
-    """Test FND-FR-DUMMY-SIM, FND-US-DUMMY-AS1: dummy_success job behavior."""
+    """Test CORE-FR-DUMMY-SIM, CORE-US-DUMMY-AS1: dummy_success job behavior."""
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_dummy_sim(
+    async def test_001_core_fr_dummy_sim(
         self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """FND-FR-DUMMY-SIM: dummy_success simulates 20s operation with logs and progress.
+        """CORE-FR-DUMMY-SIM: dummy_success simulates 20s operation with logs and progress.
 
         Tests with default 20s duration:
         - Logs INFO every 2s on source phase
@@ -144,8 +144,8 @@ class TestDummySuccessBehavior:
         assert any("8s" in r.message for r in target_error_logs)
 
     @pytest.mark.asyncio
-    async def test_001_fnd_us_dummy_as1(self, mock_job_context_factory: JobContextFactory) -> None:
-        """FND-US-DUMMY-AS1: dummy_success performs operations and completes successfully.
+    async def test_001_core_us_dummy_as1(self, mock_job_context_factory: JobContextFactory) -> None:
+        """CORE-US-DUMMY-AS1: dummy_success performs operations and completes successfully.
 
         Given: dummy_success job is enabled
         When: sync runs
@@ -171,10 +171,10 @@ class TestDummySuccessBehavior:
         assert 100 in progress_percents
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_dummy_sim_configurable_duration(
+    async def test_001_core_fr_dummy_sim_configurable_duration(
         self, mock_job_context_factory: JobContextFactory
     ) -> None:
-        """FND-FR-DUMMY-SIM: dummy_success supports configurable duration.
+        """CORE-FR-DUMMY-SIM: dummy_success supports configurable duration.
 
         Tests with shorter duration to verify config is respected.
         """
@@ -194,13 +194,13 @@ class TestDummySuccessBehavior:
 
 
 class TestDummyFailBehavior:
-    """Test FND-FR-DUMMY-EXCEPTION, FND-US-DUMMY-AS3: dummy_fail job behavior."""
+    """Test CORE-FR-DUMMY-EXCEPTION, CORE-US-DUMMY-AS3: dummy_fail job behavior."""
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_dummy_exception(
+    async def test_001_core_fr_dummy_exception(
         self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """FND-FR-DUMMY-EXCEPTION: dummy_fail raises unhandled exception at configured time.
+        """CORE-FR-DUMMY-EXCEPTION: dummy_fail raises unhandled exception at configured time.
 
         Verifies that dummy_fail simulates progress, then raises RuntimeError.
         With source_duration=10, target_duration=10, fail_at=12:
@@ -247,8 +247,8 @@ class TestDummyFailBehavior:
         assert any("Simulated failure at 12s" in r.message for r in critical_logs)
 
     @pytest.mark.asyncio
-    async def test_001_fnd_us_dummy_as3(self, mock_job_context_factory: JobContextFactory) -> None:
-        """FND-US-DUMMY-AS3: dummy_fail raises exception at configured time to test error handling.
+    async def test_001_core_us_dummy_as3(self, mock_job_context_factory: JobContextFactory) -> None:
+        """CORE-US-DUMMY-AS3: dummy_fail raises exception at configured time to test error handling.
 
         Given: dummy_fail job is enabled with defaults (fail_at=12s)
         When: sync runs and job reaches 12s elapsed
@@ -268,8 +268,8 @@ class TestDummyFailBehavior:
         assert "Dummy job failed at 12s" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_dummy_exception_configurable(self, mock_job_context_factory: JobContextFactory) -> None:
-        """FND-FR-DUMMY-EXCEPTION: dummy_fail supports configurable fail_at time.
+    async def test_001_core_fr_dummy_exception_configurable(self, mock_job_context_factory: JobContextFactory) -> None:
+        """CORE-FR-DUMMY-EXCEPTION: dummy_fail supports configurable fail_at time.
 
         Tests with different failure time to verify config is respected.
         With fail_at=6, failure occurs in source phase (before target phase).
@@ -294,13 +294,13 @@ class TestDummyFailBehavior:
 
 
 class TestDummyJobsTermination:
-    """Test FND-FR-DUMMY-TERM, FND-US-DUMMY-AS4: dummy jobs handle termination."""
+    """Test CORE-FR-DUMMY-TERM, CORE-US-DUMMY-AS4: dummy jobs handle termination."""
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_dummy_term(
+    async def test_001_core_fr_dummy_term(
         self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """FND-FR-DUMMY-TERM: Dummy jobs handle termination requests.
+        """CORE-FR-DUMMY-TERM: Dummy jobs handle termination requests.
 
         Verifies that when a dummy job receives CancelledError (termination request),
         it logs "Dummy job termination requested" and re-raises the error.
@@ -335,10 +335,10 @@ class TestDummyJobsTermination:
         assert len(termination_logs) >= 1
 
     @pytest.mark.asyncio
-    async def test_001_fnd_us_dummy_as4(
+    async def test_001_core_us_dummy_as4(
         self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """FND-US-DUMMY-AS4: Dummy job handles termination request gracefully.
+        """CORE-US-DUMMY-AS4: Dummy job handles termination request gracefully.
 
         Given: any dummy job is running
         When: user presses Ctrl+C (termination request)
@@ -364,10 +364,10 @@ class TestDummyJobsTermination:
         assert len(cancel_logs) >= 1
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_dummy_term_cleanup(
+    async def test_001_core_fr_dummy_term_cleanup(
         self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """FND-FR-DUMMY-TERM: dummy_success cleans up on termination.
+        """CORE-FR-DUMMY-TERM: dummy_success cleans up on termination.
 
         Verifies that termination during source phase doesn't execute target phase.
         """
@@ -404,11 +404,11 @@ class TestDummyJobsTermination:
 
 
 class TestJobProgressEmission:
-    """Test FND-FR-PROGRESS-EMIT: jobs emit progress updates."""
+    """Test CORE-FR-PROGRESS-EMIT: jobs emit progress updates."""
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_progress_emit(self, mock_job_context_factory: JobContextFactory) -> None:
-        """FND-FR-PROGRESS-EMIT: Jobs can emit progress updates with percentage.
+    async def test_001_core_fr_progress_emit(self, mock_job_context_factory: JobContextFactory) -> None:
+        """CORE-FR-PROGRESS-EMIT: Jobs can emit progress updates with percentage.
 
         Verifies that dummy jobs emit ProgressUpdate objects with valid percentages
         through the event bus.
@@ -441,8 +441,8 @@ class TestJobProgressEmission:
             assert event.job == "dummy_success"
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_progress_emit_validation(self, mock_job_context_factory: JobContextFactory) -> None:
-        """FND-FR-PROGRESS-EMIT: ProgressUpdate validates percent range.
+    async def test_001_core_fr_progress_emit_validation(self, mock_job_context_factory: JobContextFactory) -> None:
+        """CORE-FR-PROGRESS-EMIT: ProgressUpdate validates percent range.
 
         Verifies that ProgressUpdate enforces 0-100 range for percent.
         """

@@ -9,7 +9,7 @@ stdlib-based logging are in tests/unit/test_logging.py and
 tests/contract/test_logging_contract.py.
 
 References:
-- specs/001-foundation/spec.md - User Story 4 (Logging System)
+- specs/001-core/spec.md - User Story 4 (Logging System)
 - specs/004-python-logging - Standard Python Logging Integration
 - LOG-FR-LEVELS: Six log levels with correct ordering
 - LOG-FR-FILE-PATH: Timestamped log files

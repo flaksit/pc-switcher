@@ -243,7 +243,7 @@ class TestEndToEndSync:
     ) -> None:
         """Test US1-AS1: Job integrates via standardized interface.
 
-        Spec reference: specs/001-foundation/spec.md - User Story 1, Acceptance Scenario 1
+        Spec reference: specs/001-core/spec.md - User Story 1, Acceptance Scenario 1
 
         Verifies that a job implementing the standardized Job interface is automatically
         integrated into the sync workflow without requiring changes to core orchestrator code.
@@ -343,7 +343,7 @@ class TestEndToEndSync:
     ) -> None:
         """Test US1-AS7: Ctrl+C terminates job with cleanup.
 
-        Spec reference: specs/001-foundation/spec.md - User Story 1, Acceptance Scenario 7
+        Spec reference: specs/001-core/spec.md - User Story 1, Acceptance Scenario 7
 
         Verifies that when user presses Ctrl+C during job execution, the orchestrator:
         - Catches SIGINT signal
@@ -448,7 +448,7 @@ class TestEndToEndSync:
     ) -> None:
         """Test edge case: Target becomes unreachable mid-sync.
 
-        Spec reference: specs/001-foundation/spec.md - Edge Cases
+        Spec reference: specs/001-core/spec.md - Edge Cases
 
         Simulates network failure by blocking pc1→pc2 traffic with iptables
         during the target phase of DummySuccessJob. Verifies that:

@@ -1,6 +1,6 @@
-# Tasks: Foundation Infrastructure Complete
+# Tasks: Core Infrastructure Complete
 
-**Input**: Design documents from `/specs/001-foundation/`
+**Input**: Design documents from `/specs/001-core/`
 **Prerequisites**: plan.md (required), spec.md (required), architecture.md (required), research.md, data-model.md, contracts/
 
 **Tests**: No explicit test-first workflow requested in specification. Tests are included where they provide contract verification value.
@@ -44,7 +44,7 @@
 
 ---
 
-## Phase 2: Foundational (Blocking Prerequisites)
+## Phase 2: Core (Blocking Prerequisites)
 
 **Purpose**: Core infrastructure that MUST be complete before ANY user story can be implemented
 
@@ -63,7 +63,7 @@
 - [X] T017 Implement Process protocol wrapper for SSH process in src/pcswitcher/executor.py
 - [X] T018 Create shared test fixtures (mock_connection, mock_executor, mock_event_bus) in tests/conftest.py
 
-**Checkpoint**: Foundation ready - user story implementation can now begin
+**Checkpoint**: Core ready - user story implementation can now begin
 
 ---
 
@@ -71,7 +71,7 @@
 
 **Goal**: Load and validate YAML configuration with job-specific schema validation
 
-**Why first**: All other user stories depend on configuration being loaded and validated. This is the true foundational story.
+**Why first**: All other user stories depend on configuration being loaded and validated. This is the true core story.
 
 **Independent Test**: Create config file, run orchestrator, verify jobs receive correct config and validation errors are reported
 
@@ -85,7 +85,7 @@
 - [X] T024 [US6] Implement log level parsing (string to LogLevel enum) in src/pcswitcher/config.py
 - [X] T025 [US6] Implement disk threshold parsing (percentage or absolute) in src/pcswitcher/config.py
 - [X] T026 [US6] Add error handling for invalid YAML syntax with line numbers in src/pcswitcher/config.py
-- [X] T027 [US6] Copy config-schema.yaml from specs/001-foundation/contracts/ to src/pcswitcher/schemas/
+- [X] T027 [US6] Copy config-schema.yaml from specs/001-core/contracts/ to src/pcswitcher/schemas/
 
 **Checkpoint**: Configuration system is fully functional and testable
 
@@ -356,14 +356,14 @@
 ### Phase Dependencies
 
 - **Setup (Phase 1)**: No dependencies - can start immediately
-- **Foundational (Phase 2)**: Depends on Setup completion - BLOCKS all user stories
+- **Core (Phase 2)**: Depends on Setup completion - BLOCKS all user stories
 - **US6 Configuration (Phase 3)**: First user story - all others depend on config loading
 - **US1 Job Architecture (Phase 4)**: Depends on US6 for config validation
 - **US4 Logging (Phase 5)**: Depends on US1 for job logging helpers
 - **US9 Terminal UI (Phase 6)**: Depends on US4 for log event consumption
 - **US5 Interrupt Handling (Phase 7)**: Can run in parallel with US9
 - **US3 Snapshots (Phase 8-9)**: Depends on US1, US4, US5
-- **US2 Self-Installation (Phase 10)**: Depends on foundational only
+- **US2 Self-Installation (Phase 10)**: Depends on core only
 - **US7 Install Script (Phase 11)**: Depends on US2 (shared logic)
 - **US8 Dummy Jobs (Phase 12)**: Depends on US1, US4
 - **Core Orchestration (Phase 13)**: Depends on all prior user stories
@@ -392,10 +392,10 @@ Within each phase, tasks marked [P] can run in parallel:
 
 ---
 
-## Parallel Example: Phase 2 Foundational
+## Parallel Example: Phase 2 Core
 
 ```bash
-# Launch all parallel-safe foundational tasks together:
+# Launch all parallel-safe core tasks together:
 Task: "Implement CommandResult dataclass in src/pcswitcher/models.py"
 Task: "Implement ProgressUpdate dataclass with validation in src/pcswitcher/models.py"
 Task: "Implement ConfigError and ValidationError dataclasses in src/pcswitcher/models.py"
@@ -408,7 +408,7 @@ Task: "Implement LogEvent, ProgressEvent, ConnectionEvent dataclasses in src/pcs
 
 ### MVP First (Core Sync with Dummy Jobs)
 
-1. Complete Phase 1-2: Setup + Foundational
+1. Complete Phase 1-2: Setup + Core
 2. Complete Phase 3: Configuration System (US6)
 3. Complete Phase 4: Job Architecture (US1)
 4. Complete Phase 5: Logging (US4)

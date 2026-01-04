@@ -7,7 +7,7 @@
 feature we are currently working has a specific feature folder under specs/
 with the same name as the current git branch. The scope of this feature is
 actually the features 1+2+3 of @"docs/Feature breakdown.md" . This was
-detailed in @specs/001-foundation/spec.md .
+detailed in @specs/001-core/spec.md .
 
 My developer implemented the feature and already implemented a few tests. 
 Alas, they didn't follow TDD. The tests are very incomplete and they use a
@@ -46,7 +46,7 @@ automate the tests as much as possible, given the need for a remote system
 (the "target"). Come with some ideas about how to do this in a reliable and
 repeatable manner.
   ⎿  Read docs/Feature breakdown.md (25 lines)
-  ⎿  Read specs/001-foundation/spec.md (548 lines)
+  ⎿  Read specs/001-core/spec.md (548 lines)
 
 ● I'll explore the codebase first to understand the current implementation
   and existing tests before asking clarifying questions and discussing
@@ -686,7 +686,7 @@ Q2: tests/infrastructure. Ensure that the CI sets up the VMs if they don't
 exist yet.
 Q3: First, document this entire test framework, with all our decisions, to 
 an .md in docs/ and write your implementation plan for all this in another
-.md in specs/001-foundation/
+.md in specs/001-core/
 
 ● Let me explore the docs structure and then design the implementation
   approach.
@@ -694,7 +694,7 @@ an .md in docs/ and write your implementation plan for all this in another
 ● Search(pattern: "docs/**/*.md")
   ⎿  Found 22 files (ctrl+o to expand)
 
-● Search(pattern: "specs/001-foundation/**/*.md")
+● Search(pattern: "specs/001-core/**/*.md")
   ⎿  Found 22 files (ctrl+o to expand)
 
 ● Now let me launch a Plan agent to design the comprehensive testing
@@ -726,10 +726,10 @@ an .md in docs/ and write your implementation plan for all this in another
 
   Deliverables:
   1. docs/testing-framework.md - Framework documentation with all decisions
-  2. specs/001-foundation/testing-implementation-plan.md - Detailed
+  2. specs/001-core/testing-implementation-plan.md - Detailed
   implementation plan
-  3. specs/001-foundation/testing-playbook.md - Visual verification only
-  4. specs/001-foundation/testing-report.md - Coverage summary + risk
+  3. specs/001-core/testing-playbook.md - Visual verification only
+  4. specs/001-core/testing-report.md - Coverage summary + risk
   chapter
   5. Complete unit test suite (15+ test files)
   6. Complete integration test suite (12+ test files)
@@ -755,7 +755,7 @@ an .md in docs/ and write your implementation plan for all this in another
      │                                                                         │
      │ Overview                                                                │
      │                                                                         │
-     │ Implement comprehensive testing for the 001-foundation feature, covering│
+     │ Implement comprehensive testing for the 001-core feature, covering│
      │  all functionality with unit tests, VM-based integration tests, and a   │
      │ visual verification playbook.                                           │
      │                                                                         │
@@ -791,14 +791,14 @@ an .md in docs/ and write your implementation plan for all this in another
      │ - Lock-based isolation mechanism                                        │
      │ - Snapshot reset procedure                                              │
      │                                                                         │
-     │ specs/001-foundation/testing-implementation-plan.md - Detailed          │
+     │ specs/001-core/testing-implementation-plan.md - Detailed          │
      │ implementation plan:                                                    │
      │ - Complete test file structure                                          │
      │ - Fixtures needed                                                       │
      │ - OpenTofu configuration                                                │
      │ - GitHub Actions workflow                                               │
      │                                                                         │
-     │ specs/001-foundation/testing-playbook.md - Manual playbook:             │
+     │ specs/001-core/testing-playbook.md - Manual playbook:             │
      │ - Visual verification only (colors, progress bars)                      │
      │                                                                         │
      │ 2. Test Implementation                                                  │
@@ -901,7 +901,7 @@ an .md in docs/ and write your implementation plan for all this in another
      │                                                                         │
      │ 5. Test Report                                                          │
      │                                                                         │
-     │ Final report in specs/001-foundation/testing-report.md:                 │
+     │ Final report in specs/001-core/testing-report.md:                 │
      │ - Coverage summary (what tests cover what functionality)                │
      │ - How to run tests                                                      │
      │ - Limitations and assumptions                                           │
@@ -912,7 +912,7 @@ an .md in docs/ and write your implementation plan for all this in another
      │ Phase 1: Documentation & Unit Tests                                     │
      │                                                                         │
      │ 1. Create docs/testing-framework.md                                     │
-     │ 2. Create specs/001-foundation/testing-implementation-plan.md           │
+     │ 2. Create specs/001-core/testing-implementation-plan.md           │
      │ 3. Create tests/unit/conftest.py (fixtures)                             │
      │ 4. Implement unit tests in order:                                       │
      │   - test_config.py (highest priority)                                   │
@@ -952,8 +952,8 @@ an .md in docs/ and write your implementation plan for all this in another
      │ Phase 4: CI/CD & Finalization                                           │
      │                                                                         │
      │ 1. Create .github/workflows/test.yml                                    │
-     │ 2. Create specs/001-foundation/testing-playbook.md                      │
-     │ 3. Create specs/001-foundation/testing-report.md                        │
+     │ 2. Create specs/001-core/testing-playbook.md                      │
+     │ 3. Create specs/001-core/testing-report.md                        │
      │                                                                         │
      │ Critical Files to Modify                                                │
      │                                                                         │
@@ -970,11 +970,11 @@ an .md in docs/ and write your implementation plan for all this in another
      │ --------|                                                               │
      │ | docs/testing-framework.md                           | Framework       │
      │ documentation |                                                         │
-     │ | specs/001-foundation/testing-implementation-plan.md | Detailed plan   │
+     │ | specs/001-core/testing-implementation-plan.md | Detailed plan   │
      │         |                                                               │
-     │ | specs/001-foundation/testing-playbook.md            | Visual          │
+     │ | specs/001-core/testing-playbook.md            | Visual          │
      │ verification     |                                                      │
-     │ | specs/001-foundation/testing-report.md              | Final report    │
+     │ | specs/001-core/testing-report.md              | Final report    │
      │         |                                                               │
      │ | tests/unit/conftest.py                              | Unit test       │
      │ fixtures      |                                                         │
@@ -1045,8 +1045,8 @@ an .md in docs/ and write your implementation plan for all this in another
      ╰─────────────────────────────────────────────────────────────────────────╯
 
 > First, create docs/testing-framework.md and 
-specs/001-foundation/testing-implementation-plan.md.
-Couldn't you create specs/001-foundation/testing-report.md now as well? The 
+specs/001-core/testing-implementation-plan.md.
+Couldn't you create specs/001-core/testing-report.md now as well? The 
 contents are "Coverage summary + risk chapter", so you can know all this
 up-front no?
 I would like to review these documents before giving the final go for 
@@ -1067,11 +1067,11 @@ implementation.
      operations.
      … +225 lines (ctrl+o to expand)
 
-● Write(specs/001-foundation/testing-implementation-plan.md)
-  ⎿  Wrote 694 lines to specs/001-foundation/testing-implementation-plan.md
-     # Testing Implementation Plan for 001-Foundation
+● Write(specs/001-core/testing-implementation-plan.md)
+  ⎿  Wrote 694 lines to specs/001-core/testing-implementation-plan.md
+     # Testing Implementation Plan for 001-Core
      This document provides the detailed implementation plan for
-     comprehensive testing of the foundation feature.
+     comprehensive testing of the core feature.
      ## Test Directory Structure
      ```
      tests/
@@ -1079,11 +1079,11 @@ implementation.
      ├── pytest.ini                       # Pytest configuration
      … +684 lines (ctrl+o to expand)
 
-● Write(specs/001-foundation/testing-report.md)
-  ⎿  Wrote 263 lines to specs/001-foundation/testing-report.md             
-     # Testing Report for 001-Foundation
+● Write(specs/001-core/testing-report.md)
+  ⎿  Wrote 263 lines to specs/001-core/testing-report.md             
+     # Testing Report for 001-Core
      This report provides a comprehensive overview of testing coverage for
-     the foundation feature, including coverage mapping, how to run tests,
+     the core feature, including coverage mapping, how to run tests,
      limitations, and risk assessment.
      ## Coverage Summary
      ### Coverage by Module
@@ -1100,7 +1100,7 @@ implementation.
     - Snapshot-based reset procedure
     - Lock-based isolation
     - How to run tests locally and in CI
-  2. specs/001-foundation/testing-implementation-plan.md - Detailed
+  2. specs/001-core/testing-implementation-plan.md - Detailed
   implementation plan including:
     - Complete test directory structure
     - All test classes and methods for each file
@@ -1109,7 +1109,7 @@ implementation.
     - Lock and reset scripts
     - GitHub Actions workflow
     - Implementation order (45 steps across 7 phases)
-  3. specs/001-foundation/testing-report.md - Coverage and risk assessment
+  3. specs/001-core/testing-report.md - Coverage and risk assessment
   including:
     - Coverage by module (all modules mapped to tests)
     - Coverage by spec requirement (all FR-xxx mapped)

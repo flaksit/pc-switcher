@@ -1,13 +1,13 @@
-# Implementation Plan: Retroactive Tests for 001-Foundation
+# Implementation Plan: Retroactive Tests for 001-Core
 
-**Branch**: `003-foundation-tests` | **Date**: 2025-12-11 | **Spec**: [spec.md](spec.md)
-**Input**: Feature specification from `/specs/003-foundation-tests/spec.md`
+**Branch**: `003-core-tests` | **Date**: 2025-12-11 | **Spec**: [spec.md](spec.md)
+**Input**: Feature specification from `/specs/003-core-tests/spec.md`
 
 **Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
 
 ## Summary
 
-Create comprehensive spec-driven tests for all existing 001-foundation functionality. Tests validate 100% of user stories, acceptance scenarios, and functional requirements defined in specs/001-foundation/spec.md. Tests use the existing testing framework (002-testing-framework) with unit tests for logic verification and integration tests for real VM-based operations. Each test includes traceability to specific spec requirements through test naming and docstrings.
+Create comprehensive spec-driven tests for all existing 001-core functionality. Tests validate 100% of user stories, acceptance scenarios, and functional requirements defined in specs/001-core/spec.md. Tests use the existing testing framework (002-testing-framework) with unit tests for logic verification and integration tests for real VM-based operations. Each test includes traceability to specific spec requirements through test naming and docstrings.
 
 ## Technical Context
 
@@ -19,13 +19,13 @@ Create comprehensive spec-driven tests for all existing 001-foundation functiona
 **Project Type**: Single project (testing existing pc-switcher implementation)
 **Performance Goals**: Unit test suite completes in <30 seconds; integration tests complete in <15 minutes
 **Constraints**: Tests must be spec-driven (validate requirements, not implementation details); 100% traceability to spec requirements; unit tests must use mock executors to avoid real system operations
-**Scale/Scope**: 9 user stories from 001-foundation spec, 44 active acceptance scenarios (3 removed), 44 active functional requirements (4 removed/skipped)
+**Scale/Scope**: 9 user stories from 001-core spec, 44 active acceptance scenarios (3 removed), 44 active functional requirements (4 removed/skipped)
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- **Reliability Without Compromise**: ✓ Tests validate all reliability mechanisms defined in 001-foundation spec (snapshots, error handling, interrupt handling, conflict detection). Comprehensive test coverage ensures the foundation infrastructure behaves correctly and detects regressions early. No data integrity concerns for tests themselves (read-only verification).
+- **Reliability Without Compromise**: ✓ Tests validate all reliability mechanisms defined in 001-core spec (snapshots, error handling, interrupt handling, conflict detection). Comprehensive test coverage ensures the core infrastructure behaves correctly and detects regressions early. No data integrity concerns for tests themselves (read-only verification).
 
 - **Frictionless Command UX**: ✓ Tests validate UX requirements (single command sync, automated installation, graceful interrupts). Running tests remains simple: `uv run pytest tests/unit` (fast) and `uv run pytest tests/integration -m integration` (comprehensive). No additional manual steps required beyond what testing framework provides.
 
@@ -44,7 +44,7 @@ Create comprehensive spec-driven tests for all existing 001-foundation functiona
 ### Documentation (this feature)
 
 ```text
-specs/003-foundation-tests/
+specs/003-core-tests/
 ├── spec.md              # Feature specification (already exists)
 ├── plan.md              # This file (/speckit.plan command output)
 ├── research.md          # Phase 0 output: test patterns and approaches
@@ -81,7 +81,7 @@ tests/
     └── test_terminal_ui.py              # US-9: progress reporting (visual verification)
 ```
 
-**Structure Decision**: Tests follow existing pytest structure from 002-testing-framework. Unit tests organized by component (orchestrator, jobs, cli) for clarity. Integration tests organized by user story for traceability. Each test file corresponds to a major component or user story from 001-foundation spec.
+**Structure Decision**: Tests follow existing pytest structure from 002-testing-framework. Unit tests organized by component (orchestrator, jobs, cli) for clarity. Integration tests organized by user story for traceability. Each test file corresponds to a major component or user story from 001-core spec.
 
 ## Test Independence (FR-009)
 
@@ -108,7 +108,7 @@ The edge cases listed in data-model.md cover failure paths for their respective 
 ## Coverage Verification
 
 After all tests are implemented, perform a manual verification pass to confirm:
-1. All user stories, acceptance scenarios, and functional requirements from 001-foundation spec have corresponding tests
+1. All user stories, acceptance scenarios, and functional requirements from 001-core spec have corresponding tests
 2. Tests follow the naming convention and include traceability docstrings
 3. Each requirement has both success and failure path coverage (FR-004)
 

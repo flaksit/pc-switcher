@@ -27,14 +27,14 @@ For tests validating requirements from `specs/*/spec.md`:
 
 ```python
 def test_001_fr028_load_from_config_path() -> None:
-    """FND-FR-CONFIG-LOAD: System MUST load configuration from ~/.config/pc-switcher/config.yaml."""
+    """CORE-FR-CONFIG-LOAD: System MUST load configuration from ~/.config/pc-switcher/config.yaml."""
 
 async def test_001_us2_as1_install_missing_pcswitcher() -> None:
-    """FND-US-SELF-INSTALL-AS1: Target missing pc-switcher, orchestrator installs from GitHub."""
+    """CORE-US-SELF-INSTALL-AS1: Target missing pc-switcher, orchestrator installs from GitHub."""
 ```
 
 **Components**:
-- `<feature>`: Feature number (e.g., `001` for foundation)
+- `<feature>`: Feature number (e.g., `001` for core)
 - `<req-id>`: `fr###` for functional requirements, `us#_as#` for acceptance scenarios
 - `<description>`: Snake_case description
 

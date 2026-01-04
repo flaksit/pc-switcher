@@ -1,6 +1,6 @@
 # Testing Framework Implementation Plan
 
-This document provides the detailed implementation plan for the testing framework infrastructure. Writing actual tests for specific features (e.g., 001-foundation) is out of scope and tracked separately in feature `003-foundation-tests`.
+This document provides the detailed implementation plan for the testing framework infrastructure. Writing actual tests for specific features (e.g., 001-core) is out of scope and tracked separately in feature `003-core-tests`.
 
 > **Note**: The script structure was refactored after this document was written. See tasks.md for the current structure:
 > - `create-vm.sh` - creates a single VM (replaces provision-vms.sh VM creation + provision.sh)

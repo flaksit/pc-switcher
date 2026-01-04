@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Foundation Infrastructure Complete
+# Specification Quality Checklist: Core Infrastructure Complete
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2025-11-15
@@ -34,7 +34,7 @@
 **Passed**: All checklist items passed successfully.
 
 **Observations**:
-- Spec covers all three foundation features (CLI & Infrastructure, Safety Infrastructure, Installation & Setup)
+- Spec covers all three core features (CLI & Infrastructure, Safety Infrastructure, Installation & Setup)
 - Job architecture is detailed enough to serve as implementation contract for all future jobs
 - Six-level logging system (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL) is clearly defined
 - CRITICAL error handling and sync abortion is well-specified

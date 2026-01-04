@@ -1,10 +1,10 @@
 """Unit tests for orchestrator job lifecycle management.
 
 Tests cover:
-- FND-FR-LIFECYCLE: Validate-then-execute ordering
+- CORE-FR-LIFECYCLE: Validate-then-execute ordering
 - LOG-FR-EXCEPTION: CRITICAL log and halt on exception
-- FND-FR-PROGRESS-FWD: Progress forwarding to UI
-- FND-FR-SUMMARY: Overall result and job summary logging
+- CORE-FR-PROGRESS-FWD: Progress forwarding to UI
+- CORE-FR-SUMMARY: Overall result and job summary logging
 - US1-AS5: Validation errors halt sync
 - US1-AS6: Exception handling in orchestrator
 - Edge cases: cleanup exceptions, partial failures
@@ -59,11 +59,11 @@ class MockSyncJob(SyncJob):
 
 
 class TestFR002ValidateThenExecuteOrder:
-    """FND-FR-LIFECYCLE: Jobs must run validate() before execute() in correct order."""
+    """CORE-FR-LIFECYCLE: Jobs must run validate() before execute() in correct order."""
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_lifecycle(self, mock_job_context: JobContext) -> None:
-        """FND-FR-LIFECYCLE: Orchestrator calls validate() before execute() for each job.
+    async def test_001_core_fr_lifecycle(self, mock_job_context: JobContext) -> None:
+        """CORE-FR-LIFECYCLE: Orchestrator calls validate() before execute() for each job.
 
         Validates that the orchestrator follows the validate-then-execute contract
         for all jobs, ensuring validation happens before any state modification.
@@ -115,11 +115,11 @@ class TestFR019CriticalOnException:
 
 
 class TestFR044OrchestratorForwardsProgress:
-    """FND-FR-PROGRESS-FWD: Orchestrator forwards job progress to UI."""
+    """CORE-FR-PROGRESS-FWD: Orchestrator forwards job progress to UI."""
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_progress_fwd(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
-        """FND-FR-PROGRESS-FWD: Job progress updates are published to event bus.
+    async def test_001_core_fr_progress_fwd(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
+        """CORE-FR-PROGRESS-FWD: Job progress updates are published to event bus.
 
         Validates that when a job reports progress via _report_progress(),
         the update is published to the EventBus for UI consumption.
@@ -163,11 +163,11 @@ class TestFR044OrchestratorForwardsProgress:
 
 
 class TestFR048LogSyncSummary:
-    """FND-FR-SUMMARY: Orchestrator logs overall result and job summary."""
+    """CORE-FR-SUMMARY: Orchestrator logs overall result and job summary."""
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_summary(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
-        """FND-FR-SUMMARY: Orchestrator logs sync completion summary.
+    async def test_001_core_fr_summary(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
+        """CORE-FR-SUMMARY: Orchestrator logs sync completion summary.
 
         Validates that the orchestrator can construct a summary of job results
         (success/failed status, timing) for logging at the end of sync.
@@ -267,7 +267,7 @@ class TestEdgeCases:
     async def test_001_edge_cancelled_error_cleanup_and_reraise(self, mock_job_context: JobContext) -> None:
         """Edge: Job cleanup on cancellation happens inside execute().
 
-        Contract reference: specs/001-foundation/contracts/job-interface.md
+        Contract reference: specs/001-core/contracts/job-interface.md
 
         Jobs MUST catch `asyncio.CancelledError`, perform cleanup, and re-raise.
         This test verifies that pattern without relying on `__del__()`.

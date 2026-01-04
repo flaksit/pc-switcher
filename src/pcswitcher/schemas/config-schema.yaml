@@ -1,7 +1,7 @@
 # PC-switcher Configuration Schema (JSON Schema draft-07)
 # This schema defines the structure of ~/.config/pc-switcher/config.yaml
 #
-# Reference: FND-FR-CONFIG-FORMAT, FND-FR-CONFIG-VALIDATE
+# Reference: CORE-FR-CONFIG-FORMAT, CORE-FR-CONFIG-VALIDATE
 
 $schema: "http://json-schema.org/draft-07/schema#"
 $id: "https://pc-switcher/config-schema.yaml"
@@ -54,7 +54,7 @@ properties:
     type: object
     description: "Enable or disable optional sync jobs. Unknown job names are rejected."
     properties:
-      # Jobs implemented in 001-foundation:
+      # Jobs implemented in 001-core:
       dummy_success:
         type: boolean
         default: true

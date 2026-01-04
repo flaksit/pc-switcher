@@ -1,6 +1,6 @@
-# Testing Report for 001-Foundation
+# Testing Report for 001-Core
 
-This report provides a comprehensive overview of testing coverage for the foundation feature, including coverage mapping, how to run tests, limitations, and risk assessment.
+This report provides a comprehensive overview of testing coverage for the core feature, including coverage mapping, how to run tests, limitations, and risk assessment.
 
 ## Coverage Summary
 
@@ -116,8 +116,8 @@ These tests exist but need verification against spec.md standards (FR-007 throug
 |----------|------|-------|--------|
 | Integration | `test_vm_connectivity.py` | 14 | Framework smoke test |
 | Integration | `test_btrfs_operations.py` | 11 | Framework smoke test |
-| Unit | `test_cli_self_update.py` | 17 | PR #42, not 001-foundation |
-| Top-level | `test_version.py` (PEP440/SemVer) | ~60 | PR #42, not 001-foundation |
+| Unit | `test_cli_self_update.py` | 17 | PR #42, not 001-core |
+| Top-level | `test_version.py` (PEP440/SemVer) | ~60 | PR #42, not 001-core |
 
 ## How to Run Tests
 

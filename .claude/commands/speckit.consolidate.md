@@ -71,7 +71,7 @@ Launch a single `Explore` sub-agent with this prompt:
 >    - If feature has ≤5 US → Flag as ambiguous, needs user decision
 >
 > **Return structured result:**
-> ```
+> ```json
 > {
 >   existing_domains: [{filename, domain_code, description, semantic_ids[], topics[]}],
 >   feature_spec: {
@@ -96,7 +96,7 @@ Launch a single `Explore` sub-agent with this prompt:
 2. If recommendation is `domain_split`: Execute the split first:
    a. Create new domain file `docs/system/<new-domain>.md` with standard structure
    b. Move identified content from existing domain to new domain file
-   c. Rename semantic IDs from old domain code to new (e.g., `FND-FR-LOG-*` → `LOG-FR-*`)
+   c. Rename semantic IDs from old domain code to new (e.g., `CORE-FR-LOG-*` → `LOG-FR-*`)
    d. Launch a sub-agent to search codebase and replace old semantic IDs with new ones
    e. Continue with new domain as target
 
@@ -117,7 +117,7 @@ Using the data from Phase 2 (no file reading needed):
 ### Phase 4: Generate ID Mapping
 
 1. For each **NEW** item, generate semantic ID with format `<DOMAIN>-<TYPE>-<DESCRIPTOR>`:
-   - `<DOMAIN>`: From target domain code (e.g., `LOG`, `FND`, `TST`)
+   - `<DOMAIN>`: From target domain code (e.g., `CORE`,`LOG`, `TST`)
    - `<TYPE>`: From item type (`US`, `FR`, `SC`)
    - `<DESCRIPTOR>`: 2-3 key words from title, UPPERCASE, hyphen-joined
      - Examples: "Configure Log Levels" → `CONFIG`, "External Library Logs" → `EXTERNAL`
@@ -127,13 +127,13 @@ Using the data from Phase 2 (no file reading needed):
    - If still unclear: **STOP** and ask user for preferred descriptor
 
 3. Build complete mapping table:
-   ```
+   ```text
    | Temp ID | Semantic ID | Action |
    |---------|-------------|--------|
    | US-1    | LOG-US-CONFIG | NEW |
    | FR-001  | LOG-FR-FILE-LEVEL | NEW |
    | US-2    | LOG-US-SYSTEM | UPDATE (existing) |
-   ```
+   ```markdown
 
 4. **Immediately after mapping is complete**: Launch Phases 5, 6a, 6b, and 7 IN PARALLEL (single message with multiple Task tool calls).
 
@@ -320,7 +320,7 @@ Aggregate statistics for final report.
    ```
 
 3. Output final report:
-   ```
+   ```markdown
    ## Consolidation Complete
 
    **Feature**: NNN-feature-name

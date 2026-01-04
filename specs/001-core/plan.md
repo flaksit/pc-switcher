@@ -1,7 +1,7 @@
-# Implementation Plan: Foundation Infrastructure Complete
+# Implementation Plan: Core Infrastructure Complete
 
-**Branch**: `001-foundation` | **Date**: 2025-11-29 | **Spec**: [spec.md](./spec.md)
-**Input**: Feature specification from `/specs/001-foundation/spec.md`
+**Branch**: `001-core` | **Date**: 2025-11-29 | **Spec**: [spec.md](./spec.md)
+**Input**: Feature specification from `/specs/001-core/spec.md`
 
 ## Navigation
 
@@ -16,7 +16,7 @@
 
 ## Summary
 
-Implement the complete foundation infrastructure for pc-switcher, establishing the job architecture contract, self-installation mechanism, btrfs snapshot safety system, logging infrastructure, configuration system, terminal UI, and interrupt handling. This foundation enables all subsequent feature jobs to be developed independently against a well-defined interface.
+Implement the complete core infrastructure for pc-switcher, establishing the job architecture contract, self-installation mechanism, btrfs snapshot safety system, logging infrastructure, configuration system, terminal UI, and interrupt handling. This core enables all subsequent feature jobs to be developed independently against a well-defined interface.
 
 The architecture is fully designed in [architecture.md](./architecture.md), which defines:
 - Component relationships (CLI, Orchestrator, Jobs, Executors, Connection, EventBus, Logger, TerminalUI)
@@ -71,7 +71,7 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 
 **Conflict detection**: Subvolume existence validated before sync (FR-015). Lock files on both source and target prevent concurrent executions (FR-047), including A→B and C→B scenarios. Version mismatch detection prevents accidental downgrades (FR-006).
 
-**Rollback strategy**: Rollback capability (`pc-switcher rollback`) is deferred to a separate feature after foundation infrastructure. Pre-sync snapshots with session ID naming (FR-010) can be used for manual rollback if needed.
+**Rollback strategy**: Rollback capability (`pc-switcher rollback`) is deferred to a separate feature after core infrastructure. Pre-sync snapshots with session ID naming (FR-010) can be used for manual rollback if needed.
 
 ### Frictionless Command UX
 **Single command**: `pc-switcher sync <target>` executes complete workflow (FR-046).
@@ -98,7 +98,7 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 **Minimal temp files**: EventBus queues in memory, no intermediate disk staging.
 
 ### Throughput-Focused Syncing
-**Foundation scope**: This feature establishes infrastructure; actual sync throughput measured in subsequent job implementations.
+**Core scope**: This feature establishes infrastructure; actual sync throughput measured in subsequent job implementations.
 
 **SSH multiplexing**: Single persistent connection for efficiency (ADR-002).
 
@@ -129,7 +129,7 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 ### Documentation (this feature)
 
 ```text
-specs/001-foundation/
+specs/001-core/
 ├── spec.md              # Feature specification
 ├── architecture.md      # Component architecture (COMPLETE)
 ├── plan.md              # This file
@@ -219,11 +219,11 @@ All constitution principles are satisfied by the design. No violations requiring
 
 | Artifact | Location | Purpose |
 |----------|----------|---------|
-| research.md | `specs/001-foundation/research.md` | Technology decisions and patterns |
-| data-model.md | `specs/001-foundation/data-model.md` | Entity definitions and relationships |
-| config-schema.yaml | `specs/001-foundation/contracts/config-schema.yaml` | JSON Schema for config validation |
-| job-interface.md | `specs/001-foundation/contracts/job-interface.md` | Job implementation contract |
-| quickstart.md | `specs/001-foundation/quickstart.md` | Developer setup guide |
+| research.md | `specs/001-core/research.md` | Technology decisions and patterns |
+| data-model.md | `specs/001-core/data-model.md` | Entity definitions and relationships |
+| config-schema.yaml | `specs/001-core/contracts/config-schema.yaml` | JSON Schema for config validation |
+| job-interface.md | `specs/001-core/contracts/job-interface.md` | Job implementation contract |
+| quickstart.md | `specs/001-core/quickstart.md` | Developer setup guide |
 
 ### Ready for Task Generation
 

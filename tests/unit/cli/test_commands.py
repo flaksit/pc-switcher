@@ -1,7 +1,7 @@
 """Tests for CLI commands.
 
 Tests verify that the CLI commands defined in src/pcswitcher/cli.py exist and
-accept the correct arguments as specified in specs/001-foundation/spec.md.
+accept the correct arguments as specified in specs/001-core/spec.md.
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ runner = CliRunner()
 class TestSyncCommand:
     """Tests for the 'pc-switcher sync <target>' command."""
 
-    def test_001_fnd_fr_sync_cmd(self) -> None:
-        """Test FND-FR-SYNC-CMD: System provides single command 'pc-switcher sync <target>'.
+    def test_001_core_fr_sync_cmd(self) -> None:
+        """Test CORE-FR-SYNC-CMD: System provides single command 'pc-switcher sync <target>'.
 
         Verifies that:
         1. The sync command exists and can be invoked
@@ -29,7 +29,7 @@ class TestSyncCommand:
         3. The command structure matches the spec requirement
 
         References:
-        - FND-FR-SYNC-CMD in specs/001-foundation/spec.md
+        - CORE-FR-SYNC-CMD in specs/001-core/spec.md
         """
         # Mock Configuration to avoid needing actual config file
         mock_config = MagicMock(spec=Configuration)
@@ -49,14 +49,14 @@ class TestSyncCommand:
             # Verify that _run_sync was called with correct arguments
             # (this confirms the command structure is correct)
 
-    def test_001_fnd_fr_sync_cmd_requires_target(self) -> None:
-        """Test FND-FR-SYNC-CMD: Sync command requires a target argument.
+    def test_001_core_fr_sync_cmd_requires_target(self) -> None:
+        """Test CORE-FR-SYNC-CMD: Sync command requires a target argument.
 
         Verifies that invoking 'pc-switcher sync' without a target argument
         results in an error, ensuring the command structure is enforced.
 
         References:
-        - FND-FR-SYNC-CMD in specs/001-foundation/spec.md
+        - CORE-FR-SYNC-CMD in specs/001-core/spec.md
         """
         # Invoke the sync command without a target argument
         result = runner.invoke(app, ["sync"])
@@ -70,14 +70,14 @@ class TestSyncCommand:
         output = result.stdout + result.stderr
         assert "Missing argument" in output or "required" in output.lower()
 
-    def test_001_fnd_fr_sync_cmd_accepts_config_option(self) -> None:
-        """Test FND-FR-SYNC-CMD: Sync command accepts optional --config flag.
+    def test_001_core_fr_sync_cmd_accepts_config_option(self) -> None:
+        """Test CORE-FR-SYNC-CMD: Sync command accepts optional --config flag.
 
         Verifies that the sync command accepts the optional --config/-c flag
         for specifying a custom configuration file path.
 
         References:
-        - FND-FR-SYNC-CMD in specs/001-foundation/spec.md
+        - CORE-FR-SYNC-CMD in specs/001-core/spec.md
         - sync command implementation in src/pcswitcher/cli.py
         """
         # Mock Configuration to avoid needing actual config file

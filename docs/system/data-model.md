@@ -6,7 +6,7 @@ This document defines the core entities, their relationships, and validation rul
 
 - [System Documentation](_index.md)
 - [Architecture](architecture.md)
-- [Foundation Spec](foundation.md)
+- [Core Spec](core.md)
 - [Logging Spec](logging.md)
 
 ## Entity Overview

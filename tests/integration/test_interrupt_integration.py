@@ -1,9 +1,9 @@
 """Integration tests for interrupt handling (SIGINT/Ctrl+C) during sync operations.
 
 Tests User Story 5 (Graceful Interrupt Handling) acceptance scenarios and related FRs:
-- FND-FR-TARGET-TERM: Send termination to target processes
-- FND-FR-FORCE-TERM: Force-terminate on second SIGINT
-- FND-FR-NO-ORPHAN: No orphaned processes
+- CORE-FR-TARGET-TERM: Send termination to target processes
+- CORE-FR-FORCE-TERM: Force-terminate on second SIGINT
+- CORE-FR-NO-ORPHAN: No orphaned processes
 - US5-AS1: Ctrl+C requests job termination
 - US5-AS3: Second Ctrl+C forces termination
 - Edge: Source crashes mid-sync
@@ -17,11 +17,11 @@ from contextlib import suppress
 from pcswitcher.executor import RemoteExecutor
 
 
-async def test_001_fnd_fr_target_term(
+async def test_001_core_fr_target_term(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
 ) -> None:
-    """Test FND-FR-TARGET-TERM: Send termination to target processes.
+    """Test CORE-FR-TARGET-TERM: Send termination to target processes.
 
     Verifies that when SIGINT is received during a sync operation with active
     target-side processes, the orchestrator sends termination signals to those
@@ -80,11 +80,11 @@ async def test_001_fnd_fr_target_term(
         await pc2_executor.run_command(f"rm -f {marker_file}")
 
 
-async def test_001_fnd_fr_force_term(
+async def test_001_core_fr_force_term(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
 ) -> None:
-    """Test FND-FR-FORCE-TERM: Force-terminate on second SIGINT.
+    """Test CORE-FR-FORCE-TERM: Force-terminate on second SIGINT.
 
     Verifies that when a second SIGINT arrives before cleanup completes,
     the system immediately force-terminates without waiting for graceful cleanup.
@@ -160,11 +160,11 @@ async def test_001_fnd_fr_force_term(
         await main_task
 
 
-async def test_001_fnd_fr_no_orphan(
+async def test_001_core_fr_no_orphan(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
 ) -> None:
-    """Test FND-FR-NO-ORPHAN: No orphaned processes after interrupt.
+    """Test CORE-FR-NO-ORPHAN: No orphaned processes after interrupt.
 
     Verifies that after SIGINT and cleanup, no orphaned processes remain on
     either source or target machines. This is critical for system cleanliness
