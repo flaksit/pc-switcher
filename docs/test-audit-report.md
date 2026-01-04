@@ -632,10 +632,10 @@ def test_version_format_accepted(version_format):
 ### Scaling Consideration
 
 When adding new sync jobs:
-- Each new job should add **seconds** to test time, not **minutes**
-- New job tests should use existing sync infrastructure, not run separate syncs
-- One comprehensive sync (with all jobs enabled) validates job integration
-- The VM test infrastructure exists for real integration tests - use it
+- **Expect test time to grow**: File sync and package installation jobs inherently take time. There's no shortcut for testing that files actually sync or packages actually install.
+- **Happy-path consolidation possible**: One comprehensive sync (with all jobs enabled) can validate that jobs work together. This is valuable for integration testing.
+- **Edge cases need separate syncs**: Error handling, partial failures, interrupts, and recovery scenarios each require their own test runs. Don't try to test edge cases by piggybacking on happy-path syncs.
+- **Mocked executors defeat the purpose**: The VM test infrastructure exists for real integration tests. Tests that mock away the actual sync operations should be unit tests instead.
 
 ## Before Implementing
 
