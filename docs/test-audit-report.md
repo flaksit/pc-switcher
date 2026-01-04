@@ -450,15 +450,154 @@ graph TD
 
 ## Summary Statistics
 
-| Metric | Before | After | Change |
-| ------ | ------ | ----- | ------ |
-| Integration test files | 14 | 13 | -1 (terminal_ui moves) |
-| Integration test methods | ~70 | ~55 | -21% |
-| Estimated CI time | ~8.5 min | ~7 min | -18% |
-| Unit test methods | ~100 | ~106 | +6% (moved from integration) |
+| Metric | Current | After Cleanup | With Optimizations |
+| ------ | ------- | ------------- | ------------------ |
+| Integration test files | 14 | 13 | 13 |
+| Integration test methods | ~70 | ~55 | ~55 |
+| Estimated CI time | ~8.5 min | ~7 min | ~4-5 min |
+| Unit test methods | ~100 | ~106 | ~106 |
 
-## Appendix: Notes on Test Duration
+**Key insight**: The ~18% reduction from cleanup is modest. The larger gains (~40-50%) come from fixture optimization strategies in the Appendix.
 
-Total integration test run: **~8.5 minutes** (parallel execution on VMs).
+## Appendix: Test Time Optimization Strategies
 
-Per-file durations not estimated individually as tests run in parallel and share VM setup overhead. The main optimization opportunity is reducing redundant test scenarios, not individual test duration.
+Total integration test run: **~8.5 minutes** currently. As sync jobs are added, this must not grow to hours.
+
+### Current Expensive Operations
+
+| Operation | Est. Time | Frequency |
+| --------- | --------- | --------- |
+| Install pc-switcher from branch | 30-60s | Per module (pc1) |
+| Uninstall + reinstall old version | 40-70s | Per test needing old version |
+| `reset_pcswitcher_state` (delete config+data+snapshots) | 5-10s | Every test using it |
+| Run `pc-switcher sync` | 10-60s | ~22 times across all tests |
+
+### Strategy 1: Session-Scoped Installation (High Impact)
+
+**Problem**: `pc1_with_pcswitcher_mod` is module-scoped, reinstalling per test file.
+
+**Solution**: Make it session-scoped. Install once at session start. Most tests need pc-switcher installed anyway.
+
+```python
+@pytest.fixture(scope="session")
+async def pc1_with_pcswitcher_session(pc1_executor, current_git_branch):
+    await install_pcswitcher_with_script(pc1_executor, branch)
+    return pc1_executor
+```
+
+**Savings**: Avoid ~4-5 reinstalls per session.
+
+### Strategy 2: Ordered Test Execution (High Impact)
+
+**Problem**: Tests requiring "without pc-switcher" or "old version" trigger uninstall/reinstall cycles.
+
+**Solution**: Use `pytest-order` or custom collection hook to run tests in optimal order:
+
+```
+Phase 1: Tests needing clean target (no pc-switcher) → run FIRST
+Phase 2: Tests needing old version → install old, run all
+Phase 3: All other tests → upgrade to current, run all
+```
+
+**Savings**: Eliminate repeated install/uninstall cycles.
+
+### Strategy 3: Class-Scoped Shared Sync State (Medium Impact)
+
+**Problem**: `TestConsecutiveSyncWarning` has 4 tests, each starting fresh. Tests 6, 7, 8 all need a first sync completed before testing their specific behavior.
+
+**Solution**: Class-scoped fixture that runs the first sync once:
+
+```python
+@pytest.fixture(scope="class")
+async def post_first_sync_state(sync_ready_source, pc2_executor):
+    # Run first sync once for the class
+    await run_sync(sync_ready_source, "--allow-consecutive")
+    yield
+```
+
+**Savings**: 3 syncs → 1 sync for consecutive sync tests.
+
+### Strategy 4: Targeted Cleanup (Medium Impact)
+
+**Problem**: `reset_pcswitcher_state` cleans EVERYTHING on BOTH VMs every test.
+
+**Solution**: Lighter cleanup fixtures for tests that only need partial cleanup:
+
+```python
+@pytest.fixture
+async def clean_config_only(pc1_executor):
+    # Only delete config, keep snapshots
+    await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+    yield
+```
+
+**Savings**: Faster teardown for tests that don't create snapshots.
+
+### Strategy 5: VM State Snapshots (High Impact, More Effort)
+
+**Problem**: Reinstalling pc-switcher takes 30-60s each time.
+
+**Solution**: Use btrfs snapshots of the test VM's root filesystem:
+
+```bash
+# At session start: install pc-switcher, snapshot the VM state
+btrfs subvolume snapshot / /.test-baseline
+
+# Before each test: restore to baseline (fast)
+btrfs subvolume delete /
+btrfs subvolume snapshot /.test-baseline /
+```
+
+**Savings**: Restore in seconds instead of reinstall in minutes.
+
+### Strategy 6: Combine Assertions in Fewer Syncs (Medium Impact)
+
+**Current pattern** (bad):
+```python
+def test_sync_creates_history(): ...  # runs sync
+def test_sync_creates_snapshots(): ...  # runs sync again
+def test_sync_copies_config(): ...  # runs sync AGAIN
+```
+
+**Better pattern**:
+```python
+def test_sync_full_workflow():
+    # One sync, multiple assertions
+    run_sync()
+    assert history_exists()
+    assert snapshots_exist()
+    assert config_copied()
+```
+
+The main E2E test already does this. Apply same pattern to other test groups.
+
+### Strategy 7: Parameterize Similar Tests
+
+**Problem**: Separate tests for SemVer vs PEP440 format run identical setup.
+
+**Solution**:
+```python
+@pytest.mark.parametrize("version_format", ["0.1.0-alpha.1", "0.1.0a1"])
+def test_version_format_accepted(version_format):
+    # One test, multiple formats
+```
+
+### Recommended Priority
+
+| Priority | Strategy | Est. Savings | Effort |
+| -------- | -------- | ------------ | ------ |
+| 1 | Session-scoped installation | 2-3 min | Low |
+| 2 | Class-scoped shared sync | 1-2 min | Low |
+| 3 | Ordered test execution | 1-2 min | Medium |
+| 4 | Combine assertions | 30-60s | Low |
+| 5 | Parameterize tests | 10-30s | Low |
+| 6 | Targeted cleanup | 10-30s | Low |
+| 7 | VM state snapshots | 2-3 min | High |
+
+### Scaling Consideration
+
+When adding new sync jobs:
+- Each new job should add **seconds** to test time, not **minutes**
+- New job tests should use existing sync infrastructure, not run separate syncs
+- One comprehensive sync (with all jobs enabled) validates job integration
+- Individual job logic tested via unit tests with mocked executor
