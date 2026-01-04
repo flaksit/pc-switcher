@@ -1,6 +1,6 @@
 # Integration Test Suite Audit Report
 
-**Date**: 2026-01-01
+**Date**: 2026-01-04
 **Issue**: #125 - Cleanup tests
 **Purpose**: Identify redundant, overlapping, or misclassified integration tests
 
@@ -14,7 +14,7 @@ In this project, "integration tests" = **tests that require test-VMs to operate*
 
 ## Executive Summary
 
-This audit analyzed 14 integration test files containing approximately 70 test methods. Key findings:
+This audit analyzed 13 integration test files containing ~87 test methods. Key findings:
 
 | Category | Count | Action |
 | -------- | ----- | ------ |
@@ -37,14 +37,14 @@ graph TD
     subgraph "High Value - Keep"
         E2E[test_end_to_end_sync.py<br/>9 tests]
         INSTALL_SCRIPT[test_installation_script.py<br/>3 tests]
-        INSTALL_JOB[test_install_on_target_job.py<br/>2 tests]
-        CONFIG_SYNC[test_config_sync.py<br/>11 tests - real SSH]
+        INSTALL_JOB[jobs/test_install_on_target_job.py<br/>2 tests]
+        CONFIG_SYNC[test_config_sync.py<br/>12 tests - real SSH]
     end
 
     subgraph "Medium Value - Consolidate"
         SELF_UPDATE[test_self_update.py<br/>13 tests]
         INIT[test_init_command.py<br/>5 tests]
-        SNAPSHOT[test_snapshot_infrastructure.py<br/>7 tests]
+        SNAPSHOT[test_snapshot_infrastructure.py<br/>6 tests]
         BTRFS[test_btrfs_operations.py<br/>10 tests]
         VM_CONN[test_vm_connectivity.py<br/>13 tests]
         INTERRUPT[test_interrupt_integration.py<br/>6 tests]
@@ -53,7 +53,7 @@ graph TD
     subgraph "Move/Organize"
         TERMINAL[test_terminal_ui.py<br/>3 tests → unit tests]
         EXECUTOR[test_executor_overhead.py<br/>4 benchmarks → subfolder]
-        LOGGING[test_logging_integration.py<br/>2 placeholders]
+        LOGGING[test_logging_integration.py<br/>1 placeholder]
     end
 ```
 
@@ -63,9 +63,9 @@ graph TD
 
 | Test | Verdict | Rationale |
 |------|---------|-----------|
-| `test_001_us1_as1_job_integration_via_interface` | ✅ KEEP | Core sync workflow validation |
-| `test_001_us1_as7_interrupt_terminates_job` | ⚠️ FIX | Doesn't verify exit code 130 as claimed |
-| `test_001_edge_target_unreachable_mid_sync` | ❌ REMOVE | Always skipped - provides no value |
+| `test_core_us_job_arch_as1_job_integration_via_interface` | ✅ KEEP | Core sync workflow validation |
+| `test_core_us_job_arch_as7_interrupt_terminates_job` | ⚠️ FIX | Doesn't verify exit code 130 as claimed |
+| `test_core_edge_target_unreachable_mid_sync` | ❌ REMOVE | Always skipped - provides no value |
 | `test_install_on_target_fresh_machine` | ✅ KEEP | Tests install via sync (unique path) |
 | `test_install_on_target_upgrade_older_version` | ✅ KEEP | Tests upgrade via sync (unique path) |
 | `test_sync_updates_history_on_both_machines` | 🔄 MERGE | Could combine with consecutive sync tests |
@@ -79,18 +79,18 @@ graph TD
 
 | Test | Verdict | Rationale |
 |------|---------|-----------|
-| `test_001_fr035_install_script_no_prereqs` | ✅ KEEP | Tests raw install.sh user experience |
-| `test_001_install_release_version_on_clean_target` | ✅ KEEP | Tests VERSION parameter |
-| `test_001_upgrade_from_older_version` | ⚠️ REVIEW | Overlaps with Job upgrade test |
+| `test_core_fr_install_script` | ✅ KEEP | Tests raw install.sh user experience |
+| `test_core_install_release_version_on_clean_target` | ✅ KEEP | Tests VERSION parameter |
+| `test_core_upgrade_from_older_version` | ⚠️ REVIEW | Overlaps with E2E upgrade test |
 
-**Recommendation**: Keep all - tests the shell script path (different from Job API path).
+**Recommendation**: Keep all - tests the shell script path (different from sync-triggered install).
 
-### 3. test_install_on_target_job.py (2 tests)
+### 3. jobs/test_install_on_target_job.py (2 tests)
 
 | Test | Verdict | Rationale |
 |------|---------|-----------|
-| `test_001_us2_as1_install_missing_pcswitcher` | ✅ KEEP | Tests Job API installation |
-| `test_001_us2_as2_upgrade_outdated_target` | ✅ KEEP | Tests Job API upgrade |
+| `test_core_us_self_install_as1_install_missing_pcswitcher` | ✅ KEEP | Tests Job API installation |
+| `test_core_us_self_install_as2_upgrade_outdated_target` | ✅ KEEP | Tests Job API upgrade |
 
 **Recommendation**: Keep both - they test the programmatic API used by the orchestrator.
 
@@ -118,11 +118,11 @@ graph TD
 
 | Test | Verdict | Rationale |
 |------|---------|-----------|
-| `test_001_fr036_init_creates_default_config` | 🔄 MERGE | ~90% identical to AS1 test |
-| `test_001_us7_as1_init_after_install` | 🔄 MERGE | ~90% identical to FR036 test |
-| `test_001_us7_as3_init_preserves_existing_config` | 🔄 MERGE | Combine with --force test |
-| `test_001_us7_as3_init_force_overwrites` | 🔄 MERGE | Combine with preserve test |
-| `test_001_init_creates_parent_directory` | 📦 UNIT | Could be unit test |
+| `test_core_fr_default_config` | 🔄 MERGE | ~90% identical to AS1 test |
+| `test_core_us_install_as1_init_after_install` | 🔄 MERGE | ~90% identical to FR test |
+| `test_core_us_install_as3_init_preserves_existing_config` | 🔄 MERGE | Combine with --force test |
+| `test_core_us_install_as3_init_force_overwrites` | 🔄 MERGE | Combine with preserve test |
+| `test_core_init_creates_parent_directory` | 📦 UNIT | Could be unit test |
 
 **Recommendation**: Consolidate 5 tests → 2 tests. Move "creates parent directory" to unit tests.
 
@@ -143,17 +143,16 @@ graph TD
 
 **Recommendation**: Keep 2-3 unique tests; remove/merge the rest.
 
-### 7. test_snapshot_infrastructure.py (7 tests)
+### 7. test_snapshot_infrastructure.py (6 tests)
 
 | Test | Verdict | Rationale |
 |------|---------|-----------|
-| `test_001_us3_as2_create_presync_snapshots` | 🔄 MERGE | Combine pre/post tests |
-| `test_001_us3_as3_create_postsync_snapshots` | 🔄 MERGE | Nearly identical to pre-sync |
-| `test_001_us3_as4_create_snapshots_subvolume` | ⚠️ OVERLAP | Tested implicitly elsewhere |
-| `test_001_us3_as7_cleanup_snapshots_with_retention` | ✅ KEEP | **Unique** retention logic |
-| `test_001_us3_as9_runtime_disk_space_monitoring` | ❌ REMOVE | Tests `df` command, not app |
-| `test_001_edge_btrfs_not_available` | ⚠️ OVERLAP | Overlaps with btrfs failure tests |
-| Additional test (if any) | - | - |
+| `test_core_us_btrfs_as2_create_presync_snapshots` | 🔄 MERGE | Combine pre/post tests |
+| `test_core_us_btrfs_as3_create_postsync_snapshots` | 🔄 MERGE | Nearly identical to pre-sync |
+| `test_core_us_btrfs_as4_create_snapshots_subvolume` | ⚠️ OVERLAP | Tested implicitly elsewhere |
+| `test_core_us_btrfs_as7_cleanup_snapshots_with_retention` | ✅ KEEP | **Unique** retention logic |
+| `test_core_us_btrfs_as9_runtime_disk_space_monitoring` | ❌ REMOVE | Tests `df` command, not app |
+| `test_core_edge_btrfs_not_available` | ⚠️ OVERLAP | Overlaps with btrfs failure tests |
 
 **Recommendation**: Keep cleanup retention test; merge snapshot creation tests.
 
@@ -177,7 +176,7 @@ graph TD
 
 **Recommendation**: Move 6 tests to unit tests; remove 2 trivial tests; keep 5.
 
-### 9. test_config_sync.py (11 tests)
+### 9. test_config_sync.py (12 tests)
 
 These tests **DO require VMs** - they run actual SSH/SFTP commands (rm, mkdir, cat, test -f).
 The mocks are only for interactive prompts (can't prompt in automated tests), but file operations are real.
@@ -195,22 +194,22 @@ The mocks are only for interactive prompts (can't prompt in automated tests), bu
 | `test_sync_config_differs_keeps_target` | ✅ KEEP | Real file verification |
 | `test_sync_config_differs_aborts` | ✅ KEEP | Real file verification |
 | `test_ui_lifecycle_during_sync` | ✅ KEEP | Tests UI + real file ops |
-| `test_001_us7_as2_target_install_*` | ❌ MOVE | Misplaced - belongs in install tests |
+| `test_core_us_install_as2_shared_install_logic` | ⚠️ REVIEW | Misplaced - belongs in install tests |
 
-**Recommendation**: Keep most tests (they test real SSH/SFTP). Move misplaced install test.
+**Recommendation**: Keep most tests (they test real SSH/SFTP). Consider moving misplaced install test.
 
 ### 10. test_interrupt_integration.py (6 tests)
 
 | Test | Verdict | Rationale |
 | ---- | ------- | --------- |
-| `test_001_fr025_terminate_target_processes` | 🔄 MERGE | Consolidate process tests |
-| `test_001_fr026_second_sigint_force_terminate` | ⚠️ **BROKEN** | Takes VM fixtures but **never uses them** - see below |
-| `test_001_fr027_no_orphaned_processes` | 🔄 MERGE | Consolidate process tests |
-| `test_001_us5_as1_interrupt_requests_job_termination` | 🔄 MERGE | Nearly identical to FR025 |
-| `test_001_us5_as3_second_interrupt_forces_termination` | ✅ KEEP | Uses VMs unlike FR026 |
-| `test_001_edge_source_crash_timeout` | ⚠️ OVERLAP | Same pattern as others |
+| `test_core_fr_target_term` | 🔄 MERGE | Consolidate process tests |
+| `test_core_fr_force_term` | ⚠️ **BROKEN** | Takes VM fixtures but **never uses them** - see below |
+| `test_core_fr_no_orphan` | 🔄 MERGE | Consolidate process tests |
+| `test_core_us_interrupt_as1_interrupt_requests_job_termination` | 🔄 MERGE | Nearly identical to FR test |
+| `test_core_us_interrupt_as3_second_interrupt_forces_termination` | ✅ KEEP | Uses VMs unlike FR test |
+| `test_core_edge_source_crash_timeout` | ⚠️ OVERLAP | Same pattern as others |
 
-**Issue with `test_001_fr026`**: This test claims to verify "FR-026: Force-terminate on second SIGINT"
+**Issue with `test_core_fr_force_term`**: This test claims to verify "CORE-FR-FORCE-TERM: Force-terminate on second SIGINT"
 but the implementation only tests asyncio task cancellation locally. It:
 - Takes `pc1_executor` and `pc2_executor` fixtures but **never uses them**
 - Only creates local asyncio events/tasks
@@ -218,19 +217,19 @@ but the implementation only tests asyncio task cancellation locally. It:
 - Does NOT test real process termination on VMs
 
 **Resolution**:
-- **GH Issue #132** created: Implement proper FR-026 integration test with real SIGINT handling
+- **GH Issue #132** created: Implement proper CORE-FR-FORCE-TERM integration test with real SIGINT handling
 - **Current test**: Leave as-is for now. It's a no-op (doesn't use VMs) but also doesn't cost time. Not worth the effort to move it.
 
 ### 11. test_terminal_ui.py (3 tests)
 
 These tests **do NOT run pc-switcher commands** - they only test TerminalUI/EventBus/Console
-component interaction. The file's own docstring (lines 11-19) explicitly states they don't need VMs.
+component interaction. The file's own docstring explicitly states they don't need VMs.
 
 | Test | Verdict | Rationale |
 | ---- | ------- | --------- |
-| `test_001_us9_as1_progress_display` | 📦 UNIT | Only tests Console + TerminalUI objects |
-| `test_001_us9_as2_multi_job_progress` | 📦 UNIT | Only tests Console + TerminalUI objects |
-| `test_001_us9_as3_progress_and_connection_events` | 📦 UNIT | Only tests EventBus + TerminalUI |
+| `test_core_us_tui_as1_progress_display` | 📦 UNIT | Only tests Console + TerminalUI objects |
+| `test_core_us_tui_as2_multi_job_progress` | 📦 UNIT | Only tests Console + TerminalUI objects |
+| `test_core_us_tui_as3_progress_and_connection_events` | 📦 UNIT | Only tests EventBus + TerminalUI |
 
 **Recommendation**: Move all to unit tests - they test component integration without VMs.
 
@@ -247,16 +246,15 @@ Already marked `@pytest.mark.benchmark` - not run in normal test suite. Uses VM 
 
 **Recommendation**: Keep as integration tests (use VM fixtures). Consider moving to `tests/integration/benchmarks/` subfolder for clarity.
 
-### 13. test_logging_integration.py (2 tests)
+### 13. test_logging_integration.py (1 test)
 
-Placeholder tests for future implementation - there is a GitHub issue to implement these.
+Placeholder test for future implementation - there is a GitHub issue to implement this.
 
 | Test | Verdict | Rationale |
 | ---- | ------- | --------- |
-| `test_001_fr023_aggregate_source_target_logs` | 🔜 PLACEHOLDER | Keep - awaiting implementation |
-| `test_001_us4_as6_logs_command_displays_last_log` | 🔜 PLACEHOLDER | Keep - awaiting implementation |
+| `test_log_fr_aggregate` | 🔜 PLACEHOLDER | Keep - awaiting implementation |
 
-**Recommendation**: Keep as placeholders for tracked feature work.
+**Recommendation**: Keep as placeholder for tracked feature work.
 
 ## Overlap Diagrams
 
@@ -265,25 +263,25 @@ Placeholder tests for future implementation - there is a GitHub issue to impleme
 ```mermaid
 graph LR
     subgraph "Fresh Install"
-        A1[test_installation_script.py<br/>install_script_no_prereqs]
-        A2[test_installation_script.py<br/>install_release_version]
-        A3[test_install_on_target_job.py<br/>install_missing_pcswitcher]
+        A1[test_installation_script.py<br/>core_fr_install_script]
+        A2[test_installation_script.py<br/>core_install_release_version]
+        A3[jobs/test_install_on_target_job.py<br/>core_us_self_install_as1]
         A4[test_end_to_end_sync.py<br/>install_on_target_fresh]
     end
 
     subgraph "Upgrade"
-        B1[test_installation_script.py<br/>upgrade_from_older]
-        B2[test_install_on_target_job.py<br/>upgrade_outdated_target]
+        B1[test_installation_script.py<br/>core_upgrade_from_older]
+        B2[jobs/test_install_on_target_job.py<br/>core_us_self_install_as2]
         B3[test_end_to_end_sync.py<br/>install_upgrade_older]
         B4[test_self_update.py<br/>upgrade_to_specific_version]
     end
 
     A1 -.->|"Tests script path"| A3
-    A2 -.->|"Tests script path"| A3
-    A3 -.->|"Tests Job path"| A4
+    A2 -.->|"Tests VERSION param"| A3
+    A3 -.->|"Tests Job API"| A4
 
     B1 -.->|"Tests script path"| B2
-    B2 -.->|"Tests Job path"| B3
+    B2 -.->|"Tests Job API"| B3
     B3 -.->|"Different mechanism"| B4
 
     style A1 fill:#90EE90
@@ -313,10 +311,10 @@ graph TD
     end
 
     subgraph "test_snapshot_infrastructure.py"
-        SNAP1[create_presync_snapshots]
-        SNAP2[create_postsync_snapshots]
-        SNAP3[cleanup_with_retention]
-        SNAP4[edge_btrfs_not_available]
+        SNAP1[core_us_btrfs_as2_presync]
+        SNAP2[core_us_btrfs_as3_postsync]
+        SNAP3[core_us_btrfs_as7_cleanup]
+        SNAP4[core_edge_btrfs_not_available]
     end
 
     subgraph "test_end_to_end_sync.py"
@@ -415,14 +413,14 @@ graph TD
 | `test_btrfs_filesystem_present` | btrfs mounted | Every snapshot test fails fast if btrfs missing |
 | `test_create_writable_snapshot` | ro=false works | Unused capability - no coverage needed |
 | `test_basic_command_execution_pc1/pc2` | SSH works | Every other test; asyncssh errors are already clear |
-| `test_001_us3_as9_runtime_disk_space_monitoring` | `df` output | Tests shell command, not app logic |
+| `test_core_us_btrfs_as9_runtime_disk_space_monitoring` | `df` output | Tests shell command, not app logic |
 
 ### Fix/Investigate
 
 | Test | Issue |
 | ---- | ----- |
-| `test_001_fr026_second_sigint_force_terminate` | No-op (never uses VMs). Proper test tracked in **#132**. Leave as-is. |
-| `test_001_us1_as7_interrupt_terminates_job` | Claims to verify exit code 130 but doesn't |
+| `test_core_fr_force_term` | No-op (never uses VMs). Proper test tracked in **#132**. Leave as-is. |
+| `test_core_us_job_arch_as7_interrupt_terminates_job` | Claims to verify exit code 130 but doesn't |
 | `test_nonexistent_version` | Weak assertion |
 
 ### Move to Unit Tests
@@ -430,7 +428,7 @@ graph TD
 | Integration Test | Reason |
 | ---------------- | ------ |
 | `test_terminal_ui.py` (all 3 tests) | Docstring says "do not require VM" - tests component integration |
-| `test_init_creates_parent_directory` | Tests mkdir -p behavior, not VM-specific |
+| `test_core_init_creates_parent_directory` | Tests mkdir -p behavior, not VM-specific |
 | `test_logging_contract.py` (all) | Merge into `test_logging.py` |
 
 ### Organize/Move
@@ -438,16 +436,16 @@ graph TD
 | Item | Action |
 | ---- | ------ |
 | `test_executor_overhead.py` | Move to `tests/integration/benchmarks/` subfolder |
-| `test_001_us7_as2_target_install_*` | Move from config_sync to install tests |
+| `test_core_us_install_as2_shared_install_logic` | Move from config_sync to install tests |
 
 ### Consolidate
 
 | Tests to Merge | Into |
 |----------------|------|
-| `test_001_fr036_*` + `test_001_us7_as1_*` | Single init test |
-| `test_001_us7_as3_*` (preserve + force) | Single existing config test |
+| `test_core_fr_default_config` + `test_core_us_install_as1_*` | Single init test |
+| `test_core_us_install_as3_*` (preserve + force) | Single existing config test |
 | `test_sync_updates_history` + `consecutive_blocked` + `consecutive_allowed` | Single consecutive sync test |
-| `test_001_us3_as2_*` + `test_001_us3_as3_*` | Single snapshot naming test |
+| `test_core_us_btrfs_as2_*` + `test_core_us_btrfs_as3_*` | Single snapshot naming test |
 | `test_has_self_update` + `self_command_group_help` + `shows_prerelease_flag` | Single CLI help test |
 | `test_semver_format` + `test_pep440_format` | Parameterized format test |
 | Interrupt tests (4 of 6) | 1-2 process termination tests |
@@ -457,12 +455,12 @@ graph TD
 
 | Metric | Current | After Cleanup | With Optimizations |
 | ------ | ------- | ------------- | ------------------ |
-| Integration test files | 14 | 13 | 13 |
-| Integration test methods | ~70 | ~55 | ~55 |
+| Integration test files | 13 | 12 | 12 |
+| Integration test methods | ~87 | ~67 | ~67 |
 | Estimated CI time | ~8.5 min | ~7 min | ~4-5 min |
-| Unit test methods | ~100 | ~106 | ~106 |
+| Unit test methods | ~100 | ~107 | ~107 |
 
-**Key insight**: The ~18% reduction from cleanup is modest. The larger gains (~40-50%) come from fixture optimization strategies in the Appendix.
+**Key insight**: The ~23% reduction from cleanup is modest. The larger gains (~40-50%) come from fixture optimization strategies in the Appendix.
 
 ## Appendix: Test Time Optimization Strategies
 
