@@ -470,7 +470,7 @@ Lineage: 001-foundation edge cases, 003-foundation-tests edge cases
 - **FND-FR-TARGET-TERM** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful shutdown  
   Lineage: 001-FR-025
 
-- **FND-FR-FORCE-TERM** `[Reliability Without Compromise]`: If second SIGINT is received during cleanup, system MUST immediately force-terminate without waiting  
+- **FND-FR-FORCE-TERM** `[Reliability Without Compromise]`: Force-terminate on second SIGINT - When a second SIGINT arrives before cleanup completes, the system immediately force-terminates without waiting for graceful cleanup.  
   Lineage: 001-FR-026
 
 - **FND-FR-NO-ORPHAN** `[Reliability Without Compromise]`: System MUST ensure no orphaned processes remain on source or target after interrupt  

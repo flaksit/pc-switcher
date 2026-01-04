@@ -453,7 +453,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **FR-025** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful shutdown
 
-- **FR-026** `[Reliability Without Compromise]`: If second SIGINT is received during cleanup, system MUST immediately force-terminate without waiting
+- **FR-026** `[Reliability Without Compromise]`: Force-terminate on second SIGINT - When a second SIGINT arrives before cleanup completes, the system immediately force-terminates without waiting for graceful cleanup.
 
 - **FR-027** `[Reliability Without Compromise]`: System MUST ensure no orphaned processes remain on source or target after interrupt
 
