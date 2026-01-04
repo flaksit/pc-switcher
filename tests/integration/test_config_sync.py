@@ -262,14 +262,14 @@ class TestConfigSyncIntegration:
             local_path.unlink()
             await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
 
-    async def test_001_us7_as2_target_install_shared_logic_integration(self, pc1_executor: RemoteExecutor) -> None:
-        """US7-AS2: Target install uses shared install logic - installs uv if missing.
+    async def test_core_us_install_as2_shared_install_logic(self, pc1_executor: RemoteExecutor) -> None:
+        """CORE-US-INSTALL-AS2: Target install uses shared install logic - installs uv if missing.
 
         Verifies that when target is missing uv, the install.sh script (used by
         InstallOnTargetJob) successfully installs uv first, then pc-switcher.
         This confirms target install and initial install share the same logic.
 
-        Reference: specs/001-core/spec.md - User Story 7, Acceptance Scenario 2
+        Reference: docs/system/spec.md - CORE-US-INSTALL, Acceptance Scenario 2
         """
         # Save current uv installation state
         uv_check = await pc1_executor.run_command("command -v uv")

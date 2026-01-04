@@ -42,7 +42,7 @@ def floor_release() -> Release:
     return current.get_release_floor()
 
 
-async def test_001_core_fr_install_script(
+async def test_core_fr_install_script(
     pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
 ) -> None:
     """Test CORE-FR-INSTALL-SCRIPT: install.sh works without prerequisites.
@@ -100,7 +100,7 @@ async def test_001_core_fr_install_script(
 # - install.sh does NOT create a default config file
 # - Users must run "pc-switcher init" to create the config
 # - Tests for "pc-switcher init" belong in tests/unit/test_cli.py or similar
-# See specs/001-core/spec.md for the documented workflow.
+# See docs/system/core.md for the documented workflow.
 
 
 class TestInstallationScriptVersionParameter:
@@ -117,12 +117,12 @@ class TestInstallationScriptVersionParameter:
     - Upgrade path from one version to another
     """
 
-    async def test_001_install_release_version_on_clean_target(
+    async def test_core_install_release_version_on_clean_target(
         self,
         pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
         highest_release: Release,
     ) -> None:
-        """Test installing the release version on a clean target.
+        """Test CORE: Installing the release version on a clean target.
 
         Verifies that the install.sh script can install a specific version
         when pc-switcher is not already installed.
@@ -145,12 +145,12 @@ class TestInstallationScriptVersionParameter:
             f"Installed version {installed_version} should match {release.version}"
         )
 
-    async def test_001_upgrade_from_older_version(
+    async def test_core_upgrade_from_older_version(
         self,
         pc2_with_old_pcswitcher_fn: BashLoginRemoteExecutor,
         highest_release: Release,
     ) -> None:
-        """Test upgrading from an older version to the release version.
+        """Test CORE: Upgrading from an older version to the release version.
 
         Verifies that the install.sh script can upgrade pc-switcher from an older version to a newer version.
 

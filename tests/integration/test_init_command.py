@@ -8,8 +8,8 @@ Tests verify real behavior on VMs.
 User Stories covered:
 - CORE-FR-INSTALL-SCRIPT: One-liner install using curl and Bash
 - CORE-FR-DEFAULT-CONFIG: Default config includes helpful inline comments
-- US7-AS1: curl install.sh installs pc-switcher, then user runs 'pc-switcher init'
-- US7-AS3: Preserve existing config file (unless --force is used)
+- CORE-US-INSTALL-AS1: curl install.sh installs pc-switcher, then user runs 'pc-switcher init'
+- CORE-US-INSTALL-AS3: Preserve existing config file (unless --force is used)
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ async def clean_config_environment(
 class TestInitCommand:
     """Integration tests for pc-switcher init command."""
 
-    async def test_001_core_fr_default_config(
+    async def test_core_fr_default_config(
         self,
         clean_config_environment: BashLoginRemoteExecutor,
     ) -> None:
@@ -100,11 +100,11 @@ class TestInitCommand:
         non_comment_lines = [line for line in content.split("\n") if line.strip() and not line.strip().startswith("#")]
         assert len(non_comment_lines) > 0, "Config file should contain configuration"
 
-    async def test_001_us7_as1_init_after_install(
+    async def test_core_us_install_as1_init_after_install(
         self,
         clean_config_environment: BashLoginRemoteExecutor,
     ) -> None:
-        """US7-AS1: Full workflow - install.sh followed by pc-switcher init.
+        """CORE-US-INSTALL-AS1: Full workflow - install.sh followed by pc-switcher init.
 
         This test verifies the expected user workflow:
         1. Run install.sh (already done on test VM)
@@ -140,11 +140,11 @@ class TestInitCommand:
             "Config should contain expected sections"
         )
 
-    async def test_001_us7_as3_init_preserves_existing_config(
+    async def test_core_us_install_as3_init_preserves_existing_config(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
     ) -> None:
-        """US7-AS3: pc-switcher init refuses to overwrite existing config without --force.
+        """CORE-US-INSTALL-AS3: pc-switcher init refuses to overwrite existing config without --force.
 
         Verifies that when a config file already exists, 'pc-switcher init':
         - Detects the existing config
@@ -187,11 +187,11 @@ class TestInitCommand:
         # Clean up
         await executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
 
-    async def test_001_us7_as3_init_force_overwrites(
+    async def test_core_us_install_as3_init_force_overwrites(
         self,
         clean_config_environment: BashLoginRemoteExecutor,
     ) -> None:
-        """US7-AS3: pc-switcher init --force overwrites existing config.
+        """CORE-US-INSTALL-AS3: pc-switcher init --force overwrites existing config.
 
         Verifies that 'pc-switcher init --force' successfully overwrites
         an existing configuration file.
@@ -221,11 +221,11 @@ class TestInitCommand:
         # Verify new config has expected content (comments from default config)
         assert "#" in check_content.stdout, "New config should have comments"
 
-    async def test_001_init_creates_parent_directory(
+    async def test_core_init_creates_parent_directory(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
     ) -> None:
-        """Test that pc-switcher init creates parent directory if missing.
+        """Test CORE: pc-switcher init creates parent directory if missing.
 
         Verifies that init creates ~/.config/pc-switcher/ if it doesn't exist.
         """

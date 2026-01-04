@@ -1,7 +1,7 @@
 """Unit tests for Configuration System (CORE-US-CONFIG).
 
 Tests configuration loading, validation, defaults, and error handling
-as specified in specs/001-core/spec.md User Story 6.
+as specified in docs/system/core.md User Story 6.
 
 Test Coverage:
 - CORE-FR-JOB-LOAD: Jobs loaded in config order
@@ -33,7 +33,7 @@ from pcswitcher.models import LogLevel
 class TestConfigLoading:
     """Tests for basic configuration loading functionality."""
 
-    def test_001_core_fr_config_load(self, tmp_path: Path) -> None:
+    def test_core_fr_config_load(self, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-LOAD: Load configuration from ~/.config/pc-switcher/config.yaml.
 
         Verifies that Configuration.from_yaml() can load a config file from
@@ -53,7 +53,7 @@ logging:
         assert config.logging.file == LogLevel.DEBUG.value
         assert config.logging.tui == LogLevel.INFO.value
 
-    def test_001_core_fr_config_load_path(self) -> None:
+    def test_core_fr_config_load_path(self) -> None:
         """CORE-FR-CONFIG-LOAD: Default config path is ~/.config/pc-switcher/config.yaml."""
         expected_path = Path.home() / ".config" / "pc-switcher" / "config.yaml"
 
@@ -61,7 +61,7 @@ logging:
 
         assert actual_path == expected_path
 
-    def test_001_core_fr_config_format(self, tmp_path: Path) -> None:
+    def test_core_fr_config_format(self, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-FORMAT: YAML structure includes global settings, sync_jobs, and per-job sections.
 
         Verifies that the config file supports:
@@ -118,7 +118,7 @@ dummy_success:
 class TestConfigValidation:
     """Tests for configuration validation against schemas."""
 
-    def test_001_core_fr_config_validate(self, tmp_path: Path) -> None:
+    def test_core_fr_config_validate(self, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-VALIDATE: Validate job configs against job schemas.
 
         Verifies that invalid job configuration (wrong type, out of range values)
@@ -141,7 +141,7 @@ btrfs_snapshots:
         error_messages = [e.message for e in exc_info.value.errors]
         assert any("minimum" in msg.lower() or "0" in msg for msg in error_messages)
 
-    def test_001_core_fr_config_validate_types(self, tmp_path: Path) -> None:
+    def test_core_fr_config_validate_types(self, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-VALIDATE: Validate job config parameter types.
 
         Verifies that wrong parameter types (e.g., string instead of integer)
@@ -162,7 +162,7 @@ disk_space_monitor:
         error_messages = [e.message for e in exc_info.value.errors]
         assert any("type" in msg.lower() or "integer" in msg.lower() for msg in error_messages)
 
-    def test_001_core_fr_config_error(self, tmp_path: Path) -> None:
+    def test_core_fr_config_error(self, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-ERROR: Clear error message on validation failure.
 
         Verifies that validation errors include:
@@ -188,7 +188,7 @@ btrfs_snapshots:
         assert error.errors[0].path
         assert error.errors[0].message
 
-    def test_001_core_us_config_as4(self, tmp_path: Path) -> None:
+    def test_core_us_config_as4(self, tmp_path: Path) -> None:
         """CORE-US-CONFIG-AS4: Abort on missing required parameter.
 
         Verifies that when a job declares required config parameters
@@ -217,7 +217,7 @@ btrfs_snapshots:
 class TestConfigDefaults:
     """Tests for default value application."""
 
-    def test_001_core_fr_config_defaults(self, tmp_path: Path) -> None:
+    def test_core_fr_config_defaults(self, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-DEFAULTS: Apply defaults for missing configuration values.
 
         Verifies that when optional config values are missing, the system
@@ -253,7 +253,7 @@ btrfs_snapshots:
         assert config.btrfs_snapshots.keep_recent == 3
         assert config.btrfs_snapshots.max_age_days is None
 
-    def test_001_core_us_config_as1(self, tmp_path: Path) -> None:
+    def test_core_us_config_as1(self, tmp_path: Path) -> None:
         """CORE-US-CONFIG-AS1: Load config, validate structure, apply defaults.
 
         Comprehensive test that configuration loading:
@@ -298,7 +298,7 @@ dummy_success:
 class TestLogLevels:
     """Tests for independent log level configuration."""
 
-    def test_001_core_us_config_as2(self, tmp_path: Path) -> None:
+    def test_core_us_config_as2(self, tmp_path: Path) -> None:
         """CORE-US-CONFIG-AS2: Independent file and TUI log levels.
 
         Verifies that logging.file and logging.tui can be set independently
@@ -320,7 +320,7 @@ logging:
         # Verify they are independent
         assert config.logging.file != config.logging.tui
 
-    def test_001_fr020_invalid_log_level(self, tmp_path: Path) -> None:
+    def test_core_edge_invalid_log_level(self, tmp_path: Path) -> None:
         """Test that invalid log level values are rejected.
 
         While not explicitly in requirements, this validates proper
@@ -344,7 +344,7 @@ logging:
 class TestJobEnableDisable:
     """Tests for enabling/disabling jobs via sync_jobs."""
 
-    def test_001_core_fr_job_enable(self, tmp_path: Path) -> None:
+    def test_core_fr_job_enable(self, tmp_path: Path) -> None:
         """CORE-FR-JOB-ENABLE: Enable/disable jobs via sync_jobs section.
 
         Verifies that jobs can be enabled or disabled via the sync_jobs
@@ -364,7 +364,7 @@ sync_jobs:
         assert config.sync_jobs["dummy_success"] is True
         assert config.sync_jobs["dummy_fail"] is False
 
-    def test_001_core_us_config_as3(self, tmp_path: Path) -> None:
+    def test_core_us_config_as3(self, tmp_path: Path) -> None:
         """CORE-US-CONFIG-AS3: Jobs are enabled/disabled based on sync_jobs config.
 
         Verifies the acceptance scenario where dummy_success is enabled
@@ -387,7 +387,7 @@ sync_jobs:
         # dummy_fail should be disabled
         assert config.sync_jobs.get("dummy_fail") is False
 
-    def test_001_edge_unknown_job_in_config(self, tmp_path: Path) -> None:
+    def test_core_edge_unknown_job_in_config(self, tmp_path: Path) -> None:
         """Edge case: Unknown job name in sync_jobs is rejected.
 
         Verifies that the schema's additionalProperties: false for sync_jobs
@@ -414,7 +414,7 @@ sync_jobs:
 class TestYAMLErrorHandling:
     """Tests for YAML syntax error handling."""
 
-    def test_001_core_us_config_as5(self, tmp_path: Path) -> None:
+    def test_core_us_config_as5(self, tmp_path: Path) -> None:
         """CORE-US-CONFIG-AS5: Clear error on YAML syntax error.
 
         Verifies that when config file has invalid YAML syntax, the system
@@ -439,7 +439,7 @@ logging:
         error_msg = str(error)
         assert "yaml" in error_msg.lower() or "syntax" in error_msg.lower()
 
-    def test_001_core_fr_config_error_line(self, tmp_path: Path) -> None:
+    def test_core_fr_config_error_line(self, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-ERROR: YAML syntax error includes line number.
 
         Verifies that YAML parsing errors include the line number
@@ -463,7 +463,7 @@ btrfs_snapshots:
         # Should include line reference
         assert "line" in error_msg.lower() or "column" in error_msg.lower()
 
-    def test_001_core_fr_config_load_missing(self, tmp_path: Path) -> None:
+    def test_core_fr_config_load_missing(self, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-LOAD: Clear error when config file doesn't exist.
 
         Verifies that attempting to load a non-existent config file
@@ -484,7 +484,7 @@ btrfs_snapshots:
 class TestSnapshotsAlwaysActive:
     """Tests for snapshots being always active (CORE-FR-SNAP-ALWAYS)."""
 
-    def test_001_core_fr_snap_always(self, tmp_path: Path) -> None:
+    def test_core_fr_snap_always(self, tmp_path: Path) -> None:
         """CORE-FR-SNAP-ALWAYS: Snapshots always active (config aspect).
 
         Verifies that btrfs_snapshots configuration is mandatory and cannot
@@ -516,7 +516,7 @@ btrfs_snapshots:
 class TestJobConfigAccess:
     """Tests for job-specific configuration access."""
 
-    def test_001_get_job_config_existing(self, tmp_path: Path) -> None:
+    def test_core_get_job_config_existing(self, tmp_path: Path) -> None:
         """Test get_job_config() returns job-specific config when it exists."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
@@ -540,7 +540,7 @@ btrfs_snapshots:
         # Access it directly from the Configuration object
         assert config.btrfs_snapshots.subvolumes == ["@"]
 
-    def test_001_get_job_config_missing(self, tmp_path: Path) -> None:
+    def test_core_get_job_config_missing(self, tmp_path: Path) -> None:
         """Test get_job_config() returns empty dict for unconfigured jobs."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
@@ -560,7 +560,7 @@ logging:
 class TestJobLoadOrder:
     """Tests for job loading order (CORE-FR-JOB-LOAD)."""
 
-    def test_001_core_fr_job_load(self, tmp_path: Path) -> None:
+    def test_core_fr_job_load(self, tmp_path: Path) -> None:
         """CORE-FR-JOB-LOAD: Jobs loaded in config order.
 
         Verifies that when multiple jobs are specified in sync_jobs,
@@ -589,7 +589,7 @@ sync_jobs:
 class TestEmptyConfig:
     """Tests for empty or minimal configuration files."""
 
-    def test_001_empty_config_file(self, tmp_path: Path) -> None:
+    def test_core_empty_config_file(self, tmp_path: Path) -> None:
         """Test that empty config file uses all defaults.
 
         Verifies that an empty config file is valid and uses defaults
@@ -608,7 +608,7 @@ class TestEmptyConfig:
         assert config.disk.preflight_minimum == "20%"
         assert config.btrfs_snapshots.subvolumes == ["@", "@home"]
 
-    def test_001_whitespace_only_config(self, tmp_path: Path) -> None:
+    def test_core_whitespace_only_config(self, tmp_path: Path) -> None:
         """Test that config file with only whitespace/comments is valid."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
@@ -629,7 +629,7 @@ class TestEmptyConfig:
 class TestDiskSpaceConfig:
     """Tests for disk space monitor configuration."""
 
-    def test_001_disk_space_defaults(self, tmp_path: Path) -> None:
+    def test_core_disk_space_defaults(self, tmp_path: Path) -> None:
         """Test that disk space monitoring uses correct defaults."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text("")
@@ -641,7 +641,7 @@ class TestDiskSpaceConfig:
         assert config.disk.warning_threshold == "25%"
         assert config.disk.check_interval == 30
 
-    def test_001_disk_space_custom_values(self, tmp_path: Path) -> None:
+    def test_core_disk_space_custom_values(self, tmp_path: Path) -> None:
         """Test that custom disk space config values are applied."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
@@ -661,7 +661,7 @@ disk_space_monitor:
         assert config.disk.warning_threshold == "60GiB"
         assert config.disk.check_interval == 60
 
-    def test_001_disk_space_invalid_threshold_format(self, tmp_path: Path) -> None:
+    def test_core_disk_space_invalid_threshold_format(self, tmp_path: Path) -> None:
         """Test that invalid disk threshold format is rejected."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
@@ -676,7 +676,7 @@ disk_space_monitor:
 
         assert len(exc_info.value.errors) > 0
 
-    def test_001_disk_space_check_interval_out_of_range(self, tmp_path: Path) -> None:
+    def test_core_disk_space_check_interval_out_of_range(self, tmp_path: Path) -> None:
         """Test that check_interval out of valid range is rejected."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(

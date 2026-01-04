@@ -429,7 +429,7 @@ class TestSyncConfigToTarget:
         call_args = [str(call) for call in console.print.call_args_list]
         assert any("skipping" in str(arg).lower() for arg in call_args)
 
-    async def test_001_core_fr_config_sync(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+    async def test_core_fr_config_sync(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-SYNC: Sync config after install, prompt if missing.
 
         Verifies that when no config exists on target, user is prompted
@@ -457,7 +457,7 @@ class TestSyncConfigToTarget:
         assert result is True
         mock_remote_executor.send_file.assert_called_once()
 
-    async def test_001_core_fr_config_diff(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+    async def test_core_fr_config_diff(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-DIFF: Show diff and prompt if configs differ.
 
         Verifies that when target config differs from source, a diff
@@ -488,7 +488,7 @@ class TestSyncConfigToTarget:
         assert result is True
         mock_remote_executor.send_file.assert_called_once()
 
-    async def test_001_core_fr_config_match(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+    async def test_core_fr_config_match(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-MATCH: Skip config sync if configs match.
 
         Verifies that when source and target configs are identical,
@@ -515,11 +515,13 @@ class TestSyncConfigToTarget:
         # Verify send_file was NOT called (config not copied)
         mock_remote_executor.send_file.assert_not_called()
 
-    async def test_001_us2_as7_skip_when_configs_match(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
-        """US2-AS7: Configs match, skip config sync.
+    async def test_core_us_self_install_as7_skip_when_configs_match(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """CORE-US-SELF-INSTALL-AS7: Configs match, skip config sync.
 
-        User Story 2, Acceptance Scenario 7: When target already has
-        the same config as source, sync proceeds without config prompts.
+        When target already has the same config as source, sync proceeds
+        without config prompts.
         """
         config_content = "log_level: INFO\n"
         config_file = tmp_path / "config.yaml"

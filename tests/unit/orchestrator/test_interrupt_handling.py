@@ -1,6 +1,6 @@
 """Unit tests for orchestrator interrupt handling.
 
-Tests verify CORE-FR-TERM-CTRLC, CORE-FR-SIGINT, and CORE-US-INTERRUPT-AS2 from specs/001-core/spec.md:
+Tests verify CORE-FR-TERM-CTRLC, CORE-FR-SIGINT, and CORE-US-INTERRUPT-AS2 from docs/system/core.md:
 - CORE-FR-TERM-CTRLC: Termination request with cleanup timeout
 - CORE-FR-SIGINT: SIGINT handler, log, exit 130
 - CORE-US-INTERRUPT-AS2: Interrupt between jobs skips remaining jobs
@@ -129,7 +129,7 @@ class TestInterruptHandling:
     """Test interrupt handling in orchestrator and CLI."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_term_ctrlc(self) -> None:
+    async def test_core_fr_term_ctrlc(self) -> None:
         """CORE-FR-TERM-CTRLC: System must request termination with cleanup timeout when interrupted.
 
         Spec requirement: CORE-FR-TERM-CTRLC states that system MUST request termination of
@@ -171,7 +171,7 @@ class TestInterruptHandling:
         assert slow_job.cleanup_called, "Job should have performed cleanup before re-raising CancelledError"
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_sigint(self) -> None:
+    async def test_core_fr_sigint(self) -> None:
         """CORE-FR-SIGINT: SIGINT handler must log and exit with code 130.
 
         Spec requirement: CORE-FR-SIGINT states that system MUST install SIGINT handler
@@ -272,10 +272,10 @@ class TestInterruptHandling:
             config_path.unlink(missing_ok=True)
 
     @pytest.mark.asyncio
-    async def test_001_core_us_interrupt_as2(self) -> None:
+    async def test_core_us_interrupt_as2(self) -> None:
         """CORE-US-INTERRUPT-AS2: Interrupt between jobs skips remaining jobs and exits cleanly.
 
-        Spec requirement: US5 Acceptance Scenario 2 states that when sync is in
+        Spec requirement: CORE-US-INTERRUPT (US5) Acceptance Scenario 2 states that when sync is in
         the orchestrator phase between jobs (no job actively running) and user
         presses Ctrl+C, then orchestrator logs interruption, skips remaining jobs,
         and exits cleanly.

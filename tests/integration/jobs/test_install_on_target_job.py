@@ -7,8 +7,8 @@ Tests verify real behavior on VMs using the InstallOnTargetJob from
 src/pcswitcher/jobs/install_on_target.py.
 
 User Stories covered:
-- US2-AS1: Install missing pc-switcher on target
-- US2-AS2: Upgrade outdated target
+- CORE-US-SELF-INSTALL-AS1: Install missing pc-switcher on target
+- CORE-US-SELF-INSTALL-AS2: Upgrade outdated target
 
 **What these tests cover:**
 - InstallOnTargetJob validation and execution logic
@@ -68,20 +68,20 @@ async def _create_integration_job_context(
 class TestSelfInstallation:
     """Integration tests for automatic pc-switcher installation on target."""
 
-    async def test_001_us2_as1_install_missing_pcswitcher(
+    async def test_core_us_self_install_as1_install_missing_pcswitcher(
         self,
         pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
         pc1_executor: BashLoginRemoteExecutor,
         this_release_floor: Release,
     ) -> None:
-        """US2-AS1: Install missing pc-switcher on target.
+        """CORE-US-SELF-INSTALL-AS1: Install missing pc-switcher on target.
 
         Given source machine has pc-switcher installed and target machine has no
         pc-switcher installed, When sync begins, Then the orchestrator detects
         missing installation, installs pc-switcher on target from GitHub repository,
         verifies installation succeeded, and proceeds with sync.
 
-        Spec Reference: specs/001-core/spec.md - User Story 2, AS1
+        Spec Reference: docs/system/spec.md - CORE-US-SELF-INSTALL, AS1
         """
         # Create job context for integration test
         context = await _create_integration_job_context(pc1_executor, pc2_without_pcswitcher_fn)
@@ -106,20 +106,20 @@ class TestSelfInstallation:
             f"Target version {target_version} should match source {this_release_floor}"
         )
 
-    async def test_001_us2_as2_upgrade_outdated_target(
+    async def test_core_us_self_install_as2_upgrade_outdated_target(
         self,
         pc2_with_old_pcswitcher_fn: BashLoginRemoteExecutor,
         pc1_executor: BashLoginRemoteExecutor,
         this_release_floor: Release,
     ) -> None:
-        """US2-AS2: Upgrade outdated target.
+        """CORE-US-SELF-INSTALL-AS2: Upgrade outdated target.
 
         Given source has a newer version and target has an older version, When sync
         begins, Then orchestrator detects version mismatch, logs the upgrade action,
         upgrades pc-switcher on target from GitHub repository, and verifies upgrade
         completed successfully.
 
-        Spec Reference: specs/001-core/spec.md - User Story 2, AS2
+        Spec Reference: docs/system/spec.md - CORE-US-SELF-INSTALL, AS2
         """
         # Fixture guarantees target has old version installed
         # Verify source is newer

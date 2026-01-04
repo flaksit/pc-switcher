@@ -1,6 +1,6 @@
-# Core Infrastructure
+# Core System Specification
 
-This document is the **Living Truth** for pc-switcher's core infrastructure. It consolidates specifications from SpecKit runs into the authoritative, current definition of the system.
+This document is the **Living Truth** for pc-switcher's core. It consolidates specifications from SpecKit runs into the authoritative, current definition of the system.
 
 **Domain Code**: `CORE` (Core)
 
@@ -617,7 +617,7 @@ Lineage: 001-core Key Entities, 003-core-tests Key Entities
 
 ## Success Criteria
 
-### Core Infrastructure
+### Core
 
 - **CORE-SC-SINGLE-CMD** `[Frictionless Command UX]`: User executes complete sync with single command `pc-switcher sync <target>` without additional manual steps
   Lineage: 001-SC-001

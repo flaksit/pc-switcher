@@ -1,11 +1,11 @@
 """Integration tests for interrupt handling (SIGINT/Ctrl+C) during sync operations.
 
-Tests User Story 5 (Graceful Interrupt Handling) acceptance scenarios and related FRs:
+Tests CORE-US-INTERRUPT (Graceful Interrupt Handling) acceptance scenarios and related FRs:
 - CORE-FR-TARGET-TERM: Send termination to target processes
 - CORE-FR-FORCE-TERM: Force-terminate on second SIGINT
 - CORE-FR-NO-ORPHAN: No orphaned processes
-- US5-AS1: Ctrl+C requests job termination
-- US5-AS3: Second Ctrl+C forces termination
+- CORE-US-INTERRUPT-AS1: Ctrl+C requests job termination
+- CORE-US-INTERRUPT-AS3: Second Ctrl+C forces termination
 - Edge: Source crashes mid-sync
 """
 
@@ -17,7 +17,7 @@ from contextlib import suppress
 from pcswitcher.executor import RemoteExecutor
 
 
-async def test_001_core_fr_target_term(
+async def test_core_fr_target_term(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
 ) -> None:
@@ -80,7 +80,7 @@ async def test_001_core_fr_target_term(
         await pc2_executor.run_command(f"rm -f {marker_file}")
 
 
-async def test_001_core_fr_force_term(
+async def test_core_fr_force_term(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
 ) -> None:
@@ -160,7 +160,7 @@ async def test_001_core_fr_force_term(
         await main_task
 
 
-async def test_001_core_fr_no_orphan(
+async def test_core_fr_no_orphan(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
 ) -> None:
@@ -233,11 +233,11 @@ async def test_001_core_fr_no_orphan(
         await pc2_executor.run_command(f"rm -f {target_marker}")
 
 
-async def test_001_us5_as1_interrupt_requests_job_termination(
+async def test_core_us_interrupt_as1_interrupt_requests_job_termination(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
 ) -> None:
-    """Test US5-AS1: Ctrl+C during job execution requests termination.
+    """Test CORE-US-INTERRUPT-AS1: Ctrl+C during job execution requests termination.
 
     Verifies that when SIGINT is received during active job execution on the
     target machine, the orchestrator catches the signal, logs the interruption,
@@ -294,11 +294,11 @@ async def test_001_us5_as1_interrupt_requests_job_termination(
         await pc2_executor.run_command(f"rm -f {job_marker}")
 
 
-async def test_001_us5_as3_second_interrupt_forces_termination(
+async def test_core_us_interrupt_as3_second_interrupt_forces_termination(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
 ) -> None:
-    """Test US5-AS3: Second Ctrl+C forces immediate termination.
+    """Test CORE-US-INTERRUPT-AS3: Second Ctrl+C forces immediate termination.
 
     Verifies that when the user presses Ctrl+C multiple times rapidly,
     the second SIGINT forces immediate termination without waiting for
@@ -375,11 +375,11 @@ async def test_001_us5_as3_second_interrupt_forces_termination(
         await pc2_executor.run_command(f"rm -f {cleanup_marker}")
 
 
-async def test_001_edge_source_crash_timeout(
+async def test_core_edge_source_crash_timeout(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
 ) -> None:
-    """Test edge case: Source machine crashes mid-sync.
+    """Test CORE-EDGE: Source machine crashes mid-sync.
 
     Verifies behavior when the source machine becomes unresponsive during
     sync. This could happen due to power loss, network failure, or system crash.

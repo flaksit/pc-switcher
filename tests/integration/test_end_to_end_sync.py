@@ -1,8 +1,8 @@
 """Integration tests for end-to-end sync operations.
 
-Tests User Story 1 (Job Architecture) acceptance scenarios:
-- US1-AS1: Job integration via standardized interface
-- US1-AS7: Interrupt handling during job execution
+Tests CORE-US-JOB-ARCH (Job Architecture) acceptance scenarios:
+- CORE-US-JOB-ARCH-AS1: Job integration via standardized interface
+- CORE-US-JOB-ARCH-AS7: Interrupt handling during job execution
 - Edge case: Target unreachable mid-sync
 
 These tests verify the complete orchestrator workflow by actually running
@@ -236,14 +236,12 @@ async def sync_ready_source_long_duration(
 class TestEndToEndSync:
     """Integration tests for complete pc-switcher sync workflow."""
 
-    async def test_001_us1_as1_job_integration_via_interface(
+    async def test_core_us_job_arch_as1_job_integration_via_interface(
         self,
         sync_ready_source: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """Test US1-AS1: Job integrates via standardized interface.
-
-        Spec reference: specs/001-core/spec.md - User Story 1, Acceptance Scenario 1
+        """Test CORE-US-JOB-ARCH-AS1: Job integrates via standardized interface.
 
         Verifies that a job implementing the standardized Job interface is automatically
         integrated into the sync workflow without requiring changes to core orchestrator code.
@@ -336,14 +334,12 @@ class TestEndToEndSync:
             f"Target config should match source.\nTarget config:\n{target_config.stdout}"
         )
 
-    async def test_001_us1_as7_interrupt_terminates_job(
+    async def test_core_us_job_arch_as7_interrupt_terminates_job(
         self,
         sync_ready_source_long_duration: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """Test US1-AS7: Ctrl+C terminates job with cleanup.
-
-        Spec reference: specs/001-core/spec.md - User Story 1, Acceptance Scenario 7
+        """Test CORE-US-JOB-ARCH-AS7: Ctrl+C terminates job with cleanup.
 
         Verifies that when user presses Ctrl+C during job execution, the orchestrator:
         - Catches SIGINT signal
@@ -439,16 +435,16 @@ class TestEndToEndSync:
         # Clean up temp files
         await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
 
-    async def test_001_edge_target_unreachable_mid_sync(
+    async def test_core_edge_target_unreachable_mid_sync(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
         pc1_to_pc2_traffic_blocker: Pc1ToPc2TrafficBlocker,
     ) -> None:
-        """Test edge case: Target becomes unreachable mid-sync.
+        """Test CORE-EDGE: Target becomes unreachable mid-sync.
 
-        Spec reference: specs/001-core/spec.md - Edge Cases
+        Spec reference: docs/system/spec.md - Edge Cases
 
         Simulates network failure by blocking pc1→pc2 traffic with iptables
         during the target phase of DummySuccessJob. Verifies that:

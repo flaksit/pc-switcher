@@ -57,7 +57,7 @@ def create_mock_process(num_lines: int, terminate_at: int | None = None) -> Magi
 class TestDummyJobsExist:
     """Test CORE-FR-DUMMY-JOBS: two dummy jobs exist."""
 
-    def test_001_core_fr_dummy_jobs(self) -> None:
+    def test_core_fr_dummy_jobs(self) -> None:
         """CORE-FR-DUMMY-JOBS: System MUST include two dummy jobs: dummy_success, dummy_fail.
 
         Verifies that both dummy job classes exist and can be imported.
@@ -75,7 +75,7 @@ class TestDummySuccessBehavior:
     """Test CORE-FR-DUMMY-SIM, CORE-US-DUMMY-AS1: dummy_success job behavior."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_dummy_sim(
+    async def test_core_fr_dummy_sim(
         self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
         """CORE-FR-DUMMY-SIM: dummy_success simulates 20s operation with logs and progress.
@@ -144,7 +144,7 @@ class TestDummySuccessBehavior:
         assert any("8s" in r.message for r in target_error_logs)
 
     @pytest.mark.asyncio
-    async def test_001_core_us_dummy_as1(self, mock_job_context_factory: JobContextFactory) -> None:
+    async def test_core_us_dummy_as1(self, mock_job_context_factory: JobContextFactory) -> None:
         """CORE-US-DUMMY-AS1: dummy_success performs operations and completes successfully.
 
         Given: dummy_success job is enabled
@@ -171,9 +171,7 @@ class TestDummySuccessBehavior:
         assert 100 in progress_percents
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_dummy_sim_configurable_duration(
-        self, mock_job_context_factory: JobContextFactory
-    ) -> None:
+    async def test_core_fr_dummy_sim_configurable_duration(self, mock_job_context_factory: JobContextFactory) -> None:
         """CORE-FR-DUMMY-SIM: dummy_success supports configurable duration.
 
         Tests with shorter duration to verify config is respected.
@@ -197,7 +195,7 @@ class TestDummyFailBehavior:
     """Test CORE-FR-DUMMY-EXCEPTION, CORE-US-DUMMY-AS3: dummy_fail job behavior."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_dummy_exception(
+    async def test_core_fr_dummy_exception(
         self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
         """CORE-FR-DUMMY-EXCEPTION: dummy_fail raises unhandled exception at configured time.
@@ -247,7 +245,7 @@ class TestDummyFailBehavior:
         assert any("Simulated failure at 12s" in r.message for r in critical_logs)
 
     @pytest.mark.asyncio
-    async def test_001_core_us_dummy_as3(self, mock_job_context_factory: JobContextFactory) -> None:
+    async def test_core_us_dummy_as3(self, mock_job_context_factory: JobContextFactory) -> None:
         """CORE-US-DUMMY-AS3: dummy_fail raises exception at configured time to test error handling.
 
         Given: dummy_fail job is enabled with defaults (fail_at=12s)
@@ -268,7 +266,7 @@ class TestDummyFailBehavior:
         assert "Dummy job failed at 12s" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_dummy_exception_configurable(self, mock_job_context_factory: JobContextFactory) -> None:
+    async def test_core_fr_dummy_exception_configurable(self, mock_job_context_factory: JobContextFactory) -> None:
         """CORE-FR-DUMMY-EXCEPTION: dummy_fail supports configurable fail_at time.
 
         Tests with different failure time to verify config is respected.
@@ -297,7 +295,7 @@ class TestDummyJobsTermination:
     """Test CORE-FR-DUMMY-TERM, CORE-US-DUMMY-AS4: dummy jobs handle termination."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_dummy_term(
+    async def test_core_fr_dummy_term(
         self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
         """CORE-FR-DUMMY-TERM: Dummy jobs handle termination requests.
@@ -335,7 +333,7 @@ class TestDummyJobsTermination:
         assert len(termination_logs) >= 1
 
     @pytest.mark.asyncio
-    async def test_001_core_us_dummy_as4(
+    async def test_core_us_dummy_as4(
         self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
         """CORE-US-DUMMY-AS4: Dummy job handles termination request gracefully.
@@ -364,7 +362,7 @@ class TestDummyJobsTermination:
         assert len(cancel_logs) >= 1
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_dummy_term_cleanup(
+    async def test_core_fr_dummy_term_cleanup(
         self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
         """CORE-FR-DUMMY-TERM: dummy_success cleans up on termination.
@@ -407,7 +405,7 @@ class TestJobProgressEmission:
     """Test CORE-FR-PROGRESS-EMIT: jobs emit progress updates."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_progress_emit(self, mock_job_context_factory: JobContextFactory) -> None:
+    async def test_core_fr_progress_emit(self, mock_job_context_factory: JobContextFactory) -> None:
         """CORE-FR-PROGRESS-EMIT: Jobs can emit progress updates with percentage.
 
         Verifies that dummy jobs emit ProgressUpdate objects with valid percentages
@@ -441,7 +439,7 @@ class TestJobProgressEmission:
             assert event.job == "dummy_success"
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_progress_emit_validation(self, mock_job_context_factory: JobContextFactory) -> None:
+    async def test_core_fr_progress_emit_validation(self, mock_job_context_factory: JobContextFactory) -> None:
         """CORE-FR-PROGRESS-EMIT: ProgressUpdate validates percent range.
 
         Verifies that ProgressUpdate enforces 0-100 range for percent.
@@ -462,7 +460,7 @@ class TestDummyJobsValidation:
     """Test dummy jobs validation behavior."""
 
     @pytest.mark.asyncio
-    async def test_001_dummy_success_no_validation_errors(self, mock_job_context_factory: JobContextFactory) -> None:
+    async def test_dummy_success_no_validation_errors(self, mock_job_context_factory: JobContextFactory) -> None:
         """Dummy jobs have no prerequisites, validation returns empty list."""
         context = mock_job_context_factory(config={})
         job = DummySuccessJob(context)
@@ -471,7 +469,7 @@ class TestDummyJobsValidation:
         assert errors == []
 
     @pytest.mark.asyncio
-    async def test_001_dummy_fail_no_validation_errors(self, mock_job_context_factory: JobContextFactory) -> None:
+    async def test_dummy_fail_no_validation_errors(self, mock_job_context_factory: JobContextFactory) -> None:
         """Dummy jobs have no prerequisites, validation returns empty list."""
         context = mock_job_context_factory(config={})
         job = DummyFailJob(context)
@@ -483,7 +481,7 @@ class TestDummyJobsValidation:
 class TestDummyJobsConfigSchema:
     """Test dummy jobs config schema validation."""
 
-    def test_001_dummy_success_config_schema(self) -> None:
+    def test_dummy_success_config_schema(self) -> None:
         """DummySuccessJob CONFIG_SCHEMA includes source_duration and target_duration."""
         schema = DummySuccessJob.CONFIG_SCHEMA
         assert "properties" in schema
@@ -498,7 +496,7 @@ class TestDummyJobsConfigSchema:
         assert schema["properties"]["source_duration"]["minimum"] == 1
         assert schema["properties"]["target_duration"]["minimum"] == 1
 
-    def test_001_dummy_fail_config_schema(self) -> None:
+    def test_dummy_fail_config_schema(self) -> None:
         """DummyFailJob CONFIG_SCHEMA includes source_duration, target_duration, and fail_at."""
         schema = DummyFailJob.CONFIG_SCHEMA
         assert "properties" in schema
@@ -516,7 +514,7 @@ class TestDummyJobsConfigSchema:
         assert schema["properties"]["target_duration"]["minimum"] == 2
         assert schema["properties"]["fail_at"]["minimum"] == 2
 
-    def test_001_dummy_success_config_validation(self) -> None:
+    def test_dummy_success_config_validation(self) -> None:
         """DummySuccessJob validates config correctly."""
         # Valid config
         valid_config = {"source_duration": 10, "target_duration": 15}
@@ -528,7 +526,7 @@ class TestDummyJobsConfigSchema:
         errors = DummySuccessJob.validate_config(invalid_config)
         assert len(errors) > 0
 
-    def test_001_dummy_fail_config_validation(self) -> None:
+    def test_dummy_fail_config_validation(self) -> None:
         """DummyFailJob validates config correctly."""
         # Valid config
         valid_config = {"source_duration": 10, "target_duration": 10, "fail_at": 12}

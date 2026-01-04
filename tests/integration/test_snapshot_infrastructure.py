@@ -7,8 +7,8 @@ Tests the complete snapshot infrastructure including:
 - Runtime disk space monitoring
 - Error handling when btrfs is not available
 
-These tests verify User Story 3 (Safety Infrastructure with Btrfs Snapshots)
-from specs/001-core/spec.md.
+These tests verify CORE-US-BTRFS (Safety Infrastructure with Btrfs Snapshots)
+from docs/system/spec.md.
 """
 
 from __future__ import annotations
@@ -69,13 +69,13 @@ async def test_subvolume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     await pc1_executor.run_command(f"sudo btrfs subvolume delete {subvolume_path}")
 
 
-async def test_001_us3_as2_create_presync_snapshots(
+async def test_core_us_btrfs_as2_create_presync_snapshots(
     pc1_executor: RemoteExecutor,
     test_subvolume: str,
 ) -> None:
-    """Test US3-AS2: Create pre-sync snapshots before any sync operations.
+    """Test CORE-US-BTRFS-AS2: Create pre-sync snapshots before any sync operations.
 
-    Spec: specs/001-core/spec.md - User Story 3, Acceptance Scenario 2
+    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenario 2
     Verifies that the system creates read-only btrfs snapshots in
     /.snapshots/pc-switcher/<session-folder>/ with naming pattern
     pre-<subvol>-<timestamp>.
@@ -121,13 +121,13 @@ async def test_001_us3_as2_create_presync_snapshots(
         await pc1_executor.run_command(f"sudo rmdir {session_path} 2>/dev/null || true")
 
 
-async def test_001_us3_as3_create_postsync_snapshots(
+async def test_core_us_btrfs_as3_create_postsync_snapshots(
     pc1_executor: RemoteExecutor,
     test_subvolume: str,
 ) -> None:
-    """Test US3-AS3: Create post-sync snapshots after successful sync.
+    """Test CORE-US-BTRFS-AS3: Create post-sync snapshots after successful sync.
 
-    Spec: specs/001-core/spec.md - User Story 3, Acceptance Scenario 3
+    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenario 3
     Verifies that the system creates read-only btrfs snapshots in the same
     session folder with naming pattern post-<subvol>-<timestamp>.
     """
@@ -175,12 +175,12 @@ async def test_001_us3_as3_create_postsync_snapshots(
         await pc1_executor.run_command(f"sudo rmdir {session_path} 2>/dev/null || true")
 
 
-async def test_001_us3_as4_create_snapshots_subvolume(
+async def test_core_us_btrfs_as4_create_snapshots_subvolume(
     pc1_executor: RemoteExecutor,
 ) -> None:
-    """Test US3-AS4: Create /.snapshots/ as btrfs subvolume if missing.
+    """Test CORE-US-BTRFS-AS4: Create /.snapshots/ as btrfs subvolume if missing.
 
-    Spec: specs/001-core/spec.md - User Story 3, Acceptance Scenario 4
+    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenario 4
     Verifies that if /.snapshots/ doesn't exist, the system creates it as a
     btrfs subvolume (not a regular directory).
 
@@ -239,13 +239,13 @@ async def test_001_us3_as4_create_snapshots_subvolume(
         await pc1_executor.run_command(f"sudo rm -rf {test_snapshots_path}")
 
 
-async def test_001_us3_as7_cleanup_snapshots_with_retention(
+async def test_core_us_btrfs_as7_cleanup_snapshots_with_retention(
     pc1_executor: RemoteExecutor,
     test_subvolume: str,
 ) -> None:
-    """Test US3-AS7: Cleanup snapshots with retention policy.
+    """Test CORE-US-BTRFS-AS7: Cleanup snapshots with retention policy.
 
-    Spec: specs/001-core/spec.md - User Story 3, Acceptance Scenario 7
+    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenario 7
     Verifies that cleanup_snapshots respects retention policies:
     - Keeps the most recent N sessions regardless of age
     - Deletes snapshots older than max_age_days (if specified)
@@ -353,12 +353,12 @@ async def test_001_us3_as7_cleanup_snapshots_with_retention(
             await pc1_executor.run_command(f"sudo rmdir {session_path} 2>/dev/null || true")
 
 
-async def test_001_us3_as9_runtime_disk_space_monitoring(
+async def test_core_us_btrfs_as9_runtime_disk_space_monitoring(
     pc1_executor: RemoteExecutor,
 ) -> None:
-    """Test US3-AS9: Runtime disk space monitoring during sync.
+    """Test CORE-US-BTRFS-AS9: Runtime disk space monitoring during sync.
 
-    Spec: specs/001-core/spec.md - User Story 3, Acceptance Scenario 9
+    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenario 9
     Verifies that the system can check available disk space during runtime
     and detect when it falls below configured thresholds.
 
@@ -396,12 +396,12 @@ async def test_001_us3_as9_runtime_disk_space_monitoring(
     assert snapshots_df_result.stdout, "Disk space monitoring command returned no output"
 
 
-async def test_001_edge_btrfs_not_available(
+async def test_core_edge_btrfs_not_available(
     pc1_executor: RemoteExecutor,
 ) -> None:
-    """Test edge case: btrfs tools not available on the system.
+    """Test CORE-EDGE: btrfs tools not available on the system.
 
-    Spec: specs/003-core-tests/tasks.md - T015 edge case
+    Spec: docs/system/spec.md - Edge cases
     Verifies that the system handles gracefully when btrfs is not available
     or when trying to snapshot a non-btrfs filesystem.
     """

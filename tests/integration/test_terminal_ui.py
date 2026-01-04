@@ -19,9 +19,9 @@ dummy environment variables:
     uv run pytest tests/integration/test_terminal_ui.py -v
 
 References:
-- US9-AS1: Display progress bar, percentage, job name
-- US9-AS2: Overall and individual job progress
-- US9-AS3: Logs displayed below progress indicators
+- CORE-US-TUI-AS1: Display progress bar, percentage, job name
+- CORE-US-TUI-AS2: Overall and individual job progress
+- CORE-US-TUI-AS3: Logs displayed below progress indicators
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ from pcswitcher.models import ProgressUpdate
 from pcswitcher.ui import TerminalUI
 
 
-async def test_001_us9_as1_progress_display() -> None:
-    """Test US9-AS1: Display progress bar, percentage, and job name.
+async def test_core_us_tui_as1_progress_display() -> None:
+    """Test CORE-US-TUI-AS1: Display progress bar, percentage, and job name.
 
     Verifies that when a job reports progress, the terminal UI:
     - Creates a progress bar for the job
@@ -100,8 +100,8 @@ async def test_001_us9_as1_progress_display() -> None:
         ui.stop()
 
 
-async def test_001_us9_as2_multi_job_progress() -> None:
-    """Test US9-AS2: Overall and individual job progress display.
+async def test_core_us_tui_as2_multi_job_progress() -> None:
+    """Test CORE-US-TUI-AS2: Overall and individual job progress display.
 
     Verifies that when multiple jobs execute sequentially:
     - Terminal shows overall progress (Step N/M)
@@ -176,14 +176,14 @@ async def test_001_us9_as2_multi_job_progress() -> None:
         ui.stop()
 
 
-async def test_001_us9_as3_progress_and_connection_events() -> None:
+async def test_core_us_tui_as3_progress_and_connection_events() -> None:
     """Test progress and connection event handling via EventBus.
 
     After ADR-010 logging migration, LogEvent is no longer processed by
     consume_events(). This test verifies that ProgressEvent and ConnectionEvent
     are still handled correctly.
 
-    Note: US9-AS3 (logs displayed below progress indicators) now applies to
+    Note: CORE-US-TUI-AS3 (logs displayed below progress indicators) now applies to
     the log panel, which is populated via add_log_message() directly or
     through stdlib logging. This test focuses on EventBus event handling.
 
