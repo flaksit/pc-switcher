@@ -15,7 +15,6 @@ This file provides guidance to AI agents when working with code in this reposito
 
 **ALWAYS READ FIRST**:
 - `~/.claude/CLAUDE.md` - General agent instructions for all projects
-- `~/.claude/python_conventions.md` and `~/.claude/python_tools.md` - Python coding conventions for this project. Read all referenced files therein as well!
 - `docs/planning/High level requirements.md` - Complete project vision, scope, workflow, and constraints
 - `docs/adr/_index.md` - Summary of all architectural decisions
 
@@ -29,7 +28,7 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ## Current Project Structure
 
-```
+```text
 src/pcswitcher/       # Core implementation (orchestrator, CLI, jobs, config)
 tests/                # Unit, contract, integration tests, and manual playbook
 docs/
@@ -72,3 +71,34 @@ tests/run-integration-tests.sh tests/integration/test_end_to_end_sync.py::TestIn
 - You MUST ALWAYS use `uv run` for running Python or python packages: `uv run python`, `uv run ruff`, `uv run basedpyright`, etc.
 - You MUST NEVER use the system Python directly. So DO NOT run `python3`, `python`, `pip`, etc. directly.
 - When creating a PR on GitHub, ALWAYS set it as draft so that the integration tests don't run prematurely.
+
+## Python Standards
+
+This project uses Python 3.14 via uv. NEVER use system Python directly.
+
+### Critical Rules
+- `from __future__ import annotations` in all files
+- Modern type syntax: `str | None`, `dict[str, int]`, `list[T]` (not `Optional`, `Dict`, `List`)
+- `Path` from pathlib for all file paths
+- Full type annotations on all function signatures
+- Import from `collections.abc` not `typing` for collection types
+- Use `@override` for method overrides
+- Prefer `StrEnum` for string-based enums
+
+### Quality
+- Single responsibility, focused functions
+- Context managers for resources
+- Specific exception types with meaningful messages
+- Minimal inline comments - code should be self-documenting
+- Docstrings explain "why", not obvious "what"
+
+### Tooling
+- `uv run ruff check . && uv run ruff format .` - lint/format
+- `uv run basedpyright` - type check
+- `uv run pytest` - tests
+- `uv run codespell` - typo check
+
+### Testing
+- Test edge cases and error conditions
+- Mock external I/O, but create integration tests against real deps
+- Avoid trivial tests that just test the language
