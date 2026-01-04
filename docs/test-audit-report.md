@@ -645,7 +645,7 @@ When adding new sync jobs:
 
 ## Implementation Status (Phase 1)
 
-**Completed**: 2026-01-04 (PR #XXX - update after PR created)
+**Completed**: 2026-01-04 (PR #152)
 
 ### Removals
 
