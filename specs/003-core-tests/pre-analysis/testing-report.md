@@ -1,6 +1,6 @@
 # Testing Report for 001-Core
 
-This report provides a comprehensive overview of testing coverage for the foundation feature, including coverage mapping, how to run tests, limitations, and risk assessment.
+This report provides a comprehensive overview of testing coverage for the core feature, including coverage mapping, how to run tests, limitations, and risk assessment.
 
 ## Coverage Summary
 

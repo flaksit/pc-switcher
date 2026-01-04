@@ -32,9 +32,9 @@
 
 ---
 
-## Phase 2: Foundational (Expand Existing Test Files)
+## Phase 2: Core (Expand Existing Test Files)
 
-**Purpose**: Expand existing test files that provide foundation for multiple user stories
+**Purpose**: Expand existing test files that provide core for multiple user stories
 
 **These files already exist and need additions per data-model.md**
 
@@ -43,7 +43,7 @@
 - [X] T007 [P] Expand `tests/unit/test_lock.py` with FR-047 verification (lock prevents concurrent sync), edge case: concurrent sync attempts
 - [X] T008 [P] Expand `tests/unit/jobs/test_disk_space_monitor.py` with FR-016 (preflight disk space check), FR-017 (runtime disk space monitoring) comprehensive coverage
 
-**Checkpoint**: Foundational test files expanded - new test file creation can proceed
+**Checkpoint**: Core test files expanded - new test file creation can proceed
 
 ---
 
@@ -383,8 +383,8 @@ When implementation has functionality beyond what's specified:
 ### Phase Dependencies
 
 - **Setup (Phase 1)**: No dependencies - can start immediately
-- **Foundational (Phase 2)**: Depends on Setup completion
-- **US Phases (Phase 3-11)**: All depend on Foundational phase completion
+- **Core (Phase 2)**: Depends on Setup completion
+- **US Phases (Phase 3-11)**: All depend on Core phase completion
   - User story phases can proceed in parallel (if staffed)
   - Or sequentially in priority order (US-1 through US-9)
 - **CLI Tests (Phase 12)**: Can proceed in parallel with US phases
@@ -400,8 +400,8 @@ When implementation has functionality beyond what's specified:
 ### Parallel Opportunities
 
 - All Setup tasks marked [P] can run in parallel
-- All Foundational tasks marked [P] can run in parallel
-- Once Foundational phase completes, user story phases can start in parallel (if team capacity allows)
+- All Core tasks marked [P] can run in parallel
+- Once Core phase completes, user story phases can start in parallel (if team capacity allows)
 - Unit and integration tests within a phase can be written in parallel (different files)
 
 ---
@@ -423,7 +423,7 @@ Task: "Create tests/integration/test_end_to_end_sync.py"
 ### MVP First (Core User Stories)
 
 1. Complete Phase 1: Setup
-2. Complete Phase 2: Foundational
+2. Complete Phase 2: Core
 3. Complete Phase 3: US-1 (Job Architecture) - most critical
 4. **STOP and VALIDATE**: Verify unit tests pass, <30s
 5. Complete Phase 8: US-6 (Configuration System) - needed for most other tests
@@ -431,7 +431,7 @@ Task: "Create tests/integration/test_end_to_end_sync.py"
 
 ### Incremental Delivery
 
-1. Setup + Foundational -> Test infrastructure ready
+1. Setup + Core -> Test infrastructure ready
 2. Add US-1 tests -> Job architecture verified
 3. Add US-6 tests -> Configuration system verified
 4. Add US-3 tests -> Safety infrastructure verified
@@ -450,7 +450,7 @@ Task: "Create tests/integration/test_end_to_end_sync.py"
 |----------|-------|
 | Total Tasks | 41 |
 | Setup Tasks | 4 |
-| Foundational Tasks | 4 |
+| Core Tasks | 4 |
 | US-1 Tests | 3 tasks (11 test functions) |
 | US-2 Tests | 2 tasks (10 test functions) |
 | US-3 Tests | 2 tasks (19 test functions) |
@@ -470,7 +470,7 @@ Task: "Create tests/integration/test_end_to_end_sync.py"
 - Functional Requirements: 44/44 (100%) — 4 removed/skipped from 001-spec: FR-013, FR-034, FR-037, FR-040
 - Edge Cases: 9/9 (100%)
 
-**Suggested MVP Scope**: Phases 1-3 (Setup, Foundational, US-1) - establishes test infrastructure and verifies job architecture
+**Suggested MVP Scope**: Phases 1-3 (Setup, Core, US-1) - establishes test infrastructure and verifies job architecture
 
 ---
 
@@ -479,7 +479,7 @@ Task: "Create tests/integration/test_end_to_end_sync.py"
 - [P] tasks = different files, no dependencies
 - [Story] label maps task to specific 001-core user story being tested
 - Each user story phase can be independently completed and verified
-- Test naming convention: `test_001_<req-id>_<description>` (001 = foundation feature) — verified by T039
+- Test naming convention: `test_001_<req-id>_<description>` (001 = core feature) — verified by T039
 - All tests must include docstrings referencing spec requirements — verified by T035
 - Unit tests use mock executors (FR-011 of 003 spec) — verified by T036
 - Integration tests use real VM operations (FR-012 of 003 spec) — verified by T037

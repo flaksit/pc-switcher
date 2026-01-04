@@ -1,6 +1,6 @@
 # Testing Implementation Plan for 001-Core
 
-This document provides the detailed implementation plan for comprehensive testing of the foundation feature.
+This document provides the detailed implementation plan for comprehensive testing of the core feature.
 
 For testing framework infrastructure (conftest fixtures, VM provisioning scripts, GitHub Actions workflow), see `specs/002-testing-framework/pre-analysis/testing-implementation-plan.md`.
 

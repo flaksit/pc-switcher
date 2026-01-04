@@ -7,7 +7,7 @@ This file provides guidance to AI agents when working with code in this reposito
 
 **PC-switcher** is a synchronization system for seamless switching between Linux desktop machines (laptops, workstations). The goal is near-complete system-state replication rather than simple user data sync.
 
-**Project Stage**: Foundation infrastructure complete. Core sync functionality in development.
+**Project Stage**: Core infrastructure complete. Core sync functionality in development.
 
 **Target Environment**: Ubuntu 24.04 LTS, btrfs filesystem, machines connected via SSH (LAN, VPN, etc.).
 

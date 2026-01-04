@@ -2,7 +2,7 @@
 
 **Date**: 2025-11-26
 **Status**: Architectural Decision Documented
-**Context**: Foundation Infrastructure (001-core)
+**Context**: Core Infrastructure (001-core)
 
 ## Summary
 

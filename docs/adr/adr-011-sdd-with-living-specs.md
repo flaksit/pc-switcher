@@ -31,7 +31,7 @@ Maintain references to the original spec in the living docs. E.g., "Lineage: 004
 
 ### Semantic ID Strategy
 Use stable, semantic IDs in `docs/system/` and in code comments. Format: `<DOMAIN>-<TYPE>-<DESCRIPTOR>`:
-- `<DOMAIN>`: Short code for the domain (e.g., `LOG` for Logging, `FND` for Foundation)
+- `<DOMAIN>`: Short code for the domain (e.g., `LOG` for Logging, `CORE` for Core)
 - `<TYPE>`: Type of item (e.g., `US` for User Story, `FR` for Functional Requirement, `SC` for Success Criterion)
 - `<DESCRIPTOR>`: Concise, human-readable description (e.g., `EXT` for "External Systems", `ROTATION` for "Log Rotation")
 
@@ -66,7 +66,7 @@ In code: `# Implements LOG-FR-ROTATION`
 
 ## Context
 
-We currently use a Specification Driven Development (SDD) workflow powered by SpecKit for laying out foundations and implementing large features. This works well for major initiatives but presents significant friction for smaller fixes and extensions.
+We currently use a Specification Driven Development (SDD) workflow powered by SpecKit for laying out the core and implementing large features. This works well for major initiatives but presents significant friction for smaller fixes and extensions.
 
 ### The Problems
 1. **High Overhead**: Running the full SpecKit cycle (spec → plan → tasks) is too slow for small changes.
@@ -106,7 +106,7 @@ This directory will hold the "Golden Copy" of the system specification.
 Docs in the Golden Copy will use semantic identifiers (e.g., `LOG-FR-ROTATION`) instead of sequential numbers to avoid collisions (same numbers from multiple SpecKit runs) and ambiguity. All files (including code) must reference these semantic IDs.
 
 A Semantic ID has format `<DOMAIN>-<TYPE>-<DESCRIPTOR>`.
-   - `<DOMAIN>` is a short code for the domain (e.g., `LOG` for Logging, `FND` for Foundation).
+   - `<DOMAIN>` is a short code for the domain (e.g., `LOG` for Logging, `CORE` for Core).
    - `<TYPE>` is the type of item (e.g., `US` for User Story, `FR` for Functional Requirement, `SC` for Success Criterion).
    - `<DESCRIPTOR>` is a concise, human-readable description (e.g., `EXT` for "External Systems", `ROTATION` for "Log Rotation", `ATOMICITY` for "Atomicity").
 

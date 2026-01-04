@@ -1,4 +1,4 @@
-# Feature Specification: Foundation Infrastructure Complete
+# Feature Specification: Core Infrastructure Complete
 
 **Feature Branch**: `001-core`
 **Created**: 2025-11-15
@@ -22,7 +22,7 @@
 
 The system defines a precise contract for how sync jobs integrate with the core orchestration system. Each job (representing a discrete sync capability like package sync, Docker sync, or user data sync) implements a standardized interface covering configuration, validation, execution, logging, progress reporting, and error handling. This contract is detailed enough that all feature jobs can be developed independently and concurrently once the core infrastructure exists.
 
-**Why this priority**: This is P1 because it's the architectural foundation. Without a clear, detailed job contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future job developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as jobs. The btrfs snapshots safety infrastructure (User Story 3) is orchestrator-level infrastructure (not configurable via sync_jobs). Self-installation (User Story 2) is NOT a job—it is pre-job orchestrator logic that runs before any job execution.
+**Why this priority**: This is P1 because it's the architectural core. Without a clear, detailed job contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future job developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as jobs. The btrfs snapshots safety infrastructure (User Story 3) is orchestrator-level infrastructure (not configurable via sync_jobs). Self-installation (User Story 2) is NOT a job—it is pre-job orchestrator logic that runs before any job execution.
 
 **Independent Test**: Can be fully tested by:
 1. Defining the job interface contract
@@ -119,7 +119,7 @@ Before any sync operations modify state, the system creates read-only btrfs snap
 7. Confirming post-sync snapshots are created after successful completion of all SyncJobs
 8. Verifying that snapshot infrastructure is always active (no config option to disable)
 
-This delivers value by providing the foundation for all recovery operations.
+This delivers value by providing the core for all recovery operations.
 
 **Constitution Alignment**:
 - Reliability Without Compromise (transactional safety via snapshots)
@@ -421,7 +421,7 @@ The terminal displays real-time sync progress including current job, operation p
 
 - **FR-012** `[Frictionless Command UX]`: If pre-sync snapshot creation fails, system MUST log CRITICAL error and abort before any state modifications occur
 
-- **FR-013** *(Removed - rollback capability is deferred to a separate feature after foundation infrastructure)*
+- **FR-013** *(Removed - rollback capability is deferred to a separate feature after core infrastructure)*
 
 - **FR-014** `[Minimize SSD Wear]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs; default retention policy (keep_recent count and max_age_days) MUST be configurable in the btrfs_snapshots job section of config.yaml
 

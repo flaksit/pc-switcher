@@ -25,7 +25,7 @@ Create comprehensive spec-driven tests for all existing 001-core functionality. 
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- **Reliability Without Compromise**: ✓ Tests validate all reliability mechanisms defined in 001-core spec (snapshots, error handling, interrupt handling, conflict detection). Comprehensive test coverage ensures the foundation infrastructure behaves correctly and detects regressions early. No data integrity concerns for tests themselves (read-only verification).
+- **Reliability Without Compromise**: ✓ Tests validate all reliability mechanisms defined in 001-core spec (snapshots, error handling, interrupt handling, conflict detection). Comprehensive test coverage ensures the core infrastructure behaves correctly and detects regressions early. No data integrity concerns for tests themselves (read-only verification).
 
 - **Frictionless Command UX**: ✓ Tests validate UX requirements (single command sync, automated installation, graceful interrupts). Running tests remains simple: `uv run pytest tests/unit` (fast) and `uv run pytest tests/integration -m integration` (comprehensive). No additional manual steps required beyond what testing framework provides.
 

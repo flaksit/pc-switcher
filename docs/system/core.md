@@ -1,12 +1,12 @@
-# Foundation Infrastructure
+# Core Infrastructure
 
-This document is the **Living Truth** for pc-switcher's foundation infrastructure. It consolidates specifications from SpecKit runs into the authoritative, current definition of the system.
+This document is the **Living Truth** for pc-switcher's core infrastructure. It consolidates specifications from SpecKit runs into the authoritative, current definition of the system.
 
-**Domain Code**: `FND` (Foundation)
+**Domain Code**: `CORE` (Core)
 
 ## User Scenarios & Testing
 
-### Job Architecture and Integration Contract (FND-US-JOB-ARCH)
+### Job Architecture and Integration Contract (CORE-US-JOB-ARCH)
 
 Lineage: 001-US-1
 
@@ -14,7 +14,7 @@ Priority: P1
 
 The system defines a precise contract for how sync jobs integrate with the core orchestration system. Each job (representing a discrete sync capability like package sync, Docker sync, or user data sync) implements a standardized interface covering configuration, validation, execution, logging, progress reporting, and error handling. This contract is detailed enough that all feature jobs can be developed independently and concurrently once the core infrastructure exists.
 
-**Why this priority**: This is P1 because it's the architectural foundation. Without a clear, detailed job contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future job developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as jobs. The btrfs snapshots safety infrastructure (FND-US-BTRFS) is orchestrator-level infrastructure (not configurable via sync_jobs). Self-installation (FND-US-SELF-INSTALL) is NOT a job—it is pre-job orchestrator logic that runs before any job execution.
+**Why this priority**: This is P1 because it's the architectural core. Without a clear, detailed job contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future job developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as jobs. The btrfs snapshots safety infrastructure (CORE-US-BTRFS) is orchestrator-level infrastructure (not configurable via sync_jobs). Self-installation (CORE-US-SELF-INSTALL) is NOT a job—it is pre-job orchestrator logic that runs before any job execution.
 
 **Independent Test**: Can be fully tested by:
 1. Defining the job interface contract
@@ -50,7 +50,7 @@ The system defines a precise contract for how sync jobs integrate with the core 
 
 7. **Given** user presses Ctrl+C during job execution, **When** signal is caught, **Then** orchestrator requests termination of the currently-executing job with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), logs interruption at WARNING level, and exits gracefully with code 130
 
-### Self-Installing Sync Orchestrator (FND-US-SELF-INSTALL)
+### Self-Installing Sync Orchestrator (CORE-US-SELF-INSTALL)
 
 Lineage: 001-US-2
 
@@ -91,7 +91,7 @@ When a user initiates sync from source to target, the orchestrator ensures the p
 
 7. **Given** target config matches source config exactly, **When** sync reaches config sync phase, **Then** orchestrator logs "Target config matches source, skipping config sync" and proceeds without prompting
 
-### Safety Infrastructure with Btrfs Snapshots (FND-US-BTRFS)
+### Safety Infrastructure with Btrfs Snapshots (CORE-US-BTRFS)
 
 Lineage: 001-US-3
 
@@ -135,7 +135,7 @@ Before any sync operations modify state, the system creates read-only btrfs snap
 
 9. **Given** orchestrator configuration includes `disk_space_monitor.check_interval` (seconds, default: 30) and `disk_space_monitor.runtime_minimum` (percentage like "15%" or absolute value like "40GiB", default: "15%"), **When** sync is running, **Then** orchestrator MUST periodically check free disk space at the configured interval and log CRITICAL and abort if available free space falls below the configured runtime minimum on either side
 
-### Graceful Interrupt Handling (FND-US-INTERRUPT)
+### Graceful Interrupt Handling (CORE-US-INTERRUPT)
 
 Lineage: 001-US-5
 
@@ -166,7 +166,7 @@ When the user presses Ctrl+C during sync, the system catches the SIGINT signal, 
 
 3. **Given** user presses Ctrl+C multiple times rapidly, **When** the second SIGINT arrives before cleanup completes, **Then** orchestrator immediately force-terminates (kills connection, exits with code 130) without waiting for graceful cleanup
 
-### Configuration System (FND-US-CONFIG)
+### Configuration System (CORE-US-CONFIG)
 
 Lineage: 001-US-6
 
@@ -233,7 +233,7 @@ dummy_fail:
 
 **Configuration Schema**: The formal configuration schema structure (global settings, sync_jobs section, and per-job settings) is defined in `specs/001-core/contracts/config-schema.yaml`. Job-specific settings appear as top-level keys (e.g., `btrfs_snapshots`, `user_data`) outside of the `sync_jobs` section.
 
-### Installation and Setup Infrastructure (FND-US-INSTALL)
+### Installation and Setup Infrastructure (CORE-US-INSTALL)
 
 Lineage: 001-US-7
 
@@ -266,7 +266,7 @@ The system provides installation and setup tooling to deploy pc-switcher to new 
 
 3. **Given** `~/.config/pc-switcher/config.yaml` already exists, **When** user runs the installation script, **Then** the script prompts "Configuration file already exists. Overwrite? [y/N]" and preserves the existing file unless user confirms overwrite
 
-### Dummy Test Jobs (FND-US-DUMMY)
+### Dummy Test Jobs (CORE-US-DUMMY)
 
 Lineage: 001-US-8
 
@@ -290,7 +290,7 @@ Two dummy jobs exist for testing infrastructure: `dummy_success` (completes succ
 
 3. **Given** any dummy job is running, **When** user presses Ctrl+C, **Then** the job receives termination request, it logs "Dummy job termination requested", stops its busy-wait loop within the grace period, and returns control to orchestrator
 
-### Terminal UI with Progress Reporting (FND-US-TUI)
+### Terminal UI with Progress Reporting (CORE-US-TUI)
 
 Lineage: 001-US-9
 
@@ -313,45 +313,45 @@ The terminal displays real-time sync progress including current job, operation p
 
 3. **Given** a job emits log at INFO level or higher, **When** log reaches terminal UI, **Then** it's displayed below progress indicators with appropriate formatting (color-coded by level if terminal supports colors)
 
-### Spec-Driven Test Coverage for Foundation (FND-US-TEST-COVERAGE)
+### Spec-Driven Test Coverage for Core (CORE-US-TEST-COVERAGE)
 
 Lineage: 003-US-1
 
 Priority: P1
 
-As a pc-switcher developer, I have comprehensive tests that verify 100% of the specifications defined in the foundation specification. Tests are written based on the spec (user stories, acceptance scenarios, functional requirements), not the implementation code. If any part of the spec was not implemented or implemented incorrectly, the tests fail.
+As a pc-switcher developer, I have comprehensive tests that verify 100% of the specifications defined in the core specification. Tests are written based on the spec (user stories, acceptance scenarios, functional requirements), not the implementation code. If any part of the spec was not implemented or implemented incorrectly, the tests fail.
 
-**Why this priority**: P1 because the existing foundation code is critical infrastructure. Bugs could break entire systems. Spec-driven tests ensure the implementation matches the documented requirements and catch gaps or deviations.
+**Why this priority**: P1 because the existing core code is critical infrastructure. Bugs could break entire systems. Spec-driven tests ensure the implementation matches the documented requirements and catch gaps or deviations.
 
-**Independent Test**: Can be verified by running the full test suite and confirming tests exist for every user story, acceptance scenario, and functional requirement in the foundation spec.
+**Independent Test**: Can be verified by running the full test suite and confirming tests exist for every user story, acceptance scenario, and functional requirement in the core spec.
 
 **Acceptance Scenarios**:
 
-1. **Given** tests are implemented based on foundation spec, **When** I run the full test suite, **Then** 100% of user stories have corresponding test coverage
+1. **Given** tests are implemented based on core spec, **When** I run the full test suite, **Then** 100% of user stories have corresponding test coverage
 
-2. **Given** tests are implemented based on foundation spec, **When** I run the full test suite, **Then** 100% of acceptance scenarios have corresponding test cases
+2. **Given** tests are implemented based on core spec, **When** I run the full test suite, **Then** 100% of acceptance scenarios have corresponding test cases
 
-3. **Given** tests are implemented based on foundation spec, **When** I run the full test suite, **Then** 100% of functional requirements have corresponding test assertions
+3. **Given** tests are implemented based on core spec, **When** I run the full test suite, **Then** 100% of functional requirements have corresponding test assertions
 
 4. **Given** a part of the spec was not implemented or implemented incorrectly, **When** I run the tests, **Then** the relevant tests fail, exposing the gap or bug
 
 5. **Given** tests cover both success and failure paths, **When** I run the full test suite, **Then** error handling, edge cases, and boundary conditions from the spec are all verified
 
-### Traceability from Tests to Spec (FND-US-TEST-TRACE)
+### Traceability from Tests to Spec (CORE-US-TEST-TRACE)
 
 Lineage: 003-US-2
 
 Priority: P2
 
-As a pc-switcher developer, I can trace each test back to the specific requirement it validates. When a test fails, I can quickly identify which part of the foundation spec is affected.
+As a pc-switcher developer, I can trace each test back to the specific requirement it validates. When a test fails, I can quickly identify which part of the core spec is affected.
 
 **Why this priority**: P2 because traceability improves debugging and maintenance but the tests themselves are more critical.
 
-**Independent Test**: Can be verified by examining test names/docstrings and confirming they reference specific requirements from foundation spec.
+**Independent Test**: Can be verified by examining test names/docstrings and confirming they reference specific requirements from core spec.
 
 **Acceptance Scenarios**:
 
-1. **Given** I look at any test for foundation, **When** I read the test name or docstring, **Then** I can identify the specific user story, acceptance scenario, or FR being tested
+1. **Given** I look at any test for core, **When** I read the test name or docstring, **Then** I can identify the specific user story, acceptance scenario, or FR being tested
 
 2. **Given** a test fails in CI, **When** I review the failure output, **Then** I can immediately navigate to the corresponding spec requirement
 
@@ -398,195 +398,195 @@ Lineage: 001-core edge cases, 003-core-tests edge cases
 
 #### Job Architecture
 
-- **FND-FR-JOB-IFACE** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized Job interface specifying how the orchestrator interacts with jobs, including how logging is done, how a job reports progress to the user, methods, error handling, termination request handling, timeout handling; the interface MUST include at least `validate()` and `execute()` methods, a mechanism to declare configuration schema, and property: `name: str`  
+- **CORE-FR-JOB-IFACE** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized Job interface specifying how the orchestrator interacts with jobs, including how logging is done, how a job reports progress to the user, methods, error handling, termination request handling, timeout handling; the interface MUST include at least `validate()` and `execute()` methods, a mechanism to declare configuration schema, and property: `name: str`  
   Lineage: 001-FR-001
 
-- **FND-FR-LIFECYCLE** `[Reliability Without Compromise]`: System MUST call job lifecycle methods in order: `validate()` (all jobs), then `execute()` for each job in the specified order; on shutdown, errors, or user interrupt the system requests termination of the currently-executing job  
+- **CORE-FR-LIFECYCLE** `[Reliability Without Compromise]`: System MUST call job lifecycle methods in order: `validate()` (all jobs), then `execute()` for each job in the specified order; on shutdown, errors, or user interrupt the system requests termination of the currently-executing job  
   Lineage: 001-FR-002
 
-- **FND-FR-TERM-CTRLC** `[Reliability Without Compromise]`: System MUST request termination of currently-executing job when Ctrl+C is pressed, allowing cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful cleanup; if job does not complete cleanup within timeout, orchestrator MUST force-terminate connections and the job, then proceed with exit  
+- **CORE-FR-TERM-CTRLC** `[Reliability Without Compromise]`: System MUST request termination of currently-executing job when Ctrl+C is pressed, allowing cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful cleanup; if job does not complete cleanup within timeout, orchestrator MUST force-terminate connections and the job, then proceed with exit  
   Lineage: 001-FR-003
 
-- **FND-FR-JOB-LOAD** `[Deliberate Simplicity]`: Jobs MUST be loaded from the configuration file section `sync_jobs` in the order they appear and instantiated by the orchestrator; job execution order is strictly sequential from config (no dependency resolution is provided—simplicity over flexibility)  
+- **CORE-FR-JOB-LOAD** `[Deliberate Simplicity]`: Jobs MUST be loaded from the configuration file section `sync_jobs` in the order they appear and instantiated by the orchestrator; job execution order is strictly sequential from config (no dependency resolution is provided—simplicity over flexibility)  
   Lineage: 001-FR-004
 
 #### Self-Installation
 
-- **FND-FR-VERSION-CHECK** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version from public GitHub repository using `uv tool install git+https://github.com/[owner]/pc-switcher@v<version>` (no authentication required for public repository)  
+- **CORE-FR-VERSION-CHECK** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version from public GitHub repository using `uv tool install git+https://github.com/[owner]/pc-switcher@v<version>` (no authentication required for public repository)  
   Lineage: 001-FR-005
 
-- **FND-FR-VERSION-NEWER** `[Reliability Without Compromise]`: System MUST abort sync with CRITICAL log if the target machine's pc-switcher version is newer than the source version (preventing accidental downgrades)  
+- **CORE-FR-VERSION-NEWER** `[Reliability Without Compromise]`: System MUST abort sync with CRITICAL log if the target machine's pc-switcher version is newer than the source version (preventing accidental downgrades)  
   Lineage: 001-FR-006
 
-- **FND-FR-INSTALL-FAIL** `[Frictionless Command UX]`: If installation/upgrade fails, system MUST log CRITICAL error and abort sync  
+- **CORE-FR-INSTALL-FAIL** `[Frictionless Command UX]`: If installation/upgrade fails, system MUST log CRITICAL error and abort sync  
   Lineage: 001-FR-007
 
-- **FND-FR-CONFIG-SYNC** `[Reliability Without Compromise]`: After pc-switcher installation/upgrade, system MUST sync configuration from source to target; if target has no config, system MUST display source config and prompt user for confirmation before copying; if user declines, system MUST abort sync  
+- **CORE-FR-CONFIG-SYNC** `[Reliability Without Compromise]`: After pc-switcher installation/upgrade, system MUST sync configuration from source to target; if target has no config, system MUST display source config and prompt user for confirmation before copying; if user declines, system MUST abort sync  
   Lineage: 001-FR-007a
 
-- **FND-FR-CONFIG-DIFF** `[Frictionless Command UX]`: If target has existing config that differs from source, system MUST display a diff and prompt user with three options: (a) Accept config from source, (b) Keep current config on target, (c) Abort sync  
+- **CORE-FR-CONFIG-DIFF** `[Frictionless Command UX]`: If target has existing config that differs from source, system MUST display a diff and prompt user with three options: (a) Accept config from source, (b) Keep current config on target, (c) Abort sync  
   Lineage: 001-FR-007b
 
-- **FND-FR-CONFIG-MATCH** `[Frictionless Command UX]`: If target config matches source config exactly, system MUST skip config sync with INFO log and proceed without prompting  
+- **CORE-FR-CONFIG-MATCH** `[Frictionless Command UX]`: If target config matches source config exactly, system MUST skip config sync with INFO log and proceed without prompting  
   Lineage: 001-FR-007c
 
 #### Safety Infrastructure (Btrfs Snapshots)
 
-- **FND-FR-SNAP-PRE** `[Reliability Without Compromise]`: System MUST create read-only btrfs snapshots of configured subvolumes on both source and target before any job executes (after version check and pre-checks)  
+- **CORE-FR-SNAP-PRE** `[Reliability Without Compromise]`: System MUST create read-only btrfs snapshots of configured subvolumes on both source and target before any job executes (after version check and pre-checks)  
   Lineage: 001-FR-008
 
-- **FND-FR-SNAP-POST** `[Reliability Without Compromise]`: System MUST create post-sync snapshots after all jobs complete successfully  
+- **CORE-FR-SNAP-POST** `[Reliability Without Compromise]`: System MUST create post-sync snapshots after all jobs complete successfully  
   Lineage: 001-FR-009
 
-- **FND-FR-SNAP-NAME** `[Minimize SSD Wear]`: Snapshot naming MUST follow pattern `{pre|post}-<subvolume>-<timestamp>` for clear identification and cleanup (e.g., `pre-@home-20251116T143022`); session folder provides session context  
+- **CORE-FR-SNAP-NAME** `[Minimize SSD Wear]`: Snapshot naming MUST follow pattern `{pre|post}-<subvolume>-<timestamp>` for clear identification and cleanup (e.g., `pre-@home-20251116T143022`); session folder provides session context  
   Lineage: 001-FR-010
 
-- **FND-FR-SNAP-ALWAYS** `[Reliability Without Compromise]`: Snapshot management MUST be implemented as orchestrator-level infrastructure (not a SyncJob) that is always active; there is no configuration option to disable snapshot creation  
+- **CORE-FR-SNAP-ALWAYS** `[Reliability Without Compromise]`: Snapshot management MUST be implemented as orchestrator-level infrastructure (not a SyncJob) that is always active; there is no configuration option to disable snapshot creation  
   Lineage: 001-FR-011
 
-- **FND-FR-SNAP-FAIL** `[Frictionless Command UX]`: If pre-sync snapshot creation fails, system MUST log CRITICAL error and abort before any state modifications occur  
+- **CORE-FR-SNAP-FAIL** `[Frictionless Command UX]`: If pre-sync snapshot creation fails, system MUST log CRITICAL error and abort before any state modifications occur  
   Lineage: 001-FR-012
 
-- **FND-FR-SNAP-CLEANUP** `[Minimize SSD Wear]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs; default retention policy (keep_recent count and max_age_days) MUST be configurable in the btrfs_snapshots job section of config.yaml  
+- **CORE-FR-SNAP-CLEANUP** `[Minimize SSD Wear]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs; default retention policy (keep_recent count and max_age_days) MUST be configurable in the btrfs_snapshots job section of config.yaml  
   Lineage: 001-FR-014
 
-- **FND-FR-SUBVOL-EXIST** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort  
+- **CORE-FR-SUBVOL-EXIST** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort  
   Lineage: 001-FR-015
 
-- **FND-FR-SNAPDIR** `[Reliability Without Compromise]`: System MUST verify that `/.snapshots/` is a btrfs subvolume (not a regular directory); if it does not exist, system MUST create it as a subvolume and inform the user; if it exists but is not a subvolume, system MUST log CRITICAL error and abort (to prevent recursive snapshots)  
+- **CORE-FR-SNAPDIR** `[Reliability Without Compromise]`: System MUST verify that `/.snapshots/` is a btrfs subvolume (not a regular directory); if it does not exist, system MUST create it as a subvolume and inform the user; if it exists but is not a subvolume, system MUST log CRITICAL error and abort (to prevent recursive snapshots)  
   Lineage: 001-FR-015b
 
-- **FND-FR-DISK-PRE** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold is configured via `disk_space_monitor.preflight_minimum` and MUST be specified as a percentage (e.g., "20%") or absolute value (e.g., "50GiB"); values without explicit units are invalid; default is "20%"  
+- **CORE-FR-DISK-PRE** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold is configured via `disk_space_monitor.preflight_minimum` and MUST be specified as a percentage (e.g., "20%") or absolute value (e.g., "50GiB"); values without explicit units are invalid; default is "20%"  
   Lineage: 001-FR-016
 
-- **FND-FR-DISK-RUNTIME** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured runtime minimum via `disk_space_monitor.runtime_minimum` (e.g., "15%" or "40GiB"); values without explicit units are invalid; default is "15%"  
+- **CORE-FR-DISK-RUNTIME** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured runtime minimum via `disk_space_monitor.runtime_minimum` (e.g., "15%" or "40GiB"); values without explicit units are invalid; default is "15%"  
   Lineage: 001-FR-017
 
 #### Interrupt Handling
 
-- **FND-FR-SIGINT** `[Reliability Without Compromise]`: System MUST install SIGINT handler that requests current job termination with cleanup timeout grace period (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), logs "Sync interrupted by user" at WARNING level, and exits with code 130  
+- **CORE-FR-SIGINT** `[Reliability Without Compromise]`: System MUST install SIGINT handler that requests current job termination with cleanup timeout grace period (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), logs "Sync interrupted by user" at WARNING level, and exits with code 130  
   Lineage: 001-FR-024
 
-- **FND-FR-TARGET-TERM** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful shutdown  
+- **CORE-FR-TARGET-TERM** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful shutdown  
   Lineage: 001-FR-025
 
-- **FND-FR-FORCE-TERM** `[Reliability Without Compromise]`: Force-terminate on second SIGINT - When a second SIGINT arrives before cleanup completes, the system immediately force-terminates without waiting for graceful cleanup.  
+- **CORE-FR-FORCE-TERM** `[Reliability Without Compromise]`: Force-terminate on second SIGINT - When a second SIGINT arrives before cleanup completes, the system immediately force-terminates without waiting for graceful cleanup.  
   Lineage: 001-FR-026
 
-- **FND-FR-NO-ORPHAN** `[Reliability Without Compromise]`: System MUST ensure no orphaned processes remain on source or target after interrupt  
+- **CORE-FR-NO-ORPHAN** `[Reliability Without Compromise]`: System MUST ensure no orphaned processes remain on source or target after interrupt  
   Lineage: 001-FR-027
 
 #### Configuration System
 
-- **FND-FR-CONFIG-LOAD** `[Frictionless Command UX]`: System MUST load configuration from `~/.config/pc-switcher/config.yaml` on startup  
+- **CORE-FR-CONFIG-LOAD** `[Frictionless Command UX]`: System MUST load configuration from `~/.config/pc-switcher/config.yaml` on startup  
   Lineage: 001-FR-028
 
-- **FND-FR-CONFIG-FORMAT** `[Deliberate Simplicity]`: Configuration MUST use YAML format with sections: global settings, `sync_jobs` (enable/disable), and per-job settings  
+- **CORE-FR-CONFIG-FORMAT** `[Deliberate Simplicity]`: Configuration MUST use YAML format with sections: global settings, `sync_jobs` (enable/disable), and per-job settings  
   Lineage: 001-FR-029
 
-- **FND-FR-CONFIG-VALIDATE** `[Reliability Without Compromise]`: System MUST validate configuration structure and job-specific settings against job-declared schemas (Python dicts conforming to JSON Schema draft-07, validated using jsonschema library) before execution  
+- **CORE-FR-CONFIG-VALIDATE** `[Reliability Without Compromise]`: System MUST validate configuration structure and job-specific settings against job-declared schemas (Python dicts conforming to JSON Schema draft-07, validated using jsonschema library) before execution  
   Lineage: 001-FR-030
 
-- **FND-FR-CONFIG-DEFAULTS** `[Frictionless Command UX]`: System MUST apply reasonable defaults for missing configuration values  
+- **CORE-FR-CONFIG-DEFAULTS** `[Frictionless Command UX]`: System MUST apply reasonable defaults for missing configuration values  
   Lineage: 001-FR-031
 
-- **FND-FR-JOB-ENABLE** `[Frictionless Command UX]`: System MUST allow enabling/disabling optional jobs via `sync_jobs: { module_name: true/false }`  
+- **CORE-FR-JOB-ENABLE** `[Frictionless Command UX]`: System MUST allow enabling/disabling optional jobs via `sync_jobs: { module_name: true/false }`  
   Lineage: 001-FR-032
 
-- **FND-FR-CONFIG-ERROR** `[Reliability Without Compromise]`: If configuration file has syntax errors or invalid values, system MUST display clear error message with location and exit before sync  
+- **CORE-FR-CONFIG-ERROR** `[Reliability Without Compromise]`: If configuration file has syntax errors or invalid values, system MUST display clear error message with location and exit before sync  
   Lineage: 001-FR-033
 
 #### Installation & Setup
 
-- **FND-FR-INSTALL-SCRIPT** `[Frictionless Command UX]`: System MUST provide installation script (`install.sh`) that can be run via `curl | sh` without prerequisites; the script installs uv (if not present) via `curl -LsSf https://astral.sh/uv/install.sh | sh`, installs btrfs-progs via apt-get (if not present), installs pc-switcher package via `uv tool install`, and creates default configuration; the installation logic MUST be shared with `InstallOnTargetJob` to ensure DRY compliance (btrfs filesystem is a documented prerequisite checked at runtime, not during installation)  
+- **CORE-FR-INSTALL-SCRIPT** `[Frictionless Command UX]`: System MUST provide installation script (`install.sh`) that can be run via `curl | sh` without prerequisites; the script installs uv (if not present) via `curl -LsSf https://astral.sh/uv/install.sh | sh`, installs btrfs-progs via apt-get (if not present), installs pc-switcher package via `uv tool install`, and creates default configuration; the installation logic MUST be shared with `InstallOnTargetJob` to ensure DRY compliance (btrfs filesystem is a documented prerequisite checked at runtime, not during installation)  
   Lineage: 001-FR-035
 
-- **FND-FR-DEFAULT-CONFIG** `[Up-to-date Documentation]`: Setup script MUST create default config file with inline comments explaining each setting  
+- **CORE-FR-DEFAULT-CONFIG** `[Up-to-date Documentation]`: Setup script MUST create default config file with inline comments explaining each setting  
   Lineage: 001-FR-036
 
 #### Testing Infrastructure (Dummy Jobs)
 
-- **FND-FR-DUMMY-JOBS**: System MUST include two dummy jobs: `dummy-success`, `dummy-fail`  
+- **CORE-FR-DUMMY-JOBS**: System MUST include two dummy jobs: `dummy-success`, `dummy-fail`  
   Lineage: 001-FR-038
 
-- **FND-FR-DUMMY-SIM**: `dummy-success` and `dummy-fail` MUST simulate an operation of configurable duration on source (log every 2s, log WARNING at 6s) and of configurable duration on target (log every 2s, log ERROR at 8s), emit progress updates, and complete successfully  
+- **CORE-FR-DUMMY-SIM**: `dummy-success` and `dummy-fail` MUST simulate an operation of configurable duration on source (log every 2s, log WARNING at 6s) and of configurable duration on target (log every 2s, log ERROR at 8s), emit progress updates, and complete successfully  
   Lineage: 001-FR-039
 
-- **FND-FR-DUMMY-EXCEPTION** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at configurable time to test orchestrator exception handling on both source and target  
+- **CORE-FR-DUMMY-EXCEPTION** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at configurable time to test orchestrator exception handling on both source and target  
   Lineage: 001-FR-041
 
-- **FND-FR-DUMMY-TERM** `[Reliability Without Compromise]`: All dummy jobs MUST handle termination requests by logging "Dummy job termination requested" and stopping execution within the grace period  
+- **CORE-FR-DUMMY-TERM** `[Reliability Without Compromise]`: All dummy jobs MUST handle termination requests by logging "Dummy job termination requested" and stopping execution within the grace period  
   Lineage: 001-FR-042
 
 #### Progress Reporting
 
-- **FND-FR-PROGRESS-EMIT** `[Frictionless Command UX]`: Jobs CAN emit progress updates including percentage (0-100), current item description, and estimated completion time (progress updates are optional for jobs, but recommended for long-running operations; dummy test jobs emit progress for infrastructure testing)  
+- **CORE-FR-PROGRESS-EMIT** `[Frictionless Command UX]`: Jobs CAN emit progress updates including percentage (0-100), current item description, and estimated completion time (progress updates are optional for jobs, but recommended for long-running operations; dummy test jobs emit progress for infrastructure testing)  
   Lineage: 001-FR-043
 
-- **FND-FR-PROGRESS-FWD** `[Frictionless Command UX]`: Orchestrator MUST forward progress updates to terminal UI system for display  
+- **CORE-FR-PROGRESS-FWD** `[Frictionless Command UX]`: Orchestrator MUST forward progress updates to terminal UI system for display  
   Lineage: 001-FR-044
 
-- **FND-FR-PROGRESS-LOG**: Progress updates MUST be written to log file at FULL log level  
+- **CORE-FR-PROGRESS-LOG**: Progress updates MUST be written to log file at FULL log level  
   Lineage: 001-FR-045
 
 #### Core Orchestration
 
-- **FND-FR-SYNC-CMD** `[Frictionless Command UX]`: System MUST provide single command `pc-switcher sync <target>` that executes complete workflow  
+- **CORE-FR-SYNC-CMD** `[Frictionless Command UX]`: System MUST provide single command `pc-switcher sync <target>` that executes complete workflow  
   Lineage: 001-FR-046
 
-- **FND-FR-LOCK** `[Reliability Without Compromise]`: System MUST implement locking mechanism to prevent concurrent sync executions  
+- **CORE-FR-LOCK** `[Reliability Without Compromise]`: System MUST implement locking mechanism to prevent concurrent sync executions  
   Lineage: 001-FR-047
 
-- **FND-FR-SUMMARY**: System MUST log overall sync result (success/failure) and summary of job outcomes; summary MUST list each job with its result (SUCCESS/SKIPPED/FAILED), total duration, error count, and names of any jobs that failed  
+- **CORE-FR-SUMMARY**: System MUST log overall sync result (success/failure) and summary of job outcomes; summary MUST list each job with its result (SUCCESS/SKIPPED/FAILED), total duration, error count, and names of any jobs that failed  
   Lineage: 001-FR-048
 
-### Foundation Test Requirements
+### Core Test Requirements
 
 #### Test Coverage Requirements
 
-- **FND-FR-TEST-US**: Tests MUST cover 100% of user stories defined in foundation specification  
+- **CORE-FR-TEST-US**: Tests MUST cover 100% of user stories defined in core specification  
   Lineage: 003-FR-001
 
-- **FND-FR-TEST-AS**: Tests MUST cover 100% of acceptance scenarios defined in foundation specification  
+- **CORE-FR-TEST-AS**: Tests MUST cover 100% of acceptance scenarios defined in core specification  
   Lineage: 003-FR-002
 
-- **FND-FR-TEST-FR**: Tests MUST cover 100% of functional requirements defined in foundation specification  
+- **CORE-FR-TEST-FR**: Tests MUST cover 100% of functional requirements defined in core specification  
   Lineage: 003-FR-003
 
-- **FND-FR-TEST-PATHS**: Tests MUST verify both success paths and failure paths (error handling, edge cases, boundary conditions) for each requirement  
+- **CORE-FR-TEST-PATHS**: Tests MUST verify both success paths and failure paths (error handling, edge cases, boundary conditions) for each requirement  
   Lineage: 003-FR-004
 
 #### Test Organization Requirements
 
-- **FND-FR-TEST-UNIT-DIR**: Unit tests for foundation MUST be placed in `tests/unit/` directory following module structure  
+- **CORE-FR-TEST-UNIT-DIR**: Unit tests for core MUST be placed in `tests/unit/` directory following module structure  
   Lineage: 003-FR-005
 
-- **FND-FR-TEST-INT-DIR**: Integration tests for foundation MUST be placed in `tests/integration/` directory  
+- **CORE-FR-TEST-INT-DIR**: Integration tests for core MUST be placed in `tests/integration/` directory  
   Lineage: 003-FR-006
 
-- **FND-FR-TEST-DOCSTRING**: Each test file MUST include docstrings or comments referencing the spec requirements being tested  
+- **CORE-FR-TEST-DOCSTRING**: Each test file MUST include docstrings or comments referencing the spec requirements being tested  
   Lineage: 003-FR-007
 
-- **FND-FR-TEST-NAMING**: Test function names MUST indicate the requirement being tested (e.g., `test_fr001_connection_ssh_authentication`)  
+- **CORE-FR-TEST-NAMING**: Test function names MUST indicate the requirement being tested (e.g., `test_fr001_connection_ssh_authentication`)  
   Lineage: 003-FR-008
 
 #### Test Quality Requirements
 
-- **FND-FR-TEST-INDEP**: Tests MUST be independent and not rely on execution order or shared mutable state between tests  
+- **CORE-FR-TEST-INDEP**: Tests MUST be independent and not rely on execution order or shared mutable state between tests  
   Lineage: 003-FR-009
 
-- **FND-FR-TEST-FIXTURES**: Tests MUST use fixtures from the testing framework for VM access, event buses, and cleanup  
+- **CORE-FR-TEST-FIXTURES**: Tests MUST use fixtures from the testing framework for VM access, event buses, and cleanup  
   Lineage: 003-FR-010
 
-- **FND-FR-TEST-MOCK**: Unit tests MUST use mock executors to avoid real system operations  
+- **CORE-FR-TEST-MOCK**: Unit tests MUST use mock executors to avoid real system operations  
   Lineage: 003-FR-011
 
-- **FND-FR-TEST-REAL**: Integration tests MUST execute real operations on test VMs  
+- **CORE-FR-TEST-REAL**: Integration tests MUST execute real operations on test VMs  
   Lineage: 003-FR-012
 
 #### Test Performance Requirements
 
-- **FND-FR-TEST-SPEED**: Unit tests MUST complete full suite execution in under 30 seconds  
+- **CORE-FR-TEST-SPEED**: Unit tests MUST complete full suite execution in under 30 seconds  
   Lineage: 003-FR-013
 
 ### Key Entities
@@ -609,7 +609,7 @@ Lineage: 001-core Key Entities, 003-core-tests Key Entities
 
 - **RemoteExecutor**: Represents the interface injected into jobs wrapping TargetConnection with simplified run_command(), send_file(), and get_hostname() methods
 
-- **SpecRequirement**: Represents a requirement from foundation spec; has ID (FR-xxx, US-xxx, AS-xxx), description, and test status
+- **SpecRequirement**: Represents a requirement from core spec; has ID (FR-xxx, US-xxx, AS-xxx), description, and test status
 
 - **TestMapping**: Represents the mapping between a spec requirement and its corresponding tests; enables traceability
 
@@ -619,60 +619,60 @@ Lineage: 001-core Key Entities, 003-core-tests Key Entities
 
 ### Core Infrastructure
 
-- **FND-SC-SINGLE-CMD** `[Frictionless Command UX]`: User executes complete sync with single command `pc-switcher sync <target>` without additional manual steps
+- **CORE-SC-SINGLE-CMD** `[Frictionless Command UX]`: User executes complete sync with single command `pc-switcher sync <target>` without additional manual steps
   Lineage: 001-SC-001
 
-- **FND-SC-SNAPSHOTS** `[Reliability Without Compromise]`: System creates snapshots before and after sync in 100% of successful sync runs
+- **CORE-SC-SNAPSHOTS** `[Reliability Without Compromise]`: System creates snapshots before and after sync in 100% of successful sync runs
   Lineage: 001-SC-002
 
-- **FND-SC-ABORT** `[Reliability Without Compromise]`: System successfully aborts sync within the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) when CRITICAL error occurs, with no state modifications after abort
+- **CORE-SC-ABORT** `[Reliability Without Compromise]`: System successfully aborts sync within the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) when CRITICAL error occurs, with no state modifications after abort
   Lineage: 001-SC-003
 
-- **FND-SC-VERSION-TIME** `[Frictionless Command UX]`: System completes version check and installation/upgrade on target within 30 seconds
+- **CORE-SC-VERSION-TIME** `[Frictionless Command UX]`: System completes version check and installation/upgrade on target within 30 seconds
   Lineage: 001-SC-004
 
-- **FND-SC-AUDIT**: Log files contain complete audit trail of all operations with timestamps, levels, and job attribution in 100% of sync runs
+- **CORE-SC-AUDIT**: Log files contain complete audit trail of all operations with timestamps, levels, and job attribution in 100% of sync runs
   Lineage: 001-SC-005
 
-- **FND-SC-GRACEFUL** `[Reliability Without Compromise]`: User interrupt (Ctrl+C) results in graceful shutdown with no orphaned processes in 100% of tests
+- **CORE-SC-GRACEFUL** `[Reliability Without Compromise]`: User interrupt (Ctrl+C) results in graceful shutdown with no orphaned processes in 100% of tests
   Lineage: 001-SC-006
 
-- **FND-SC-JOB-SIMPLE** `[Deliberate Simplicity]`: New feature job implementation requires only implementing job interface (< 200 lines of code for basic job) with no changes to core orchestrator
+- **CORE-SC-JOB-SIMPLE** `[Deliberate Simplicity]`: New feature job implementation requires only implementing job interface (< 200 lines of code for basic job) with no changes to core orchestrator
   Lineage: 001-SC-007
 
-- **FND-SC-COW** `[Minimize SSD Wear]`: Btrfs snapshots use copy-on-write with zero initial write amplification (verified via btrfs filesystem usage commands)
+- **CORE-SC-COW** `[Minimize SSD Wear]`: Btrfs snapshots use copy-on-write with zero initial write amplification (verified via btrfs filesystem usage commands)
   Lineage: 001-SC-008
 
-- **FND-SC-INSTALL-TIME** `[Frictionless Command UX]`: Installation script completes setup on fresh Ubuntu 24.04 machine in under 2 minutes with network connection
+- **CORE-SC-INSTALL-TIME** `[Frictionless Command UX]`: Installation script completes setup on fresh Ubuntu 24.04 machine in under 2 minutes with network connection
   Lineage: 001-SC-009
 
-- **FND-SC-DUMMY-DEMO** `[Reliability Without Compromise]`: All dummy jobs correctly demonstrate their expected behaviors (success, CRITICAL abort, exception handling) in 100% of test runs
+- **CORE-SC-DUMMY-DEMO** `[Reliability Without Compromise]`: All dummy jobs correctly demonstrate their expected behaviors (success, CRITICAL abort, exception handling) in 100% of test runs
   Lineage: 001-SC-010
 
 ### Test Success Criteria
 
-- **FND-SC-TEST-US**: 100% of user stories in foundation spec have corresponding test coverage
+- **CORE-SC-TEST-US**: 100% of user stories in core spec have corresponding test coverage
   Lineage: 003-SC-001
 
-- **FND-SC-TEST-AS**: 100% of acceptance scenarios in foundation spec have corresponding test cases
+- **CORE-SC-TEST-AS**: 100% of acceptance scenarios in core spec have corresponding test cases
   Lineage: 003-SC-002
 
-- **FND-SC-TEST-FR**: 100% of functional requirements in foundation spec have corresponding test assertions
+- **CORE-SC-TEST-FR**: 100% of functional requirements in core spec have corresponding test assertions
   Lineage: 003-SC-003
 
-- **FND-SC-TEST-PATHS**: All tests verify both success and failure paths as specified in the requirements
+- **CORE-SC-TEST-PATHS**: All tests verify both success and failure paths as specified in the requirements
   Lineage: 003-SC-004
 
-- **FND-SC-TEST-TRACE**: All test files include traceability references to spec requirements
+- **CORE-SC-TEST-TRACE**: All test files include traceability references to spec requirements
   Lineage: 003-SC-005
 
-- **FND-SC-TEST-GAPS**: Running the test suite surfaces any gaps between spec and implementation through failing tests
+- **CORE-SC-TEST-GAPS**: Running the test suite surfaces any gaps between spec and implementation through failing tests
   Lineage: 003-SC-006
 
-- **FND-SC-TEST-UNIT-SPEED**: Unit test suite executes completely in under 30 seconds on a standard development machine
+- **CORE-SC-TEST-UNIT-SPEED**: Unit test suite executes completely in under 30 seconds on a standard development machine
   Lineage: 003-SC-007
 
-- **FND-SC-TEST-INT-SPEED**: Integration tests complete full VM-based testing in under 15 minutes
+- **CORE-SC-TEST-INT-SPEED**: Integration tests complete full VM-based testing in under 15 minutes
   Lineage: 003-SC-008
 
 ## Assumptions
@@ -687,7 +687,7 @@ Lineage: 001-core Assumptions, 003-core-tests Assumptions
 - Sufficient disk space exists on target for package installation
 - No other tools are simultaneously modifying the same system state during sync
 - Testing framework infrastructure from specs/002-testing-framework/spec.md is implemented and operational
-- Foundation implementation exists and is testable
+- Core implementation exists and is testable
 
 ## Out of Scope
 
@@ -701,8 +701,8 @@ Lineage: 001-core Out of Scope, 003-core-tests Out of Scope
 - Non-btrfs filesystems
 - Multi-user concurrent usage
 - Automated testing infrastructure (CI/CD) - though dummy jobs enable manual testing
-- Tests for features beyond foundation (those will have their own test specs)
-- Testing implementation details not specified in foundation spec
+- Tests for features beyond core (those will have their own test specs)
+- Testing implementation details not specified in core spec
 - Fixing bugs found by these tests (separate bug fix tasks)
-- Updating foundation spec if gaps are found (separate spec update task)
+- Updating core spec if gaps are found (separate spec update task)
 - Test coverage for third-party libraries (only test project code)

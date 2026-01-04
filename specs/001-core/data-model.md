@@ -1,9 +1,9 @@
-# Data Model: Foundation Infrastructure
+# Data Model: Core Infrastructure
 
 **Feature**: 001-core
 **Date**: 2025-11-29
 
-This document defines the core entities, their relationships, and validation rules for the foundation infrastructure. Types are expressed in Python 3.14 syntax with modern annotations.
+This document defines the core entities, their relationships, and validation rules for the core infrastructure. Types are expressed in Python 3.14 syntax with modern annotations.
 
 ## Navigation
 

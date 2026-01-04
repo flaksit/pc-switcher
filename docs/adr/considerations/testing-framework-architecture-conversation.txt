@@ -1071,7 +1071,7 @@ implementation.
   ⎿  Wrote 694 lines to specs/001-core/testing-implementation-plan.md
      # Testing Implementation Plan for 001-Core
      This document provides the detailed implementation plan for
-     comprehensive testing of the foundation feature.
+     comprehensive testing of the core feature.
      ## Test Directory Structure
      ```
      tests/
@@ -1083,7 +1083,7 @@ implementation.
   ⎿  Wrote 263 lines to specs/001-core/testing-report.md             
      # Testing Report for 001-Core
      This report provides a comprehensive overview of testing coverage for
-     the foundation feature, including coverage mapping, how to run tests,
+     the core feature, including coverage mapping, how to run tests,
      limitations, and risk assessment.
      ## Coverage Summary
      ### Coverage by Module

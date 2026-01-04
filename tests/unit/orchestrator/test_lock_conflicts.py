@@ -39,8 +39,8 @@ class TestSourceLockConflictMessages:
     """Test error messages when source lock acquisition fails."""
 
     @pytest.mark.asyncio
-    async def test_001_fnd_fr_lock(self, mock_config: MagicMock, tmp_path: Path) -> None:
-        """FND-FR-LOCK: Source lock error message includes holder information.
+    async def test_001_core_fr_lock(self, mock_config: MagicMock, tmp_path: Path) -> None:
+        """CORE-FR-LOCK: Source lock error message includes holder information.
 
         When source lock acquisition fails because another sync holds the lock,
         the error message should include the holder info for debugging.

@@ -100,7 +100,7 @@ Follow the structure from `specs/003-core-tests/data-model.md`:
 **Pattern**: `test_<feature>_<req-id>_<description>()`
 
 **Format Rules**:
-- `<feature>`: Always `001` for foundation tests (ensures uniqueness across SpecKit features)
+- `<feature>`: Always `001` for core tests (ensures uniqueness across SpecKit features)
 - `<req-id>`: `fr###` for functional requirements, `us#_as#` for acceptance scenarios
 - `<description>`: Descriptive name in snake_case
 

@@ -1,9 +1,9 @@
-# Quickstart: Foundation Infrastructure Development
+# Quickstart: Core Infrastructure Development
 
 **Feature**: 001-core
 **Date**: 2025-11-29
 
-This guide provides the essential commands and patterns for developing the foundation infrastructure.
+This guide provides the essential commands and patterns for developing the core infrastructure.
 
 ## Prerequisites
 
@@ -434,7 +434,7 @@ pc-switcher sync target-hostname
 
 ## Next Steps
 
-After foundation is complete:
+After core is complete:
 1. Implement actual sync jobs (user_data, packages, docker, etc.)
 2. Add integration tests with real SSH connections
 3. Set up CI/CD with GitHub Actions

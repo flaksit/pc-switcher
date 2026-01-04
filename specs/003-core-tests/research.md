@@ -45,7 +45,7 @@ This document captures research findings for implementing comprehensive spec-dri
 **Pattern**:
 ```python
 # Format: test_<feature>_<req-id>_<description>()
-# Feature number is always 001 for foundation tests
+# Feature number is always 001 for core tests
 
 # Unit tests reference FR (Functional Requirement):
 def test_001_fr001_job_interface_defines_validate_method() -> None: ...

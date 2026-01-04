@@ -34,7 +34,7 @@ Pre-analysis References:
 
 As a pc-switcher developer, I have comprehensive tests that verify 100% of the specifications defined in specs/001-core/spec.md. Tests are written based on the spec (user stories, acceptance scenarios, functional requirements), not the implementation code. If any part of the spec was not implemented or implemented incorrectly, the tests fail.
 
-**Why this priority**: P1 because the existing foundation code is critical infrastructure. Bugs could break entire systems. Spec-driven tests ensure the implementation matches the documented requirements and catch gaps or deviations.
+**Why this priority**: P1 because the existing core code is critical infrastructure. Bugs could break entire systems. Spec-driven tests ensure the implementation matches the documented requirements and catch gaps or deviations.
 
 **Independent Test**: Can be verified by running the full test suite and confirming tests exist for every user story, acceptance scenario, and functional requirement in the 001-core spec.
 
@@ -151,7 +151,7 @@ As a pc-switcher developer, I can trace each test back to the specific requireme
 
 This feature aligns with the following constitution principles:
 
-- **Reliability Without Compromise**: Tests validate all reliability mechanisms (snapshots, error handling, interrupts, conflict detection) ensuring foundation infrastructure behaves correctly and catches regressions.
+- **Reliability Without Compromise**: Tests validate all reliability mechanisms (snapshots, error handling, interrupts, conflict detection) ensuring core infrastructure behaves correctly and catches regressions.
 
 - **Frictionless Command UX**: Tests validate UX requirements (single command sync, automated installation, graceful interrupts). Running tests is simple: `uv run pytest`.
 

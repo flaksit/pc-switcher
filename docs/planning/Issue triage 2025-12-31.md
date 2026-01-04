@@ -102,7 +102,7 @@
 | ----- | ----- | ------ | ------------ |
 | #89 | Add ADR with python tool and conventions instead of having it in the user CLAUDE.md/AGENTS.md | documentation, prio:medium | NO |
 | #88 | Follow official MADR instead of our own ADR .md template | documentation, prio:low | NO |
-| #84 | Rename "Foundations" to "Core" | prio:low | NO |
+| #84 | Rename legacy core naming to Core | prio:low | NO |
 
 **Notes:**
 
@@ -199,7 +199,7 @@ All other 30 issues can be addressed in parallel with or after user feature impl
 
 ## Conclusion
 
-Only 3 critical issues block user feature implementation. The foundation infrastructure is solid and complete, with integration tests validated (PR #90, #99). Once #103, #37, and #47 are resolved, the project is ready to proceed with implementing sync jobs (Features 5-10).
+Only 3 critical issues block user feature implementation. The core infrastructure is solid and complete, with integration tests validated (PR #90, #99). Once #103, #37, and #47 are resolved, the project is ready to proceed with implementing sync jobs (Features 5-10).
 
 
 ## Implementation DAG

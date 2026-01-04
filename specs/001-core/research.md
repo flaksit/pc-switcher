@@ -1,4 +1,4 @@
-# Research: Foundation Infrastructure
+# Research: Core Infrastructure
 
 **Feature**: 001-core
 **Date**: 2025-11-29
