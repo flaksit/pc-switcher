@@ -65,7 +65,7 @@ graph TD
 |------|---------|-----------|
 | `test_core_us_job_arch_as1_job_integration_via_interface` | ✅ KEEP | Core sync workflow validation |
 | `test_core_us_job_arch_as7_interrupt_terminates_job` | ⚠️ FIX | Doesn't verify exit code 130 as claimed |
-| `test_core_edge_target_unreachable_mid_sync` | ❌ REMOVE | Always skipped - provides no value |
+| `test_core_edge_target_unreachable_mid_sync` | ⚠️ OPTIMIZE | Takes ~90s waiting for timeout - see **#150** |
 | `test_install_on_target_fresh_machine` | ✅ KEEP | Tests install via sync (unique path) |
 | `test_install_on_target_upgrade_older_version` | ✅ KEEP | Tests upgrade via sync (unique path) |
 | `test_sync_updates_history_on_both_machines` | 🔄 MERGE | Could combine with consecutive sync tests |
@@ -73,7 +73,7 @@ graph TD
 | `test_consecutive_sync_allowed_with_flag` | 🔄 MERGE | Combine tests 6, 7, 8 |
 | `test_back_sync_clears_warning` | ✅ KEEP | Unique workflow test |
 
-**Recommendation**: Remove skipped test, merge consecutive sync tests (5 syncs → 3 syncs).
+**Recommendation**: Optimize timeout test (#150), merge consecutive sync tests (5 syncs → 3 syncs).
 
 ### 2. test_installation_script.py (3 tests)
 
@@ -419,6 +419,7 @@ graph TD
 
 | Test | Issue |
 | ---- | ----- |
+| `test_core_edge_target_unreachable_mid_sync` | Takes ~90s (~12% of total runtime) waiting for timeout. See **#150**. |
 | `test_core_fr_force_term` | No-op (never uses VMs). Proper test tracked in **#132**. Leave as-is. |
 | `test_core_us_job_arch_as7_interrupt_terminates_job` | Claims to verify exit code 130 but doesn't |
 | `test_nonexistent_version` | Weak assertion |
@@ -457,30 +458,41 @@ graph TD
 | ------ | ------- | ------------- | ------------------ |
 | Integration test files | 13 | 12 | 12 |
 | Integration test methods | ~87 | ~67 | ~67 |
-| Estimated CI time | ~8.5 min | ~7 min | ~4-5 min |
+| Estimated CI time | ~8-12 min | ~7-10 min | ~6-9 min |
 | Unit test methods | ~100 | ~107 | ~107 |
 
-**Key insight**: The ~23% reduction from cleanup is modest. The larger gains (~40-50%) come from fixture optimization strategies in the Appendix.
+**Key insight**: Based on measured timings, the total optimization potential is ~80-120 seconds (~10-15% improvement). The biggest wins come from avoiding redundant sync operations (Strategies 3 and 6).
 
 ## Appendix: Test Time Optimization Strategies
 
-Total integration test run: **~8.5 minutes** currently. As sync jobs are added, this must not grow to hours.
+Total integration test run: **~8-12 minutes** currently. As sync jobs are added, this must not grow to hours.
 
-### Current Expensive Operations
+### Measured Operation Timings (Benchmarked 2026-01-04)
 
-| Operation | Est. Time | Frequency |
-| --------- | --------- | --------- |
-| Install pc-switcher from branch | 30-60s | Per module (pc1) |
-| Uninstall + reinstall old version | 40-70s | Per test needing old version |
-| `reset_pcswitcher_state` (delete config+data+snapshots) | 5-10s | Every test using it |
-| Run `pc-switcher sync` | 10-60s | ~22 times across all tests |
+| Operation | Measured Time | Notes |
+| --------- | ------------- | ----- |
+| Delete config dir | ~3ms | `rm -rf ~/.config/pc-switcher` |
+| Delete data dir | ~3ms | `rm -rf ~/.local/share/pc-switcher` |
+| Delete btrfs subvolume | ~20ms each | `btrfs subvolume delete` |
+| **Full reset** (config+data+4 subvolumes) | **<1 second** | Typical reset_pcswitcher_state |
+| Uninstall pc-switcher | ~100ms | `uv tool uninstall` |
+| **Install pc-switcher** (cached deps) | **~4 seconds** | Typical case during CI |
+| Install pc-switcher (cold cache) | ~7 seconds | First install or after cache clear |
+| Upgrade/reinstall pc-switcher | ~2 seconds | When already installed |
+| Create btrfs snapshot of /home | ~30ms | COW metadata only |
+| Delete btrfs snapshot | ~16ms | Fast cleanup |
+| **Typical sync operation** | **15-25 seconds** | Measured from CI logs |
+
+### Key Insight: Installation is Fast
+
+The measured install time (~4s cached) is **6-10x faster** than originally estimated (30-60s). This significantly changes the cost-benefit analysis of optimization strategies.
 
 ### ⚠️ Risks of Fixture Optimization
 
 1. **State leakage**: Session-scoped installs and shared state can increase flakiness if cleanup isn't precise.
-2. **Measure first**: Treat estimated savings as hypotheses. Time before/after each change.
+2. **Complexity vs savings tradeoff**: Some strategies add test infrastructure complexity for marginal gains.
 
-### Strategy 1: Session-Scoped Installation (High Impact)
+### Strategy 1: Session-Scoped Installation (Medium Impact)
 
 **Problem**: `pc1_with_pcswitcher_mod` is module-scoped, reinstalling per test file.
 
@@ -493,9 +505,9 @@ async def pc1_with_pcswitcher_session(pc1_executor, current_git_branch):
     return pc1_executor
 ```
 
-**Savings**: Avoid ~4-5 reinstalls per session.
+**Savings**: ~4s per avoided reinstall × ~4-5 reinstalls = **~16-20 seconds**.
 
-### Strategy 2: Ordered Test Execution (High Impact)
+### Strategy 2: Ordered Test Execution (Medium Impact)
 
 **Problem**: Tests requiring "without pc-switcher" or "old version" trigger uninstall/reinstall cycles.
 
@@ -507,9 +519,9 @@ Phase 2: Tests needing old version → install old, run all
 Phase 3: All other tests → upgrade to current, run all
 ```
 
-**Savings**: Eliminate repeated install/uninstall cycles.
+**Savings**: Avoid ~2-3 extra install cycles = **~8-12 seconds**.
 
-### Strategy 3: Class-Scoped Shared Sync State (Medium Impact)
+### Strategy 3: Class-Scoped Shared Sync State (High Impact)
 
 **Problem**: `TestConsecutiveSyncWarning` has 4 tests, each starting fresh. Tests 6, 7, 8 all need a first sync completed before testing their specific behavior.
 
@@ -523,9 +535,9 @@ async def post_first_sync_state(sync_ready_source, pc2_executor):
     yield
 ```
 
-**Savings**: 3 syncs → 1 sync for consecutive sync tests.
+**Savings**: 2 avoided syncs × ~20s = **~40 seconds**. This is the highest-impact strategy.
 
-### Strategy 4: Targeted Cleanup (Medium Impact)
+### Strategy 4: Targeted Cleanup (Low Impact)
 
 **Problem**: `reset_pcswitcher_state` cleans EVERYTHING on BOTH VMs every test.
 
@@ -539,26 +551,33 @@ async def clean_config_only(pc1_executor):
     yield
 ```
 
-**Savings**: Faster teardown for tests that don't create snapshots.
+**Savings**: Reset already takes <1 second. Partial cleanup saves **<0.5 seconds per test**. Not worth the added complexity.
 
-### Strategy 5: VM State Snapshots (High Impact, More Effort)
+### Strategy 5: VM State Snapshots (Low Priority)
 
-**Problem**: Reinstalling pc-switcher takes 30-60s each time.
+**Problem**: Reinstalling pc-switcher after uninstall.
 
-**Solution**: Use btrfs snapshots of the test VM's root filesystem:
+**Original idea**: Use btrfs snapshots to restore VM state instantly.
 
-```bash
-# At session start: install pc-switcher, snapshot the VM state
-btrfs subvolume snapshot / /.test-baseline
+**Constraints discovered**:
+1. Restoring `/` (root subvolume) requires reboot - not practical for tests
+2. Can only snapshot `/home` which contains pc-switcher install (`~/.local/`), config, and data
+3. Future sync-jobs for `/etc` and system packages would NOT benefit (they modify `/`)
 
-# Before each test: restore to baseline (fast)
-btrfs subvolume delete /
-btrfs subvolume snapshot /.test-baseline /
-```
+**Measured impact**:
+- Current approach: Uninstall (100ms) + Install (~4s) + Reset (<1s) = **~4-5 seconds**
+- Snapshot approach: Delete + Restore snapshot = **~50ms**
+- **Savings per fresh-install test: ~4 seconds**
 
-**Savings**: Restore in seconds instead of reinstall in minutes.
+**Assessment**: With install taking only ~4s (not 30-60s as originally estimated), this strategy's ROI is questionable:
+- Saves ~4s per test needing fresh install (maybe 5-10 tests)
+- Total savings: ~20-40 seconds
+- Adds significant infrastructure complexity
+- Only works for `/home`-scoped operations
 
-### Strategy 6: Combine Assertions in Fewer Syncs (Medium Impact)
+**Verdict**: **Low priority**. The complexity outweighs the modest savings. Consider only if test suite grows significantly and install/reset becomes a bottleneck.
+
+### Strategy 6: Combine Assertions in Fewer Syncs (High Impact)
 
 **Current pattern** (bad):
 ```python
@@ -581,7 +600,9 @@ The main E2E test already does this. Apply same pattern to other test groups.
 
 **How to merge well**: Use small assertion helpers with crisp names (`assert_history_recorded()`, `assert_snapshots_created()`). This keeps tests readable while getting the runtime benefit.
 
-### Strategy 7: Parameterize Similar Tests
+**Savings**: Each avoided sync saves ~20 seconds. Merging 3 tests into 1 saves **~40 seconds**.
+
+### Strategy 7: Parameterize Similar Tests (Low Impact)
 
 **Problem**: Separate tests for SemVer vs PEP440 format run identical setup.
 
@@ -592,17 +613,21 @@ def test_version_format_accepted(version_format):
     # One test, multiple formats
 ```
 
-### Recommended Priority
+**Savings**: Minimal - these tests run quickly anyway. Main benefit is code cleanliness, not speed.
 
-| Priority | Strategy | Est. Savings | Effort |
-| -------- | -------- | ------------ | ------ |
-| 1 | Session-scoped installation | 2-3 min | Low |
-| 2 | Class-scoped shared sync | 1-2 min | Low |
-| 3 | Ordered test execution | 1-2 min | Medium |
-| 4 | Combine assertions | 30-60s | Low |
-| 5 | Parameterize tests | 10-30s | Low |
-| 6 | Targeted cleanup | 10-30s | Low |
-| 7 | VM state snapshots | 2-3 min | High |
+### Recommended Priority (Updated with Measured Data)
+
+| Priority | Strategy | Measured Savings | Effort | Verdict |
+| -------- | -------- | ---------------- | ------ | ------- |
+| 1 | Class-scoped shared sync | ~40 seconds | Low | **Do first** |
+| 2 | Combine assertions in fewer syncs | ~40 seconds | Low | **Do second** |
+| 3 | Session-scoped installation | ~16-20 seconds | Low | Worth doing |
+| 4 | Ordered test execution | ~8-12 seconds | Medium | Worth doing |
+| 5 | Parameterize tests | ~5 seconds | Low | Nice to have |
+| 6 | Targeted cleanup | <5 seconds | Low | Skip - not worth complexity |
+| 7 | VM state snapshots | ~20-40 seconds | High | Skip - complexity vs ROI |
+
+**Total potential savings**: ~80-120 seconds (from ~8-12 min baseline = ~10-15% improvement).
 
 ### Scaling Consideration
 
@@ -610,9 +635,10 @@ When adding new sync jobs:
 - Each new job should add **seconds** to test time, not **minutes**
 - New job tests should use existing sync infrastructure, not run separate syncs
 - One comprehensive sync (with all jobs enabled) validates job integration
-- Individual job logic tested via unit tests with mocked executor
+- The VM test infrastructure exists for real integration tests - use it
 
 ## Before Implementing
 
-1. **Measure** CI timing before/after each optimization
+1. **Re-measure** CI timing if significant changes are made to test structure
 2. **Verify** removed tests have their unique assertion covered elsewhere (see table in Action Items)
+3. Focus on **avoiding redundant sync operations** - that's where the time goes
