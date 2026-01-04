@@ -370,8 +370,8 @@ class TestAcceptanceScenarios:
     Tests correspond to acceptance scenarios from spec.md.
     """
 
-    def test_us1_scenario2_external_warning_filters_asyncssh_info(self) -> None:
-        """US1-Scenario 2: external=WARNING filters asyncssh INFO from both outputs.
+    def test_log_us_config_scenario2_external_warning_filters_asyncssh_info(self) -> None:
+        """LOG-US-CONFIG Scenario 2: external=WARNING filters asyncssh INFO from both outputs.
 
         Given external: WARNING,
         When asyncssh logs an INFO message,
@@ -418,8 +418,8 @@ class TestAcceptanceScenarios:
                 if listener._thread and listener._thread.is_alive():
                     listener.stop()
 
-    def test_us1_scenario3_pcswitcher_debug_in_file_not_tui(self) -> None:
-        """US1-Scenario 3: pcswitcher DEBUG appears in file but NOT in TUI.
+    def test_log_us_config_scenario3_pcswitcher_debug_in_file_not_tui(self) -> None:
+        """LOG-US-CONFIG Scenario 3: pcswitcher DEBUG appears in file but NOT in TUI.
 
         Given file: DEBUG, tui: INFO, external: WARNING,
         When pcswitcher logs a DEBUG message,
@@ -464,8 +464,8 @@ class TestAcceptanceScenarios:
                 if listener._thread and listener._thread.is_alive():
                     listener.stop()
 
-    def test_us2_scenario3_asyncssh_info_in_file_not_tui(self) -> None:
-        """US2-Scenario 3: asyncssh INFO appears in file but NOT in TUI.
+    def test_log_us_external_scenario3_asyncssh_info_in_file_not_tui(self) -> None:
+        """LOG-US-EXTERNAL Scenario 3: asyncssh INFO appears in file but NOT in TUI.
 
         Given external: INFO, file: DEBUG, tui: WARNING,
         When asyncssh emits an INFO,

@@ -5,8 +5,8 @@ Tests cover:
 - LOG-FR-EXCEPTION: CRITICAL log and halt on exception
 - CORE-FR-PROGRESS-FWD: Progress forwarding to UI
 - CORE-FR-SUMMARY: Overall result and job summary logging
-- US1-AS5: Validation errors halt sync
-- US1-AS6: Exception handling in orchestrator
+- CORE-US-JOB-ARCH-AS5: Validation errors halt sync
+- CORE-US-JOB-ARCH-AS6: Exception handling in orchestrator
 - Edge cases: cleanup exceptions, partial failures
 """
 
@@ -62,7 +62,7 @@ class TestFR002ValidateThenExecuteOrder:
     """CORE-FR-LIFECYCLE: Jobs must run validate() before execute() in correct order."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_lifecycle(self, mock_job_context: JobContext) -> None:
+    async def test_core_fr_lifecycle(self, mock_job_context: JobContext) -> None:
         """CORE-FR-LIFECYCLE: Orchestrator calls validate() before execute() for each job.
 
         Validates that the orchestrator follows the validate-then-execute contract
@@ -88,7 +88,7 @@ class TestFR019CriticalOnException:
     """LOG-FR-EXCEPTION: Orchestrator must log CRITICAL and halt on job exceptions."""
 
     @pytest.mark.asyncio
-    async def test_001_log_fr_exception(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
+    async def test_log_fr_exception(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
         """LOG-FR-EXCEPTION: Job exception triggers CRITICAL log and halts sync.
 
         Validates that when a job raises an exception during execution:
@@ -118,7 +118,7 @@ class TestFR044OrchestratorForwardsProgress:
     """CORE-FR-PROGRESS-FWD: Orchestrator forwards job progress to UI."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_progress_fwd(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
+    async def test_core_fr_progress_fwd(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
         """CORE-FR-PROGRESS-FWD: Job progress updates are published to event bus.
 
         Validates that when a job reports progress via _report_progress(),
@@ -166,7 +166,7 @@ class TestFR048LogSyncSummary:
     """CORE-FR-SUMMARY: Orchestrator logs overall result and job summary."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_summary(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
+    async def test_core_fr_summary(self, mock_job_context: JobContext, mock_event_bus: MagicMock) -> None:
         """CORE-FR-SUMMARY: Orchestrator logs sync completion summary.
 
         Validates that the orchestrator can construct a summary of job results
@@ -198,11 +198,11 @@ class TestFR048LogSyncSummary:
 
 
 class TestUS1AS5ValidationErrorsHaltSync:
-    """US1-AS5: Validation errors prevent sync execution."""
+    """CORE-US-JOB-ARCH-AS5: Validation errors prevent sync execution."""
 
     @pytest.mark.asyncio
-    async def test_001_us1_as5_validation_errors_halt_sync(self, mock_job_context: JobContext) -> None:
-        """US1-AS5: Jobs with validation errors do not execute.
+    async def test_core_us_job_arch_as5_validation_errors_halt_sync(self, mock_job_context: JobContext) -> None:
+        """CORE-US-JOB-ARCH-AS5: Jobs with validation errors do not execute.
 
         Validates that when a job's validate() returns errors, the orchestrator:
         1. Collects the validation errors
@@ -229,11 +229,11 @@ class TestUS1AS5ValidationErrorsHaltSync:
 
 
 class TestUS1AS6ExceptionHandling:
-    """US1-AS6: Orchestrator catches and handles job exceptions."""
+    """CORE-US-JOB-ARCH-AS6: Orchestrator catches and handles job exceptions."""
 
     @pytest.mark.asyncio
-    async def test_001_us1_as6_exception_handling(self, mock_job_context: JobContext) -> None:
-        """US1-AS6: Orchestrator catches exceptions from jobs.
+    async def test_core_us_job_arch_as6_exception_handling(self, mock_job_context: JobContext) -> None:
+        """CORE-US-JOB-ARCH-AS6: Orchestrator catches exceptions from jobs.
 
         Validates that when a job raises an exception during execute():
         1. The orchestrator can catch the exception
@@ -264,10 +264,10 @@ class TestEdgeCases:
     """Edge cases for orchestrator job lifecycle."""
 
     @pytest.mark.asyncio
-    async def test_001_edge_cancelled_error_cleanup_and_reraise(self, mock_job_context: JobContext) -> None:
+    async def test_core_edge_cancelled_error_cleanup_and_reraise(self, mock_job_context: JobContext) -> None:
         """Edge: Job cleanup on cancellation happens inside execute().
 
-        Contract reference: specs/001-core/contracts/job-interface.md
+        Contract reference: docs/system/core.md
 
         Jobs MUST catch `asyncio.CancelledError`, perform cleanup, and re-raise.
         This test verifies that pattern without relying on `__del__()`.
@@ -301,7 +301,7 @@ class TestEdgeCases:
         assert job.cleanup_ran
 
     @pytest.mark.asyncio
-    async def test_001_edge_partial_job_failures(self, mock_job_context: JobContext) -> None:
+    async def test_core_edge_partial_job_failures(self, mock_job_context: JobContext) -> None:
         """Edge: Some jobs succeed, some fail.
 
         Validates that the orchestrator correctly handles a scenario where

@@ -1,7 +1,7 @@
 """Unit tests for BtrfsSnapshotJob.
 
-Tests verify snapshot creation, validation, and error handling per 001-core spec.
-Reference: specs/001-core/spec.md (User Story 3 - Safety Infrastructure with Btrfs Snapshots)
+Tests verify snapshot creation, validation, and error handling per CORE-US-BTRFS spec.
+Reference: docs/system/core.md (User Story CORE-US-BTRFS - Safety Infrastructure with Btrfs Snapshots)
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pcswitcher.models import CommandResult
 class TestBtrfsSnapshotJobCreation:
     """Tests for snapshot creation functionality."""
 
-    async def test_001_core_fr_snap_pre(
+    async def test_core_fr_snap_pre(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
@@ -59,7 +59,7 @@ class TestBtrfsSnapshotJobCreation:
         assert any("sudo btrfs subvolume snapshot -r /" in call for call in target_calls)
         assert any("sudo btrfs subvolume snapshot -r /home" in call for call in target_calls)
 
-    async def test_001_core_fr_snap_post(
+    async def test_core_fr_snap_post(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
@@ -92,7 +92,7 @@ class TestBtrfsSnapshotJobCreation:
         assert not any("pre-@-" in call for call in source_calls)
 
     @freeze_time("2025-01-15T10:30:00")
-    async def test_001_core_fr_snap_name(
+    async def test_core_fr_snap_name(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
@@ -125,7 +125,7 @@ class TestBtrfsSnapshotJobCreation:
         # Should contain snapshot with format: pre-@home-20250115T103000
         assert any("pre-@home-20250115T103000" in call for call in source_calls)
 
-    async def test_001_core_fr_snap_always(
+    async def test_core_fr_snap_always(
         self,
         mock_job_context_factory: type,
     ) -> None:
@@ -161,7 +161,7 @@ class TestBtrfsSnapshotJobCreation:
 class TestBtrfsSnapshotJobErrorHandling:
     """Tests for snapshot error handling and validation."""
 
-    async def test_001_core_fr_snap_fail(
+    async def test_core_fr_snap_fail(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
@@ -198,7 +198,7 @@ class TestBtrfsSnapshotJobErrorHandling:
         with pytest.raises(RuntimeError, match="Snapshot creation failed"):
             await job.execute()
 
-    async def test_001_core_fr_snap_cleanup(self) -> None:
+    async def test_core_fr_snap_cleanup(self) -> None:
         """CORE-FR-SNAP-CLEANUP: System MUST provide snapshot cleanup with retention policy.
 
         Note: This test verifies that cleanup functionality exists and is testable.
@@ -218,7 +218,7 @@ class TestBtrfsSnapshotJobErrorHandling:
 class TestBtrfsSnapshotJobValidation:
     """Tests for snapshot validation functionality."""
 
-    async def test_001_core_fr_subvol_exist(
+    async def test_core_fr_subvol_exist(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
@@ -265,7 +265,7 @@ class TestBtrfsSnapshotJobValidation:
         assert len(errors) > 0
         assert any("@home" in str(error) and "source" in str(error).lower() for error in errors)
 
-    async def test_001_core_fr_snapdir(
+    async def test_core_fr_snapdir(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
@@ -301,13 +301,13 @@ class TestBtrfsSnapshotJobValidation:
         source_calls = [call[0][0] for call in mock_local_executor.run_command.call_args_list]
         assert any("btrfs subvolume show /.snapshots" in call for call in source_calls)
 
-    async def test_001_us3_as1_validate_subvolumes_exist(
+    async def test_core_us_btrfs_as1_validate_subvolumes_exist(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
         mock_remote_executor: MagicMock,
     ) -> None:
-        """US3-AS1: Orchestrator MUST verify configured subvolumes exist on both hosts.
+        """CORE-US-BTRFS-AS1: Orchestrator MUST verify configured subvolumes exist on both hosts.
 
         Acceptance Scenario 1: Given a sync is requested with configured subvolumes,
         When orchestrator begins pre-sync checks, Then it MUST verify that all
@@ -351,13 +351,13 @@ class TestBtrfsSnapshotJobValidation:
         # All subvolumes exist - no errors
         assert len(errors) == 0
 
-    async def test_001_us3_as5_abort_if_snapshots_not_subvolume(
+    async def test_core_us_btrfs_as5_abort_if_snapshots_not_subvolume(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
         mock_remote_executor: MagicMock,
     ) -> None:
-        """US3-AS5: Orchestrator MUST abort if /.snapshots/ is not a subvolume.
+        """CORE-US-BTRFS-AS5: Orchestrator MUST abort if /.snapshots/ is not a subvolume.
 
         Acceptance Scenario 5: Given /.snapshots/ exists but is a regular directory
         (not a subvolume), When orchestrator validates snapshot infrastructure,
@@ -399,13 +399,13 @@ class TestBtrfsSnapshotJobValidation:
         assert len(errors) > 0
         assert any("/.snapshots" in str(error) and "source" in str(error).lower() for error in errors)
 
-    async def test_001_us3_as6_abort_on_snapshot_failure(
+    async def test_core_us_btrfs_as6_abort_on_snapshot_failure(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,
         mock_remote_executor: MagicMock,
     ) -> None:
-        """US3-AS6: Orchestrator MUST abort if snapshot creation fails.
+        """CORE-US-BTRFS-AS6: Orchestrator MUST abort if snapshot creation fails.
 
         Acceptance Scenario 6: Given snapshot creation fails on target
         (e.g., insufficient space), When the failure occurs, Then the
@@ -438,8 +438,8 @@ class TestBtrfsSnapshotJobValidation:
         with pytest.raises(RuntimeError, match="Snapshot creation failed"):
             await job.execute()
 
-    async def test_001_us3_as8_preflight_disk_space_check(self) -> None:
-        """US3-AS8: Orchestrator MUST check disk space before starting sync.
+    async def test_core_us_btrfs_as8_preflight_disk_space_check(self) -> None:
+        """CORE-US-BTRFS-AS8: Orchestrator MUST check disk space before starting sync.
 
         Acceptance Scenario 8: Given orchestrator configuration includes
         disk_space_monitor.preflight_minimum, When sync begins, Then orchestrator
@@ -462,7 +462,7 @@ class TestBtrfsSnapshotJobValidation:
 class TestBtrfsSnapshotJobEdgeCases:
     """Tests for edge cases and boundary conditions."""
 
-    async def test_001_edge_insufficient_space_snapshots(
+    async def test_core_edge_insufficient_space_snapshots(
         self,
         mock_job_context_factory: type,
         mock_local_executor: MagicMock,

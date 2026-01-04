@@ -100,7 +100,7 @@ class TestSyncLock:
         assert target_lock.acquire("target:hostB:session2")
         target_lock.release()
 
-    def test_001_core_fr_lock(self, tmp_path: Path) -> None:
+    def test_core_fr_lock(self, tmp_path: Path) -> None:
         """CORE-FR-LOCK: Locking prevents concurrent execution.
 
         System MUST implement locking mechanism to prevent concurrent sync executions.
@@ -125,8 +125,8 @@ class TestSyncLock:
         assert sync2_lock.acquire("source:laptop2:sync2")
         sync2_lock.release()
 
-    def test_001_edge_concurrent_sync_attempts(self, tmp_path: Path) -> None:
-        """Edge case: concurrent sync attempts are blocked.
+    def test_core_edge_concurrent_sync_attempts(self, tmp_path: Path) -> None:
+        """CORE-EDGE: concurrent sync attempts are blocked.
 
         When multiple processes attempt to acquire the lock simultaneously,
         only one should succeed while all others fail gracefully without

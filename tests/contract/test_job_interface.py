@@ -135,7 +135,7 @@ class TestJobContract:
         mock_job_context.event_bus.publish.assert_called_once()  # type: ignore[union-attr]
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_job_iface(self, mock_job_context: JobContext) -> None:
+    async def test_core_fr_job_iface(self, mock_job_context: JobContext) -> None:
         """CORE-FR-JOB-IFACE: Job interface defines standardized methods.
 
         Verifies that the Job interface includes:
@@ -161,8 +161,8 @@ class TestJobContract:
         assert isinstance(ExampleTestJob.name, str)
 
     @pytest.mark.asyncio
-    async def test_001_us1_as2_config_schema_validation(self) -> None:
-        """US1-AS2: Job defines config schema, system validates.
+    async def test_core_us_job_arch_as2_config_schema_validation(self) -> None:
+        """CORE-US-JOB-ARCH-AS2: Job defines config schema, system validates.
 
         Verifies that:
         - Job can define configuration schema
@@ -189,10 +189,10 @@ class TestJobContract:
         assert "required_field" in errors[0].message
 
     @pytest.mark.asyncio
-    async def test_001_us1_as3_job_logging_at_all_levels(
+    async def test_core_us_job_arch_as3_job_logging_at_all_levels(
         self, mock_job_context: JobContext, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """US1-AS3: Job emits log messages at six levels.
+        """CORE-US-JOB-ARCH-AS3: Job emits log messages at six levels.
 
         Verifies that jobs can emit logs at all six levels:
         DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL
@@ -225,8 +225,8 @@ class TestJobContract:
             assert record.__dict__.get("host") == "source"
 
     @pytest.mark.asyncio
-    async def test_001_us1_as4_job_progress_reporting(self, mock_job_context: JobContext) -> None:
-        """US1-AS4: Job emits progress updates.
+    async def test_core_us_job_arch_as4_job_progress_reporting(self, mock_job_context: JobContext) -> None:
+        """CORE-US-JOB-ARCH-AS4: Job emits progress updates.
 
         Verifies that jobs can emit progress updates with:
         - Percentage

@@ -9,7 +9,7 @@ stdlib-based logging are in tests/unit/test_logging.py and
 tests/contract/test_logging_contract.py.
 
 References:
-- specs/001-core/spec.md - User Story 4 (Logging System)
+- docs/system/core.md - User Story 4 (Logging System)
 - specs/004-python-logging - Standard Python Logging Integration
 - LOG-FR-LEVELS: Six log levels with correct ordering
 - LOG-FR-FILE-PATH: Timestamped log files
@@ -26,7 +26,7 @@ from pcswitcher.models import LogLevel
 class TestLogLevelOrdering:
     """Test LOG-FR-LEVELS: Six log levels with correct ordering."""
 
-    def test_001_log_fr_levels(self) -> None:
+    def test_log_fr_levels(self) -> None:
         """LOG-FR-LEVELS: Six log levels with correct ordering.
 
         Verifies that LogLevel enum has exactly six levels with the ordering:
@@ -61,7 +61,7 @@ class TestLogLevelOrdering:
 class TestFileLoggerTimestampedFile:
     """Test LOG-FR-FILE-PATH: Logs written to timestamped file."""
 
-    def test_001_log_fr_file_path(self) -> None:
+    def test_log_fr_file_path(self) -> None:
         """LOG-FR-FILE-PATH: Log filename includes timestamp and session ID.
 
         Verifies generate_log_filename() creates filenames with format:

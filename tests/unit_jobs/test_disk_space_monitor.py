@@ -175,7 +175,7 @@ class TestDiskSpaceMonitorValidation:
 class TestDiskSpaceMonitorPreflightCheck:
     """Test preflight disk space checks - CORE-FR-DISK-PRE."""
 
-    def test_001_core_fr_disk_pre_percentage_threshold(self, mock_job_context: JobContext) -> None:
+    def test_core_fr_disk_pre_percentage_threshold(self, mock_job_context: JobContext) -> None:
         """CORE-FR-DISK-PRE: DiskSpaceMonitorJob must support percentage-based preflight_minimum threshold.
 
         Spec requirement: CORE-FR-DISK-PRE states that preflight_minimum MUST be specified
@@ -187,7 +187,7 @@ class TestDiskSpaceMonitorPreflightCheck:
         assert job._preflight_threshold[0] == "percent"
         assert job._preflight_threshold[1] == 20
 
-    def test_001_core_fr_disk_pre_absolute_threshold(self) -> None:
+    def test_core_fr_disk_pre_absolute_threshold(self) -> None:
         """CORE-FR-DISK-PRE: DiskSpaceMonitorJob must support absolute value preflight_minimum threshold.
 
         Spec requirement: CORE-FR-DISK-PRE states that preflight_minimum MUST support
@@ -222,7 +222,7 @@ class TestDiskSpaceMonitorPreflightCheck:
         assert job._preflight_threshold[0] == "bytes"
         assert job._preflight_threshold[1] == 50 * (2**30)
 
-    def test_001_core_fr_disk_pre_rejects_invalid_format(self) -> None:
+    def test_core_fr_disk_pre_rejects_invalid_format(self) -> None:
         """CORE-FR-DISK-PRE: Values without explicit units must be invalid.
 
         Spec requirement: CORE-FR-DISK-PRE explicitly states that values without explicit
@@ -245,7 +245,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
     """Test runtime disk space monitoring - CORE-FR-DISK-RUNTIME."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_disk_runtime_detects_critical_threshold(self, mock_job_context: JobContext) -> None:
+    async def test_core_fr_disk_runtime_detects_critical_threshold(self, mock_job_context: JobContext) -> None:
         """CORE-FR-DISK-RUNTIME: Monitor must abort with CRITICAL when free space falls below runtime_minimum.
 
         Spec requirement: CORE-FR-DISK-RUNTIME states orchestrator MUST monitor free disk space
@@ -271,7 +271,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         assert "15%" in exc_info.value.threshold
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_disk_runtime_percentage_threshold(self, mock_job_context: JobContext) -> None:
+    async def test_core_fr_disk_runtime_percentage_threshold(self, mock_job_context: JobContext) -> None:
         """CORE-FR-DISK-RUNTIME: Runtime monitoring must support percentage-based runtime_minimum.
 
         Spec requirement: CORE-FR-DISK-RUNTIME requires runtime_minimum to be specified as
@@ -284,7 +284,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         assert job._runtime_threshold[1] == 15
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_disk_runtime_absolute_threshold(self) -> None:
+    async def test_core_fr_disk_runtime_absolute_threshold(self) -> None:
         """CORE-FR-DISK-RUNTIME: Runtime monitoring must support absolute value runtime_minimum.
 
         Spec requirement: CORE-FR-DISK-RUNTIME requires runtime_minimum to support absolute
@@ -320,7 +320,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         assert job._runtime_threshold[1] == 40 * (2**30)
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_disk_runtime_configurable_interval(self, mock_job_context: JobContext) -> None:
+    async def test_core_fr_disk_runtime_configurable_interval(self, mock_job_context: JobContext) -> None:
         """CORE-FR-DISK-RUNTIME: Monitoring must use configurable check interval.
 
         Spec requirement: CORE-FR-DISK-RUNTIME requires monitoring at a configurable interval
@@ -332,7 +332,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         assert job._check_interval == 30
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_disk_runtime_warns_at_warning_threshold(self, mock_job_context: JobContext) -> None:
+    async def test_core_fr_disk_runtime_warns_at_warning_threshold(self, mock_job_context: JobContext) -> None:
         """CORE-FR-DISK-RUNTIME: Monitor must warn when disk space approaches warning threshold.
 
         While CORE-FR-DISK-RUNTIME focuses on CRITICAL abort, the implementation includes
@@ -362,7 +362,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         # Note: actual logging verification depends on event_bus mock implementation
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_disk_runtime_continues_when_above_threshold(self, mock_job_context: JobContext) -> None:
+    async def test_core_fr_disk_runtime_continues_when_above_threshold(self, mock_job_context: JobContext) -> None:
         """CORE-FR-DISK-RUNTIME: Monitor must continue monitoring when disk space is sufficient.
 
         Spec requirement: CORE-FR-DISK-RUNTIME requires continuous monitoring - only abort when
@@ -391,7 +391,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
             await task
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_disk_runtime_monitors_target_host(self) -> None:
+    async def test_core_fr_disk_runtime_monitors_target_host(self) -> None:
         """CORE-FR-DISK-RUNTIME: Monitor must support monitoring target host.
 
         Spec requirement: CORE-FR-DISK-RUNTIME requires monitoring on both source AND target.
@@ -440,7 +440,7 @@ class TestDiskSpaceMonitorRuntimeMonitoring:
         # Verify target executor was used (not source)
         target.run_command.assert_called()
 
-    def test_001_core_fr_disk_runtime_rejects_invalid_format(self) -> None:
+    def test_core_fr_disk_runtime_rejects_invalid_format(self) -> None:
         """CORE-FR-DISK-RUNTIME: Values without explicit units must be invalid.
 
         Spec requirement: CORE-FR-DISK-RUNTIME explicitly states that values without explicit

@@ -1,11 +1,11 @@
 """Unit tests for InstallOnTargetJob.
 
-Tests cover CORE-US-SELF-INSTALL (Self-Installation) requirements from specs/001-core/spec.md:
+Tests cover CORE-US-SELF-INSTALL (Self-Installation) requirements:
 - CORE-FR-VERSION-CHECK: Check version, install from GitHub
 - CORE-FR-VERSION-NEWER: Abort if target newer
 - CORE-FR-INSTALL-FAIL: Abort on installation failure
-- US2-AS3: Skip when versions match
-- US2-AS4: Abort on install failure
+- CORE-US-SELF-INSTALL-AS3: Skip when versions match
+- CORE-US-SELF-INSTALL-AS4: Abort on install failure
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ class TestInstallOnTargetJobVersionCheck:
     """Test version checking and installation logic - CORE-FR-VERSION-CHECK."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_version_check(self, mock_install_context: JobContext) -> None:
+    async def test_core_fr_version_check(self, mock_install_context: JobContext) -> None:
         """CORE-FR-VERSION-CHECK: System must check target version and install from GitHub if missing.
 
         Spec requirement: CORE-FR-VERSION-CHECK states system MUST check target machine's pc-switcher
@@ -92,7 +92,7 @@ class TestInstallOnTargetJobVersionCheck:
             )
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_version_check_upgrade(self, mock_install_context: JobContext) -> None:
+    async def test_core_fr_version_check_upgrade(self, mock_install_context: JobContext) -> None:
         """CORE-FR-VERSION-CHECK: System must upgrade target when version is older than source.
 
         Spec requirement: CORE-FR-VERSION-CHECK requires installation/upgrade when target is
@@ -142,7 +142,7 @@ class TestInstallOnTargetJobNewerTargetVersion:
     """Test abort when target has newer version - CORE-FR-VERSION-NEWER."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_version_newer(self, mock_install_context: JobContext) -> None:
+    async def test_core_fr_version_newer(self, mock_install_context: JobContext) -> None:
         """CORE-FR-VERSION-NEWER: System must abort sync if target version is newer than source.
 
         Spec requirement: CORE-FR-VERSION-NEWER states system MUST abort sync with CRITICAL log
@@ -166,7 +166,7 @@ class TestInstallOnTargetJobNewerTargetVersion:
             assert errors[0].host == Host.TARGET
 
     @pytest.mark.asyncio
-    async def test_001_edge_target_newer_version(self, mock_install_context: JobContext) -> None:
+    async def test_edge_target_newer_version(self, mock_install_context: JobContext) -> None:
         """Edge case: Target has newer version prevents execution.
 
         Tests that when target has a newer version than source, the validation
@@ -195,7 +195,7 @@ class TestInstallOnTargetJobInstallationFailure:
     """Test abort on installation failure - CORE-FR-INSTALL-FAIL."""
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_install_fail(self, mock_install_context: JobContext) -> None:
+    async def test_core_fr_install_fail(self, mock_install_context: JobContext) -> None:
         """CORE-FR-INSTALL-FAIL: System must abort if installation/upgrade fails.
 
         Spec requirement: CORE-FR-INSTALL-FAIL states if installation/upgrade fails, system MUST
@@ -234,7 +234,7 @@ class TestInstallOnTargetJobInstallationFailure:
             assert "disk full" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_001_core_fr_install_fail_verification(self, mock_install_context: JobContext) -> None:
+    async def test_core_fr_install_fail_verification(self, mock_install_context: JobContext) -> None:
         """CORE-FR-INSTALL-FAIL: System must abort if installation verification fails.
 
         Tests that even if install command succeeds, verification must confirm
@@ -276,10 +276,10 @@ class TestInstallOnTargetJobSkipWhenMatching:
     """Test skip when versions match - CORE-US-SELF-INSTALL-AS3."""
 
     @pytest.mark.asyncio
-    async def test_001_core_us_self_install_as3(self, mock_install_context: JobContext) -> None:
+    async def test_core_us_self_install_as3(self, mock_install_context: JobContext) -> None:
         """CORE-US-SELF-INSTALL-AS3: System must skip installation when versions match.
 
-        Spec requirement: US2-AS3 states when source and target both have version
+        Spec requirement: CORE-US-SELF-INSTALL-AS3 states when source and target both have version
         0.4.0, orchestrator logs "Target pc-switcher version matches source (0.4.0),
         skipping installation" and proceeds immediately to next phase.
         """
@@ -315,10 +315,10 @@ class TestInstallOnTargetJobAS4:
     """Test CORE-US-SELF-INSTALL-AS4: Abort on install failure."""
 
     @pytest.mark.asyncio
-    async def test_001_core_us_self_install_as4(self, mock_install_context: JobContext) -> None:
+    async def test_core_us_self_install_as4(self, mock_install_context: JobContext) -> None:
         """CORE-US-SELF-INSTALL-AS4: System must abort sync when installation fails.
 
-        Spec requirement: US2-AS4 states when installation/upgrade fails on target
+        Spec requirement: CORE-US-SELF-INSTALL-AS4 states when installation/upgrade fails on target
         (e.g., disk full, permissions issue), orchestrator logs CRITICAL error and
         does not proceed with sync.
         """
@@ -356,13 +356,13 @@ class TestInstallOnTargetJobAS4:
 
 
 class TestInstallOnTargetJobUS7AS2:
-    """Test US7-AS2: Target install uses shared installation logic."""
+    """Test CORE-US-INSTALL-AS2: Target install uses shared installation logic."""
 
     @pytest.mark.asyncio
-    async def test_001_us7_as2_target_install_shared_logic(self, mock_install_context: JobContext) -> None:
-        """US7-AS2: InstallOnTargetJob must use the same install.sh script as initial installation.
+    async def test_core_us_install_as2_target_install_shared_logic(self, mock_install_context: JobContext) -> None:
+        """CORE-US-INSTALL-AS2: InstallOnTargetJob must use the same install.sh script as initial installation.
 
-        Spec requirement: US7-AS2 states that when pc-switcher sync installs on target
+        Spec requirement: CORE-US-INSTALL-AS2 states that when pc-switcher sync installs on target
         (InstallOnTargetJob), it MUST use the same installation logic (install.sh) that
         handles uv installation if missing, then installs/upgrades pc-switcher.
 
