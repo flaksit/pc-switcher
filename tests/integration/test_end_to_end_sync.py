@@ -731,6 +731,9 @@ class TestConsecutiveSyncWarning:
     ) -> None:
         """Test complete consecutive sync warning workflow.
 
+        TODO add links to the Semantic IDs for ALL tests executed here.
+        TODO change name of test to something that covers everything done here.
+
         Consolidated test covering:
         - Sync history updates on both machines after successful sync
         - Consecutive syncs blocked when prompt defaults to 'n'
@@ -750,7 +753,7 @@ class TestConsecutiveSyncWarning:
 
         # Step 1: First sync - verify history updates
         first_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes --allow-consecutive",
+            "pc-switcher sync pc2 --yes",
             timeout=180.0,
             login_shell=True,
         )
@@ -790,7 +793,7 @@ class TestConsecutiveSyncWarning:
             f"Exit code: {second_sync.exit_code}\nStdout: {second_sync.stdout}"
         )
         output = second_sync.stdout + second_sync.stderr
-        assert "consecutive" in output.lower() or "abort" in output.lower(), (
+        assert "consecutive" in output.lower() and "abort" in output.lower(), (
             f"Output should mention consecutive sync warning.\nOutput: {output}"
         )
 
@@ -829,7 +832,7 @@ class TestConsecutiveSyncWarning:
 
         # Step 1: pc1 syncs to pc2
         first_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes --allow-consecutive",
+            "pc-switcher sync pc2 --yes",
             timeout=180.0,
             login_shell=True,
         )

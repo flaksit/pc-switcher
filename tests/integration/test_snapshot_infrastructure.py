@@ -77,7 +77,6 @@ async def test_core_us_btrfs_create_snapshots(
 ) -> None:
     """Test CORE-US-BTRFS-AS2/AS3: Create pre-sync and post-sync snapshots.
 
-    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenarios 2 & 3
     Verifies that the system creates read-only btrfs snapshots in
     /.snapshots/pc-switcher/<session-folder>/ with correct naming patterns:
     - PRE: pre-<subvol>-<timestamp>
@@ -134,12 +133,14 @@ async def test_core_us_btrfs_as4_create_snapshots_subvolume(
 ) -> None:
     """Test CORE-US-BTRFS-AS4: Create /.snapshots/ as btrfs subvolume if missing.
 
-    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenario 4
     Verifies that if /.snapshots/ doesn't exist, the system creates it as a
     btrfs subvolume (not a regular directory).
 
     Note: This test uses a test directory instead of the actual /.snapshots
     because the test VMs use /.snapshots/baseline for infrastructure reset.
+
+    TODO: Remove this functionality! We shouldn't be creating top-level subvolumes.
+        Isn't /.snapshots/ part of the prerequisites?
     """
     # Use a test directory that won't interfere with VM infrastructure
     test_snapshots_path = "/test-snapshots-creation"
