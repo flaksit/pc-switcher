@@ -724,30 +724,42 @@ class TestConsecutiveSyncWarning:
     - Back-sync workflow clears the warning state
     """
 
-    async def test_sync_updates_history_on_both_machines(
+    async def test_consecutive_sync_warning_workflow(
         self,
         sync_ready_source: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """After sync, both machines should have correct sync history.
+        """Test complete consecutive sync warning workflow.
 
-        Verifies:
-        - Source (pc1) has last_role="source"
-        - Target (pc2) has last_role="target"
+        TODO add links to the Semantic IDs for ALL tests executed here.
+        TODO change name of test to something that covers everything done here.
+
+        Consolidated test covering:
+        - Sync history updates on both machines after successful sync
+        - Consecutive syncs blocked when prompt defaults to 'n'
+        - --allow-consecutive flag bypasses the warning
+
+        Workflow:
+        1. First sync → verifies history updated on both machines
+        2. Second sync (no flag) → verifies blocked by warning
+        3. Third sync (with flag) → verifies flag bypasses warning
+
+        This consolidation saves ~2 sync operations (~16 seconds) compared
+        to running these as separate tests.
         """
         pc1_executor = sync_ready_source
 
         # History cleanup done by reset_pcswitcher_state fixture (via sync_ready_source)
 
-        # Run sync with --allow-consecutive to avoid any existing state issues
-        sync_result = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes --allow-consecutive",
+        # Step 1: First sync - verify history updates
+        first_sync = await pc1_executor.run_command(
+            "pc-switcher sync pc2 --yes",
             timeout=180.0,
             login_shell=True,
         )
-        assert sync_result.success, (
-            f"Sync failed.\nExit code: {sync_result.exit_code}\n"
-            f"Stdout: {sync_result.stdout}\nStderr: {sync_result.stderr}"
+        assert first_sync.success, (
+            f"First sync failed.\nExit code: {first_sync.exit_code}\n"
+            f"Stdout: {first_sync.stdout}\nStderr: {first_sync.stderr}"
         )
 
         # Verify source history
@@ -770,71 +782,30 @@ class TestConsecutiveSyncWarning:
             f"pc2 should have last_role=target.\nContent: {pc2_history.stdout}"
         )
 
-    async def test_consecutive_sync_blocked_without_flag(
-        self,
-        sync_ready_source: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-    ) -> None:
-        """Consecutive sync should be blocked when prompt defaults to 'n'.
-
-        After a successful sync, attempting another sync without --allow-consecutive
-        should abort because the warning prompt defaults to 'n' in non-interactive mode.
-        """
-        pc1_executor = sync_ready_source
-
-        # History cleanup done by reset_pcswitcher_state fixture (via sync_ready_source)
-
-        first_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes --allow-consecutive",
-            timeout=180.0,
-            login_shell=True,
-        )
-        assert first_sync.success, f"First sync should succeed: {first_sync.stderr}"
-
-        # Attempt second sync WITHOUT --allow-consecutive
-        # This should fail because warning prompt defaults to 'n'
+        # Step 2: Second sync WITHOUT --allow-consecutive should be blocked
         second_sync = await pc1_executor.run_command(
             "pc-switcher sync pc2 --yes",
             timeout=60.0,
             login_shell=True,
         )
-
         assert not second_sync.success, (
             f"Second sync should fail (warning default=n).\n"
             f"Exit code: {second_sync.exit_code}\nStdout: {second_sync.stdout}"
         )
-        # Verify the output mentions consecutive sync or abort
         output = second_sync.stdout + second_sync.stderr
-        assert "consecutive" in output.lower() or "abort" in output.lower(), (
+        assert "consecutive" in output.lower() and "abort" in output.lower(), (
             f"Output should mention consecutive sync warning.\nOutput: {output}"
         )
 
-    async def test_consecutive_sync_allowed_with_flag(
-        self,
-        sync_ready_source: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-    ) -> None:
-        """Consecutive sync should succeed with --allow-consecutive flag."""
-        pc1_executor = sync_ready_source
-
-        # History cleanup done by reset_pcswitcher_state fixture (via sync_ready_source)
-
-        first_sync = await pc1_executor.run_command(
+        # Step 3: Third sync WITH --allow-consecutive should succeed
+        third_sync = await pc1_executor.run_command(
             "pc-switcher sync pc2 --yes --allow-consecutive",
             timeout=180.0,
             login_shell=True,
         )
-        assert first_sync.success, f"First sync should succeed: {first_sync.stderr}"
-
-        # Second sync WITH --allow-consecutive should succeed
-        second_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes --allow-consecutive",
-            timeout=180.0,
-            login_shell=True,
-        )
-        assert second_sync.success, (
-            f"Second sync with --allow-consecutive should succeed.\n"
-            f"Exit code: {second_sync.exit_code}\nStderr: {second_sync.stderr}"
+        assert third_sync.success, (
+            f"Third sync with --allow-consecutive should succeed.\n"
+            f"Exit code: {third_sync.exit_code}\nStderr: {third_sync.stderr}"
         )
 
     async def test_back_sync_clears_warning(
@@ -861,7 +832,7 @@ class TestConsecutiveSyncWarning:
 
         # Step 1: pc1 syncs to pc2
         first_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes --allow-consecutive",
+            "pc-switcher sync pc2 --yes",
             timeout=180.0,
             login_shell=True,
         )

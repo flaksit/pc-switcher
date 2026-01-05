@@ -1,4 +1,4 @@
-"""Integration tests for Terminal UI with progress reporting.
+"""Unit tests for Terminal UI with progress reporting.
 
 Tests the Rich-based terminal UI system that displays:
 - Job progress bars with percentages
@@ -8,15 +8,8 @@ Tests the Rich-based terminal UI system that displays:
 These tests verify that UI components exist and respond to events correctly.
 Visual appearance is verified via manual playbook per 002-testing-framework spec.
 
-NOTE: These tests do not require VM infrastructure. They test the integration
-of UI components with the event system in isolation. To run without VMs, set
-dummy environment variables:
-
-    export HCLOUD_TOKEN=dummy
-    export PC_SWITCHER_TEST_PC1_HOST=dummy
-    export PC_SWITCHER_TEST_PC2_HOST=dummy
-    export PC_SWITCHER_TEST_USER=dummy
-    uv run pytest tests/integration/test_terminal_ui.py -v
+These tests do not require VM infrastructure. They test the integration
+of UI components with the event system in isolation.
 
 References:
 - CORE-US-TUI-AS1: Display progress bar, percentage, job name

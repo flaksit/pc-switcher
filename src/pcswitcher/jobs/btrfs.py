@@ -35,6 +35,8 @@ def subvolume_to_mount_point(subvol_name: str) -> str:
 
     Returns:
         Mount point path (e.g., "/home")
+
+    TODO: Review if it is sound to have a fixed mapping here. Shouldn't we get the mapping live from the system?
     """
     if subvol_name == "@":
         return "/"
