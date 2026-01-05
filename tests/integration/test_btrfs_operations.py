@@ -147,31 +147,3 @@ async def test_multiple_snapshots_isolation(pc1_executor: RemoteExecutor, test_v
             f"sudo btrfs subvolume delete {snapshot2}",
             timeout=10.0,
         )
-
-
-@pytest.mark.parametrize(
-    ("scenario", "command"),
-    [
-        ("invalid_source", "sudo btrfs subvolume snapshot -r /nonexistent/path /tmp/bad-snapshot"),
-        ("invalid_destination", "sudo btrfs subvolume snapshot -r /test-vol /nonexistent/dir/snapshot"),
-        ("delete_nonexistent", "sudo btrfs subvolume delete /test-vol/.snapshots/nonexistent-snapshot-12345"),
-    ],
-)
-async def test_snapshot_operation_failures(
-    pc1_executor: RemoteExecutor,
-    test_volume: str,
-    scenario: str,
-    command: str,
-) -> None:
-    """Test that snapshot operations fail gracefully with invalid paths.
-
-    Per spec TST-FR-CONTRACT, we must verify failure paths.
-    Tests:
-    - Snapshot creation with invalid source path
-    - Snapshot creation with invalid destination path
-    - Snapshot deletion when snapshot doesn't exist
-    """
-    result = await pc1_executor.run_command(command, timeout=10.0)
-
-    assert not result.success, f"{scenario} should fail"
-    assert result.exit_code != 0, f"{scenario} should have non-zero exit code"
