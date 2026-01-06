@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 from collections.abc import Iterator
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
@@ -321,3 +322,85 @@ class TestInterruptHandling:
         assert "job1" in jobs_executed, "First job should have executed"
         assert "job2" not in jobs_executed, "Second job should not execute after interrupt"
         assert "job3" not in jobs_executed, "Third job should not execute after interrupt"
+
+    @pytest.mark.asyncio
+    async def test_asyncio_cancellation_on_double_interrupt(self) -> None:
+        """Test asyncio cancellation pattern for double-interrupt scenario.
+
+        This test verifies the asyncio task cancellation pattern used in the CLI
+        when handling double SIGINT. It tests the local asyncio behavior, not the
+        actual SIGINT handling with real processes.
+
+        The actual integration test for CORE-FR-FORCE-TERM (force-terminate on
+        second SIGINT with real processes and VMs) is in:
+        tests/integration/test_interrupt_integration.py::test_core_fr_force_term
+
+        Test approach:
+        1. Start a long-running operation
+        2. Send first cancellation (begins graceful cleanup)
+        3. Send second cancellation before cleanup completes
+        4. Verify immediate termination without waiting for timeout
+        """
+        # This test verifies the asyncio pattern described in cli.py lines 280-296
+        # The first cancel triggers cleanup with timeout, second cancel forces immediate exit
+
+        # Create a test scenario using asyncio tasks to simulate the orchestrator behavior
+        cleanup_started = asyncio.Event()
+        cleanup_completed = asyncio.Event()
+        force_terminated = asyncio.Event()
+
+        sigint_count = [0]
+        main_task: asyncio.Task[None] | None = None
+
+        async def mock_sync_operation():
+            """Simulates a long-running sync that can be interrupted."""
+            try:
+                # Simulate work
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                cleanup_started.set()
+                # Simulate cleanup taking some time
+                try:
+                    await asyncio.sleep(5)
+                    cleanup_completed.set()
+                except asyncio.CancelledError:
+                    force_terminated.set()
+                    raise
+
+        def sigint_handler():
+            """Simulates the SIGINT handler from cli.py."""
+            nonlocal main_task
+            sigint_count[0] += 1
+            if sigint_count[0] == 1:
+                # First SIGINT: cancel main task
+                if main_task:
+                    main_task.cancel()
+            # Second SIGINT (or any subsequent): force terminate main task
+            elif sigint_count[0] >= 2 and main_task:
+                main_task.cancel()
+
+        # Create and start the main task
+        main_task = asyncio.create_task(mock_sync_operation())
+
+        # Give it a moment to start
+        await asyncio.sleep(0.1)
+
+        # Send first SIGINT
+        sigint_handler()
+        await asyncio.sleep(0.1)
+
+        # Verify cleanup started
+        assert cleanup_started.is_set(), "Cleanup should have started after first SIGINT"
+        assert not cleanup_completed.is_set(), "Cleanup should not complete yet"
+
+        # Send second SIGINT before cleanup completes
+        sigint_handler()
+        await asyncio.sleep(0.1)
+
+        # Verify force termination occurred
+        assert force_terminated.is_set(), "Force termination should occur on second SIGINT"
+        assert not cleanup_completed.is_set(), "Graceful cleanup should not complete"
+
+        # Wait for task to complete (it should be cancelled)
+        with suppress(asyncio.CancelledError):
+            await main_task
