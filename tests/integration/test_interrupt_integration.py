@@ -15,6 +15,10 @@ import asyncio
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 
+# Test timing constants
+SECOND_SIGINT_DELAY = 1.0  # Seconds to wait before sending second SIGINT
+FORCE_TERMINATION_THRESHOLD = 5.0  # Max seconds for force termination (much less than CLEANUP_TIMEOUT_SECONDS=30)
+
 
 async def test_core_fr_target_term(
     pc1_executor: BashLoginRemoteExecutor,
@@ -204,7 +208,7 @@ dummy_success:
         # Give it a moment to start cleanup (but not complete it)
         # The cleanup timeout is 30 seconds (CLEANUP_TIMEOUT_SECONDS in cli.py)
         # We send second SIGINT after ~1 second, well before cleanup would complete
-        await asyncio.sleep(1)
+        await asyncio.sleep(SECOND_SIGINT_DELAY)
 
         # Verify process is still running (still in cleanup)
         ps_check = await pc1_executor.run_command(f"ps -p {sync_pid} -o pid= 2>/dev/null || true", timeout=5.0)
@@ -223,11 +227,11 @@ dummy_success:
             await asyncio.sleep(1)
 
             # Verify immediate termination (should exit quickly, not wait for 30s timeout)
-            # We use 5 seconds as threshold: much less than CLEANUP_TIMEOUT_SECONDS (30s)
+            # We use FORCE_TERMINATION_THRESHOLD: much less than CLEANUP_TIMEOUT_SECONDS (30s)
             # but enough to account for process shutdown and network delays.
             elapsed = asyncio.get_event_loop().time() - first_sigint_time
-            assert elapsed < 5, (
-                f"Force termination should be immediate (< 5s), but took {elapsed:.1f}s. "
+            assert elapsed < FORCE_TERMINATION_THRESHOLD, (
+                f"Force termination should be immediate (< {FORCE_TERMINATION_THRESHOLD}s), but took {elapsed:.1f}s. "
                 "This suggests it waited for cleanup timeout instead of forcing."
             )
 

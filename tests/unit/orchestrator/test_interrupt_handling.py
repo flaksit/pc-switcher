@@ -375,8 +375,8 @@ class TestInterruptHandling:
                 # First SIGINT: cancel main task
                 if main_task:
                     main_task.cancel()
-            # Second SIGINT: force terminate main task (only)
-            elif main_task:
+            # Second SIGINT (or any subsequent): force terminate main task
+            elif sigint_count[0] >= 2 and main_task:
                 main_task.cancel()
 
         # Create and start the main task
