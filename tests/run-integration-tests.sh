@@ -204,25 +204,29 @@ check_vm_ready() {
     
     if [[ -n "$ci_job_id" ]]; then
         # CI mode: Host keys already configured, use strict checking
-        if ssh_run "$userhost" "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null; then
+        # ssh_run uses BatchMode=yes and verifies against known_hosts (strict by default)
+        if ssh_run -o ConnectTimeout=10 "$userhost" \
+            "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null; then
             return 0
         else
             return 1
         fi
     elif [[ -t 0 ]]; then
         # Local interactive mode: Ask user to accept new host keys
-        if ssh -o ConnectTimeout=10 "$userhost" "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null; then
+        if ssh -o ConnectTimeout=10 "$userhost" \
+            "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null; then
             return 0
         else
             return 1
         fi
     else
         # Local non-interactive mode (Claude/scripts): Fail with explicit error
-        if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=yes -o BatchMode=yes "$userhost" \
-            "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null; then
+        ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=yes -o BatchMode=yes "$userhost" \
+            "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null
+        local exit_code=$?
+        if [[ $exit_code -eq 0 ]]; then
             return 0
         else
-            local exit_code=$?
             if [[ $exit_code -eq 255 ]]; then
                 log_error "SSH connection failed to ${vm_host}"
                 log_error "Running in non-interactive mode but host key not in known_hosts"
