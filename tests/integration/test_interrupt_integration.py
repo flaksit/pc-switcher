@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import asyncio
 
-from pcswitcher.executor import RemoteExecutor
+from pcswitcher.executor import BashLoginRemoteExecutor
 
 
 async def test_core_fr_target_term(
-    pc1_executor: RemoteExecutor,
-    pc2_executor: RemoteExecutor,
+    pc1_executor: BashLoginRemoteExecutor,
+    pc2_executor: BashLoginRemoteExecutor,
 ) -> None:
     """Test CORE-FR-TARGET-TERM: Send termination to target processes.
 
@@ -80,8 +80,9 @@ async def test_core_fr_target_term(
 
 
 async def test_core_fr_force_term(
-    pc1_executor: RemoteExecutor,
-    pc2_executor: RemoteExecutor,
+    pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+    pc2_executor: BashLoginRemoteExecutor,
+    reset_pcswitcher_state: None,
 ) -> None:
     """Test CORE-FR-FORCE-TERM: Force-terminate on second SIGINT with real process.
 
@@ -106,6 +107,9 @@ async def test_core_fr_force_term(
     Note: The asyncio cancellation pattern test is in unit tests at:
     tests/unit/orchestrator/test_interrupt_handling.py::test_asyncio_cancellation_on_double_interrupt
     """
+    _ = reset_pcswitcher_state  # Ensure clean state
+    pc1_executor = pc1_with_pcswitcher_mod
+
     # Setup: Create a minimal config for sync with long-duration dummy job
     # This gives us time to interrupt during cleanup
     config_content = """
@@ -264,8 +268,8 @@ dummy_success:
 
 
 async def test_core_fr_no_orphan(
-    pc1_executor: RemoteExecutor,
-    pc2_executor: RemoteExecutor,
+    pc1_executor: BashLoginRemoteExecutor,
+    pc2_executor: BashLoginRemoteExecutor,
 ) -> None:
     """Test CORE-FR-NO-ORPHAN: No orphaned processes after interrupt.
 
@@ -337,8 +341,8 @@ async def test_core_fr_no_orphan(
 
 
 async def test_core_us_interrupt_as1_interrupt_requests_job_termination(
-    pc1_executor: RemoteExecutor,
-    pc2_executor: RemoteExecutor,
+    pc1_executor: BashLoginRemoteExecutor,
+    pc2_executor: BashLoginRemoteExecutor,
 ) -> None:
     """Test CORE-US-INTERRUPT-AS1: Ctrl+C during job execution requests termination.
 
@@ -398,8 +402,8 @@ async def test_core_us_interrupt_as1_interrupt_requests_job_termination(
 
 
 async def test_core_us_interrupt_as3_second_interrupt_forces_termination(
-    pc1_executor: RemoteExecutor,
-    pc2_executor: RemoteExecutor,
+    pc1_executor: BashLoginRemoteExecutor,
+    pc2_executor: BashLoginRemoteExecutor,
 ) -> None:
     """Test CORE-US-INTERRUPT-AS3: Second Ctrl+C forces immediate termination.
 
@@ -479,8 +483,8 @@ async def test_core_us_interrupt_as3_second_interrupt_forces_termination(
 
 
 async def test_core_edge_source_crash_timeout(
-    pc1_executor: RemoteExecutor,
-    pc2_executor: RemoteExecutor,
+    pc1_executor: BashLoginRemoteExecutor,
+    pc2_executor: BashLoginRemoteExecutor,
 ) -> None:
     """Test CORE-EDGE: Source machine crashes mid-sync.
 
