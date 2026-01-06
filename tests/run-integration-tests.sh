@@ -230,6 +230,7 @@ check_vm_ready() {
             if [[ $exit_code -eq 255 ]]; then
                 log_error "SSH connection failed to ${vm_host}"
                 log_error "Running in non-interactive mode but host key not in known_hosts"
+                log_error "Or the VM may not be reachable or provisioned yet"
                 log_error "To fix: Run this command interactively to accept the host key:"
                 log_error "  ssh ${userhost} 'echo Connection successful'"
                 log_error "Or update ~/.ssh/known_hosts with the correct host key"
