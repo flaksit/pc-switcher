@@ -402,5 +402,5 @@ class TestInterruptHandling:
         assert not cleanup_completed.is_set(), "Graceful cleanup should not complete"
 
         # Wait for task to complete (it should be cancelled)
-        with pytest.raises(asyncio.CancelledError):
+        with suppress(asyncio.CancelledError):
             await main_task

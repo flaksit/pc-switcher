@@ -147,6 +147,7 @@ dummy_success:
     test_id = f"force_term_{int(asyncio.get_event_loop().time())}"
     output_file = f"/tmp/{test_id}_output.log"
     pid_file = f"/tmp/{test_id}_pid.txt"
+    sync_pid: str | None = None  # Initialize to avoid NameError in cleanup
 
     try:
         # Clean up any existing files
@@ -182,6 +183,8 @@ dummy_success:
                 assert False, f"Sync process ended prematurely. Output:\n{output_check.stdout}"
 
             # Check output for signs sync is running (not just in setup phase)
+            # Note: This string matching is fragile and may break if log format changes.
+            # We look for phase indicators that appear during active sync execution.
             output_check = await pc1_executor.run_command(f"tail -20 {output_file}", timeout=5.0)
             if "connecting" not in output_check.stdout.lower() and (
                 "source phase" in output_check.stdout.lower() or "target phase" in output_check.stdout.lower()
@@ -220,6 +223,8 @@ dummy_success:
             await asyncio.sleep(1)
 
             # Verify immediate termination (should exit quickly, not wait for 30s timeout)
+            # We use 5 seconds as threshold: much less than CLEANUP_TIMEOUT_SECONDS (30s)
+            # but enough to account for process shutdown and network delays.
             elapsed = asyncio.get_event_loop().time() - first_sigint_time
             assert elapsed < 5, (
                 f"Force termination should be immediate (< 5s), but took {elapsed:.1f}s. "
@@ -261,7 +266,8 @@ dummy_success:
 
     finally:
         # Cleanup: Kill any remaining processes and remove test files
-        await pc1_executor.run_command(f"kill -9 {sync_pid} 2>/dev/null || true", timeout=10.0, login_shell=False)
+        if sync_pid:
+            await pc1_executor.run_command(f"kill -9 {sync_pid} 2>/dev/null || true", timeout=10.0, login_shell=False)
         await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
         # Clean up config
         await pc1_executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
