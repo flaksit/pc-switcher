@@ -197,14 +197,46 @@ log_info "Checking if test VMs are provisioned and ready..."
 check_vm_ready() {
     local vm_host="$1"
     local user="$2"
+    local userhost="${user}@${vm_host}"
 
-    # Try to connect and check baseline snapshot exists
-    if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-        "${user}@${vm_host}" \
-        "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null; then
-        return 0
+    # Determine SSH mode based on environment
+    local ci_job_id="${CI_JOB_ID:-${GITHUB_RUN_ID:-}}"
+    
+    if [[ -n "$ci_job_id" ]]; then
+        # CI mode: Host keys already configured, use strict checking
+        # ssh_run uses BatchMode=yes and verifies against known_hosts (strict by default)
+        if ssh_run -o ConnectTimeout=10 "$userhost" \
+            "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null; then
+            return 0
+        else
+            return 1
+        fi
+    elif [[ -t 0 ]]; then
+        # Local interactive mode: Ask user to accept new host keys
+        if ssh -o ConnectTimeout=10 "$userhost" \
+            "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null; then
+            return 0
+        else
+            return 1
+        fi
     else
-        return 1
+        # Local non-interactive mode (Claude/scripts): Fail with explicit error
+        ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=yes -o BatchMode=yes "$userhost" \
+            "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null
+        local exit_code=$?
+        if [[ $exit_code -eq 0 ]]; then
+            return 0
+        else
+            if [[ $exit_code -eq 255 ]]; then
+                log_error "SSH connection failed to ${vm_host}"
+                log_error "Running in non-interactive mode but host key not in known_hosts"
+                log_error "Or the VM may not be reachable or provisioned yet"
+                log_error "To fix: Run this command interactively to accept the host key:"
+                log_error "  ssh ${userhost} 'echo Connection successful'"
+                log_error "Or update ~/.ssh/known_hosts with the correct host key"
+            fi
+            return 1
+        fi
     fi
 }
 
