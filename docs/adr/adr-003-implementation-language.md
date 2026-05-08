@@ -11,8 +11,8 @@ Use Python as the primary orchestration language for PC-switcher CLI, with task-
 **Required Patterns:**
 - **Python version**: Target Python 3.14
 - **Package structure**: Build as an installable Python package using `uv`, distributable to both source and target machines
-- **Dependency management**: Use `uv` exclusively for all dependency management and running Python code (see `~/.claude/python.md` for details)
-- **Modern Python practices**: Follow conventions in `~/.claude/python_conventions.md` including:
+- **Dependency management**: Use `uv` exclusively for all dependency management and running Python code (see `~/.claude/rules/python-tools.md` for details)
+- **Modern Python practices**: Follow conventions in `~/.claude/rules/python-conventions.md` including:
   - Modern type syntax (`str | None`, `dict[str]`)
   - Full type annotations
   - `from __future__ import annotations`
@@ -123,5 +123,5 @@ See `docs/adr/considerations/adr-003-implementation-language-analysis.md` for de
 - High Level Requirements: UX requirements, project principles, workflow
 - ADR-002: SSH as communication channel
 - docs/adr/considerations/adr-003-implementation-language-analysis.md: Detailed technology analysis and alternatives
-- ~/.claude/python.md: Python development conventions and tooling requirements
+- ~/.claude/rules/python-conventions.md and ~/.claude/rules/python-tools.md: Python development conventions and tooling requirements (auto-loaded by Claude Code via `paths:` glob)
 - [Python 3.14 Readiness Tracker](http://pyreadiness.org/3.14/) for monitoring library compatibility

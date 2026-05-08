@@ -6,7 +6,7 @@ This guide provides instructions and expectations for AI agents when developing 
 
 **Always read first:**
 - `~/.claude/CLAUDE.md` - General agent instructions
-- `~/.claude/python_conventions.md` and `~/.claude/python_tools.md` - Python coding conventions
+- `~/.claude/rules/python-conventions.md` and `~/.claude/rules/python-tools.md` - Python coding conventions (Claude Code auto-loads these via `paths:` glob; other agents must read explicitly)
 - `docs/adr/_index.md` - Architectural decisions
 
 **For feature work:**
