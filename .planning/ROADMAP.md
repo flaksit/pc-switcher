@@ -18,9 +18,9 @@ The orchestration framework is already built (Job architecture, self-installing 
 - Decimal phases (2.1, 2.2): Urgent insertions (marked INSERTED), appearing between their surrounding integers in numeric order.
 
 - [x] **Foundation: Core framework, testing, logging, CI** — Complete (pre-GSD; specs 001-004)
-- [ ] **Phase 1: Home-Sync MVP (User Data Sync)** — Single-command `/home` + `/root` replication over rsync-over-SSH, exclusions and metadata preserved, proven by a bidirectional round-trip
+- [ ] **Phase 1: Home-Sync MVP (User Data Sync)** — Single-command `/home` replication over rsync-over-SSH, exclusions and metadata preserved, proven by a bidirectional round-trip
 - [ ] **Phase 2: Package Management Sync** — Replicate apt/snap/flatpak/.deb/PPA/script packages with conflict and version-mismatch detection
-- [ ] **Phase 3: System & Application Configuration Sync** — Replicate GNOME, cloud mounts, systemd, `/etc`, users/groups with conflicting-change detection
+- [ ] **Phase 3: System & Application Configuration Sync** — Replicate GNOME, cloud mounts, systemd, `/etc`, `/root`, users/groups with conflicting-change detection
 - [ ] **Phase 4: Docker State Sync** — Replicate images, containers, volumes, and cache with running-container / incompatible-state detection
 - [ ] **Phase 5: VM State Sync** — Replicate KVM/virt-manager VMs with a powered-off guard and concurrent-use detection
 - [ ] **Phase 6: k3s Cluster Sync** — Replicate single-node k3s state including PVCs with cluster validation and active-workload detection
@@ -35,11 +35,11 @@ The orchestration framework is already built (Job architecture, self-installing 
 **Note**: Not a plannable GSD phase. Listed so the roadmap reflects what already exists; sync phases extend this framework rather than rebuild it.
 
 ### Phase 1: Home-Sync MVP (User Data Sync)
-**Goal**: A user can run one command to replicate `/home` and `/root` from the source machine to the target over rsync-over-SSH, with machine-specific items excluded and file metadata preserved — and the result is proven correct in both directions.
+**Goal**: A user can run one command to replicate `/home` from the source machine to the target over rsync-over-SSH, with machine-specific items excluded and file metadata preserved — and the result is proven correct in both directions. (`/root` is deferred to Phase 3, with other root-owned system state.)
 **Depends on**: Foundation
 **Requirements**: REQ-sync-scope-user-data, REQ-machine-specific-exclusions, REQ-sync-scope-file-metadata, REQ-manual-sync-workflow, REQ-terminal-ux
 **Success Criteria** (what must be TRUE):
-  1. Running `pc-switcher sync <target>` on machine A copies `/home` and `/root` to machine B; after sync, every included file exists on B and is byte-identical to A (verified by checksum).
+  1. Running `pc-switcher sync <target>` on machine A copies `/home` to machine B; after sync, every included file exists on B and is byte-identical to A (verified by checksum).
   2. File metadata is preserved: owner, group, permissions, POSIX ACLs, and modification timestamps on B match A for every synced file.
   3. Machine-specific items are never copied — SSH private keys (`.ssh/id_*`), Tailscale config (`.config/tailscale`), GPU/shader and fontconfig caches, and excluded browser/IDE caches (VS Code) are absent from B's synced tree — while dev-tool caches (uv, pip, cargo, npm) ARE included.
   4. The sync is reversible and exclusions hold both directions: after modifying, adding, and deleting files on B and running `pc-switcher sync <A>` from B, A reflects B's changes byte-identically with metadata preserved, and the same machine-specific exclusions are honored on this reverse sync.
