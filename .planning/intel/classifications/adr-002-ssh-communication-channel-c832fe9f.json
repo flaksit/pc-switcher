@@ -1,0 +1,13 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/adr/adr-002-ssh-communication-channel.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "ADR-002: SSH as Communication Channel between Source and Target",
+  "summary": "Use SSH with connection multiplexing as the orchestration channel between source and target machines, with stateless target-side scripts.",
+  "scope": ["SSH communication channel", "ControlMaster multiplexing", "source-target orchestration", "progress streaming via stdout/stderr", "signal handling and cleanup", "SSH config aliases"],
+  "cross_refs": ["docs/adr/considerations/adr-002-ssh-communication-channel.md"],
+  "locked": true,
+  "precedence": 0,
+  "notes": ""
+}

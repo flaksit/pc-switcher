@@ -1,0 +1,25 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/specs/004-python-logging/spec.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Feature Specification: Standard Python Logging Integration",
+  "summary": "Requirements for migrating pc-switcher to Python's standard logging module with configurable file, TUI, and external library log levels while preserving existing formats.",
+  "scope": [
+    "configurable file log level floor",
+    "configurable TUI log level floor",
+    "configurable external library log level floor",
+    "capture and route external library logs (asyncssh)",
+    "standard Python logging foundation",
+    "six-level hierarchy with custom FULL level",
+    "JSON lines file format preservation",
+    "colored TUI format preservation",
+    "sensible default log levels",
+    "fail on invalid log level config",
+    "structured context preservation"
+  ],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": 3,
+  "notes": ""
+}

@@ -1,0 +1,30 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/system/core.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Core System Specification",
+  "summary": "Authoritative core spec covering the job contract, self-installation, btrfs snapshot safety, interrupt handling, configuration, and test coverage requirements.",
+  "scope": [
+    "Job architecture contract",
+    "Self-installing orchestrator",
+    "Btrfs snapshot safety infrastructure",
+    "Graceful interrupt handling",
+    "Configuration system",
+    "Installation and setup",
+    "Dummy test jobs",
+    "Terminal UI progress reporting",
+    "Spec-driven test coverage",
+    "Functional requirements",
+    "Success criteria",
+    "Key entities"
+  ],
+  "cross_refs": [
+    "specs/001-core/contracts/config-schema.yaml",
+    "specs/002-testing-framework/spec.md",
+    "cli.py"
+  ],
+  "locked": false,
+  "precedence": 2,
+  "notes": ""
+}

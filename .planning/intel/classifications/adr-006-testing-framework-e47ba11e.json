@@ -1,0 +1,13 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/adr/adr-006-testing-framework.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "ADR-006: Testing Framework",
+  "summary": "Adopt three-tier testing with safe unit tests, VM-isolated integration tests using btrfs snapshot reset, and a manual visual verification playbook.",
+  "scope": ["three-tier testing", "unit tests", "VM-isolated integration tests", "btrfs snapshot reset", "lock-based concurrency control", "manual playbook"],
+  "cross_refs": ["../ops/testing-architecture.md", "considerations/testing-framework-architecture-conversation.txt"],
+  "locked": true,
+  "precedence": 0,
+  "notes": ""
+}

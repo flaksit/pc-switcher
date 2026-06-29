@@ -1,0 +1,24 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/adr/adr-010-logging-infrastructure.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "ADR-010: Standard Library Logging Infrastructure",
+  "summary": "Use Python stdlib logging with QueueHandler/QueueListener and custom JSON and Rich formatters instead of structlog.",
+  "scope": [
+    "logging infrastructure",
+    "stdlib logging module",
+    "QueueHandler and QueueListener",
+    "JSON and Rich formatters",
+    "logger hierarchy filtering",
+    "structlog rejection"
+  ],
+  "cross_refs": [
+    "considerations/adr-010-logging-infrastructure-analysis.md",
+    "https://docs.python.org/3/howto/logging-cookbook.html",
+    "../../specs/004-python-logging/spec.md"
+  ],
+  "locked": true,
+  "precedence": 0,
+  "notes": ""
+}

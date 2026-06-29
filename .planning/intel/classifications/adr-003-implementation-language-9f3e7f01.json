@@ -1,0 +1,13 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/adr/adr-003-implementation-language.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "ADR-003: Python Orchestrator with Task-Specific Languages",
+  "summary": "Use Python 3.14 with uv as the primary orchestration language, delegating individual sync operations to task-specific languages like bash.",
+  "scope": ["Python 3.14", "uv package management", "orchestrator", "CLI", "asyncssh", "rich/typer", "task-specific bash scripts", "package structure", "pytest unit tests"],
+  "cross_refs": ["docs/adr/considerations/adr-003-implementation-language-analysis.md", "ADR-002", "~/.claude/rules/python-conventions.md", "~/.claude/rules/python-tools.md"],
+  "locked": true,
+  "precedence": 0,
+  "notes": ""
+}

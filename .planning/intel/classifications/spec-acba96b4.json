@@ -1,0 +1,33 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/specs/003-core-tests/spec.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Feature Specification: Retroactive Tests for 001-Core",
+  "summary": "Requirements for spec-driven retroactive test coverage of all 001-core user stories, acceptance scenarios, and functional requirements with traceability.",
+  "scope": [
+    "100% coverage of 001-core user stories",
+    "100% coverage of acceptance scenarios",
+    "100% coverage of functional requirements",
+    "success and failure path testing",
+    "test-to-spec traceability",
+    "unit test placement in tests/unit",
+    "integration test placement in tests/integration",
+    "mock executors for unit tests",
+    "real VM operations for integration tests",
+    "test independence and performance budgets"
+  ],
+  "cross_refs": [
+    "../../High%20level%20requirements.md",
+    "../../docs/adr/_index.md",
+    "../001-core/spec.md",
+    "../002-testing-framework/spec.md",
+    "../../docs/testing-framework.md",
+    "../../docs/testing-developer-guide.md",
+    "../002-testing-framework/pre-analysis/testing-implementation-plan.md",
+    "pre-analysis/testing-report.md"
+  ],
+  "locked": false,
+  "precedence": 3,
+  "notes": ""
+}

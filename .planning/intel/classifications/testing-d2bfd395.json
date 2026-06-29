@@ -1,0 +1,32 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/system/testing.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Testing Framework",
+  "summary": "Defines the three-tier testing framework: unit tests, VM-isolated integration tests, CI/CD integration, manual playbook, and supporting documentation requirements.",
+  "scope": [
+    "Three-tier test structure",
+    "Unit test suite",
+    "Integration test suite with VM isolation",
+    "CI/CD integration",
+    "Manual testing playbook",
+    "Developer guide",
+    "Operational guide",
+    "Architecture documentation",
+    "Test VM requirements",
+    "Test fixtures",
+    "Test locking and reset"
+  ],
+  "cross_refs": [
+    "docs/ops/testing-architecture.md",
+    "docs/dev/testing-guide.md",
+    "docs/ops/testing-ops.md",
+    "tests/manual-playbook.md",
+    "ADR-006",
+    "ADR-012"
+  ],
+  "locked": false,
+  "precedence": 2,
+  "notes": ""
+}

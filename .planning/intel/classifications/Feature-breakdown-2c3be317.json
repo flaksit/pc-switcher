@@ -1,0 +1,26 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/planning/Feature breakdown.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Feature breakdown",
+  "summary": "Decomposition of pc-switcher into core cross-cutting infrastructure features and modular user-facing sync features with conflict detection.",
+  "scope": [
+    "Basic CLI & Infrastructure",
+    "Safety Infrastructure (btrfs snapshots)",
+    "Installation & Setup",
+    "Rollback Capability",
+    "User Data Sync",
+    "Package Management Sync",
+    "System Configuration Sync",
+    "Docker State Sync",
+    "VM State Sync",
+    "k3s Cluster Sync",
+    "modular feature architecture",
+    "per-feature conflict detection and validation"
+  ],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": 1,
+  "notes": ""
+}

@@ -1,0 +1,33 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/specs/002-testing-framework/spec.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Feature Specification: Testing Framework",
+  "summary": "Requirements for a three-tier testing framework (unit, integration with VM isolation, manual playbook) plus CI/CD integration and supporting documentation.",
+  "scope": [
+    "three-tier test structure (unit/integration/manual)",
+    "fast unit tests with no external dependencies",
+    "integration tests with isolated VM provisioning",
+    "btrfs baseline snapshot reset",
+    "concurrent run locking",
+    "contract tests for MockExecutor vs real executors",
+    "two test VMs (pc1/pc2) configuration",
+    "CI/CD workflows (push, PR, manual trigger, concurrency)",
+    "fork PR secret handling",
+    "manual testing playbook",
+    "developer guide, operational guide, architecture documentation",
+    "pytest markers and VM fixtures",
+    "cost constraints under EUR 10/month"
+  ],
+  "cross_refs": [
+    "../../High%20level%20requirements.md",
+    "../../docs/adr/_index.md",
+    "../../docs/adr/adr-006-testing-framework.md",
+    "../../docs/testing-framework.md",
+    "pre-analysis/testing-implementation-plan.md"
+  ],
+  "locked": false,
+  "precedence": 3,
+  "notes": ""
+}

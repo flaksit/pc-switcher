@@ -1,0 +1,13 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/adr/adr-004-dynamic-versioning-github-releases.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "ADR-004: Dynamic Package Versioning from GitHub Releases",
+  "summary": "Use dynamic versioning where GitHub Release tags are the single source of truth, injected at build via uv-dynamic-versioning with hatchling backend.",
+  "scope": ["dynamic versioning", "GitHub Release tags", "uv-dynamic-versioning plugin", "hatchling build backend", "pyproject.toml", "SemVer pre-release format", "GitHub Actions"],
+  "cross_refs": ["docs/adr/considerations/adr-004-versioning-uv-github.md", "docs/adr/considerations/adr-004-preplexity-conversation.md"],
+  "locked": true,
+  "precedence": 0,
+  "notes": ""
+}
