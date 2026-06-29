@@ -75,3 +75,6 @@ logs/
 tmp/
 temp/
 *.tmp
+
+# Personal markdownlint config (extends a per-user ~/.markdownlint.jsonc)
+.markdownlint.jsonc
