@@ -866,6 +866,39 @@ class TestStreamRsync:
         assert isinstance(result, tuple)
         assert len(result) == 3
 
+    async def test_progress_line_reports_transferred_bytes(self) -> None:
+        """_stream_rsync returns a non-zero bytes_transferred from the progress2 size token (WR-01)."""
+        # 9.53G in the progress line → bytes_transferred must be > 0 and match _parse_size_to_bytes
+        progress_line = b"9.53G 21% 317.26MB/s 0:00:28 (xfr#83, to-chk=444/538)\r"
+        (_, bytes_transferred, _), _, _ = await self._run_stream([progress_line])
+
+        expected = FolderSyncJob._parse_size_to_bytes("9.53G")
+        assert bytes_transferred > 0, "bytes_transferred must be non-zero when rsync reports progress"
+        assert bytes_transferred == expected
+
+    async def test_parse_size_to_bytes_units(self) -> None:
+        """_parse_size_to_bytes converts K/M/G/T suffixes and bare integers correctly (WR-01)."""
+        assert FolderSyncJob._parse_size_to_bytes("1.00K") == 1024
+        assert FolderSyncJob._parse_size_to_bytes("512") == 512
+        assert FolderSyncJob._parse_size_to_bytes("1M") == 1024**2
+        assert FolderSyncJob._parse_size_to_bytes("1G") == 1024**3
+        assert FolderSyncJob._parse_size_to_bytes("1T") == 1024**4
+
+    async def test_created_and_hardlink_change_types_logged_at_full(self) -> None:
+        """Per-file lines beginning with 'c' (created) or 'h' (hard link) are logged at FULL (IN-03)."""
+        # rsync %i format: 'c' = created dir/symlink/device, 'h' = hard link
+        c_line = b"cd+++++++++ subdir/\n"
+        h_line = b"hf. . . . . . . path/to/hardlink\n"
+        _, log_calls, _ = await self._run_stream([c_line + h_line])
+
+        full_logs = [msg for _, level, msg in log_calls if level == LogLevel.FULL]
+        assert any("subdir/" in msg for msg in full_logs), (
+            "Created-type ('c') line must be logged at FULL"
+        )
+        assert any("hardlink" in msg for msg in full_logs), (
+            "Hard-link-type ('h') line must be logged at FULL"
+        )
+
 
 @pytest.mark.asyncio
 class TestExecuteDryRun:
