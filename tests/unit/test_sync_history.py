@@ -353,9 +353,7 @@ class TestUnknownGenerationSentinel:
         assert UNKNOWN_GENERATION == -1
         assert "UNKNOWN_GENERATION" in sync_history.__all__
 
-    def test_unknown_generation_sentinel_round_trips(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_unknown_generation_sentinel_round_trips(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """set then get with UNKNOWN_GENERATION returns UNKNOWN_GENERATION, not None.
 
         UNKNOWN_GENERATION is a valid stored value distinct from None (never synced).

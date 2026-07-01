@@ -581,9 +581,7 @@ class TestDivergenceGuard:
         UNVERIFIABLE — it is unsafe to let rsync --delete proceed.
         """
         ctx = make_context(config={"folders": [{"path": "/root"}]})
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(findmnt_exit=1)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(findmnt_exit=1))
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
             job = FolderSyncJob(ctx)
@@ -621,9 +619,7 @@ class TestDivergenceGuard:
         also tool state, not user divergence (CR-01).
         """
         ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_CONFIG_ONLY)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_CONFIG_ONLY))
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
             job = FolderSyncJob(ctx)
@@ -670,9 +666,7 @@ class TestDivergenceGuard:
     async def test_unverifiable_with_baseline_fails_closed(self) -> None:
         """When find-new exits non-zero AND a baseline is stored, validate() must fail closed (CR-02)."""
         ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(find_new_exit=1)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_exit=1))
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
             job = FolderSyncJob(ctx)
@@ -685,32 +679,24 @@ class TestDivergenceGuard:
     async def test_unverifiable_under_allow_divergence_proceeds(self) -> None:
         """Under allow_divergence=True, an UNVERIFIABLE result is logged at WARNING and does not block."""
         ctx = make_context(config={"folders": [{"path": "/home"}]}, allow_divergence=True)
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(find_new_exit=1)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_exit=1))
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
             job = FolderSyncJob(ctx)
             errors = await job.validate()
 
-        assert not errors, (
-            "allow_divergence must suppress the blocking error even for UNVERIFIABLE"
-        )
+        assert not errors, "allow_divergence must suppress the blocking error even for UNVERIFIABLE"
 
     async def test_unverifiable_under_dry_run_proceeds(self) -> None:
         """Under dry_run=True, an UNVERIFIABLE result is logged at WARNING and does not block."""
         ctx = make_context(config={"folders": [{"path": "/home"}]}, dry_run=True)
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(find_new_exit=1)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_exit=1))
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
             job = FolderSyncJob(ctx)
             errors = await job.validate()
 
-        assert not errors, (
-            "dry_run must suppress the blocking error even for UNVERIFIABLE"
-        )
+        assert not errors, "dry_run must suppress the blocking error even for UNVERIFIABLE"
 
     async def test_unknown_generation_baseline_fails_closed(self) -> None:
         """When the stored generation is UNKNOWN_GENERATION, validate() must fail closed without querying target.
@@ -1031,9 +1017,7 @@ class TestExecuteNormalMode:
         fake_proc = make_fake_process()
         ctx.source.start_process = AsyncMock(return_value=fake_proc)
         # btrfs subvolume show fails → _get_subvolume_generation raises RuntimeError
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_for_execute(btrfs_show_exit=1)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_for_execute(btrfs_show_exit=1))
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation") as mock_set:
             job = FolderSyncJob(ctx)
@@ -1044,6 +1028,5 @@ class TestExecuteNormalMode:
         assert mock_set.call_count == 1, "Expected exactly one set_target_generation call (the sentinel)"
         call_args = mock_set.call_args_list[0]
         assert call_args[0][2] == sync_history.UNKNOWN_GENERATION, (
-            f"Expected UNKNOWN_GENERATION ({sync_history.UNKNOWN_GENERATION}) "
-            f"but got {call_args[0][2]}"
+            f"Expected UNKNOWN_GENERATION ({sync_history.UNKNOWN_GENERATION}) but got {call_args[0][2]}"
         )

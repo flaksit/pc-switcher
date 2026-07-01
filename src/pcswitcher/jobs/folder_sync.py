@@ -363,7 +363,7 @@ class FolderSyncJob(SyncJob):
             # generation — exclude them so they don't trigger false divergence (CR-01).
             # Strip the leading ~/ to get the path segment used in find-new output, then
             # add surrounding slashes so the match is a true path-component check.
-            history_token = f"/{sync_history.HISTORY_DIR.lstrip('~/')}/"   # /.local/share/pc-switcher/
+            history_token = f"/{sync_history.HISTORY_DIR.lstrip('~/')}/"  # /.local/share/pc-switcher/
             config_token = f"/{config_sync.CONFIG_REMOTE_DIR.lstrip('~/')}/"  # /.config/pc-switcher/
             tool_state_tokens = (history_token, config_token)
 
