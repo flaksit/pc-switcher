@@ -18,6 +18,18 @@ last_role and leaves target_generations intact, and set_target_generation
 only updates the relevant nested value and leaves last_role intact.
 This prevents the Pitfall 4 false-divergence that would occur if a role
 switch silently erased the stored generation markers.
+
+Special generation values
+-------------------------
+- A positive integer is a real btrfs subvolume generation from a successful sync.
+- None (absence of a key) means "never synced" — the divergence guard is skipped
+  fail-open for the first sync (RESEARCH Open Q3).
+- UNKNOWN_GENERATION (-1) means "a baseline could not be established during the
+  last sync run" — the divergence guard must treat it as UNVERIFIABLE and fail
+  closed (block the sync) rather than as a first sync. This sentinel is written by
+  execute() when btrfs generation capture fails after a successful rsync transfer
+  so that the data transfer is not rolled back while the next run is still guarded
+  against undetected target divergence (WR-02 / CR-02).
 """
 
 from __future__ import annotations
@@ -32,6 +44,7 @@ from pathlib import Path
 __all__ = [
     "HISTORY_DIR",
     "HISTORY_PATH",
+    "UNKNOWN_GENERATION",
     "SyncRole",
     "get_history_path",
     "get_last_role",
@@ -46,6 +59,12 @@ __all__ = [
 # For local Python operations, use get_history_path() which returns a Path object.
 HISTORY_DIR = "~/.local/share/pc-switcher"
 HISTORY_PATH = f"{HISTORY_DIR}/sync-history.json"
+
+# Sentinel stored when the post-sync btrfs generation could not be captured.
+# Distinct from None (never synced / no key): UNKNOWN_GENERATION means the guard
+# IS active but the baseline is uncertain — the next run must treat the target as
+# UNVERIFIABLE and fail closed rather than proceeding as a first sync (WR-02/CR-02).
+UNKNOWN_GENERATION: int = -1
 
 
 class SyncRole(Enum):

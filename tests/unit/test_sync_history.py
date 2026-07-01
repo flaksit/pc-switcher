@@ -9,8 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from pcswitcher import sync_history
 from pcswitcher.sync_history import (
     HISTORY_DIR,
+    UNKNOWN_GENERATION,
     SyncRole,
     get_history_path,
     get_last_role,
@@ -341,3 +343,29 @@ class TestRecordRoleMergePreserving:
         record_role(SyncRole.TARGET)
         assert get_last_role() == SyncRole.TARGET
         assert get_target_generation("host-b", "/home") == 1000
+
+
+class TestUnknownGenerationSentinel:
+    """Tests for the UNKNOWN_GENERATION sentinel constant (added for CR-02/WR-02)."""
+
+    def test_unknown_generation_is_negative_one_and_exported(self) -> None:
+        """UNKNOWN_GENERATION must equal -1 and be exported in __all__."""
+        assert UNKNOWN_GENERATION == -1
+        assert "UNKNOWN_GENERATION" in sync_history.__all__
+
+    def test_unknown_generation_sentinel_round_trips(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """set then get with UNKNOWN_GENERATION returns UNKNOWN_GENERATION, not None.
+
+        UNKNOWN_GENERATION is a valid stored value distinct from None (never synced).
+        Callers use None vs UNKNOWN_GENERATION to distinguish "never synced" from
+        "baseline could not be established last run" — the two require different handling:
+        the former is fail-open (first sync), the latter is fail-closed (guard is active).
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        set_target_generation("host-b", "/home", UNKNOWN_GENERATION)
+        result = get_target_generation("host-b", "/home")
+        assert result == UNKNOWN_GENERATION
+        # Confirm it is distinct from None (the "never synced" marker)
+        assert result is not None
