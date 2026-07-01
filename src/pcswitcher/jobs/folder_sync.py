@@ -568,6 +568,27 @@ class FolderSyncJob(SyncJob):
                 session_id=self.context.session_id,
             )
 
+            # Re-check divergence immediately before the destructive transfer (WR-03 / T-09-01).
+            # The Phase-4 validate() check runs earlier in the orchestrator pipeline; an arbitrary
+            # user write arriving between Phase 4 and Phase 9 would otherwise escape the guard.
+            # The target lock stops concurrent pc-switcher syncs but not unrelated user activity.
+            # _check_divergence already encodes the dry_run/allow_divergence overrides (returns
+            # None in those modes), so a non-None result here always means: block before --delete.
+            # The empty-prefix tool-state filter (01-07) ensures a Phase-8 config.yaml write
+            # (~/.config/pc-switcher/config.yaml) does NOT re-trigger divergence for /home.
+            recheck_error = await self._check_divergence(folder)
+            if recheck_error is not None:
+                self._log(
+                    Host.TARGET,
+                    LogLevel.CRITICAL,
+                    f"Pre-transfer divergence re-check blocked sync for {folder.path!r}: "
+                    f"{recheck_error.message}",
+                )
+                raise RuntimeError(
+                    f"Pre-transfer divergence re-check failed for {folder.path!r}: "
+                    f"{recheck_error.message}"
+                )
+
             cmd = self._build_rsync_cmd(folder, self.context.dry_run)
 
             # Spawn rsync; in dry_run mode the command already includes --dry-run
