@@ -71,6 +71,33 @@ pc-switcher logs
 
 After sync completes, power off the source machine and resume work on target.
 
+## What Happens During a Sync
+
+`pc-switcher sync <target>` runs a fixed sequence of steps, orchestrated by `Orchestrator.run()` (`src/pcswitcher/orchestrator.py`). The order matters: each step sets up the environment the next one depends on. All steps run on the **source** machine, acting on the **target** over a single SSH connection.
+
+The sequence stops at the first failure (raising an exception), and the `finally` cleanup always runs (release locks, kill remote processes, close the connection).
+
+1. **Load config & arm interrupt handling** (CLI, before the orchestrator). Read `~/.config/pc-switcher/config.yaml`, start the asyncio loop, install the SIGINT handler that triggers graceful cleanup.
+2. **Consecutive-sync check.** Abort (or warn interactively) if this machine was the *source* last time without a sync back — protects against overwriting the target's newer state. Skipped with `--allow-consecutive`.
+3. **Acquire source lock.** Local lock file; this machine can now not join any other sync (as source or target).
+4. **Establish SSH connection.** Creates the local and remote executors every later step uses. Nothing touches the target before this point.
+5. **Acquire target lock.** A persistent remote process holds the same unified lock on the target; released during cleanup.
+6. **Discover & validate jobs.**
+   - Load enabled jobs from config
+   - Validate their config
+   - Run each job's `validate()` against live system state.  
+     This is where the **folder-sync divergence guard** runs: `btrfs subvolume find-new` detects if the target's synced subvolume changed since the last sync, aborting *before* any destructive mirror+delete. Nothing has been mutated yet.
+7. **Disk-space preflight.** Check free space on both hosts in parallel against `preflight_minimum`; abort if either is short — so snapshots and rsync don't run a disk into ENOSPC.
+8. **Pre-sync snapshots.** Create btrfs snapshots on both hosts. This is the rollback point; every mutating step below happens after it.
+9. **Install/upgrade pc-switcher on target.** Ensures the target has a compatible version to run its side of later jobs. After snapshots, so a bad install is recoverable.
+10. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs with identical settings.
+11. **Run sync jobs sequentially.** The actual data movement (e.g. `folder_sync` via rsync-over-SSH as root on both ends).  
+    A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
+12. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state.
+13. **Record sync history.** On success, mark this machine `SOURCE` and the target `TARGET` (drives step 2 next time). Skipped in `--dry-run`.
+
+With `--dry-run`, the workflow previews without writing state (no history update, no snapshots, no mutations). `--allow-divergence` skips the step 6 guard after manual review.
+
 ## Configuration
 
 Run `pc-switcher init` to create the default configuration file at `~/.config/pc-switcher/config.yaml`, or create it manually:
