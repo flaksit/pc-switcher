@@ -260,11 +260,13 @@ class TestUpdateSyncHistory:
 
         await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]
 
-        # Verify remote command was called
+        # Verify remote command was called with a merge-preserving python3 script
         mock_executor.run_command.assert_called_once()
         cmd = mock_executor.run_command.call_args[0][0]
         assert "mkdir -p ~/.local/share/pc-switcher" in cmd
-        assert '"last_role": "target"' in cmd
+        assert "python3" in cmd
+        assert "last_role" in cmd
+        assert "target" in cmd
 
     @pytest.mark.asyncio
     async def test_remote_history_failure_raises_error(
