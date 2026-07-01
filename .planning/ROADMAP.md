@@ -49,7 +49,7 @@ The orchestration framework is already built (Job architecture, self-installing 
   4. The sync is reversible and exclusions hold both directions: after modifying, adding, and deleting files on B and running `pc-switcher sync <A>` from B, A reflects B's changes byte-identically with metadata preserved, and the same machine-specific exclusions are honored on this reverse sync.
   5. A VM-isolated integration test automates the full A→B, mutate-on-B, B→A round-trip and asserts criteria 1-4 — the developer-facing milestone success metric.
 
-**Plans**: 9/9 plans complete
+**Plans**: 9/9 complete; 5 gap-closure plans added (design pivot — divergence-safety redesign per ADR-015)
 
 Plans:
 **Wave 1**
@@ -75,6 +75,14 @@ Plans:
 - [x] 01-07-PLAN.md — divergence-guard correctness: CR-01 false-divergence (tool-state filter), CR-02 fail-closed, WR-02 robust baseline + CR-01 unit/integration tests [wave 1]
 - [x] 01-08-PLAN.md — IN-01 dead SIGINT cleanup removal, IN-02 progress-bar total counts only executed steps [wave 1]
 - [x] 01-09-PLAN.md — WR-01 transferred-byte parsing, IN-03 `c`/`h` itemize change types, WR-03 pre-transfer divergence re-check (TOCTOU) [wave 2, depends on 01-07]
+
+**Design Pivot — Gap Closure round 2** *(removes btrfs content-divergence detection; replaces it with the topology-based safety model — ADR-015, resolves CR-01/CR-02/WR-01/IN-01)*
+
+- [ ] 01-10-PLAN.md — decision record: ADR-015 (topology-based sync-safety model) + _index + CONTEXT supersession [wave 1]
+- [ ] 01-11-PLAN.md — remove content-divergence guard from FolderSyncJob + WR-01 config_sync removeprefix + prune obsolete tests [wave 1]
+- [ ] 01-12-PLAN.md — sync-history schema: add last_peer, remove btrfs generation store + tests [wave 2, depends on 01-11]
+- [ ] 01-13-PLAN.md — CLI --allow-out-of-order + orchestrator out-of-order/target-state step + last_peer recording; drop allow_divergence/allow_consecutive [wave 3, depends on 01-11, 01-12]
+- [ ] 01-14-PLAN.md — README sync-sequence fix + FULL deletion-log persistence test + integration test rework [wave 4, depends on 01-11, 01-13]
 
 ### Phase 2: Package Management Sync
 
