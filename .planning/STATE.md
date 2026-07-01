@@ -6,14 +6,14 @@ current_phase: 01
 current_phase_name: home-sync-mvp-user-data-sync
 status: executing
 stopped_at: Completed 01-03-PLAN.md
-last_updated: "2026-06-30T14:00:07.329Z"
+last_updated: "2026-06-30T14:21:44.323Z"
 last_activity: 2026-06-30
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
   percent: 0
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 ## Current Position
 
 Phase: 01 (home-sync-mvp-user-data-sync) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-06-30 — Phase 01 execution started
 
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P02 | 2min | 2 tasks | 2 files |
 | Phase 01 P03 | 11min | 2 tasks | 7 files |
 | Phase 01 P04 | 8min | 2 tasks | 3 files |
+| Phase 01 P05 | 6min | - tasks | - files |
 
 ## Accumulated Context
 
@@ -73,6 +74,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: dry-run is tool-wide contract binding all SyncJobs (D-12): no file writes, no snapshots, no history updates in dry-run mode
 - [Phase ?]: folder_sync job name (not user_data) is canonical per D-01; default excludes live in YAML not Python per D-11
 - [Phase ?]: Remote role-record command now uses python3 -c merge-preserving script instead of echo-overwrite, so target_generations in sync-history.json survive a role switch
+- [Phase ?]: sudo -E rsync preserves SSH_AUTH_SOCK and HOME for root rsync subprocess to access ~/.ssh/config (Pitfall 1 fix)
 
 ### Pending Todos
 
@@ -92,6 +94,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-30T14:00:07.324Z
+Last session: 2026-06-30T14:21:34.594Z
 Stopped at: Completed 01-03-PLAN.md
 Resume file: .planning/phases/01-home-sync-mvp-user-data-sync/01-CONTEXT.md

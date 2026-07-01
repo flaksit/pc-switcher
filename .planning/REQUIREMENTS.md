@@ -17,7 +17,7 @@ These requirements carry the full project vision (all sync scopes plus workflow,
 - [x] **REQ-sync-scope-user-data**: Sync `/home` and `/root` (documents, code, configs, application data) via a generic per-folder include/exclude mechanism usable for any path. Include dev-tool caches (uv, pip, cargo, npm) and VS Code `User/` state; exclude regenerable caches (VS Code cache dirs, browser caches). (`/root` is included here because rsync must run as root to preserve cross-owner files; `/etc` and other system config remain REQ-sync-scope-app-and-system-config, Phase 3.)
 - [ ] **REQ-sync-scope-packages**: Sync installed packages across apt, snap, flatpak, manual .debs, custom PPAs, and install-script packages; detect package conflicts / version mismatches.
 - [ ] **REQ-sync-scope-app-and-system-config**: Sync application configuration (GNOME desktop, cloud mounts, systemd services) and machine-independent system config (`/etc`, startup services, users/groups); detect conflicting system changes. (`/root` moved to REQ-sync-scope-user-data, Phase 1.)
-- [ ] **REQ-sync-scope-file-metadata**: Preserve file metadata — owner, group, permissions, POSIX ACLs, timestamps.
+- [x] **REQ-sync-scope-file-metadata**: Preserve file metadata — owner, group, permissions, POSIX ACLs, timestamps.
 - [ ] **REQ-sync-scope-docker**: Sync Docker images, containers, volumes, and cache; detect running containers or incompatible states.
 - [ ] **REQ-sync-scope-vms**: Sync KVM/virt-manager VMs; VMs must be suspended/powered off before sync; detect concurrent VM usage.
 - [ ] **REQ-sync-scope-k3s**: Sync local single-node k3s cluster state including PVCs; validate cluster state and detect active workloads.
@@ -30,7 +30,7 @@ These requirements carry the full project vision (all sync scopes plus workflow,
 ### Workflow and UX
 
 - [x] **REQ-manual-sync-workflow**: Manual single-command trigger from source to target. User works on source, wakes target, triggers sync, waits, resumes. No real-time/cloud syncing.
-- [ ] **REQ-terminal-ux**: A single command launches the full sync across both machines; terminal-based UI; simple, intuitive experience for sync, conflict, and error handling.
+- [x] **REQ-terminal-ux**: A single command launches the full sync across both machines; terminal-based UI; simple, intuitive experience for sync, conflict, and error handling.
 
 ### Reliability and Architecture
 
@@ -75,9 +75,9 @@ Each requirement maps to the phase that first delivers it. Foundation requiremen
 | REQ-near-full-state-replication | Cross-cutting (Phases 1-6) | Pending |
 | REQ-sync-scope-user-data | Phase 1 | Complete |
 | REQ-machine-specific-exclusions | Phase 1 | Complete |
-| REQ-sync-scope-file-metadata | Phase 1 | Pending |
+| REQ-sync-scope-file-metadata | Phase 1 | Complete |
 | REQ-manual-sync-workflow | Phase 1 | Complete |
-| REQ-terminal-ux | Phase 1 | Pending |
+| REQ-terminal-ux | Phase 1 | Complete |
 | REQ-sync-scope-packages | Phase 2 | Pending |
 | REQ-conflict-detection-no-resolution | Phase 2 (cross-cutting, per job) | Pending |
 | REQ-sync-scope-app-and-system-config | Phase 3 | Pending |
