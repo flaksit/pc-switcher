@@ -1,24 +1,32 @@
 """Generic folder sync job via rsync-over-SSH.
 
 Syncs configured folders from source to target, running rsync as root on both
-ends (local `sudo rsync` on source, `--rsync-path='sudo rsync'` on target) to
-preserve cross-owner file metadata including POSIX ACLs and xattrs.
+ends (local `sudo -E rsync` on source, `--rsync-path='sudo rsync'` on target)
+to preserve cross-owner file metadata including POSIX ACLs and xattrs.
 
 The key safety mechanism is the target-divergence guard in validate(): it uses
 `btrfs subvolume find-new` to detect whether the target's synced subvolume was
 independently modified since the last sync, aborting before the destructive
-mirror+delete runs (D-06/D-07/D-08/D-18). execute() is implemented in plan 05.
+mirror+delete runs (D-06/D-07/D-08/D-18).
 """
 
 from __future__ import annotations
 
+import re
 import shlex
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 from pcswitcher import sync_history
 from pcswitcher.jobs.base import SyncJob
-from pcswitcher.models import Host, LogLevel, ValidationError
+from pcswitcher.models import Host, LogLevel, ProgressUpdate, ValidationError
+
+# Matches rsync --info=progress2 output, e.g.:
+#   "9.53G 21% 317.26MB/s 0:00:28 (xfr#83063, to-chk=443926/538653)"
+_PROGRESS2_RE = re.compile(
+    r"\d+[\d.]*[KMGT]?\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*to-chk=\d+/(\d+)\)"
+)
 
 
 @dataclass
@@ -175,6 +183,63 @@ class FolderSyncJob(SyncJob):
                 errors.append(error)
 
         return errors
+
+    def _build_rsync_cmd(self, folder: FolderEntry, dry_run: bool) -> str:
+        """Build the rsync shell command for syncing a single folder.
+
+        Produces a command that:
+        - Runs as root on source via `sudo -E rsync` (preserves SSH_AUTH_SOCK and
+          $HOME so root's rsync subprocess can reach the target's ~/.ssh/config —
+          Pitfall 1 from RESEARCH.md).
+        - Elevates to root on target via `--rsync-path='sudo rsync'` over the
+          normal-user SSH connection (D-05); root SSH login stays disabled.
+        - Uses the D-13 flag baseline: -aAXHS + --numeric-ids + --delete.
+        - Adds --dry-run only when `dry_run` is True (D-12).
+        - Never includes --delete-excluded (excluded files must survive on target
+          — D-06) or --checksum (rsync's built-in verification is trusted — D-14).
+
+        All config-derived values (folder path, exclude patterns, target hostname)
+        are shlex.quote'd to prevent shell injection (T-05-01).
+        """
+        parts = [
+            "sudo", "-E", "rsync",
+            "-aAXHS",
+            "--numeric-ids",
+            "--delete",
+            "--info=progress2",
+            f"--out-format={shlex.quote('%i %n%L')}",
+            "--partial",
+            "--mkpath",
+        ]
+
+        if dry_run:
+            parts.append("--dry-run")
+
+        # SSH transport: no pseudo-tty (-T), quiet (-q) to suppress host banner.
+        # sudo -E above preserves $HOME and SSH_AUTH_SOCK so the ssh subprocess
+        # uses the invoking user's ~/.ssh/config and agent (Pitfall 1).
+        parts.append(f"-e {shlex.quote('ssh -T -q')}")
+
+        # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
+        parts.append(f"--rsync-path={shlex.quote('sudo rsync')}")
+
+        # Per-folder filter rules in config order (first-match-wins for rsync).
+        # DO NOT add --delete-excluded — excluded machine-specific files (e.g.
+        # .ssh/id_*, .config/tailscale) must survive on the target (D-06).
+        for pattern in folder.excludes:
+            parts.append(f"--filter={shlex.quote(f'- {pattern}')}")
+
+        # Source: trailing slash syncs contents, not the directory itself.
+        src = shlex.quote(folder.path.rstrip("/") + "/")
+        parts.append(src)
+
+        # Destination: <target_hostname>:<path>/ — rsync opens its own SSH
+        # connection using ~/.ssh/config (ADR-002); the colon is rsync's own
+        # remote-host separator, not a shell metacharacter.
+        dst_raw = f"{self.context.target_hostname}:{folder.path.rstrip('/') + '/'}"
+        parts.append(shlex.quote(dst_raw))
+
+        return " ".join(parts)
 
     async def _resolve_subvolume(self, path: str) -> tuple[str, str] | None:
         """Determine the btrfs subvolume mount and relative prefix for `path` on the target.
