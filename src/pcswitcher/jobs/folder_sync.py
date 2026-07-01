@@ -27,9 +27,7 @@ from pcswitcher.models import Host, LogLevel, ProgressUpdate, ValidationError
 #   "9.53G 21% 317.26MB/s 0:00:28 (xfr#83063, to-chk=443926/538653)"
 # Group 1: size token (e.g. "9.53G") — used to compute bytes_transferred (WR-01).
 # Group 2: percent complete.  Group 3: files transferred so far.  Group 4: total-to-check.
-_PROGRESS2_RE = re.compile(
-    r"(\d+[\d.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*to-chk=\d+/(\d+)\)"
-)
+_PROGRESS2_RE = re.compile(r"(\d+[\d.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*to-chk=\d+/(\d+)\)")
 
 
 class DivergenceStatus(Enum):
@@ -581,12 +579,10 @@ class FolderSyncJob(SyncJob):
                 self._log(
                     Host.TARGET,
                     LogLevel.CRITICAL,
-                    f"Pre-transfer divergence re-check blocked sync for {folder.path!r}: "
-                    f"{recheck_error.message}",
+                    f"Pre-transfer divergence re-check blocked sync for {folder.path!r}: {recheck_error.message}",
                 )
                 raise RuntimeError(
-                    f"Pre-transfer divergence re-check failed for {folder.path!r}: "
-                    f"{recheck_error.message}"
+                    f"Pre-transfer divergence re-check failed for {folder.path!r}: {recheck_error.message}"
                 )
 
             cmd = self._build_rsync_cmd(folder, self.context.dry_run)

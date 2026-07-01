@@ -892,12 +892,8 @@ class TestStreamRsync:
         _, log_calls, _ = await self._run_stream([c_line + h_line])
 
         full_logs = [msg for _, level, msg in log_calls if level == LogLevel.FULL]
-        assert any("subdir/" in msg for msg in full_logs), (
-            "Created-type ('c') line must be logged at FULL"
-        )
-        assert any("hardlink" in msg for msg in full_logs), (
-            "Hard-link-type ('h') line must be logged at FULL"
-        )
+        assert any("subdir/" in msg for msg in full_logs), "Created-type ('c') line must be logged at FULL"
+        assert any("hardlink" in msg for msg in full_logs), "Hard-link-type ('h') line must be logged at FULL"
 
 
 @pytest.mark.asyncio
@@ -1111,10 +1107,13 @@ class TestExecuteDivergenceRecheck:
             side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_WITH_CHANGES)
         )
 
-        with patch(
-            "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
-            return_value=900,
-        ), patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
+        with (
+            patch(
+                "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
+                return_value=900,
+            ),
+            patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"),
+        ):
             job = FolderSyncJob(ctx)
             with pytest.raises(RuntimeError):
                 await job.execute()
@@ -1127,14 +1126,15 @@ class TestExecuteDivergenceRecheck:
         ctx = make_context()
         fake_proc = make_fake_process()
         ctx.source.start_process = AsyncMock(return_value=fake_proc)
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_EMPTY)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_EMPTY))
 
-        with patch(
-            "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
-            return_value=900,
-        ), patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
+        with (
+            patch(
+                "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
+                return_value=900,
+            ),
+            patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"),
+        ):
             job = FolderSyncJob(ctx)
             await job.execute()  # must not raise
 
@@ -1149,10 +1149,13 @@ class TestExecuteDivergenceRecheck:
             side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_WITH_CHANGES)
         )
 
-        with patch(
-            "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
-            return_value=900,
-        ), patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
+        with (
+            patch(
+                "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
+                return_value=900,
+            ),
+            patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"),
+        ):
             job = FolderSyncJob(ctx)
             await job.execute()  # must not raise under allow_divergence
 
@@ -1173,10 +1176,13 @@ class TestExecuteDivergenceRecheck:
             side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_CONFIG_ONLY)
         )
 
-        with patch(
-            "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
-            return_value=900,
-        ), patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
+        with (
+            patch(
+                "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
+                return_value=900,
+            ),
+            patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"),
+        ):
             job = FolderSyncJob(ctx)
             await job.execute()  # must not raise — config.yaml write is tool state
 
