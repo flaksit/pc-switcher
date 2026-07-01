@@ -21,13 +21,14 @@ The job is **generic folder sync**, not home-specific. Default folders shipped e
 - Mirror semantics with `--delete` (target becomes an exact replica).
 - Target-divergence detection (the reliability linchpin — see D-06).
 - Tool-wide `--dry-run` contract (see D-12).
+- Specifying the consistency preconditions (D-17–D-19) and enforcing the target-divergence one; the session-quiescence preconditions are documented assumptions until a later phase.
 
 **Out of scope (deferred):**
 
 - `/etc`, systemd units, users/groups, GNOME dconf and other **system config** — stays Phase 3. `/root` (root's home directory) is the only root-owned path pulled forward into Phase 1.
-- Per-file conflict detection/resolution — Phase 2 (cross-cutting).
+- Per-file conflict detection (richer reporting) — not needed for safety given the preconditions + divergence guard; deferred (see D-09).
 - Reflink / shared-extent (CoW) topology preservation — not achievable with rsync; only relevant to VM images / snapshotted datasets handled in later phases.
-- Consistency preconditions (no-user-logged-in enforcement, `lsof` open-file checks) — a later phase.
+- Automated enforcement of session-quiescence preconditions (login-session / `lsof` open-file checks) — later phase. The preconditions themselves ARE specified in Phase 1 (D-17–D-19); the target-divergence precondition is enforced now (D-06).
 - Packages, Docker, VMs, k3s, rollback — Phases 2–7.
 
 **Roadmap impact:** moving `/root` into Phase 1 reverses the recent "defer `/root` to Phase 3" decision. ROADMAP.md and REQUIREMENTS.md must be updated so traceability stays honest (REQ-sync-scope-app-and-system-config keeps only `/etc` + system config in Phase 3; `/root`-as-folder-data moves to Phase 1 under REQ-sync-scope-user-data / the generic folder-sync mechanism).
@@ -53,7 +54,15 @@ The job is **generic folder sync**, not home-specific. Default folders shipped e
 - **D-06 (linchpin):** Mirror with `--delete` so the target becomes an exact replica and removals propagate (satisfies success criterion 4). **No arbitrary mass-delete cap** — that is false security and case-dependent. Safety comes from (a) btrfs pre/post snapshots as backstop, and (b) robust detection that the **target has not diverged since the last sync between this machine pair**. If the target is unchanged → mirror+delete is provably safe and runs. If the target changed independently → warn and require explicit confirmation. This divergence detection+enforcement MUST be implemented well; it is the core reliability mechanism of Phase 1.
 - **D-07:** The guard is about *target divergence since last sync*, NOT about "last role." Doing A→B, continuing work on A, then A→B again is **not** a conflict (A stays the source of truth; B was untouched). The conflict case is B being modified independently after it last participated in a sync.
 - **D-08:** `sync_history.py` today records only last *role* (source/target) and is insufficient for D-06/D-07. A per-target sync-state marker is needed. Leading candidate: compare the target's current `@`/`@home` against the last post-sync btrfs snapshot (subvolume generation / `btrfs subvolume find-new`), reusing existing snapshot infrastructure. The researcher decides the exact mechanism.
-- **D-09:** Per-file conflict detection/resolution is deferred to Phase 2. Phase 1 detection operates at folder/subvolume granularity (changed-since-last-sync).
+- **D-09:** Per-file conflict detection is NOT required for safety. Given the consistency preconditions (D-17–D-19) plus the target-divergence guard (D-06/D-07), no conflict can arise unsupervised: the only dangerous case (the target diverged since last sync) is already caught at folder/subvolume granularity and stops the sync for manual resolution. Per-file detection would add only richer *reporting* of which files diverged — a nicety, not a correctness need — so it stays deferred (was tagged Phase 2 under REQ-conflict-detection-no-resolution). No auto-resolution in any case.
+
+### Consistency preconditions
+
+These preconditions make the one-directional mirror safe and the captured state consistent. They are **specified now**; Phase 1 *enforces* only the divergence precondition (D-18, via D-06). The session-quiescence preconditions (D-17, D-19) are **documented assumptions the user is responsible for** in Phase 1; a later phase adds automated checking + enforcement with a user override.
+
+- **D-17 (single active machine):** Only one machine is active at a time; each sync is one-directional source→target and the user does not use the target concurrently. Project premise; assumed, not enforced in Phase 1.
+- **D-18 (target not independently modified):** The target's synced folders must not have changed since their last sync with the source. This is the divergence precondition and IS checked + enforced in Phase 1 via D-06/D-07 (warn + require confirmation on divergence).
+- **D-19 (quiescent source during capture):** For a consistent copy, the source's synced folders should not be written by other sessions/apps during the sync — ideally no user logged in except the shell running `pc-switcher` (or apps closed). Open files / live app state can yield an inconsistent snapshot. Assumed in Phase 1; a later phase adds automated detection (e.g. login-session / `lsof` checks) + enforcement with `--override`.
 
 ### Include/exclude configuration
 
@@ -146,8 +155,8 @@ The job is **generic folder sync**, not home-specific. Default folders shipped e
 <deferred>
 ## Deferred Ideas
 
-- **Consistency preconditions** — enforce/verify a consistent-state precondition before sync (e.g. no user logged in except the shell running `pc-switcher`, `lsof`-based open-file detection). A later phase.
-- **Per-file conflict detection & resolution** — Phase 2 (REQ-conflict-detection-no-resolution).
+- **Automated precondition checking/enforcement** — the consistency preconditions (D-17–D-19) are *specified* in Phase 1, but only the divergence one (D-18) is enforced now. Automated checking + enforcement of the session-quiescence preconditions (login-session / `lsof` open-file detection) with a user `--override` is deferred to a later phase.
+- **Per-file conflict detection (richer reporting)** — not a safety requirement given preconditions + divergence guard (D-09); only adds finer reporting of which files diverged. Deferred (was Phase 2 under REQ-conflict-detection-no-resolution). No auto-resolution in any case.
 - **Reflink / shared-extent (CoW) preservation** — only matters for VM images / snapshotted datasets inside synced folders; handled where those scopes live (VMs = Phase 5).
 - **`/etc`, systemd, users/groups, GNOME dconf** — system config, Phase 3.
 
