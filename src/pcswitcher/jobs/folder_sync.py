@@ -25,7 +25,11 @@ from pcswitcher.models import Host, LogLevel, ProgressUpdate, ValidationError
 
 # Matches rsync --info=progress2 output, e.g.:
 #   "9.53G 21% 317.26MB/s 0:00:28 (xfr#83063, to-chk=443926/538653)"
-_PROGRESS2_RE = re.compile(r"\d+[\d.]*[KMGT]?\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*to-chk=\d+/(\d+)\)")
+# Group 1: size token (e.g. "9.53G") — used to compute bytes_transferred (WR-01).
+# Group 2: percent complete.  Group 3: files transferred so far.  Group 4: total-to-check.
+_PROGRESS2_RE = re.compile(
+    r"(\d+[\d.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*to-chk=\d+/(\d+)\)"
+)
 
 
 class DivergenceStatus(Enum):
@@ -104,6 +108,19 @@ class FolderSyncJob(SyncJob):
         "required": ["folders"],
         "additionalProperties": False,
     }
+
+    @staticmethod
+    def _parse_size_to_bytes(value: str) -> int:
+        """Convert an rsync size token (e.g. '9.53G', '317K', '512') to an integer byte count.
+
+        Multipliers: K=1024, M=1024**2, G=1024**3, T=1024**4.  A bare number (no suffix)
+        is returned as-is.  Conversion is best-effort — rsync rounds progress figures, so
+        the result is an approximation of the true cumulative byte count (WR-01).
+        """
+        multipliers: dict[str, int] = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+        if value and value[-1].upper() in multipliers:
+            return int(float(value[:-1]) * multipliers[value[-1].upper()])
+        return int(float(value))
 
     def _active_folders(self) -> list[FolderEntry]:
         """Return only enabled folder entries from config."""
@@ -491,10 +508,15 @@ class FolderSyncJob(SyncJob):
                     continue
                 m = _PROGRESS2_RE.search(line)
                 if m:
-                    # Progress2 line: update TUI (D-15)
-                    pct = int(m.group(1))
-                    files_xfr = int(m.group(2))
-                    total_check = int(m.group(3))
+                    # Progress2 line: update TUI (D-15) and capture transferred bytes (WR-01).
+                    # Group numbering after adding the size capture group:
+                    #   1=size  2=percent  3=files_xfr  4=total_check
+                    # Last progress line wins — rsync emits these as running totals so the
+                    # final line is the best approximation of the cumulative byte count.
+                    bytes_xfr = self._parse_size_to_bytes(m.group(1))
+                    pct = int(m.group(2))
+                    files_xfr = int(m.group(3))
+                    total_check = int(m.group(4))
                     self._report_progress(
                         ProgressUpdate(
                             percent=min(pct, 100),
@@ -502,8 +524,11 @@ class FolderSyncJob(SyncJob):
                             total=total_check,
                         )
                     )
-                elif line[0] in (">", "<", "*", "."):
-                    # Per-file --out-format line (format: "%i %n%L") — log at FULL (D-16)
+                elif line[0] in (">", "<", "*", ".", "c", "h"):
+                    # Per-file --out-format line (format: "%i %n%L") — log at FULL (D-16).
+                    # Change-type characters (rsync %i first char):
+                    #   > sent to remote   < received from remote   * special message
+                    #   . attribute-only   c created (dir/symlink/device)   h hard link (IN-03)
                     self._log(Host.SOURCE, LogLevel.FULL, f"{folder.path}: {line}")
                     if line.startswith("*deleting"):
                         files_deleted += 1
@@ -511,7 +536,7 @@ class FolderSyncJob(SyncJob):
         # Flush any remaining fragment that didn't end with \r or \n.
         if buf:
             line = buf.decode(errors="replace").strip()
-            if line and line[0] in (">", "<", "*", "."):
+            if line and line[0] in (">", "<", "*", ".", "c", "h"):
                 self._log(Host.SOURCE, LogLevel.FULL, f"{folder.path}: {line}")
                 if line.startswith("*deleting"):
                     files_deleted += 1
