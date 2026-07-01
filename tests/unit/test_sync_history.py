@@ -11,7 +11,6 @@ import pytest
 
 from pcswitcher.sync_history import (
     HISTORY_DIR,
-    HISTORY_PATH,
     SyncRole,
     get_history_path,
     get_last_role,
@@ -189,6 +188,7 @@ class TestGetRecordRoleCommand:
         cmd = get_record_role_command(SyncRole.TARGET)
         result = subprocess.run(
             cmd,
+            check=False,
             shell=True,
             env={**os.environ, "HOME": str(tmp_path)},
             capture_output=True,
@@ -207,6 +207,7 @@ class TestGetRecordRoleCommand:
         cmd = get_record_role_command(SyncRole.SOURCE)
         result = subprocess.run(
             cmd,
+            check=False,
             shell=True,
             env={**os.environ, "HOME": str(tmp_path)},
             capture_output=True,
@@ -241,7 +242,9 @@ class TestGetTargetGeneration:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
         history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text(json.dumps({"last_role": "source", "target_generations": {"other-host": {"/home": 1}}}))
+        history_path.write_text(
+            json.dumps({"last_role": "source", "target_generations": {"other-host": {"/home": 1}}})
+        )
         assert get_target_generation("host-b", "/home") is None
 
     def test_returns_none_for_missing_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

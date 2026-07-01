@@ -232,7 +232,12 @@ def sync(
 
     # Run the sync operation
     exit_code = _run_sync(
-        target, cfg, auto_accept=yes, allow_consecutive=allow_consecutive, dry_run=dry_run, allow_divergence=allow_divergence
+        target,
+        cfg,
+        auto_accept=yes,
+        allow_consecutive=allow_consecutive,
+        dry_run=dry_run,
+        allow_divergence=allow_divergence,
     )
     sys.exit(exit_code)
 
@@ -261,7 +266,12 @@ def _run_sync(
     """
     return asyncio.run(
         _async_run_sync(
-            target, cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive, dry_run=dry_run, allow_divergence=allow_divergence
+            target,
+            cfg,
+            auto_accept=auto_accept,
+            allow_consecutive=allow_consecutive,
+            dry_run=dry_run,
+            allow_divergence=allow_divergence,
         )
     )
 
