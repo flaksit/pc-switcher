@@ -234,6 +234,8 @@ class TestValidatePreflight:
 
     async def test_folder_path_is_shell_quoted(self) -> None:
         """Folder paths in preflight commands are shell-quoted (T-04-01 injection guard)."""
+        import shlex as _shlex
+
         ctx = make_context(config={"folders": [{"path": "/home/user name"}]})
         source_cmds: list[str] = []
 
@@ -245,11 +247,13 @@ class TestValidatePreflight:
         ctx.target.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
         job = FolderSyncJob(ctx)
         await job.validate()
-        # The path with a space must be quoted; bare "/home/user name" must not appear
+        # shlex.quote wraps the path in single quotes: '/home/user name'
+        # Verify that exact quoted form appears in the test -d command (not the bare path).
+        expected_quoted = _shlex.quote("/home/user name")  # -> "'/home/user name'"
         folder_checks = [c for c in source_cmds if "test -d" in c]
         assert folder_checks, "expected at least one test -d call"
-        assert all('/home/user name' not in c for c in folder_checks), (
-            "unquoted path found in command — shell injection risk"
+        assert all(expected_quoted in c for c in folder_checks), (
+            f"Expected shell-quoted path {expected_quoted!r} in folder check commands, got: {folder_checks}"
         )
 
     async def test_execute_stub_raises(self) -> None:
