@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 1
-current_phase_name: Home-Sync MVP — User Data Sync
+current_phase: 01
+current_phase_name: home-sync-mvp-user-data-sync
 status: executing
 stopped_at: Phase 1 context gathered
-last_updated: "2026-06-30T11:27:12.022Z"
+last_updated: "2026-06-30T13:24:15.483Z"
 last_activity: 2026-06-30
-last_activity_desc: Bootstrap-from-ingest complete; PROJECT/REQUIREMENTS/ROADMAP/STATE written.
+last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 7
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 6
+  completed_plans: 1
   percent: 0
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-30)
 
 **Core value:** After a single sync command, the target machine is a faithful, reliable replica of the source — no data loss, conflicts detected, metadata intact.
-**Current focus:** Phase 1 — Home-Sync MVP (User Data Sync)
+**Current focus:** Phase 01 — home-sync-mvp-user-data-sync
 
 ## Current Position
 
-Phase: 1 of 7 (Home-Sync MVP — User Data Sync)
-Plan: 0 of TBD in current phase
+Phase: 01 (home-sync-mvp-user-data-sync) — EXECUTING
+Plan: 2 of 6
 Status: Ready to execute
-Last activity: 2026-06-30 — Bootstrap-from-ingest complete; PROJECT/REQUIREMENTS/ROADMAP/STATE written.
+Last activity: 2026-06-30 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -55,6 +55,7 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: n/a
 
 *Updated after each plan completion.*
+| Phase 01 P01 | 4min | - tasks | - files |
 
 ## Accumulated Context
 
@@ -65,6 +66,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - Foundation: 11 Accepted ADRs are locked (SSH channel, Python+uv, asyncio, three-tier testing, TDD, draft-aware CI, stdlib logging, living specs, doc structure, dynamic versioning, ADR process).
 - Foundation: ADR-009 (AI-readiness issue labels) is Proposed, not locked.
 - Phase 1: User-data transport is rsync-over-SSH (chosen over btrfs send/receive) — direction set but not yet captured in an ADR.
+- [Phase ?]: rsync-over-SSH chosen as user-data transport (D-04); rsync runs as root on both ends via sudo, root SSH login forbidden (D-05)
+- [Phase ?]: dry-run is tool-wide contract binding all SyncJobs (D-12): no file writes, no snapshots, no history updates in dry-run mode
 
 ### Pending Todos
 
@@ -84,6 +87,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-30T09:32:23.387Z
+Last session: 2026-06-30T13:23:21.563Z
 Stopped at: Phase 1 context gathered
 Resume file: .planning/phases/01-home-sync-mvp-user-data-sync/01-CONTEXT.md

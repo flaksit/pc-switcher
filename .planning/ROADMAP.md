@@ -49,12 +49,12 @@ The orchestration framework is already built (Job architecture, self-installing 
   4. The sync is reversible and exclusions hold both directions: after modifying, adding, and deleting files on B and running `pc-switcher sync <A>` from B, A reflects B's changes byte-identically with metadata preserved, and the same machine-specific exclusions are honored on this reverse sync.
   5. A VM-isolated integration test automates the full A→B, mutate-on-B, B→A round-trip and asserts criteria 1-4 — the developer-facing milestone success metric.
 
-**Plans**: 6 plans
+**Plans**: 1/6 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 01-01-PLAN.md — ADRs: rsync-over-SSH transport (D-04/D-05) and the unified dry-run contract (D-12)
+- [x] 01-01-PLAN.md — ADRs: rsync-over-SSH transport (D-04/D-05) and the unified dry-run contract (D-12)
 - [ ] 01-02-PLAN.md — folder_sync config schema + default /home,/root entries and exclusions
 - [ ] 01-03-PLAN.md — divergence-marker store, --allow-divergence flag, dry-run history skip
 
@@ -155,7 +155,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Home-Sync MVP (User Data Sync) | 0/6 | Not started | - |
+| 1. Home-Sync MVP (User Data Sync) | 1/6 | In Progress|  |
 | 2. Package Management Sync | 0/TBD | Not started | - |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
