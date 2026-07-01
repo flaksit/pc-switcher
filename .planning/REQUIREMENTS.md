@@ -14,9 +14,9 @@ These requirements carry the full project vision (all sync scopes plus workflow,
 
 ### Sync Scope
 
-- [ ] **REQ-sync-scope-user-data**: Sync `/home` (documents, code, configs, application data). Include dev-tool caches (uv, pip, cargo, npm); exclude browser/IDE caches (VS Code specifically). (`/root` is deferred to REQ-sync-scope-app-and-system-config, Phase 3.)
+- [ ] **REQ-sync-scope-user-data**: Sync `/home` and `/root` (documents, code, configs, application data) via a generic per-folder include/exclude mechanism usable for any path. Include dev-tool caches (uv, pip, cargo, npm) and VS Code `User/` state; exclude regenerable caches (VS Code cache dirs, browser caches). (`/root` is included here because rsync must run as root to preserve cross-owner files; `/etc` and other system config remain REQ-sync-scope-app-and-system-config, Phase 3.)
 - [ ] **REQ-sync-scope-packages**: Sync installed packages across apt, snap, flatpak, manual .debs, custom PPAs, and install-script packages; detect package conflicts / version mismatches.
-- [ ] **REQ-sync-scope-app-and-system-config**: Sync application configuration (GNOME desktop, cloud mounts, systemd services) and machine-independent system config (`/root`, `/etc`, startup services, users/groups); detect conflicting system changes.
+- [ ] **REQ-sync-scope-app-and-system-config**: Sync application configuration (GNOME desktop, cloud mounts, systemd services) and machine-independent system config (`/etc`, startup services, users/groups); detect conflicting system changes. (`/root` moved to REQ-sync-scope-user-data, Phase 1.)
 - [ ] **REQ-sync-scope-file-metadata**: Preserve file metadata — owner, group, permissions, POSIX ACLs, timestamps.
 - [ ] **REQ-sync-scope-docker**: Sync Docker images, containers, volumes, and cache; detect running containers or incompatible states.
 - [ ] **REQ-sync-scope-vms**: Sync KVM/virt-manager VMs; VMs must be suspended/powered off before sync; detect concurrent VM usage.

@@ -24,11 +24,11 @@ Shipped before GSD adoption and relied upon as the foundation every sync job bui
 
 Current scope. Each item is a modular sync job built on the finished framework, sequenced as milestones.
 
-- [ ] User-data sync of `/home` over rsync-over-SSH with file-metadata preservation and machine-specific exclusions — Phase 1 (Home-Sync MVP, current milestone)
+- [ ] User-data sync of `/home` and `/root` over rsync-over-SSH (generic per-folder include/exclude) with file-metadata preservation and machine-specific exclusions — Phase 1 (Home-Sync MVP, current milestone)
 - [ ] Machine-specific exclusions enforced on every sync, both directions — Phase 1 onward (introduced for user data, extended per scope)
 - [ ] File-metadata preservation (owner, group, permissions, POSIX ACLs, timestamps) across all scopes — Phase 1 onward
 - [ ] Package management sync (apt, snap, flatpak, manual .debs, custom PPAs, install-script packages) with conflict/version-mismatch detection — Phase 2
-- [ ] System and application configuration sync (GNOME desktop, cloud mounts, systemd services, `/root`, `/etc`, startup services, users/groups) with conflicting-change detection — Phase 3
+- [ ] System and application configuration sync (GNOME desktop, cloud mounts, systemd services, `/etc`, startup services, users/groups) with conflicting-change detection — Phase 3
 - [ ] Docker state sync (images, containers, volumes, cache) with running-container / incompatible-state detection — Phase 4
 - [ ] VM state sync (KVM/virt-manager) with powered-off guard and concurrent-use detection — Phase 5
 - [ ] Local single-node k3s cluster sync including PVCs, with cluster-state validation and active-workload detection — Phase 6
