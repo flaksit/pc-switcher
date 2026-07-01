@@ -302,9 +302,7 @@ async def _async_run_sync(
 
         if sigint_count[0] == 1:
             console.print("\n[yellow]Interrupt received, cleaning up...[/yellow]")
-            console.print(
-                "[dim](Press Ctrl+C again to force quit immediately)[/dim]"
-            )
+            console.print("[dim](Press Ctrl+C again to force quit immediately)[/dim]")
             if main_task is not None and not main_task.done():
                 main_task.cancel()
         else:
