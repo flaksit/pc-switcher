@@ -42,8 +42,9 @@ sync_jobs:
   dummy_success: true    # Test job that completes successfully
   dummy_fail: false      # Test job that fails at configurable progress
 
+  folder_sync: true          # Sync /home and /root directories (Phase 1)
+
   # Future jobs (uncomment when available):
-  # user_data: true       # Sync /home and /root directories
   # packages: true        # Sync apt, snap, flatpak packages
   # docker: false         # Sync Docker images, containers, volumes
   # vms: false            # Sync KVM/virt-manager VMs
@@ -108,5 +109,48 @@ dummy_fail:
   source_duration: 10    # Seconds to run on source machine
   target_duration: 10    # Seconds to run on target machine
   fail_at: 12            # Elapsed seconds at which to fail
+
+# =============================================================================
+# Folder Sync Configuration
+# =============================================================================
+# Defines folders to sync via rsync. Each entry has its own exclude list.
+# Excludes are relative to the folder path and passed as rsync --filter rules.
+#
+# Explicitly SYNCED (not excluded):
+#   - Dev-tool caches: ~/.local/share/uv, pip cache, ~/.cargo, ~/.npm
+#   - VS Code user state: ~/.config/Code/User/ (settings, keybindings, extensions)
+#
+# Excluded below: machine-specific keys/config, GPU/shader caches, VS Code
+# regenerable caches. Users can override by editing this file.
+
+folder_sync:
+  folders:
+    - path: /home
+      enabled: true
+      excludes:
+        # Machine-specific SSH private keys — never synced between machines
+        - .ssh/id_*
+        # Tailscale machine-specific config (node key, network identity)
+        - .config/tailscale
+        # GPU shader caches (regenerable; GPU-model specific — wrong on different hardware)
+        - .cache/nvidia
+        - .cache/mesa_shader_cache
+        - .nv
+        # Fontconfig cache (regenerable; font paths differ per machine)
+        - .cache/fontconfig
+        # VS Code regenerable caches (NOT Code/User — that IS synced)
+        - .config/Code/Cache
+        - .config/Code/CachedData
+        - .config/Code/GPUCache
+        - .config/Code/Code Cache
+        - .config/Code/CachedExtensionVSIXs
+
+    - path: /root
+      enabled: true
+      excludes:
+        # Machine-specific SSH private keys
+        - .ssh/id_*
+        # Tailscale machine-specific config
+        - .config/tailscale
 
 # Future job configurations will be added here when features are implemented:
