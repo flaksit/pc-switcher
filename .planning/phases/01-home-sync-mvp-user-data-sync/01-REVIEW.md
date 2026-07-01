@@ -1,184 +1,112 @@
 ---
 phase: 01-home-sync-mvp-user-data-sync
-reviewed: 2026-06-30T00:00:00Z
+reviewed: 2026-07-01T00:00:00Z
 depth: standard
-files_reviewed: 18
+files_reviewed: 6
 files_reviewed_list:
-  - docs/adr/adr-013-rsync-over-ssh-user-data-transport.md
-  - docs/adr/adr-014-unified-dry-run-contract.md
-  - docs/adr/_index.md
-  - src/pcswitcher/cli.py
-  - src/pcswitcher/default-config.yaml
-  - src/pcswitcher/executor.py
-  - src/pcswitcher/jobs/context.py
-  - src/pcswitcher/jobs/folder_sync.py
-  - src/pcswitcher/jobs/__init__.py
-  - src/pcswitcher/orchestrator.py
-  - src/pcswitcher/schemas/config-schema.yaml
   - src/pcswitcher/sync_history.py
-  - tests/contract/test_job_interface.py
-  - tests/integration/test_folder_sync.py
-  - tests/unit/jobs/test_folder_sync.py
-  - tests/unit/orchestrator/test_consecutive_sync.py
-  - tests/unit/test_dry_run.py
-  - tests/unit/test_sync_history.py
+  - src/pcswitcher/config_sync.py
+  - src/pcswitcher/jobs/folder_sync.py
+  - src/pcswitcher/cli.py
+  - src/pcswitcher/orchestrator.py
+  - src/pcswitcher/ui.py
 findings:
   critical: 2
-  warning: 3
-  info: 5
-  total: 10
+  warning: 1
+  info: 1
+  total: 4
 status: issues_found
 ---
 
-# Phase 1: Code Review Report
+# Phase 01: Code Review Report
 
-- **Reviewed:** 2026-06-30
+- **Reviewed:** 2026-07-01T00:00:00Z
 - **Depth:** standard
-- **Files Reviewed:** 18
+- **Files Reviewed:** 6
 - **Status:** issues_found
 
 ## Summary
 
-The folder-sync slice is generally careful where the prompt flagged the highest risk: every config-derived value that reaches a shell is `shlex.quote`'d (folder paths, exclude patterns, the `ssh -T -q` transport, `--rsync-path='sudo rsync'`, and the `host:path` destination), and I could not construct a local shell-injection through `_build_rsync_cmd` or the `validate()` preflight/divergence commands. Dry-run side-effect freedom also holds: `execute()` adds `--dry-run` to rsync and skips the `set_target_generation` marker write under `dry_run`, and the orchestrator skips the post-sync history update under `dry_run`.
+Reviewed the gap-closure changes (commits `f1825fb`..`796e3a8`) that resolved the prior review's CR-01/CR-02/WR-01..03/IN-01..03 findings in this data-loss-critical rsync sync tool. The state-machine refactor (`DivergenceStatus` tri-state, `UNKNOWN_GENERATION` sentinel, fail-closed on findmnt/find-new failure), the merge-preserving history writes, the bytes-parsing and `c`/`h` change-type additions, the progress-bar `set_total_steps` correction, and the SIGINT dead-code removal are all individually sound. `uv run basedpyright` reports 0 errors on the six files.
 
-However, the divergence guard — explicitly called out as the data-loss safety linchpin — has two serious defects. First, with the **shipped default config** (which syncs `/home`, giving an empty subvolume prefix), the tool's own post-sync write of `sync-history.json` onto the target's `/home` lands *after* the divergence baseline is captured, which makes the guard report a false divergence and block essentially every second sync. The integration suite misses this because it deliberately syncs a subdirectory (non-empty prefix), not `/home`. Second, the guard **fails open**: when `btrfs find-new` or subvolume resolution fails, it logs a warning and proceeds with the destructive mirror+delete instead of blocking. For a safety linchpin, inability to verify the target should fail closed.
+However, the empty-prefix tool-state filter that underpins CR-01 has two correctness defects that the existing test suite does not exercise, both centered on `FolderSyncJob._target_diverged_since` and the new pre-transfer re-check.
+
+First, the tool-state tokens are matched unanchored anywhere in the find-new path, so a real user file nested under any `.config/pc-switcher/` or `.local/share/pc-switcher/` subpath (common with dotfile managers) is silently masked, meaning real divergence goes undetected and data is lost.
+
+Second, the filter only masks pc-switcher's own state dirs, but `install_on_target` (Phase 7) writes upgrade artifacts to `~/.local/bin/` and `~/.local/share/uv/` under the synced `@home` subvolume. The new Phase-9 pre-transfer re-check (WR-03) runs after Phase 7 and flags those artifacts as divergence, so legitimate "upgrade then sync" runs are falsely blocked, pushing the user to `--allow-divergence` (which disables the guard entirely).
 
 ## Critical Issues
 
-### CR-01: Default config (`/home`, empty prefix) self-triggers a false divergence and blocks every second sync
+### CR-01: Tool-state filter matches unanchored, masking real user divergence at any nesting depth
 
-**File:** `src/pcswitcher/jobs/folder_sync.py:507-522`, `src/pcswitcher/orchestrator.py:266-284`
+**File:** `src/pcswitcher/jobs/folder_sync.py:381-397`
 
-**Issue:**
+**Issue:** In the empty-prefix branch the exclusion is `any(token in line for token in tool_state_tokens)` where `history_token = "/.local/share/pc-switcher/"` and `config_token = "/.config/pc-switcher/"`. `btrfs subvolume find-new` emits paths relative to the subvolume root, e.g. `... flags UNKNOWN janfr/.config/pc-switcher/config.yaml`. The substring test is not anchored to the top-level (single username segment) position, so it also matches these paths at arbitrary depth: `janfr/dotfiles/.config/pc-switcher/config.yaml`, `janfr/backups/home/.local/share/pc-switcher/anything`, or any git/dotfile-manager checkout (chezmoi, yadm, stow) containing a copy of `.config/pc-switcher/`.
 
-The post-sync divergence baseline is recorded inside `FolderSyncJob.execute()` (orchestrator Phase 9) via `_get_subvolume_generation(mount)`. The orchestrator then continues, and in Phase 10+ calls `_update_sync_history()` (orchestrator.py:283-284), whose `get_record_role_command(SyncRole.TARGET)` writes `~/.local/share/pc-switcher/sync-history.json` **on the target**. Because the SSH user is a normal user, that path lives under `/home/<user>/.local`, i.e. inside the `@home` subvolume — and that write happens *after* the baseline generation was captured, so it bumps `@home`'s generation past the stored baseline.
+Because the default synced folder is `/home` (empty prefix), a genuine user modification to any such nested path on the target is silently classified `CLEAN`. The divergence guard — whose entire purpose is to prevent `rsync --delete` from destroying independent target changes — then proceeds and overwrites the user's data. This is a false-negative data-loss path. The target audience (power users syncing Linux desktops, often with dotfile repos) makes the trigger realistic, not theoretical. The existing tests only cover the depth-1 case (`janfr/.config/pc-switcher/…`), so this gap is uncaught.
 
-On the next sync, `_target_diverged_since` runs `btrfs subvolume find-new /home <baseline>`. For the `/home` folder entry, `_resolve_subvolume("/home")` returns `mount="/home"`, `prefix=""`. With `prefix == ""` the matcher at folder_sync.py:341 treats *any* changed path as divergence:
-
-```python
-if prefix == "" or f" {prefix}/" in line or line.endswith(f" {prefix}"):
-    return True
-```
-
-The tool's own `sync-history.json` (and any target-side log/install writes under `~/.local`) therefore register as a divergence, and the sync is blocked with "Target divergence detected" even though the user never touched the target. This makes the default `/home` sync unusable for repeated runs.
-
-The integration test `tests/integration/test_folder_sync.py:341-503` does not catch this because `_make_config` syncs `/home/<user>/pcswitcher-folder-sync-test`, which yields a non-empty prefix that happens to exclude `~/.local`. The default `folders: [- path: /home]` is never exercised end-to-end.
-
-**Fix:**
-
-Capture the divergence baseline only after *all* target-side writes for the session are complete (i.e. record `set_target_generation` after `_update_sync_history` and the post-sync snapshot, e.g. as a dedicated final orchestrator phase), or exclude the pc-switcher state directory from the divergence scope. Concretely, move baseline recording out of `execute()` into a post-history orchestrator step:
+**Fix:** Anchor the match to the top-level home-relative position — the tool-state dir must appear immediately after the first (username) path segment, not anywhere. Extract the path (last whitespace-delimited field of the find-new line) and test against an anchored pattern, e.g.:
 
 ```python
-# orchestrator.run(), after _update_sync_history() and post snapshots:
-if not self._dry_run:
-    await self._record_divergence_baselines()  # calls set_target_generation per folder
+import re
+
+# path is the final field of a find-new line: "... flags UNKNOWN <user>/<rest>"
+_TOOL_STATE_RE = re.compile(r"^[^/]+/(?:\.local/share|\.config)/pc-switcher/")
+
+def _is_tool_state_path(find_new_line: str) -> bool:
+    path = find_new_line.rsplit(" ", 1)[-1]  # relative to subvolume root
+    return bool(_TOOL_STATE_RE.match(path))
 ```
 
-and have `_target_diverged_since` ignore changes under the pc-switcher state path (`.local/share/pc-switcher/`) so unavoidable tool writes never count as user divergence. Add an end-to-end test that uses the default `/home` entry (empty prefix) and performs two consecutive A→B syncs.
+Then in the empty-prefix loop use `if _is_tool_state_path(line): continue`. This masks only `<user>/.config/pc-switcher/…` and `<user>/.local/share/pc-switcher/…` at the true home root and no longer masks nested user copies. The derived `.local/share`/`.config` segments should still come from `sync_history.HISTORY_DIR` / `config_sync.CONFIG_REMOTE_DIR` to keep the single source of truth.
 
-### CR-02: Divergence guard fails open — destructive mirror+delete proceeds when the target cannot be verified
+### CR-02: Pre-transfer re-check flags `install_on_target` upgrade artifacts as divergence, falsely blocking legitimate syncs
 
-**File:** `src/pcswitcher/jobs/folder_sync.py:308-344`
+**File:** `src/pcswitcher/jobs/folder_sync.py:577-586` (re-check) combined with the tool-state token set at `381-383`
 
-**Issue:**
+**Issue:** The WR-03 pre-transfer re-check calls `_check_divergence(folder)` in `execute()` immediately before the destructive rsync, comparing the target against the previous run's stored generation `G(N)`. In the orchestrator pipeline this runs in Phase 9 — after Phase 7 `install_on_target`. When the target's pc-switcher version differs from the source (verified: `install_on_target.execute()` only skips when `target_version == source_version`, `src/pcswitcher/jobs/install_on_target.py:70-75`), Phase 7 runs `install.sh`, which writes upgrade artifacts under the synced `@home` subvolume: `uv tool install` writes `$HOME/.local/bin/pc-switcher` and `$HOME/.local/share/uv/tools/pcswitcher/…` (`install.sh:190-200`), and uv bootstrap (if absent) writes `$HOME/.local/bin/uv` (`install.sh:111-114`).
 
-The guard returns `False` ("not diverged", proceed) whenever it cannot actually determine the target's state:
+These land under `janfr/.local/bin/…` and `janfr/.local/share/uv/…`. The tool-state filter only masks `/.local/share/pc-switcher/` and `/.config/pc-switcher/`, so `find-new` since `G(N)` reports the install artifacts as changed files, yielding `DivergenceStatus.DIVERGED`, and the re-check raises `RuntimeError("Pre-transfer divergence re-check failed …")` and aborts the sync before rsync runs.
+
+Result: any sync that also upgrades pc-switcher on the target (every version bump in production; nearly every sync during active development where the source dev version changes constantly) fails with a false "target has been modified since the last sync" error. The only escape is `--allow-divergence`, which disables the guard entirely and reopens the exact data-loss window CR-01/CR-02 were meant to close. This is a regression newly introduced by the WR-03 re-check (the old Phase-4-only check ran before Phase 7 and never saw install writes), and it is not covered by the unit tests (which mock a single-folder `/home` with no install step).
+
+**Fix:** Exclude pc-switcher's install footprint from the divergence scope for the empty-prefix case, in addition to the two state dirs. Option A (preferred; pairs with the CR-01 fix) is to broaden the anchored tool-state matcher:
 
 ```python
-resolved = await self._resolve_subvolume(folder.path)
-if resolved is None:
-    self._log(... "skipping divergence check")
-    return False                      # -> proceeds to mirror+delete
-...
-if result.exit_code != 0:             # find-new failed
-    self._log(... "skipping divergence check")
-    return False                      # -> proceeds to mirror+delete
+_TOOL_STATE_RE = re.compile(
+    r"^[^/]+/(?:"
+    r"\.local/share/pc-switcher|"
+    r"\.config/pc-switcher|"
+    r"\.local/bin/(?:pc-switcher|uv)|"
+    r"\.local/share/uv"
+    r")(?:/|$)"
+)
 ```
 
-After a baseline has been established, a *transient* failure of `findmnt` or `sudo btrfs subvolume find-new` on the target (sudo hiccup, btrfs error, command not found, unexpected output) causes the guard to silently allow the subsequent `rsync -aAXHS --delete`, which deletes any target-side changes. For the component the prompt identifies as the data-loss linchpin, "cannot verify" must fail **closed** (block, require `--allow-divergence`), not open.
-
-`_resolve_subvolume` returning `None` for a genuinely non-btrfs path is a documented tradeoff (RESEARCH Open Q3), but the more dangerous case is a previously-working btrfs target where the query *fails*: the baseline only exists because a prior `btrfs subvolume show` succeeded, so a later failure is an anomaly that should stop the destructive operation, not wave it through.
-
-**Fix:**
-
-Distinguish "no baseline / known non-btrfs" (safe to proceed) from "verification command failed" (must block). When `stored is not None` and `find-new`/`findmnt` fails, return a blocking `ValidationError` unless `allow_divergence` is set, rather than `return False`.
+Option B (more robust) is to capture the target subvolume generation after Phase 7/Phase 8 (i.e. establish the re-check baseline post-install) rather than reusing `G(N)`, so pc-switcher's own pipeline writes are never inside the compared window. Whichever is chosen, add a test that runs the re-check with a `find-new` line under `janfr/.local/bin/pc-switcher` and asserts the sync is not blocked, and one under a genuine user path that is blocked.
 
 ## Warnings
 
-### WR-01: `bytes_transferred` is always 0 in the per-folder audit summary
+### WR-01: `lstrip("~/")` used for prefix stripping is character-set removal, not prefix removal
 
-**File:** `src/pcswitcher/jobs/folder_sync.py:405-447, 498-505`
+**File:** `src/pcswitcher/jobs/folder_sync.py:381-382`; `src/pcswitcher/config_sync.py:317`
 
-**Issue:**
+**Issue:** The tool-state tokens and the config absolute-path derivation strip the leading `~/` with `str.lstrip("~/")`. `str.lstrip` removes any leading characters in the set `{"~", "/"}`, not the literal prefix `~/`. For the current constants (`"~/.local/share/pc-switcher"`, `"~/.config/pc-switcher/config.yaml"`) the output happens to be correct because the third character is `.`. But this is a silent landmine: any future constant beginning with an additional `~` or `/` (e.g. a normalized `"~//.config/…"`, or a value that starts with a `/` after the tilde) would be over-stripped, and here it directly feeds the security-relevant divergence filter tokens — a wrong derivation would silently disable the guard rather than error.
 
-`_stream_rsync` initializes `bytes_xfr = 0` and never reassigns it; `_PROGRESS2_RE` (folder_sync.py:27) captures only percent, `xfr#`, and the `to-chk` total — not the leading byte figure (`9.53G`). The docstring claims "bytes_transferred is a best-effort count based on the last progress line," but the returned value is constant 0, so `execute()` logs `"... 0 bytes ..."` for every transfer regardless of size. This is a misleading audit trail for an operation whose logging is otherwise emphasized (D-16).
-
-**Fix:** Either capture the byte figure (add a leading group to the regex and convert the `K/M/G/T` suffix to bytes) and assign it to `bytes_xfr`, or drop the byte count from the summary line and the return tuple so the log does not assert a false "0 bytes".
-
-### WR-02: Baseline-record failure after a successful destructive sync leaves inconsistent state
-
-**File:** `src/pcswitcher/jobs/folder_sync.py:507-522`, `src/pcswitcher/jobs/folder_sync.py:287-292`
-
-**Issue:**
-
-`execute()` runs the destructive `rsync --delete` first, then records the baseline. If `_get_subvolume_generation` raises (`RuntimeError` when the `Generation:` line is absent or the command fails), the exception propagates and the job is marked FAILED (orchestrator.py:747-764) and the whole sync aborts — even though the target data was already fully mirrored. The post-sync history update is then skipped, and on the next run the *old* baseline is compared against a target that the just-completed (but "failed") sync already advanced, which will itself read as a divergence. The user sees a failed sync that actually mutated the target.
-
-**Fix:** Treat baseline recording as best-effort and non-fatal (log a WARNING and continue, as is already done for the `resolved is None` branch at folder_sync.py:513-519) rather than letting it abort an otherwise-successful sync; or record the baseline before any externally observable failure point.
-
-### WR-03: Divergence is checked at validate-time (Phase 4) but the destructive rsync runs at Phase 9
-
-**File:** `src/pcswitcher/orchestrator.py:239-268`, `src/pcswitcher/jobs/folder_sync.py:177-183`
-
-**Issue:**
-
-`_check_divergence` runs during `_discover_and_validate_jobs` (Phase 4), but the `rsync --delete` that acts on the result runs in `_execute_jobs` (Phase 9), after disk checks, snapshots, install, and config sync. The target lock prevents another *pc-switcher* sync but not arbitrary user/process writes to the target during that window. A target modification that arrives after Phase 4 will be deleted by the Phase 9 mirror without ever being seen by the guard. For a data-loss safety mechanism this TOCTOU gap is material.
-
-**Fix:** Re-run the divergence check immediately before the destructive rsync (inside `execute()`, gated by the same `allow_divergence`/`dry_run` rules), or document and justify the accepted window explicitly with the lock guarantees it relies on.
+**Fix:** Use explicit prefix removal so the intent is unambiguous and robust: `sync_history.HISTORY_DIR.removeprefix("~/")`, `config_sync.CONFIG_REMOTE_DIR.removeprefix("~/")`, and likewise `CONFIG_REMOTE_PATH.removeprefix("~/")` in `config_sync._copy_config_to_target`.
 
 ## Info
 
-### IN-01: SIGINT cleanup wait is a no-op; its timeout branch is unreachable
+### IN-01: Duplicated per-line skip logic in the two branches of `_target_diverged_since`
 
-**File:** `src/pcswitcher/cli.py:340-355`
+**File:** `src/pcswitcher/jobs/folder_sync.py:385-409`
 
-**Issue:** `await asyncio.wait_for(asyncio.shield(asyncio.sleep(0)), timeout=CLEANUP_TIMEOUT_SECONDS)` waits on `sleep(0)`, which returns immediately, so it neither grants the orchestrator any cleanup time nor can it ever raise `TimeoutError`. By the time this `except asyncio.CancelledError` block runs, the orchestrator's `finally`/`_cleanup` has already completed as part of the cancelled task. The block reads as if it bounds cleanup time but does nothing.
+**Issue:** The empty-prefix branch and the `else` (non-empty prefix) branch each re-implement the same iteration scaffold — skip `transid marker` summary lines, skip blank lines — differing only in the accept/reject predicate. This duplication is what let the tool-state filter diverge from the prefix filter and made CR-01/CR-02 easy to miss. Consolidating into one loop that computes `is_tool_state` and `is_in_prefix` per line (with the prefix always `""` meaning match-all in the empty case) would remove the duplication and give a single place to reason about which paths count as divergence.
 
-**Fix:** Remove the dead `wait_for`/`TimeoutError` handling, or implement an actual bounded wait on a real cleanup future if a timeout is desired.
+**Fix:** Extract a single helper that yields the candidate paths from `find-new` stdout (dropping the `transid marker` and blank lines once), then apply the branch-specific predicate to that stream.
 
-### IN-02: `total_steps` over-counts when jobs are disabled, so the progress bar never reaches 100%
+---
 
-**File:** `src/pcswitcher/orchestrator.py:196, 274`
-
-**Issue:** `total_steps = 8 + len(self._config.sync_jobs) + 1` counts *all* configured job entries (including `enabled: false` ones), while the final step is set to `8 + len(jobs) + 1` using only enabled+valid jobs. With the default config (`dummy_success: true`, `dummy_fail: false`, `folder_sync: true`) total is 12 but the last step set is 11, so the UI never completes.
-
-**Fix:** Compute `total_steps` from the count of jobs that will actually run, or set it after `_discover_and_validate_jobs` returns `jobs`.
-
-### IN-03: rsync itemize parsing misses `c` and `h` change types
-
-**File:** `src/pcswitcher/jobs/folder_sync.py:433, 442`
-
-**Issue:** Per-file `--out-format` lines are recognized only when the first char is in `(">", "<", "*", ".")`. rsync's `%i` also emits `c` (created items: directories, symlinks, devices) and `h` (hard links), so those changes are silently dropped from FULL logging. Deletion counting is unaffected (`*deleting`), so this is cosmetic/log-completeness only.
-
-**Fix:** Include `c` and `h` (and any other valid leading itemize codes) in the recognized set.
-
-### IN-04: `os.write` partial-write and missing fsync in atomic history writes
-
-**File:** `src/pcswitcher/sync_history.py:151, 196-198, 279`
-
-**Issue:** `os.write(fd, content.encode())` may write fewer bytes than requested and the result is not checked, and the temp file is renamed without an `fsync` of its contents. For the small JSON payloads here a partial write is unlikely, but on a crash between rename and writeback the marker file could be truncated/empty. The same pattern is embedded in the remote `python3 -c` script.
-
-**Fix:** Use `os.fdopen(fd, "wb").write(...)` (which loops) or check the `os.write` return value, and `os.fsync(fd)` before the rename for durability of the state the divergence guard depends on.
-
-### IN-05: Changes to *excluded* files on the target still trigger divergence (false positive, fails safe)
-
-**File:** `src/pcswitcher/jobs/folder_sync.py:332-344`
-
-**Issue:** `find-new` reports raw filesystem changes and is independent of rsync `--filter` excludes. With `prefix == ""` (e.g. `/home`), a target-side change to an excluded path (`.cache/nvidia`, `.config/tailscale`, etc.) counts as divergence and blocks the sync, even though that file would never be synced or deleted. This fails closed (safe) but can surprise users by blocking on files the tool explicitly ignores. Related to CR-01's root cause (empty-prefix over-matching).
-
-**Fix:** Consider intersecting the divergence scope with the actual sync scope (apply the same exclude filters when deciding whether a changed path constitutes meaningful divergence), or document the intended conservatism.
-
-## Footer
-
-- _Reviewed: 2026-06-30_
+- _Reviewed: 2026-07-01T00:00:00Z_
 - _Reviewer: Claude (gsd-code-reviewer)_
 - _Depth: standard_
