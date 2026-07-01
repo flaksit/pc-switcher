@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 01
 current_phase_name: home-sync-mvp-user-data-sync
 status: executing
-stopped_at: Completed 01-07-PLAN.md
-last_updated: "2026-07-01T09:26:59.721Z"
+stopped_at: Completed 01-08-PLAN.md
+last_updated: "2026-07-01T09:35:15.524Z"
 last_activity: 2026-07-01
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 9
-  completed_plans: 7
+  completed_plans: 8
   percent: 0
 ---
 
@@ -24,13 +24,17 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-30)
 
 **Core value:** After a single sync command, the target machine is a faithful, reliable replica of the source — no data loss, conflicts detected, metadata intact.
+
 **Current focus:** Phase 01 — home-sync-mvp-user-data-sync
 
 ## Current Position
 
 Phase: 01 (home-sync-mvp-user-data-sync) — EXECUTING
-Plan: 2 of 9
+
+Plan: 3 of 9
+
 Status: Ready to execute
+
 Last activity: 2026-07-01 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -63,6 +67,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P06 | 22 | - tasks | - files |
 | Phase 01 P06 | 22 | 2 tasks | 1 files |
 | Phase 01 P07 | 7min | 3 tasks | 6 files |
+| Phase 01 P08 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -82,6 +87,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: Integration test: dedicated /home/<user>/pcswitcher-folder-sync-test dir on @home btrfs subvolume for divergence tracking without mirroring real /home
 - [Phase ?]: D-07 no-false-divergence: sync-history writes after rsync fall outside test_dir prefix so btrfs find-new prefix scoping ignores them
 - [Phase ?]: D-12 dry-run verification: compare target_generations in sync-history.json before/after --dry-run to confirm no marker write
+- [Phase 01]: IN-01: Remove asyncio.wait_for(asyncio.shield(asyncio.sleep(0))) from SIGINT path — returned immediately so cleanup time was zero; first-SIGINT message no longer claims a numeric grace period
+- [Phase 01]: IN-02: Two-phase total_steps — enabled-job estimate upfront, set_total_steps correction after Phase 4 discovery so denominator matches executed steps exactly
 
 ### Pending Todos
 
@@ -101,6 +108,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-01T09:26:59.716Z
-Stopped at: Completed 01-07-PLAN.md
+Last session: 2026-07-01T09:35:02.186Z
+
+Stopped at: Completed 01-08-PLAN.md
+
 Resume file: None

@@ -49,7 +49,7 @@ The orchestration framework is already built (Job architecture, self-installing 
   4. The sync is reversible and exclusions hold both directions: after modifying, adding, and deleting files on B and running `pc-switcher sync <A>` from B, A reflects B's changes byte-identically with metadata preserved, and the same machine-specific exclusions are honored on this reverse sync.
   5. A VM-isolated integration test automates the full A→B, mutate-on-B, B→A round-trip and asserts criteria 1-4 — the developer-facing milestone success metric.
 
-**Plans**: 7/9 plans executed
+**Plans**: 8/9 plans executed
 
 Plans:
 **Wave 1**
@@ -73,7 +73,7 @@ Plans:
 **Gap Closure** *(from 01-VERIFICATION.md — closes 1 BLOCKER + 7 warnings/info findings)*
 
 - [x] 01-07-PLAN.md — divergence-guard correctness: CR-01 false-divergence (tool-state filter), CR-02 fail-closed, WR-02 robust baseline + CR-01 unit/integration tests [wave 1]
-- [ ] 01-08-PLAN.md — IN-01 dead SIGINT cleanup removal, IN-02 progress-bar total counts only executed steps [wave 1]
+- [x] 01-08-PLAN.md — IN-01 dead SIGINT cleanup removal, IN-02 progress-bar total counts only executed steps [wave 1]
 - [ ] 01-09-PLAN.md — WR-01 transferred-byte parsing, IN-03 `c`/`h` itemize change types, WR-03 pre-transfer divergence re-check (TOCTOU) [wave 2, depends on 01-07]
 
 ### Phase 2: Package Management Sync
@@ -161,7 +161,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Home-Sync MVP (User Data Sync) | 7/9 | In Progress|  |
+| 1. Home-Sync MVP (User Data Sync) | 8/9 | In Progress|  |
 | 2. Package Management Sync | 0/TBD | Not started | - |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
