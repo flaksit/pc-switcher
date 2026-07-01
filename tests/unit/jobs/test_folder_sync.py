@@ -1063,3 +1063,121 @@ class TestExecuteNormalMode:
         assert call_args[0][2] == sync_history.UNKNOWN_GENERATION, (
             f"Expected UNKNOWN_GENERATION ({sync_history.UNKNOWN_GENERATION}) but got {call_args[0][2]}"
         )
+
+
+@pytest.mark.asyncio
+class TestExecuteDivergenceRecheck:
+    """execute() re-checks divergence immediately before spawning rsync (WR-03 / T-09-01).
+
+    The Phase-4 validate() guard runs earlier in the orchestrator; a user write between
+    Phase 4 and Phase 9 would otherwise escape the pre-transfer guard.  execute() must
+    call _check_divergence(folder) *before* start_process for each folder, and abort
+    (raise RuntimeError) when the re-check returns a blocking error — unless dry_run or
+    allow_divergence, which inherit 01-07's override semantics.
+    """
+
+    def _make_target_for_recheck(
+        self,
+        *,
+        find_new_output: str = _FIND_NEW_EMPTY,
+        find_new_exit: int = 0,
+        home_mount: str = "/home",
+        btrfs_show_output: str = "Generation: 1234\n",
+    ):
+        """Build a target run_command side_effect that handles both re-check and baseline queries."""
+
+        async def side_effect(cmd: str, **kw: object) -> CommandResult:
+            if "findmnt" in cmd:
+                return CommandResult(exit_code=0, stdout=home_mount, stderr="")
+            if "find-new" in cmd:
+                stderr = "btrfs error" if find_new_exit != 0 else ""
+                return CommandResult(exit_code=find_new_exit, stdout=find_new_output, stderr=stderr)
+            if "btrfs subvolume show" in cmd:
+                return CommandResult(exit_code=0, stdout=btrfs_show_output, stderr="")
+            return CommandResult(exit_code=0, stdout="", stderr="")
+
+        return side_effect
+
+    async def test_recheck_blocks_destructive_rsync_when_target_diverged(self) -> None:
+        """execute() raises before calling start_process when re-check detects real divergence (WR-03).
+
+        A user write that arrives between Phase-4 validate() and Phase-9 execute() must
+        be caught here before any --delete runs.
+        """
+        ctx = make_context()
+        fake_proc = make_fake_process()
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+        ctx.target.run_command = AsyncMock(
+            side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_WITH_CHANGES)
+        )
+
+        with patch(
+            "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
+            return_value=900,
+        ), patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
+            job = FolderSyncJob(ctx)
+            with pytest.raises(RuntimeError):
+                await job.execute()
+
+        # rsync must NOT have been spawned — abort before any --delete
+        ctx.source.start_process.assert_not_called()
+
+    async def test_recheck_allows_when_clean(self) -> None:
+        """execute() proceeds and spawns rsync when the re-check finds no divergence (happy path)."""
+        ctx = make_context()
+        fake_proc = make_fake_process()
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+        ctx.target.run_command = AsyncMock(
+            side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_EMPTY)
+        )
+
+        with patch(
+            "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
+            return_value=900,
+        ), patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
+            job = FolderSyncJob(ctx)
+            await job.execute()  # must not raise
+
+        ctx.source.start_process.assert_called_once()
+
+    async def test_recheck_does_not_block_under_allow_divergence(self) -> None:
+        """Under allow_divergence=True the re-check does not block even when the target is diverged."""
+        ctx = make_context(allow_divergence=True)
+        fake_proc = make_fake_process()
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+        ctx.target.run_command = AsyncMock(
+            side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_WITH_CHANGES)
+        )
+
+        with patch(
+            "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
+            return_value=900,
+        ), patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
+            job = FolderSyncJob(ctx)
+            await job.execute()  # must not raise under allow_divergence
+
+        ctx.source.start_process.assert_called_once()
+
+    async def test_recheck_ignores_phase8_config_write_for_empty_prefix(self) -> None:
+        """For the default /home (empty prefix), a Phase-8 config.yaml write does NOT block the re-check.
+
+        Phase-8 config sync writes ~/.config/pc-switcher/config.yaml before job execution.
+        01-07's empty-prefix tool-state filter must treat this as pc-switcher state, not
+        user divergence — execute() must proceed and spawn rsync (Codex HIGH #1).
+        """
+        ctx = make_context(config={"folders": [{"path": "/home"}]})
+        fake_proc = make_fake_process()
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+        # find-new output contains ONLY the Phase-8 config.yaml write — no real user changes
+        ctx.target.run_command = AsyncMock(
+            side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_CONFIG_ONLY)
+        )
+
+        with patch(
+            "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
+            return_value=900,
+        ), patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
+            job = FolderSyncJob(ctx)
+            await job.execute()  # must not raise — config.yaml write is tool state
+
+        ctx.source.start_process.assert_called_once()
