@@ -49,7 +49,7 @@ The orchestration framework is already built (Job architecture, self-installing 
   4. The sync is reversible and exclusions hold both directions: after modifying, adding, and deleting files on B and running `pc-switcher sync <A>` from B, A reflects B's changes byte-identically with metadata preserved, and the same machine-specific exclusions are honored on this reverse sync.
   5. A VM-isolated integration test automates the full A→B, mutate-on-B, B→A round-trip and asserts criteria 1-4 — the developer-facing milestone success metric.
 
-**Plans**: 3/6 plans executed
+**Plans**: 4/6 plans executed
 
 Plans:
 **Wave 1**
@@ -60,7 +60,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-04-PLAN.md — FolderSyncJob validate() + target-divergence guard (the reliability linchpin)
+- [x] 01-04-PLAN.md — FolderSyncJob validate() + target-divergence guard (the reliability linchpin)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -155,7 +155,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Home-Sync MVP (User Data Sync) | 3/6 | In Progress|  |
+| 1. Home-Sync MVP (User Data Sync) | 4/6 | In Progress|  |
 | 2. Package Management Sync | 0/TBD | Not started | - |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
