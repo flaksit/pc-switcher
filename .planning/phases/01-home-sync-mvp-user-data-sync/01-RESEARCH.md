@@ -666,20 +666,25 @@ if self.context.dry_run:
 
 ## Open Questions
 
-1. **ControlMaster socket for rsync to reuse the asyncssh connection**
+All three are RESOLVED in the Phase 1 plans (closing plan refs noted per item); none blocks execution.
+
+1. **ControlMaster socket for rsync to reuse the asyncssh connection** — RESOLVED
    - What we know: asyncssh is a pure-Python SSH implementation; it does NOT create an OpenSSH ControlMaster socket by default.
    - What's unclear: Whether asyncssh can be configured to expose a ControlMaster-compatible Unix socket that rsync's `-e ssh` option can use.
    - Recommendation: Treat rsync's SSH as an independent connection (simplest approach). If performance is a concern (second TCP handshake), this can be revisited using OpenSSH ControlMaster configured in `~/.ssh/config`.
+   - Resolution: Plan 01-05 wires rsync over an independent system-`ssh` transport per ADR-002 (honoring `~/.ssh/config`/known_hosts; threat T-05-05), exactly the recommended simplest approach. ControlMaster reuse is explicitly deferred as a future optimization, not a Phase 1 requirement.
 
-2. **Source-side sudo rsync: sudo prompts in non-interactive context**
+2. **Source-side sudo rsync: sudo prompts in non-interactive context** — RESOLVED
    - What we know: `sudo rsync` locally must be passwordless. If it's not, the asyncio subprocess will hang waiting for a password.
    - What's unclear: Whether the same sudoers entry (`NOPASSWD: /usr/bin/rsync`) is already present on developer machines or needs to be part of the installation guide.
    - Recommendation: Add to `validate()`: test `sudo rsync --version` locally and surface a clear error if it fails (not a runtime hang).
+   - Resolution: Plan 01-04 Task 1 `validate()` runs `sudo rsync --version` on both source and target and returns a `ValidationError` (no runtime hang) when it fails; ADR-013 (plan 01-01) documents the scoped `NOPASSWD` sudoers entry as an install-guide prerequisite.
 
-3. **Integration test btrfs subvolume for /root**
+3. **Integration test btrfs subvolume for /root** — RESOLVED
    - What we know: The test VMs have `@home` as a separate subvolume. `/root` may not be a separate subvolume — it could be part of the root `@` subvolume.
    - What's unclear: Whether the divergence detection mechanism (subvolume generation) works for `/root` if `/root` is not its own subvolume. If `/root` is on `@`, any write anywhere on `@` would increment the generation.
    - Recommendation: In `validate()`, check whether the folder path is a btrfs subvolume root (not just any directory). If it's not a subvolume, generation tracking is not available for that path; warn the user and fall back to no divergence check (conservative: always allow, or always warn).
+   - Resolution: Plan 01-04 Task 2 `_resolve_subvolume` checks whether the folder is a btrfs subvolume root; when it is not (e.g. `/root` on `@`), it logs a WARNING that divergence tracking is unavailable for that path and skips the check rather than crashing — the conservative documented fallback.
 
 ## Environment Availability
 
@@ -701,7 +706,7 @@ if self.context.dry_run:
 | Property | Value |
 |----------|-------|
 | Framework | pytest + pytest-asyncio [VERIFIED: codebase] |
-| Config file | pyproject.toml `[tool.pytest.ini_options]` asyncio_mode = "auto" |
+| Config file | pyproject.toml `[tool.pytest]` asyncio_mode = "auto" (pytest 9 canonical table) [VERIFIED: codebase] |
 | Quick run command | `uv run pytest tests/unit/jobs/test_folder_sync.py tests/contract/ -x` |
 | Full suite command | `uv run pytest tests/unit/ tests/contract/` |
 | Integration tests | `tests/run-integration-tests.sh tests/integration/test_folder_sync.py` |
