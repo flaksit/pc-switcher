@@ -233,11 +233,36 @@ class TestValidatePreflight:
             f"Expected shell-quoted path {expected_quoted!r} in folder check commands, got: {folder_checks}"
         )
 
-    async def test_execute_stub_raises(self) -> None:
-        """execute() raises NotImplementedError as a clear stub marker."""
+    async def test_execute_stub_no_longer_raises_not_implemented(self) -> None:
+        """execute() no longer raises NotImplementedError — it is implemented in plan 05."""
+        # This test documents the transition; once execute() is fully implemented it will
+        # run rsync. For isolation we mock start_process to avoid real subprocesses.
+        from unittest.mock import AsyncMock as _AsyncMock
+
         ctx = make_context()
-        job = FolderSyncJob(ctx)
-        with pytest.raises(NotImplementedError):
+
+        async def fake_chunks(*_: object, **__: object):  # type: ignore[no-untyped-def]
+            return
+            yield b""  # make it an async generator
+
+        fake_proc = MagicMock()
+        fake_proc.read_stdout_chunks = fake_chunks
+        fake_proc.wait_result = _AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        ctx.source.start_process = _AsyncMock(return_value=fake_proc)
+
+        # Mock subvolume resolution so the divergence marker write succeeds
+        async def target_cmd_ok(cmd: str, **_: object) -> CommandResult:
+            if "findmnt" in cmd:
+                return CommandResult(exit_code=0, stdout="/home", stderr="")
+            if "btrfs subvolume show" in cmd:
+                return CommandResult(exit_code=0, stdout="Generation: 100\n", stderr="")
+            return CommandResult(exit_code=0, stdout="", stderr="")
+
+        ctx.target.run_command = _AsyncMock(side_effect=target_cmd_ok)
+
+        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
+            job = FolderSyncJob(ctx)
+            # Must NOT raise NotImplementedError; must complete without error.
             await job.execute()
 
 
@@ -522,3 +547,287 @@ class TestDivergenceGuard:
             errors = await job.validate()
 
         assert not any("diverge" in e.message.lower() for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Task 2 (plan 05): _stream_rsync and execute()
+# ---------------------------------------------------------------------------
+
+
+def make_fake_process(
+    *,
+    exit_code: int = 0,
+    stdout_chunks: list[bytes] | None = None,
+    stderr: str = "",
+) -> MagicMock:
+    """Create a fake LocalProcess stub for use in execute() tests.
+
+    Provides `read_stdout_chunks` (async generator) and `wait_result` (AsyncMock)
+    without spawning a real subprocess.
+    """
+    proc = MagicMock()
+    chunks = stdout_chunks or []
+
+    async def fake_read_stdout_chunks(*_: object, **__: object):  # type: ignore[no-untyped-def]
+        for chunk in chunks:
+            yield chunk
+
+    proc.read_stdout_chunks = fake_read_stdout_chunks
+    proc.wait_result = AsyncMock(
+        return_value=CommandResult(exit_code=exit_code, stdout="", stderr=stderr)
+    )
+    return proc
+
+
+# Fake rsync stdout: a progress2 line then two per-file lines (one transfer, one deletion).
+_RSYNC_STDOUT_SAMPLE = (
+    b"9.53G 21% 317.26MB/s 0:00:28 (xfr#83, to-chk=444/538)\r"
+    b">f+++++++++ path/to/file.txt\n"
+    b"*deleting path/to/old.txt\n"
+)
+
+
+@pytest.mark.asyncio
+class TestStreamRsync:
+    """Tests for FolderSyncJob._stream_rsync (decoupled from subprocess).
+
+    _stream_rsync consumes an async byte-chunk source so it is testable
+    with a fake async generator instead of a real rsync subprocess.
+    """
+
+    async def _run_stream(
+        self,
+        chunks: list[bytes],
+        folder_path: str = "/home",
+    ) -> tuple[tuple[int, int, int], list[tuple], list[object]]:
+        """Helper: run _stream_rsync with fake chunks; capture log calls and progress calls."""
+        ctx = make_context()
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path=folder_path)
+
+        log_calls: list[tuple] = []
+        progress_calls: list[object] = []
+
+        def fake_log(host: object, level: object, message: str, **kw: object) -> None:
+            log_calls.append((host, level, message))
+
+        def fake_progress(update: object) -> None:
+            progress_calls.append(update)
+
+        job._log = fake_log  # type: ignore[method-assign]
+        job._report_progress = fake_progress  # type: ignore[method-assign]
+
+        async def gen_chunks():  # type: ignore[no-untyped-def]
+            for chunk in chunks:
+                yield chunk
+
+        result = await job._stream_rsync(gen_chunks(), folder)
+        return result, log_calls, progress_calls
+
+    async def test_progress_line_emits_report_progress(self) -> None:
+        """A progress2 line triggers a _report_progress call with parsed percent."""
+        progress_line = b"9.53G 21% 317.26MB/s 0:00:28 (xfr#83, to-chk=444/538)\r"
+        _, _, progress_calls = await self._run_stream([progress_line])
+
+        assert len(progress_calls) >= 1
+        update = progress_calls[0]
+        from pcswitcher.models import ProgressUpdate
+
+        assert isinstance(update, ProgressUpdate)
+        assert update.percent == 21
+        assert update.current == 83
+
+    async def test_per_file_line_logged_at_full(self) -> None:
+        """An --out-format per-file line is logged at LogLevel.FULL."""
+        file_line = b">f+++++++++ path/to/file.txt\n"
+        _, log_calls, _ = await self._run_stream([file_line])
+
+        full_logs = [msg for _, level, msg in log_calls if level == LogLevel.FULL]
+        assert any("path/to/file.txt" in msg for msg in full_logs), (
+            f"Expected FULL log with filename; got: {full_logs}"
+        )
+
+    async def test_deletion_line_increments_count(self) -> None:
+        """*deleting lines increment the files_deleted counter."""
+        del_line = b"*deleting path/to/old.txt\n"
+        (_, _, files_deleted), _, _ = await self._run_stream([del_line])
+        assert files_deleted == 1
+
+    async def test_multiple_deletions_counted(self) -> None:
+        """Each *deleting line increments the counter independently."""
+        data = b"*deleting a.txt\n*deleting b.txt\n"
+        (_, _, files_deleted), _, _ = await self._run_stream([data])
+        assert files_deleted == 2
+
+    async def test_combined_sample_produces_progress_and_file_logs(self) -> None:
+        """Full sample (progress2 + per-file lines) emits progress and FULL logs."""
+        (files_xfr, _, files_deleted), log_calls, progress_calls = await self._run_stream(
+            [_RSYNC_STDOUT_SAMPLE]
+        )
+
+        # At least one progress update
+        assert len(progress_calls) >= 1
+        # At least one FULL log (for >f... line)
+        full_logs = [msg for _, level, msg in log_calls if level == LogLevel.FULL]
+        assert full_logs
+        # Deletion counted
+        assert files_deleted == 1
+
+    async def test_carriage_return_delimited_progress_handled(self) -> None:
+        """Progress lines separated by \\r (not \\n) are still parsed."""
+        data = (
+            b"9.53G 10% 300.00MB/s 0:00:10 (xfr#10, to-chk=90/100)\r"
+            b"9.53G 50% 300.00MB/s 0:00:05 (xfr#50, to-chk=50/100)\r"
+        )
+        _, _, progress_calls = await self._run_stream([data])
+        assert len(progress_calls) >= 2
+
+    async def test_returns_counts_tuple(self) -> None:
+        """_stream_rsync returns a 3-tuple (files_xfr, bytes_xfr, files_deleted)."""
+        result, _, _ = await self._run_stream([_RSYNC_STDOUT_SAMPLE])
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+
+
+@pytest.mark.asyncio
+class TestExecuteDryRun:
+    """execute() in dry-run mode: rsync runs with --dry-run; no marker is recorded."""
+
+    async def test_dry_run_does_not_call_set_target_generation(self) -> None:
+        """In dry-run mode, execute() never calls set_target_generation (D-12)."""
+        ctx = make_context(dry_run=True)
+        fake_proc = make_fake_process()
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+
+        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation") as mock_set:
+            job = FolderSyncJob(ctx)
+            await job.execute()
+
+        mock_set.assert_not_called()
+
+    async def test_dry_run_rsync_command_includes_dry_run_flag(self) -> None:
+        """In dry-run mode, the rsync command passed to start_process contains --dry-run."""
+        ctx = make_context(dry_run=True)
+        fake_proc = make_fake_process()
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+
+        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
+            job = FolderSyncJob(ctx)
+            await job.execute()
+
+        called_cmd: str = ctx.source.start_process.call_args[0][0]
+        assert "--dry-run" in called_cmd
+
+
+@pytest.mark.asyncio
+class TestExecuteNormalMode:
+    """execute() in normal mode: rsync runs; divergence baseline is recorded per folder."""
+
+    def _make_target_for_execute(
+        self, *, home_mount: str = "/home", root_mount: str | None = None
+    ):
+        """Build a target run_command side_effect for execute() tests."""
+
+        async def side_effect(cmd: str, **kw: object) -> CommandResult:
+            if "findmnt" in cmd:
+                if "/home" in cmd:
+                    return CommandResult(exit_code=0, stdout=home_mount, stderr="")
+                if root_mount and "/root" in cmd:
+                    return CommandResult(exit_code=0, stdout=root_mount, stderr="")
+            if "btrfs subvolume show" in cmd:
+                return CommandResult(exit_code=0, stdout="Generation: 1234\n", stderr="")
+            return CommandResult(exit_code=0, stdout="", stderr="")
+
+        return side_effect
+
+    async def test_normal_mode_calls_set_target_generation_once_per_folder(self) -> None:
+        """After a successful sync, set_target_generation is called once per active folder."""
+        ctx = make_context(
+            config={"folders": [{"path": "/home"}, {"path": "/root"}]}
+        )
+        fake_proc = make_fake_process()
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+        ctx.target.run_command = AsyncMock(
+            side_effect=self._make_target_for_execute(home_mount="/home", root_mount="/")
+        )
+
+        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation") as mock_set:
+            job = FolderSyncJob(ctx)
+            await job.execute()
+
+        # Two active folders → two set_target_generation calls
+        assert mock_set.call_count == 2
+
+    async def test_normal_mode_does_not_add_dry_run_flag(self) -> None:
+        """In normal mode, the rsync command does NOT contain --dry-run."""
+        ctx = make_context()
+        fake_proc = make_fake_process()
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+        ctx.target.run_command = AsyncMock(
+            side_effect=self._make_target_for_execute()
+        )
+
+        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
+            job = FolderSyncJob(ctx)
+            await job.execute()
+
+        called_cmd: str = ctx.source.start_process.call_args[0][0]
+        assert "--dry-run" not in called_cmd
+
+    async def test_non_zero_rsync_exit_raises(self) -> None:
+        """A non-zero rsync exit code causes execute() to raise RuntimeError."""
+        ctx = make_context()
+        fake_proc = make_fake_process(exit_code=23, stderr="partial transfer due to error")
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+
+        job = FolderSyncJob(ctx)
+        with pytest.raises(RuntimeError):
+            await job.execute()
+
+    async def test_non_zero_rsync_exit_logs_critical(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A non-zero rsync exit causes a CRITICAL log (level 50) before raising."""
+        import logging
+
+        ctx = make_context()
+        fake_proc = make_fake_process(exit_code=23, stderr="partial transfer due to error")
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+
+        job = FolderSyncJob(ctx)
+        with caplog.at_level(logging.CRITICAL, logger="pcswitcher.jobs.base"):
+            with pytest.raises(RuntimeError):
+                await job.execute()
+
+        # A CRITICAL-level record must have been emitted
+        assert any(r.levelno == LogLevel.CRITICAL for r in caplog.records)
+
+    async def test_set_target_generation_not_called_on_rsync_failure(self) -> None:
+        """If rsync fails, set_target_generation is never called (sync aborted)."""
+        ctx = make_context()
+        fake_proc = make_fake_process(exit_code=1, stderr="error")
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+
+        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation") as mock_set:
+            job = FolderSyncJob(ctx)
+            with pytest.raises(RuntimeError):
+                await job.execute()
+
+        mock_set.assert_not_called()
+
+    async def test_divergence_baseline_uses_target_subvolume_generation(self) -> None:
+        """set_target_generation is called with the queried target subvolume generation."""
+        ctx = make_context()
+        fake_proc = make_fake_process()
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+        ctx.target.run_command = AsyncMock(
+            side_effect=self._make_target_for_execute(home_mount="/home")
+        )
+
+        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation") as mock_set:
+            job = FolderSyncJob(ctx)
+            await job.execute()
+
+        # Check the generation value (parsed from "Generation: 1234\n")
+        call_args = mock_set.call_args_list[0]
+        assert call_args[0][2] == 1234  # third positional arg is generation
