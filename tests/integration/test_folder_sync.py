@@ -483,9 +483,23 @@ printf 'pc2_private_key' > "$T/.ssh/id_rsa"
             )
 
             # Step 5: A→B again — no false divergence (D-07)
-            # The B→A sync caused pc-switcher to write metadata to pc2's /home
-            # (sync-history.json, log files), but those are outside the test_dir
-            # prefix, so find-new scoping must prevent a false positive.
+            #
+            # Why this does NOT trigger a false divergence:
+            # The B→A sync caused pc-switcher to write its OWN state files to pc2's @home:
+            #   - ~/.local/share/pc-switcher/sync-history.json (post-sync baseline write)
+            #   - ~/.local/share/pc-switcher/pc-switcher.lock (runtime lock file)
+            #   - ~/.config/pc-switcher/config.yaml (Phase-8 config sync, if configs differ)
+            # These writes bump pc2's @home btrfs generation AFTER the baseline is captured.
+            # However, all of these paths land OUTSIDE the dedicated <tdir> prefix
+            # (/home/<user>/pcswitcher-folder-sync-test), so the EXISTING prefix-scoping
+            # in _target_diverged_since filters them out — `btrfs find-new` reports them but
+            # the prefix check (`f" {prefix}/" in line`) does not match <tdir>.
+            # NOTE: this is the PREFIX-SCOPING path, not the empty-prefix tool-state filter
+            # (CR-01). The CR-01 filter handles the default /home config (empty prefix where
+            # pc-switcher writes fall inside the scanned subvolume root). For this test the
+            # synced folder is <tdir> — a non-empty prefix — so the out-of-prefix pc-switcher
+            # writes are already excluded by the ordinary prefix check.
+            # Regression: if prefix-scoping breaks, this step fails with "divergence detected".
             sync_ab2 = await pc1_executor.run_command(
                 "pc-switcher sync pc2 --yes",
                 timeout=300.0,
