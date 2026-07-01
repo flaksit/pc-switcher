@@ -78,3 +78,6 @@ temp/
 
 # Personal markdownlint config (extends a per-user ~/.markdownlint.jsonc)
 .markdownlint.jsonc
+
+.antigravitycli
+.planning/research/.cache/
