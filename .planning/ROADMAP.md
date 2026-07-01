@@ -49,7 +49,7 @@ The orchestration framework is already built (Job architecture, self-installing 
   4. The sync is reversible and exclusions hold both directions: after modifying, adding, and deleting files on B and running `pc-switcher sync <A>` from B, A reflects B's changes byte-identically with metadata preserved, and the same machine-specific exclusions are honored on this reverse sync.
   5. A VM-isolated integration test automates the full A→B, mutate-on-B, B→A round-trip and asserts criteria 1-4 — the developer-facing milestone success metric.
 
-**Plans**: 6/6 plans complete
+**Plans**: 6/6 complete + 3 gap-closure plans (01-07 – 01-09) from 01-VERIFICATION.md
 
 Plans:
 **Wave 1**
@@ -69,6 +69,12 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 01-06-PLAN.md — VM-isolated A→B/mutate/B→A round-trip integration test (success criterion 5)
+
+**Gap Closure** *(from 01-VERIFICATION.md — closes 1 BLOCKER + 7 warnings/info findings)*
+
+- [ ] 01-07-PLAN.md — divergence-guard correctness: CR-01 false-divergence (tool-state filter), CR-02 fail-closed, WR-02 robust baseline + CR-01 unit/integration tests [wave 1]
+- [ ] 01-08-PLAN.md — IN-01 dead SIGINT cleanup removal, IN-02 progress-bar total counts only executed steps [wave 1]
+- [ ] 01-09-PLAN.md — WR-01 transferred-byte parsing, IN-03 `c`/`h` itemize change types, WR-03 pre-transfer divergence re-check (TOCTOU) [wave 2, depends on 01-07]
 
 ### Phase 2: Package Management Sync
 
