@@ -9,6 +9,9 @@ All executor interactions are mocked; no real SSH connections are made.
 
 from __future__ import annotations
 
+import shlex
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,14 +20,24 @@ from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.folder_sync import FolderEntry, FolderSyncJob
 from pcswitcher.models import CommandResult, Host
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
+def fail_when(substring: str, stderr: str) -> Callable[..., CommandResult]:
+    """Return a run_command side_effect that fails (exit 1) when `substring` is in the command."""
+
+    def _side_effect(cmd: str, **_: object) -> CommandResult:
+        if substring in cmd:
+            return CommandResult(exit_code=1, stdout="", stderr=stderr)
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    return _side_effect
+
+
 def make_context(
-    config: dict | None = None,
+    config: dict[str, Any] | None = None,
     dry_run: bool = False,
     allow_divergence: bool = False,
 ) -> JobContext:
@@ -106,18 +119,14 @@ class TestActiveFolderSelection:
 
     def test_all_enabled_by_default(self) -> None:
         """Entries without 'enabled' key default to enabled=True."""
-        ctx = make_context(
-            config={"folders": [{"path": "/home"}, {"path": "/root"}]}
-        )
+        ctx = make_context(config={"folders": [{"path": "/home"}, {"path": "/root"}]})
         job = FolderSyncJob(ctx)
         active = job._active_folders()
         assert {f.path for f in active} == {"/home", "/root"}
 
     def test_explicitly_enabled_entries_included(self) -> None:
         """enabled=true entries are included."""
-        ctx = make_context(
-            config={"folders": [{"path": "/home", "enabled": True}]}
-        )
+        ctx = make_context(config={"folders": [{"path": "/home", "enabled": True}]})
         job = FolderSyncJob(ctx)
         assert len(job._active_folders()) == 1
 
@@ -142,13 +151,7 @@ class TestValidatePreflight:
     async def test_missing_sudo_rsync_on_target(self) -> None:
         """validate() returns a ValidationError for HOST.TARGET when sudo rsync is unavailable on target."""
         ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(
-            side_effect=lambda cmd, **kw: (
-                CommandResult(exit_code=1, stdout="", stderr="rsync not found")
-                if "rsync" in cmd
-                else CommandResult(exit_code=0, stdout="", stderr="")
-            )
-        )
+        ctx.target.run_command = AsyncMock(side_effect=fail_when("rsync", "rsync not found"))
         job = FolderSyncJob(ctx)
         errors = await job.validate()
         assert any(e.host == Host.TARGET and "rsync" in e.message.lower() for e in errors)
@@ -156,13 +159,7 @@ class TestValidatePreflight:
     async def test_missing_sudo_rsync_on_source(self) -> None:
         """validate() returns a ValidationError for HOST.SOURCE when sudo rsync is unavailable on source."""
         ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.source.run_command = AsyncMock(
-            side_effect=lambda cmd, **kw: (
-                CommandResult(exit_code=1, stdout="", stderr="rsync not found")
-                if "rsync" in cmd
-                else CommandResult(exit_code=0, stdout="", stderr="")
-            )
-        )
+        ctx.source.run_command = AsyncMock(side_effect=fail_when("rsync", "rsync not found"))
         job = FolderSyncJob(ctx)
         errors = await job.validate()
         assert any(e.host == Host.SOURCE and "rsync" in e.message.lower() for e in errors)
@@ -170,13 +167,7 @@ class TestValidatePreflight:
     async def test_missing_acl_on_source(self) -> None:
         """validate() returns a ValidationError for HOST.SOURCE when acl package is absent on source."""
         ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.source.run_command = AsyncMock(
-            side_effect=lambda cmd, **kw: (
-                CommandResult(exit_code=1, stdout="", stderr="no packages found")
-                if "acl" in cmd
-                else CommandResult(exit_code=0, stdout="", stderr="")
-            )
-        )
+        ctx.source.run_command = AsyncMock(side_effect=fail_when("acl", "no packages found"))
         job = FolderSyncJob(ctx)
         errors = await job.validate()
         assert any(e.host == Host.SOURCE and "acl" in e.message.lower() for e in errors)
@@ -184,13 +175,7 @@ class TestValidatePreflight:
     async def test_missing_acl_on_target(self) -> None:
         """validate() returns a ValidationError for HOST.TARGET when acl package is absent on target."""
         ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(
-            side_effect=lambda cmd, **kw: (
-                CommandResult(exit_code=1, stdout="", stderr="no packages found")
-                if "acl" in cmd
-                else CommandResult(exit_code=0, stdout="", stderr="")
-            )
-        )
+        ctx.target.run_command = AsyncMock(side_effect=fail_when("acl", "no packages found"))
         job = FolderSyncJob(ctx)
         errors = await job.validate()
         assert any(e.host == Host.TARGET and "acl" in e.message.lower() for e in errors)
@@ -198,13 +183,7 @@ class TestValidatePreflight:
     async def test_missing_source_folder(self) -> None:
         """validate() returns a ValidationError naming the path when an enabled folder is absent on source."""
         ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.source.run_command = AsyncMock(
-            side_effect=lambda cmd, **kw: (
-                CommandResult(exit_code=1, stdout="", stderr="no such file")
-                if "test -d" in cmd
-                else CommandResult(exit_code=0, stdout="", stderr="")
-            )
-        )
+        ctx.source.run_command = AsyncMock(side_effect=fail_when("test -d", "no such file"))
         job = FolderSyncJob(ctx)
         errors = await job.validate()
         assert any(e.host == Host.SOURCE and "/home" in e.message for e in errors)
@@ -234,8 +213,6 @@ class TestValidatePreflight:
 
     async def test_folder_path_is_shell_quoted(self) -> None:
         """Folder paths in preflight commands are shell-quoted (T-04-01 injection guard)."""
-        import shlex as _shlex
-
         ctx = make_context(config={"folders": [{"path": "/home/user name"}]})
         source_cmds: list[str] = []
 
@@ -249,7 +226,7 @@ class TestValidatePreflight:
         await job.validate()
         # shlex.quote wraps the path in single quotes: '/home/user name'
         # Verify that exact quoted form appears in the test -d command (not the bare path).
-        expected_quoted = _shlex.quote("/home/user name")  # -> "'/home/user name'"
+        expected_quoted = shlex.quote("/home/user name")  # -> "'/home/user name'"
         folder_checks = [c for c in source_cmds if "test -d" in c]
         assert folder_checks, "expected at least one test -d call"
         assert all(expected_quoted in c for c in folder_checks), (
@@ -295,7 +272,10 @@ _FINDMNT_HOME = "/home"
 _FIND_NEW_EMPTY = "transid marker was 1000\n"
 
 # find-new output showing a changed file
-_FIND_NEW_WITH_CHANGES = "inode 1234 file offset 0 len 4096 disk start 0 offset 0 gen 1001 flags UNKNOWN path/to/changed/file\ntransid marker was 1000\n"
+_FIND_NEW_WITH_CHANGES = (
+    "inode 1234 file offset 0 len 4096 disk start 0 offset 0 gen 1001 flags UNKNOWN path/to/changed/file\n"
+    "transid marker was 1000\n"
+)
 
 
 @pytest.mark.asyncio
@@ -337,9 +317,7 @@ class TestDivergenceGuard:
     async def test_unmodified_target_no_error(self) -> None:
         """No divergence error when find-new reports no changed files."""
         ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_EMPTY)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_EMPTY))
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
             job = FolderSyncJob(ctx)
@@ -350,9 +328,7 @@ class TestDivergenceGuard:
     async def test_diverged_target_raises_error(self) -> None:
         """ValidationError for HOST.TARGET when target has changed since last sync (default mode)."""
         ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_WITH_CHANGES)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_WITH_CHANGES))
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
             job = FolderSyncJob(ctx)
@@ -363,9 +339,7 @@ class TestDivergenceGuard:
     async def test_diverged_target_dry_run_warning_no_error(self) -> None:
         """Under dry_run=True, a detected divergence is logged at WARNING and does NOT block."""
         ctx = make_context(config={"folders": [{"path": "/home"}]}, dry_run=True)
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_WITH_CHANGES)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_WITH_CHANGES))
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
             job = FolderSyncJob(ctx)
@@ -376,9 +350,7 @@ class TestDivergenceGuard:
     async def test_diverged_target_allow_divergence_no_error(self) -> None:
         """Under allow_divergence=True, a detected divergence is logged at WARNING and does NOT block."""
         ctx = make_context(config={"folders": [{"path": "/home"}]}, allow_divergence=True)
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_WITH_CHANGES)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_WITH_CHANGES))
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
             job = FolderSyncJob(ctx)
@@ -389,9 +361,7 @@ class TestDivergenceGuard:
     async def test_consecutive_source_syncs_ok(self) -> None:
         """Two consecutive source→target syncs with untouched target produce no divergence error (D-07)."""
         ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_EMPTY)
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_EMPTY))
 
         # Simulate a stored baseline that matches current state (target untouched)
         with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
@@ -402,9 +372,7 @@ class TestDivergenceGuard:
 
         # Second validate call (same target, still untouched)
         ctx2 = make_context(config={"folders": [{"path": "/home"}]})
-        ctx2.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_EMPTY)
-        )
+        ctx2.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_EMPTY))
         with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
             job2 = FolderSyncJob(ctx2)
             errors_second = await job2.validate()
@@ -433,10 +401,9 @@ class TestDivergenceGuard:
             await job.validate()
 
         path_cmds = [c for c in target_cmds if "/home/user name" in c]
-        assert all(
-            "'/home/user name'" in c or '"/home/user name"' in c
-            for c in path_cmds
-        ), f"Unquoted path found in: {path_cmds}"
+        assert all("'/home/user name'" in c or '"/home/user name"' in c for c in path_cmds), (
+            f"Unquoted path found in: {path_cmds}"
+        )
 
     async def test_no_btrfs_subvolume_skips_divergence_check(self) -> None:
         """When findmnt cannot find a btrfs subvolume, divergence check is skipped with a WARNING (Open Q3)."""
