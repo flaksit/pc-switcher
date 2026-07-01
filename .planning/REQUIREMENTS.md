@@ -24,7 +24,7 @@ These requirements carry the full project vision (all sync scopes plus workflow,
 
 ### Exclusions and Safety
 
-- [ ] **REQ-machine-specific-exclusions**: Never sync machine-specific items — SSH keys (`.ssh/id_*`), Tailscale config (`.config/tailscale`), hardware caches (GPU shaders, fontconfig), machine-specific packages and configuration.
+- [x] **REQ-machine-specific-exclusions**: Never sync machine-specific items — SSH keys (`.ssh/id_*`), Tailscale config (`.config/tailscale`), hardware caches (GPU shaders, fontconfig), machine-specific packages and configuration.
 - [ ] **REQ-conflict-detection-no-resolution**: Detect conflicts arising from unsupported concurrent use and report them; resolution is manual (no automatic resolution).
 
 ### Workflow and UX
@@ -74,7 +74,7 @@ Each requirement maps to the phase that first delivers it. Foundation requiremen
 | REQ-environment-constraints | Foundation | Complete |
 | REQ-near-full-state-replication | Cross-cutting (Phases 1-6) | Pending |
 | REQ-sync-scope-user-data | Phase 1 | Complete |
-| REQ-machine-specific-exclusions | Phase 1 | Pending |
+| REQ-machine-specific-exclusions | Phase 1 | Complete |
 | REQ-sync-scope-file-metadata | Phase 1 | Pending |
 | REQ-manual-sync-workflow | Phase 1 | Complete |
 | REQ-terminal-ux | Phase 1 | Pending |
