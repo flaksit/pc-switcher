@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 01
 current_phase_name: home-sync-mvp-user-data-sync
 status: executing
-stopped_at: Phase 1 context gathered
-last_updated: "2026-06-30T13:30:55.165Z"
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-06-30T13:46:31.360Z"
 last_activity: 2026-06-30
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 6
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 ## Current Position
 
 Phase: 01 (home-sync-mvp-user-data-sync) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Status: Ready to execute
 Last activity: 2026-06-30 — Phase 01 execution started
 
@@ -57,6 +57,7 @@ Progress: [░░░░░░░░░░] 0%
 *Updated after each plan completion.*
 | Phase 01 P01 | 4min | - tasks | - files |
 | Phase 01 P02 | 2min | 2 tasks | 2 files |
+| Phase 01 P03 | 11min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: rsync-over-SSH chosen as user-data transport (D-04); rsync runs as root on both ends via sudo, root SSH login forbidden (D-05)
 - [Phase ?]: dry-run is tool-wide contract binding all SyncJobs (D-12): no file writes, no snapshots, no history updates in dry-run mode
 - [Phase ?]: folder_sync job name (not user_data) is canonical per D-01; default excludes live in YAML not Python per D-11
+- [Phase ?]: Remote role-record command now uses python3 -c merge-preserving script instead of echo-overwrite, so target_generations in sync-history.json survive a role switch
 
 ### Pending Todos
 
@@ -89,6 +91,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-30T13:30:45.267Z
-Stopped at: Phase 1 context gathered
+Last session: 2026-06-30T13:46:31.355Z
+Stopped at: Completed 01-03-PLAN.md
 Resume file: .planning/phases/01-home-sync-mvp-user-data-sync/01-CONTEXT.md
