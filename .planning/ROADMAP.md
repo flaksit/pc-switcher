@@ -19,7 +19,7 @@ The orchestration framework is already built (Job architecture, self-installing 
 - Decimal phases (2.1, 2.2): Urgent insertions (marked INSERTED), appearing between their surrounding integers in numeric order.
 
 - [x] **Foundation: Core framework, testing, logging, CI** — Complete (pre-GSD; specs 001-004)
-- [ ] **Phase 1: Home-Sync MVP (User Data Sync)** — Single-command replication of configured folders (`/home` and `/root` by default) over rsync-over-SSH, per-folder exclusions and metadata preserved, proven by a bidirectional round-trip
+- [x] **Phase 1: Home-Sync MVP (User Data Sync)** — Single-command replication of configured folders (`/home` and `/root` by default) over rsync-over-SSH, per-folder exclusions and metadata preserved, proven by a bidirectional round-trip (completed 2026-06-30)
 - [ ] **Phase 2: Package Management Sync** — Replicate apt/snap/flatpak/.deb/PPA/script packages with conflict and version-mismatch detection
 - [ ] **Phase 3: System & Application Configuration Sync** — Replicate GNOME, cloud mounts, systemd, `/etc`, users/groups with conflicting-change detection
 - [ ] **Phase 4: Docker State Sync** — Replicate images, containers, volumes, and cache with running-container / incompatible-state detection
@@ -49,7 +49,7 @@ The orchestration framework is already built (Job architecture, self-installing 
   4. The sync is reversible and exclusions hold both directions: after modifying, adding, and deleting files on B and running `pc-switcher sync <A>` from B, A reflects B's changes byte-identically with metadata preserved, and the same machine-specific exclusions are honored on this reverse sync.
   5. A VM-isolated integration test automates the full A→B, mutate-on-B, B→A round-trip and asserts criteria 1-4 — the developer-facing milestone success metric.
 
-**Plans**: 5/6 plans executed
+**Plans**: 6/6 plans complete
 
 Plans:
 **Wave 1**
@@ -68,7 +68,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 01-06-PLAN.md — VM-isolated A→B/mutate/B→A round-trip integration test (success criterion 5)
+- [x] 01-06-PLAN.md — VM-isolated A→B/mutate/B→A round-trip integration test (success criterion 5)
 
 ### Phase 2: Package Management Sync
 
@@ -155,7 +155,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Home-Sync MVP (User Data Sync) | 5/6 | In Progress|  |
+| 1. Home-Sync MVP (User Data Sync) | 6/6 | Complete   | 2026-06-30 |
 | 2. Package Management Sync | 0/TBD | Not started | - |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
