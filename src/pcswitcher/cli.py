@@ -23,11 +23,6 @@ from pcswitcher.models import SyncSession
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
 
-# Cleanup timeout for graceful shutdown after SIGINT.
-# After first SIGINT, cleanup has this many seconds to complete.
-# Second SIGINT or timeout expiry forces immediate termination.
-CLEANUP_TIMEOUT_SECONDS = 30
-
 # Create Typer app
 app = typer.Typer(
     name="pc-switcher",
@@ -295,8 +290,8 @@ async def _async_run_sync(
         allow_divergence: If True, skip the target-divergence guard
 
     Interrupt behavior:
-    - First SIGINT: Cancel sync task, allow CLEANUP_TIMEOUT_SECONDS for cleanup
-    - Second SIGINT or timeout: Force terminate immediately
+    - First SIGINT: Cancel sync task; cleanup runs in orchestrator's finally block
+    - Second SIGINT: Force terminate immediately
     """
     loop = asyncio.get_running_loop()
     main_task: asyncio.Task[SyncSession] | None = None
@@ -308,8 +303,7 @@ async def _async_run_sync(
         if sigint_count[0] == 1:
             console.print("\n[yellow]Interrupt received, cleaning up...[/yellow]")
             console.print(
-                f"[dim](Press Ctrl+C again to force quit, "
-                f"or wait up to {CLEANUP_TIMEOUT_SECONDS}s for graceful cleanup)[/dim]"
+                "[dim](Press Ctrl+C again to force quit immediately)[/dim]"
             )
             if main_task is not None and not main_task.done():
                 main_task.cancel()
@@ -338,19 +332,8 @@ async def _async_run_sync(
             return 0
 
         except asyncio.CancelledError:
-            # First cancellation - wait for cleanup with timeout
-            if sigint_count[0] == 1:
-                try:
-                    # Give orchestrator time to clean up (it has a finally block)
-                    await asyncio.wait_for(
-                        asyncio.shield(asyncio.sleep(0)),  # Allow pending cleanup
-                        timeout=CLEANUP_TIMEOUT_SECONDS,
-                    )
-                except TimeoutError:
-                    console.print(
-                        f"[red]Cleanup timeout ({CLEANUP_TIMEOUT_SECONDS}s) exceeded, forcing termination[/red]"
-                    )
-
+            # Cleanup runs in the orchestrator's finally block before CancelledError
+            # propagates here, so there is nothing further to wait on.
             console.print("[yellow]Sync interrupted by user[/yellow]")
             return 130
 
