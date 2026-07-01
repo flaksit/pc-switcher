@@ -16,15 +16,30 @@ import re
 import shlex
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, ClassVar
 
-from pcswitcher import sync_history
+from pcswitcher import config_sync, sync_history
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.models import Host, LogLevel, ProgressUpdate, ValidationError
 
 # Matches rsync --info=progress2 output, e.g.:
 #   "9.53G 21% 317.26MB/s 0:00:28 (xfr#83063, to-chk=443926/538653)"
 _PROGRESS2_RE = re.compile(r"\d+[\d.]*[KMGT]?\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*to-chk=\d+/(\d+)\)")
+
+
+class DivergenceStatus(Enum):
+    """Result of a btrfs-based target-divergence check.
+
+    CLEAN: no user changes found since the stored generation.
+    DIVERGED: at least one user file changed.
+    UNVERIFIABLE: the subvolume could not be resolved or find-new failed;
+        the caller must fail closed when a stored baseline exists (CR-02).
+    """
+
+    CLEAN = "clean"
+    DIVERGED = "diverged"
+    UNVERIFIABLE = "unverifiable"
 
 
 @dataclass
@@ -291,8 +306,8 @@ class FolderSyncJob(SyncJob):
                 return int(line.split()[-1])
         raise RuntimeError(f"Generation not found in `btrfs subvolume show {mount}` output: {result.stdout[:200]!r}")
 
-    async def _target_diverged_since(self, folder: FolderEntry, stored_gen: int) -> bool:
-        """Return True if the target's synced folder has changed since `stored_gen`.
+    async def _target_diverged_since(self, folder: FolderEntry, stored_gen: int) -> DivergenceStatus:
+        """Return the divergence status of the target's synced folder since `stored_gen`.
 
         Uses `btrfs subvolume find-new <mount> <stored_gen>` to list filesystem
         objects that changed after the stored generation.  The check is file-level:
@@ -301,9 +316,22 @@ class FolderSyncJob(SyncJob):
         not write files under the user data prefix, so it does not cause a false
         positive (D-07).
 
-        Returns False (not diverged) when the subvolume cannot be resolved — the
-        conservative fallback documented in RESEARCH Open Q3 for paths like /root
-        that may not be their own btrfs subvolume.
+        For an empty prefix (subvolume root, the default `/home`/`/root` case),
+        pc-switcher's own tool-state writes are excluded from the divergence scope:
+        - `~/.local/share/pc-switcher/` (sync-history.json, lock) written by the
+          post-sync baseline/role-record steps on the target.
+        - `~/.config/pc-switcher/` (config.yaml) written by Phase-8 config sync
+          before the job runs.
+        These writes inevitably bump @home after the baseline is captured and are
+        NOT user divergence (CR-01).  The filter is NOT applied for non-empty
+        prefixes — a change under an arbitrary synced subfolder that happens to
+        contain a `.local/share/pc-switcher/` subpath is real user data (Codex HIGH #2).
+
+        Returns:
+            CLEAN: no user changes since `stored_gen`.
+            DIVERGED: at least one user file changed.
+            UNVERIFIABLE: subvolume resolution or find-new command failed — the
+                caller must fail closed when a stored baseline exists (CR-02).
         """
         resolved = await self._resolve_subvolume(folder.path)
         if resolved is None:
@@ -311,9 +339,9 @@ class FolderSyncJob(SyncJob):
                 Host.TARGET,
                 LogLevel.WARNING,
                 f"Divergence tracking unavailable for {folder.path!r}: "
-                "could not resolve btrfs subvolume mount — skipping divergence check",
+                "could not resolve btrfs subvolume mount — treating as unverifiable (CR-02)",
             )
-            return False
+            return DivergenceStatus.UNVERIFIABLE
 
         mount, prefix = resolved
         quoted_mount = shlex.quote(mount)
@@ -325,23 +353,45 @@ class FolderSyncJob(SyncJob):
             self._log(
                 Host.TARGET,
                 LogLevel.WARNING,
-                f"find-new failed for {folder.path!r}: {result.stderr.strip()} — skipping divergence check",
+                f"find-new failed for {folder.path!r}: {result.stderr.strip()} — treating as unverifiable (CR-02)",
             )
-            return False
+            return DivergenceStatus.UNVERIFIABLE
 
-        for line in result.stdout.splitlines():
-            # The final summary line "transid marker was N" is not a file change — skip it.
-            if line.startswith("transid marker"):
-                continue
-            if not line.strip():
-                continue
-            # Any other non-empty line is a changed filesystem object.
-            # When prefix is "" (folder is the subvolume root), any change counts.
-            # When prefix is non-empty, only include files whose path starts with the prefix.
-            if prefix == "" or f" {prefix}/" in line or line.endswith(f" {prefix}"):
-                return True
+        if prefix == "":
+            # Empty prefix means this folder IS the subvolume root (default /home case).
+            # pc-switcher's own post-sync writes land under @home and would bump the
+            # generation — exclude them so they don't trigger false divergence (CR-01).
+            # Strip the leading ~/ to get the path segment used in find-new output, then
+            # add surrounding slashes so the match is a true path-component check.
+            history_token = f"/{sync_history.HISTORY_DIR.lstrip('~/')}/"   # /.local/share/pc-switcher/
+            config_token = f"/{config_sync.CONFIG_REMOTE_DIR.lstrip('~/')}/"  # /.config/pc-switcher/
+            tool_state_tokens = (history_token, config_token)
 
-        return False
+            for line in result.stdout.splitlines():
+                # The final summary line "transid marker was N" is not a file change.
+                if line.startswith("transid marker"):
+                    continue
+                if not line.strip():
+                    continue
+                # Skip lines whose path lies under a pc-switcher-owned tool-state directory.
+                # These are valid ONLY for the subvolume-root case — a user syncing a
+                # non-empty subfolder that happens to contain such a path still gets
+                # the change reported as real divergence (handled in the else branch).
+                if any(token in line for token in tool_state_tokens):
+                    continue
+                return DivergenceStatus.DIVERGED
+            return DivergenceStatus.CLEAN
+        else:
+            for line in result.stdout.splitlines():
+                # The final summary line "transid marker was N" is not a file change.
+                if line.startswith("transid marker"):
+                    continue
+                if not line.strip():
+                    continue
+                # Only include files whose path starts with the synced prefix.
+                if f" {prefix}/" in line or line.endswith(f" {prefix}"):
+                    return DivergenceStatus.DIVERGED
+            return DivergenceStatus.CLEAN
 
     async def _check_divergence(self, folder: FolderEntry) -> ValidationError | None:
         """Run the divergence guard for a single folder.
@@ -349,8 +399,15 @@ class FolderSyncJob(SyncJob):
         Returns a ValidationError when divergence blocks the sync, or None when
         the sync may proceed (first-sync, untouched target, or override active).
 
-        Under dry_run or allow_divergence a detected divergence is logged at
-        WARNING and does NOT block (D-12, D-06 override).
+        Under dry_run or allow_divergence a detected divergence or unverifiable result
+        is logged at WARNING and does NOT block (D-12, D-06 override).
+
+        Fail-open vs fail-closed:
+        - stored is None (never synced): fail-open — first sync proceeds (RESEARCH Open Q3).
+        - stored is a real generation: run _target_diverged_since; CLEAN proceeds, DIVERGED
+          and UNVERIFIABLE block (CR-02).
+        - stored is UNKNOWN_GENERATION: short-circuit to UNVERIFIABLE without querying the
+          target — the previous run could not establish a baseline; block to be safe (WR-02).
         """
         stored = sync_history.get_target_generation(self.context.target_hostname, folder.path)
         if stored is None:
@@ -362,15 +419,30 @@ class FolderSyncJob(SyncJob):
             )
             return None
 
-        diverged = await self._target_diverged_since(folder, stored)
-        if not diverged:
+        # UNKNOWN_GENERATION means the previous run transferred data but could not capture
+        # the post-sync generation. Short-circuit to UNVERIFIABLE without querying the target
+        # so the guard fails closed rather than silently skipping (CR-02 / WR-02 read path).
+        if stored == sync_history.UNKNOWN_GENERATION:
+            status = DivergenceStatus.UNVERIFIABLE
+        else:
+            status = await self._target_diverged_since(folder, stored)
+
+        if status == DivergenceStatus.CLEAN:
             return None
 
-        msg = (
-            f"Target divergence detected for {folder.path!r}: "
-            f"{self.context.target_hostname!r} has been modified since the last sync. "
-            "Re-run with --allow-divergence to proceed after manual review."
-        )
+        if status == DivergenceStatus.DIVERGED:
+            msg = (
+                f"Target divergence detected for {folder.path!r}: "
+                f"{self.context.target_hostname!r} has been modified since the last sync. "
+                "Re-run with --allow-divergence to proceed after manual review."
+            )
+        else:  # UNVERIFIABLE
+            msg = (
+                f"Target divergence state is unverifiable for {folder.path!r}: "
+                f"the btrfs subvolume could not be queried on {self.context.target_hostname!r}. "
+                "Re-run with --allow-divergence after manual review, or retry if the "
+                "target was temporarily inaccessible."
+            )
 
         if self.context.dry_run or self.context.allow_divergence:
             # Log at WARNING for the audit trail (T-04-02b) but do not block.
@@ -514,9 +586,29 @@ class FolderSyncJob(SyncJob):
                         Host.TARGET,
                         LogLevel.WARNING,
                         f"Cannot record divergence baseline for {folder.path!r}: "
-                        "could not resolve btrfs subvolume mount",
+                        "could not resolve btrfs subvolume mount — "
+                        "recording sentinel for fail-closed next run (WR-02)",
+                    )
+                    # Write the sentinel so the next run's guard fails closed rather than
+                    # silently skipping (the successful rsync transfer must not be rolled back).
+                    sync_history.set_target_generation(
+                        self.context.target_hostname, folder.path, sync_history.UNKNOWN_GENERATION
                     )
                     continue
                 mount, _ = resolved
-                gen = await self._get_subvolume_generation(mount)
-                sync_history.set_target_generation(self.context.target_hostname, folder.path, gen)
+                try:
+                    gen = await self._get_subvolume_generation(mount)
+                    sync_history.set_target_generation(self.context.target_hostname, folder.path, gen)
+                except (RuntimeError, ValueError) as exc:
+                    # _get_subvolume_generation raises RuntimeError on non-zero btrfs exit
+                    # and ValueError if int(line.split()[-1]) fails on a malformed Generation
+                    # line.  Neither should abort an otherwise-successful sync (WR-02).
+                    self._log(
+                        Host.TARGET,
+                        LogLevel.WARNING,
+                        f"Post-sync baseline capture failed for {folder.path!r}: {exc!s} — "
+                        "recording sentinel so next run fails closed (WR-02)",
+                    )
+                    sync_history.set_target_generation(
+                        self.context.target_hostname, folder.path, sync_history.UNKNOWN_GENERATION
+                    )

@@ -16,7 +16,13 @@ if TYPE_CHECKING:
     from pcswitcher.executor import RemoteExecutor
     from pcswitcher.ui import TerminalUI
 
-__all__ = ["ConfigSyncAction", "sync_config_to_target"]
+# Single source of truth for the remote pc-switcher config directory and file path.
+# folder_sync derives its tool-state filter token from CONFIG_REMOTE_DIR rather than
+# hardcoding a second copy of the literal (CR-01 empty-prefix tool-state filter).
+CONFIG_REMOTE_DIR: str = "~/.config/pc-switcher"
+CONFIG_REMOTE_PATH: str = f"{CONFIG_REMOTE_DIR}/config.yaml"
+
+__all__ = ["CONFIG_REMOTE_DIR", "CONFIG_REMOTE_PATH", "ConfigSyncAction", "sync_config_to_target"]
 
 
 class ConfigSyncAction(Enum):
@@ -33,10 +39,7 @@ async def _get_target_config(target: RemoteExecutor) -> str | None:
     Returns:
         Config file content as string, or None if file doesn't exist.
     """
-    # Use ~ expansion on remote
-    remote_path = "~/.config/pc-switcher/config.yaml"
-
-    result = await target.run_command(f"cat {remote_path} 2>/dev/null")
+    result = await target.run_command(f"cat {CONFIG_REMOTE_PATH} 2>/dev/null")
     if result.success and result.stdout.strip():
         return result.stdout
     return None
@@ -298,10 +301,8 @@ async def _copy_config_to_target(target: RemoteExecutor, source_path: Path) -> N
     Raises:
         RuntimeError: If copy fails
     """
-    remote_dir = "~/.config/pc-switcher"
-
     # Ensure directory exists on target
-    result = await target.run_command(f"mkdir -p {remote_dir}")
+    result = await target.run_command(f"mkdir -p {CONFIG_REMOTE_DIR}")
     if not result.success:
         raise RuntimeError(f"Failed to create config directory on target: {result.stderr}")
 
@@ -312,5 +313,7 @@ async def _copy_config_to_target(target: RemoteExecutor, source_path: Path) -> N
         raise RuntimeError("Failed to get home directory on target")
     home_dir = result.stdout.strip()
 
-    absolute_remote_path = f"{home_dir}/.config/pc-switcher/config.yaml"
+    # Derive the absolute path from CONFIG_REMOTE_PATH by expanding the ~ prefix
+    config_remote_relpath = CONFIG_REMOTE_PATH.lstrip("~/")
+    absolute_remote_path = f"{home_dir}/{config_remote_relpath}"
     await target.send_file(source_path, absolute_remote_path)
