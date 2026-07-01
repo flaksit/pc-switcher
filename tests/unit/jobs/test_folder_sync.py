@@ -242,6 +242,105 @@ class TestValidatePreflight:
 
 
 # ---------------------------------------------------------------------------
+# Task 1 (plan 05): _build_rsync_cmd
+# ---------------------------------------------------------------------------
+
+
+class TestBuildRsyncCmd:
+    """Tests for FolderSyncJob._build_rsync_cmd (plan 05).
+
+    Each test directly inspects the returned shell command string for the
+    presence or absence of specific flags and arguments (injection-safe per
+    T-05-01, correct flag baseline per D-13, D-05, D-14).
+    """
+
+    def _build(
+        self,
+        path: str = "/home",
+        excludes: list[str] | None = None,
+        dry_run: bool = False,
+    ) -> str:
+        ctx = make_context(config={"folders": [{"path": path}]})
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path=path, excludes=excludes or [])
+        return job._build_rsync_cmd(folder, dry_run)
+
+    def test_base_flags_present(self) -> None:
+        """Command contains the full D-13 flag baseline."""
+        cmd = self._build()
+        assert "-aAXHS" in cmd
+        assert "--numeric-ids" in cmd
+        assert "--delete" in cmd
+        assert "--info=progress2" in cmd
+        assert "--partial" in cmd
+        assert "--mkpath" in cmd
+
+    def test_root_via_sudo_and_ssh_transport(self) -> None:
+        """Command uses --rsync-path='sudo rsync' for remote root and an -e ssh option with -T."""
+        cmd = self._build()
+        # Remote root via sudo (target side)
+        assert "--rsync-path='sudo rsync'" in cmd
+        # SSH transport with -T (no pseudo-tty)
+        assert "-T" in cmd
+
+    def test_no_forbidden_flags(self) -> None:
+        """Command never includes --delete-excluded or --checksum (D-06, D-14)."""
+        cmd = self._build(excludes=[".ssh/id_*"])
+        assert "--delete-excluded" not in cmd
+        assert "--checksum" not in cmd
+
+    def test_filter_args_count_equals_excludes(self) -> None:
+        """Number of --filter args in the command equals the number of excludes."""
+        import re
+
+        excludes = [".ssh/id_*", ".config/tailscale"]
+        cmd = self._build(excludes=excludes)
+        matches = re.findall(r"--filter", cmd)
+        assert len(matches) == len(excludes)
+
+    def test_filter_args_preserve_order(self) -> None:
+        """Filter args appear in config order (first-match-wins preserved for rsync)."""
+        cmd = self._build(excludes=[".ssh/id_*", ".config/tailscale"])
+        idx_ssh = cmd.index(".ssh/id_*")
+        idx_tailscale = cmd.index(".config/tailscale")
+        assert idx_ssh < idx_tailscale
+
+    def test_no_filter_args_when_no_excludes(self) -> None:
+        """A folder with no excludes produces no --filter args."""
+        cmd = self._build(excludes=[])
+        assert "--filter" not in cmd
+
+    def test_dry_run_true_adds_flag(self) -> None:
+        """dry_run=True includes --dry-run in the command."""
+        cmd = self._build(dry_run=True)
+        assert "--dry-run" in cmd
+
+    def test_dry_run_false_omits_flag(self) -> None:
+        """dry_run=False does not include --dry-run in the command."""
+        cmd = self._build(dry_run=False)
+        assert "--dry-run" not in cmd
+
+    def test_source_path_has_trailing_slash(self) -> None:
+        """Source argument ends with a trailing slash (sync contents, not directory)."""
+        cmd = self._build(path="/home")
+        assert "/home/" in cmd
+
+    def test_destination_format(self) -> None:
+        """Destination is <target_hostname>:<path>/ form."""
+        cmd = self._build(path="/home")
+        # target_hostname is "target-host" in make_context()
+        assert "target-host" in cmd
+        assert "/home/" in cmd
+
+    def test_config_derived_values_are_shell_quoted(self) -> None:
+        """Paths and exclude patterns with special characters are shell-quoted (T-05-01)."""
+        excludes = [".ssh/id_*"]
+        cmd = self._build(path="/home/user name", excludes=excludes)
+        # The path with a space must be quoted in the command
+        assert "/home/user name/" not in cmd or "'/home/user name/'" in cmd
+
+
+# ---------------------------------------------------------------------------
 # Task 2: Target-divergence guard
 # ---------------------------------------------------------------------------
 
