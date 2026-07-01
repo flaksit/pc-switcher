@@ -1,4 +1,4 @@
-# Architecture Decisions Summary (Last updated: 2026-01-03)
+# Architecture Decisions Summary (Last updated: 2026-06-30)
 
 ## Active Decisions
 
@@ -14,6 +14,8 @@
 - [ADR-010](adr-010-logging-infrastructure.md): Standard Library Logging Infrastructure
 - [ADR-011](adr-011-sdd-with-living-specs.md): Specification-Driven Development with Living Specs
 - [ADR-012](adr-012-documentation-structure.md): Documentation Structure and Strategy
+- [ADR-013](adr-013-rsync-over-ssh-user-data-transport.md): rsync-over-SSH as user-data transport, running as root via sudo
+- [ADR-014](adr-014-unified-dry-run-contract.md): Unified dry-run contract for all SyncJobs
 
 ### Instructions for AI agents
 Load specific ADRs only when relevant to current task: search workspace files to find relevant ADRs
