@@ -9,6 +9,8 @@ All executor interactions are mocked; no real SSH connections are made.
 
 from __future__ import annotations
 
+import logging
+import re
 import shlex
 from collections.abc import Callable
 from typing import Any
@@ -18,7 +20,7 @@ import pytest
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.folder_sync import FolderEntry, FolderSyncJob
-from pcswitcher.models import CommandResult, Host, LogLevel
+from pcswitcher.models import CommandResult, Host, LogLevel, ProgressUpdate
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -237,8 +239,6 @@ class TestValidatePreflight:
         """execute() no longer raises NotImplementedError — it is implemented in plan 05."""
         # This test documents the transition; once execute() is fully implemented it will
         # run rsync. For isolation we mock start_process to avoid real subprocesses.
-        from unittest.mock import AsyncMock as _AsyncMock
-
         ctx = make_context()
 
         async def fake_chunks(*_: object, **__: object):  # type: ignore[no-untyped-def]
@@ -247,8 +247,8 @@ class TestValidatePreflight:
 
         fake_proc = MagicMock()
         fake_proc.read_stdout_chunks = fake_chunks
-        fake_proc.wait_result = _AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
-        ctx.source.start_process = _AsyncMock(return_value=fake_proc)
+        fake_proc.wait_result = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
 
         # Mock subvolume resolution so the divergence marker write succeeds
         async def target_cmd_ok(cmd: str, **_: object) -> CommandResult:
@@ -258,7 +258,7 @@ class TestValidatePreflight:
                 return CommandResult(exit_code=0, stdout="Generation: 100\n", stderr="")
             return CommandResult(exit_code=0, stdout="", stderr="")
 
-        ctx.target.run_command = _AsyncMock(side_effect=target_cmd_ok)
+        ctx.target.run_command = AsyncMock(side_effect=target_cmd_ok)
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
             job = FolderSyncJob(ctx)
@@ -316,7 +316,6 @@ class TestBuildRsyncCmd:
 
     def test_filter_args_count_equals_excludes(self) -> None:
         """Number of --filter args in the command equals the number of excludes."""
-        import re
 
         excludes = [".ssh/id_*", ".config/tailscale"]
         cmd = self._build(excludes=excludes)
@@ -573,17 +572,13 @@ def make_fake_process(
             yield chunk
 
     proc.read_stdout_chunks = fake_read_stdout_chunks
-    proc.wait_result = AsyncMock(
-        return_value=CommandResult(exit_code=exit_code, stdout="", stderr=stderr)
-    )
+    proc.wait_result = AsyncMock(return_value=CommandResult(exit_code=exit_code, stdout="", stderr=stderr))
     return proc
 
 
 # Fake rsync stdout: a progress2 line then two per-file lines (one transfer, one deletion).
 _RSYNC_STDOUT_SAMPLE = (
-    b"9.53G 21% 317.26MB/s 0:00:28 (xfr#83, to-chk=444/538)\r"
-    b">f+++++++++ path/to/file.txt\n"
-    b"*deleting path/to/old.txt\n"
+    b"9.53G 21% 317.26MB/s 0:00:28 (xfr#83, to-chk=444/538)\r>f+++++++++ path/to/file.txt\n*deleting path/to/old.txt\n"
 )
 
 
@@ -599,13 +594,13 @@ class TestStreamRsync:
         self,
         chunks: list[bytes],
         folder_path: str = "/home",
-    ) -> tuple[tuple[int, int, int], list[tuple], list[object]]:
+    ) -> tuple[tuple[int, int, int], list[tuple[object, object, str]], list[object]]:
         """Helper: run _stream_rsync with fake chunks; capture log calls and progress calls."""
         ctx = make_context()
         job = FolderSyncJob(ctx)
         folder = FolderEntry(path=folder_path)
 
-        log_calls: list[tuple] = []
+        log_calls: list[tuple[object, object, str]] = []
         progress_calls: list[object] = []
 
         def fake_log(host: object, level: object, message: str, **kw: object) -> None:
@@ -631,7 +626,6 @@ class TestStreamRsync:
 
         assert len(progress_calls) >= 1
         update = progress_calls[0]
-        from pcswitcher.models import ProgressUpdate
 
         assert isinstance(update, ProgressUpdate)
         assert update.percent == 21
@@ -661,9 +655,7 @@ class TestStreamRsync:
 
     async def test_combined_sample_produces_progress_and_file_logs(self) -> None:
         """Full sample (progress2 + per-file lines) emits progress and FULL logs."""
-        (files_xfr, _, files_deleted), log_calls, progress_calls = await self._run_stream(
-            [_RSYNC_STDOUT_SAMPLE]
-        )
+        (_, _, files_deleted), log_calls, progress_calls = await self._run_stream([_RSYNC_STDOUT_SAMPLE])
 
         # At least one progress update
         assert len(progress_calls) >= 1
@@ -723,9 +715,7 @@ class TestExecuteDryRun:
 class TestExecuteNormalMode:
     """execute() in normal mode: rsync runs; divergence baseline is recorded per folder."""
 
-    def _make_target_for_execute(
-        self, *, home_mount: str = "/home", root_mount: str | None = None
-    ):
+    def _make_target_for_execute(self, *, home_mount: str = "/home", root_mount: str | None = None):
         """Build a target run_command side_effect for execute() tests."""
 
         async def side_effect(cmd: str, **kw: object) -> CommandResult:
@@ -742,9 +732,7 @@ class TestExecuteNormalMode:
 
     async def test_normal_mode_calls_set_target_generation_once_per_folder(self) -> None:
         """After a successful sync, set_target_generation is called once per active folder."""
-        ctx = make_context(
-            config={"folders": [{"path": "/home"}, {"path": "/root"}]}
-        )
+        ctx = make_context(config={"folders": [{"path": "/home"}, {"path": "/root"}]})
         fake_proc = make_fake_process()
         ctx.source.start_process = AsyncMock(return_value=fake_proc)
         ctx.target.run_command = AsyncMock(
@@ -763,9 +751,7 @@ class TestExecuteNormalMode:
         ctx = make_context()
         fake_proc = make_fake_process()
         ctx.source.start_process = AsyncMock(return_value=fake_proc)
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_for_execute()
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_for_execute())
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
             job = FolderSyncJob(ctx)
@@ -784,20 +770,16 @@ class TestExecuteNormalMode:
         with pytest.raises(RuntimeError):
             await job.execute()
 
-    async def test_non_zero_rsync_exit_logs_critical(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_non_zero_rsync_exit_logs_critical(self, caplog: pytest.LogCaptureFixture) -> None:
         """A non-zero rsync exit causes a CRITICAL log (level 50) before raising."""
-        import logging
 
         ctx = make_context()
         fake_proc = make_fake_process(exit_code=23, stderr="partial transfer due to error")
         ctx.source.start_process = AsyncMock(return_value=fake_proc)
 
         job = FolderSyncJob(ctx)
-        with caplog.at_level(logging.CRITICAL, logger="pcswitcher.jobs.base"):
-            with pytest.raises(RuntimeError):
-                await job.execute()
+        with caplog.at_level(logging.CRITICAL, logger="pcswitcher.jobs.base"), pytest.raises(RuntimeError):
+            await job.execute()
 
         # A CRITICAL-level record must have been emitted
         assert any(r.levelno == LogLevel.CRITICAL for r in caplog.records)
@@ -820,9 +802,7 @@ class TestExecuteNormalMode:
         ctx = make_context()
         fake_proc = make_fake_process()
         ctx.source.start_process = AsyncMock(return_value=fake_proc)
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_for_execute(home_mount="/home")
-        )
+        ctx.target.run_command = AsyncMock(side_effect=self._make_target_for_execute(home_mount="/home"))
 
         with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation") as mock_set:
             job = FolderSyncJob(ctx)
