@@ -233,6 +233,20 @@ class TerminalUI:
         if self._live:
             self._live.update(self._render())
 
+    def set_total_steps(self, total: int) -> None:
+        """Correct the total step count once the actual number of jobs is known.
+
+        Called by the orchestrator after Phase 4 job discovery to replace the
+        initial estimate with the exact count of enabled, discoverable jobs.
+        Refreshes the live render immediately so the display reflects the correction.
+
+        Args:
+            total: Corrected total step count
+        """
+        self._total_steps = total
+        if self._live:
+            self._live.update(self._render())
+
     async def consume_events(
         self,
         queue: asyncio.Queue[Any],

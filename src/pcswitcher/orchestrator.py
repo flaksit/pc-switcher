@@ -193,7 +193,10 @@ class Orchestrator:
         # Calculate total steps: 8 system phases + sync jobs + 1 post-snapshot
         # System phases: 1=source lock, 2=SSH, 3=target lock, 4=validation,
         # 5=disk check, 6=pre-snapshots, 7=install on target, 8=config sync
-        total_steps = 8 + len(self._config.sync_jobs) + 1
+        # Count only enabled jobs for the initial estimate; Phase 4 discovery may
+        # reduce this further (e.g. module not found), so we correct via
+        # set_total_steps() after _discover_and_validate_jobs() returns.
+        total_steps = 8 + sum(1 for enabled in self._config.sync_jobs.values() if enabled) + 1
         self._console = Console()
         self._ui = TerminalUI(
             console=self._console,
@@ -239,6 +242,10 @@ class Orchestrator:
             # Phase 4: Job discovery and validation
             self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator", "host": "source"})
             jobs = await self._discover_and_validate_jobs()
+            # Correct the total now that we know the exact jobs that will run.
+            # Disabled jobs and undiscoverable jobs must not inflate the denominator,
+            # so the final set_current_step(8 + len(jobs) + 1) reaches exactly 100%.
+            self._ui.set_total_steps(8 + len(jobs) + 1)
             self._ui.set_current_step(4)
 
             # Phase 5: Disk space preflight check

@@ -169,6 +169,38 @@ async def test_core_us_tui_as2_multi_job_progress() -> None:
         ui.stop()
 
 
+async def test_set_total_steps_updates_total() -> None:
+    """Test that set_total_steps updates _total_steps and refreshes the live render.
+
+    Mirrors set_current_step: assigns the value and calls self._live.update(self._render())
+    when a live display is active, so a mid-run total correction is reflected immediately.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=10)
+
+    # Without live display: only the stored value changes
+    ui.set_total_steps(15)
+    assert ui._total_steps == 15, "set_total_steps should update _total_steps without live"
+
+    # With live display active: stored value updates and render is refreshed immediately
+    ui.start()
+    try:
+        ui.set_current_step(5)
+        ui.set_total_steps(20)
+        assert ui._total_steps == 20, "set_total_steps should update _total_steps with live active"
+
+        # Allow the live display to flush the render to the output buffer
+        await asyncio.sleep(0.1)
+        rendered = output.getvalue()
+
+        # The step display shows "Step 5/20" — the updated total must appear
+        assert "20" in rendered, "Updated total from set_total_steps should appear in rendered output"
+    finally:
+        ui.stop()
+
+
 async def test_core_us_tui_as3_progress_and_connection_events() -> None:
     """Test progress and connection event handling via EventBus.
 
