@@ -18,7 +18,7 @@ import pytest
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.folder_sync import FolderEntry, FolderSyncJob
-from pcswitcher.models import CommandResult, Host
+from pcswitcher.models import CommandResult, Host, LogLevel
 
 # ---------------------------------------------------------------------------
 # Helpers

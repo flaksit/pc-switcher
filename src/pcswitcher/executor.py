@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shlex
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
 from typing import Protocol
 
@@ -95,6 +95,48 @@ class LocalProcess:
             exit_code=self._proc.returncode or 0,
             stdout=stdout_bytes.decode() if stdout_bytes else "",
             stderr=stderr_bytes.decode() if stderr_bytes else "",
+        )
+
+    async def read_stdout_chunks(self, size: int = 4096) -> AsyncGenerator[bytes]:
+        """Yield raw stdout bytes in chunks until EOF.
+
+        Use instead of the line-based `stdout()` iterator when the process
+        writes carriage-return-delimited output (e.g. rsync `--info=progress2`)
+        that would block a readline-based reader indefinitely (RESEARCH Pitfall 2).
+
+        Args:
+            size: Number of bytes to read per chunk.
+
+        Yields:
+            Raw bytes chunks as they arrive; stops at EOF.
+        """
+        if self._proc.stdout is None:
+            return
+        while True:
+            chunk = await self._proc.stdout.read(size)
+            if not chunk:
+                break
+            yield chunk
+
+    async def wait_result(self) -> CommandResult:
+        """Wait for process exit and return the result, assuming stdout already consumed.
+
+        Reads stderr to completion (via the stderr pipe) and then waits for the
+        process to exit.  The `stdout` field in the returned `CommandResult` is
+        empty because stdout was already consumed by `read_stdout_chunks`.
+
+        Use this after draining stdout via `read_stdout_chunks` to obtain the
+        exit code and any error output without calling `communicate()` (which
+        would attempt to read stdout a second time).
+        """
+        stderr_bytes = b""
+        if self._proc.stderr is not None:
+            stderr_bytes = await self._proc.stderr.read()
+        await self._proc.wait()
+        return CommandResult(
+            exit_code=self._proc.returncode or 0,
+            stdout="",
+            stderr=stderr_bytes.decode(errors="replace"),
         )
 
     async def terminate(self) -> None:
