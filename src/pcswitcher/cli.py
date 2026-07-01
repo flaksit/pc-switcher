@@ -212,6 +212,13 @@ def sync(
             help="Skip warning about consecutive syncs without receiving a sync back first",
         ),
     ] = False,
+    allow_divergence: Annotated[
+        bool,
+        typer.Option(
+            "--allow-divergence",
+            help="Skip the target-divergence guard (use after manual review of target changes)",
+        ),
+    ] = False,
 ) -> None:
     """Sync to target machine.
 
@@ -224,7 +231,9 @@ def sync(
     cfg = _load_configuration(config_path)
 
     # Run the sync operation
-    exit_code = _run_sync(target, cfg, auto_accept=yes, allow_consecutive=allow_consecutive, dry_run=dry_run)
+    exit_code = _run_sync(
+        target, cfg, auto_accept=yes, allow_consecutive=allow_consecutive, dry_run=dry_run, allow_divergence=allow_divergence
+    )
     sys.exit(exit_code)
 
 
@@ -235,6 +244,7 @@ def _run_sync(
     auto_accept: bool = False,
     allow_consecutive: bool = False,
     dry_run: bool = False,
+    allow_divergence: bool = False,
 ) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
 
@@ -244,12 +254,15 @@ def _run_sync(
         auto_accept: If True, auto-accept prompts (e.g., config sync)
         allow_consecutive: If True, skip warning about consecutive syncs
         dry_run: If True, preview sync without making changes
+        allow_divergence: If True, skip the target-divergence guard
 
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
     """
     return asyncio.run(
-        _async_run_sync(target, cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive, dry_run=dry_run)
+        _async_run_sync(
+            target, cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive, dry_run=dry_run, allow_divergence=allow_divergence
+        )
     )
 
 
@@ -260,6 +273,7 @@ async def _async_run_sync(
     auto_accept: bool = False,
     allow_consecutive: bool = False,
     dry_run: bool = False,
+    allow_divergence: bool = False,
 ) -> int:
     """Async implementation of sync with interrupt handling.
 
@@ -268,6 +282,7 @@ async def _async_run_sync(
         cfg: Loaded configuration
         auto_accept: If True, auto-accept prompts (e.g., config sync)
         dry_run: If True, preview sync without making changes
+        allow_divergence: If True, skip the target-divergence guard
 
     Interrupt behavior:
     - First SIGINT: Cancel sync task, allow CLEANUP_TIMEOUT_SECONDS for cleanup
@@ -299,7 +314,12 @@ async def _async_run_sync(
 
     try:
         orchestrator = Orchestrator(
-            target=target, config=cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive, dry_run=dry_run
+            target=target,
+            config=cfg,
+            auto_accept=auto_accept,
+            allow_consecutive=allow_consecutive,
+            dry_run=dry_run,
+            allow_divergence=allow_divergence,
         )
         main_task = asyncio.create_task(orchestrator.run())
 

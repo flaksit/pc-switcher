@@ -82,6 +82,7 @@ class Orchestrator:
         auto_accept: bool = False,
         allow_consecutive: bool = False,
         dry_run: bool = False,
+        allow_divergence: bool = False,
     ) -> None:
         """Initialize orchestrator with target and validated configuration.
 
@@ -91,11 +92,13 @@ class Orchestrator:
             auto_accept: If True, auto-accept prompts (e.g., config sync)
             allow_consecutive: If True, skip warning about consecutive syncs
             dry_run: If True, preview sync without making changes
+            allow_divergence: If True, skip the target-divergence guard (D-06 override)
         """
         self._config = config
         self._auto_accept = auto_accept
         self._allow_consecutive = allow_consecutive
         self._dry_run = dry_run
+        self._allow_divergence = allow_divergence
         self._session_id = secrets.token_hex(4)
         self._session_folder = session_folder_name(self._session_id)
         self._source_hostname = get_local_hostname()
@@ -139,6 +142,7 @@ class Orchestrator:
             source_hostname=self._source_hostname,
             target_hostname=self._target_hostname,
             dry_run=self._dry_run,
+            allow_divergence=self._allow_divergence,
         )
 
     async def run(self) -> SyncSession:  # noqa: PLR0915
@@ -274,8 +278,10 @@ class Orchestrator:
             session.ended_at = datetime.now(UTC)
             self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
 
-            # Update sync history: this machine was SOURCE, target was TARGET
-            await self._update_sync_history()
+            # Update sync history: this machine was SOURCE, target was TARGET.
+            # Skipped in dry-run mode (D-12: dry-run must not write any state).
+            if not self._dry_run:
+                await self._update_sync_history()
 
             return session
 
