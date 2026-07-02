@@ -6,18 +6,16 @@ import asyncio
 import importlib
 import logging
 import secrets
-import sys
 from datetime import UTC, datetime
 from logging.handlers import QueueListener
 from typing import Any
 
 from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Prompt
 
 from pcswitcher.btrfs_snapshots import session_folder_name
 from pcswitcher.config import Configuration
 from pcswitcher.config_sync import sync_config_to_target
+from pcswitcher.confirmer import Confirmer, TerminalUIConfirmer
 from pcswitcher.connection import Connection
 from pcswitcher.disk import DiskSpace, check_disk_space, parse_threshold
 from pcswitcher.events import EventBus
@@ -83,6 +81,7 @@ class Orchestrator:
         *,
         auto_accept: bool = False,
         allow_out_of_order: bool = False,
+        allow_first_sync: bool = False,
         dry_run: bool = False,
     ) -> None:
         """Initialize orchestrator with target and validated configuration.
@@ -91,12 +90,15 @@ class Orchestrator:
             target: Target hostname or SSH alias
             config: Validated configuration from YAML file
             auto_accept: If True, auto-accept prompts (e.g., config sync)
-            allow_out_of_order: If True, bypass the out-of-order topology confirmation
+            allow_out_of_order: If True, bypass the out-of-order topology confirmation (W2/W3)
+            allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
+                issued by FolderSyncJob when the target has no sync history (ADR-015)
             dry_run: If True, preview sync without making changes
         """
         self._config = config
         self._auto_accept = auto_accept
         self._allow_out_of_order = allow_out_of_order
+        self._allow_first_sync = allow_first_sync
         self._dry_run = dry_run
         self._session_id = secrets.token_hex(4)
         self._session_folder = session_folder_name(self._session_id)
@@ -123,6 +125,7 @@ class Orchestrator:
         self._ui: TerminalUI | None = None
         self._console: Console | None = None
         self._ui_task: asyncio.Task[None] | None = None
+        self._confirmer: Confirmer | None = None
 
     def _create_job_context(self, config: dict[str, Any]) -> JobContext:
         """Create JobContext with current orchestrator state.
@@ -141,6 +144,8 @@ class Orchestrator:
             source_hostname=self._source_hostname,
             target_hostname=self._target_hostname,
             dry_run=self._dry_run,
+            allow_first_sync=self._allow_first_sync,
+            confirmer=self._confirmer,
         )
 
     async def run(self) -> SyncSession:  # noqa: PLR0915
@@ -200,6 +205,9 @@ class Orchestrator:
             console=self._console,
             total_steps=total_steps,
         )
+        # Shared interactive confirmation gate for the orchestrator's out-of-order check
+        # and any job-level prompt (e.g. FolderSyncJob first-sync overwrite, ADR-015).
+        self._confirmer = TerminalUIConfirmer(self._console, self._ui, logger=self._logger)
 
         # Start UI event consumer as background task (ProgressEvent, ConnectionEvent)
         self._ui_task = asyncio.create_task(self._ui.consume_events(queue=ui_queue))
@@ -397,12 +405,16 @@ class Orchestrator:
 
         Runs after acquiring the target lock so we can read the target's sync-history
         over the established SSH connection. Compares `last_role` and `last_peer` on
-        both machines to detect three situations that warrant a heads-up:
+        both machines to detect two out-of-order situations that warrant a heads-up:
 
-        - W1: target has no readable sync history (first sync or corrupted file)
         - W2: target last synced with a different machine (machine-C scenario)
         - W3: consecutive push — this source is pushing to the same target again
               without a back-sync in between (GitHub #159)
+
+        A target with no readable sync history is NOT out-of-order — it is a
+        first-ever sync. That case is semantically distinct and is handled by
+        FolderSyncJob's own first-sync overwrite confirmation (ADR-015 refinement),
+        so this check proceeds (returns True) and defers to the job.
 
         The clean A→B / work / B→A / A→B pattern always proceeds silently.
         Bypassed by --allow-out-of-order. Under --dry-run the warning is logged
@@ -411,9 +423,8 @@ class Orchestrator:
         Returns:
             True if sync should proceed, False if aborted.
         """
-        assert self._console is not None
-        assert self._ui is not None
         assert self._remote_executor is not None
+        assert self._confirmer is not None
 
         if self._allow_out_of_order:
             self._logger.info(
@@ -428,38 +439,32 @@ class Orchestrator:
         # Read local sync state (role + peer from this machine's sync-history.json)
         local_role, local_peer = get_last_sync_state()
 
-        # Read target sync state over SSH; failure or empty output → treat as unreadable
+        # Read target sync state over SSH; failure or empty output → no readable history
         cat_result = await self._remote_executor.run_command(f"cat {HISTORY_PATH} 2>/dev/null")
         target_stdout = cat_result.stdout.strip()
-        if not cat_result.success or not target_stdout:
-            target_role: SyncRole | None = None
-            target_peer: str | None = None
-            target_readable = False
-        else:
-            target_role, target_peer = parse_sync_state(target_stdout)
-            target_readable = True
+        target_role, target_peer = (
+            parse_sync_state(target_stdout) if cat_result.success and target_stdout else (None, None)
+        )
+
+        if target_role is None:
+            # No readable/parseable target history → first sync, not out-of-order.
+            # FolderSyncJob issues the first-sync overwrite confirmation (ADR-015).
+            self._logger.info(
+                "Target has no readable sync history; first-sync confirmation deferred to FolderSyncJob",
+                extra={"job": "orchestrator", "host": "target"},
+            )
+            return True
 
         # Consecutive push: this source most recently synced TO this same target
         consecutive_push = local_role == SyncRole.SOURCE and local_peer == tgt
 
-        # Suppress (clean case): target is readable, it last synced with this source,
-        # and this is not a repeat push from the same source without a back-sync.
-        if target_readable and target_peer == src and not consecutive_push:
+        # Suppress (clean case): target last synced with this source, and this is
+        # not a repeat push from the same source without a back-sync.
+        if target_peer == src and not consecutive_push:
             return True
 
         # Determine warning type and compose message
-        if not target_readable:
-            # W1: no readable history — cannot confirm the target's state
-            warn_title = "No Target Sync History"
-            warning = (
-                f"[bold]{tgt}[/bold] has no readable sync history.\n\n"
-                "Its home contents will be overwritten by rsync --delete. "
-                "If you have made changes on that machine since the last sync, "
-                "those changes will be lost.\n\n"
-                "Run [bold]pc-switcher sync --dry-run[/bold] to preview "
-                "what would be deleted before committing to a live sync."
-            )
-        elif target_peer is not None and target_peer != src:
+        if target_peer is not None and target_peer != src:
             # W2: machine-C — target last synced with a third machine
             direction = "received a sync from" if target_role == SyncRole.TARGET else "sent a sync to"
             warn_title = "Target Last Synced with a Different Machine"
@@ -493,32 +498,13 @@ class Orchestrator:
             )
             return True
 
-        if not sys.stdin.isatty():
-            self._console.print(f"[yellow]Warning: {warn_title}[/yellow]")
-            self._console.print(warning)
-            self._console.print("\nUse [bold]--allow-out-of-order[/bold] to proceed in non-interactive mode.")
-            return False
-
-        # Interactive: pause UI, show warning panel, prompt user, resume UI
-        self._ui.stop()
-        try:
-            self._console.print()
-            self._console.print(
-                Panel(
-                    warning,
-                    title=warn_title,
-                    border_style="yellow",
-                )
-            )
-            self._console.print()
-            response = Prompt.ask(
-                "[bold]Continue anyway?[/bold]",
-                choices=["y", "n"],
-                default="n",
-            )
-            return response.lower() == "y"
-        finally:
-            self._ui.start()
+        return await self._confirmer.confirm(
+            title=warn_title,
+            message=warning,
+            allow=self._allow_out_of_order,
+            allow_flag="--allow-out-of-order",
+            log_extra={"job": "orchestrator", "host": "source"},
+        )
 
     async def _update_sync_history(self) -> None:
         """Update sync history on both source and target machines.

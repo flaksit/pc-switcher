@@ -4,9 +4,14 @@ Covers _check_out_of_order() across all truth-table cases:
 - Clean case (target_peer == source, no consecutive push) → silent True
 - W3: consecutive push to a clean target → interactive prompt / non-interactive False
 - W2: machine-C (target last synced with a different peer) → warns
-- W1: no/unreadable target history → warns
+- No/unreadable target history → first sync, deferred to FolderSyncJob (silent True here)
 - --allow-out-of-order → bypass (always True, no reading/prompting)
 - dry-run with a warn condition → True without prompting (ADR-014)
+
+Per the ADR-015 refinement, a target with no readable sync history is a first-ever
+sync, not an out-of-order sync. The orchestrator no longer warns on it; the
+first-sync overwrite confirmation is owned by FolderSyncJob (see
+tests/unit/jobs/test_folder_sync.py).
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pcswitcher.config import Configuration
+from pcswitcher.confirmer import TerminalUIConfirmer
 from pcswitcher.models import CommandResult
 from pcswitcher.orchestrator import Orchestrator
 
@@ -73,6 +79,13 @@ def _make_orchestrator(
     orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
     orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
     orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
+    # Wire the real shared confirmer to the mock console/ui so the interactive path
+    # exercises Panel/Prompt and the ui.stop()/start() pause exactly as in production.
+    orchestrator._confirmer = TerminalUIConfirmer(  # pyright: ignore[reportPrivateUsage]
+        orchestrator._console,  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+        orchestrator._ui,  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+        logger=orchestrator._logger,  # pyright: ignore[reportPrivateUsage]
+    )
 
     mock_result = CommandResult(exit_code=remote_exit_code, stdout=remote_stdout, stderr="")
     mock_executor = AsyncMock()
@@ -314,27 +327,31 @@ class TestCheckOutOfOrderW2MachineC:
 
 
 # ---------------------------------------------------------------------------
-# W1: no / unreadable target history
+# No / unreadable target history → first sync, deferred to FolderSyncJob
 # ---------------------------------------------------------------------------
 
 
-class TestCheckOutOfOrderW1NoHistory:
-    """W1: target history is missing or unreadable."""
+class TestCheckOutOfOrderFirstSyncDeferred:
+    """A target with no readable sync history is a first sync, not out-of-order.
+
+    The orchestrator must proceed (return True) without prompting or warning; the
+    first-sync overwrite confirmation is owned by FolderSyncJob (ADR-015 refinement).
+    """
 
     @pytest.mark.asyncio
-    async def test_target_history_missing_non_interactive_returns_false(
+    async def test_target_history_missing_returns_true_without_prompt(
         self,
         mock_config: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Cat returns empty (file not found) → treats as unreadable, warns."""
+        """Cat returns empty (file not found) → first sync → proceed, no prompt."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         orchestrator = _make_orchestrator(
             mock_config,
             target="target-host",
-            remote_stdout="",  # empty → unreadable
+            remote_stdout="",  # empty → no readable history
             remote_exit_code=1,
         )
         orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
@@ -342,25 +359,21 @@ class TestCheckOutOfOrderW1NoHistory:
         with patch.object(sys, "stdin", _mock_isatty(False)):
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
-        assert result is False
-        cast(MagicMock, orchestrator._console).print.assert_called()  # pyright: ignore[reportPrivateUsage]
+        assert result is True
+        # No out-of-order prompt and no console warning: this is deferred to the job.
+        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._console).print.assert_not_called()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
-    async def test_target_history_unreadable_json_non_interactive_returns_false(
+    async def test_target_history_corrupt_json_returns_true_without_prompt(
         self,
         mock_config: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Cat returns corrupted JSON → parse_sync_state returns (None, None) → W1."""
+        """Cat returns corrupted JSON → parse_sync_state (None, None) → first sync → proceed."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # parse_sync_state treats invalid JSON as (None, None); treat that as readable=True
-        # but target_peer=None, which falls to W1 (no peer info = unreadable effectively)
-        # Actually corrupt JSON → parse returns (None, None) → target_readable=True but
-        # target_peer=None → W2 path triggers "target_peer is not None and != src" is False
-        # So we fall through to W3 check; consecutive_push also False → we skip suppress
-        # Either way a warn is issued. Let's verify False is returned in non-interactive.
         orchestrator = _make_orchestrator(
             mock_config,
             target="target-host",
@@ -372,16 +385,17 @@ class TestCheckOutOfOrderW1NoHistory:
         with patch.object(sys, "stdin", _mock_isatty(False)):
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
-        assert result is False
+        assert result is True
+        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
-    async def test_target_history_missing_interactive_prompts(
+    async def test_target_history_missing_interactive_does_not_prompt(
         self,
         mock_config: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Missing target history in interactive mode shows panel, user can accept."""
+        """Even interactively, missing target history proceeds without an out-of-order prompt."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         orchestrator = _make_orchestrator(
@@ -393,13 +407,14 @@ class TestCheckOutOfOrderW1NoHistory:
         orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
 
         with (
-            patch("rich.prompt.Prompt.ask", return_value="y"),
+            patch("rich.prompt.Prompt.ask", return_value="y") as mock_ask,
             patch.object(sys, "stdin", _mock_isatty(True)),
         ):
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is True
-        cast(MagicMock, orchestrator._ui).stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+        mock_ask.assert_not_called()
+        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------
@@ -459,23 +474,30 @@ class TestCheckOutOfOrderDryRun:
     """dry-run mode: the warning is logged but _check_out_of_order returns True."""
 
     @pytest.mark.asyncio
-    async def test_dry_run_with_warn_condition_returns_true(
+    async def test_dry_run_with_consecutive_push_returns_true(
         self,
         mock_config: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A W1 condition under --dry-run must not abort; returns True."""
+        """A W3 (consecutive push) condition under --dry-run must not abort; returns True."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        source_name = "source-host"
+        target_name = "target-host"
+
+        # Local: this machine was SOURCE to target-host (consecutive push setup)
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text(_history_json("source", target_name))
 
         orchestrator = _make_orchestrator(
             mock_config,
-            target="target-host",
+            target=target_name,
             dry_run=True,
-            remote_stdout="",  # → W1 (no target history)
-            remote_exit_code=1,
+            remote_stdout=_history_json("target", source_name),
         )
-        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+        orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
 
         # Non-interactive mode (guarantees no Prompt.ask is reached)
         with patch.object(sys, "stdin", _mock_isatty(False)):
