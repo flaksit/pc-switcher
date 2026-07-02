@@ -170,12 +170,14 @@ run_installimage() {
     vm_ip=$(hcloud server ip "$vm_name")
 
     # Discover the current Ubuntu 24.04 amd64 base image on the rescue system.
-    # Hetzner periodically renames these tarballs, so resolving the name at runtime
-    # avoids a hardcoded filename going stale (installimage fails early with
-    # "Loading image file variables ... failed" when the IMAGE path does not exist).
+    # Hetzner names these tarballs by release codename (24.04 LTS == "noble") and
+    # periodically changes the scheme, so resolve the name at runtime rather than
+    # hardcoding it (installimage fails early with "Loading image file variables
+    # ... failed" when the IMAGE path does not exist). Older versioned names
+    # (Ubuntu-2404-*/Ubuntu-24.04-*) are kept as fallbacks.
     local image_dir="/root/.oldroot/nfs/install/../images"
     local image_path
-    image_path=$(ssh_run "root@$vm_ip" "ls -1 ${image_dir}/Ubuntu-2404-*amd64-base.tar.gz ${image_dir}/Ubuntu-24.04-*amd64-base.tar.gz 2>/dev/null | sort -V | tail -1")
+    image_path=$(ssh_run "root@$vm_ip" "ls -1 ${image_dir}/Ubuntu-noble-*amd64-base.tar.gz ${image_dir}/Ubuntu-2404-*amd64-base.tar.gz ${image_dir}/Ubuntu-24.04-*amd64-base.tar.gz 2>/dev/null | sort -V | tail -1")
     if [[ -z "$image_path" ]]; then
         log_error_prefixed "No Ubuntu 24.04 amd64 base image found in ${image_dir}. Available images:"
         ssh_run "root@$vm_ip" "ls -1 ${image_dir}/ 2>/dev/null || echo '(image dir not found: ${image_dir})'" | while IFS= read -r line; do
