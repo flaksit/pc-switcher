@@ -6,15 +6,15 @@ current_phase: 01
 current_phase_name: home-sync-mvp-user-data-sync
 status: executing
 stopped_at: Completed 01-09-PLAN.md
-last_updated: "2026-07-01T09:43:39Z"
-last_activity: 2026-07-01
+last_updated: "2026-07-02T11:53:40.645Z"
+last_activity: 2026-07-02
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 7
-  completed_phases: 1
-  total_plans: 9
-  completed_plans: 9
-  percent: 14
+  completed_phases: 0
+  total_plans: 14
+  completed_plans: 10
+  percent: 0
 ---
 
 # Project State
@@ -31,11 +31,11 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 01 (home-sync-mvp-user-data-sync) — EXECUTING
 
-Plan: 4 of 9
+Plan: 2 of 14
 
 Status: Ready to execute
 
-Last activity: 2026-07-01 — Phase 01 execution started
+Last activity: 2026-07-02 — Phase 01 execution started
 
 Progress: [██████████] 100%
 
@@ -69,6 +69,7 @@ Progress: [██████████] 100%
 | Phase 01 P07 | 7min | 3 tasks | 6 files |
 | Phase 01 P08 | 3min | 2 tasks | 4 files |
 | Phase 01 P09 | 4min | 2 tasks | 2 files |
+| Phase 01 P10 | 3min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase 01]: IN-02: Two-phase total_steps — enabled-job estimate upfront, set_total_steps correction after Phase 4 discovery so denominator matches executed steps exactly
 - [Phase 01]: WR-01/IN-03: last-progress-line-wins for bytes_transferred (best-effort cumulative); change-type set extended to c/h with inline comments
 - [Phase 01]: WR-03: execute() raises RuntimeError (not ValidationError) for pre-transfer divergence abort — consistent with existing rsync-failure handling; delegated to _check_divergence for all override semantics
+- [Phase ?]: ADR-015: topology-based sync-safety model replaces btrfs find-new
+- [Phase ?]: ADR-014 not superseded by ADR-015: its divergence-detection step is now realized by the topology check, not btrfs find-new
+- [Phase ?]: D-06/D-07/D-08 in 01-CONTEXT.md marked superseded by ADR-015; original text preserved for audit history
 
 ### Pending Todos
 
@@ -111,7 +115,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-01T09:43:39Z
+Last session: 2026-07-02T11:52:32.644Z
 
 Stopped at: Completed 01-09-PLAN.md
 
