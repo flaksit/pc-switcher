@@ -1,97 +1,21 @@
 ---
 phase: 01-home-sync-mvp-user-data-sync
-verified: 2026-07-01T12:00:00Z
-status: gaps_found
-score: 9/16
+verified: 2026-07-02T15:30:00Z
+status: human_needed
+score: 15/20
 behavior_unverified: 5
 overrides_applied: 0
 re_verification:
   previous_status: gaps_found
-  previous_score: 8/14
+  previous_score: 9/16
   gaps_closed:
-    - "T6 (D-07): False divergence from depth-1 pc-switcher tool-state writes (sync-history.json, config.yaml) — closed by plan 07's tool-state filter (depth-1 case verified by unit tests D2/D3)"
-    - "Guard fails open when find-new fails and baseline exists (old CR-02) — closed by DivergenceStatus.UNVERIFIABLE + fail-closed path in plan 07"
-    - "Baseline capture failure aborts successful sync and disables next run's guard (WR-02) — closed by UNKNOWN_GENERATION sentinel in plan 07"
-    - "Dead asyncio.wait_for SIGINT code and dishonest interrupt messaging (IN-01) — closed by plan 08"
-    - "Progress bar never reaches 100% with disabled jobs (IN-02) — closed by plan 08"
-    - "bytes_transferred always 0 in per-folder summary (WR-01) — closed by plan 09"
-    - "c/h rsync itemize change types silently dropped from FULL logging (IN-03) — closed by plan 09"
-    - "Phase-4 to Phase-9 TOCTOU window in divergence guard (WR-03) — pre-transfer re-check added in plan 09"
+    - "T15 (CR-01): Unanchored tool-state filter false-negative — CLOSED. Entire btrfs divergence guard removed from folder_sync.py by plan 01-11."
+    - "T16 (CR-02): Pre-transfer re-check false-positive after Phase-7 install artifacts — CLOSED. Same removal resolves this."
   gaps_remaining: []
-  regressions:
-    - "CR-01 (new): tool-state filter in _target_diverged_since uses unanchored substring test; user files nested under any .config/pc-switcher/ or .local/share/pc-switcher/ subpath at depth > 1 are silently excluded from divergence detection — false-negative data-loss path"
-    - "CR-02 (new): pre-transfer re-check (plan 09/WR-03) runs in Phase 9 AFTER Phase 7 install_on_target; install.sh writes ~/.local/bin/uv, ~/.local/share/uv/tools/pcswitcher/, ~/.local/bin/pc-switcher under the synced @home subvolume; these paths are not excluded by the tool-state filter, so every upgrade-then-sync run is falsely blocked with a DIVERGED error"
-gaps:
-  - truth: "T15: Tool-state filter excludes only pc-switcher-owned paths at the expected depth; user files nested under a .config/pc-switcher/ or .local/share/pc-switcher/ subpath at any greater depth are NOT silently masked"
-    status: failed
-    reason: >
-      The empty-prefix branch of _target_diverged_since (folder_sync.py:395) uses
-      `any(token in line for token in tool_state_tokens)` where tokens are
-      `"/.local/share/pc-switcher/"` and `"/.config/pc-switcher/"` (lines 381-383).
-      This is an unanchored substring test across the whole find-new output line.
-      btrfs find-new emits lines like `inode ... flags UNKNOWN janfr/dotfiles/.config/pc-switcher/config.yaml`.
-      A real user file at `janfr/dotfiles/.config/pc-switcher/config.yaml` (common with chezmoi/yadm/stow
-      tracking a pc-switcher config copy) contains the substring `/.config/pc-switcher/` and is silently
-      skipped — classified CLEAN — so the guard proceeds and `rsync --delete` destroys the user's diverged
-      data. The existing tests only cover depth-1 paths (`janfr/.config/pc-switcher/config.yaml`).
-    artifacts:
-      - path: "src/pcswitcher/jobs/folder_sync.py"
-        issue: "Lines 381-383: tokens built via lstrip; line 395: `any(token in line ...)` is unanchored substring check — must be an anchored path-prefix test on the last whitespace-delimited field of the find-new line"
-    missing:
-      - >
-        Extract the path field from the find-new line (final whitespace-delimited token) and test
-        with an anchored regex, e.g.: `_TOOL_STATE_RE = re.compile(r"^[^/]+/(?:\.local/share|\.config)/pc-switcher/")`.
-        Use `path = line.rsplit(" ", 1)[-1]` and `_TOOL_STATE_RE.match(path)` instead of the
-        unanchored `token in line` check. The match must still derive the state-dir segments
-        from `sync_history.HISTORY_DIR` and `config_sync.CONFIG_REMOTE_DIR` (single source of truth).
-      - >
-        Add a unit test with a find-new line whose path is `janfr/dotfiles/.config/pc-switcher/config.yaml`
-        (depth > 1) and assert it IS reported as DIVERGED, not CLEAN (proves the anchoring).
-
-  - truth: "T16: The pre-transfer re-check in execute() does not false-positive after Phase-7 install_on_target writes upgrade artifacts under the synced @home subvolume"
-    status: failed
-    reason: >
-      Plan 09's WR-03 pre-transfer re-check calls _check_divergence(folder) in execute()
-      (folder_sync.py:577) — in orchestrator Phase 9. Phase 7 (_install_on_target_job(),
-      orchestrator.py:265) runs BEFORE Phase 9 (line 275). install.sh writes:
-        - `$HOME/.local/bin/uv` (uv bootstrap, install.sh:111-114)
-        - `$HOME/.local/share/uv/tools/pcswitcher/...` (uv tool install, install.sh:191-200)
-        - `$HOME/.local/bin/pc-switcher` (binary from uv tool install)
-      All land under janfr/.local/bin/ and janfr/.local/share/uv/ on the @home subvolume.
-      The tool-state filter (lines 381-383) only excludes `/.local/share/pc-switcher/`
-      and `/.config/pc-switcher/`. It does NOT exclude .local/bin/ or .local/share/uv/.
-      install_on_target runs whenever target_version != source_version (install_on_target.py:70-75).
-      After Phase 7 upgrades the target, the Phase-9 re-check calls btrfs find-new with the
-      pre-upgrade stored generation and sees the install artifacts as changed files, returns
-      DIVERGED, logs CRITICAL, and raises RuntimeError — aborting the sync before rsync runs.
-      Every upgrade-then-sync (every version bump in production; every sync during active
-      development where the dev version changes between machines) is falsely blocked.
-      The only escape is --allow-divergence, which disables the divergence guard entirely.
-    artifacts:
-      - path: "src/pcswitcher/jobs/folder_sync.py"
-        issue: "Lines 569-586: pre-transfer re-check reuses stored gen from last sync (not from post-Phase-7 state); tool-state filter does not cover install artifacts"
-      - path: "src/pcswitcher/orchestrator.py"
-        issue: "Phase 7 (_install_on_target_job, line 265) writes to @home BEFORE Phase 9 (_execute_jobs, line 275); install artifacts are in the re-check window"
-      - path: "install.sh"
-        issue: "Lines 111-114, 191-200: writes ~/.local/bin/uv, ~/.local/share/uv/tools/pcswitcher/..., ~/.local/bin/pc-switcher under the user's @home subvolume"
-    missing:
-      - >
-        Option A (preferred — pairs with CR-01 fix): Broaden the anchored tool-state regex to
-        also exclude pc-switcher's install footprint at the expected depth for the empty-prefix case:
-        `_TOOL_STATE_RE = re.compile(r"^[^/]+/(?:\.local/share/pc-switcher|\.config/pc-switcher|\.local/bin/(?:pc-switcher|uv)|\.local/share/uv)(?:/|$)")`.
-        This allows future install footprint changes to be tracked in one place.
-      - >
-        Option B (more robust): After Phase-7 and Phase-8 complete but before Phase-9 executes,
-        record the current @home generation as the re-check baseline (replacing stored gen from last sync
-        as the re-check's starting point). Then only user writes in the narrow Phase-8-to-Phase-9 window
-        trigger the re-check — all Phase-7/8 writes from pc-switcher's own pipeline are outside the window.
-      - >
-        Add a unit test with find-new output containing `janfr/.local/bin/pc-switcher` and
-        `janfr/.local/share/uv/tools/pcswitcher/lib/python3.14/...` lines and assert the re-check
-        in execute() does NOT block (rsync is still spawned).
+  regressions: []
 behavior_unverified_items:
   - truth: "A→B sync copies configured folders byte-identically with every included file present (ROADMAP SC1)"
-    test: "Run pc-switcher sync <target> on a machine with the default /home and /root config; compare md5sum of all included files on both machines after sync"
+    test: "Run pc-switcher sync <target> on machine A with the default /home and /root config; compare md5sum of all included files on both machines after sync"
     expected: "Every included file exists on the target and has the same md5sum as the source"
     why_human: "Requires real rsync-as-root execution over SSH to live VMs; cannot be simulated with unit test mocks"
   - truth: "File metadata preserved: owner, group, permissions, ACLs, timestamps (ROADMAP SC2)"
@@ -120,9 +44,9 @@ human_verification:
   - test: "Round-Trip Propagation (ROADMAP SC4): After A→B, mutate B (add/modify/delete), then run B→A; verify A reflects all mutation types"
     expected: "Addition present on A, modified file has new content, deleted file absent on A, excluded file absent on A, metadata preserved"
     why_human: "Requires bidirectional VM execution and deletion propagation via --delete across real SSH"
-  - test: "Default /home two-consecutive-sync manual/live check (D-07): After CR-01 and CR-02 are fixed, on a real machine pair with default /home config, run pc-switcher sync <target> twice in a row without --allow-divergence"
-    expected: "Second sync exits 0; no 'divergence' in output; note that this test must be re-run AFTER the CR-01 and CR-02 gap-closure plans complete"
-    why_human: "Requires destructive --delete mirror of real /home on a real machine pair; CR-01 and CR-02 must be fixed first"
+  - test: "Two-consecutive-sync live check (D-07 — now unblocked): On a real machine pair with default /home config, run pc-switcher sync <target> twice in a row without --allow-out-of-order"
+    expected: "First sync: succeeds (or prompts W1/W3 if no prior history — answer y); second sync: exits 0; back-and-forth A→B / B→A / A→B proceeds silently in the clean case"
+    why_human: "Requires destructive --delete mirror of real /home on a real machine pair; blocked on VMs"
   - test: "Full VM Integration Test Suite: tests/run-integration-tests.sh tests/integration/test_folder_sync.py"
     expected: "All three tests pass: TestFolderSyncAToB::test_a_to_b_content_metadata_and_exclusions, TestFolderSyncRoundTrip::test_round_trip_and_no_false_divergence, TestFolderSyncRoundTrip::test_divergence_guard_and_dry_run"
     why_human: "Requires live Hetzner VM infrastructure and SSH access"
@@ -130,114 +54,134 @@ human_verification:
 
 # Phase 1: Home-Sync MVP Verification Report
 
-**Phase Goal:** A user can run one command to replicate configured folders (`/home` and `/root` by default) from the source machine to the target over rsync-over-SSH, with machine-specific items excluded and file metadata preserved — and the result is proven correct in both directions. The job is a generic folder-sync mechanism (per-folder include/exclude), usable for any path; `/root` is included because rsync must run as root anyway to preserve cross-owner files.
+**Phase Goal:** A user can run one command to replicate configured folders (`/home` and `/root` by default) from the source machine to the target over rsync-over-SSH, with machine-specific items excluded and file metadata preserved — and the result is proven correct in both directions. The job is a generic folder-sync mechanism (per-folder include/exclude), usable for any path.
 
-**Verified:** 2026-07-01
+**Verified:** 2026-07-02
 
-**Status:** gaps_found — 2 NEW BLOCKERS (CR-01: unanchored tool-state filter → false-negative data loss; CR-02: Phase-7 install artifacts not excluded from pre-transfer re-check → false-positive on every upgrade), 5 runtime behaviors require VM execution
+**Status:** human_needed — all technical truths VERIFIED including the topology-based safety pivot (plans 10-14); 5 ROADMAP success criteria require live VM execution for behavioral proof
 
-**Re-verification:** Yes — after gap-closure plans 07/08/09 (completed 2026-07-01)
+**Re-verification:** Yes — after gap-closure design pivot (plans 01-10 through 01-14, ADR-015)
 
 ## Goal Achievement
 
-### What Gap-Closure Plans Fixed
+### What The Design Pivot Fixed
 
-Plans 07, 08, and 09 addressed all 8 findings from the previous verification and review cycle:
+Plans 01-10 through 01-14 replaced the btrfs content-based divergence guard with a topology-based safety model (ADR-015), closing both previous blockers:
 
-| Item | Closed By | Evidence |
-|------|-----------|---------|
-| T6 (D-07): false divergence from sync-history.json / config.yaml depth-1 writes | Plan 07 | `DivergenceStatus`, tool-state filter, unit tests D2/D3 pass |
-| Old CR-02: guard fails open when find-new fails with existing baseline | Plan 07 | `UNVERIFIABLE` + fail-closed path, `test_unverifiable_with_baseline_fails_closed` passes |
-| WR-02: baseline capture failure aborts successful sync | Plan 07 | `UNKNOWN_GENERATION` sentinel + non-fatal execute() loop |
-| IN-01: dead SIGINT wait_for construct | Plan 08 | `asyncio.wait_for/shield/sleep(0)` removed from cli.py |
-| IN-02: progress bar never 100% | Plan 08 | `set_total_steps()` added; orchestrator corrects total after Phase 4 |
-| WR-01: bytes_transferred always 0 in summary | Plan 09 | `_parse_size_to_bytes()` + updated `_PROGRESS2_RE` group 1 |
-| IN-03: c/h change types dropped from FULL logging | Plan 09 | Change-type set extended to include `c` and `h` in `_stream_rsync` |
-| WR-03 (TOCTOU Phase-4 to Phase-9) | Plan 09 | Pre-transfer `_check_divergence` call in `execute()` before rsync spawn |
+| Previous Gap | Plan | Resolution |
+|---|---|---|
+| CR-01: Unanchored tool-state filter — false-negative data loss | 01-11 | Entire btrfs divergence guard removed from `folder_sync.py`; no filter to misapply |
+| CR-02: Phase-7 install artifacts in pre-transfer re-check — false-positive on every upgrade+sync | 01-11 | Pre-transfer re-check removed with the guard; no check to false-positive |
+| WR-01: `lstrip('~/')` in config_sync.py | 01-11 | Replaced with `removeprefix("~/")` |
+| Old --allow-divergence/--allow-consecutive fragmentation | 01-13 | Consolidated to single `--allow-out-of-order` flag |
 
 ### Observable Truths
 
-| # | Truth | Status | Evidence |
-|---|-------|--------|----------|
-| T1 | ADR-013 (rsync-over-SSH transport) and ADR-014 (dry-run contract) are Accepted; both in `docs/adr/_index.md` | VERIFIED | Both ADR files exist, `Status: Accepted`, correct Implementation Rules; both indexed |
-| T2 | Config schema accepts `folder_sync`; default config ships `/home`+`/root` with D-11 exclusions; loads cleanly | VERIFIED | Schema has `folder_sync` object; `Configuration.from_yaml` returns correct values and excludes |
-| T3 | `--allow-divergence` plumbed CLI→Orchestrator→JobContext; dry-run skips sync-history update; `sync_history` exposes `get/set_target_generation` with merge-preserving writes | VERIFIED | CLI help confirms; `Orchestrator.__init__` param confirmed; `if not self._dry_run:` guard at orchestrator.py:290 |
-| T4 | `FolderSyncJob` with `name='folder_sync'` exported from `pcswitcher.jobs`; `validate()` checks sudo rsync, acl, and active folder existence | VERIFIED | Import succeeds; validate() steps confirmed; unit/contract tests pass |
-| T5 | Divergence guard blocks when target changed since last sync; allows under `--allow-divergence` or `--dry-run` (WARNING + no error) | VERIFIED | `_check_divergence` returns `ValidationError` for DIVERGED/UNVERIFIABLE in normal mode; returns `None` + logs WARNING under overrides |
-| T6 | D-07: when the target is unchanged between syncs, `validate()` allows the sync without false divergence (depth-1 tool-state writes excluded) | VERIFIED | Plan 07's tool-state filter correctly excludes `<user>/.local/share/pc-switcher/` and `<user>/.config/pc-switcher/` at depth 1; `test_toolstate_write_under_empty_prefix_not_divergence` and `test_config_write_under_empty_prefix_not_divergence` pass |
-| T7 | `_build_rsync_cmd` produces correct flags (`-aAXHS --numeric-ids --delete --rsync-path='sudo rsync' --info=progress2 --partial --mkpath`); `execute()` uses async subprocess | VERIFIED | Command verified in plan 05 SUMMARY; `source.start_process(cmd)` uses asyncio subprocess |
-| T8 | Dry-run executes rsync with `--dry-run`; no divergence marker written; no state changes (D-12) | VERIFIED | `execute()` adds `--dry-run` to command; `if not self.context.dry_run:` guard before baseline writes; orchestrator guard before sync-history update |
-| T9 | Post-sync baseline recorded via `set_target_generation` after all folders succeed in non-dry-run mode; baseline-capture failure records sentinel and does not abort | VERIFIED | Non-fatal loop in `execute()` at lines 623-655; `UNKNOWN_GENERATION` sentinel written on RuntimeError/ValueError; `test_baseline_capture_failure_records_sentinel_and_does_not_raise` passes |
-| T10 | A→B sync copies configured folders byte-identically with every included file present (ROADMAP SC1) | PRESENT_BEHAVIOR_UNVERIFIED | Mechanism correct: `rsync -aAXHS --delete`; unit tests verify command construction. Runtime byte-identity requires VM execution. |
-| T11 | File metadata preserved: owner, group, permissions, ACLs, timestamps (ROADMAP SC2) | PRESENT_BEHAVIOR_UNVERIFIED | Mechanism correct: `-aAXHS --numeric-ids` flags. Actual metadata transfer requires live rsync-as-root on VMs. |
-| T12 | Machine-specific items excluded; dev-tool caches and VS Code User/ state included (ROADMAP SC3) | PRESENT_BEHAVIOR_UNVERIFIED | Mechanism correct: `--filter='- <pattern>'` rules from config excludes. Actual filter enforcement requires VM execution. |
-| T13 | B→A round-trip propagates additions, modifications, and deletions byte-identically; exclusions hold in reverse (ROADMAP SC4) | PRESENT_BEHAVIOR_UNVERIFIED | Mechanism correct: same FolderSyncJob code path; `--delete` propagates deletions. Full round-trip proof requires VM execution. |
-| T14 | VM integration test automates A→B/mutate/B→A round-trip and asserts criteria 1-4 (ROADMAP SC5) | PRESENT_BEHAVIOR_UNVERIFIED | `tests/integration/test_folder_sync.py` exists, 3 test methods; collects without error offline. Never run against live VMs. |
-| T15 | Tool-state filter excludes only pc-switcher-owned paths at the expected depth; user files nested under a `.config/pc-switcher/` or `.local/share/pc-switcher/` subpath at depth > 1 are NOT silently masked | FAILED — BLOCKER (CR-01) | `folder_sync.py:395` uses `any(token in line for token in tool_state_tokens)` — unanchored substring check. Token `/.config/pc-switcher/` matches any line containing that string, including `janfr/dotfiles/.config/pc-switcher/config.yaml`. No test for deep nesting exists. |
-| T16 | The pre-transfer re-check in `execute()` (WR-03) does not false-positive after Phase-7 `install_on_target` writes upgrade artifacts under the synced @home subvolume | FAILED — BLOCKER (CR-02) | Orchestrator Phase 7 (`_install_on_target_job`, line 265) runs before Phase 9 (`_execute_jobs`, line 275). install.sh writes `$HOME/.local/bin/uv`, `$HOME/.local/share/uv/tools/pcswitcher/`, `$HOME/.local/bin/pc-switcher` under @home. Tool-state filter only excludes `/.local/share/pc-switcher/` and `/.config/pc-switcher/`. Phase-9 re-check at folder_sync.py:577 sees install artifacts as DIVERGED and raises before rsync. Happens whenever `target_version != source_version` (install_on_target.py:70-75). |
+#### Topology Pivot Truths (Plans 10-14 — all new in this re-verification)
 
-**Score:** 9/16 truths verified (1 old gap closed: T6; 5 present, behavior-unverified; 2 new FAILED BLOCKERS: T15/T16)
+| # | Truth | Status | Evidence |
+|---|---|---|---|
+| N1 | ADR-015 accepted, indexed in `docs/adr/_index.md`, and `01-CONTEXT.md` D-06/D-07/D-08 marked superseded | VERIFIED | ADR-015 exists, `Status: Accepted`; `_index.md` line 19 links it; CONTEXT.md lines 54-70 add supersession note and new-model summary |
+| N2 | Btrfs content-divergence machinery removed from `folder_sync.py`: no `DivergenceStatus`, `_target_diverged_since`, `_check_divergence`, `_resolve_subvolume`, `_get_subvolume_generation`, `find-new` invocation, `allow_divergence` reference | VERIFIED | `grep -nE "DivergenceStatus|_target_diverged_since|_check_divergence|find-new|allow_divergence" folder_sync.py` returns no matches; basedpyright clean |
+| N3 | Per-target btrfs generation store removed from `sync_history.py`: no `get_target_generation`, `set_target_generation`, `UNKNOWN_GENERATION` | VERIFIED | `grep -nE "get_target_generation|set_target_generation|UNKNOWN_GENERATION" sync_history.py` returns no matches; `__all__` contains none of these symbols |
+| N4 | `sync_history` exposes `parse_sync_state` (pure JSON parser returning `(role, peer)`) and `get_last_sync_state` (reads local history file); `record_role` and `get_record_role_command` accept optional `peer` argument; writes remain merge-preserving and atomic | VERIFIED | Both functions in `__all__`; `record_role(role, peer=None)` and `get_record_role_command(role, peer=None)` signatures confirmed; `parse_sync_state('{"last_role":"target","last_peer":"pc1"}')` returns `(SyncRole.TARGET, "pc1")`; bad input returns `(None, None)` |
+| N5 | CLI exposes `--allow-out-of-order` only; `--allow-divergence` and `--allow-consecutive` no longer exist; `allow_divergence` removed from `JobContext` | VERIFIED | `grep -nE "allow_divergence|allow_consecutive" cli.py jobs/context.py` returns no matches; `--allow-out-of-order` confirmed at cli.py:203-206 threaded through `_run_sync`/`_async_run_sync` to `Orchestrator` |
+| N6 | `_check_out_of_order()` implements the W1/W2/W3/clean truth table: W1 (no readable target history) → warn; W2 (target_peer ≠ source) → warn; W3 (consecutive push to same target) → warn; clean (target_readable AND target_peer == src AND not consecutive_push) → silent return True; `--dry-run` logs warning but returns True; `--allow-out-of-order` returns True immediately; non-interactive returns False | VERIFIED | Method at orchestrator.py:395-520 reviewed; truth table matches; W1/W2/W3 branch logic correct; dry-run path at line 487-494; non-interactive at 496-500; all 6 test-table cases covered by `test_consecutive_sync.py` |
+| N7 | `_check_out_of_order()` called AFTER `_acquire_target_lock()` (step 3) and BEFORE `_discover_and_validate_jobs()` (step 4) in `orchestrator.run()` | VERIFIED | orchestrator.py line 231: `_acquire_target_lock()`; line 232: `set_current_step(3)`; line 236: `_check_out_of_order()`; line 241: `_discover_and_validate_jobs()` |
+| N8 | `_update_sync_history()` records `last_peer=target_hostname` on source and `last_peer=source_hostname` on target after success | VERIFIED | orchestrator.py:537-547: `record_role(SyncRole.SOURCE, peer=self._target_hostname)` local; `get_record_role_command(SyncRole.TARGET, peer=self._source_hostname)` remote |
+| N9 | Deletion audit trail proven: `*deleting <path>` lines from `_stream_rsync` persist to JSON-lines log at `FULL` level for both `--dry-run` and real runs; default file log floor ≤ `FULL` | VERIFIED | `tests/unit/jobs/test_folder_sync_deletion_log.py` 3/3 tests pass: `test_deletion_persisted_at_full_in_real_run`, `test_deletion_persisted_at_full_in_dry_run`, `test_default_file_log_floor_is_at_or_below_full` |
+| N10 | Integration test uses `--allow-out-of-order`, contains no `--allow-divergence`/`find-new`; README "What Happens During a Sync" documents topology check and `--allow-out-of-order`, omits consecutive/find-new guards; `config_sync.py` uses `removeprefix("~/")` | VERIFIED | Integration test: grep confirms; README: step 5 at line 84 describes topology check; `--allow-out-of-order` at line 84, 97; config_sync.py:317 uses `removeprefix` |
+
+#### Carried-Forward Verified Truths (Regression Checks)
+
+| # | Truth | Status | Evidence |
+|---|---|---|---|
+| R1 | ADR-013 (rsync-over-SSH) and ADR-014 (dry-run contract) remain `Status: Accepted`; indexed | VERIFIED | Both ADR files unchanged |
+| R2 | Config schema accepts `folder_sync`; default-config ships `/home`+`/root` with D-11 exclusions | VERIFIED | Unchanged by pivot |
+| R3 | `validate()` checks only sudo rsync, acl, and active-folder existence — no divergence check | VERIFIED | folder_sync.py:118-183: 3 steps only; no btrfs call, no error for divergence |
+| R4 | `_build_rsync_cmd` produces `-aAXHS --numeric-ids --delete --rsync-path='sudo rsync' --info=progress2 --partial --mkpath`; `execute()` streams via async subprocess | VERIFIED | Unchanged by pivot |
+| R5 | Dry-run flag passed to rsync as `--dry-run`; sync-history update skipped in dry-run | VERIFIED | Unchanged by pivot; orchestrator dry-run guard at line 285 confirmed |
+
+#### ROADMAP Success Criteria (Behavior-Unverified — Require VMs)
+
+| # | Truth | Status | Evidence |
+|---|---|---|---|
+| SC1 | A→B sync copies configured folders byte-identically; every included file exists on B and is byte-identical to A | PRESENT_BEHAVIOR_UNVERIFIED | Mechanism verified: `rsync -aAXHS --delete`. Behavioral proof requires live VM execution. |
+| SC2 | File metadata preserved: owner, group, permissions, POSIX ACLs, and modification timestamps match A on B | PRESENT_BEHAVIOR_UNVERIFIED | Mechanism verified: `-aAXHS --numeric-ids` flags. Actual metadata transfer requires rsync-as-root on VMs. |
+| SC3 | Machine-specific items never copied (`.ssh/id_*`, `.config/tailscale`, GPU caches); dev-tool caches included | PRESENT_BEHAVIOR_UNVERIFIED | Mechanism verified: `--filter` rules from config. Actual enforcement requires VM execution. |
+| SC4 | Sync reversible; exclusions hold both directions; round-trip propagates additions, modifications, and deletions byte-identically | PRESENT_BEHAVIOR_UNVERIFIED | Mechanism correct: same `FolderSyncJob` code path; `--delete` propagates deletions. Full round-trip proof requires VMs. |
+| SC5 | VM integration test automates full A→B/mutate-on-B/B→A round-trip and asserts criteria 1-4 | PRESENT_BEHAVIOR_UNVERIFIED | `tests/integration/test_folder_sync.py` exists (3 test methods), collects offline; updated to topology model. Never run against live VMs. |
+
+**Score:** 15/20 truths verified (5 present, behavior-unverified — require VM execution)
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
-|----------|----------|--------|---------|
-| `docs/adr/adr-013-rsync-over-ssh-user-data-transport.md` | ADR recording rsync-over-SSH transport | VERIFIED | Exists, `Status: Accepted`, correct rules |
-| `docs/adr/adr-014-unified-dry-run-contract.md` | ADR recording tool-wide dry-run contract | VERIFIED | Exists, `Status: Accepted` |
-| `docs/adr/_index.md` | Updated with ADR-013 and ADR-014 | VERIFIED | Both entries present in Active Decisions |
-| `src/pcswitcher/schemas/config-schema.yaml` | Schema accepts `folder_sync` | VERIFIED | `folder_sync` object with `required: [folders]`, `additionalProperties: false` |
-| `src/pcswitcher/default-config.yaml` | Defaults: `/home`+`/root` with D-11 excludes | VERIFIED | Correct excludes; `folder_sync: true` |
-| `src/pcswitcher/jobs/context.py` | `allow_divergence: bool = False` | VERIFIED | Field confirmed |
-| `src/pcswitcher/sync_history.py` | `get/set_target_generation`, merge-preserving `record_role`, `UNKNOWN_GENERATION` sentinel | VERIFIED | All exported in `__all__`; `UNKNOWN_GENERATION = -1`; merge-preserving writes confirmed |
-| `src/pcswitcher/config_sync.py` | `CONFIG_REMOTE_DIR` + `CONFIG_REMOTE_PATH` constants | VERIFIED | Both at lines 22-23, exported in `__all__` |
-| `src/pcswitcher/jobs/folder_sync.py` | `FolderSyncJob` with `DivergenceStatus` enum, tool-state filter, `_check_divergence`, `execute()` with pre-transfer re-check and non-fatal baseline | VERIFIED (with 2 BLOCKERS) | File exists, substantive, wired. CR-01 bug makes unanchored filter mask nested user files. CR-02 bug makes pre-transfer re-check false-positive after Phase-7 install. |
-| `src/pcswitcher/jobs/__init__.py` | Exports `FolderSyncJob` | VERIFIED | Import succeeds |
-| `src/pcswitcher/executor.py` | `LocalProcess.read_stdout_chunks()` + `LocalProcess.wait_result()` | VERIFIED | Both methods present |
-| `src/pcswitcher/ui.py` | `TerminalUI.set_total_steps()` setter | VERIFIED | Method added by plan 08, mirrors `set_current_step` pattern |
-| `tests/integration/test_folder_sync.py` | VM integration test with A→B, round-trip, divergence scenarios | VERIFIED (existence), PRESENT_BEHAVIOR_UNVERIFIED (execution) | Exists, 3 test methods, collects offline; never run against live VMs |
+|---|---|---|---|
+| `docs/adr/adr-015-topology-based-sync-safety-model.md` | New ADR recording topology safety model | VERIFIED | Exists, `Status: Accepted`, correct Implementation Rules (no find-new, no generation markers) |
+| `docs/adr/_index.md` | ADR-015 listed under Active Decisions | VERIFIED | Line 19 links `adr-015-topology-based-sync-safety-model.md` |
+| `.planning/phases/01-home-sync-mvp-user-data-sync/01-CONTEXT.md` | D-06/D-07/D-08 marked superseded by ADR-015 | VERIFIED | Lines 54-70 add supersession markers and new-model summary |
+| `src/pcswitcher/jobs/folder_sync.py` | Pure rsync mirror; divergence machinery gone | VERIFIED | All divergence symbols absent; basedpyright clean; 486 unit tests pass |
+| `src/pcswitcher/sync_history.py` | `last_peer` persisted; `parse_sync_state`/`get_last_sync_state` added; generation store gone | VERIFIED | Both functions in `__all__`; generation symbols absent; basedpyright clean |
+| `src/pcswitcher/orchestrator.py` | `_check_out_of_order()` step; old `_check_consecutive_sync` gone; `allow_divergence` gone; `last_peer` recorded | VERIFIED | Method at line 395; called at line 236; old symbols absent; basedpyright clean |
+| `src/pcswitcher/cli.py` | `--allow-out-of-order` flag; old flags gone | VERIFIED | Flag at line 203; old flags absent |
+| `src/pcswitcher/jobs/context.py` | `allow_divergence` field removed | VERIFIED | `grep allow_divergence context.py` returns no matches |
+| `src/pcswitcher/config_sync.py` | `removeprefix("~/")` replacing `lstrip("~/")` | VERIFIED | Line 317 confirmed |
+| `tests/unit/jobs/test_folder_sync_deletion_log.py` | Deletion audit trail persistence tests | VERIFIED | 3 tests, all pass |
+| `tests/unit/orchestrator/test_consecutive_sync.py` | Reworked to `_check_out_of_order` topology coverage | VERIFIED | No old symbols; W1/W2/W3/clean/bypass/dry-run cases covered |
+| `tests/unit/test_dry_run.py` | `allow_divergence` tests removed; `allow_out_of_order` test present | VERIFIED | Old symbols absent; `test_orchestrator_accepts_allow_out_of_order_parameter` present |
+| `tests/unit/test_sync_history.py` | Generation tests removed; `last_peer`/`parse_sync_state`/`get_last_sync_state` tests added | VERIFIED | Old symbols absent; new functions tested |
+| `tests/integration/test_folder_sync.py` | Updated to topology model; `--allow-out-of-order` used; no `--allow-divergence` | VERIFIED | Collects offline; topology references confirmed |
+| `README.md` | Sync sequence describes topology check; omits find-new guard; documents `--allow-out-of-order` | VERIFIED | Step 5 at line 84; `--allow-out-of-order` documented |
 
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
-|------|----|-----|--------|---------|
-| `cli.py` → `Orchestrator` | `--allow-divergence` flag | Typer option through `_run_sync` / `_async_run_sync` | VERIFIED | Confirmed via `pc-switcher sync --help` and `Orchestrator.__init__` signature |
-| `Orchestrator` → `JobContext` | `allow_divergence` param | `_create_job_context` passes it to `JobContext(...)` | VERIFIED | Parameter present in both signatures |
-| `FolderSyncJob._check_divergence` → `sync_history` | Reads `get_target_generation`; UNKNOWN_GENERATION triggers UNVERIFIABLE short-circuit | `folder_sync.py:427,440` | VERIFIED | Direct call at line 427; sentinel check at line 440 |
-| `FolderSyncJob.execute()` → `_check_divergence` | Pre-transfer re-check BEFORE rsync spawn | `folder_sync.py:577` | VERIFIED (with CR-02 BLOCKER) | Call at line 577; non-None result raises RuntimeError before `start_process`. Install artifacts not excluded — CR-02. |
-| `FolderSyncJob.execute()` → `sync_history` | Writes baseline (or sentinel) after rsync succeeds | `folder_sync.py:643,655` | VERIFIED | Non-fatal loop; `UNKNOWN_GENERATION` sentinel on capture failure |
-| `Orchestrator` Phase 7 → Phase 9 ordering | Phase 7 install runs BEFORE Phase 9 execute | `orchestrator.py:265,275` | VERIFIED (CR-02 root cause) | Lines 265 and 275 confirmed; install artifacts land in @home before re-check baseline |
-| `config_sync.CONFIG_REMOTE_DIR` → `folder_sync` tool-state filter | Token derived from constant, not hardcoded literal | `folder_sync.py:382` | VERIFIED (with WR-01 caveat) | `lstrip('~/')` works for current constants but is character-set strip, not prefix strip — see Anti-Patterns |
+|---|---|---|---|---|
+| `cli.py --allow-out-of-order` | `Orchestrator(allow_out_of_order=...)` | `_run_sync`/`_async_run_sync` parameter | VERIFIED | Threaded at cli.py:231, 262, 315 |
+| `Orchestrator.__init__(allow_out_of_order)` | `_check_out_of_order()` | `self._allow_out_of_order` field checked at orchestrator.py:418 | VERIFIED | Field stored at line 99; bypass path at line 418-423 |
+| `_check_out_of_order()` | local sync-history | `sync_history.get_last_sync_state()` at line 429 | VERIFIED | Direct call; returns `(role, peer)` tuple |
+| `_check_out_of_order()` | target sync-history | SSH `cat {HISTORY_PATH}` → `parse_sync_state(stdout)` at lines 432-440 | VERIFIED | HISTORY_PATH from sync_history constant; parse_sync_state at line 439 |
+| `_update_sync_history()` | source history | `record_role(SyncRole.SOURCE, peer=target_hostname)` at line 538 | VERIFIED | Direct call with peer |
+| `_update_sync_history()` | target history | `get_record_role_command(SyncRole.TARGET, peer=source_hostname)` via SSH at lines 543-546 | VERIFIED | Command construction with peer |
+| `_stream_rsync *deleting line` | JSON log at FULL | `self._log(FULL, ...)` → `QueueHandler` → `FileHandler` | VERIFIED | Proven by `test_folder_sync_deletion_log.py` tests |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
-|----------|---------|--------|--------|
-| Full unit suite (520 tests) | `uv run pytest tests/unit tests/contract -q --tb=no` | 520 passed, 0 failed | PASS |
-| Divergence guard tests (16 tests) | `uv run pytest tests/unit/jobs/test_folder_sync.py::TestDivergenceGuard -q --tb=no` | 16 passed | PASS |
-| Integration tests collect without error | `uv run pytest tests/integration/test_folder_sync.py --collect-only -q` | 3 tests deselected by `not integration`; no collection errors | PASS |
-| CR-01 deep-nesting case (depth > 1 path) | No test exists for this case | — | NOT COVERED — no test for `janfr/dotfiles/.config/pc-switcher/...` depth-2 path |
-| CR-02 Phase-7 install artifacts in re-check | No test exercises install artifact paths in `TestExecuteDivergenceRecheck` | — | NOT COVERED — no test for `janfr/.local/bin/pc-switcher`, `janfr/.local/share/uv/...` in re-check |
+|---|---|---|---|
+| Full unit suite (486 tests) | `uv run pytest tests/unit tests/contract -q --tb=no` | 486 passed, 0 failed | PASS |
+| Deletion log persistence (3 tests) | `uv run pytest tests/unit/jobs/test_folder_sync_deletion_log.py -v` | 3 passed | PASS |
+| Topology truth table tests | `uv run pytest tests/unit/orchestrator/test_consecutive_sync.py -q` | All pass | PASS |
+| `parse_sync_state` handles old-format history | `python -c "from pcswitcher import sync_history as s; r,p = s.parse_sync_state('{\"last_role\":\"target\"}'); assert r is s.SyncRole.TARGET and p is None"` | Returns `(SyncRole.TARGET, None)` | PASS |
+| Integration tests collect offline (deselected by marker) | `uv run pytest tests/integration/test_folder_sync.py --collect-only -q` | 3 deselected (marker), no collection errors | PASS |
 | Integration tests against real VMs | `tests/run-integration-tests.sh tests/integration/test_folder_sync.py` | SKIPPED — requires live Hetzner VMs | SKIP |
 
 ### Requirements Coverage
 
 | Requirement | Source Plans | Description | Status | Evidence |
-|-------------|-------------|-------------|--------|----------|
-| REQ-sync-scope-user-data | 01, 02, 04, 05, 06 | Sync `/home` + `/root` via generic per-folder mechanism | PARTIAL | Mechanism verified; **CR-01 and CR-02 mean the default config is still unreliable for upgrade+sync workflows and has a data-loss path for users with nested tool-state paths** |
-| REQ-machine-specific-exclusions | 02, 04, 05, 06 | Never sync `.ssh/id_*`, tailscale, GPU/fontconfig caches | VERIFIED (mechanism) | Default excludes in YAML; `--filter` rules built correctly; no `--delete-excluded` |
-| REQ-sync-scope-file-metadata | 04, 05, 06 | Preserve owner, group, permissions, ACLs, timestamps | VERIFIED (mechanism) | `-aAXHS --numeric-ids` flags; VM execution needed for behavioral proof |
-| REQ-manual-sync-workflow | 01, 03, 04, 05, 06 | Single-command trigger; divergence guard; dry-run preview | PARTIAL | Command works; dry-run works; **CR-02 breaks upgrade+sync (the guard false-positives after Phase-7 install)**; **CR-01 is a false-negative data-loss path** |
-| REQ-terminal-ux | 05, 06, 08, 09 | Single command; terminal UI; progress; clear errors; truthful audit log | VERIFIED (mechanism) | CLI works; `--info=progress2` streaming; Rich UI; progress bar reaches 100% (plan 08); bytes reported correctly (plan 09); `c`/`h` types in FULL logs |
+|---|---|---|---|---|
+| REQ-sync-scope-user-data | 01, 02, 04, 05, 06, 11, 14 | Sync `/home` + `/root` via generic per-folder mechanism | VERIFIED (mechanism) | rsync mirror intact; CR-01/CR-02 blockers eliminated by removing the guard; behavioral proof via VMs |
+| REQ-machine-specific-exclusions | 02, 04, 05, 06, 11 | Never sync `.ssh/id_*`, tailscale, GPU/fontconfig caches | VERIFIED (mechanism) | Exclusion filter construction unchanged; `TestBuildRsyncCmd` asserts it; no `--delete-excluded` |
+| REQ-sync-scope-file-metadata | 04, 05, 06 | Preserve owner, group, permissions, ACLs, timestamps | VERIFIED (mechanism) | `-aAXHS --numeric-ids` flags unchanged; behavioral proof via VMs |
+| REQ-manual-sync-workflow | 01, 03, 04, 05, 06, 13 | Single-command trigger; safety check; dry-run preview | VERIFIED | `pc-switcher sync <target>`; topology warn+confirm replaces btrfs guard; dry-run deletion log; `--allow-out-of-order` bypass |
+| REQ-terminal-ux | 05, 06, 08, 09, 13, 14 | Single command; terminal UI; progress; clear errors; truthful audit log | VERIFIED | CLI works; Rich UI; progress bar reaches 100%; bytes reported correctly; topology warning uses Rich Panel; deletion log at FULL |
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
-|------|------|---------|----------|--------|
-| `src/pcswitcher/jobs/folder_sync.py` | 395 | `any(token in line for token in tool_state_tokens)` — unanchored substring check across entire find-new output line | BLOCKER (CR-01) | Silently masks real user files at depth > 1 whose path contains `/.config/pc-switcher/` or `/.local/share/pc-switcher/` anywhere; `rsync --delete` proceeds and destroys diverged user data |
-| `src/pcswitcher/jobs/folder_sync.py` | 577–586 | Pre-transfer re-check reads stored gen from last sync; Phase-7 install artifacts not excluded by tool-state filter | BLOCKER (CR-02) | Every upgrade-then-sync falsely blocked with DIVERGED; user forced to `--allow-divergence` (disables guard) |
-| `src/pcswitcher/jobs/folder_sync.py` | 381–382 | `sync_history.HISTORY_DIR.lstrip('~/')` — character-set strip, not prefix strip | WARNING (WR-01) | Works for current constants; latent landmine if any future constant begins with `/` or extra `~`; feeds the security-relevant filter token derivation; should be `.removeprefix("~/")` |
-| `src/pcswitcher/config_sync.py` | 317 | `CONFIG_REMOTE_PATH.lstrip("~/")` — same character-set strip issue | WARNING (WR-01) | Same latent bug; should be `.removeprefix("~/")` |
-| `src/pcswitcher/jobs/folder_sync.py` | 385–409 | Duplicated per-line skip scaffold (`transid marker` + blank-line guards) in both the empty-prefix branch and the `else` branch | INFO (IN-01) | Duplication is what let CR-01/CR-02 diverge; a shared path-yielding helper would reduce future drift |
+|---|---|---|---|---|
+| `src/pcswitcher/orchestrator.py` | 160 | `config={},  # TODO: Add config snapshot` | INFO (pre-existing) | Deferred feature for session-log config snapshot; introduced in plan 01-03, unrelated to pivot; no functional impact |
+
+No TBD, FIXME, or XXX markers found in any file modified by the pivot plans (01-10 through 01-14).
+
+### Transitional Note: Post-Upgrade First Sync
+
+On a machine pair that had sync-history.json files from before the pivot (containing only `last_role`, no `last_peer`), the first sync post-upgrade will see:
+- local: `(role, peer=None)` from the old format
+- target: `(role, peer=None)` from the old format
+
+This causes the `_check_out_of_order` to fall into the W3 branch (consecutive-push warning) rather than W1 (no history), producing a slightly misleading warning message. The consequence is a spurious confirmation prompt requiring user input (the safe side — no silent data loss). After the first post-upgrade sync both machines have `last_peer` populated and subsequent syncs classify correctly. This self-heals after one sync and requires no code fix.
 
 ### Human Verification Required
 
@@ -245,7 +189,7 @@ Plans 07, 08, and 09 addressed all 8 findings from the previous verification and
 
 **Test:** On machine A with the default config (or the test-dir config), run `pc-switcher sync <B>`. Compare `md5sum` of all included files on both machines.
 
-**Expected:** Every included file exists on B and has the same md5sum as A. No excluded files (.ssh/id_*, .config/tailscale, VS Code cache dirs) appear on B.
+**Expected:** Every included file exists on B and has the same md5sum as A. No excluded files (`.ssh/id_*`, `.config/tailscale`, VS Code cache dirs) appear on B.
 
 **Why human:** Requires live rsync-as-root over SSH to real btrfs VMs. Unit tests only verify the rsync command construction.
 
@@ -265,13 +209,13 @@ Plans 07, 08, and 09 addressed all 8 findings from the previous verification and
 
 **Why human:** Requires bidirectional VM execution and deletion propagation via `--delete` across real SSH.
 
-#### 4. Default /home two-consecutive-sync check (D-07 — after CR-01 + CR-02 are fixed)
+#### 4. Two-Consecutive-Sync Live Check (D-07 — now unblocked)
 
-**Test:** After both CR-01 and CR-02 gap-closure plans are executed, on a real machine pair using the shipped default config (`/home`), run `pc-switcher sync <target>` twice in a row WITHOUT `--allow-divergence`.
+**Test:** On a real machine pair using the shipped default config (`/home`), run `pc-switcher sync <target>` twice in a row WITHOUT `--allow-out-of-order` (the sync is interactive or use `--yes` if added). On the first sync, if W1 or W3 triggers, confirm with `y`. The second sync should proceed silently (clean A→B/B→A/A→B case).
 
-**Expected:** Exit code 0 on both runs; no "divergence" in output. Note: this item is blocked pending CR-01 and CR-02 closure — running it now will fail due to CR-02 if the target version differs.
+**Expected:** Both runs succeed; the second sync produces no out-of-order warning; exit code 0. The topology check self-calibrates after the first sync.
 
-**Why human:** Requires destructive `--delete` mirror of real `/home` on a real machine pair; CR-01 and CR-02 must be fixed first.
+**Why human:** Requires destructive `--delete` mirror of real `/home` on a real machine pair. CR-01 and CR-02 are now fixed — this check is unblocked.
 
 #### 5. Full VM Integration Test Suite
 
@@ -283,64 +227,17 @@ Plans 07, 08, and 09 addressed all 8 findings from the previous verification and
 
 ### Gaps Summary
 
-**2 BLOCKERS — introduced by the gap-closure work (plans 07-09)**
+No gaps. The two previous blockers (CR-01 and CR-02) are closed by the design pivot:
 
-**BLOCKER 1 — CR-01: Unanchored tool-state filter creates a false-negative data-loss path**
+- **CR-01 (unanchored tool-state filter)** was a data-loss path in `_target_diverged_since`. Closed by removing the entire btrfs divergence guard from `folder_sync.py` (plan 01-11). No filter, no false-negative.
+- **CR-02 (Phase-7 install artifacts in pre-transfer re-check)** was a false-positive that blocked every upgrade+sync run. Closed by removing the pre-transfer re-check along with the guard (plan 01-11). No check, no false-positive.
 
-`folder_sync.py:381-397` (`_target_diverged_since`, empty-prefix branch). The fix for the original T6 gap used substring-matching to exclude pc-switcher's own state writes:
+The replacement safety model (ADR-015): btrfs pre/post snapshots (rollback backstop) + rsync `--dry-run` deletion log at FULL (auditable preview) + topology out-of-order warn+confirm (reads `last_role`+`last_peer` from both machines' sync-history). All three pillars are verified in the codebase.
 
-```python
-# folder_sync.py:381-383
-history_token = f"/{sync_history.HISTORY_DIR.lstrip('~/')}/"  # /.local/share/pc-switcher/
-config_token = f"/{config_sync.CONFIG_REMOTE_DIR.lstrip('~/')}/"  # /.config/pc-switcher/
-tool_state_tokens = (history_token, config_token)
-
-# folder_sync.py:395
-if any(token in line for token in tool_state_tokens):
-    continue
-```
-
-A btrfs find-new line looks like: `inode 5678 file offset 0 len 4096 disk start 0 offset 0 gen 1001 flags UNKNOWN janfr/.config/pc-switcher/config.yaml`
-
-The substring `"/.config/pc-switcher/"` is checked anywhere in this whole line. A file at `janfr/dotfiles/.config/pc-switcher/config.yaml` also contains the substring — because `dotfiles/.config/pc-switcher/` includes `/.config/pc-switcher/` — and is silently classified CLEAN. The divergence guard then proceeds with `rsync --delete`, overwriting the user's genuinely diverged data. The target audience (power users syncing Linux desktops, frequently with dotfile repos managed by chezmoi/yadm/stow) makes this trigger realistic. The existing unit tests only cover the depth-1 case.
-
-**Fix direction:** Extract the path field (last whitespace-delimited token of the find-new line) and apply an anchored regex, e.g.:
-```python
-_TOOL_STATE_RE = re.compile(r"^[^/]+/(?:\.local/share|\.config)/pc-switcher/")
-path = line.rsplit(" ", 1)[-1]
-if _TOOL_STATE_RE.match(path):
-    continue
-```
-This matches only `<user>/.config/pc-switcher/...` and `<user>/.local/share/pc-switcher/...` at the expected depth. Add a unit test for the depth-2 case.
-
-**BLOCKER 2 — CR-02: Pre-transfer re-check flags Phase-7 install artifacts as divergence**
-
-`folder_sync.py:569-586` (`execute()`, pre-transfer re-check added by plan 09/WR-03) + `orchestrator.py:265,275` (Phase 7 before Phase 9).
-
-The re-check calls `_check_divergence(folder)` using the stored generation from the LAST sync. Phase 7 (`_install_on_target_job()`, orchestrator.py:265) runs BEFORE Phase 9 (`_execute_jobs()`, line 275). When `target_version != source_version` (install_on_target.py:70-75), Phase 7 executes `install.sh`, which writes:
-- `$HOME/.local/bin/uv` (uv bootstrap, install.sh:111-114)
-- `$HOME/.local/share/uv/tools/pcswitcher/...` (uv tool install, install.sh:191-200)
-- `$HOME/.local/bin/pc-switcher` (binary link)
-
-These land at `janfr/.local/bin/uv`, `janfr/.local/share/uv/...`, `janfr/.local/bin/pc-switcher` on the @home subvolume. The tool-state filter only excludes `/.local/share/pc-switcher/` and `/.config/pc-switcher/` — it does NOT exclude `.local/bin/` or `.local/share/uv/`. The Phase-9 re-check reports DIVERGED, logs CRITICAL, and raises RuntimeError before rsync runs.
-
-This affects every sync where the source and target have different pc-switcher versions: every version bump in production; every sync during active development where dev versions diverge between machines. The only escape is `--allow-divergence`, which disables the guard entirely and reopens the data-loss window that CR-01/CR-02 were meant to close.
-
-**Fix direction (two options):**
-- **Option A** (preferred; pairs with CR-01 fix): Extend the anchored regex to also cover install artifacts at the expected depth: `r"^[^/]+/(?:\.local/share/pc-switcher|\.config/pc-switcher|\.local/bin/(?:pc-switcher|uv)|\.local/share/uv)(?:/|$)"`.
-- **Option B** (more robust): After Phases 7 and 8 complete but before Phase 9 executes, record the current @home generation as the re-check baseline, so only user writes in the narrow Phase-8→Phase-9 window trigger the re-check.
-
-Add a unit test with a find-new output containing `janfr/.local/bin/pc-switcher` and `janfr/.local/share/uv/tools/pcswitcher/...` paths and assert `execute()` does NOT raise (rsync is spawned).
-
-**Secondary concerns (warnings — same root cause, block together):**
-
-- **WR-01**: `lstrip('~/')` at folder_sync.py:381-382 and config_sync.py:317 is character-set stripping, not prefix stripping. Works for current constants. The CR-01 fix should simultaneously replace both with `.removeprefix("~/")`.
-- **IN-01**: Duplicated per-line skip logic in the two branches of `_target_diverged_since` (folder_sync.py:385-409) — the structural cause that let CR-01/CR-02 diverge between branches. The CR-01 fix should consolidate into a shared path-yielding helper.
-
-**5 runtime behaviors are PRESENT_BEHAVIOR_UNVERIFIED** — code is present and wired; behavioral proof requires VM execution: byte-identical content, metadata preservation, exclusion correctness, round-trip propagation, and the integration test itself.
+The only remaining work is behavioral proof via live VM execution — 5 items that have always been in the human-verification list and are unchanged in nature.
 
 ---
 
-_Verified: 2026-07-01_
+_Verified: 2026-07-02_
 
-_Verifier: Claude (gsd-verifier) — re-verification after gap-closure plans 07/08/09_
+_Verifier: Claude (gsd-verifier) — re-verification after design pivot plans 01-10 through 01-14 (ADR-015, topology-based sync-safety model)_
