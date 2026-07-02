@@ -203,50 +203,8 @@ class TestOrchestratorDryRunPropagation:
         param_names = list(sig.parameters.keys())
         assert "dry_run" in param_names, "Orchestrator.__init__ should accept dry_run parameter"
 
-    def test_orchestrator_accepts_allow_divergence_parameter(self) -> None:
-        """Verify Orchestrator.__init__ accepts allow_divergence parameter (mirrors dry_run plumbing)."""
+    def test_orchestrator_accepts_allow_out_of_order_parameter(self) -> None:
+        """Verify Orchestrator.__init__ accepts allow_out_of_order (topology bypass)."""
         sig = inspect.signature(Orchestrator.__init__)
         param_names = list(sig.parameters.keys())
-        assert "allow_divergence" in param_names, "Orchestrator.__init__ should accept allow_divergence parameter"
-
-
-class TestJobContextAllowDivergenceField:
-    """Tests for allow_divergence field on JobContext."""
-
-    def test_job_context_allow_divergence_defaults_to_false(
-        self,
-        mock_local_executor: MagicMock,
-        mock_remote_executor: MagicMock,
-        mock_event_bus: MagicMock,
-    ) -> None:
-        """Verify JobContext has allow_divergence field with default False."""
-        context = JobContext(
-            config={},
-            source=mock_local_executor,
-            target=mock_remote_executor,
-            event_bus=mock_event_bus,
-            session_id="test-session",
-            source_hostname="source",
-            target_hostname="target",
-        )
-        assert hasattr(context, "allow_divergence")
-        assert context.allow_divergence is False
-
-    def test_job_context_allow_divergence_can_be_set_true(
-        self,
-        mock_local_executor: MagicMock,
-        mock_remote_executor: MagicMock,
-        mock_event_bus: MagicMock,
-    ) -> None:
-        """Verify JobContext allow_divergence can be set to True."""
-        context = JobContext(
-            config={},
-            source=mock_local_executor,
-            target=mock_remote_executor,
-            event_bus=mock_event_bus,
-            session_id="test-session",
-            source_hostname="source",
-            target_hostname="target",
-            allow_divergence=True,
-        )
-        assert context.allow_divergence is True
+        assert "allow_out_of_order" in param_names, "Orchestrator.__init__ should accept allow_out_of_order parameter"
