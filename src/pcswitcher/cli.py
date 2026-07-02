@@ -200,24 +200,22 @@ def sync(
             help="Auto-accept prompts (e.g., config sync confirmation)",
         ),
     ] = False,
-    allow_consecutive: Annotated[
+    allow_out_of_order: Annotated[
         bool,
         typer.Option(
-            "--allow-consecutive",
-            help="Skip warning about consecutive syncs without receiving a sync back first",
-        ),
-    ] = False,
-    allow_divergence: Annotated[
-        bool,
-        typer.Option(
-            "--allow-divergence",
-            help="Skip the target-divergence guard (use after manual review of target changes)",
+            "--allow-out-of-order",
+            help=(
+                "Proceed even if this sync is out of the normal back-and-forth order. "
+                "Skips the target-state confirmation prompt. Use after manually reviewing "
+                "the target machine's current state."
+            ),
         ),
     ] = False,
 ) -> None:
     """Sync to target machine.
 
     Loads configuration, creates orchestrator, and runs the complete sync workflow.
+    Use --allow-out-of-order to bypass the out-of-order topology check after manual review.
     """
     # Determine config path
     config_path = config or Configuration.get_default_config_path()
@@ -230,9 +228,8 @@ def sync(
         target,
         cfg,
         auto_accept=yes,
-        allow_consecutive=allow_consecutive,
+        allow_out_of_order=allow_out_of_order,
         dry_run=dry_run,
-        allow_divergence=allow_divergence,
     )
     sys.exit(exit_code)
 
@@ -242,9 +239,8 @@ def _run_sync(
     cfg: Configuration,
     *,
     auto_accept: bool = False,
-    allow_consecutive: bool = False,
+    allow_out_of_order: bool = False,
     dry_run: bool = False,
-    allow_divergence: bool = False,
 ) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
 
@@ -252,9 +248,8 @@ def _run_sync(
         target: Target hostname
         cfg: Loaded configuration
         auto_accept: If True, auto-accept prompts (e.g., config sync)
-        allow_consecutive: If True, skip warning about consecutive syncs
+        allow_out_of_order: If True, skip the out-of-order target-state confirmation
         dry_run: If True, preview sync without making changes
-        allow_divergence: If True, skip the target-divergence guard
 
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
@@ -264,9 +259,8 @@ def _run_sync(
             target,
             cfg,
             auto_accept=auto_accept,
-            allow_consecutive=allow_consecutive,
+            allow_out_of_order=allow_out_of_order,
             dry_run=dry_run,
-            allow_divergence=allow_divergence,
         )
     )
 
@@ -276,9 +270,8 @@ async def _async_run_sync(
     cfg: Configuration,
     *,
     auto_accept: bool = False,
-    allow_consecutive: bool = False,
+    allow_out_of_order: bool = False,
     dry_run: bool = False,
-    allow_divergence: bool = False,
 ) -> int:
     """Async implementation of sync with interrupt handling.
 
@@ -286,8 +279,8 @@ async def _async_run_sync(
         target: Target hostname
         cfg: Loaded configuration
         auto_accept: If True, auto-accept prompts (e.g., config sync)
+        allow_out_of_order: If True, skip the out-of-order target-state confirmation
         dry_run: If True, preview sync without making changes
-        allow_divergence: If True, skip the target-divergence guard
 
     Interrupt behavior:
     - First SIGINT: Cancel sync task; cleanup runs in orchestrator's finally block
@@ -319,9 +312,8 @@ async def _async_run_sync(
             target=target,
             config=cfg,
             auto_accept=auto_accept,
-            allow_consecutive=allow_consecutive,
+            allow_out_of_order=allow_out_of_order,
             dry_run=dry_run,
-            allow_divergence=allow_divergence,
         )
         main_task = asyncio.create_task(orchestrator.run())
 

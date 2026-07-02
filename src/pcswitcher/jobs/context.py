@@ -22,4 +22,3 @@ class JobContext:
     source_hostname: str
     target_hostname: str
     dry_run: bool = False  # If True, skip state-modifying operations
-    allow_divergence: bool = False  # If True, skip the target-divergence guard (D-06 override)
