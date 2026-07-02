@@ -478,14 +478,25 @@ printf 'pc2_private_key' > "$T/.ssh/id_rsa"
                 "Deleted file alpha_hardlink.txt still present on pc1 after B→A deletion propagation"
             )
 
-            # Exclusion in reverse: pc2's .ssh/id_rsa must NOT appear on pc1
+            # Exclusion in reverse: pc1 seeded its OWN .ssh/id_rsa ('fake_private_key')
+            # and pc2 created a different one ('pc2_private_key'). Correct reverse
+            # exclusion means B→A must (a) not propagate pc2's excluded copy over pc1's,
+            # and (b) not delete pc1's own copy (excluded files are never --delete'd —
+            # D-06). So the file must still exist on pc1 holding pc1's ORIGINAL content,
+            # never pc2's. Asserting mere absence would be wrong — pc1 legitimately keeps
+            # its own excluded file.
             excl_reverse = await pc1_executor.run_command(
-                f"test ! -e {tdir}/.ssh/id_rsa",
+                f"cat {tdir}/.ssh/id_rsa",
                 timeout=10.0,
                 login_shell=False,
             )
             assert excl_reverse.success, (
-                "Excluded file .ssh/id_rsa from pc2 appeared on pc1 after B→A (exclusion must hold in reverse)"
+                f"pc1's own excluded .ssh/id_rsa was removed by B→A (excluded files must survive --delete).\n"
+                f"stderr: {excl_reverse.stderr}"
+            )
+            assert excl_reverse.stdout.strip() == "fake_private_key", (
+                f"Excluded file .ssh/id_rsa from pc2 propagated to pc1 in reverse — exclusion failed. "
+                f"Expected pc1's original 'fake_private_key', got {excl_reverse.stdout.strip()!r}"
             )
 
             # Step 5: A→B again — topology check must be silent (no override needed).
