@@ -11,11 +11,11 @@ pc1/pc2 Hetzner VMs (Ubuntu 24.04, btrfs @home at /home, sudo rsync, acl):
     present (A→B and B→A).
   - Criterion 4: Additions, modifications, and deletions propagate B→A with
     the same exclusion and metadata guarantees.
-  - Criterion 5 (ADR-015, D-12): The topology out-of-order / target-state check
-    triggers a heads-up (non-zero exit) in non-interactive mode when no prior
-    sync history exists; --allow-out-of-order bypasses it; a normal A→B / B→A /
-    A→B round-trip proceeds WITHOUT any override (the clean case is silent);
-    --dry-run performs a read-only preview and does not update sync history.
+  - Criterion 5 (ADR-015, D-12): Two independent safety gates: W1 (first-ever sync,
+    no target history) gated by --allow-first-sync; W2/W3 (out-of-order or consecutive
+    push) gated by --allow-out-of-order. A normal A→B / B→A / A→B round-trip proceeds
+    WITHOUT any override (the clean case is silent). --dry-run performs a read-only
+    preview through both gates and does not update sync history.
 
 Safety: the test configures folder_sync to mirror a DEDICATED test directory
 (not the real /home or /root), so the destructive --delete mirror cannot harm
@@ -239,11 +239,11 @@ class TestFolderSyncAToB:
             assert alpha_inode == hardlink_inode, "Hard-link pair must share an inode on pc1"
 
             # --- A→B sync ---
-            # --allow-out-of-order: pc2 has no prior sync history (W1 case), so the
-            # topology check would trigger a heads-up in non-interactive mode.  We bypass
-            # it here because this test focuses on content/metadata, not topology safety.
+            # --allow-first-sync: pc2 has no prior sync history (W1: first-ever sync), so
+            # the first-sync gate fires in non-interactive mode.  We bypass it here because
+            # this test focuses on content/metadata, not topology safety.
             sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-out-of-order",
+                "pc-switcher sync pc2 --yes --allow-first-sync",
                 timeout=300.0,
                 login_shell=True,
             )
@@ -352,7 +352,7 @@ class TestFolderSyncRoundTrip:
         """B→A propagates additions, modifications, and deletions; A→B again has no out-of-order warning.
 
         Workflow:
-          1. A→B — initial sync to pc2 (--allow-out-of-order: pc2 has no prior history).
+          1. A→B — initial sync to pc2 (--allow-first-sync: pc2 has no prior history, W1 gate).
           2. Mutate pc2 — add new file, modify existing, delete a file.
           3. B→A from pc2 — back-sync to pc1 (no override needed: topology clean case).
           4. Assert pc1 reflects all three mutations, with metadata preserved and
@@ -374,10 +374,10 @@ class TestFolderSyncRoundTrip:
             await _seed_test_tree(pc1_executor, tdir)
 
             # Step 1: A→B initial sync
-            # --allow-out-of-order: pc2 has no prior sync history so the topology check
-            # (W1: no readable history) would trigger a heads-up in non-interactive mode.
+            # --allow-first-sync: pc2 has no prior sync history (W1: first-ever sync),
+            # so the first-sync gate fires in non-interactive mode.
             sync_ab = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-out-of-order",
+                "pc-switcher sync pc2 --yes --allow-first-sync",
                 timeout=300.0,
                 login_shell=True,
             )
@@ -524,18 +524,18 @@ printf 'pc2_private_key' > "$T/.ssh/id_rsa"
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """Topology out-of-order check and dry-run preview behaviour (ADR-015, D-12).
+        """First-sync (W1) gate and dry-run preview behaviour (ADR-015, D-12).
 
         Workflow:
           1. Seed pc1's test directory; pc2 has no prior sync history.
-          2. A→B attempt WITHOUT --allow-out-of-order — must fail with non-zero exit
-             and output mentioning the out-of-order / target-state reason (W1: no
-             readable history — non-interactive mode cannot confirm).
+          2. A→B attempt without any bypass flag — must fail with non-zero exit; the
+             W1 (first-sync) gate fires because pc2 has no history and non-interactive
+             mode cannot confirm the overwrite.
           3. A→B --dry-run — must NOT be blocked (ADR-014: dry-run is a read-only
-             rehearsal; out-of-order warning is logged but sync proceeds); pc2's test
-             directory must remain empty (no file mutations); pc1's sync-history.json
-             must not be created or updated (D-12: no state writes in dry-run).
-          4. A→B --allow-out-of-order --yes — must proceed (exit 0) and populate pc2's
+             rehearsal; both gates log and proceed); pc2's test directory must remain
+             empty (no file mutations); pc1's sync-history.json must not be created or
+             updated (D-12: no state writes in dry-run).
+          4. A→B --allow-first-sync --yes — must proceed (exit 0) and populate pc2's
              test directory with the source files.
 
         Requirements: REQ-manual-sync-workflow (ADR-015, D-12) — ROADMAP criterion 5.
@@ -549,21 +549,23 @@ printf 'pc2_private_key' > "$T/.ssh/id_rsa"
             await _write_config(pc1_executor, config)
             await _seed_test_tree(pc1_executor, tdir)
 
-            # Step 2: A→B WITHOUT --allow-out-of-order — topology check W1 (no history on pc2)
-            # must trigger the out-of-order heads-up in non-interactive mode.
+            # Step 2: A→B without a bypass flag — W1 (first-sync) gate fires because pc2
+            # has no sync history; non-interactive mode cannot confirm the overwrite.
             blocked_result = await pc1_executor.run_command(
                 "pc-switcher sync pc2 --yes",
                 timeout=120.0,
                 login_shell=True,
             )
             assert not blocked_result.success, (
-                "Topology check should have returned non-zero (non-interactive, no history), "
+                "First-sync (W1) gate should have returned non-zero (non-interactive, no history), "
                 f"but it exited with code {blocked_result.exit_code}.\n"
                 f"stdout: {blocked_result.stdout}"
             )
             combined = (blocked_result.stdout + blocked_result.stderr).lower()
+            # "out-of-order" appears in the RuntimeError "Sync aborted at the out-of-order /
+            # target-state check"; "target" appears in the W1 warning title and message body.
             assert "out-of-order" in combined or "target" in combined, (
-                "Out-of-order heads-up output must mention 'out-of-order' or 'target'.\n"
+                "First-sync gate output must mention 'out-of-order' (abort message) or 'target'.\n"
                 f"stdout: {blocked_result.stdout}\nstderr: {blocked_result.stderr}"
             )
 
@@ -618,14 +620,15 @@ printf 'pc2_private_key' > "$T/.ssh/id_rsa"
                 f"Before: {history_before.stdout.strip()!r}\nAfter: {history_after.stdout.strip()!r}"
             )
 
-            # Step 4: A→B --allow-out-of-order — must proceed and populate pc2.
+            # Step 4: A→B --allow-first-sync — bypasses the W1 gate, populates pc2.
+            # (Dry-run in step 3 does not update history, so pc2 still has no history here.)
             allow_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-out-of-order",
+                "pc-switcher sync pc2 --yes --allow-first-sync",
                 timeout=300.0,
                 login_shell=True,
             )
             assert allow_result.success, (
-                f"--allow-out-of-order sync failed.\n"
+                f"--allow-first-sync sync failed.\n"
                 f"exit={allow_result.exit_code}\n"
                 f"stdout: {allow_result.stdout}\nstderr: {allow_result.stderr}"
             )

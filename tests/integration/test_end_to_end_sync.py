@@ -268,9 +268,11 @@ class TestEndToEndSync:
 
         # Run pc-switcher sync from pc1 to pc2
         # Timeout: ~60s for SSH + install + snapshots + job execution (4+4 seconds)
-        # Use --yes to auto-accept config sync prompts (non-interactive)
+        # Use --yes to auto-accept config sync prompts (non-interactive).
+        # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
+        # (no TTY) to bypass the first-sync overwrite confirmation.
         sync_result = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes",
+            "pc-switcher sync pc2 --yes --allow-first-sync",
             timeout=180.0,
             login_shell=True,
         )
@@ -372,9 +374,13 @@ class TestEndToEndSync:
         await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
 
         # Start sync in background with script for TTY emulation
-        # We use bash -c to wrap the command and capture the PID
+        # We use bash -c to wrap the command and capture the PID.
+        # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
+        # (no TTY) to bypass the first-sync overwrite confirmation and reach job execution.
         start_result = await pc1_executor.run_command(
-            f"nohup bash -c 'echo $$ > {pid_file}; exec pc-switcher sync pc2 --yes 2>&1' > {output_file} &",
+            f"nohup bash -c 'echo $$ > {pid_file};"
+            f" exec pc-switcher sync pc2 --yes --allow-first-sync 2>&1'"
+            f" > {output_file} &",
             timeout=10.0,
             login_shell=True,
         )
@@ -482,9 +488,14 @@ class TestEndToEndSync:
         pid_file = "/tmp/pcswitcher-network-failure-test-pid.txt"
         await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
 
-        # Start sync in background
+        # Start sync in background.
+        # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
+        # (no TTY) to bypass the first-sync overwrite confirmation so the sync proceeds
+        # into the job execution phase where the network failure is injected.
         start_result = await pc1_executor.run_command(
-            f"nohup bash -c 'echo $$ > {pid_file}; exec pc-switcher sync pc2 --yes 2>&1' > {output_file} &",
+            f"nohup bash -c 'echo $$ > {pid_file};"
+            f" exec pc-switcher sync pc2 --yes --allow-first-sync 2>&1'"
+            f" > {output_file} &",
             timeout=10.0,
             login_shell=True,
         )
@@ -614,10 +625,11 @@ class TestInstallOnTargetIntegration:
         )
 
         try:
-            # Run sync - this should install pc-switcher on target
-            # Use --yes to auto-accept config sync prompts (non-interactive)
+            # Run sync - this should install pc-switcher on target.
+            # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
+            # (no TTY) to bypass the first-sync overwrite confirmation.
             sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes",
+                "pc-switcher sync pc2 --yes --allow-first-sync",
                 timeout=300.0,  # Allow more time for fresh install
                 login_shell=True,
             )
@@ -678,10 +690,11 @@ class TestInstallOnTargetIntegration:
         )
 
         try:
-            # Run sync - this should upgrade pc-switcher on target
-            # Use --yes to auto-accept config sync prompts (non-interactive)
+            # Run sync - this should upgrade pc-switcher on target.
+            # --allow-first-sync: pc2 has no sync history even when it has an old pc-switcher
+            # installed (install ≠ sync history); W1 gate fires in non-interactive CI.
             sync_result = await pc1_with_pcswitcher_mod.run_command(
-                "pc-switcher sync pc2 --yes",
+                "pc-switcher sync pc2 --yes --allow-first-sync",
                 timeout=300.0,
                 login_shell=True,
             )
@@ -715,13 +728,14 @@ class TestInstallOnTargetIntegration:
 
 
 class TestConsecutiveSyncWarning:
-    """Integration tests for consecutive sync warning feature (#47).
+    """Integration tests for first-sync (W1) gate and consecutive-push (W3) warning (ADR-015).
 
     Tests verify that:
     - Sync history is updated on both source and target after successful sync
-    - Consecutive syncs without back-sync are blocked (prompt defaults to 'n')
-    - --allow-consecutive flag bypasses the warning
-    - Back-sync workflow clears the warning state
+    - First sync to a target with no history (W1) is gated by --allow-first-sync
+    - Consecutive syncs without back-sync (W3) are blocked (non-interactive, defaults to abort)
+    - --allow-out-of-order flag bypasses the W3 consecutive-push gate
+    - Back-sync workflow clears the consecutive-push warning state
     """
 
     async def test_consecutive_sync_warning_workflow(
@@ -729,20 +743,22 @@ class TestConsecutiveSyncWarning:
         sync_ready_source: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """Test complete consecutive sync warning workflow.
+        """Test first-sync (W1) gate and consecutive-push (W3) warning workflow.
 
         TODO add links to the Semantic IDs for ALL tests executed here.
         TODO change name of test to something that covers everything done here.
 
         Consolidated test covering:
-        - Sync history updates on both machines after successful sync
-        - Consecutive syncs blocked when prompt defaults to 'n'
-        - --allow-consecutive flag bypasses the warning
+        - First sync to a fresh target (W1): gated by --allow-first-sync; sync history
+          updated on both machines after success.
+        - Consecutive push (W3): second A→B without a back-sync is blocked in non-interactive
+          mode (no flag, defaults to abort).
+        - --allow-out-of-order bypasses the W3 consecutive-push gate.
 
         Workflow:
-        1. First sync → verifies history updated on both machines
-        2. Second sync (no flag) → verifies blocked by warning
-        3. Third sync (with flag) → verifies flag bypasses warning
+        1. First sync with --allow-first-sync → verifies W1 gate passed, history updated
+        2. Second sync (no flag) → verifies blocked by W3 gate (consecutive push)
+        3. Third sync with --allow-out-of-order → verifies W3 gate bypassed
 
         This consolidation saves ~2 sync operations (~16 seconds) compared
         to running these as separate tests.
@@ -751,9 +767,10 @@ class TestConsecutiveSyncWarning:
 
         # History cleanup done by reset_pcswitcher_state fixture (via sync_ready_source)
 
-        # Step 1: First sync - verify history updates
+        # Step 1: First sync (W1 gate) — pc2 has no history; --allow-first-sync is required
+        # in non-interactive CI to bypass the first-sync overwrite confirmation.
         first_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes",
+            "pc-switcher sync pc2 --yes --allow-first-sync",
             timeout=180.0,
             login_shell=True,
         )
@@ -782,29 +799,33 @@ class TestConsecutiveSyncWarning:
             f"pc2 should have last_role=target.\nContent: {pc2_history.stdout}"
         )
 
-        # Step 2: Second sync WITHOUT --allow-consecutive should be blocked
+        # Step 2: Second sync WITHOUT --allow-out-of-order — W3 (consecutive push) gate fires
+        # because pc1 is pushing to pc2 again without a back-sync.  Non-interactive mode
+        # cannot confirm, so it aborts (title: "Consecutive Sync — No Back-Sync Received").
         second_sync = await pc1_executor.run_command(
             "pc-switcher sync pc2 --yes",
             timeout=60.0,
             login_shell=True,
         )
         assert not second_sync.success, (
-            f"Second sync should fail (warning default=n).\n"
+            f"Second sync should fail (W3 consecutive-push gate, defaults to abort).\n"
             f"Exit code: {second_sync.exit_code}\nStdout: {second_sync.stdout}"
         )
         output = second_sync.stdout + second_sync.stderr
+        # "consecutive" from "Consecutive Sync — No Back-Sync Received" (W3 warning title);
+        # "abort" from "Sync aborted at the out-of-order / target-state check" (RuntimeError).
         assert "consecutive" in output.lower() and "abort" in output.lower(), (
-            f"Output should mention consecutive sync warning.\nOutput: {output}"
+            f"Output should mention consecutive-push warning and abort.\nOutput: {output}"
         )
 
-        # Step 3: Third sync WITH --allow-consecutive should succeed
+        # Step 3: Third sync WITH --allow-out-of-order bypasses the W3 gate.
         third_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes --allow-consecutive",
+            "pc-switcher sync pc2 --yes --allow-out-of-order",
             timeout=180.0,
             login_shell=True,
         )
         assert third_sync.success, (
-            f"Third sync with --allow-consecutive should succeed.\n"
+            f"Third sync with --allow-out-of-order should succeed.\n"
             f"Exit code: {third_sync.exit_code}\nStderr: {third_sync.stderr}"
         )
 
@@ -816,10 +837,10 @@ class TestConsecutiveSyncWarning:
         """After receiving a back-sync, machine can sync again without warning.
 
         Full workflow:
-        1. pc1 syncs to pc2 → pc1=source, pc2=target
-        2. pc2 syncs back to pc1 → pc2=source, pc1=target
-        3. pc1 syncs to pc2 again → should succeed WITHOUT --allow-consecutive
-           because pc1 was last a target (received sync from pc2)
+        1. pc1 syncs to pc2 (W1: first-sync, --allow-first-sync required) → pc1=source, pc2=target
+        2. pc2 syncs back to pc1 (clean case: pc1 has history, target_peer=pc2==source)
+        3. pc1 syncs to pc2 again → should succeed WITHOUT --allow-out-of-order
+           because pc1 was last a target (received back-sync from pc2 = clean case)
 
         NOTE: pc2_with_pcswitcher is used instead of pc2_executor to ensure
         pc2 has the exact same version as pc1 (from current branch), which is
@@ -830,9 +851,9 @@ class TestConsecutiveSyncWarning:
 
         # History cleanup done by reset_pcswitcher_state fixture (via sync_ready_source)
 
-        # Step 1: pc1 syncs to pc2
+        # Step 1: pc1 syncs to pc2 — W1 gate (pc2 has no history), --allow-first-sync required.
         first_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes",
+            "pc-switcher sync pc2 --yes --allow-first-sync",
             timeout=180.0,
             login_shell=True,
         )
@@ -858,14 +879,14 @@ class TestConsecutiveSyncWarning:
         pc1_history = await pc1_executor.run_command("cat ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
         assert '"last_role": "target"' in pc1_history.stdout, "pc1 should be target after back-sync"
 
-        # Step 3: pc1 syncs to pc2 again - should succeed WITHOUT --allow-consecutive
-        # because pc1 was last a target
+        # Step 3: pc1 syncs to pc2 again — clean case: pc1's last_role=TARGET (received
+        # back-sync from pc2), so no consecutive-push W3 gate fires.  No flags needed.
         third_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes",  # No --allow-consecutive!
+            "pc-switcher sync pc2 --yes",  # No --allow-out-of-order needed (clean round-trip)
             timeout=180.0,
             login_shell=True,
         )
         assert third_sync.success, (
-            f"Third sync should succeed without --allow-consecutive (pc1 was target).\n"
+            f"Third sync should succeed without --allow-out-of-order (pc1 was target).\n"
             f"Exit code: {third_sync.exit_code}\nStderr: {third_sync.stderr}"
         )
