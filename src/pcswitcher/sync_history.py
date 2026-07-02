@@ -28,29 +28,20 @@ from pathlib import Path
 __all__ = [
     "HISTORY_DIR",
     "HISTORY_PATH",
-    "UNKNOWN_GENERATION",
     "SyncRole",
     "get_history_path",
     "get_last_role",
     "get_last_role_with_error",
     "get_last_sync_state",
     "get_record_role_command",
-    "get_target_generation",
     "parse_sync_state",
     "record_role",
-    "set_target_generation",
 ]
 
 # Shell-expandable paths for use in SSH commands (remote execution).
 # For local Python operations, use get_history_path() which returns a Path object.
 HISTORY_DIR = "~/.local/share/pc-switcher"
 HISTORY_PATH = f"{HISTORY_DIR}/sync-history.json"
-
-# Sentinel stored when the post-sync btrfs generation could not be captured.
-# Distinct from None (never synced / no key): UNKNOWN_GENERATION means the guard
-# IS active but the baseline is uncertain — the next run must treat the target as
-# UNVERIFIABLE and fail closed rather than proceeding as a first sync (WR-02/CR-02).
-UNKNOWN_GENERATION: int = -1
 
 
 class SyncRole(Enum):
@@ -267,89 +258,3 @@ def get_last_sync_state() -> tuple[SyncRole | None, str | None]:
     except OSError:
         return None, None
     return parse_sync_state(content)
-
-
-def get_target_generation(target_hostname: str, path: str) -> int | None:
-    """Get the stored btrfs subvolume generation for a target host and path.
-
-    Used by the divergence guard (D-08) to compare the current target
-    subvolume generation against the post-sync baseline.
-
-    Args:
-        target_hostname: Hostname of the target machine
-        path: Absolute folder path (e.g. "/home")
-
-    Returns:
-        The stored generation integer, or None if no marker exists for this
-        (target_hostname, path) pair, if the file is missing, or if it is corrupt.
-    """
-    history_path = get_history_path()
-    if not history_path.exists():
-        return None
-    try:
-        data = json.loads(history_path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return None
-        target_gens = data.get("target_generations")
-        if not isinstance(target_gens, dict):
-            return None
-        host_gens = target_gens.get(target_hostname)
-        if not isinstance(host_gens, dict):
-            return None
-        value = host_gens.get(path)
-        return value if isinstance(value, int) else None
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-def set_target_generation(target_hostname: str, path: str, generation: int) -> None:
-    """Store the btrfs subvolume generation for a target host and path.
-
-    Merge-preserving read-modify-write: loads existing JSON (treating
-    missing or corrupt as {}), sets the nested value for the given
-    (target_hostname, path) pair, preserves last_role and all other
-    targets/paths, and writes atomically via temp-file rename.
-
-    Args:
-        target_hostname: Hostname of the target machine
-        path: Absolute folder path (e.g. "/home")
-        generation: btrfs subvolume generation number to store
-    """
-    history_path = get_history_path()
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # json.loads returns Any, so isinstance is needed to narrow the type.
-    try:
-        raw = json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else {}
-        existing: dict[str, object] = raw if isinstance(raw, dict) else {}
-    except (json.JSONDecodeError, OSError):
-        existing = {}
-
-    # Merge: preserve last_role and all other targets; only update the target/path pair
-    target_gens = existing.get("target_generations")
-    if not isinstance(target_gens, dict):
-        target_gens = {}
-    host_gens = target_gens.get(target_hostname)
-    if not isinstance(host_gens, dict):
-        host_gens = {}
-    host_gens[path] = generation
-    target_gens[target_hostname] = host_gens
-    data = {**existing, "target_generations": target_gens}
-
-    content = json.dumps(data)
-
-    fd, temp_path = tempfile.mkstemp(
-        dir=history_path.parent,
-        prefix=".sync-history-",
-        suffix=".tmp",
-    )
-    try:
-        os.write(fd, content.encode())
-        os.close(fd)
-        Path(temp_path).rename(history_path)
-    except Exception:
-        with contextlib.suppress(OSError):
-            os.close(fd)
-        with contextlib.suppress(OSError):
-            Path(temp_path).unlink()
-        raise
