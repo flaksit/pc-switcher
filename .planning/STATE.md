@@ -6,14 +6,14 @@ current_phase: 01
 current_phase_name: home-sync-mvp-user-data-sync
 status: executing
 stopped_at: Completed 01-12-PLAN.md
-last_updated: "2026-07-02T12:14:37.415Z"
+last_updated: "2026-07-02T12:31:12.104Z"
 last_activity: 2026-07-02
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 14
-  completed_plans: 12
+  completed_plans: 13
   percent: 0
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 01 (home-sync-mvp-user-data-sync) — EXECUTING
 
-Plan: 4 of 14
+Plan: 5 of 14
 
 Status: Ready to execute
 
@@ -72,6 +72,7 @@ Progress: [██████████] 100%
 | Phase 01 P10 | 3min | 3 tasks | 3 files |
 | Phase 01 P11 | 10min | 3 tasks | 4 files |
 | Phase 01 P12 | 8min | 3 tasks | 2 files |
+| Phase 01 P13 | 20min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: CR-01/CR-02: removed btrfs divergence guard; safety via ADR-015 (snapshots + dry-run deletion log + topology check)
 - [Phase ?]: WR-01: config_sync removeprefix fix — lstrip stripped any leading ~ and / chars, removeprefix strips only exact leading ~/
 - [Phase ?]: sync_history simplified to {last_role, last_peer} per ADR-015; generation store removed; parse_sync_state/get_last_sync_state added for topology check (plan 01-13)
+- [Phase 01]: Single --allow-out-of-order flag replaces --allow-consecutive + --allow-divergence (ADR-015 topology model; plan 01-13)
+- [Phase 01]: _check_out_of_order() inserted between Phase 3 and 4 with no new step counter — 8-phase formula unchanged; W1/W2/W3 warn+confirm never hard-aborts (#159); last_peer recorded on both ends (plan 01-13)
 
 ### Pending Todos
 
@@ -120,7 +123,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-02T12:14:37.409Z
+Last session: 2026-07-02T12:31:12.099Z
 
 Stopped at: Completed 01-12-PLAN.md
 
