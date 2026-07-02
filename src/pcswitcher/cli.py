@@ -211,11 +211,23 @@ def sync(
             ),
         ),
     ] = False,
+    allow_first_sync: Annotated[
+        bool,
+        typer.Option(
+            "--allow-first-sync",
+            help=(
+                "Proceed with a first-ever sync without interactive confirmation. "
+                "WARNING: every folder configured for folder_sync will be overwritten "
+                "on the target (rsync --delete), except configured exclusions."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Sync to target machine.
 
     Loads configuration, creates orchestrator, and runs the complete sync workflow.
     Use --allow-out-of-order to bypass the out-of-order topology check after manual review.
+    Use --allow-first-sync to auto-approve the first-sync overwrite of a target with no history.
     """
     # Determine config path
     config_path = config or Configuration.get_default_config_path()
@@ -229,6 +241,7 @@ def sync(
         cfg,
         auto_accept=yes,
         allow_out_of_order=allow_out_of_order,
+        allow_first_sync=allow_first_sync,
         dry_run=dry_run,
     )
     sys.exit(exit_code)
@@ -240,6 +253,7 @@ def _run_sync(
     *,
     auto_accept: bool = False,
     allow_out_of_order: bool = False,
+    allow_first_sync: bool = False,
     dry_run: bool = False,
 ) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
@@ -249,6 +263,7 @@ def _run_sync(
         cfg: Loaded configuration
         auto_accept: If True, auto-accept prompts (e.g., config sync)
         allow_out_of_order: If True, skip the out-of-order target-state confirmation
+        allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
         dry_run: If True, preview sync without making changes
 
     Returns:
@@ -260,6 +275,7 @@ def _run_sync(
             cfg,
             auto_accept=auto_accept,
             allow_out_of_order=allow_out_of_order,
+            allow_first_sync=allow_first_sync,
             dry_run=dry_run,
         )
     )
@@ -271,6 +287,7 @@ async def _async_run_sync(
     *,
     auto_accept: bool = False,
     allow_out_of_order: bool = False,
+    allow_first_sync: bool = False,
     dry_run: bool = False,
 ) -> int:
     """Async implementation of sync with interrupt handling.
@@ -280,6 +297,7 @@ async def _async_run_sync(
         cfg: Loaded configuration
         auto_accept: If True, auto-accept prompts (e.g., config sync)
         allow_out_of_order: If True, skip the out-of-order target-state confirmation
+        allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
         dry_run: If True, preview sync without making changes
 
     Interrupt behavior:
@@ -313,6 +331,7 @@ async def _async_run_sync(
             config=cfg,
             auto_accept=auto_accept,
             allow_out_of_order=allow_out_of_order,
+            allow_first_sync=allow_first_sync,
             dry_run=dry_run,
         )
         main_task = asyncio.create_task(orchestrator.run())
