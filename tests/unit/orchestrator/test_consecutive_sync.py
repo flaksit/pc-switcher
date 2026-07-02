@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -124,7 +125,7 @@ class TestCheckOutOfOrderCleanCase:
         result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is True
-        orchestrator._ui.stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------
@@ -167,8 +168,8 @@ class TestCheckOutOfOrderW3ConsecutivePush:
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is True
-        orchestrator._ui.stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._ui.start.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).start.assert_called_once()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_consecutive_push_interactive_declines(
@@ -231,9 +232,9 @@ class TestCheckOutOfOrderW3ConsecutivePush:
 
         assert result is False
         # UI must NOT be stopped in non-interactive path
-        orchestrator._ui.stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
         # Warning message must be printed
-        orchestrator._console.print.assert_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._console).print.assert_called()  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +276,7 @@ class TestCheckOutOfOrderW2MachineC:
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is False
-        orchestrator._console.print.assert_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._console).print.assert_called()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_machine_c_interactive_prompts_user(
@@ -309,7 +310,7 @@ class TestCheckOutOfOrderW2MachineC:
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is True
-        orchestrator._ui.stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +343,7 @@ class TestCheckOutOfOrderW1NoHistory:
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is False
-        orchestrator._console.print.assert_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._console).print.assert_called()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_target_history_unreadable_json_non_interactive_returns_false(
@@ -398,7 +399,7 @@ class TestCheckOutOfOrderW1NoHistory:
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is True
-        orchestrator._ui.stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------
@@ -431,8 +432,8 @@ class TestCheckOutOfOrderBypass:
 
         assert result is True
         # Remote executor must NOT have been called (check bypassed before SSH read)
-        orchestrator._remote_executor.run_command.assert_not_called()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._ui.stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._remote_executor).run_command.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
 
     def test_orchestrator_accepts_allow_out_of_order(self, mock_config: MagicMock) -> None:
         """Orchestrator.__init__ stores allow_out_of_order."""
@@ -482,9 +483,9 @@ class TestCheckOutOfOrderDryRun:
 
         assert result is True
         # Logger.warning must have been called (warning logged, not silenced)
-        orchestrator._logger.warning.assert_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._logger).warning.assert_called()  # pyright: ignore[reportPrivateUsage]
         # Prompt must NOT have been shown
-        orchestrator._ui.stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_dry_run_with_machine_c_returns_true(
@@ -508,7 +509,7 @@ class TestCheckOutOfOrderDryRun:
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is True
-        orchestrator._logger.warning.assert_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._logger).warning.assert_called()  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------

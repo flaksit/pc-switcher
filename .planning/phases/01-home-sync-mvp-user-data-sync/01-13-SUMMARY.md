@@ -102,6 +102,13 @@ Single --allow-out-of-order flag and topology warn+confirm step replace the cons
 - **Files modified:** `tests/unit/jobs/test_folder_sync.py`
 - **Commit:** efe1f07 (included in Task 2 commit)
 
+**2. [Post-review fix] Resolve basedpyright regressions in reworked test file**
+- **Found during:** Coordinator review after Task 3 — `test_consecutive_sync.py` raised 26 `reportOptionalMemberAccess` + `reportAttributeAccessIssue` errors
+- **Issue:** Mock-assertion calls like `orchestrator._ui.stop.assert_not_called()` accessed attributes on `orchestrator._ui` (typed `TerminalUI | None`) and `orchestrator._remote_executor` (typed `RemoteExecutor | None`). The existing `# pyright: ignore[reportPrivateUsage]` did not cover the None-access and MethodType-attribute errors.
+- **Fix:** Wrapped each private mock access in `cast(MagicMock, orchestrator._X)` so the type narrows to `MagicMock` (mock-assertion methods resolve via `__getattr__`, and `None` is excluded). The `reportPrivateUsage` ignore remains valid for the still-private attribute read.
+- **Files modified:** `tests/unit/orchestrator/test_consecutive_sync.py`
+- **Verification:** `uv run basedpyright` → 0 errors; `uv run pytest` → 505 passed
+
 ## Known Stubs
 
 None — all topology check code is fully wired.
