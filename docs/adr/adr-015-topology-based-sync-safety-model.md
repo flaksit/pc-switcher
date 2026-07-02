@@ -49,6 +49,28 @@ rsync `--dry-run --delete` already provides the exact, scope-correct, noise-free
 - Topology check requires populated sync-history on both machines; first-ever sync has no prior `last_role`/`last_peer` record (treat absent history as in-order)
 - btrfs snapshots remain a mandatory prerequisite for the rollback backstop; the topology check alone is not a sufficient rollback mechanism
 
+## Refinement: first-sync is distinct from out-of-order
+
+This section refines the Decision above; where they differ, this section takes precedence.
+
+The original model folded three situations into a single orchestrator pre-flight gated by `--allow-out-of-order`:
+
+- W1: the target has no readable sync-history
+- W2: the target last synced with a different peer (machine-C)
+- W3: consecutive push — the same source pushes again without a back-sync (GitHub #159)
+
+W1 is not an out-of-order condition. A target with no readable sync-history has never been synced by pc-switcher, so there is no prior topology to be "out of order" with. It is a first-ever sync whose risk is simply that `rsync --delete` will overwrite every configured folder wholesale. That is a different question ("do you want to overwrite this untracked target?") from the out-of-order question ("this target's last peer isn't who you expect"), and it warrants its own confirmation with its own bypass flag.
+
+Decisions:
+
+- First-sync detection and its overwrite confirmation move out of the orchestrator and into `FolderSyncJob`, which owns the destructive `rsync --delete` transfer. The job reads the target's sync-history; unreadable, empty, or unparsable content is treated as a first sync. Before transferring, it confirms an explicit "this overwrites the target" prompt that lists the in-scope folders. Non-first syncs proceed silently.
+- The first-sync confirmation is gated by a new `--allow-first-sync` flag (auto-approve in non-interactive runs). `--allow-out-of-order` now affects only W2/W3.
+- The orchestrator's `_check_out_of_order` handles only W2/W3. When the target has no readable sync-history it does not treat this as out-of-order and does not abort — it proceeds and defers the first-sync confirmation to `FolderSyncJob`.
+- Under `--dry-run`, both gates log their warning and proceed without prompting (ADR-014: dry-run is a read-only rehearsal).
+- A reusable `Confirmer` abstraction (`pcswitcher.confirmer.TerminalUIConfirmer`) now backs both gates. Interactive runs pause the live TUI, show a yellow Rich panel, and prompt `Continue anyway? [y/n]`; non-interactive runs fall back to the caller's `--allow-*` flag. It is injected via `JobContext.confirmer` so future interactive jobs reuse the same mechanism instead of reaching into the console/TUI directly.
+
+This supersedes the Consequences note "first-ever sync … treat absent history as in-order": absent history is now handled by the first-sync confirmation, not silently treated as in-order.
+
 ## References
 
 - ADR-013: rsync-over-SSH as user-data transport (transport layer this safety model sits above)
