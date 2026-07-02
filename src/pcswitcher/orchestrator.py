@@ -50,9 +50,11 @@ from pcswitcher.models import (
     ValidationError,
 )
 from pcswitcher.sync_history import (
+    HISTORY_PATH,
     SyncRole,
-    get_last_role_with_error,
+    get_last_sync_state,
     get_record_role_command,
+    parse_sync_state,
     record_role,
 )
 from pcswitcher.ui import TerminalUI
@@ -80,9 +82,8 @@ class Orchestrator:
         config: Configuration,
         *,
         auto_accept: bool = False,
-        allow_consecutive: bool = False,
+        allow_out_of_order: bool = False,
         dry_run: bool = False,
-        allow_divergence: bool = False,
     ) -> None:
         """Initialize orchestrator with target and validated configuration.
 
@@ -90,15 +91,13 @@ class Orchestrator:
             target: Target hostname or SSH alias
             config: Validated configuration from YAML file
             auto_accept: If True, auto-accept prompts (e.g., config sync)
-            allow_consecutive: If True, skip warning about consecutive syncs
+            allow_out_of_order: If True, bypass the out-of-order topology confirmation
             dry_run: If True, preview sync without making changes
-            allow_divergence: If True, skip the target-divergence guard (D-06 override)
         """
         self._config = config
         self._auto_accept = auto_accept
-        self._allow_consecutive = allow_consecutive
+        self._allow_out_of_order = allow_out_of_order
         self._dry_run = dry_run
-        self._allow_divergence = allow_divergence
         self._session_id = secrets.token_hex(4)
         self._session_folder = session_folder_name(self._session_id)
         self._source_hostname = get_local_hostname()
@@ -142,7 +141,6 @@ class Orchestrator:
             source_hostname=self._source_hostname,
             target_hostname=self._target_hostname,
             dry_run=self._dry_run,
-            allow_divergence=self._allow_divergence,
         )
 
     async def run(self) -> SyncSession:  # noqa: PLR0915
@@ -217,12 +215,6 @@ class Orchestrator:
             )
 
         try:
-            # Pre-Phase: Check for consecutive sync (before any operations)
-            if not self._allow_consecutive:
-                should_continue = await self._check_consecutive_sync()
-                if not should_continue:
-                    raise RuntimeError("Sync aborted: consecutive sync without receiving a sync back first")
-
             # Phase 1: Acquire source lock
             self._logger.info("Acquiring source lock", extra={"job": "orchestrator", "host": "source"})
             await self._acquire_source_lock()
@@ -238,6 +230,11 @@ class Orchestrator:
             self._logger.info("Acquiring target lock", extra={"job": "orchestrator", "host": "target"})
             await self._acquire_target_lock()
             self._ui.set_current_step(3)
+
+            # Topology out-of-order / target-state check (between Phase 3 and 4):
+            # runs after the target lock so we can read the target's sync-history over SSH.
+            if not await self._check_out_of_order():
+                raise RuntimeError("Sync aborted at the out-of-order / target-state check")
 
             # Phase 4: Job discovery and validation
             self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator", "host": "source"})
@@ -395,69 +392,130 @@ class Orchestrator:
 
         self._logger.info("Configuration sync completed", extra={"job": "orchestrator", "host": "target"})
 
-    async def _check_consecutive_sync(self) -> bool:
-        """Check if this is a consecutive sync and prompt user if so.
+    async def _check_out_of_order(self) -> bool:
+        """Check topology state and warn when this sync may overwrite independent target changes.
 
-        A consecutive sync is when this machine tries to be a SOURCE again
-        without having been a TARGET first. This usually means the user forgot
-        to sync back from the other machine.
+        Runs after acquiring the target lock so we can read the target's sync-history
+        over the established SSH connection. Compares `last_role` and `last_peer` on
+        both machines to detect three situations that warrant a heads-up:
+
+        - W1: target has no readable sync history (first sync or corrupted file)
+        - W2: target last synced with a different machine (machine-C scenario)
+        - W3: consecutive push — this source is pushing to the same target again
+              without a back-sync in between (GitHub #159)
+
+        The clean A→B / work / B→A / A→B pattern always proceeds silently.
+        Bypassed by --allow-out-of-order. Under --dry-run the warning is logged
+        but never aborts (ADR-014: dry-run is a read-only rehearsal).
 
         Returns:
-            True if sync should continue, False if user aborted.
+            True if sync should proceed, False if aborted.
         """
         assert self._console is not None
         assert self._ui is not None
+        assert self._remote_executor is not None
 
-        last_role, had_error = get_last_role_with_error()
-
-        # No warning needed if:
-        # - No history exists (first sync)
-        # - Last role was TARGET (received a sync, now sending - normal flow)
-        if last_role is None and not had_error:
-            return True
-        if last_role == SyncRole.TARGET:
-            return True
-
-        # Warning needed if:
-        # - Last role was SOURCE (consecutive sync from same machine)
-        # - History file was corrupted (safety-first: treat as consecutive)
-
-        # In non-interactive mode (no TTY), use the default "n" response
-        # to avoid hanging on Prompt.ask()
-        if not sys.stdin.isatty():
-            self._console.print(
-                "[yellow]Warning: Consecutive sync detected (no back-sync received).[/yellow]\n"
-                "Use --allow-consecutive to override in non-interactive mode."
+        if self._allow_out_of_order:
+            self._logger.info(
+                "Out-of-order topology check bypassed by --allow-out-of-order",
+                extra={"job": "orchestrator", "host": "source"},
             )
+            return True
+
+        src = self._source_hostname
+        tgt = self._target_hostname
+
+        # Read local sync state (role + peer from this machine's sync-history.json)
+        local_role, local_peer = get_last_sync_state()
+
+        # Read target sync state over SSH; failure or empty output → treat as unreadable
+        cat_result = await self._remote_executor.run_command(f"cat {HISTORY_PATH} 2>/dev/null")
+        target_stdout = cat_result.stdout.strip()
+        if not cat_result.success or not target_stdout:
+            target_role: SyncRole | None = None
+            target_peer: str | None = None
+            target_readable = False
+        else:
+            target_role, target_peer = parse_sync_state(target_stdout)
+            target_readable = True
+
+        # Consecutive push: this source most recently synced TO this same target
+        consecutive_push = local_role == SyncRole.SOURCE and local_peer == tgt
+
+        # Suppress (clean case): target is readable, it last synced with this source,
+        # and this is not a repeat push from the same source without a back-sync.
+        if target_readable and target_peer == src and not consecutive_push:
+            return True
+
+        # Determine warning type and compose message
+        if not target_readable:
+            # W1: no readable history — cannot confirm the target's state
+            warn_title = "No Target Sync History"
+            warning = (
+                f"[bold]{tgt}[/bold] has no readable sync history.\n\n"
+                "Its home contents will be overwritten by rsync --delete. "
+                "If you have made changes on that machine since the last sync, "
+                "those changes will be lost.\n\n"
+                "Run [bold]pc-switcher sync --dry-run[/bold] to preview "
+                "what would be deleted before committing to a live sync."
+            )
+        elif target_peer is not None and target_peer != src:
+            # W2: machine-C — target last synced with a third machine
+            direction = "received a sync from" if target_role == SyncRole.TARGET else "sent a sync to"
+            warn_title = "Target Last Synced with a Different Machine"
+            warning = (
+                f"[bold]{tgt}[/bold] most recently {direction} [bold]{target_peer}[/bold], "
+                f"not this machine ([bold]{src}[/bold]).\n\n"
+                f"Proceeding will overwrite that state. If [bold]{target_peer}[/bold] "
+                f"pushed independent changes to [bold]{tgt}[/bold], those changes will be lost.\n\n"
+                "Run [bold]pc-switcher sync --dry-run[/bold] to preview "
+                "what would be deleted before committing to a live sync."
+            )
+        else:
+            # W3: consecutive push — target looks clean but this source is pushing again
+            warn_title = "Consecutive Sync — No Back-Sync Received"
+            warning = (
+                f"You are syncing from [bold]{src}[/bold] to [bold]{tgt}[/bold] again "
+                "without receiving a sync back first.\n\n"
+                f"[bold]{tgt}[/bold] shows it last synced with this machine. "
+                f"If you made changes on [bold]{tgt}[/bold] since then and have not "
+                "synced them back, those changes will be lost.\n\n"
+                "Run [bold]pc-switcher sync --dry-run[/bold] to preview "
+                "what would be deleted before committing to a live sync."
+            )
+
+        if self._dry_run:
+            # ADR-014: dry-run is a read-only rehearsal — log the warning, never abort
+            self._logger.warning(
+                "%s — skipping confirmation in dry-run mode",
+                warn_title,
+                extra={"job": "orchestrator", "host": "source"},
+            )
+            return True
+
+        if not sys.stdin.isatty():
+            self._console.print(f"[yellow]Warning: {warn_title}[/yellow]")
+            self._console.print(warning)
+            self._console.print("\nUse [bold]--allow-out-of-order[/bold] to proceed in non-interactive mode.")
             return False
 
+        # Interactive: pause UI, show warning panel, prompt user, resume UI
         self._ui.stop()
-
         try:
             self._console.print()
             self._console.print(
                 Panel(
-                    "[yellow]Warning: You are syncing FROM this machine again "
-                    "without receiving a sync back first.[/yellow]\n\n"
-                    "The normal workflow is:\n"
-                    "  1. Sync FROM this machine TO another\n"
-                    "  2. Work on the other machine\n"
-                    "  3. Sync FROM the other machine BACK to this one\n"
-                    "  4. Then sync FROM this machine again\n\n"
-                    "You appear to be at step 4 without completing step 3.\n"
-                    "Continuing may overwrite changes made on the target machine.",
-                    title="Consecutive Sync Warning",
+                    warning,
+                    title=warn_title,
                     border_style="yellow",
                 )
             )
             self._console.print()
-
             response = Prompt.ask(
                 "[bold]Continue anyway?[/bold]",
                 choices=["y", "n"],
                 default="n",
             )
-
             return response.lower() == "y"
         finally:
             self._ui.start()
@@ -466,21 +524,23 @@ class Orchestrator:
         """Update sync history on both source and target machines.
 
         After a successful sync:
-        - Source machine's history: last_role = SOURCE
-        - Target machine's history: last_role = TARGET
+        - Source machine's history: last_role = SOURCE, last_peer = target hostname
+        - Target machine's history: last_role = TARGET, last_peer = source hostname
 
-        This enables the consecutive sync warning to work correctly.
+        Recording `last_peer` on both ends enables the topology out-of-order check
+        to distinguish the clean A→B / B→A pattern from the machine-C and
+        consecutive-push cases on the next sync.
 
         Raises:
             RuntimeError: If history update fails on either machine.
         """
         # Update local (source) history
-        record_role(SyncRole.SOURCE)
+        record_role(SyncRole.SOURCE, peer=self._target_hostname)
         self._logger.debug("Updated sync history: role=source", extra={"job": "orchestrator", "host": "source"})
 
         # Update remote (target) history via SSH
         if self._remote_executor is not None:
-            cmd = get_record_role_command(SyncRole.TARGET)
+            cmd = get_record_role_command(SyncRole.TARGET, peer=self._source_hostname)
             result = await self._remote_executor.run_command(cmd)
             if not result.success:
                 raise RuntimeError(f"Failed to update sync history on target: {result.stderr}")

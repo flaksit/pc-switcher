@@ -40,7 +40,6 @@ def fail_when(substring: str, stderr: str) -> Callable[..., CommandResult]:
 def make_context(
     config: dict[str, Any] | None = None,
     dry_run: bool = False,
-    allow_divergence: bool = False,
 ) -> JobContext:
     """Create a JobContext with mocked source/target executors."""
     source = MagicMock()
@@ -56,7 +55,6 @@ def make_context(
         source_hostname="source-host",
         target_hostname="target-host",
         dry_run=dry_run,
-        allow_divergence=allow_divergence,
     )
 
 
