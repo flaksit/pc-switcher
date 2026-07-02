@@ -12,15 +12,14 @@ import pytest
 from pcswitcher import sync_history
 from pcswitcher.sync_history import (
     HISTORY_DIR,
-    UNKNOWN_GENERATION,
     SyncRole,
     get_history_path,
     get_last_role,
     get_last_role_with_error,
+    get_last_sync_state,
     get_record_role_command,
-    get_target_generation,
+    parse_sync_state,
     record_role,
-    set_target_generation,
 )
 
 
@@ -155,6 +154,126 @@ class TestRecordRole:
         record_role(SyncRole.TARGET)
         assert get_last_role() == SyncRole.TARGET
 
+    def test_writes_peer_when_provided(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """record_role(role, peer) writes last_peer alongside last_role."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        record_role(SyncRole.TARGET, peer="workstation-a")
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        data = json.loads(history_path.read_text())
+        assert data["last_role"] == "target"
+        assert data["last_peer"] == "workstation-a"
+
+    def test_omits_peer_when_not_provided(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """record_role(role) without peer does not add last_peer to a fresh file."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        record_role(SyncRole.SOURCE)
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        data = json.loads(history_path.read_text())
+        assert "last_peer" not in data
+
+    def test_preserves_unrelated_keys_on_merge(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """record_role must not erase unrelated keys present in the file."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text(json.dumps({"last_role": "source", "custom_key": "preserved"}))
+        record_role(SyncRole.TARGET, peer="laptop-b")
+        data = json.loads(history_path.read_text())
+        assert data["last_role"] == "target"
+        assert data["last_peer"] == "laptop-b"
+        assert data["custom_key"] == "preserved", "merge-preserving write must keep unrelated keys"
+
+
+class TestParseSyncState:
+    """Tests for parse_sync_state function (pure JSON parser for remote history)."""
+
+    def test_exported_in_all(self) -> None:
+        """parse_sync_state must be listed in __all__."""
+        assert "parse_sync_state" in sync_history.__all__
+
+    def test_valid_target_with_peer(self) -> None:
+        """Returns (TARGET, peer) for valid JSON with target role and last_peer."""
+        role, peer = parse_sync_state('{"last_role": "target", "last_peer": "pc1"}')
+        assert role is SyncRole.TARGET
+        assert peer == "pc1"
+
+    def test_valid_source_with_peer(self) -> None:
+        """Returns (SOURCE, peer) for valid JSON with source role and last_peer."""
+        role, peer = parse_sync_state('{"last_role": "source", "last_peer": "laptop-b"}')
+        assert role is SyncRole.SOURCE
+        assert peer == "laptop-b"
+
+    def test_valid_role_without_peer(self) -> None:
+        """Returns (role, None) when last_peer key is absent."""
+        role, peer = parse_sync_state('{"last_role": "source"}')
+        assert role is SyncRole.SOURCE
+        assert peer is None
+
+    def test_malformed_json(self) -> None:
+        """Returns (None, None) for non-JSON input."""
+        assert parse_sync_state("not json at all") == (None, None)
+
+    def test_non_dict_json(self) -> None:
+        """Returns (None, None) when JSON root is not a dict."""
+        assert parse_sync_state('["source", "target"]') == (None, None)
+
+    def test_missing_last_role_key(self) -> None:
+        """Returns (None, None) when last_role key is absent."""
+        assert parse_sync_state('{"last_peer": "pc1"}') == (None, None)
+
+    def test_invalid_role_value(self) -> None:
+        """Returns (None, None) for an unrecognised last_role string."""
+        assert parse_sync_state('{"last_role": "admin", "last_peer": "pc1"}') == (None, None)
+
+    def test_non_string_peer_value(self) -> None:
+        """Returns (role, None) when last_peer is present but not a string."""
+        role, peer = parse_sync_state('{"last_role": "source", "last_peer": 42}')
+        assert role is SyncRole.SOURCE
+        assert peer is None
+
+    def test_empty_string(self) -> None:
+        """Returns (None, None) for an empty input string."""
+        assert parse_sync_state("") == (None, None)
+
+
+class TestGetLastSyncState:
+    """Tests for get_last_sync_state function (reads local history file)."""
+
+    def test_exported_in_all(self) -> None:
+        """get_last_sync_state must be listed in __all__."""
+        assert "get_last_sync_state" in sync_history.__all__
+
+    def test_returns_none_none_when_file_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns (None, None) when no history file exists."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert get_last_sync_state() == (None, None)
+
+    def test_returns_role_and_peer_from_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns (SyncRole.TARGET, peer) when history contains both fields."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text('{"last_role": "target", "last_peer": "pc1"}')
+        role, peer = get_last_sync_state()
+        assert role is SyncRole.TARGET
+        assert peer == "pc1"
+
+    def test_returns_none_none_for_corrupt_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns (None, None) when history file is not valid JSON."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text("corrupt{{")
+        assert get_last_sync_state() == (None, None)
+
+    def test_round_trips_with_record_role(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """record_role followed by get_last_sync_state returns the persisted (role, peer)."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        record_role(SyncRole.SOURCE, peer="workstation-a")
+        role, peer = get_last_sync_state()
+        assert role is SyncRole.SOURCE
+        assert peer == "workstation-a"
+
 
 class TestGetRecordRoleCommand:
     """Tests for get_record_role_command function."""
@@ -175,19 +294,47 @@ class TestGetRecordRoleCommand:
         assert "last_role" in cmd
         assert SyncRole.TARGET.value in cmd  # "target"
 
+    def test_command_includes_last_peer_when_provided(self) -> None:
+        """Command string mentions last_peer when peer argument is given."""
+        cmd = get_record_role_command(SyncRole.SOURCE, peer="workstation-a")
+        assert "last_peer" in cmd
+        assert "workstation-a" in cmd
+
+    def test_command_omits_last_peer_when_not_provided(self) -> None:
+        """Command string does not mention last_peer when peer is omitted."""
+        cmd = get_record_role_command(SyncRole.SOURCE)
+        assert "last_peer" not in cmd
+
+    def test_remote_command_writes_last_peer(self, tmp_path: Path) -> None:
+        """Executing the command writes last_peer into the remote history file."""
+        cmd = get_record_role_command(SyncRole.TARGET, peer="laptop-b")
+        result = subprocess.run(
+            cmd,
+            check=False,
+            shell=True,
+            env={**os.environ, "HOME": str(tmp_path)},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"Remote command failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+
+        history_file = tmp_path / ".local" / "share" / "pc-switcher" / "sync-history.json"
+        actual = json.loads(history_file.read_text())
+        assert actual["last_role"] == "target"
+        assert actual["last_peer"] == "laptop-b"
+
     def test_remote_command_is_merge_preserving(self, tmp_path: Path) -> None:
-        """Executing the remote command preserves an existing target_generations map."""
-        # Pre-seed sync-history.json with last_role and target_generations
+        """Executing the remote command preserves existing keys; also writes last_peer."""
         history_dir = tmp_path / ".local" / "share" / "pc-switcher"
         history_dir.mkdir(parents=True)
         history_file = history_dir / "sync-history.json"
         initial_data: dict[str, object] = {
             "last_role": "source",
-            "target_generations": {"host-b": {"/home": 54321, "/root": 1234}},
+            "custom_key": "must_survive",
         }
         history_file.write_text(json.dumps(initial_data))
 
-        cmd = get_record_role_command(SyncRole.TARGET)
+        cmd = get_record_role_command(SyncRole.TARGET, peer="workstation-a")
         result = subprocess.run(
             cmd,
             check=False,
@@ -200,9 +347,8 @@ class TestGetRecordRoleCommand:
 
         actual = json.loads(history_file.read_text())
         assert actual["last_role"] == "target", "last_role should be updated to target"
-        assert actual["target_generations"] == {"host-b": {"/home": 54321, "/root": 1234}}, (
-            "target_generations should be preserved unchanged"
-        )
+        assert actual["last_peer"] == "workstation-a", "last_peer should be written"
+        assert actual["custom_key"] == "must_survive", "unrelated keys must be preserved"
 
     def test_remote_command_creates_file_when_missing(self, tmp_path: Path) -> None:
         """Executing the remote command creates the file when no prior history exists."""
@@ -221,149 +367,3 @@ class TestGetRecordRoleCommand:
         assert history_file.exists()
         actual = json.loads(history_file.read_text())
         assert actual["last_role"] == "source"
-
-
-class TestGetTargetGeneration:
-    """Tests for get_target_generation function."""
-
-    def test_returns_none_when_no_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns None when sync-history.json does not exist."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        assert get_target_generation("host-b", "/home") is None
-
-    def test_returns_none_for_old_format_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns None when the file has only last_role (pre-extension format)."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text('{"last_role": "source"}')
-        assert get_target_generation("host-b", "/home") is None
-
-    def test_returns_none_for_missing_target(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns None when the target host has no entry in target_generations."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text(
-            json.dumps({"last_role": "source", "target_generations": {"other-host": {"/home": 1}}})
-        )
-        assert get_target_generation("host-b", "/home") is None
-
-    def test_returns_none_for_missing_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns None when the path has no entry for the given host."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text(json.dumps({"target_generations": {"host-b": {"/root": 999}}}))
-        assert get_target_generation("host-b", "/home") is None
-
-    def test_round_trip_single_pair(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """set then get returns the same generation for a single (host, path) pair."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        set_target_generation("host-b", "/home", 54321)
-        assert get_target_generation("host-b", "/home") == 54321
-
-    def test_round_trip_multiple_pairs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """round-trip works independently for multiple (host, path) pairs."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        set_target_generation("host-b", "/home", 100)
-        set_target_generation("host-b", "/root", 200)
-        set_target_generation("host-c", "/home", 300)
-
-        assert get_target_generation("host-b", "/home") == 100
-        assert get_target_generation("host-b", "/root") == 200
-        assert get_target_generation("host-c", "/home") == 300
-        # Unset entries still return None
-        assert get_target_generation("host-c", "/root") is None
-
-
-class TestSetTargetGeneration:
-    """Tests for set_target_generation function."""
-
-    def test_creates_file_when_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Creates the history file and parent directories when they do not exist."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
-        assert not history_path.exists()
-        set_target_generation("host-b", "/home", 42)
-        assert history_path.exists()
-        data = json.loads(history_path.read_text())
-        assert data["target_generations"]["host-b"]["/home"] == 42
-
-    def test_preserves_existing_last_role(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """set_target_generation does not erase an existing last_role value."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text('{"last_role": "source"}')
-        set_target_generation("host-b", "/home", 99)
-        data = json.loads(history_path.read_text())
-        assert data["last_role"] == "source", "last_role must be preserved by set_target_generation"
-        assert data["target_generations"]["host-b"]["/home"] == 99
-
-    def test_preserves_other_targets(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Updating one target does not remove entries for other targets."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        set_target_generation("host-b", "/home", 10)
-        set_target_generation("host-c", "/home", 20)
-        # Updating host-b must not touch host-c
-        set_target_generation("host-b", "/home", 11)
-        assert get_target_generation("host-c", "/home") == 20
-
-    def test_updates_existing_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Calling set_target_generation twice updates the value in place."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        set_target_generation("host-b", "/home", 100)
-        set_target_generation("host-b", "/home", 200)
-        assert get_target_generation("host-b", "/home") == 200
-
-
-class TestRecordRoleMergePreserving:
-    """Tests that record_role preserves target_generations (Pitfall 4 guard)."""
-
-    def test_record_role_preserves_target_generations(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """record_role(SOURCE) must not erase a target_generations map written earlier."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        # Simulate FolderSyncJob writing a divergence marker before record_role is called
-        set_target_generation("host-b", "/home", 54321)
-        # Now record_role as source — this must preserve the marker
-        record_role(SyncRole.SOURCE)
-        assert get_last_role() == SyncRole.SOURCE
-        assert get_target_generation("host-b", "/home") == 54321, (
-            "record_role must not erase target_generations (Pitfall 4)"
-        )
-
-    def test_record_role_preserves_target_generations_on_role_switch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Switching role from SOURCE to TARGET must not erase target_generations."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        set_target_generation("host-b", "/home", 1000)
-        record_role(SyncRole.SOURCE)
-        record_role(SyncRole.TARGET)
-        assert get_last_role() == SyncRole.TARGET
-        assert get_target_generation("host-b", "/home") == 1000
-
-
-class TestUnknownGenerationSentinel:
-    """Tests for the UNKNOWN_GENERATION sentinel constant (added for CR-02/WR-02)."""
-
-    def test_unknown_generation_is_negative_one_and_exported(self) -> None:
-        """UNKNOWN_GENERATION must equal -1 and be exported in __all__."""
-        assert UNKNOWN_GENERATION == -1
-        assert "UNKNOWN_GENERATION" in sync_history.__all__
-
-    def test_unknown_generation_sentinel_round_trips(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """set then get with UNKNOWN_GENERATION returns UNKNOWN_GENERATION, not None.
-
-        UNKNOWN_GENERATION is a valid stored value distinct from None (never synced).
-        Callers use None vs UNKNOWN_GENERATION to distinguish "never synced" from
-        "baseline could not be established last run" — the two require different handling:
-        the former is fail-open (first sync), the latter is fail-closed (guard is active).
-        """
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        set_target_generation("host-b", "/home", UNKNOWN_GENERATION)
-        result = get_target_generation("host-b", "/home")
-        assert result == UNKNOWN_GENERATION
-        # Confirm it is distinct from None (the "never synced" marker)
-        assert result is not None
