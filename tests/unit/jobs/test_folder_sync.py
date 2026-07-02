@@ -8,18 +8,15 @@ All executor interactions are mocked; no real SSH connections are made.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import shlex
-import sys
 from collections.abc import Callable
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from pcswitcher.confirmer import Confirmer, TerminalUIConfirmer
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.folder_sync import FolderEntry, FolderSyncJob
 from pcswitcher.models import CommandResult, Host, LogLevel, ProgressUpdate
@@ -40,72 +37,15 @@ def fail_when(substring: str, stderr: str) -> Callable[..., CommandResult]:
     return _side_effect
 
 
-def _history_json(role: str = "target", peer: str = "source-host") -> str:
-    """Produce a target sync-history JSON payload (non-first-sync marker)."""
-    return json.dumps({"last_role": role, "last_peer": peer})
-
-
-def _mock_isatty(interactive: bool) -> MagicMock:
-    """Create a mock for sys.stdin whose isatty() returns `interactive`."""
-    mock_stdin = MagicMock()
-    mock_stdin.isatty.return_value = interactive
-    return mock_stdin
-
-
-class FakeConfirmer:
-    """A Confirmer stub that records calls and returns a fixed answer.
-
-    Satisfies the Confirmer protocol without touching the console/TUI, so first-sync
-    tests can assert whether the job prompted and control the yes/no outcome.
-    """
-
-    def __init__(self, response: bool = True) -> None:
-        self.response = response
-        self.calls: list[dict[str, Any]] = []
-
-    async def confirm(
-        self,
-        *,
-        title: str,
-        message: str,
-        allow: bool,
-        allow_flag: str,
-        log_extra: dict[str, Any] | None = None,
-    ) -> bool:
-        self.calls.append({"title": title, "message": message, "allow": allow, "allow_flag": allow_flag})
-        return self.response
-
-
 def make_context(
     config: dict[str, Any] | None = None,
     dry_run: bool = False,
-    *,
-    first_sync: bool = False,
-    allow_first_sync: bool = False,
-    confirmer: Confirmer | None = None,
 ) -> JobContext:
-    """Create a JobContext with mocked source/target executors.
-
-    By default the target reports a readable sync-history (non-first sync), so
-    execute() skips the first-sync confirmation. Pass ``first_sync=True`` to make the
-    target's history read come back empty (a first-ever sync).
-    """
+    """Create a JobContext with mocked source/target executors."""
     source = MagicMock()
     source.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
     target = MagicMock()
-    if first_sync:
-        # Empty stdout from the sync-history read → treated as a first-ever sync.
-        target.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
-    else:
-
-        def _target_side_effect(cmd: str, **_: object) -> CommandResult:
-            # The first-sync probe reads sync-history.json; return valid history so the
-            # job classifies the target as already-synced. Everything else succeeds.
-            if "sync-history.json" in cmd:
-                return CommandResult(exit_code=0, stdout=_history_json(), stderr="")
-            return CommandResult(exit_code=0, stdout="", stderr="")
-
-        target.run_command = AsyncMock(side_effect=_target_side_effect)
+    target.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
     return JobContext(
         config=config if config is not None else {"folders": [{"path": "/home"}]},
         source=source,
@@ -115,8 +55,6 @@ def make_context(
         source_hostname="source-host",
         target_hostname="target-host",
         dry_run=dry_run,
-        allow_first_sync=allow_first_sync,
-        confirmer=confirmer,
     )
 
 
@@ -627,128 +565,3 @@ class TestExecuteNormalMode:
 
         # A CRITICAL-level record must have been emitted
         assert any(r.levelno == LogLevel.CRITICAL for r in caplog.records)
-
-
-# ---------------------------------------------------------------------------
-# First-sync overwrite confirmation (ADR-015 refinement)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-class TestFirstSyncDetection:
-    """_target_is_first_sync classifies the target from its sync-history read."""
-
-    async def test_empty_history_is_first_sync(self) -> None:
-        """Empty stdout from the history read → first sync."""
-        ctx = make_context(first_sync=True)
-        job = FolderSyncJob(ctx)
-        assert await job._target_is_first_sync() is True
-
-    async def test_failed_read_is_first_sync(self) -> None:
-        """Non-zero exit (file absent) → first sync."""
-        ctx = make_context()
-        ctx.target.run_command = AsyncMock(return_value=CommandResult(exit_code=1, stdout="", stderr=""))
-        job = FolderSyncJob(ctx)
-        assert await job._target_is_first_sync() is True
-
-    async def test_corrupt_history_is_first_sync(self) -> None:
-        """Unparsable history JSON → first sync (safety-first)."""
-        ctx = make_context()
-        ctx.target.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="not json", stderr=""))
-        job = FolderSyncJob(ctx)
-        assert await job._target_is_first_sync() is True
-
-    async def test_readable_history_is_not_first_sync(self) -> None:
-        """Valid history JSON → not a first sync."""
-        ctx = make_context()  # default: readable history
-        job = FolderSyncJob(ctx)
-        assert await job._target_is_first_sync() is False
-
-
-@pytest.mark.asyncio
-class TestFirstSyncConfirmation:
-    """execute() confirms the overwrite before the first-ever destructive transfer."""
-
-    async def test_interactive_yes_proceeds(self) -> None:
-        """First sync + user confirms → rsync runs."""
-        confirmer = FakeConfirmer(response=True)
-        ctx = make_context(first_sync=True, confirmer=confirmer)
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-
-        job = FolderSyncJob(ctx)
-        await job.execute()
-
-        assert len(confirmer.calls) == 1
-        assert confirmer.calls[0]["allow_flag"] == "--allow-first-sync"
-        ctx.source.start_process.assert_called_once()
-
-    async def test_interactive_no_aborts(self) -> None:
-        """First sync + user declines → RuntimeError, no rsync."""
-        confirmer = FakeConfirmer(response=False)
-        ctx = make_context(first_sync=True, confirmer=confirmer)
-        ctx.source.start_process = AsyncMock(return_value=make_fake_process())
-
-        job = FolderSyncJob(ctx)
-        with pytest.raises(RuntimeError, match="--allow-first-sync"):
-            await job.execute()
-
-        ctx.source.start_process.assert_not_called()
-
-    async def test_non_interactive_without_flag_aborts(self) -> None:
-        """First sync, no TTY, no --allow-first-sync → RuntimeError via the real confirmer."""
-        console = MagicMock()
-        ui = MagicMock()
-        confirmer = TerminalUIConfirmer(console, ui)
-        ctx = make_context(first_sync=True, allow_first_sync=False, confirmer=confirmer)
-        ctx.source.start_process = AsyncMock(return_value=make_fake_process())
-
-        job = FolderSyncJob(ctx)
-        with patch.object(sys, "stdin", _mock_isatty(False)), pytest.raises(RuntimeError, match="--allow-first-sync"):
-            await job.execute()
-
-        ctx.source.start_process.assert_not_called()
-
-    async def test_non_interactive_with_flag_proceeds(self) -> None:
-        """First sync, no TTY, --allow-first-sync set → auto-approved, rsync runs."""
-        console = MagicMock()
-        ui = MagicMock()
-        confirmer = TerminalUIConfirmer(console, ui)
-        ctx = make_context(first_sync=True, allow_first_sync=True, confirmer=confirmer)
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-
-        job = FolderSyncJob(ctx)
-        with patch.object(sys, "stdin", _mock_isatty(False)):
-            await job.execute()
-
-        ctx.source.start_process.assert_called_once()
-
-    async def test_dry_run_first_sync_proceeds_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        """First sync under --dry-run logs a WARNING and proceeds without prompting."""
-        confirmer = FakeConfirmer(response=False)  # would abort if consulted
-        ctx = make_context(first_sync=True, dry_run=True, confirmer=confirmer)
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-
-        job = FolderSyncJob(ctx)
-        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
-            await job.execute()
-
-        # Confirmer must NOT be consulted in dry-run; rsync (with --dry-run) still runs.
-        assert confirmer.calls == []
-        ctx.source.start_process.assert_called_once()
-        assert any(r.levelno == LogLevel.WARNING and "First sync" in r.getMessage() for r in caplog.records)
-
-    async def test_non_first_sync_does_not_prompt(self) -> None:
-        """A target with readable history is not a first sync → confirmer is never consulted."""
-        confirmer = FakeConfirmer(response=False)  # would abort if wrongly consulted
-        ctx = make_context(confirmer=confirmer)  # default: readable history
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-
-        job = FolderSyncJob(ctx)
-        await job.execute()
-
-        assert confirmer.calls == []
-        ctx.source.start_process.assert_called_once()

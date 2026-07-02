@@ -1,17 +1,16 @@
-"""Unit tests for the orchestrator out-of-order / target-state topology check.
+"""Unit tests for the orchestrator target-state pre-flight check (_check_out_of_order).
 
-Covers _check_out_of_order() across all truth-table cases:
+Covers both gates the pre-flight dispatches to (ADR-015):
 - Clean case (target_peer == source, no consecutive push) → silent True
-- W3: consecutive push to a clean target → interactive prompt / non-interactive False
-- W2: machine-C (target last synced with a different peer) → warns
-- No/unreadable target history → first sync, deferred to FolderSyncJob (silent True here)
-- --allow-out-of-order → bypass (always True, no reading/prompting)
-- dry-run with a warn condition → True without prompting (ADR-014)
+- W1 (no readable target history = FIRST SYNC): confirmed via --allow-first-sync
+- W2: machine-C (target last synced with a different peer) → confirmed via --allow-out-of-order
+- W3: consecutive push to a clean target → confirmed via --allow-out-of-order
+- --allow-out-of-order → bypass W2/W3 (still reads history to detect first sync)
+- dry-run with any warn condition → True without prompting (ADR-014)
 
-Per the ADR-015 refinement, a target with no readable sync history is a first-ever
-sync, not an out-of-order sync. The orchestrator no longer warns on it; the
-first-sync overwrite confirmation is owned by FolderSyncJob (see
-tests/unit/jobs/test_folder_sync.py).
+Per the ADR-015 refinement, first-sync (W1) and out-of-order (W2/W3) are distinct
+gates with distinct flags, but BOTH are orchestrator-level pre-flight checks — the
+"first sync overwrites the target" question is asked once centrally, not per-job.
 """
 
 from __future__ import annotations
@@ -59,6 +58,7 @@ def _make_orchestrator(
     *,
     target: str = "target-host",
     allow_out_of_order: bool = False,
+    allow_first_sync: bool = False,
     dry_run: bool = False,
     remote_stdout: str = "",
     remote_exit_code: int = 0,
@@ -74,6 +74,7 @@ def _make_orchestrator(
         target=target,
         config=mock_config,
         allow_out_of_order=allow_out_of_order,
+        allow_first_sync=allow_first_sync,
         dry_run=dry_run,
     )
     orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
@@ -327,75 +328,54 @@ class TestCheckOutOfOrderW2MachineC:
 
 
 # ---------------------------------------------------------------------------
-# No / unreadable target history → first sync, deferred to FolderSyncJob
+# W1: no / unreadable target history → first sync (orchestrator-level, --allow-first-sync)
 # ---------------------------------------------------------------------------
 
 
-class TestCheckOutOfOrderFirstSyncDeferred:
-    """A target with no readable sync history is a first sync, not out-of-order.
+class TestCheckFirstSync:
+    """W1: a target with no readable sync history is a first-ever sync.
 
-    The orchestrator must proceed (return True) without prompting or warning; the
-    first-sync overwrite confirmation is owned by FolderSyncJob (ADR-015 refinement).
+    Handled by the orchestrator pre-flight and gated by --allow-first-sync (distinct
+    from the W2/W3 --allow-out-of-order gate). The overwrite question is asked once
+    centrally, not per-job (ADR-015).
     """
 
     @pytest.mark.asyncio
-    async def test_target_history_missing_returns_true_without_prompt(
+    async def test_first_sync_interactive_accepts(
         self,
         mock_config: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Cat returns empty (file not found) → first sync → proceed, no prompt."""
+        """Missing target history, interactive user answers 'y' → True, prompt shown."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         orchestrator = _make_orchestrator(
             mock_config,
             target="target-host",
-            remote_stdout="",  # empty → no readable history
+            remote_stdout="",  # empty → no readable history → first sync
             remote_exit_code=1,
         )
         orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
 
-        with patch.object(sys, "stdin", _mock_isatty(False)):
+        with (
+            patch("rich.prompt.Prompt.ask", return_value="y"),
+            patch.object(sys, "stdin", _mock_isatty(True)),
+        ):
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is True
-        # No out-of-order prompt and no console warning: this is deferred to the job.
-        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
-        cast(MagicMock, orchestrator._console).print.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).start.assert_called_once()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
-    async def test_target_history_corrupt_json_returns_true_without_prompt(
+    async def test_first_sync_interactive_declines(
         self,
         mock_config: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Cat returns corrupted JSON → parse_sync_state (None, None) → first sync → proceed."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        orchestrator = _make_orchestrator(
-            mock_config,
-            target="target-host",
-            remote_stdout="not valid json",
-            remote_exit_code=0,
-        )
-        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
-
-        with patch.object(sys, "stdin", _mock_isatty(False)):
-            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
-
-        assert result is True
-        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
-
-    @pytest.mark.asyncio
-    async def test_target_history_missing_interactive_does_not_prompt(
-        self,
-        mock_config: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Even interactively, missing target history proceeds without an out-of-order prompt."""
+        """Missing target history, interactive user answers 'n' → False."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         orchestrator = _make_orchestrator(
@@ -407,47 +387,173 @@ class TestCheckOutOfOrderFirstSyncDeferred:
         orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
 
         with (
-            patch("rich.prompt.Prompt.ask", return_value="y") as mock_ask,
+            patch("rich.prompt.Prompt.ask", return_value="n"),
             patch.object(sys, "stdin", _mock_isatty(True)),
         ):
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
-        assert result is True
-        mock_ask.assert_not_called()
-        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
-
-
-# ---------------------------------------------------------------------------
-# --allow-out-of-order bypass
-# ---------------------------------------------------------------------------
-
-
-class TestCheckOutOfOrderBypass:
-    """--allow-out-of-order bypasses all reading and prompting."""
+        assert result is False
 
     @pytest.mark.asyncio
-    async def test_allow_out_of_order_returns_true_without_reading(
+    async def test_first_sync_corrupt_json_prompts(
         self,
         mock_config: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """With allow_out_of_order=True the check is bypassed entirely."""
+        """Corrupt target history (parse → None) is treated as a first sync and prompts."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            remote_stdout="not valid json",
+            remote_exit_code=0,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with (
+            patch("rich.prompt.Prompt.ask", return_value="y"),
+            patch.object(sys, "stdin", _mock_isatty(True)),
+        ):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        cast(MagicMock, orchestrator._ui).stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_first_sync_non_interactive_without_flag_returns_false(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First sync, no TTY, no --allow-first-sync → False, message printed."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is False
+        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._console).print.assert_called()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_first_sync_non_interactive_with_flag_returns_true(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First sync, no TTY, --allow-first-sync set → auto-approved (True)."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            allow_first_sync=True,
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_first_sync_not_gated_by_allow_out_of_order(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """--allow-out-of-order does NOT bypass the first-sync gate (distinct flag)."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            allow_out_of_order=True,  # must not auto-approve a first sync
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_first_sync_dry_run_returns_true(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First sync under --dry-run logs a warning and proceeds without prompting."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            dry_run=True,
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        cast(MagicMock, orchestrator._logger).warning.assert_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+
+# ---------------------------------------------------------------------------
+# --allow-out-of-order bypass (W2/W3 only; history is still read for first-sync)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckOutOfOrderBypass:
+    """--allow-out-of-order bypasses the W2/W3 prompt but not the first-sync gate."""
+
+    @pytest.mark.asyncio
+    async def test_allow_out_of_order_bypasses_w2_prompt(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With allow_out_of_order=True a W2 (machine-C) history proceeds without prompting."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         orchestrator = _make_orchestrator(
             mock_config,
             target="target-host",
             allow_out_of_order=True,
-            remote_stdout=_history_json("source", "other-host"),
+            remote_stdout=_history_json("source", "other-host"),  # W2, readable history
         )
         orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
 
         result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is True
-        # Remote executor must NOT have been called (check bypassed before SSH read)
-        cast(MagicMock, orchestrator._remote_executor).run_command.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        # History IS read (needed to distinguish first-sync from out-of-order),
+        # but no prompt is shown for the bypassed W2/W3 case.
+        cast(MagicMock, orchestrator._remote_executor).run_command.assert_called()  # pyright: ignore[reportPrivateUsage]
         cast(MagicMock, orchestrator._ui).stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
 
     def test_orchestrator_accepts_allow_out_of_order(self, mock_config: MagicMock) -> None:
@@ -463,6 +569,20 @@ class TestCheckOutOfOrderBypass:
         """allow_out_of_order defaults to False."""
         orchestrator = Orchestrator(target="test-target", config=mock_config)
         assert orchestrator._allow_out_of_order is False  # pyright: ignore[reportPrivateUsage]
+
+    def test_orchestrator_accepts_allow_first_sync(self, mock_config: MagicMock) -> None:
+        """Orchestrator.__init__ stores allow_first_sync."""
+        orchestrator = Orchestrator(
+            target="test-target",
+            config=mock_config,
+            allow_first_sync=True,
+        )
+        assert orchestrator._allow_first_sync is True  # pyright: ignore[reportPrivateUsage]
+
+    def test_orchestrator_defaults_allow_first_sync_to_false(self, mock_config: MagicMock) -> None:
+        """allow_first_sync defaults to False."""
+        orchestrator = Orchestrator(target="test-target", config=mock_config)
+        assert orchestrator._allow_first_sync is False  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------

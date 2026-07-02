@@ -400,38 +400,92 @@ class Orchestrator:
 
         self._logger.info("Configuration sync completed", extra={"job": "orchestrator", "host": "target"})
 
+    def _first_sync_scope(self) -> list[str]:
+        """Return the enabled folder paths in scope of the folder_sync job, for messaging.
+
+        Read from the folder_sync job config so the first-sync overwrite warning can
+        name exactly what will be replaced on the target. Returns an empty list when
+        folder_sync is absent or has no folders (the warning then falls back to a
+        generic phrasing).
+        """
+        folder_cfg = self._config.job_configs.get("folder_sync", {})
+        folders = folder_cfg.get("folders", [])
+        return [
+            f["path"]
+            for f in folders
+            if isinstance(f, dict) and f.get("enabled", True) and isinstance(f.get("path"), str)
+        ]
+
+    async def _confirm_first_sync(self) -> bool:
+        """Confirm the overwrite of a target that has never been synced (first sync).
+
+        A first sync (no readable target sync-history) is semantically distinct from an
+        out-of-order sync: there is no prior topology to reconcile, the destructive
+        `rsync --delete` transfer simply replaces everything in scope of the configured
+        sync jobs on the target. Because this question is common to all jobs, it is asked
+        once here (after the target lock) rather than per-job.
+
+        Gated by --allow-first-sync (distinct from the W2/W3 --allow-out-of-order gate).
+        Under --dry-run the warning is logged but never aborts (ADR-014).
+
+        Returns:
+            True if the sync should proceed, False if the user declined.
+        """
+        assert self._confirmer is not None
+
+        tgt = self._target_hostname
+        scope = self._first_sync_scope()
+        scope_line = "\n".join(f"  {path}" for path in scope) if scope else "  (all folders configured for sync)"
+        warn_title = "First Sync — Target Will Be Overwritten"
+        warning = (
+            f"[bold]{tgt}[/bold] has never been synced by pc-switcher (no sync history).\n\n"
+            "This first-ever sync will overwrite everything on the target that is in scope of "
+            "the configured sync jobs (rsync --delete), except configured exclusions. In scope:\n\n"
+            f"{scope_line}\n\n"
+            f"Any independent data on [bold]{tgt}[/bold] within that scope will be lost.\n\n"
+            "Run [bold]pc-switcher sync --dry-run[/bold] to preview what would change first."
+        )
+
+        if self._dry_run:
+            # ADR-014: dry-run is a read-only rehearsal — log the warning, never abort.
+            self._logger.warning(
+                "%s — skipping confirmation in dry-run mode",
+                warn_title,
+                extra={"job": "orchestrator", "host": "target"},
+            )
+            return True
+
+        return await self._confirmer.confirm(
+            title=warn_title,
+            message=warning,
+            allow=self._allow_first_sync,
+            allow_flag="--allow-first-sync",
+            log_extra={"job": "orchestrator", "host": "target"},
+        )
+
     async def _check_out_of_order(self) -> bool:
-        """Check topology state and warn when this sync may overwrite independent target changes.
+        """Pre-flight target-state check run after the target lock (reads target sync-history over SSH).
 
-        Runs after acquiring the target lock so we can read the target's sync-history
-        over the established SSH connection. Compares `last_role` and `last_peer` on
-        both machines to detect two out-of-order situations that warrant a heads-up:
+        Reads `last_role`/`last_peer` from both machines once, then dispatches to the
+        confirmation appropriate to the situation. Two independent gates:
 
-        - W2: target last synced with a different machine (machine-C scenario)
-        - W3: consecutive push — this source is pushing to the same target again
-              without a back-sync in between (GitHub #159)
+        - W1 (first sync): target has no readable sync-history. Overwriting an untracked
+          target is a distinct question with its own flag — handled by
+          `_confirm_first_sync`, gated by --allow-first-sync.
+        - W2/W3 (out-of-order): target last synced with a different machine (machine-C),
+          or this source is pushing again without a back-sync (GitHub #159). Gated by
+          --allow-out-of-order.
 
-        A target with no readable sync history is NOT out-of-order — it is a
-        first-ever sync. That case is semantically distinct and is handled by
-        FolderSyncJob's own first-sync overwrite confirmation (ADR-015 refinement),
-        so this check proceeds (returns True) and defers to the job.
-
-        The clean A→B / work / B→A / A→B pattern always proceeds silently.
-        Bypassed by --allow-out-of-order. Under --dry-run the warning is logged
-        but never aborts (ADR-014: dry-run is a read-only rehearsal).
+        The clean A→B / work / B→A / A→B pattern always proceeds silently. All prompts go
+        through the shared Confirmer; under --dry-run every gate logs and proceeds
+        (ADR-014). Both checks live in the orchestrator so the overwrite question is asked
+        once centrally rather than per-job (ADR-015).
 
         Returns:
             True if sync should proceed, False if aborted.
         """
         assert self._remote_executor is not None
         assert self._confirmer is not None
-
-        if self._allow_out_of_order:
-            self._logger.info(
-                "Out-of-order topology check bypassed by --allow-out-of-order",
-                extra={"job": "orchestrator", "host": "source"},
-            )
-            return True
 
         src = self._source_hostname
         tgt = self._target_hostname
@@ -446,12 +500,15 @@ class Orchestrator:
             parse_sync_state(target_stdout) if cat_result.success and target_stdout else (None, None)
         )
 
+        # W1: no readable/parseable target history → first-ever sync (own flag).
         if target_role is None:
-            # No readable/parseable target history → first sync, not out-of-order.
-            # FolderSyncJob issues the first-sync overwrite confirmation (ADR-015).
+            return await self._confirm_first_sync()
+
+        # W2/W3 (out-of-order) — bypassed by --allow-out-of-order.
+        if self._allow_out_of_order:
             self._logger.info(
-                "Target has no readable sync history; first-sync confirmation deferred to FolderSyncJob",
-                extra={"job": "orchestrator", "host": "target"},
+                "Out-of-order topology check bypassed by --allow-out-of-order",
+                extra={"job": "orchestrator", "host": "source"},
             )
             return True
 
