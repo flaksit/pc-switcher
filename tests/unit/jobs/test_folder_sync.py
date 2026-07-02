@@ -12,6 +12,7 @@ import logging
 import re
 import shlex
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -40,6 +41,7 @@ def fail_when(substring: str, stderr: str) -> Callable[..., CommandResult]:
 def make_context(
     config: dict[str, Any] | None = None,
     dry_run: bool = False,
+    target_username: str | None = None,
 ) -> JobContext:
     """Create a JobContext with mocked source/target executors."""
     source = MagicMock()
@@ -55,6 +57,7 @@ def make_context(
         source_hostname="source-host",
         target_hostname="target-host",
         dry_run=dry_run,
+        target_username=target_username,
     )
 
 
@@ -268,8 +271,9 @@ class TestBuildRsyncCmd:
         path: str = "/home",
         excludes: list[str] | None = None,
         dry_run: bool = False,
+        target_username: str | None = "testuser",
     ) -> str:
-        ctx = make_context(config={"folders": [{"path": path}]})
+        ctx = make_context(config={"folders": [{"path": path}]}, target_username=target_username)
         job = FolderSyncJob(ctx)
         folder = FolderEntry(path=path, excludes=excludes or [])
         return job._build_rsync_cmd(folder, dry_run)
@@ -285,12 +289,13 @@ class TestBuildRsyncCmd:
         assert "--mkpath" in cmd
 
     def test_root_via_sudo_and_ssh_transport(self) -> None:
-        """Command uses --rsync-path='sudo rsync' for remote root and an -e ssh option with -T."""
+        """Command uses --rsync-path='sudo rsync' for remote root and an -e ssh option with -T and -l."""
         cmd = self._build()
         # Remote root via sudo (target side)
         assert "--rsync-path='sudo rsync'" in cmd
-        # SSH transport with -T (no pseudo-tty)
+        # SSH transport with -T (no pseudo-tty) and explicit login user
         assert "-T" in cmd
+        assert "-l testuser" in cmd
 
     def test_no_forbidden_flags(self) -> None:
         """Command never includes --delete-excluded or --checksum (D-06, D-14)."""
@@ -346,6 +351,97 @@ class TestBuildRsyncCmd:
         cmd = self._build(path="/home/user name", excludes=excludes)
         # The path with a space must be quoted in the command
         assert "/home/user name/" not in cmd or "'/home/user name/'" in cmd
+
+
+# ---------------------------------------------------------------------------
+# SSH transport credential tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildRsyncCmdSSHTransport:
+    """Verify explicit SSH credentials in the -e transport of _build_rsync_cmd.
+
+    When sudo launches rsync as root, the spawned ssh binary resolves ~/.ssh
+    from root's passwd entry (/root/.ssh), ignoring $HOME.  The fix passes
+    the invoking user's credentials explicitly via -l, -i, -o UserKnownHostsFile=,
+    and optionally -F.  These tests control HOME and create fake ~/.ssh files so
+    assertions are deterministic regardless of the test runner's actual dotfiles.
+    """
+
+    def _build_in_fake_home(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        target_username: str | None = "alice",
+        ssh_files: list[str] | None = None,
+    ) -> str:
+        """Create a controlled fake ~/.ssh, then build the rsync command."""
+        # Redirect Path.home() to tmp_path via $HOME (Path.home() reads $HOME on Linux).
+        monkeypatch.setenv("HOME", str(tmp_path))
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir(parents=True, exist_ok=True)
+        for fname in ssh_files or []:
+            (ssh_dir / fname).write_text("placeholder")
+
+        ctx = make_context(
+            config={"folders": [{"path": "/home"}]},
+            target_username=target_username,
+        )
+        job = FolderSyncJob(ctx)
+        return job._build_rsync_cmd(FolderEntry(path="/home"), False)
+
+    def test_target_username_from_context_used_as_l_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """target_username from context appears as -l <user> in the ssh command."""
+        cmd = self._build_in_fake_home(tmp_path, monkeypatch, target_username="alice")
+        assert "-l alice" in cmd
+
+    def test_falls_back_to_getpass_when_target_username_is_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When context.target_username is None, getpass.getuser() fills the -l flag."""
+        monkeypatch.setattr("getpass.getuser", lambda: "fallbackuser")
+        cmd = self._build_in_fake_home(tmp_path, monkeypatch, target_username=None)
+        assert "-l fallbackuser" in cmd
+
+    def test_identity_file_included_when_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A present ~/.ssh/id_ed25519 produces -i <path> in the ssh command."""
+        cmd = self._build_in_fake_home(tmp_path, monkeypatch, target_username="alice", ssh_files=["id_ed25519"])
+        assert "-i" in cmd
+        assert "id_ed25519" in cmd
+
+    def test_no_identity_flag_when_no_keys_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When no default key files exist under ~/.ssh, no -i key paths appear."""
+        cmd = self._build_in_fake_home(tmp_path, monkeypatch, target_username="alice", ssh_files=[])
+        # Assert by key name, not by the bare flag substring, because --numeric-ids
+        # and --info in the rsync flags also contain "-i" as a substring.
+        assert "id_ed25519" not in cmd
+        assert "id_ecdsa" not in cmd
+        assert "id_rsa" not in cmd
+
+    def test_known_hosts_option_when_file_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A present ~/.ssh/known_hosts produces -o UserKnownHostsFile=<path>."""
+        cmd = self._build_in_fake_home(tmp_path, monkeypatch, target_username="alice", ssh_files=["known_hosts"])
+        assert "UserKnownHostsFile=" in cmd
+        assert "known_hosts" in cmd
+
+    def test_no_known_hosts_option_when_file_absent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When ~/.ssh/known_hosts is absent, UserKnownHostsFile does not appear."""
+        cmd = self._build_in_fake_home(tmp_path, monkeypatch, target_username="alice", ssh_files=[])
+        assert "UserKnownHostsFile" not in cmd
+
+    def test_ssh_config_flag_when_config_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A present ~/.ssh/config produces -F <path> in the ssh command."""
+        cmd = self._build_in_fake_home(tmp_path, monkeypatch, target_username="alice", ssh_files=["config"])
+        assert "-F" in cmd
+        assert "config" in cmd
+
+    def test_no_ssh_config_flag_when_config_absent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """-F is absent when ~/.ssh/config does not exist (ssh errors on -F <missing>)."""
+        cmd = self._build_in_fake_home(tmp_path, monkeypatch, target_username="alice", ssh_files=[])
+        assert "-F" not in cmd
 
 
 # ---------------------------------------------------------------------------

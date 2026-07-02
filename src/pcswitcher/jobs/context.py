@@ -27,3 +27,7 @@ class JobContext:
     # Interactive confirmation gate for destructive job actions (ADR-015 refinement).
     # Optional so lightweight test contexts can omit it; jobs that prompt assert it is set.
     confirmer: Confirmer | None = None
+    # SSH username on the target, resolved from the live asyncssh connection.
+    # Optional so existing lightweight test contexts (which don't set up a real connection)
+    # keep working; jobs that need it fall back to getpass.getuser() when None.
+    target_username: str | None = None

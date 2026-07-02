@@ -12,10 +12,12 @@ rsync transfer.
 
 from __future__ import annotations
 
+import getpass
 import re
 import shlex
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar
 
 from pcswitcher.jobs.base import SyncJob
@@ -186,9 +188,8 @@ class FolderSyncJob(SyncJob):
         """Build the rsync shell command for syncing a single folder.
 
         Produces a command that:
-        - Runs as root on source via `sudo -E rsync` (preserves SSH_AUTH_SOCK and
-          $HOME so root's rsync subprocess can reach the target's ~/.ssh/config —
-          Pitfall 1 from RESEARCH.md).
+        - Runs as root on source via `sudo -E rsync` (preserves SSH_AUTH_SOCK
+          so the ssh agent socket remains accessible).
         - Elevates to root on target via `--rsync-path='sudo rsync'` over the
           normal-user SSH connection (D-05); root SSH login stays disabled.
         - Uses the D-13 flag baseline: -aAXHS + --numeric-ids + --delete.
@@ -198,6 +199,14 @@ class FolderSyncJob(SyncJob):
 
         All config-derived values (folder path, exclude patterns, target hostname)
         are shlex.quote'd to prevent shell injection (T-05-01).
+
+        SSH transport note: `sudo -E rsync` runs rsync as root, and the ssh it
+        spawns also runs as root.  OpenSSH resolves `~/.ssh` from the running
+        uid's passwd entry (root → /root/.ssh) regardless of the $HOME variable.
+        Passing explicit credentials (-l, -i, -o UserKnownHostsFile=, -F) with
+        the invoking user's paths is the correct fix; relying on $HOME does NOT
+        work (empirically verified on target VMs: ssh fails with "Host key
+        verification failed" / rsync exit 255 without explicit credentials).
         """
         parts = [
             "sudo",
@@ -215,10 +224,37 @@ class FolderSyncJob(SyncJob):
         if dry_run:
             parts.append("--dry-run")
 
-        # SSH transport: no pseudo-tty (-T), quiet (-q) to suppress host banner.
-        # sudo -E above preserves $HOME and SSH_AUTH_SOCK so the ssh subprocess
-        # uses the invoking user's ~/.ssh/config and agent (Pitfall 1).
-        parts.append(f"-e {shlex.quote('ssh -T -q')}")
+        # Build explicit SSH credentials for the -e transport.
+        # Background: sudo launches rsync as root; root's ssh resolves ~/.ssh
+        # from /root/.ssh (uid lookup), not from $HOME.  Passing the invoking
+        # user's assets explicitly is the verified fix (see docstring).
+        home = Path.home()
+        ssh_dir = home / ".ssh"
+        target_user = self.context.target_username or getpass.getuser()
+
+        ssh_tokens: list[str] = ["ssh", "-T", "-q", "-l", target_user]
+
+        # -F before host-name flags so it takes effect for all connection params.
+        config_file = ssh_dir / "config"
+        if config_file.exists():
+            ssh_tokens += ["-F", str(config_file)]
+
+        known_hosts_file = ssh_dir / "known_hosts"
+        if known_hosts_file.exists():
+            ssh_tokens += ["-o", f"UserKnownHostsFile={known_hosts_file}"]
+
+        # Offer all default key types that exist; ssh tries each in order.
+        # SSH_AUTH_SOCK (preserved by sudo -E) is also available when an agent
+        # is running, but explicit -i keys cover the no-agent case.
+        for key_name in ("id_ed25519", "id_ecdsa", "id_rsa"):
+            key_file = ssh_dir / key_name
+            if key_file.exists():
+                ssh_tokens += ["-i", str(key_file)]
+
+        # shlex.join quotes individual tokens (handles spaces in paths).
+        # shlex.quote wraps the assembled command for the outer -e argument.
+        ssh_cmd = shlex.join(ssh_tokens)
+        parts.append(f"-e {shlex.quote(ssh_cmd)}")
 
         # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
         parts.append(f"--rsync-path={shlex.quote('sudo rsync')}")

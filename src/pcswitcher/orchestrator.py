@@ -146,6 +146,10 @@ class Orchestrator:
             dry_run=self._dry_run,
             allow_first_sync=self._allow_first_sync,
             confirmer=self._confirmer,
+            # Connection is always set when _create_job_context is called in
+            # production (Phase 2+), but unit tests mock executors without a
+            # real connection, so fall back to None (JobContext accepts it).
+            target_username=self._connection.username if self._connection is not None else None,
         )
 
     async def run(self) -> SyncSession:  # noqa: PLR0915
