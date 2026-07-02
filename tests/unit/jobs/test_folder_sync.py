@@ -1,8 +1,7 @@
 """Unit tests for FolderSyncJob.
 
 Tests cover: active-folder selection, validate() preflight (sudo rsync, acl, folder
-existence), and the target-divergence guard (first-sync, untouched, diverged, dry-run,
-allow_divergence, consecutive-source-sync cases).
+existence), rsync command construction, and transfer streaming/exit-code handling.
 
 All executor interactions are mocked; no real SSH connections are made.
 """
@@ -14,11 +13,10 @@ import re
 import shlex
 from collections.abc import Callable
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from pcswitcher import sync_history
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.folder_sync import FolderEntry, FolderSyncJob
 from pcswitcher.models import CommandResult, Host, LogLevel, ProgressUpdate
@@ -237,9 +235,7 @@ class TestValidatePreflight:
         )
 
     async def test_execute_stub_no_longer_raises_not_implemented(self) -> None:
-        """execute() no longer raises NotImplementedError — it is implemented in plan 05."""
-        # This test documents the transition; once execute() is fully implemented it will
-        # run rsync. For isolation we mock start_process to avoid real subprocesses.
+        """execute() no longer raises NotImplementedError — it is implemented."""
         ctx = make_context()
 
         async def fake_chunks(*_: object, **__: object):  # type: ignore[no-untyped-def]
@@ -251,20 +247,9 @@ class TestValidatePreflight:
         fake_proc.wait_result = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
         ctx.source.start_process = AsyncMock(return_value=fake_proc)
 
-        # Mock subvolume resolution so the divergence marker write succeeds
-        async def target_cmd_ok(cmd: str, **_: object) -> CommandResult:
-            if "findmnt" in cmd:
-                return CommandResult(exit_code=0, stdout="/home", stderr="")
-            if "btrfs subvolume show" in cmd:
-                return CommandResult(exit_code=0, stdout="Generation: 100\n", stderr="")
-            return CommandResult(exit_code=0, stdout="", stderr="")
-
-        ctx.target.run_command = AsyncMock(side_effect=target_cmd_ok)
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
-            job = FolderSyncJob(ctx)
-            # Must NOT raise NotImplementedError; must complete without error.
-            await job.execute()
+        job = FolderSyncJob(ctx)
+        # Must NOT raise NotImplementedError; must complete without error.
+        await job.execute()
 
 
 # ---------------------------------------------------------------------------
@@ -363,375 +348,6 @@ class TestBuildRsyncCmd:
         cmd = self._build(path="/home/user name", excludes=excludes)
         # The path with a space must be quoted in the command
         assert "/home/user name/" not in cmd or "'/home/user name/'" in cmd
-
-
-# ---------------------------------------------------------------------------
-# Task 2: Target-divergence guard
-# ---------------------------------------------------------------------------
-
-# btrfs subvolume show output for /home (own subvolume)
-_BTRFS_SHOW_HOME = """\
-Name: \t\t\thome
-UUID: \t\t\tabc123
-Parent UUID: \t\t-
-Received UUID: \t\t-
-Creation time: \t\t2024-01-01 00:00:00 +0000
-Subvolume ID: \t\t256
-Generation: \t\t1000
-Gen at creation: \t1
-Parent ID: \t\t5
-Top level ID: \t\t5
-Flags: \t\t\t-
-Send transid: \t\t0
-Send time: \t\t2024-01-01 00:00:00 +0000
-Receive transid: \t0
-Receive time: \t\t-
-Snapshot(s):
-"""
-
-# findmnt output when /home is its own subvolume
-_FINDMNT_HOME = "/home"
-
-# find-new output with no changes (target untouched)
-_FIND_NEW_EMPTY = "transid marker was 1000\n"
-
-# find-new output showing a changed file
-_FIND_NEW_WITH_CHANGES = (
-    "inode 1234 file offset 0 len 4096 disk start 0 offset 0 gen 1001 flags UNKNOWN path/to/changed/file\n"
-    "transid marker was 1000\n"
-)
-
-# find-new output where ONLY the pc-switcher sync-history/lock file changed.
-# These are written by the post-sync baseline capture and role-record steps on the
-# target's @home after the baseline is taken; they are not user divergence (CR-01).
-_FIND_NEW_TOOLSTATE_ONLY = (
-    "inode 5678 file offset 0 len 4096 disk start 0 offset 0 gen 1001 flags UNKNOWN "
-    "janfr/.local/share/pc-switcher/sync-history.json\n"
-    "transid marker was 1000\n"
-)
-
-# find-new output where ONLY the pc-switcher config.yaml changed.
-# Written by Phase-8 config sync (_copy_config_to_target) before job execution;
-# also not user divergence for the empty-prefix subvolume-root case (CR-01).
-_FIND_NEW_CONFIG_ONLY = (
-    "inode 9012 file offset 0 len 4096 disk start 0 offset 0 gen 1001 flags UNKNOWN "
-    "janfr/.config/pc-switcher/config.yaml\n"
-    "transid marker was 1000\n"
-)
-
-
-@pytest.mark.asyncio
-class TestDivergenceGuard:
-    """validate() target-divergence guard (D-06/D-07/D-08/D-18)."""
-
-    def _make_target_cmds(
-        self,
-        *,
-        findmnt_output: str = _FINDMNT_HOME,
-        findmnt_exit: int = 0,
-        btrfs_show_output: str = _BTRFS_SHOW_HOME,
-        find_new_output: str = _FIND_NEW_EMPTY,
-        find_new_exit: int = 0,
-    ):
-        """Build a target run_command side_effect for divergence tests."""
-
-        async def side_effect(cmd: str, **kw: object) -> CommandResult:
-            if "findmnt" in cmd:
-                return CommandResult(exit_code=findmnt_exit, stdout=findmnt_output, stderr="")
-            if "btrfs subvolume show" in cmd:
-                return CommandResult(exit_code=0, stdout=btrfs_show_output, stderr="")
-            if "find-new" in cmd:
-                stderr = "btrfs error" if find_new_exit != 0 else ""
-                return CommandResult(exit_code=find_new_exit, stdout=find_new_output, stderr=stderr)
-            # Default: succeed (rsync version, acl checks)
-            return CommandResult(exit_code=0, stdout="", stderr="")
-
-        return side_effect
-
-    async def test_first_sync_no_stored_baseline(self) -> None:
-        """No divergence error on first sync (stored baseline is None)."""
-        ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds())
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=None):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert not any(e.host == Host.TARGET and "diverge" in e.message.lower() for e in errors)
-
-    async def test_unmodified_target_no_error(self) -> None:
-        """No divergence error when find-new reports no changed files."""
-        ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_EMPTY))
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert not any("diverge" in e.message.lower() for e in errors)
-
-    async def test_diverged_target_raises_error(self) -> None:
-        """ValidationError for HOST.TARGET when target has changed since last sync (default mode)."""
-        ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_WITH_CHANGES))
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert any(e.host == Host.TARGET and "diverge" in e.message.lower() for e in errors)
-
-    async def test_diverged_target_dry_run_warning_no_error(self) -> None:
-        """Under dry_run=True, a detected divergence is logged at WARNING and does NOT block."""
-        ctx = make_context(config={"folders": [{"path": "/home"}]}, dry_run=True)
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_WITH_CHANGES))
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert not any("diverge" in e.message.lower() for e in errors)
-
-    async def test_diverged_target_allow_divergence_no_error(self) -> None:
-        """Under allow_divergence=True, a detected divergence is logged at WARNING and does NOT block."""
-        ctx = make_context(config={"folders": [{"path": "/home"}]}, allow_divergence=True)
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_WITH_CHANGES))
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert not any("diverge" in e.message.lower() for e in errors)
-
-    async def test_consecutive_source_syncs_ok(self) -> None:
-        """Two consecutive source→target syncs with untouched target produce no divergence error (D-07)."""
-        ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_EMPTY))
-
-        # Simulate a stored baseline that matches current state (target untouched)
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors_first = await job.validate()
-
-        assert not any("diverge" in e.message.lower() for e in errors_first)
-
-        # Second validate call (same target, still untouched)
-        ctx2 = make_context(config={"folders": [{"path": "/home"}]})
-        ctx2.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_EMPTY))
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job2 = FolderSyncJob(ctx2)
-            errors_second = await job2.validate()
-
-        assert not any("diverge" in e.message.lower() for e in errors_second)
-
-    async def test_divergence_commands_shell_quote_folder_path(self) -> None:
-        """Divergence guard commands that embed folder.path use shlex.quote (T-04-01)."""
-        ctx = make_context(config={"folders": [{"path": "/home/user name"}]})
-        target_cmds: list[str] = []
-
-        async def record_target(cmd: str, **kw: object) -> CommandResult:
-            target_cmds.append(cmd)
-            if "findmnt" in cmd:
-                return CommandResult(exit_code=0, stdout="/home/user name", stderr="")
-            if "btrfs subvolume show" in cmd:
-                return CommandResult(exit_code=0, stdout=_BTRFS_SHOW_HOME, stderr="")
-            if "find-new" in cmd:
-                return CommandResult(exit_code=0, stdout=_FIND_NEW_EMPTY, stderr="")
-            return CommandResult(exit_code=0, stdout="", stderr="")
-
-        ctx.target.run_command = AsyncMock(side_effect=record_target)
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            await job.validate()
-
-        path_cmds = [c for c in target_cmds if "/home/user name" in c]
-        assert all("'/home/user name'" in c or '"/home/user name"' in c for c in path_cmds), (
-            f"Unquoted path found in: {path_cmds}"
-        )
-
-    async def test_no_btrfs_subvolume_no_baseline_proceeds(self) -> None:
-        """When findmnt cannot find a btrfs subvolume AND there is no stored baseline, sync proceeds (Open Q3).
-
-        No-baseline + unresolvable mount = never synced or first sync to a non-btrfs path.
-        The guard is fail-open for this case per RESEARCH Open Q3.
-        """
-        ctx = make_context(config={"folders": [{"path": "/root"}]})
-
-        async def target_side_effect(cmd: str, **kw: object) -> CommandResult:
-            if "findmnt" in cmd:
-                # Simulate non-btrfs or unmounted path
-                return CommandResult(exit_code=1, stdout="", stderr="not found")
-            return CommandResult(exit_code=0, stdout="", stderr="")
-
-        ctx.target.run_command = AsyncMock(side_effect=target_side_effect)
-
-        # No stored baseline → first sync path → proceed regardless of subvolume resolution
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=None):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert not any("diverge" in e.message.lower() for e in errors)
-
-    async def test_no_btrfs_with_stored_baseline_fails_closed(self) -> None:
-        """When findmnt fails AND a baseline is stored, validate() must fail closed (CR-02).
-
-        A stored baseline means a previous sync succeeded and the guard is active.
-        If the subvolume cannot be resolved on the current run, the target state is
-        UNVERIFIABLE — it is unsafe to let rsync --delete proceed.
-        """
-        ctx = make_context(config={"folders": [{"path": "/root"}]})
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(findmnt_exit=1))
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert any(e.host == Host.TARGET for e in errors), (
-            "Stored baseline + unresolvable subvolume must produce a blocking error (CR-02)"
-        )
-
-    async def test_toolstate_write_under_empty_prefix_not_divergence(self) -> None:
-        """For empty prefix (subvolume root), a find-new line under .local/share/pc-switcher/ is NOT divergence.
-
-        pc-switcher's own post-sync writes (sync-history.json, lock) bump @home after
-        the baseline is captured.  For the default /home config these are tool state,
-        not user divergence (CR-01).
-        """
-        ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_TOOLSTATE_ONLY)
-        )
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert not any("diverge" in e.message.lower() for e in errors), (
-            "Tool-state write under empty prefix must not trigger divergence (CR-01)"
-        )
-
-    async def test_config_write_under_empty_prefix_not_divergence(self) -> None:
-        """For empty prefix (subvolume root), a find-new line under .config/pc-switcher/ is NOT divergence.
-
-        Phase-8 config sync writes ~/.config/pc-switcher/config.yaml on the target BEFORE
-        the folder-sync job runs, bumping @home. For the default /home config this is
-        also tool state, not user divergence (CR-01).
-        """
-        ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_output=_FIND_NEW_CONFIG_ONLY))
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert not any("diverge" in e.message.lower() for e in errors), (
-            "Phase-8 config.yaml write under empty prefix must not trigger divergence (CR-01)"
-        )
-
-    async def test_toolstate_path_under_nonempty_prefix_is_divergence(self) -> None:
-        """For a non-empty prefix, a pc-switcher-looking path IS real divergence (Codex HIGH #2).
-
-        The tool-state filter is ONLY valid for the empty-prefix / subvolume-root case.
-        For a non-empty synced root (e.g. /home/user/synced), a change under a
-        .local/share/pc-switcher/ subpath is user data and must still block the sync.
-        """
-        # Synced folder is a subdirectory, not the subvolume root → non-empty prefix
-        ctx = make_context(config={"folders": [{"path": "/home/janfr/synced"}]})
-
-        # findmnt returns /home (the actual subvolume mount), so prefix = "janfr/synced"
-        find_new_nonempty_toolstate = (
-            "inode 5678 file offset 0 len 4096 disk start 0 offset 0 gen 1001 flags UNKNOWN "
-            "janfr/synced/.local/share/pc-switcher/sync-history.json\n"
-            "transid marker was 1000\n"
-        )
-
-        async def target_side_effect(cmd: str, **kw: object) -> CommandResult:
-            if "findmnt" in cmd:
-                return CommandResult(exit_code=0, stdout="/home", stderr="")
-            if "find-new" in cmd:
-                return CommandResult(exit_code=0, stdout=find_new_nonempty_toolstate, stderr="")
-            return CommandResult(exit_code=0, stdout="", stderr="")
-
-        ctx.target.run_command = AsyncMock(side_effect=target_side_effect)
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert any(e.host == Host.TARGET and "diverge" in e.message.lower() for e in errors), (
-            "Non-empty-prefix pc-switcher-looking path must be treated as real divergence (Codex HIGH #2)"
-        )
-
-    async def test_unverifiable_with_baseline_fails_closed(self) -> None:
-        """When find-new exits non-zero AND a baseline is stored, validate() must fail closed (CR-02)."""
-        ctx = make_context(config={"folders": [{"path": "/home"}]})
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_exit=1))
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert any(e.host == Host.TARGET for e in errors), (
-            "Stored baseline + failed find-new must produce a blocking ValidationError (CR-02)"
-        )
-
-    async def test_unverifiable_under_allow_divergence_proceeds(self) -> None:
-        """Under allow_divergence=True, an UNVERIFIABLE result is logged at WARNING and does not block."""
-        ctx = make_context(config={"folders": [{"path": "/home"}]}, allow_divergence=True)
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_exit=1))
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert not errors, "allow_divergence must suppress the blocking error even for UNVERIFIABLE"
-
-    async def test_unverifiable_under_dry_run_proceeds(self) -> None:
-        """Under dry_run=True, an UNVERIFIABLE result is logged at WARNING and does not block."""
-        ctx = make_context(config={"folders": [{"path": "/home"}]}, dry_run=True)
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_cmds(find_new_exit=1))
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=900):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert not errors, "dry_run must suppress the blocking error even for UNVERIFIABLE"
-
-    async def test_unknown_generation_baseline_fails_closed(self) -> None:
-        """When the stored generation is UNKNOWN_GENERATION, validate() must fail closed without querying target.
-
-        UNKNOWN_GENERATION means the previous run captured no reliable generation.
-        The guard short-circuits: it does NOT query the target (no find-new call)
-        and immediately returns UNVERIFIABLE → blocking error (CR-02/WR-02 sentinel read path).
-        """
-        ctx = make_context(config={"folders": [{"path": "/home"}]})
-        target_cmds: list[str] = []
-
-        async def recording_target(cmd: str, **kw: object) -> CommandResult:
-            target_cmds.append(cmd)
-            if "findmnt" in cmd:
-                return CommandResult(exit_code=0, stdout="/home", stderr="")
-            if "btrfs subvolume show" in cmd:
-                return CommandResult(exit_code=0, stdout=_BTRFS_SHOW_HOME, stderr="")
-            return CommandResult(exit_code=0, stdout="", stderr="")
-
-        ctx.target.run_command = AsyncMock(side_effect=recording_target)
-
-        with patch(
-            "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
-            return_value=sync_history.UNKNOWN_GENERATION,
-        ):
-            job = FolderSyncJob(ctx)
-            errors = await job.validate()
-
-        assert any(e.host == Host.TARGET for e in errors), (
-            "UNKNOWN_GENERATION sentinel must produce a blocking error (CR-02/WR-02)"
-        )
-        # find-new must NOT be called — the sentinel short-circuits before any target query
-        assert not any("find-new" in cmd for cmd in target_cmds), (
-            "UNKNOWN_GENERATION sentinel must short-circuit without querying target via find-new"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -898,19 +514,7 @@ class TestStreamRsync:
 
 @pytest.mark.asyncio
 class TestExecuteDryRun:
-    """execute() in dry-run mode: rsync runs with --dry-run; no marker is recorded."""
-
-    async def test_dry_run_does_not_call_set_target_generation(self) -> None:
-        """In dry-run mode, execute() never calls set_target_generation (D-12)."""
-        ctx = make_context(dry_run=True)
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation") as mock_set:
-            job = FolderSyncJob(ctx)
-            await job.execute()
-
-        mock_set.assert_not_called()
+    """execute() in dry-run mode: rsync runs with --dry-run."""
 
     async def test_dry_run_rsync_command_includes_dry_run_flag(self) -> None:
         """In dry-run mode, the rsync command passed to start_process contains --dry-run."""
@@ -918,9 +522,8 @@ class TestExecuteDryRun:
         fake_proc = make_fake_process()
         ctx.source.start_process = AsyncMock(return_value=fake_proc)
 
-        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
-            job = FolderSyncJob(ctx)
-            await job.execute()
+        job = FolderSyncJob(ctx)
+        await job.execute()
 
         called_cmd: str = ctx.source.start_process.call_args[0][0]
         assert "--dry-run" in called_cmd
@@ -928,57 +531,16 @@ class TestExecuteDryRun:
 
 @pytest.mark.asyncio
 class TestExecuteNormalMode:
-    """execute() in normal mode: rsync runs; divergence baseline is recorded per folder."""
-
-    def _make_target_for_execute(
-        self,
-        *,
-        home_mount: str = "/home",
-        root_mount: str | None = None,
-        btrfs_show_exit: int = 0,
-    ):
-        """Build a target run_command side_effect for execute() tests."""
-
-        async def side_effect(cmd: str, **kw: object) -> CommandResult:
-            if "findmnt" in cmd:
-                if "/home" in cmd:
-                    return CommandResult(exit_code=0, stdout=home_mount, stderr="")
-                if root_mount and "/root" in cmd:
-                    return CommandResult(exit_code=0, stdout=root_mount, stderr="")
-            if "btrfs subvolume show" in cmd:
-                if btrfs_show_exit != 0:
-                    return CommandResult(exit_code=btrfs_show_exit, stdout="", stderr="btrfs error")
-                return CommandResult(exit_code=0, stdout="Generation: 1234\n", stderr="")
-            return CommandResult(exit_code=0, stdout="", stderr="")
-
-        return side_effect
-
-    async def test_normal_mode_calls_set_target_generation_once_per_folder(self) -> None:
-        """After a successful sync, set_target_generation is called once per active folder."""
-        ctx = make_context(config={"folders": [{"path": "/home"}, {"path": "/root"}]})
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_for_execute(home_mount="/home", root_mount="/")
-        )
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation") as mock_set:
-            job = FolderSyncJob(ctx)
-            await job.execute()
-
-        # Two active folders → two set_target_generation calls
-        assert mock_set.call_count == 2
+    """execute() in normal mode: rsync transfer and exit-code handling."""
 
     async def test_normal_mode_does_not_add_dry_run_flag(self) -> None:
         """In normal mode, the rsync command does NOT contain --dry-run."""
         ctx = make_context()
         fake_proc = make_fake_process()
         ctx.source.start_process = AsyncMock(return_value=fake_proc)
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_for_execute())
 
-        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"):
-            job = FolderSyncJob(ctx)
-            await job.execute()
+        job = FolderSyncJob(ctx)
+        await job.execute()
 
         called_cmd: str = ctx.source.start_process.call_args[0][0]
         assert "--dry-run" not in called_cmd
@@ -995,7 +557,6 @@ class TestExecuteNormalMode:
 
     async def test_non_zero_rsync_exit_logs_critical(self, caplog: pytest.LogCaptureFixture) -> None:
         """A non-zero rsync exit causes a CRITICAL log (level 50) before raising."""
-
         ctx = make_context()
         fake_proc = make_fake_process(exit_code=23, stderr="partial transfer due to error")
         ctx.source.start_process = AsyncMock(return_value=fake_proc)
@@ -1006,184 +567,3 @@ class TestExecuteNormalMode:
 
         # A CRITICAL-level record must have been emitted
         assert any(r.levelno == LogLevel.CRITICAL for r in caplog.records)
-
-    async def test_set_target_generation_not_called_on_rsync_failure(self) -> None:
-        """If rsync fails, set_target_generation is never called (sync aborted)."""
-        ctx = make_context()
-        fake_proc = make_fake_process(exit_code=1, stderr="error")
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation") as mock_set:
-            job = FolderSyncJob(ctx)
-            with pytest.raises(RuntimeError):
-                await job.execute()
-
-        mock_set.assert_not_called()
-
-    async def test_divergence_baseline_uses_target_subvolume_generation(self) -> None:
-        """set_target_generation is called with the queried target subvolume generation."""
-        ctx = make_context()
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_for_execute(home_mount="/home"))
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation") as mock_set:
-            job = FolderSyncJob(ctx)
-            await job.execute()
-
-        # Check the generation value (parsed from "Generation: 1234\n")
-        call_args = mock_set.call_args_list[0]
-        assert call_args[0][2] == 1234  # third positional arg is generation
-
-    async def test_baseline_capture_failure_records_sentinel_and_does_not_raise(self) -> None:
-        """execute() must not raise when post-transfer baseline capture fails; must write UNKNOWN_GENERATION.
-
-        The rsync transfer already completed successfully — failing the job at this point
-        would discard transferred data for no benefit.  Instead, write UNKNOWN_GENERATION
-        so the NEXT run's divergence guard fails closed rather than silently skipping (WR-02).
-        """
-        ctx = make_context()
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-        # btrfs subvolume show fails → _get_subvolume_generation raises RuntimeError
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_for_execute(btrfs_show_exit=1))
-
-        with patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation") as mock_set:
-            job = FolderSyncJob(ctx)
-            # Must NOT raise — the rsync data transfer already completed
-            await job.execute()
-
-        # Sentinel must have been written for the folder so the next run fails closed
-        assert mock_set.call_count == 1, "Expected exactly one set_target_generation call (the sentinel)"
-        call_args = mock_set.call_args_list[0]
-        assert call_args[0][2] == sync_history.UNKNOWN_GENERATION, (
-            f"Expected UNKNOWN_GENERATION ({sync_history.UNKNOWN_GENERATION}) but got {call_args[0][2]}"
-        )
-
-
-@pytest.mark.asyncio
-class TestExecuteDivergenceRecheck:
-    """execute() re-checks divergence immediately before spawning rsync (WR-03 / T-09-01).
-
-    The Phase-4 validate() guard runs earlier in the orchestrator; a user write between
-    Phase 4 and Phase 9 would otherwise escape the pre-transfer guard.  execute() must
-    call _check_divergence(folder) *before* start_process for each folder, and abort
-    (raise RuntimeError) when the re-check returns a blocking error — unless dry_run or
-    allow_divergence, which inherit 01-07's override semantics.
-    """
-
-    def _make_target_for_recheck(
-        self,
-        *,
-        find_new_output: str = _FIND_NEW_EMPTY,
-        find_new_exit: int = 0,
-        home_mount: str = "/home",
-        btrfs_show_output: str = "Generation: 1234\n",
-    ):
-        """Build a target run_command side_effect that handles both re-check and baseline queries."""
-
-        async def side_effect(cmd: str, **kw: object) -> CommandResult:
-            if "findmnt" in cmd:
-                return CommandResult(exit_code=0, stdout=home_mount, stderr="")
-            if "find-new" in cmd:
-                stderr = "btrfs error" if find_new_exit != 0 else ""
-                return CommandResult(exit_code=find_new_exit, stdout=find_new_output, stderr=stderr)
-            if "btrfs subvolume show" in cmd:
-                return CommandResult(exit_code=0, stdout=btrfs_show_output, stderr="")
-            return CommandResult(exit_code=0, stdout="", stderr="")
-
-        return side_effect
-
-    async def test_recheck_blocks_destructive_rsync_when_target_diverged(self) -> None:
-        """execute() raises before calling start_process when re-check detects real divergence (WR-03).
-
-        A user write that arrives between Phase-4 validate() and Phase-9 execute() must
-        be caught here before any --delete runs.
-        """
-        ctx = make_context()
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_WITH_CHANGES)
-        )
-
-        with (
-            patch(
-                "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
-                return_value=900,
-            ),
-            patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"),
-        ):
-            job = FolderSyncJob(ctx)
-            with pytest.raises(RuntimeError):
-                await job.execute()
-
-        # rsync must NOT have been spawned — abort before any --delete
-        ctx.source.start_process.assert_not_called()
-
-    async def test_recheck_allows_when_clean(self) -> None:
-        """execute() proceeds and spawns rsync when the re-check finds no divergence (happy path)."""
-        ctx = make_context()
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-        ctx.target.run_command = AsyncMock(side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_EMPTY))
-
-        with (
-            patch(
-                "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
-                return_value=900,
-            ),
-            patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"),
-        ):
-            job = FolderSyncJob(ctx)
-            await job.execute()  # must not raise
-
-        ctx.source.start_process.assert_called_once()
-
-    async def test_recheck_does_not_block_under_allow_divergence(self) -> None:
-        """Under allow_divergence=True the re-check does not block even when the target is diverged."""
-        ctx = make_context(allow_divergence=True)
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_WITH_CHANGES)
-        )
-
-        with (
-            patch(
-                "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
-                return_value=900,
-            ),
-            patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"),
-        ):
-            job = FolderSyncJob(ctx)
-            await job.execute()  # must not raise under allow_divergence
-
-        ctx.source.start_process.assert_called_once()
-
-    async def test_recheck_ignores_phase8_config_write_for_empty_prefix(self) -> None:
-        """For the default /home (empty prefix), a Phase-8 config.yaml write does NOT block the re-check.
-
-        Phase-8 config sync writes ~/.config/pc-switcher/config.yaml before job execution.
-        01-07's empty-prefix tool-state filter must treat this as pc-switcher state, not
-        user divergence — execute() must proceed and spawn rsync (Codex HIGH #1).
-        """
-        ctx = make_context(config={"folders": [{"path": "/home"}]})
-        fake_proc = make_fake_process()
-        ctx.source.start_process = AsyncMock(return_value=fake_proc)
-        # find-new output contains ONLY the Phase-8 config.yaml write — no real user changes
-        ctx.target.run_command = AsyncMock(
-            side_effect=self._make_target_for_recheck(find_new_output=_FIND_NEW_CONFIG_ONLY)
-        )
-
-        with (
-            patch(
-                "pcswitcher.jobs.folder_sync.sync_history.get_target_generation",
-                return_value=900,
-            ),
-            patch("pcswitcher.jobs.folder_sync.sync_history.set_target_generation"),
-        ):
-            job = FolderSyncJob(ctx)
-            await job.execute()  # must not raise — config.yaml write is tool state
-
-        ctx.source.start_process.assert_called_once()

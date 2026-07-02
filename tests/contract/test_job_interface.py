@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -293,9 +293,8 @@ class TestFolderSyncJobContract:
     @pytest.mark.asyncio
     async def test_folder_sync_validate_returns_list(self, folder_sync_context: JobContext) -> None:
         """FolderSyncJob.validate() must return a list (of ValidationError)."""
-        with patch("pcswitcher.jobs.folder_sync.sync_history.get_target_generation", return_value=None):
-            job = FolderSyncJob(folder_sync_context)
-            errors = await job.validate()
+        job = FolderSyncJob(folder_sync_context)
+        errors = await job.validate()
         assert isinstance(errors, list)
 
 
