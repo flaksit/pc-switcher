@@ -314,6 +314,6 @@ async def _copy_config_to_target(target: RemoteExecutor, source_path: Path) -> N
     home_dir = result.stdout.strip()
 
     # Derive the absolute path from CONFIG_REMOTE_PATH by expanding the ~ prefix
-    config_remote_relpath = CONFIG_REMOTE_PATH.lstrip("~/")
+    config_remote_relpath = CONFIG_REMOTE_PATH.removeprefix("~/")
     absolute_remote_path = f"{home_dir}/{config_remote_relpath}"
     await target.send_file(source_path, absolute_remote_path)
