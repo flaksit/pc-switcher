@@ -507,9 +507,9 @@ printf 'pc2_private_key' > "$T/.ssh/id_rsa"
                 f"stdout: {sync_ab2.stdout}\nstderr: {sync_ab2.stderr}"
             )
             # An out-of-order trigger would produce non-zero exit with 'out-of-order' in output.
-            out_of_order_triggered = not sync_ab2.success and "out-of-order" in (
-                sync_ab2.stdout + sync_ab2.stderr
-            ).lower()
+            out_of_order_triggered = (
+                not sync_ab2.success and "out-of-order" in (sync_ab2.stdout + sync_ab2.stderr).lower()
+            )
             assert not out_of_order_triggered, (
                 "Second A→B triggered out-of-order warning after a normal round-trip (ADR-015 #159 violated)"
             )
@@ -604,8 +604,7 @@ printf 'pc2_private_key' > "$T/.ssh/id_rsa"
                 login_shell=False,
             )
             assert pc2_still_empty.success, (
-                f"pc2's test directory was created by --dry-run (must be read-only).\n"
-                f"stderr: {pc2_still_empty.stderr}"
+                f"pc2's test directory was created by --dry-run (must be read-only).\nstderr: {pc2_still_empty.stderr}"
             )
 
             # pc1's sync-history must not have changed (D-12: no state writes in dry-run).
@@ -638,8 +637,7 @@ printf 'pc2_private_key' > "$T/.ssh/id_rsa"
                 login_shell=False,
             )
             assert pc2_populated.success, (
-                f"pc2's test directory not populated after --allow-out-of-order sync.\n"
-                f"stderr: {pc2_populated.stderr}"
+                f"pc2's test directory not populated after --allow-out-of-order sync.\nstderr: {pc2_populated.stderr}"
             )
 
         finally:
