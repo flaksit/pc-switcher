@@ -11,10 +11,11 @@ pc1/pc2 Hetzner VMs (Ubuntu 24.04, btrfs @home at /home, sudo rsync, acl):
     present (A→B and B→A).
   - Criterion 4: Additions, modifications, and deletions propagate B→A with
     the same exclusion and metadata guarantees.
-  - Criterion 5 (D-06/D-07/D-12): Target divergence detected and blocked;
-    --allow-divergence overrides it; a normal A→B→B→A→A→B round-trip does NOT
-    trigger false divergence (D-07); --dry-run leaves no file changes and does
-    not update the divergence marker (D-12).
+  - Criterion 5 (ADR-015, D-12): The topology out-of-order / target-state check
+    triggers a heads-up (non-zero exit) in non-interactive mode when no prior
+    sync history exists; --allow-out-of-order bypasses it; a normal A→B / B→A /
+    A→B round-trip proceeds WITHOUT any override (the clean case is silent);
+    --dry-run performs a read-only preview and does not update sync history.
 
 Safety: the test configures folder_sync to mirror a DEDICATED test directory
 (not the real /home or /root), so the destructive --delete mirror cannot harm
@@ -30,7 +31,6 @@ VM Requirements:
 
 from __future__ import annotations
 
-import json
 import os
 
 from pcswitcher.executor import BashLoginRemoteExecutor
@@ -239,8 +239,11 @@ class TestFolderSyncAToB:
             assert alpha_inode == hardlink_inode, "Hard-link pair must share an inode on pc1"
 
             # --- A→B sync ---
+            # --allow-out-of-order: pc2 has no prior sync history (W1 case), so the
+            # topology check would trigger a heads-up in non-interactive mode.  We bypass
+            # it here because this test focuses on content/metadata, not topology safety.
             sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes",
+                "pc-switcher sync pc2 --yes --allow-out-of-order",
                 timeout=300.0,
                 login_shell=True,
             )
@@ -336,7 +339,7 @@ class TestFolderSyncAToB:
 
 
 class TestFolderSyncRoundTrip:
-    """Round-trip, divergence guard, and dry-run scenarios (criteria 4, D-06/D-07/D-12)."""
+    """Round-trip and topology-model scenarios (criteria 4, D-12, ADR-015)."""
 
     async def test_round_trip_and_no_false_divergence(
         self,
@@ -346,19 +349,20 @@ class TestFolderSyncRoundTrip:
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """B→A propagates additions, modifications, and deletions; A→B again has no false divergence.
+        """B→A propagates additions, modifications, and deletions; A→B again has no out-of-order warning.
 
         Workflow:
-          1. A→B — initial sync to pc2.
+          1. A→B — initial sync to pc2 (--allow-out-of-order: pc2 has no prior history).
           2. Mutate pc2 — add new file, modify existing, delete a file.
-          3. B→A from pc2 — back-sync to pc1.
+          3. B→A from pc2 — back-sync to pc1 (no override needed: topology clean case).
           4. Assert pc1 reflects all three mutations, with metadata preserved and
              the same exclusions honoured in reverse.
-          5. A→B again — must succeed WITHOUT --allow-divergence (D-07: normal
-             round-trip is NOT divergence).
+          5. A→B again — must succeed WITHOUT --allow-out-of-order (ADR-015 #159:
+             normal A→B / B→A / A→B round-trip is the clean case and never triggers
+             the out-of-order heads-up).
 
         Requirements: REQ-sync-scope-user-data, REQ-machine-specific-exclusions,
-        REQ-sync-scope-file-metadata — ROADMAP success criterion 4 + D-07.
+        REQ-sync-scope-file-metadata — ROADMAP success criterion 4 + ADR-015.
         """
         _ = reset_pcswitcher_state
         user = os.environ["PC_SWITCHER_TEST_USER"]
@@ -370,8 +374,10 @@ class TestFolderSyncRoundTrip:
             await _seed_test_tree(pc1_executor, tdir)
 
             # Step 1: A→B initial sync
+            # --allow-out-of-order: pc2 has no prior sync history so the topology check
+            # (W1: no readable history) would trigger a heads-up in non-interactive mode.
             sync_ab = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes",
+                "pc-switcher sync pc2 --yes --allow-out-of-order",
                 timeout=300.0,
                 login_shell=True,
             )
@@ -482,61 +488,57 @@ printf 'pc2_private_key' > "$T/.ssh/id_rsa"
                 "Excluded file .ssh/id_rsa from pc2 appeared on pc1 after B→A (exclusion must hold in reverse)"
             )
 
-            # Step 5: A→B again — no false divergence (D-07)
+            # Step 5: A→B again — topology check must be silent (no override needed).
             #
-            # Why this does NOT trigger a false divergence:
-            # The B→A sync caused pc-switcher to write its OWN state files to pc2's @home:
-            #   - ~/.local/share/pc-switcher/sync-history.json (post-sync baseline write)
-            #   - ~/.local/share/pc-switcher/pc-switcher.lock (runtime lock file)
-            #   - ~/.config/pc-switcher/config.yaml (Phase-8 config sync, if configs differ)
-            # These writes bump pc2's @home btrfs generation AFTER the baseline is captured.
-            # However, all of these paths land OUTSIDE the dedicated <tdir> prefix
-            # (/home/<user>/pcswitcher-folder-sync-test), so the EXISTING prefix-scoping
-            # in _target_diverged_since filters them out — `btrfs find-new` reports them but
-            # the prefix check (`f" {prefix}/" in line`) does not match <tdir>.
-            # NOTE: this is the PREFIX-SCOPING path, not the empty-prefix tool-state filter
-            # (CR-01). The CR-01 filter handles the default /home config (empty prefix where
-            # pc-switcher writes fall inside the scanned subvolume root). For this test the
-            # synced folder is <tdir> — a non-empty prefix — so the out-of-prefix pc-switcher
-            # writes are already excluded by the ordinary prefix check.
-            # Regression: if prefix-scoping breaks, this step fails with "divergence detected".
+            # After B→A, pc1's sync history: last_role=TARGET, last_peer=pc2.
+            # pc2's sync history: last_role=SOURCE, last_peer=pc1.
+            # Topology check: target_peer (pc1) == this source (pc1), and no consecutive
+            # push (pc1's local role is TARGET, not SOURCE) → clean case → no warning.
+            # ADR-015 / GitHub #159: the A→B / B→A / A→B pattern is explicitly the
+            # legitimate workflow that must never be blocked.
             sync_ab2 = await pc1_executor.run_command(
                 "pc-switcher sync pc2 --yes",
                 timeout=300.0,
                 login_shell=True,
             )
             assert sync_ab2.success, (
-                f"Second A→B sync falsely reported divergence (D-07 violated).\n"
+                f"Second A→B sync failed (topology check incorrectly triggered for clean round-trip).\n"
                 f"exit={sync_ab2.exit_code}\n"
                 f"stdout: {sync_ab2.stdout}\nstderr: {sync_ab2.stderr}"
             )
-            # A divergence would produce non-zero exit with 'divergence' in output.
-            divergence_triggered = not sync_ab2.success and "divergence" in (sync_ab2.stdout + sync_ab2.stderr).lower()
-            assert not divergence_triggered, (
-                "Second A→B falsely blocked as divergence after a normal round-trip (D-07)"
+            # An out-of-order trigger would produce non-zero exit with 'out-of-order' in output.
+            out_of_order_triggered = not sync_ab2.success and "out-of-order" in (
+                sync_ab2.stdout + sync_ab2.stderr
+            ).lower()
+            assert not out_of_order_triggered, (
+                "Second A→B triggered out-of-order warning after a normal round-trip (ADR-015 #159 violated)"
             )
 
         finally:
             await _remove_test_artifacts(pc1_executor, pc2_executor, tdir)
 
-    async def test_divergence_guard_and_dry_run(
+    async def test_out_of_order_and_dry_run(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """Divergence guard blocks sync when target independently modified; dry-run stays no-op.
+        """Topology out-of-order check and dry-run preview behaviour (ADR-015, D-12).
 
         Workflow:
-          1. A→B initial sync — establishes divergence baseline.
-          2. Independently mutate pc2's test directory (without syncing).
-          3. A→B attempt — must be BLOCKED (non-zero exit, divergence message).
-          4. A→B --dry-run — must NOT be blocked; target files unchanged; marker
-             not updated; divergence logged as warning.
-          5. A→B --allow-divergence — must proceed (exit 0) and reconcile target.
+          1. Seed pc1's test directory; pc2 has no prior sync history.
+          2. A→B attempt WITHOUT --allow-out-of-order — must fail with non-zero exit
+             and output mentioning the out-of-order / target-state reason (W1: no
+             readable history — non-interactive mode cannot confirm).
+          3. A→B --dry-run — must NOT be blocked (ADR-014: dry-run is a read-only
+             rehearsal; out-of-order warning is logged but sync proceeds); pc2's test
+             directory must remain empty (no file mutations); pc1's sync-history.json
+             must not be created or updated (D-12: no state writes in dry-run).
+          4. A→B --allow-out-of-order --yes — must proceed (exit 0) and populate pc2's
+             test directory with the source files.
 
-        Requirements: REQ-manual-sync-workflow (D-06, D-12) — ROADMAP criterion 5.
+        Requirements: REQ-manual-sync-workflow (ADR-015, D-12) — ROADMAP criterion 5.
         """
         _ = reset_pcswitcher_state
         user = os.environ["PC_SWITCHER_TEST_USER"]
@@ -547,57 +549,39 @@ printf 'pc2_private_key' > "$T/.ssh/id_rsa"
             await _write_config(pc1_executor, config)
             await _seed_test_tree(pc1_executor, tdir)
 
-            # Step 1: A→B to establish divergence baseline
-            sync_ab = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes",
-                timeout=300.0,
-                login_shell=True,
-            )
-            assert sync_ab.success, (
-                f"Initial A→B sync failed.\nexit={sync_ab.exit_code}\n"
-                f"stdout: {sync_ab.stdout}\nstderr: {sync_ab.stderr}"
-            )
-
-            # Capture pc2 checksums BEFORE the independent mutation (step 2).
-            before_md5 = await pc2_executor.run_command(
-                f"md5sum {tdir}/alpha.txt {tdir}/subdir/beta.txt",
-                timeout=10.0,
-                login_shell=False,
-            )
-            assert before_md5.success
-
-            # Step 2: Independently modify pc2's test directory WITHOUT syncing.
-            # Writing to the test directory increments pc2's @home btrfs generation,
-            # which the divergence guard will detect via btrfs find-new.
-            tamper = await pc2_executor.run_command(
-                f"printf 'tampered' >> {tdir}/alpha.txt",
-                timeout=10.0,
-                login_shell=False,
-            )
-            assert tamper.success, f"Tamper write on pc2 failed: {tamper.stderr}"
-
-            # Step 3: A→B attempt — must be BLOCKED by divergence guard.
+            # Step 2: A→B WITHOUT --allow-out-of-order — topology check W1 (no history on pc2)
+            # must trigger the out-of-order heads-up in non-interactive mode.
             blocked_result = await pc1_executor.run_command(
                 "pc-switcher sync pc2 --yes",
                 timeout=120.0,
                 login_shell=True,
             )
             assert not blocked_result.success, (
-                "Divergence guard should have blocked the sync (non-zero exit expected), "
+                "Topology check should have returned non-zero (non-interactive, no history), "
                 f"but it exited with code {blocked_result.exit_code}.\n"
                 f"stdout: {blocked_result.stdout}"
             )
             combined = (blocked_result.stdout + blocked_result.stderr).lower()
-            assert "divergence" in combined or "diverged" in combined, (
-                "Divergence guard output must mention 'divergence' or 'diverged'.\n"
+            assert "out-of-order" in combined or "target" in combined, (
+                "Out-of-order heads-up output must mention 'out-of-order' or 'target'.\n"
                 f"stdout: {blocked_result.stdout}\nstderr: {blocked_result.stderr}"
             )
 
-            # Step 4: A→B --dry-run — must NOT be blocked; target files unchanged;
-            # divergence marker must not be updated.
-            # Read pc1's current sync-history to verify the marker is not changed after dry-run.
+            # Confirm pc2's test directory was not created (no sync happened).
+            pc2_empty = await pc2_executor.run_command(
+                f"test ! -e {tdir}",
+                timeout=10.0,
+                login_shell=False,
+            )
+            assert pc2_empty.success, (
+                f"pc2's test directory exists after blocked sync (should not have been created).\n"
+                f"stderr: {pc2_empty.stderr}"
+            )
+
+            # Step 3: A→B --dry-run — must proceed (ADR-014: dry-run never aborts on
+            # out-of-order warning).  No files written to pc2; no history update on pc1.
             history_before = await pc1_executor.run_command(
-                "cat ~/.local/share/pc-switcher/sync-history.json 2>/dev/null || echo '{}'",
+                "cat ~/.local/share/pc-switcher/sync-history.json 2>/dev/null || echo 'absent'",
                 timeout=10.0,
             )
             assert history_before.success
@@ -608,83 +592,54 @@ printf 'pc2_private_key' > "$T/.ssh/id_rsa"
                 login_shell=True,
             )
             assert dry_run_result.success, (
-                f"--dry-run should not be blocked by divergence (D-12).\n"
+                f"--dry-run should not be blocked by out-of-order check (ADR-014).\n"
                 f"exit={dry_run_result.exit_code}\n"
                 f"stdout: {dry_run_result.stdout}\nstderr: {dry_run_result.stderr}"
             )
-            # Divergence must be logged as a warning in the output (not a hard error).
-            dry_combined = (dry_run_result.stdout + dry_run_result.stderr).lower()
-            assert "divergence" in dry_combined or "diverged" in dry_combined, (
-                "--dry-run output should log the divergence warning.\n"
-                f"stdout: {dry_run_result.stdout}\nstderr: {dry_run_result.stderr}"
-            )
 
-            # Target files unchanged after dry-run.
-            after_dryrun_md5 = await pc2_executor.run_command(
-                f"md5sum {tdir}/alpha.txt {tdir}/subdir/beta.txt",
+            # pc2's test directory still absent after --dry-run (no file mutations).
+            pc2_still_empty = await pc2_executor.run_command(
+                f"test ! -e {tdir}",
                 timeout=10.0,
                 login_shell=False,
             )
-            assert after_dryrun_md5.success
-            # alpha.txt was tampered — the tampering must still be there (not overwritten by dry-run).
-            # The dry-run does NOT reset the tamper; it shows what WOULD change, but doesn't change it.
-            # We verify that beta.txt is still the original (unchanged by dry-run).
-            # beta.txt should be the same (the tamper was only on alpha.txt)
-            before_beta = [ln for ln in before_md5.stdout.strip().splitlines() if "beta.txt" in ln]
-            after_beta = [ln for ln in after_dryrun_md5.stdout.strip().splitlines() if "beta.txt" in ln]
-            assert before_beta[0].split()[0] == after_beta[0].split()[0], (
-                "beta.txt was modified by dry-run (should be unchanged)"
+            assert pc2_still_empty.success, (
+                f"pc2's test directory was created by --dry-run (must be read-only).\n"
+                f"stderr: {pc2_still_empty.stderr}"
             )
 
-            # Divergence marker not updated after dry-run (D-12: no state writes).
+            # pc1's sync-history must not have changed (D-12: no state writes in dry-run).
             history_after = await pc1_executor.run_command(
-                "cat ~/.local/share/pc-switcher/sync-history.json 2>/dev/null || echo '{}'",
+                "cat ~/.local/share/pc-switcher/sync-history.json 2>/dev/null || echo 'absent'",
                 timeout=10.0,
             )
             assert history_after.success
-
-            # The target_generations entry for pc2/tdir should be the same as before.
-            def _get_gen(json_str: str) -> int | None:
-                try:
-                    data = json.loads(json_str)
-                    return data.get("target_generations", {}).get("pc2", {}).get(tdir)
-                except json.JSONDecodeError:
-                    return None
-
-            gen_before = _get_gen(history_before.stdout)
-            gen_after = _get_gen(history_after.stdout)
-            assert gen_before == gen_after, (
-                f"Divergence marker updated by --dry-run (violates D-12).\n"
-                f"Before: gen={gen_before!r}\nAfter: gen={gen_after!r}"
+            assert history_before.stdout.strip() == history_after.stdout.strip(), (
+                "pc1 sync-history was updated by --dry-run (violates D-12).\n"
+                f"Before: {history_before.stdout.strip()!r}\nAfter: {history_after.stdout.strip()!r}"
             )
 
-            # Step 5: A→B --allow-divergence — must proceed and reconcile target.
+            # Step 4: A→B --allow-out-of-order — must proceed and populate pc2.
             allow_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-divergence",
+                "pc-switcher sync pc2 --yes --allow-out-of-order",
                 timeout=300.0,
                 login_shell=True,
             )
             assert allow_result.success, (
-                f"--allow-divergence sync failed.\n"
+                f"--allow-out-of-order sync failed.\n"
                 f"exit={allow_result.exit_code}\n"
                 f"stdout: {allow_result.stdout}\nstderr: {allow_result.stderr}"
             )
 
-            # Target should now be reconciled: alpha.txt matches pc1 (tamper overwritten).
-            pc1_alpha_md5 = await pc1_executor.run_command(
-                f"md5sum {tdir}/alpha.txt",
+            # pc2's test directory now has the source files.
+            pc2_populated = await pc2_executor.run_command(
+                f"test -f {tdir}/alpha.txt && test -f {tdir}/subdir/beta.txt",
                 timeout=10.0,
                 login_shell=False,
             )
-            pc2_alpha_md5 = await pc2_executor.run_command(
-                f"md5sum {tdir}/alpha.txt",
-                timeout=10.0,
-                login_shell=False,
-            )
-            assert pc1_alpha_md5.success and pc2_alpha_md5.success
-            assert pc1_alpha_md5.stdout.split()[0] == pc2_alpha_md5.stdout.split()[0], (
-                "After --allow-divergence sync, alpha.txt should match between pc1 and pc2.\n"
-                f"pc1: {pc1_alpha_md5.stdout.strip()}\npc2: {pc2_alpha_md5.stdout.strip()}"
+            assert pc2_populated.success, (
+                f"pc2's test directory not populated after --allow-out-of-order sync.\n"
+                f"stderr: {pc2_populated.stderr}"
             )
 
         finally:
