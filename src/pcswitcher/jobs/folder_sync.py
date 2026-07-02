@@ -20,6 +20,7 @@ from typing import Any, ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.models import Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.sync_history import HISTORY_PATH, parse_sync_state
 
 # Matches rsync --info=progress2 output, e.g.:
 #   "9.53G 21% 317.26MB/s 0:00:28 (xfr#83063, to-chk=443926/538653)"
@@ -315,10 +316,80 @@ class FolderSyncJob(SyncJob):
 
         return files_xfr, bytes_xfr, files_deleted
 
+    async def _target_is_first_sync(self) -> bool:
+        """Return True when the target has no readable sync-history (a first-ever sync).
+
+        A first sync means `rsync --delete` will mirror every configured folder onto the
+        target, replacing its contents wholesale. Reads HISTORY_PATH over the target
+        executor exactly as the orchestrator does; unreadable, empty, or unparsable
+        content is treated as a first sync (safety-first — the target's prior state is
+        unknown, so the overwrite must be confirmed).
+        """
+        result = await self.target.run_command(f"cat {HISTORY_PATH} 2>/dev/null")
+        stdout = result.stdout.strip()
+        if not result.success or not stdout:
+            return True
+        role, _peer = parse_sync_state(stdout)
+        return role is None
+
+    async def _confirm_first_sync_if_needed(self, folders: list[FolderEntry]) -> None:
+        """Confirm before overwriting a target that has never been synced (ADR-015 refinement).
+
+        A first sync is semantically distinct from an out-of-order sync: there is no
+        prior state to reconcile, `rsync --delete` simply replaces the target's copy of
+        every configured folder. Because the target's contents are unknown, the user must
+        explicitly approve the overwrite — interactively, or non-interactively via
+        --allow-first-sync.
+
+        In dry-run mode the same warning is logged at WARNING but never blocks (ADR-014:
+        dry-run is a read-only rehearsal). Non-first syncs proceed silently.
+
+        Raises:
+            RuntimeError: If a first sync is detected and the overwrite is not confirmed.
+        """
+        if not await self._target_is_first_sync():
+            return
+
+        folder_list = ", ".join(f.path for f in folders)
+        title = "First sync — target will be overwritten"
+        message = (
+            f"[bold]{self.context.target_hostname}[/bold] has never been synced by pc-switcher.\n\n"
+            "Every folder configured for folder_sync will be overwritten on the target by "
+            "rsync --delete, except the configured exclusions. In scope:\n\n"
+            f"  {folder_list}\n\n"
+            "If this machine is not the intended source of truth for those folders, "
+            "the target's current contents will be lost.\n\n"
+            "Run [bold]pc-switcher sync --dry-run[/bold] to preview what would change first."
+        )
+
+        if self.context.dry_run:
+            self._log(
+                Host.TARGET,
+                LogLevel.WARNING,
+                f"[dry-run] {title}: {folder_list} would be overwritten on "
+                f"{self.context.target_hostname!r} by rsync --delete (except exclusions)",
+            )
+            return
+
+        assert self.context.confirmer is not None, "FolderSyncJob requires a confirmer for first-sync confirmation"
+        approved = await self.context.confirmer.confirm(
+            title=title,
+            message=message,
+            allow=self.context.allow_first_sync,
+            allow_flag="--allow-first-sync",
+            log_extra={"job": self.name, "host": Host.TARGET.value},
+        )
+        if not approved:
+            raise RuntimeError(
+                "First sync aborted: the target has no sync history and the overwrite "
+                "was not confirmed. Pass --allow-first-sync to proceed non-interactively."
+            )
+
     async def execute(self) -> None:
         """Sync each active folder via rsync-over-SSH.
 
-        For each active folder (D-10):
+        Before any transfer, confirm the overwrite when this is the target's first-ever
+        sync (ADR-015 refinement). Then, for each active folder (D-10):
         1. Builds the rsync command with the D-13 flag baseline, machine-specific
            filter rules (D-11), and the dry-run toggle (D-12).
         2. Spawns rsync as an async subprocess (ADR-005 — no blocking calls).
@@ -327,6 +398,8 @@ class FolderSyncJob(SyncJob):
         4. On non-zero exit, logs CRITICAL and raises RuntimeError (sync aborts).
         """
         folders = self._active_folders()
+
+        await self._confirm_first_sync_if_needed(folders)
 
         for folder in folders:
             prefix = "[dry-run] " if self.context.dry_run else ""
