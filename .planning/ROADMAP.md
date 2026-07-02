@@ -49,7 +49,7 @@ The orchestration framework is already built (Job architecture, self-installing 
   4. The sync is reversible and exclusions hold both directions: after modifying, adding, and deleting files on B and running `pc-switcher sync <A>` from B, A reflects B's changes byte-identically with metadata preserved, and the same machine-specific exclusions are honored on this reverse sync.
   5. A VM-isolated integration test automates the full A→B, mutate-on-B, B→A round-trip and asserts criteria 1-4 — the developer-facing milestone success metric.
 
-**Plans**: 10/14 plans executed
+**Plans**: 11/14 plans executed
 
 Plans:
 **Wave 1**
@@ -79,7 +79,7 @@ Plans:
 **Design Pivot — Gap Closure round 2** *(removes btrfs content-divergence detection; replaces it with the topology-based safety model — ADR-015, resolves CR-01/CR-02/WR-01/IN-01)*
 
 - [x] 01-10-PLAN.md — decision record: ADR-015 (topology-based sync-safety model) + _index + CONTEXT supersession [wave 1]
-- [ ] 01-11-PLAN.md — remove content-divergence guard from FolderSyncJob + WR-01 config_sync removeprefix + prune obsolete tests [wave 1]
+- [x] 01-11-PLAN.md — remove content-divergence guard from FolderSyncJob + WR-01 config_sync removeprefix + prune obsolete tests [wave 1]
 - [ ] 01-12-PLAN.md — sync-history schema: add last_peer, remove btrfs generation store + tests [wave 2, depends on 01-11]
 - [ ] 01-13-PLAN.md — CLI --allow-out-of-order + orchestrator out-of-order/target-state step + last_peer recording; drop allow_divergence/allow_consecutive [wave 3, depends on 01-11, 01-12]
 - [ ] 01-14-PLAN.md — README sync-sequence fix + FULL deletion-log persistence test + integration test rework [wave 4, depends on 01-11, 01-13]
@@ -169,7 +169,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Home-Sync MVP (User Data Sync) | 10/14 | In Progress|  |
+| 1. Home-Sync MVP (User Data Sync) | 11/14 | In Progress|  |
 | 2. Package Management Sync | 0/TBD | Not started | - |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
