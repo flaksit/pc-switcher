@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import io
 import json
@@ -11,7 +12,7 @@ from datetime import datetime
 from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from queue import Queue
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol
 
 from rich.console import Console
 from rich.text import Text
@@ -34,12 +35,27 @@ logging.Logger.full = _full  # type: ignore[method-assign]
 __all__ = [
     "FULL",
     "JsonFormatter",
+    "LogPanelSink",
     "RichFormatter",
+    "UILogHandler",
     "generate_log_filename",
     "get_latest_log_file",
     "get_logs_directory",
     "setup_logging",
 ]
+
+
+class LogPanelSink(Protocol):
+    """Structural type for a UI component that accepts log-panel lines.
+
+    Matches `TerminalUI.add_log_message` (src/pcswitcher/ui.py) without
+    importing TerminalUI directly into logger.py, keeping the logging module
+    free of a UI dependency.
+    """
+
+    def add_log_message(self, message: str) -> None:
+        """Append a formatted line to the UI's log panel."""
+        ...
 
 
 class JsonFormatter(logging.Formatter):
@@ -207,6 +223,61 @@ class RichFormatter(logging.Formatter):
         return capture.get()
 
 
+class UILogHandler(logging.Handler):
+    """Route log records into a UI's Recent Logs panel via the event loop.
+
+    emit() runs on the QueueListener's background thread. Handing the
+    formatted line to `sink.add_log_message` through
+    `loop.call_soon_threadsafe` — rather than calling it directly — keeps
+    every Live.update call on the single event-loop thread (the same thread
+    that drives progress updates), so there is exactly one Live-render path
+    and no cursor desync between an uncoordinated stderr write and Live's own
+    redraw bookkeeping (see .planning/debug/tui-live-progress-flooding.md).
+    """
+
+    def __init__(self, sink: LogPanelSink) -> None:
+        """Initialize the handler, capturing the currently-running event loop.
+
+        Must be constructed from within the running orchestrator loop —
+        the loop is captured once here, not re-resolved per emit().
+        """
+        super().__init__()
+        self._sink = sink
+        self._loop = asyncio.get_running_loop()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Format the record as plain text and hand it to the event loop.
+
+        No ANSI escape codes or Rich markup: the Recent Logs panel renders
+        strings as-is, so raw ANSI would show literally and Rich markup
+        would risk markup-injection from arbitrary message content.
+        """
+        try:
+            line = self._format_line(record)
+            self._loop.call_soon_threadsafe(self._sink.add_log_message, line)
+        except RuntimeError:
+            # Loop closed (late record during shutdown) -- swallow via the
+            # standard handler error path instead of raising from the
+            # QueueListener's background thread.
+            self.handleError(record)
+
+    def _format_line(self, record: logging.LogRecord) -> str:
+        """Build a compact plain-text line: HH:MM:SS [LEVEL] [job] (host) message."""
+        timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        parts = [timestamp, f"[{record.levelname}]"]
+
+        job = getattr(record, "job", None)
+        if job is not None:
+            parts.append(f"[{job}]")
+
+        host = getattr(record, "host", None)
+        if host is not None:
+            parts.append(f"({host})")
+
+        parts.append(record.getMessage())
+        return " ".join(parts)
+
+
 def generate_log_filename(session_id: str) -> str:
     """Generate log filename for a sync session.
 
@@ -234,6 +305,9 @@ def get_latest_log_file() -> Path | None:
 def setup_logging(
     log_file_path: Path,
     log_config: LogConfig,
+    *,
+    ui: LogPanelSink | None = None,
+    console: Console | None = None,
 ) -> tuple[QueueListener, Queue[logging.LogRecord]]:
     """Set up stdlib logging infrastructure with QueueHandler/QueueListener.
 
@@ -245,9 +319,21 @@ def setup_logging(
     - pcswitcher logger level = min(file, tui) (allows pcswitcher logs to handlers)
     - Each handler applies its own level filter (file vs tui)
 
+    The TUI-floor handler is chosen by interactivity: when `ui` is given and
+    `console` reports a real terminal, log records are routed into the UI's
+    Recent Logs panel (UILogHandler) so they render through the same single
+    Live.update path as progress updates, instead of writing independently
+    to stderr and desyncing Live's cursor bookkeeping. Otherwise (ui/console
+    omitted, or console is not a terminal) the plain stderr StreamHandler is
+    used, unchanged — this is the fallback for CI and piped/non-TTY output.
+
     Args:
         log_file_path: Path to the JSON log file
         log_config: Logging level configuration with file, tui, and external settings
+        ui: Sink for the UI's Recent Logs panel. None disables UI routing
+            (stderr fallback), which also keeps existing callers unaffected.
+        console: Console whose `is_terminal` decides UI vs stderr routing.
+            Required (together with `ui`) to select the UI sink.
 
     Returns:
         Tuple of (QueueListener, queue) for lifecycle management.
@@ -265,17 +351,25 @@ def setup_logging(
     file_handler.setLevel(log_config.file)
     file_handler.setFormatter(JsonFormatter())
 
-    # Create stream handler with Rich formatter for TUI output
-    stream_handler = logging.StreamHandler(sys.stderr)
-    stream_handler.setLevel(log_config.tui)
-    stream_handler.setFormatter(RichFormatter())
+    # Create the TUI-floor handler: UI-routed when an interactive Live display
+    # owns the terminal, otherwise the plain stderr StreamHandler (unchanged
+    # behavior for CI / piped output).
+    use_ui = ui is not None and console is not None and console.is_terminal
+    tui_handler: logging.Handler
+    if use_ui:
+        assert ui is not None  # narrowed by use_ui
+        tui_handler = UILogHandler(ui)
+    else:
+        tui_handler = logging.StreamHandler(sys.stderr)
+        tui_handler.setFormatter(RichFormatter())
+    tui_handler.setLevel(log_config.tui)
 
     # Create and start listener with respect_handler_level=True
     # This ensures each handler's level is used as an additional filter
     listener = QueueListener(
         queue,
         file_handler,
-        stream_handler,
+        tui_handler,
         respect_handler_level=True,
     )
     listener.start()
