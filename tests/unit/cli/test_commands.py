@@ -7,12 +7,14 @@ accept the correct arguments as specified in docs/system/core.md.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
-from pcswitcher.cli import app
+from pcswitcher.cli import _async_run_sync, app
 from pcswitcher.config import Configuration
+from pcswitcher.models import SyncAbortedByUser
 
 runner = CliRunner()
 
@@ -100,6 +102,36 @@ class TestSyncCommand:
 
             # Verify that _load_configuration was called with the custom config path
             mock_load.assert_called_once_with(custom_config_path)
+
+
+class TestSyncAbortedByUserHandling:
+    """_async_run_sync must surface a user abort once, calmly, distinct from a failure.
+
+    UAT gap 2 / plan 01-16: previously a declined confirmation fell through to
+    the generic except Exception handler and printed the same red "Sync
+    failed" text the orchestrator's own CRITICAL log already implied.
+    """
+
+    @pytest.mark.asyncio
+    async def test_user_abort_prints_single_calm_message_and_nonzero_exit(self) -> None:
+        """Orchestrator.run() raising SyncAbortedByUser -> one calm 'aborted' line."""
+        mock_config = MagicMock(spec=Configuration)
+
+        with (
+            patch("pcswitcher.cli.Orchestrator") as mock_orchestrator_cls,
+            patch("pcswitcher.cli.console") as mock_console,
+        ):
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.run = AsyncMock(side_effect=SyncAbortedByUser("Config sync aborted by user"))
+            mock_orchestrator_cls.return_value = mock_orchestrator
+
+            exit_code = await _async_run_sync("target-host", mock_config)
+
+        assert exit_code != 0
+
+        printed = " ".join(str(call.args[0]) for call in mock_console.print.call_args_list)
+        assert "aborted" in printed.lower()
+        assert "failed" not in printed.lower()
 
 
 class TestLogsCommand:
