@@ -20,7 +20,7 @@ import pytest
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.folder_sync import FolderEntry, FolderSyncJob
-from pcswitcher.models import CommandResult, Host, LogLevel, ProgressUpdate
+from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ProgressUpdate
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -131,6 +131,48 @@ class TestActiveFolderSelection:
         ctx = make_context(config={"folders": [{"path": "/home", "enabled": True}]})
         job = FolderSyncJob(ctx)
         assert len(job._active_folders()) == 1
+
+
+# ---------------------------------------------------------------------------
+# describe_first_sync_scope (ADR-015, gap-closure 01-15)
+# ---------------------------------------------------------------------------
+
+
+class TestDescribeFirstSyncScope:
+    """FolderSyncJob.describe_first_sync_scope() self-describes its overwrite scope."""
+
+    def test_populated_config_returns_scope(self) -> None:
+        """Enabled folder paths + a mechanism phrase are returned for a populated config."""
+        config = {"folders": [{"path": "/home"}, {"path": "/root"}]}
+
+        scope = FolderSyncJob.describe_first_sync_scope(config)
+
+        assert isinstance(scope, FirstSyncScope)
+        assert scope.job_name == "folder_sync"
+        assert scope.scope_items == ["/home", "/root"]
+        assert scope.mechanism
+
+    def test_disabled_folders_excluded(self) -> None:
+        """A folder entry with enabled=False is excluded from scope_items."""
+        config = {"folders": [{"path": "/home"}, {"path": "/root", "enabled": False}]}
+
+        scope = FolderSyncJob.describe_first_sync_scope(config)
+
+        assert scope is not None
+        assert scope.scope_items == ["/home"]
+
+    def test_empty_folders_returns_none(self) -> None:
+        """No folders configured → None (nothing in scope)."""
+        assert FolderSyncJob.describe_first_sync_scope({"folders": []}) is None
+
+    def test_all_disabled_folders_returns_none(self) -> None:
+        """Every folder disabled → None (nothing in scope)."""
+        config = {"folders": [{"path": "/home", "enabled": False}]}
+        assert FolderSyncJob.describe_first_sync_scope(config) is None
+
+    def test_missing_folders_key_returns_none(self) -> None:
+        """A config dict with no 'folders' key at all → None."""
+        assert FolderSyncJob.describe_first_sync_scope({}) is None
 
 
 # ---------------------------------------------------------------------------
