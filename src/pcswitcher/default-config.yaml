@@ -134,6 +134,11 @@ folder_sync:
       excludes:
         # Machine-specific SSH private keys — never synced between machines
         - .ssh/id_*
+        # SSH known_hosts is machine-local: mirroring it (rsync --delete) overwrites
+        # the target's copy with the source's, which lacks the source's own host key.
+        # The target would then lose the source's key and fail the reverse sync
+        # (source→target works, target→source fails host-key verification).
+        - .ssh/known_hosts
         # Tailscale machine-specific config (node key, network identity)
         - .config/tailscale
         # GPU shader caches (regenerable; GPU-model specific — wrong on different hardware)
@@ -154,6 +159,8 @@ folder_sync:
       excludes:
         # Machine-specific SSH private keys
         - .ssh/id_*
+        # SSH known_hosts is machine-local (see /home note above)
+        - .ssh/known_hosts
         # Tailscale machine-specific config
         - .config/tailscale
 

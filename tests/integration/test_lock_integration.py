@@ -21,15 +21,18 @@ from pcswitcher.executor import BashLoginRemoteExecutor
 
 _LOCK = "$HOME/.local/share/pc-switcher/pc-switcher.lock"
 
-# Minimal valid config: the sync fails at the target-lock phase (before job
-# discovery/validation), so the folder contents are never inspected.
+# Minimal valid config. The sync must fail at the target-lock phase (before job
+# discovery/execution). We deliberately use only the harmless dummy_success job and
+# NO folder_sync: if the target lock ever regresses and the sync proceeds, it must
+# not mirror real /home (a /home --delete mirror would clobber the target's
+# .ssh/known_hosts and break subsequent tests — the very bug this test guards).
 _MIN_CONFIG = """\
 logging:
   file: DEBUG
   tui: INFO
   external: WARNING
 sync_jobs:
-  folder_sync: true
+  dummy_success: true
 disk_space_monitor:
   preflight_minimum: "5%"
   runtime_minimum: "3%"
@@ -40,10 +43,9 @@ btrfs_snapshots:
     - "@"
     - "@home"
   keep_recent: 2
-folder_sync:
-  folders:
-    - path: /home
-      enabled: true
+dummy_success:
+  source_duration: 2
+  target_duration: 2
 """
 
 
