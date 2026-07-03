@@ -313,7 +313,7 @@ sequenceDiagram
 1. **Source lock** — acquire the local unified lock. Fail-fast (no wait, no retry): if this machine is already a source or target of another sync, abort immediately.
 2. **SSH connection** — establish the asyncssh connection to the target.
 3. **Target lock** — acquire the target's unified lock over SSH, held by a persistent remote `flock` process for the entire session (released in cleanup). Fail-fast if the target is already busy.
-   - **Out-of-order / first-sync gate** (runs right after the target lock, once the target's sync-history is readable over SSH): the W1 first-sync gate (bypass: `--allow-first-sync`) and the W2/W3 out-of-order gate (bypass: `--allow-out-of-order`) per ADR-015. A `--dry-run` rehearses both gates without aborting (ADR-014).
+   - **Out-of-order / first-sync gate** (runs right after the target lock, once the target's sync-history is readable over SSH): the first-sync gate (bypass: `--allow-first-sync`) and the out-of-order gate (bypass: `--allow-out-of-order`) per ADR-015. A `--dry-run` rehearses both gates without aborting (ADR-014).
 4. **Job discovery & validation** — discover enabled jobs; validate config schema and system prerequisites.
 5. **Disk-space preflight** — verify sufficient free space before making changes.
 6. **Pre-sync snapshots** — btrfs pre-snapshots on both machines (the rollback point).
