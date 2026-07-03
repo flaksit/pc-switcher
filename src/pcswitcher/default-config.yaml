@@ -122,6 +122,10 @@ dummy_fail:
 #
 # Excluded below: machine-specific keys/config, GPU/shader caches, VS Code
 # regenerable caches. Users can override by editing this file.
+#
+# Always excluded automatically (not listed here, cannot be overridden): pc-switcher's
+# own runtime files — ~/.local/share/pc-switcher/ (state, lock, logs), the uv-tool
+# install, and the ~/.local/bin/pc-switcher shim (ADR-016).
 
 folder_sync:
   folders:

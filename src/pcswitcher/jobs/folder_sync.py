@@ -29,6 +29,19 @@ from pcswitcher.models import Host, LogLevel, ProgressUpdate, ValidationError
 # Group 2: percent complete.  Group 3: files transferred so far.  Group 4: total-to-check.
 _PROGRESS2_RE = re.compile(r"(\d+[\d.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*to-chk=\d+/(\d+)\)")
 
+# pc-switcher's own runtime state and installation live under the invoking
+# user's home directory. Mirroring them between machines is unsafe:
+# sync-history.json is the topology-safety state (ADR-015) and a --delete mirror
+# would clobber the target's copy mid-sync; the lock file, logs, and the running
+# install must stay machine-local. These paths are ALWAYS excluded from folder
+# sync regardless of user config, and are the ONLY hardcoded excludes — every
+# other exclusion is user-configurable (ADR-016).
+_RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
+    ".local/share/pc-switcher",  # lock, sync-history.json, logs/
+    ".local/share/uv/tools/pcswitcher",  # uv tool install (virtualenv)
+    ".local/bin/pc-switcher",  # entry-point shim
+)
+
 
 @dataclass
 class FolderEntry:
@@ -184,6 +197,25 @@ class FolderSyncJob(SyncJob):
 
         return errors
 
+    @staticmethod
+    def _runtime_exclude_filters(folder_path: str) -> list[str]:
+        """rsync `--filter` args protecting pc-switcher's own runtime files.
+
+        The runtime files (`_RUNTIME_EXCLUDE_RELPATHS`) live under the invoking
+        user's home directory. When `folder_path` contains that home (e.g. syncing
+        `/home`), each protected path is emitted as a root-anchored rsync pattern
+        relative to the transfer root, so it matches exactly one location and can
+        never be re-exposed by a user include rule. When home is outside
+        `folder_path` (e.g. `/root` synced by a normal user) there is nothing to
+        protect and the list is empty.
+        """
+        try:
+            rel = Path.home().relative_to(folder_path.rstrip("/") or "/")
+        except ValueError:
+            return []
+        prefix = "/" if str(rel) == "." else f"/{rel}/"
+        return [f"--filter={shlex.quote(f'- {prefix}{sub}')}" for sub in _RUNTIME_EXCLUDE_RELPATHS]
+
     def _build_rsync_cmd(self, folder: FolderEntry, dry_run: bool) -> str:
         """Build the rsync shell command for syncing a single folder.
 
@@ -258,6 +290,10 @@ class FolderSyncJob(SyncJob):
 
         # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
         parts.append(f"--rsync-path={shlex.quote('sudo rsync')}")
+
+        # Hardcoded protective excludes come FIRST (before user rules) so no user
+        # include rule can re-expose pc-switcher's own runtime files (ADR-016).
+        parts.extend(self._runtime_exclude_filters(folder.path))
 
         # Per-folder filter rules in config order (first-match-wins for rsync).
         # DO NOT add --delete-excluded — excluded machine-specific files (e.g.

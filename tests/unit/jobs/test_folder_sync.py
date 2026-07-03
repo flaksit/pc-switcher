@@ -14,7 +14,7 @@ import shlex
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -272,11 +272,17 @@ class TestBuildRsyncCmd:
         excludes: list[str] | None = None,
         dry_run: bool = False,
         target_username: str | None = "testuser",
+        home: str = "/nonhome",
     ) -> str:
+        # Default home is OUTSIDE any typical sync path, so the hardcoded runtime
+        # excludes (which anchor to the invoking user's home) are absent unless a
+        # test opts in by passing a `home` under `path`. This keeps the user-exclude
+        # assertions below deterministic regardless of the machine running them.
         ctx = make_context(config={"folders": [{"path": path}]}, target_username=target_username)
         job = FolderSyncJob(ctx)
         folder = FolderEntry(path=path, excludes=excludes or [])
-        return job._build_rsync_cmd(folder, dry_run)
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path(home)):
+            return job._build_rsync_cmd(folder, dry_run)
 
     def test_base_flags_present(self) -> None:
         """Command contains the full D-13 flag baseline."""
@@ -351,6 +357,56 @@ class TestBuildRsyncCmd:
         cmd = self._build(path="/home/user name", excludes=excludes)
         # The path with a space must be quoted in the command
         assert "/home/user name/" not in cmd or "'/home/user name/'" in cmd
+
+
+# ---------------------------------------------------------------------------
+# Hardcoded runtime-file excludes (ADR-016)
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeExcludeFilters:
+    """pc-switcher's own runtime files are always excluded from folder sync.
+
+    These are the ONLY hardcoded excludes; they anchor to the invoking user's
+    home and only apply when that home is inside the synced folder.
+    """
+
+    _RELPATHS = (
+        ".local/share/pc-switcher",
+        ".local/share/uv/tools/pcswitcher",
+        ".local/bin/pc-switcher",
+    )
+
+    def _filters(self, folder_path: str, home: str) -> list[str]:
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path(home)):
+            return FolderSyncJob._runtime_exclude_filters(folder_path)  # pyright: ignore[reportPrivateUsage]
+
+    def test_home_under_synced_folder_anchors_to_user_subdir(self) -> None:
+        """Syncing /home anchors each runtime path under the user's subdir."""
+        filters = self._filters("/home", "/home/alice")
+        assert filters == [f"--filter={shlex.quote(f'- /alice/{rel}')}" for rel in self._RELPATHS]
+
+    def test_folder_equals_home_anchors_to_root(self) -> None:
+        """Syncing the home directory itself anchors runtime paths at the transfer root."""
+        filters = self._filters("/home/alice", "/home/alice")
+        assert filters == [f"--filter={shlex.quote(f'- /{rel}')}" for rel in self._RELPATHS]
+
+    def test_trailing_slash_on_folder_is_ignored(self) -> None:
+        """A trailing slash on the folder path does not change anchoring."""
+        assert self._filters("/home/", "/home/alice") == self._filters("/home", "/home/alice")
+
+    def test_home_outside_synced_folder_yields_no_filters(self) -> None:
+        """Syncing /root as a normal user (home under /home) adds no runtime excludes."""
+        assert self._filters("/root", "/home/alice") == []
+
+    def test_runtime_excludes_precede_user_excludes_in_command(self) -> None:
+        """Protective excludes appear before user excludes so an include can't re-expose them."""
+        ctx = make_context(config={"folders": [{"path": "/home"}]}, target_username="testuser")
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path="/home", excludes=[".ssh/id_*"])
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path("/home/alice")):
+            cmd = job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
+        assert cmd.index("/alice/.local/share/pc-switcher") < cmd.index(".ssh/id_*")
 
 
 # ---------------------------------------------------------------------------

@@ -93,6 +93,9 @@ class TestSourceLockConflictMessages:
                 assert error_msg.startswith("This machine is already involved in a sync")
                 assert "(held by:" in error_msg
                 assert ")" in error_msg
+                # Remediation guidance is present and points at killing the holder, not rm.
+                assert "releases automatically" in error_msg
+                assert "pkill -f pc-switcher.lock" in error_msg
         finally:
             existing_lock.release()
 
@@ -129,9 +132,10 @@ class TestTargetLockConflictMessages:
 
     @pytest.mark.asyncio
     async def test_target_lock_error_message_format(self, mock_config: MagicMock) -> None:
-        """Target lock error follows expected format for user-facing display.
+        """Target lock error identifies the target and explains how to unblock.
 
-        Error format: "Target <hostname> is already involved in a sync"
+        Format: "Target <hostname> is already involved in a sync" followed by
+        how-to-unblock guidance (wait / auto-release / force-clear a stuck lock).
         """
         target_hostname = "pc2"
         orchestrator = Orchestrator(target=target_hostname, config=mock_config)
@@ -147,7 +151,10 @@ class TestTargetLockConflictMessages:
                 await orchestrator._acquire_target_lock()  # pyright: ignore[reportPrivateUsage]
 
             error_msg = str(exc_info.value)
-            assert error_msg == f"Target {target_hostname} is already involved in a sync"
+            assert error_msg.startswith(f"Target {target_hostname} is already involved in a sync")
+            # Remediation guidance is present and points at killing the holder, not rm.
+            assert "releases automatically" in error_msg
+            assert "pkill -f pc-switcher.lock" in error_msg
 
 
 class TestLockErrorMessageClarity:

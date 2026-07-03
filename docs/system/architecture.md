@@ -306,6 +306,24 @@ sequenceDiagram
     CLI-->>User: Exit with status
 ```
 
+### Sync Lifecycle Phases
+
+`Orchestrator.run()` executes a fixed, ordered sequence of phases. These names are the shared vocabulary for reasoning about the sync — the sequence diagram above shows the message flow; this list names each step and its role. The numbering matches the `# Phase N:` markers in `orchestrator.py`.
+
+1. **Source lock** — acquire the local unified lock. Fail-fast (no wait, no retry): if this machine is already a source or target of another sync, abort immediately.
+2. **SSH connection** — establish the asyncssh connection to the target.
+3. **Target lock** — acquire the target's unified lock over SSH, held by a persistent remote `flock` process for the entire session (released in cleanup). Fail-fast if the target is already busy.
+   - **Out-of-order / first-sync gate** (runs right after the target lock, once the target's sync-history is readable over SSH): the W1 first-sync gate (bypass: `--allow-first-sync`) and the W2/W3 out-of-order gate (bypass: `--allow-out-of-order`) per ADR-015. A `--dry-run` rehearses both gates without aborting (ADR-014).
+4. **Job discovery & validation** — discover enabled jobs; validate config schema and system prerequisites.
+5. **Disk-space preflight** — verify sufficient free space before making changes.
+6. **Pre-sync snapshots** — btrfs pre-snapshots on both machines (the rollback point).
+7. **Install/upgrade on target** — install the matching pc-switcher version on the target (after snapshots, so a bad install is recoverable).
+8. **Config sync** — copy the source config to the target.
+9. **Job execution** — run each enabled sync job, with a background disk-space monitor.
+10. **Post-sync snapshots** — btrfs post-snapshots on both machines.
+
+On success, the orchestrator then records the source/target roles in each machine's sync-history (the topology-safety state read by the phase-3 gate on the next run). A `finally` block always runs cleanup: it terminates the remote lock process (releasing the target lock) and disconnects. Locks are fcntl advisory locks, so they are released automatically if a process exits or the SSH connection drops — a leftover lock *file* never blocks a future sync.
+
 ### Event-Driven Logging Flow
 
 ```mermaid
@@ -407,5 +425,4 @@ The orchestrator ensures version consistency before any sync operations.
 
 ## Disk Space Preflight Check
 
-The orchestrator checks free disk space on both source and target before creating snapshots.
-Thresholds are configurable (e.g., "20%" or "50GiB").
+The orchestrator checks free disk space on both source and target before creating snapshots. Thresholds are configurable (e.g., "20%" or "50GiB").

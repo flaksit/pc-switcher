@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import os
 import secrets
 from datetime import UTC, datetime
 from logging.handlers import QueueListener
@@ -58,6 +59,24 @@ from pcswitcher.sync_history import (
 from pcswitcher.ui import TerminalUI
 
 __all__ = ["Orchestrator"]
+
+
+def _stuck_lock_hint(machine: str, lock_path: str) -> str:
+    """How-to-unblock guidance appended to lock-conflict errors.
+
+    The lock is an fcntl advisory lock on the open fd, not the file's existence,
+    so a leftover lock *file* never blocks a future sync — deleting it does not
+    help. The lock is released automatically when the holding process exits or
+    its SSH connection closes. The only way a lock genuinely stays held with no
+    running sync is an orphaned holder process, which must be terminated (not
+    rm'd) to clear.
+    """
+    return (
+        f"Wait for the other sync to finish — the lock releases automatically when it exits. "
+        f"If no sync is running, a previous run left a stuck lock on {machine}; clear it by "
+        f"terminating the holder process (e.g. `fuser -k {lock_path}` or `pkill -f pc-switcher.lock`), "
+        f"not by deleting the lock file."
+    )
 
 
 class Orchestrator:
@@ -327,10 +346,13 @@ class Orchestrator:
         """
         self._source_lock = SyncLock(get_lock_path())
 
-        holder_info = f"source:{self._source_hostname}:{self._session_id}"
+        holder_info = f"source:{self._source_hostname}:{self._session_id}:pid={os.getpid()}"
         if not self._source_lock.acquire(holder_info):
             existing_holder = self._source_lock.get_holder_info()
-            raise RuntimeError(f"This machine is already involved in a sync (held by: {existing_holder})")
+            raise RuntimeError(
+                f"This machine is already involved in a sync (held by: {existing_holder}).\n"
+                f"{_stuck_lock_hint('this machine', str(get_lock_path()))}"
+            )
 
     async def _establish_connection(self) -> None:
         """Establish SSH connection to target machine."""
@@ -355,7 +377,10 @@ class Orchestrator:
             self._remote_executor, self._source_hostname, self._session_id
         )
         if self._target_lock_process is None:
-            raise RuntimeError(f"Target {self._target_hostname} is already involved in a sync")
+            raise RuntimeError(
+                f"Target {self._target_hostname} is already involved in a sync.\n"
+                f"{_stuck_lock_hint(self._target_hostname, '~/.local/share/pc-switcher/pc-switcher.lock')}"
+            )
 
     async def _install_on_target_job(self) -> None:
         """Execute InstallOnTargetJob to ensure pc-switcher is on target.
