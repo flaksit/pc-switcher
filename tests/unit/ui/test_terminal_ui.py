@@ -201,6 +201,74 @@ async def test_set_total_steps_updates_total() -> None:
         ui.stop()
 
 
+async def test_pause_resume_reuses_same_live_instance() -> None:
+    """pause()/resume() must reuse the single Live instance, not rebuild it.
+
+    Rebuilding a fresh Live on every confirmation resume left the prior
+    frame in scrollback and reset step continuity. start() constructs the
+    Live only once; pause() stops without discarding it; resume() restarts
+    the same instance.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=5)
+
+    ui.start()
+    try:
+        live_after_start = ui._live  # pyright: ignore[reportPrivateUsage]
+        assert live_after_start is not None
+
+        ui.pause()
+        # pause() must not discard the instance.
+        assert ui._live is live_after_start, "pause() must keep the Live instance"  # pyright: ignore[reportPrivateUsage]
+        assert live_after_start.is_started is False, "pause() must stop rendering"
+
+        ui.resume()
+        assert ui._live is live_after_start, "resume() must reuse the same Live instance"  # pyright: ignore[reportPrivateUsage]
+        assert live_after_start.is_started is True, "resume() must restart the same instance"
+
+        # A second start() (as happens if a caller resumes via start() instead of
+        # resume()) must also reuse the existing instance rather than building a new one.
+        ui.pause()
+        ui.start()
+        assert ui._live is live_after_start, "start() must not construct a new Live on resume"  # pyright: ignore[reportPrivateUsage]
+    finally:
+        ui.stop()
+
+    assert ui._live is None, "stop() remains the final teardown and nulls the instance"  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_resume_forces_redraw_of_state_mutated_while_paused() -> None:
+    """resume() must redraw immediately, not wait for an unrelated future update.
+
+    Isolates resume()'s own redraw: mutate state while paused (stored via the
+    is_started guard but not rendered), call resume() with no further mutator
+    calls, and assert the rendered output already reflects the new state.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=5)
+
+    ui.start()
+    try:
+        ui.set_current_step(2)
+        await asyncio.sleep(0.15)
+
+        ui.pause()
+        # Mutated while paused: stored, but the is_started guard prevents rendering.
+        ui.set_current_step(3)
+
+        ui.resume()
+        await asyncio.sleep(0.15)
+
+        rendered = output.getvalue()
+        assert "Step 3/5" in rendered, "resume() must force a redraw reflecting state mutated while paused"
+    finally:
+        ui.stop()
+
+
 async def test_core_us_tui_as3_progress_and_connection_events() -> None:
     """Test progress and connection event handling via EventBus.
 

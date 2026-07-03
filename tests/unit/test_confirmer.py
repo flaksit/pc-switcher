@@ -41,8 +41,8 @@ class TestInteractive:
         ):
             result = await confirmer.confirm(title="T", message="m", allow=False, allow_flag="--allow-x")
         assert result is True
-        ui.stop.assert_called_once()
-        ui.start.assert_called_once()
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()
 
     async def test_no_returns_false(self) -> None:
         confirmer, _console, ui = _make_confirmer()
@@ -53,7 +53,7 @@ class TestInteractive:
             result = await confirmer.confirm(title="T", message="m", allow=False, allow_flag="--allow-x")
         assert result is False
         # UI is resumed even when the user declines.
-        ui.start.assert_called_once()
+        ui.resume.assert_called_once()
 
     async def test_ui_resumed_when_prompt_raises(self) -> None:
         """If the prompt raises, the finally block still resumes the TUI."""
@@ -64,7 +64,7 @@ class TestInteractive:
             pytest.raises(KeyboardInterrupt),
         ):
             await confirmer.confirm(title="T", message="m", allow=False, allow_flag="--allow-x")
-        ui.start.assert_called_once()
+        ui.resume.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ class TestNonInteractive:
         with patch.object(sys, "stdin", _mock_isatty(False)):
             result = await confirmer.confirm(title="T", message="m", allow=True, allow_flag="--allow-x")
         assert result is True
-        ui.stop.assert_not_called()
+        ui.pause.assert_not_called()
         console.print.assert_not_called()
 
     async def test_allow_false_refuses_and_prints_hint(self) -> None:
@@ -84,7 +84,7 @@ class TestNonInteractive:
         with patch.object(sys, "stdin", _mock_isatty(False)):
             result = await confirmer.confirm(title="T", message="m", allow=False, allow_flag="--allow-x")
         assert result is False
-        ui.stop.assert_not_called()
+        ui.pause.assert_not_called()
         # The refusal prints the message and the flag hint for the user.
         console.print.assert_called()
         printed = " ".join(str(c.args[0]) for c in console.print.call_args_list if c.args)
