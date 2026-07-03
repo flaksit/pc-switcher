@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from pcswitcher.lock import LOCK_FILE_NAME, SyncLock, get_lock_path
+from pcswitcher.lock import LOCK_FILE_NAME, SyncLock, get_lock_path, start_persistent_remote_lock
+from pcswitcher.models import CommandResult
 
 
 class TestLockPath:
@@ -160,3 +162,43 @@ class TestSyncLock:
 
         # Clean up
         lock2.release()
+
+
+class TestStartPersistentRemoteLock:
+    """The remote target lock must verify flock actually acquired, not just start."""
+
+    @staticmethod
+    def _executor(poll_result: int | None) -> MagicMock:
+        """Mock executor whose start_process yields a process with the given poll() result."""
+        executor = MagicMock()
+        executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        process = MagicMock()
+        process.poll = MagicMock(return_value=poll_result)
+        process.wait = AsyncMock(return_value=CommandResult(exit_code=1, stdout="", stderr=""))
+        executor.start_process = AsyncMock(return_value=process)
+        return executor
+
+    @pytest.mark.asyncio
+    async def test_returns_process_when_lock_acquired(self) -> None:
+        """A still-running flock (poll() is None) means the lock was acquired."""
+        executor = self._executor(poll_result=None)
+        process = await start_persistent_remote_lock(executor, "src-host", "sess1")
+        assert process is not None
+        assert process is executor.start_process.return_value
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_lock_already_held(self) -> None:
+        """A flock that exited immediately (poll() is not None) means the target is busy."""
+        executor = self._executor(poll_result=1)
+        process = await start_persistent_remote_lock(executor, "src-host", "sess1")
+        assert process is None
+        # The exited process must be reaped.
+        executor.start_process.return_value.wait.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_setup_fails(self) -> None:
+        """If the remote state-dir/holder-file setup fails, no lock is attempted."""
+        executor = self._executor(poll_result=None)
+        executor.run_command = AsyncMock(return_value=CommandResult(exit_code=1, stdout="", stderr="denied"))
+        process = await start_persistent_remote_lock(executor, "src-host", "sess1")
+        assert process is None

@@ -141,16 +141,22 @@ async def start_persistent_remote_lock(
     if not setup_result.success:
         return None
 
-    # Start persistent process that holds the lock
-    # flock -n for non-blocking lock attempt
-    # -c "read" waits indefinitely by reading from stdin (which will never provide input)
-    # This keeps the process alive and holding the lock until terminated
+    # Start persistent process that holds the lock.
+    # flock -n = non-blocking attempt; if the lock is already held it exits
+    # immediately (non-zero). -c "read" otherwise blocks forever on stdin (which
+    # never receives input), keeping the process — and the lock — alive until
+    # terminated.
     cmd = f'flock -n "{lock_path}" -c "read"'
 
     try:
         process = await executor.start_process(cmd)
-        # Give flock a moment to acquire the lock or fail
-        await asyncio.sleep(0.1)
+        # Give flock time to either acquire the lock (and block on read) or
+        # fail-fast. A process that has already exited means flock could NOT
+        # acquire the lock — the target is already involved in another sync.
+        await asyncio.sleep(0.5)
+        if process.poll() is not None:
+            await process.wait()  # reap the exited process
+            return None
         return process
     except Exception:
         return None

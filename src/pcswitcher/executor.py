@@ -243,6 +243,14 @@ class RemoteProcess:
             stderr=stderr_data,
         )
 
+    def poll(self) -> int | None:
+        """Return the exit status if the process has finished, else None (still running).
+
+        Mirrors subprocess.Popen.poll(). Used to detect a process that exited
+        immediately (e.g. a non-blocking `flock` that failed to acquire the lock).
+        """
+        return self._proc.exit_status
+
     async def terminate(self) -> None:
         """Terminate the process."""
         self._proc.terminate()

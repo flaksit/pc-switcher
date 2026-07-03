@@ -9,10 +9,13 @@ reachable when the target is busy for a reason independent of the second sync's
 source. Unit tests cover this by mocking the remote lock; this test exercises the
 real remote `flock` conflict by pre-holding the target's lock out-of-band.
 
-VM Requirements: see test_folder_sync.py (same pc1/pc2 Hetzner VMs).
+VM Requirements: same pc1/pc2 Hetzner VMs as test_end_to_end_sync.py.
 """
 
 from __future__ import annotations
+
+import asyncio
+import contextlib
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 
@@ -61,19 +64,25 @@ class TestTargetLockConflict:
         """
         _ = (pc1_with_pcswitcher_mod, reset_pcswitcher_state)
 
+        holder: asyncio.Task[object] | None = None
         try:
             await _write_config(pc1_executor, _MIN_CONFIG)
+            await pc2_executor.run_command(f'mkdir -p "$(dirname "{_LOCK}")"', timeout=10.0)
 
-            # Hold pc2's unified lock out-of-band via a detached flock process.
-            held = await pc2_executor.run_command(
-                f'mkdir -p "$(dirname "{_LOCK}")"\n'
-                f"nohup setsid flock -n \"{_LOCK}\" -c 'sleep 60' >/dev/null 2>&1 &\n"
-                "sleep 0.5\n"
-                f'if flock -n "{_LOCK}" -c true; then echo NOT_HELD; else echo HELD; fi',
-                timeout=15.0,
+            # Hold pc2's unified lock for the duration of the sync via a CONCURRENT,
+            # still-running command. Keeping the SSH channel open keeps the remote
+            # flock process alive (a detached background process would be reaped when
+            # its channel closed, freeing the lock before the sync reached it).
+            holder = asyncio.create_task(pc2_executor.run_command(f'flock -n "{_LOCK}" -c "sleep 45"', timeout=60.0))
+            await asyncio.sleep(2.0)  # let flock acquire
+
+            # Verify the lock is actually held (a non-blocking flock on another channel fails).
+            check = await pc2_executor.run_command(
+                f'if flock -n "{_LOCK}" -c true; then echo FREE; else echo HELD; fi',
+                timeout=10.0,
             )
-            assert held.success and "HELD" in held.stdout, (
-                f"Failed to pre-hold pc2's lock out-of-band.\nstdout: {held.stdout}\nstderr: {held.stderr}"
+            assert "HELD" in check.stdout, (
+                f"Precondition failed: pc2's lock is not held.\nstdout: {check.stdout}\nstderr: {check.stderr}"
             )
 
             # A→pc2 must fail at the target-lock phase (fast — the timeout guards
@@ -96,7 +105,11 @@ class TestTargetLockConflict:
             )
 
         finally:
-            # Release the held lock (kills the flock holder; the child sleep dies with it).
+            if holder is not None:
+                holder.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await holder
+            # Belt-and-braces: kill any lingering holder and remove the lock file.
             await pc2_executor.run_command(
                 f'pkill -f "pc-switcher.lock" || true; rm -f "{_LOCK}"',
                 timeout=15.0,

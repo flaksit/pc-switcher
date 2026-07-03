@@ -282,6 +282,59 @@ if ! wait_for_ssh "${SSH_USER}@${VM_HOST}" 300; then
     exit 1
 fi
 
+# Step 6.5: Re-learn the peer VM's current host key (self-healing inter-VM trust)
+#
+# Inter-VM SSH trust is seeded once at provisioning time (configure-hosts.sh) and
+# frozen into the @home baseline snapshot that this reset just restored. That frozen
+# known_hosts can drift out of sync with the peer's actual host key: upgrade-vms.sh
+# recreates baselines without re-running configure-hosts.sh, and a single-VM
+# reprovision regenerates that VM's host key while the peer's @home baseline still
+# pins the old one. Because reset restores the stale baseline every run, such drift
+# is persistent and breaks reverse-direction sync (e.g. pc2 -> pc1).
+#
+# Re-scanning the peer here makes each test run re-learn the peer's CURRENT host key
+# instead of trusting the possibly-stale baseline. Idempotent: the old entry is
+# removed before the fresh one is appended. Runs as testuser (known_hosts lives in
+# testuser's home). The peer host key is stable across reboots, so a peer that is
+# briefly mid-reboot during a parallel reset just needs a bounded retry.
+log_step_prefixed "Refreshing peer host key in known_hosts..."
+ssh_vm 'bash -s' << 'EOF'
+set -euo pipefail
+
+self="$(hostname)"
+case "$self" in
+    pc1) peer="pc2" ;;
+    pc2) peer="pc1" ;;
+    *) echo "ERROR: unexpected hostname '$self'; cannot determine peer VM" >&2; exit 1 ;;
+esac
+
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+
+# Retry the scan until the peer offers its ed25519 key: during a parallel reset the
+# peer may still be rebooting. Bounded so a genuinely-unreachable peer fails loudly.
+deadline=$(( $(date +%s) + 120 ))
+scanned=""
+while [ "$(date +%s)" -lt "$deadline" ]; do
+    scanned="$(ssh-keyscan -T 5 -t rsa,ecdsa,ed25519 -H "$peer" 2>/dev/null || true)"
+    if printf '%s\n' "$scanned" | grep -q 'ssh-ed25519'; then
+        break
+    fi
+    sleep 5
+done
+
+if ! printf '%s\n' "$scanned" | grep -q 'ssh-ed25519'; then
+    echo "ERROR: could not obtain ed25519 host key for peer '$peer'" >&2
+    exit 1
+fi
+
+# Remove any prior (possibly stale) entry, then pin the freshly-scanned keys.
+ssh-keygen -R "$peer" >/dev/null 2>&1 || true
+printf '%s\n' "$scanned" >> ~/.ssh/known_hosts
+echo "Refreshed known_hosts entry for peer '$peer'"
+EOF
+log_info_prefixed "Peer host key refreshed"
+
 # Step 7: Clean up old subvolumes after reboot (keep 3 most recent for investigation)
 log_step_prefixed "Rotating old subvolumes (keeping 3 most recent)..."
 ssh_vm 'sudo bash -s' << 'EOF'

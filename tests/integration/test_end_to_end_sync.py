@@ -27,6 +27,7 @@ Test VM Requirements:
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
@@ -233,108 +234,392 @@ async def sync_ready_source_long_duration(
     )
 
 
+# ---------------------------------------------------------------------------
+# Folder-sync scenario helpers (real /home): seeding, manifests, config.
+#
+# The end-to-end test below syncs the real /home (the production default scope).
+# It is safe on the VMs because both boot from an identical btrfs baseline (so the
+# --delete mirror only moves the seeded subtree), pc-switcher's own runtime files
+# are protected by the hardcoded excludes (ADR-016), heavy regenerable trees are
+# excluded in the test config for speed, and .ssh/known_hosts is excluded because
+# reset-vm.sh gives each VM the other's host key. Each test cleans up its subtree.
+# ---------------------------------------------------------------------------
+
+# Seeded rich test subtree, relative to the user's home.
+_TESTTREE = "pcsw-itest"
+
+# uid/gid 1 = daemon on Ubuntu — a non-root system user, used numerically to prove
+# uid/gid preservation for files the invoking user cannot access.
+_OTHER_UID = 1
+_OTHER_GID = 1
+
+# Known mtimes (Unix epoch seconds) for backdated-mtime assertions.
+_BACKDATED_MTIME = 1705312800  # 2024-01-15 10:00:00 UTC
+_ADDITION_MTIME = 1710000000  # 2024-03-09 16:00:00 UTC
+
+# pc-switcher runtime state dir (ADR-016 hardcoded exclude target).
+_STATE_DIR = "~/.local/share/pc-switcher"
+
+
+def _tree(user: str) -> str:
+    """Absolute path of the seeded rich test subtree within the real home."""
+    return f"/home/{user}/{_TESTTREE}"
+
+
+def _make_e2e_config() -> str:
+    """Config exercising both a generic job (dummy_success) and folder_sync of /home."""
+    return f"""\
+logging:
+  file: DEBUG
+  tui: INFO
+  external: WARNING
+sync_jobs:
+  dummy_success: true
+  folder_sync: true
+disk_space_monitor:
+  preflight_minimum: "5%"
+  runtime_minimum: "3%"
+  warning_threshold: "10%"
+  check_interval: 5
+btrfs_snapshots:
+  subvolumes:
+    - "@"
+    - "@home"
+  keep_recent: 2
+dummy_success:
+  source_duration: 2
+  target_duration: 2
+folder_sync:
+  folders:
+    - path: /home
+      enabled: true
+      excludes:
+        - .ssh/id_*
+        - .config/tailscale
+        - .config/Code/Cache
+        - .config/Code/CachedData
+        - .config/Code/GPUCache
+        - .ssh/known_hosts
+        - .cache
+        - .local/share/uv/python
+        - {_TESTTREE}/secret
+"""
+
+
+async def _write_config(executor: BashLoginRemoteExecutor, config: str) -> None:
+    """Write the pc-switcher config to a VM."""
+    result = await executor.run_command(
+        f"mkdir -p ~/.config/pc-switcher && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
+        timeout=10.0,
+    )
+    assert result.success, f"Failed to write config: {result.stderr}"
+
+
+async def _seed_rich_tree(executor: BashLoginRemoteExecutor, tree: str) -> None:
+    """Create the rich metadata/ownership test tree inside `tree` on a VM.
+
+    Covers the full ownership x permission matrix (user/root/other-user files AND
+    directories), special permission bits (setuid/setgid/sticky), a POSIX ACL, a
+    backdated mtime, a hard-link pair, a relative symlink, and a config-excluded
+    subtree. Root-/other-user-owned entries are created then chowned, so rsync-as-root
+    must read and preserve entries the invoking user cannot access.
+    """
+    result = await executor.run_command(
+        f"""set -e
+T={tree}
+rm -rf "$T"
+mkdir -p "$T"/d700 "$T"/d755 "$T"/setgid_dir "$T"/sticky_dir "$T"/secret
+
+# User-owned files with varied permission bits
+printf 'content-600' > "$T/f600.txt"; chmod 600 "$T/f600.txt"
+printf 'content-640' > "$T/f640.txt"; chmod 640 "$T/f640.txt"
+printf 'content-644' > "$T/f644.txt"; chmod 644 "$T/f644.txt"
+printf 'content-755' > "$T/f755.txt"; chmod 755 "$T/f755.txt"
+printf 'content-777' > "$T/f777.txt"; chmod 777 "$T/f777.txt"
+printf 'content-suid' > "$T/setuid.bin"; chmod 4755 "$T/setuid.bin"
+printf 'content-sgid' > "$T/setgid.bin"; chmod 2755 "$T/setgid.bin"
+
+# User-owned directories with varied permission bits (each non-empty)
+printf 'in-d700'   > "$T/d700/inside.txt";       chmod 700  "$T/d700"
+printf 'in-d755'   > "$T/d755/inside.txt";       chmod 755  "$T/d755"
+printf 'in-sgid'   > "$T/setgid_dir/inside.txt"; chmod 2775 "$T/setgid_dir"
+printf 'in-sticky' > "$T/sticky_dir/inside.txt"; chmod 1777 "$T/sticky_dir"
+
+# POSIX ACL (numeric uid, need not exist on either machine)
+printf 'content-acl' > "$T/acl.txt"; setfacl -m u:2001:r "$T/acl.txt"
+
+# Backdated mtime
+printf 'content-backdated' > "$T/backdated.txt"
+touch -d "@{_BACKDATED_MTIME}" "$T/backdated.txt"
+
+# Hard-link pair and relative symlink
+printf 'content-hardlink' > "$T/hl_a.txt"
+ln "$T/hl_a.txt" "$T/hl_b.txt"
+ln -s f644.txt "$T/sym.txt"
+
+# Root-owned file and directory (created as the user, then chowned; the user
+# ends up with no access, and rsync-as-root must still read and preserve them).
+printf 'content-root-file' > "$T/root_file.txt"
+sudo chown 0:0 "$T/root_file.txt"; sudo chmod 600 "$T/root_file.txt"
+mkdir -p "$T/root_dir"; printf 'content-root-dir' > "$T/root_dir/inside.txt"
+sudo chown -R 0:0 "$T/root_dir"
+sudo chmod 700 "$T/root_dir"; sudo chmod 600 "$T/root_dir/inside.txt"
+
+# Other-(system-)user-owned file and directory (invoking user has no access)
+printf 'content-other-file' > "$T/other_file.txt"
+sudo chown {_OTHER_UID}:{_OTHER_GID} "$T/other_file.txt"; sudo chmod 600 "$T/other_file.txt"
+mkdir -p "$T/other_dir"; printf 'content-other-dir' > "$T/other_dir/inside.txt"
+sudo chown -R {_OTHER_UID}:{_OTHER_GID} "$T/other_dir"
+sudo chmod 700 "$T/other_dir"; sudo chmod 600 "$T/other_dir/inside.txt"
+
+# Excluded subtree (must never reach the target)
+printf 'top-secret' > "$T/secret/token.txt"
+""",
+        timeout=60.0,
+        login_shell=False,
+    )
+    assert result.success, f"Failed to seed rich test tree: {result.stderr}"
+
+
+def _manifest_cmd(tree: str) -> str:
+    """Command emitting a deterministic `<type> <mode> <uid> <gid> <path>` manifest of `tree`.
+
+    Runs under sudo (root-/other-user-owned entries readable); the excluded
+    `secret/` subtree is pruned so source and target manifests match on success.
+    """
+    return (
+        f"cd {tree} && sudo find . -path ./secret -prune -o "
+        r"\( -type f -o -type d -o -type l \) -printf '%y %m %U %G %p\n' | LC_ALL=C sort"
+    )
+
+
+def _md5_manifest_cmd(tree: str) -> str:
+    """Command emitting C-sorted md5sums of every regular file in `tree` (symlinks/secret skipped)."""
+    return (
+        f"cd {tree} && sudo find . -path ./secret -prune -o -type f ! -type l "
+        r"-exec md5sum {} + | LC_ALL=C sort"
+    )
+
+
+async def _remove_test_artifacts(
+    pc1_exec: BashLoginRemoteExecutor,
+    pc2_exec: BashLoginRemoteExecutor,
+    tree: str,
+) -> None:
+    """Remove the seeded test subtree and config from both VMs (best-effort cleanup)."""
+    for name, exec_ in (("pc1", pc1_exec), ("pc2", pc2_exec)):
+        res = await exec_.run_command(
+            f"sudo rm -rf {tree} && rm -f ~/.config/pc-switcher/config.yaml",
+            timeout=30.0,
+            login_shell=False,
+        )
+        if not res.success:
+            print(f"[cleanup] {name} removal warning: {res.stderr}")
+
+
 class TestEndToEndSync:
     """Integration tests for complete pc-switcher sync workflow."""
 
-    async def test_core_us_job_arch_as1_job_integration_via_interface(
+    async def test_core_us_job_arch_as1_job_integration_via_interface(  # noqa: PLR0915
         self,
-        sync_ready_source: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+        pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """Test CORE-US-JOB-ARCH-AS1: Job integrates via standardized interface.
+        """CORE-US-JOB-ARCH-AS1 + full folder-sync end-to-end (criteria 1-5, ADR-014/015/016).
 
-        Verifies that a job implementing the standardized Job interface is automatically
-        integrated into the sync workflow without requiring changes to core orchestrator code.
+        One scenario, one seed, five syncs — the complete pipeline in a single run:
 
-        This test validates:
-        - Job is discovered and loaded by orchestrator
-        - Configuration is validated against job schema
-        - Job lifecycle methods called in correct order (validate → execute)
-        - Job logging routed to file and terminal UI
-        - Progress updates forwarded to UI
-        - Job results included in sync summary
+        1. Blocked A→B (no flag): the W1 first-sync gate aborts non-interactively; nothing reaches pc2.
+        2. A→B --dry-run: rehearses through the gate (ADR-014) but writes nothing and does not update history (D-12).
+        3. A→B --allow-first-sync: the real sync. Verifies BOTH
+           - job integration via the standardized interface (dummy_success + folder_sync discovered,
+             logged, pre/post snapshots on both machines, config synced), AND
+           - folder_sync of the real /home: byte-identical content; numeric uid/gid; permissions incl.
+             setuid/setgid/sticky; POSIX ACL; mtime; hard-link inode sharing; symlink; across user-,
+             root-, and other-user-owned files AND directories the invoking user cannot read; config
+             exclusions honoured; and the ADR-016 runtime-file excludes (state/install/logs) via sentinels.
+        4. Mutate pc2 (add / modify / delete file / delete directory / chmod) then B→A: all propagate.
+        5. A→B again with no override: a clean round-trip must not trip the out-of-order gate (ADR-015 #159).
 
-        Expected behavior:
-        1. Configure a test sync job (dummy_success) via config.yaml
-        2. Run pc-switcher sync from pc1 to pc2
-        3. Verify orchestrator loads the job
-        4. Verify job completes successfully
-        5. Verify sync exits with code 0
-        6. Verify log file contains job entries
-        7. Verify snapshots were created
+        See the module-level "Folder-sync scenario helpers" for why syncing the real /home is safe here.
         """
-        pc1_executor = sync_ready_source
-        # Snapshot cleanup is handled by reset_pcswitcher_state fixture (via sync_ready_source)
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+        user = os.environ["PC_SWITCHER_TEST_USER"]
+        tree = _tree(user)
 
-        # Run pc-switcher sync from pc1 to pc2
-        # Timeout: ~60s for SSH + install + snapshots + job execution (4+4 seconds)
-        # Use --yes to auto-accept config sync prompts (non-interactive).
-        # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
-        # (no TTY) to bypass the first-sync overwrite confirmation.
-        sync_result = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes --allow-first-sync",
-            timeout=180.0,
-            login_shell=True,
-        )
+        try:
+            await _write_config(pc1_executor, _make_e2e_config())
+            await _seed_rich_tree(pc1_executor, tree)
+            await pc2_executor.run_command(f"sudo rm -rf {tree}", timeout=15.0, login_shell=False)
 
-        # Verify sync completed successfully
-        assert sync_result.success, (
-            f"pc-switcher sync failed with exit code {sync_result.exit_code}.\n"
-            f"stdout: {sync_result.stdout}\n"
-            f"stderr: {sync_result.stderr}"
-        )
+            # ADR-016 runtime-exclude sentinels: a marker inside each machine's own state dir
+            # (reset_pcswitcher_state wiped the dir, so create it fresh here).
+            await pc1_executor.run_command(
+                f"mkdir -p {_STATE_DIR} && printf pc1 > {_STATE_DIR}/SENTINEL_SOURCE", timeout=10.0
+            )
+            await pc2_executor.run_command(
+                f"mkdir -p {_STATE_DIR} && printf pc2 > {_STATE_DIR}/SENTINEL_TARGET", timeout=10.0
+            )
 
-        # Verify log file was created and contains job entries
-        log_check = await pc1_executor.run_command(
-            "ls -la ~/.local/share/pc-switcher/logs/sync-*.log | tail -1",
-            timeout=10.0,
-        )
-        assert log_check.success, f"Log file not found: {log_check.stderr}"
+            src_manifest = await pc1_executor.run_command(_manifest_cmd(tree), timeout=30.0, login_shell=False)
+            assert src_manifest.success, f"source manifest failed: {src_manifest.stderr}"
+            src_md5 = await pc1_executor.run_command(_md5_manifest_cmd(tree), timeout=30.0, login_shell=False)
+            assert src_md5.success, f"source md5 manifest failed: {src_md5.stderr}"
 
-        # Read the latest log file and verify job execution entries
-        log_content = await pc1_executor.run_command(
-            "cat $(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)",
-            timeout=10.0,
-        )
-        assert log_content.success, f"Failed to read log file: {log_content.stderr}"
-        log_text = log_content.stdout
+            # --- Step 1: blocked first sync (W1 gate, non-interactive) ---
+            blocked = await pc1_executor.run_command("pc-switcher sync pc2 --yes", timeout=180.0, login_shell=True)
+            assert not blocked.success, (
+                f"W1 first-sync gate should block non-interactively, got exit {blocked.exit_code}.\n{blocked.stdout}"
+            )
+            assert (
+                "out-of-order" in (blocked.stdout + blocked.stderr).lower()
+                or "target" in (blocked.stdout + blocked.stderr).lower()
+            ), f"Unexpected first-sync-gate message.\nstdout: {blocked.stdout}\nstderr: {blocked.stderr}"
+            no_tree = await pc2_executor.run_command(f"test ! -e {tree}", timeout=10.0, login_shell=False)
+            assert no_tree.success, "Blocked first sync transferred the tree to pc2."
 
-        # Verify job execution logged (dummy_success job should log phase messages)
-        assert "dummy_success" in log_text.lower() or "source phase" in log_text.lower(), (
-            f"Log should contain dummy_success job entries.\nLog content:\n{log_text[:2000]}"
-        )
+            # --- Step 2: dry-run rehearsal (proceeds, writes nothing, no history change) ---
+            hist_before = await pc1_executor.run_command(
+                f"cat {_STATE_DIR}/sync-history.json 2>/dev/null || echo absent", timeout=10.0
+            )
+            dry = await pc1_executor.run_command(
+                "pc-switcher sync pc2 --yes --dry-run", timeout=180.0, login_shell=True
+            )
+            assert dry.success, f"--dry-run should not be blocked (ADR-014).\nstderr: {dry.stderr}"
+            still_no_tree = await pc2_executor.run_command(f"test ! -e {tree}", timeout=10.0, login_shell=False)
+            assert still_no_tree.success, "--dry-run transferred the tree to pc2 (must be read-only)."
+            hist_after = await pc1_executor.run_command(
+                f"cat {_STATE_DIR}/sync-history.json 2>/dev/null || echo absent", timeout=10.0
+            )
+            assert hist_before.stdout.strip() == hist_after.stdout.strip(), "--dry-run updated sync-history (D-12)."
 
-        # Verify snapshots were created on source (pc1)
-        # Snapshots are at /.snapshots/pc-switcher/<session_folder>/<snapshot_name>
-        # e.g., /.snapshots/pc-switcher/20251219T143022-abc12345/pre-@-20251219T143022
-        source_snapshots = await pc1_executor.run_command(
-            "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head -1",
-            timeout=10.0,
-            login_shell=False,
-        )
-        assert source_snapshots.stdout.strip(), (
-            f"Pre/post-sync snapshots should exist on source.\nLs output: {source_snapshots.stdout}"
-        )
+            # --- Step 3: real first sync (--allow-first-sync) ---
+            sync_ab = await pc1_executor.run_command(
+                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=300.0, login_shell=True
+            )
+            assert sync_ab.success, (
+                f"A→B first sync failed.\nexit={sync_ab.exit_code}\nstdout: {sync_ab.stdout}\nstderr: {sync_ab.stderr}"
+            )
 
-        # Verify snapshots were created on target (pc2)
-        target_snapshots = await pc2_executor.run_command(
-            "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head -1",
-            timeout=10.0,
-            login_shell=False,
-        )
-        assert target_snapshots.stdout.strip(), (
-            f"Pre/post-sync snapshots should exist on target.\nLs output: {target_snapshots.stdout}"
-        )
+            # 3a. Job integration via interface: log entries, snapshots on both, config synced.
+            log_content = await pc1_executor.run_command(
+                "cat $(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)", timeout=10.0
+            )
+            assert log_content.success, f"Failed to read log file: {log_content.stderr}"
+            log_text = log_content.stdout.lower()
+            assert "dummy_success" in log_text or "source phase" in log_text, "Generic job (dummy_success) not logged."
+            assert "folder_sync" in log_text, "folder_sync job not logged."
+            src_snaps = await pc1_executor.run_command(
+                "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head -1", timeout=10.0, login_shell=False
+            )
+            assert src_snaps.stdout.strip(), "Pre/post-sync snapshots missing on source."
+            tgt_snaps = await pc2_executor.run_command(
+                "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head -1", timeout=10.0, login_shell=False
+            )
+            assert tgt_snaps.stdout.strip(), "Pre/post-sync snapshots missing on target."
+            tgt_config = await pc2_executor.run_command("cat ~/.config/pc-switcher/config.yaml", timeout=10.0)
+            assert tgt_config.success and "dummy_success: true" in tgt_config.stdout, "Config not synced to target."
 
-        # Verify config was synced to target
-        target_config = await pc2_executor.run_command(
-            "cat ~/.config/pc-switcher/config.yaml",
-            timeout=10.0,
-        )
-        assert target_config.success, f"Config should exist on target: {target_config.stderr}"
-        assert "dummy_success: true" in target_config.stdout, (
-            f"Target config should match source.\nTarget config:\n{target_config.stdout}"
-        )
+            # 3b. folder_sync content + metadata: target manifests must equal source manifests exactly.
+            tgt_manifest = await pc2_executor.run_command(_manifest_cmd(tree), timeout=30.0, login_shell=False)
+            assert tgt_manifest.success, f"target manifest failed: {tgt_manifest.stderr}"
+            assert tgt_manifest.stdout == src_manifest.stdout, (
+                "Ownership/permission manifest differs after A→B (numeric uid/gid, mode, or special bits).\n"
+                f"--- pc1 ---\n{src_manifest.stdout}\n--- pc2 ---\n{tgt_manifest.stdout}"
+            )
+            tgt_md5 = await pc2_executor.run_command(_md5_manifest_cmd(tree), timeout=30.0, login_shell=False)
+            assert tgt_md5.success, f"target md5 manifest failed: {tgt_md5.stderr}"
+            assert tgt_md5.stdout == src_md5.stdout, (
+                "Content md5 manifest differs after A→B.\n"
+                f"--- pc1 ---\n{src_md5.stdout}\n--- pc2 ---\n{tgt_md5.stdout}"
+            )
+
+            # 3c. ACL, backdated mtime, hard-link inode sharing, symlink target.
+            details = await pc2_executor.run_command(
+                f"getfacl -p {tree}/acl.txt && echo '---' && "
+                f"stat -c '%Y' {tree}/backdated.txt && "
+                f"stat -c '%i' {tree}/hl_a.txt && stat -c '%i' {tree}/hl_b.txt && "
+                f"readlink {tree}/sym.txt",
+                timeout=15.0,
+                login_shell=False,
+            )
+            assert details.success, f"metadata detail checks failed on pc2: {details.stderr}"
+            acl_part, rest = details.stdout.split("---\n", 1)
+            lines = rest.strip().splitlines()
+            assert "user:2001:r--" in acl_part, f"ACL entry not preserved on pc2:\n{acl_part}"
+            assert int(lines[0]) == _BACKDATED_MTIME, f"backdated mtime not preserved: {lines[0]}"
+            assert lines[1] == lines[2], f"hard-link pair not sharing an inode on pc2 ({lines[1]} != {lines[2]})"
+            assert lines[3] == "f644.txt", f"symlink target wrong on pc2: {lines[3]!r}"
+
+            # 3d. Exclusions: config-excluded subtree absent; ADR-016 runtime excludes held.
+            excl = await pc2_executor.run_command(
+                f"test ! -e {tree}/secret/token.txt", timeout=10.0, login_shell=False
+            )
+            assert excl.success, "Config-excluded secret/token.txt reached pc2 (exclusion failed)."
+            runtime = await pc2_executor.run_command(
+                f"test ! -e {_STATE_DIR}/SENTINEL_SOURCE && "
+                f"test -e {_STATE_DIR}/SENTINEL_TARGET && "
+                f"test -e ~/.local/bin/pc-switcher",
+                timeout=10.0,
+            )
+            assert runtime.success, (
+                "ADR-016 runtime exclusion failed: pc1's state reached pc2, or pc2's own state/install was "
+                "clobbered by the --delete mirror of /home."
+            )
+
+            # --- Step 4: mutate pc2, then B→A ---
+            mutate = await pc2_executor.run_command(
+                f"""set -e
+T={tree}
+printf 'added-on-pc2' > "$T/added.txt"; chmod 750 "$T/added.txt"; touch -d "@{_ADDITION_MTIME}" "$T/added.txt"
+printf 'MODIFIED-644' > "$T/f644.txt"
+rm -f "$T/f600.txt"
+rm -rf "$T/d700"
+chmod 700 "$T/f755.txt"
+""",
+                timeout=15.0,
+                login_shell=False,
+            )
+            assert mutate.success, f"Mutation on pc2 failed: {mutate.stderr}"
+
+            sync_ba = await pc2_executor.run_command("pc-switcher sync pc1 --yes", timeout=300.0, login_shell=True)
+            assert sync_ba.success, (
+                f"B→A sync failed.\nexit={sync_ba.exit_code}\nstdout: {sync_ba.stdout}\nstderr: {sync_ba.stderr}"
+            )
+
+            roundtrip = await pc1_executor.run_command(
+                f"cat {tree}/added.txt && echo '|' && "
+                f"stat -c '%a %Y' {tree}/added.txt && echo '|' && "
+                f"cat {tree}/f644.txt && echo '|' && "
+                f"stat -c '%a' {tree}/f755.txt && echo '|' && "
+                f"( test ! -e {tree}/f600.txt && echo GONE_FILE ) && "
+                f"( test ! -e {tree}/d700 && echo GONE_DIR )",
+                timeout=15.0,
+                login_shell=False,
+            )
+            assert roundtrip.success, f"pc1 checks after B→A failed: {roundtrip.stderr}"
+            added_content, added_meta, f644_content, f755_mode, gone = [p.strip() for p in roundtrip.stdout.split("|")]
+            assert added_content == "added-on-pc2", f"addition content wrong on pc1: {added_content!r}"
+            added_mode, added_mtime = added_meta.split()
+            assert added_mode == "750", f"addition perms not preserved on B→A: {added_mode}"
+            assert int(added_mtime) == _ADDITION_MTIME, f"addition mtime not preserved: {added_mtime}"
+            assert f644_content == "MODIFIED-644", f"modification not propagated on B→A: {f644_content!r}"
+            assert f755_mode == "700", f"permission change not propagated on B→A: {f755_mode}"
+            assert "GONE_FILE" in gone, "file deletion (f600.txt) not propagated on B→A"
+            assert "GONE_DIR" in gone, "directory deletion (d700) not propagated on B→A"
+
+            # --- Step 5: clean A→B again must not trip the out-of-order gate ---
+            sync_ab2 = await pc1_executor.run_command("pc-switcher sync pc2 --yes", timeout=300.0, login_shell=True)
+            assert sync_ab2.success, (
+                f"Second A→B failed (out-of-order gate wrongly tripped for a clean round-trip, ADR-015 #159).\n"
+                f"exit={sync_ab2.exit_code}\nstdout: {sync_ab2.stdout}\nstderr: {sync_ab2.stderr}"
+            )
+
+        finally:
+            await _remove_test_artifacts(pc1_executor, pc2_executor, tree)
 
     async def test_core_us_job_arch_as7_interrupt_terminates_job(
         self,
