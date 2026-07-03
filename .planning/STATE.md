@@ -5,16 +5,16 @@ milestone_name: milestone
 current_phase: 01
 current_phase_name: home-sync-mvp-user-data-sync
 status: executing
-stopped_at: Completed 01-16-PLAN.md
-last_updated: "2026-07-03T22:05:44.179Z"
+stopped_at: Completed 01-18-PLAN.md
+last_updated: "2026-07-03T22:16:59.391Z"
 last_activity: 2026-07-03
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 7
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 18
-  completed_plans: 17
-  percent: 0
+  completed_plans: 18
+  percent: 14
 ---
 
 # Project State
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 01 (home-sync-mvp-user-data-sync) — EXECUTING
 
-Plan: 4 of 18
+Plan: 5 of 18
 
 Status: Ready to execute
 
@@ -77,6 +77,7 @@ Progress: [█████████░] 94%
 | Phase 01 P15 | 6min | 3 tasks | 6 files |
 | Phase 01 P17 | 8min | 3 tasks | 7 files |
 | Phase 01 P16 | 8min | 3 tasks | 5 files |
+| Phase 01 P18 | 10min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: [Phase 01] (01-17): PausableUI now exposes pause()/resume() instead of start()/stop(); TerminalUI.start()/stop() remain the orchestrator's create/teardown lifecycle only
 - [Phase ?]: Phase 01 (01-16): SyncAbortedByUser is a plain Exception (not RuntimeError subclass) carrying a human-readable reason, distinguishing a user decline from every other failure path
 - [Phase ?]: Phase 01 (01-16): CLI abort message reuses exit code 1 (same as generic failure); the distinction is calm wording, not exit code
+- [Phase 01]: 01-18: UILogHandler routes log records into TerminalUI's Recent Logs panel via loop.call_soon_threadsafe, replacing the stderr StreamHandler that desynced Live's cursor bookkeeping — Fixes UAT-diagnosed live-progress flooding (761 duplicate panel headers / 326 duplicate 0% frames in one run); setup_logging is TTY-aware, falling back to stderr when non-interactive
+- [Phase 01]: 01-18: Orchestrator now constructs Console/TerminalUI/TerminalUIConfirmer before calling setup_logging, passing ui+console in — TUI-floor handler selection requires the UI/console to exist first; setup_logging's ui/console params are keyword-only with None defaults so existing callers stay unaffected
 
 ### Pending Todos
 
@@ -133,8 +136,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-03T22:05:44.173Z
+Last session: 2026-07-03T22:16:59.386Z
 
-Stopped at: Completed 01-16-PLAN.md
+Stopped at: Completed 01-18-PLAN.md
 
 Resume file: None

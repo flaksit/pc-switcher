@@ -49,7 +49,7 @@ The orchestration framework is already built (Job architecture, self-installing 
   4. The sync is reversible and exclusions hold both directions: after modifying, adding, and deleting files on B and running `pc-switcher sync <A>` from B, A reflects B's changes byte-identically with metadata preserved, and the same machine-specific exclusions are honored on this reverse sync.
   5. A VM-isolated integration test automates the full A→B, mutate-on-B, B→A round-trip and asserts criteria 1-4 — the developer-facing milestone success metric.
 
-**Plans**: 17/18 plans executed
+**Plans**: 18/18 plans complete
 
 Plans:
 **Wave 1**
@@ -89,7 +89,7 @@ Plans:
 - [x] 01-15-PLAN.md — job-agnostic first-sync overwrite messaging: each SyncJob describes its own scope/mechanism (gap 1) [wave 1]
 - [x] 01-16-PLAN.md — user-declined confirmations become a distinct SyncAbortedByUser outcome: logged once at WARNING, single calm CLI message, never CRITICAL/duplicated (gap 2) [wave 2, depends on 01-15]
 - [x] 01-17-PLAN.md — single persistent Live with pause/resume around prompts + config-sync consistency under --dry-run (gaps 3, 5) [wave 1]
-- [ ] 01-18-PLAN.md — route interactive TUI log output through the single Live panel with a stderr fallback, fixing the live-progress flooding (gap 4) [wave 3, depends on 01-15, 01-16, 01-17]
+- [x] 01-18-PLAN.md — route interactive TUI log output through the single Live panel with a stderr fallback, fixing the live-progress flooding (gap 4) [wave 3, depends on 01-15, 01-16, 01-17]
 
 ### Phase 2: Package Management Sync
 
@@ -176,7 +176,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Home-Sync MVP (User Data Sync) | 17/18 | In Progress|  |
+| 1. Home-Sync MVP (User Data Sync) | 18/18 | Complete   | 2026-07-03 |
 | 2. Package Management Sync | 0/TBD | Not started | - |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
