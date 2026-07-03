@@ -19,7 +19,7 @@ from rich.text import Text
 from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
-from pcswitcher.models import SyncSession
+from pcswitcher.models import SyncAbortedByUser, SyncSession
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
 
@@ -345,6 +345,13 @@ async def _async_run_sync(
             # propagates here, so there is nothing further to wait on.
             console.print("[yellow]Sync interrupted by user[/yellow]")
             return 130
+
+    except SyncAbortedByUser as e:
+        # The orchestrator already logged this once at WARNING; print a single
+        # calm summary here instead of falling through to the red "Sync failed"
+        # message, which would duplicate what the user just declined.
+        console.print(f"[yellow]Sync aborted:[/yellow] {e}")
+        return 1
 
     except Exception as e:
         console.print(f"\n[bold red]Sync failed:[/bold red] {e}")
