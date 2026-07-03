@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 01
 current_phase_name: home-sync-mvp-user-data-sync
 status: executing
-stopped_at: Completed 01-15-PLAN.md
-last_updated: "2026-07-03T21:53:32.684Z"
+stopped_at: Completed 01-16-PLAN.md
+last_updated: "2026-07-03T22:05:44.179Z"
 last_activity: 2026-07-03
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 18
-  completed_plans: 16
+  completed_plans: 17
   percent: 0
 ---
 
@@ -31,13 +31,13 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 01 (home-sync-mvp-user-data-sync) — EXECUTING
 
-Plan: 3 of 18
+Plan: 4 of 18
 
 Status: Ready to execute
 
 Last activity: 2026-07-03 — Phase 01 execution started
 
-Progress: [██████████] 100%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
@@ -76,6 +76,7 @@ Progress: [██████████] 100%
 | Phase 01 P14 | 6min | 3 tasks | 3 files |
 | Phase 01 P15 | 6min | 3 tasks | 6 files |
 | Phase 01 P17 | 8min | 3 tasks | 7 files |
+| Phase 01 P16 | 8min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -111,6 +112,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: Phase 01 (01-15): _resolve_sync_job_class() factored out of _discover_and_validate_jobs, shared with the new _first_sync_scopes(), to avoid duplicating dynamic-import/class-scan logic
 - [Phase ?]: [Phase 01] (01-17): sync_config_to_target computes should_pause once and pairs the finally-resume with it, so an auto_accept run (which never paused) no longer resumes an idle Live
 - [Phase ?]: [Phase 01] (01-17): PausableUI now exposes pause()/resume() instead of start()/stop(); TerminalUI.start()/stop() remain the orchestrator's create/teardown lifecycle only
+- [Phase ?]: Phase 01 (01-16): SyncAbortedByUser is a plain Exception (not RuntimeError subclass) carrying a human-readable reason, distinguishing a user decline from every other failure path
+- [Phase ?]: Phase 01 (01-16): CLI abort message reuses exit code 1 (same as generic failure); the distinction is calm wording, not exit code
 
 ### Pending Todos
 
@@ -130,8 +133,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-03T21:53:17.208Z
+Last session: 2026-07-03T22:05:44.173Z
 
-Stopped at: Completed 01-15-PLAN.md
+Stopped at: Completed 01-16-PLAN.md
 
 Resume file: None
