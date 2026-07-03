@@ -1,112 +1,134 @@
 ---
 phase: 01-home-sync-mvp-user-data-sync
-reviewed: 2026-07-01T00:00:00Z
+reviewed: 2026-07-04T00:00:00Z
 depth: standard
-files_reviewed: 6
+files_reviewed: 19
 files_reviewed_list:
-  - src/pcswitcher/sync_history.py
-  - src/pcswitcher/config_sync.py
-  - src/pcswitcher/jobs/folder_sync.py
   - src/pcswitcher/cli.py
+  - src/pcswitcher/config_sync.py
+  - src/pcswitcher/confirmer.py
+  - src/pcswitcher/jobs/base.py
+  - src/pcswitcher/jobs/folder_sync.py
+  - src/pcswitcher/logger.py
+  - src/pcswitcher/models.py
   - src/pcswitcher/orchestrator.py
   - src/pcswitcher/ui.py
+  - tests/unit/cli/test_commands.py
+  - tests/unit/cli/test_config_sync.py
+  - tests/unit/jobs/test_folder_sync.py
+  - tests/unit/orchestrator/test_consecutive_sync.py
+  - tests/unit/orchestrator/test_first_sync_scope.py
+  - tests/unit/orchestrator/test_logging_system.py
+  - tests/unit/orchestrator/test_user_abort.py
+  - tests/unit/test_confirmer.py
+  - tests/unit/test_logging.py
+  - tests/unit/ui/test_terminal_ui.py
 findings:
-  critical: 2
-  warning: 1
-  info: 1
-  total: 4
+  critical: 1
+  warning: 3
+  info: 2
+  total: 6
 status: issues_found
 ---
 
 # Phase 01: Code Review Report
 
-- **Reviewed:** 2026-07-01T00:00:00Z
-- **Depth:** standard
-- **Files Reviewed:** 6
-- **Status:** issues_found
+Reviewed 2026-07-04, standard depth, 19 files. Status: issues_found.
 
-## Summary
+## Narrative Findings (AI reviewer)
 
-Reviewed the gap-closure changes (commits `f1825fb`..`796e3a8`) that resolved the prior review's CR-01/CR-02/WR-01..03/IN-01..03 findings in this data-loss-critical rsync sync tool. The state-machine refactor (`DivergenceStatus` tri-state, `UNKNOWN_GENERATION` sentinel, fail-closed on findmnt/find-new failure), the merge-preserving history writes, the bytes-parsing and `c`/`h` change-type additions, the progress-bar `set_total_steps` correction, and the SIGINT dead-code removal are all individually sound. `uv run basedpyright` reports 0 errors on the six files.
+### Summary
 
-However, the empty-prefix tool-state filter that underpins CR-01 has two correctness defects that the existing test suite does not exercise, both centered on `FolderSyncJob._target_diverged_since` and the new pre-transfer re-check.
+Reviewed the four UAT gap-closure changes since `dd29e1e`: job-agnostic first-sync warning (01-15), `SyncAbortedByUser` distinct decline outcome (01-16), single-`rich.live.Live` pause/resume plus dry-run-consistent config prompting (01-17), and UI-routed logging via `UILogHandler` (01-18).
 
-First, the tool-state tokens are matched unanchored anywhere in the find-new path, so a real user file nested under any `.config/pc-switcher/` or `.local/share/pc-switcher/` subpath (common with dotfile managers) is silently masked, meaning real divergence goes undetected and data is lost.
+The `SyncAbortedByUser` exception ordering is correct in both `Orchestrator.run()` (caught before the generic `except Exception`, logged once at WARNING, re-raised) and the CLI (`except SyncAbortedByUser` before `except Exception`, single calm message). The `describe_first_sync_scope` composition is genuinely job-agnostic in the orchestrator's warning body. The single-`Live` pause/resume lifecycle is idempotent (`Live.start`/`stop` are guarded by `_started`) and the `is_started` guards correctly prevent re-entrancy into a stopped Live. `UILogHandler` correctly captures the running loop once and routes through `call_soon_threadsafe`, with a working stderr fallback for non-TTY runs.
 
-Second, the filter only masks pc-switcher's own state dirs, but `install_on_target` (Phase 7) writes upgrade artifacts to `~/.local/bin/` and `~/.local/share/uv/` under the synced `@home` subvolume. The new Phase-9 pre-transfer re-check (WR-03) runs after Phase 7 and flags those artifacts as divergence, so legitimate "upgrade then sync" runs are falsely blocked, pushing the user to `--allow-divergence` (which disables the guard entirely).
+However, the 01-18 UI-routing feature introduces a reproducible crash: arbitrary log content is rendered as Rich console markup by the Recent Logs `Panel`, so realistic message text (rsync file paths, rsync stderr, any string containing `[/...]`) raises `MarkupError` at render time. That is the one BLOCKER. Three WARNING-level control-flow/messaging gaps and two INFO items follow.
 
 ## Critical Issues
 
-### CR-01: Tool-state filter matches unanchored, masking real user divergence at any nesting depth
+### CR-01: Log-panel renders arbitrary log content as Rich markup — `MarkupError` crashes the live display and teardown
 
-**File:** `src/pcswitcher/jobs/folder_sync.py:381-397`
+**File:** `src/pcswitcher/ui.py:104-110` (`_render`), enabled by `src/pcswitcher/logger.py:248-278` (`UILogHandler.emit` / `_format_line`)
 
-**Issue:** In the empty-prefix branch the exclusion is `any(token in line for token in tool_state_tokens)` where `history_token = "/.local/share/pc-switcher/"` and `config_token = "/.config/pc-switcher/"`. `btrfs subvolume find-new` emits paths relative to the subvolume root, e.g. `... flags UNKNOWN janfr/.config/pc-switcher/config.yaml`. The substring test is not anchored to the top-level (single username segment) position, so it also matches these paths at arbitrary depth: `janfr/dotfiles/.config/pc-switcher/config.yaml`, `janfr/backups/home/.local/share/pc-switcher/anything`, or any git/dotfile-manager checkout (chezmoi, yadm, stow) containing a copy of `.config/pc-switcher/`.
-
-Because the default synced folder is `/home` (empty prefix), a genuine user modification to any such nested path on the target is silently classified `CLEAN`. The divergence guard — whose entire purpose is to prevent `rsync --delete` from destroying independent target changes — then proceeds and overwrites the user's data. This is a false-negative data-loss path. The target audience (power users syncing Linux desktops, often with dotfile repos) makes the trigger realistic, not theoretical. The existing tests only cover the depth-1 case (`janfr/.config/pc-switcher/…`), so this gap is uncaught.
-
-**Fix:** Anchor the match to the top-level home-relative position — the tool-state dir must appear immediately after the first (username) path segment, not anywhere. Extract the path (last whitespace-delimited field of the find-new line) and test against an anchored pattern, e.g.:
+**Issue:** `UILogHandler` (01-18) now feeds every log record at/above the `tui` floor into `TerminalUI.add_log_message`, which appends the raw string to `self._log_panel`. `_render()` then does:
 
 ```python
-import re
-
-# path is the final field of a find-new line: "... flags UNKNOWN <user>/<rest>"
-_TOOL_STATE_RE = re.compile(r"^[^/]+/(?:\.local/share|\.config)/pc-switcher/")
-
-def _is_tool_state_path(find_new_line: str) -> bool:
-    path = find_new_line.rsplit(" ", 1)[-1]  # relative to subvolume root
-    return bool(_TOOL_STATE_RE.match(path))
+log_text = "\n".join(self._log_panel) if self._log_panel else "[dim]No logs yet[/dim]"
+log_panel = Panel(log_text, title="Recent Logs", ...)
 ```
 
-Then in the empty-prefix loop use `if _is_tool_state_path(line): continue`. This masks only `<user>/.config/pc-switcher/…` and `<user>/.local/share/pc-switcher/…` at the true home root and no longer masks nested user copies. The derived `.local/share`/`.config` segments should still come from `sync_history.HISTORY_DIR` / `config_sync.CONFIG_REMOTE_DIR` to keep the single source of truth.
+Passing a bare `str` to `Panel(...)` makes Rich interpret console markup in that string (the `[dim]No logs yet[/dim]` fallback relies on exactly this). Log content is not markup-safe: `[token]` sequences are silently swallowed (verified: a line containing `[orchestrator]` renders with that token deleted), and `[/...]` sequences raise `rich.errors.MarkupError` (verified: `... *deleting home/user/[/old]/cache` raises `MarkupError: closing tag '[/old]' ... doesn't match any open tag`).
 
-### CR-02: Pre-transfer re-check flags `install_on_target` upgrade artifacts as divergence, falsely blocking legitimate syncs
+Rendering happens on the Live background auto-refresh thread and again during `Live.stop()` (`transient=False` forces a final frame). I reproduced the teardown crash end-to-end through the real `TerminalUI`: `ui.stop()` — which the orchestrator calls from `_cleanup()` inside `run()`'s `finally` block (`orchestrator.py:998-999`) — raised `MarkupError` on the bracketed line above. Consequences on any sync whose logs contain such content: (1) the auto-refresh thread dies mid-sync, freezing the live display; (2) `_cleanup()`'s `self._ui.stop()` raises during the `finally`, masking the real sync result with a `MarkupError` traceback.
 
-**File:** `src/pcswitcher/jobs/folder_sync.py:577-586` (re-check) combined with the tool-state token set at `381-383`
+Untrusted/arbitrary text reaches this path routinely: rsync stderr on failure (`folder_sync.py:454`, logged CRITICAL — reaches the panel at every `tui` level), the folder-sync summary/`INFO` lines embedding `folder.path!r`, and — when `tui` is set to `FULL`/`DEBUG` — every per-file rsync path (`folder_sync.py:400,408`). The `UILogHandler` docstring claims to defend against this ("Rich markup would risk markup-injection from arbitrary message content"), but the defense was applied to the wrong layer: it avoids emitting markup in the format prefix while the message body and the Panel render still interpret markup. Existing tests miss it because `_FakeLogPanelSink` (`test_logging.py:33-43`) records to a list and never renders, and the `TerminalUI` tests never push bracketed content through a Panel.
 
-**Issue:** The WR-03 pre-transfer re-check calls `_check_divergence(folder)` in `execute()` immediately before the destructive rsync, comparing the target against the previous run's stored generation `G(N)`. In the orchestrator pipeline this runs in Phase 9 — after Phase 7 `install_on_target`. When the target's pc-switcher version differs from the source (verified: `install_on_target.execute()` only skips when `target_version == source_version`, `src/pcswitcher/jobs/install_on_target.py:70-75`), Phase 7 runs `install.sh`, which writes upgrade artifacts under the synced `@home` subvolume: `uv tool install` writes `$HOME/.local/bin/pc-switcher` and `$HOME/.local/share/uv/tools/pcswitcher/…` (`install.sh:190-200`), and uv bootstrap (if absent) writes `$HOME/.local/bin/uv` (`install.sh:111-114`).
-
-These land under `janfr/.local/bin/…` and `janfr/.local/share/uv/…`. The tool-state filter only masks `/.local/share/pc-switcher/` and `/.config/pc-switcher/`, so `find-new` since `G(N)` reports the install artifacts as changed files, yielding `DivergenceStatus.DIVERGED`, and the re-check raises `RuntimeError("Pre-transfer divergence re-check failed …")` and aborts the sync before rsync runs.
-
-Result: any sync that also upgrades pc-switcher on the target (every version bump in production; nearly every sync during active development where the source dev version changes constantly) fails with a false "target has been modified since the last sync" error. The only escape is `--allow-divergence`, which disables the guard entirely and reopens the exact data-loss window CR-01/CR-02 were meant to close. This is a regression newly introduced by the WR-03 re-check (the old Phase-4-only check ran before Phase 7 and never saw install writes), and it is not covered by the unit tests (which mock a single-folder `/home` with no install step).
-
-**Fix:** Exclude pc-switcher's install footprint from the divergence scope for the empty-prefix case, in addition to the two state dirs. Option A (preferred; pairs with the CR-01 fix) is to broaden the anchored tool-state matcher:
+**Fix:** Render the panel body as markup-disabled text instead of letting Rich parse it. Either wrap the joined lines in a `Text` object:
 
 ```python
-_TOOL_STATE_RE = re.compile(
-    r"^[^/]+/(?:"
-    r"\.local/share/pc-switcher|"
-    r"\.config/pc-switcher|"
-    r"\.local/bin/(?:pc-switcher|uv)|"
-    r"\.local/share/uv"
-    r")(?:/|$)"
-)
+from rich.text import Text
+...
+if self._log_panel:
+    log_body: RenderableType = Text("\n".join(self._log_panel))
+else:
+    log_body = Text.from_markup("[dim]No logs yet[/dim]")
+log_panel = Panel(log_body, title="Recent Logs", border_style="blue", height=self._max_log_lines + 2)
 ```
 
-Option B (more robust) is to capture the target subvolume generation after Phase 7/Phase 8 (i.e. establish the re-check baseline post-install) rather than reusing `G(N)`, so pc-switcher's own pipeline writes are never inside the compared window. Whichever is chosen, add a test that runs the re-check with a `find-new` line under `janfr/.local/bin/pc-switcher` and asserts the sync is not blocked, and one under a genuine user path that is blocked.
+or escape at ingestion in `add_log_message` (and in `UILogHandler._format_line`) via `rich.markup.escape(message)`. Add a regression test that pushes a line containing `[/x]` through the real `TerminalUI` render and calls `stop()` without raising.
 
 ## Warnings
 
-### WR-01: `lstrip("~/")` used for prefix stripping is character-set removal, not prefix removal
+### WR-01: `SyncAbortedByUser` raised inside a sync job is mis-logged CRITICAL and recorded as FAILED
 
-**File:** `src/pcswitcher/jobs/folder_sync.py:381-382`; `src/pcswitcher/config_sync.py:317`
+**File:** `src/pcswitcher/orchestrator.py:934-951`
 
-**Issue:** The tool-state tokens and the config absolute-path derivation strip the leading `~/` with `str.lstrip("~/")`. `str.lstrip` removes any leading characters in the set `{"~", "/"}`, not the literal prefix `~/`. For the current constants (`"~/.local/share/pc-switcher"`, `"~/.config/pc-switcher/config.yaml"`) the output happens to be correct because the third character is `.`. But this is a silent landmine: any future constant beginning with an additional `~` or `/` (e.g. a normalized `"~//.config/…"`, or a value that starts with a `/` after the tilde) would be over-stripped, and here it directly feeds the security-relevant divergence filter tokens — a wrong derivation would silently disable the guard rather than error.
+**Issue:** `JobContext` is constructed with `confirmer=self._confirmer` (`orchestrator.py:169`) and the confirmer is explicitly described as the "Shared interactive confirmation gate for the orchestrator's out-of-order check *and any job-level prompt* (e.g. FolderSyncJob first-sync overwrite)" (`orchestrator.py:220-221`). If any job uses that confirmer and raises `SyncAbortedByUser` on decline, `_execute_jobs`'s `except Exception as e` (line 934) catches it first: it records a `JobStatus.FAILED` result and logs `self._logger.critical("Job %s failed: %s", ...)` (line 945) before re-raising. `run()` then also logs it at WARNING. The result is a double log (one CRITICAL, one WARNING) plus a FAILED job/session status for what the abort contract (`models.py:125-133`) says must be "reported once, at WARNING." No job triggers this today, so it is latent — but the injected confirmer and its documented intent make it a realistic near-term trap.
 
-**Fix:** Use explicit prefix removal so the intent is unambiguous and robust: `sync_history.HISTORY_DIR.removeprefix("~/")`, `config_sync.CONFIG_REMOTE_DIR.removeprefix("~/")`, and likewise `CONFIG_REMOTE_PATH.removeprefix("~/")` in `config_sync._copy_config_to_target`.
+**Fix:** In `_execute_jobs`, let user-abort pass through untouched:
+
+```python
+except SyncAbortedByUser:
+    raise
+except Exception as e:
+    ...  # existing FAILED-result + CRITICAL path
+```
+
+### WR-02: CLI `--allow-first-sync` help text hardcodes folder_sync / rsync specifics, defeating the job-agnostic warning goal
+
+**File:** `src/pcswitcher/cli.py:214-224`
+
+**Issue:** 01-15 made the orchestrator's first-sync warning job-agnostic (`_confirm_first_sync` composes scope from each job's `describe_first_sync_scope`, and the body no longer names rsync). But the user-facing flag help still reads: "every folder configured for **folder_sync** will be overwritten on the target (**rsync --delete**), except configured exclusions." This re-introduces exactly the per-job coupling 01-15 removed and will be wrong the moment a non-folder job (or a job with a different mechanism) participates in a first sync.
+
+**Fix:** Reword generically, e.g. "Proceed with a first-ever sync without interactive confirmation. WARNING: everything on the target within the scope of the configured sync jobs will be overwritten, except configured exclusions. Run with `--dry-run` first to preview."
+
+### WR-03: Config-sync decline prints two conflicting abort messages, inconsistent with the single-message contract
+
+**File:** `src/pcswitcher/config_sync.py:217,257` together with `src/pcswitcher/cli.py:349-354`
+
+**Issue:** 01-16's goal was a single, non-alarming abort surface. For the out-of-order / first-sync decline paths that holds (the confirmer prints nothing on decline; only the CLI prints one yellow "Sync aborted:" line). But the config-sync decline path prints its own message inside `config_sync.py` — `"[red]Sync aborted: configuration required on target.[/red]"` (line 217) or `"[red]Sync aborted by user.[/red]"` (line 257) — and then `_sync_config_to_target` raises `SyncAbortedByUser`, so the CLI prints a *second*, differently-colored `"[yellow]Sync aborted:[/yellow] Config sync aborted by user"`. The user sees two abort lines with inconsistent wording/severity, and this path diverges from the other decline paths.
+
+**Fix:** Remove the console prints at the config-sync decline sites (return `False` silently) and let the single CLI `except SyncAbortedByUser` handler own the user-facing message; or route config-sync decline through the same confirmer/message pathway so exactly one line is emitted.
 
 ## Info
 
-### IN-01: Duplicated per-line skip logic in the two branches of `_target_diverged_since`
+### IN-01: `resume()` does not actually force an immediate redraw as its docstring claims
 
-**File:** `src/pcswitcher/jobs/folder_sync.py:385-409`
+**File:** `src/pcswitcher/ui.py:139-150`
 
-**Issue:** The empty-prefix branch and the `else` (non-empty prefix) branch each re-implement the same iteration scaffold — skip `transid marker` summary lines, skip blank lines — differing only in the accept/reject predicate. This duplication is what let the tool-state filter diverge from the prefix filter and made CR-01/CR-02 easy to miss. Consolidating into one loop that computes `is_tool_state` and `is_in_prefix` per line (with the prefix always `""` meaning match-all in the empty case) would remove the duplication and give a single place to reason about which paths count as divergence.
+**Issue:** The docstring says resume "must redraw right away," but `self._live.update(self._render())` is called without `refresh=True`, so it only stores the renderable; the visible redraw is deferred to the 10 Hz auto-refresh thread. The behavior is functionally fine only because `auto_refresh` is always on. The test `test_resume_forces_redraw_of_state_mutated_while_paused` (`test_terminal_ui.py:242-269`) sleeps 0.15 s, so it passes via auto-refresh and does not actually verify an immediate redraw.
 
-**Fix:** Extract a single helper that yields the candidate paths from `find-new` stdout (dropping the `transid marker` and blank lines once), then apply the branch-specific predicate to that stream.
+**Fix:** Either pass `refresh=True` to make the claim true (`self._live.refresh()` after `start()`, or `self._live.update(self._render(), refresh=True)`), or soften the docstring to state the redraw is picked up by the next auto-refresh tick.
+
+### IN-02: Split interactivity detection between logging setup and the confirmer
+
+**File:** `src/pcswitcher/logger.py:357` vs `src/pcswitcher/confirmer.py:100`
+
+**Issue:** `setup_logging` decides UI-vs-stderr routing from `console.is_terminal` (stdout), while `TerminalUIConfirmer.confirm` decides interactive-vs-flag from `sys.stdin.isatty()` (stdin). Under mixed redirection (e.g. stdout is a TTY but stdin is `/dev/null`) these disagree: the Live UI and `UILogHandler` are active, yet confirmations silently fall back to `--allow-*` flags. No crash, but the interactivity model is split-brained and could surprise a user who sees a live UI but gets non-interactive confirmation behavior.
+
+**Fix:** Pick one interactivity signal (or require both stdin and stdout to be TTYs) and share it between logging setup and the confirmer.
 
 ---
 
-- _Reviewed: 2026-07-01T00:00:00Z_
-- _Reviewer: Claude (gsd-code-reviewer)_
-- _Depth: standard_
+Reviewed 2026-07-04 by Claude (gsd-code-reviewer) at standard depth.
