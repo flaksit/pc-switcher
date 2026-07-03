@@ -5,6 +5,7 @@ Tests cover LOG-SC-FILE-DEBUG, LOG-SC-EXT-FILTER, LOG-SC-NO-REGRESS, LOG-SC-INVA
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -16,15 +17,30 @@ from queue import Queue
 from unittest.mock import patch
 
 import pytest
+from rich.console import Console
 
 from pcswitcher.config import Configuration, ConfigurationError, LogConfig
 from pcswitcher.logger import (
     FULL,
     JsonFormatter,
     RichFormatter,
+    UILogHandler,
     get_latest_log_file,
     setup_logging,
 )
+
+
+class _FakeLogPanelSink:
+    """Fake LogPanelSink (see pcswitcher.logger.LogPanelSink) that records
+    delivered lines for assertions, without depending on TerminalUI/Rich Live.
+    """
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def add_log_message(self, message: str) -> None:
+        """Record a delivered log-panel line."""
+        self.messages.append(message)
 
 
 class TestLogLevelRegistration:
@@ -328,6 +344,99 @@ class TestSetupLogging:
             listener, _queue = setup_logging(log_path, config)
             # Should not raise
             listener.stop()
+
+
+class TestUILogHandlerRouting:
+    """Test setup_logging's TTY-aware TUI-handler selection (gap closure 01-18).
+
+    Proves the fix for the live-progress flooding root cause: an interactive
+    console routes log records into the UI's Recent Logs panel (through the
+    event loop) instead of writing them directly to stderr, which used to
+    desync rich.live.Live's cursor bookkeeping (see
+    .planning/debug/tui-live-progress-flooding.md).
+    """
+
+    async def test_interactive_setup_routes_to_ui_handler_no_stderr(self) -> None:
+        """Interactive setup selects UILogHandler and delivers a plain-text line."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            config = LogConfig()
+            sink = _FakeLogPanelSink()
+            console = Console(file=io.StringIO(), force_terminal=True)
+
+            listener, _queue = setup_logging(log_path, config, ui=sink, console=console)
+            try:
+                tui_handler = listener.handlers[1]
+                assert isinstance(tui_handler, UILogHandler)
+
+                # The corrupting handler (a StreamHandler writing to sys.stderr
+                # while Live owns the terminal) must be absent entirely.
+                assert not any(
+                    isinstance(h, logging.StreamHandler) and h.stream is sys.stderr for h in listener.handlers
+                )
+
+                logger = logging.getLogger("pcswitcher.test")
+                logger.info("Routed log line", extra={"job": "test", "host": "source"})
+
+                # The record crosses the QueueListener's background thread and
+                # is delivered via call_soon_threadsafe; poll briefly for the
+                # loop to process the scheduled callback.
+                for _ in range(100):
+                    if sink.messages:
+                        break
+                    await asyncio.sleep(0.01)
+
+                assert sink.messages, "expected the UI sink to receive a delivered line"
+                line = sink.messages[0]
+                assert "Routed log line" in line
+                assert "INFO" in line
+                assert "\x1b" not in line  # plain text -- no raw ANSI escape codes
+            finally:
+                listener.stop()
+
+    async def test_non_interactive_setup_falls_back_to_stderr(self) -> None:
+        """Non-interactive setup keeps the stderr StreamHandler and JSON file output."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            config = LogConfig()
+            sink = _FakeLogPanelSink()
+            console = Console(file=io.StringIO(), force_terminal=False)
+
+            listener, _queue = setup_logging(log_path, config, ui=sink, console=console)
+            try:
+                tui_handler = listener.handlers[1]
+                assert isinstance(tui_handler, logging.StreamHandler)
+                assert tui_handler.stream is sys.stderr
+                assert not isinstance(tui_handler, UILogHandler)
+
+                logger = logging.getLogger("pcswitcher.test")
+                logger.info("Fallback log line", extra={"job": "test", "host": "source"})
+
+                listener.stop()
+
+                # No line should have reached the (unused) UI sink.
+                assert sink.messages == []
+
+                # The file handler still writes JSON at the file floor.
+                content = log_path.read_text()
+                assert "Fallback log line" in content
+            finally:
+                if listener._thread and listener._thread.is_alive():
+                    listener.stop()
+
+    async def test_no_ui_argument_keeps_default_stderr_behavior(self) -> None:
+        """Omitting ui/console (the pre-existing call signature) keeps stderr."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            config = LogConfig()
+
+            listener, _queue = setup_logging(log_path, config)
+            try:
+                tui_handler = listener.handlers[1]
+                assert isinstance(tui_handler, logging.StreamHandler)
+                assert tui_handler.stream is sys.stderr
+            finally:
+                listener.stop()
 
 
 class TestInvalidLogLevel:
