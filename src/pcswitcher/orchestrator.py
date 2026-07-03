@@ -199,25 +199,12 @@ class Orchestrator:
         if not self._target_hostname:
             raise RuntimeError("Target hostname is not set")
 
-        # Create log file path and set up stdlib logging infrastructure
-        log_file_path = get_logs_directory() / generate_log_filename(self._session_id)
-        self._queue_listener, _ = setup_logging(log_file_path, self._config.logging)
-
-        # Log session start with hostname mapping (LOG-FR-SESSION-HOSTNAMES)
-        self._logger.info(
-            "Starting sync session",
-            extra={
-                "job": "orchestrator",
-                "host": "source",
-                "source_hostname": self._source_hostname,
-                "target_hostname": self._target_hostname,
-                "session_id": self._session_id,
-            },
-        )
-
-        # Subscribe to event bus for UI (ProgressEvent, ConnectionEvent only)
-        ui_queue = self._event_bus.subscribe()
-
+        # Create the UI before logging so setup_logging can route the TUI-floor
+        # handler through the UI's Recent Logs panel instead of a raw stderr
+        # write (both share the same terminal region as Live). Constructing
+        # TerminalUI does not start the Live (start() is still called below),
+        # so creating it early is safe.
+        #
         # Calculate total steps: 8 system phases + sync jobs + 1 post-snapshot
         # System phases: 1=source lock, 2=SSH, 3=target lock, 4=validation,
         # 5=disk check, 6=pre-snapshots, 7=install on target, 8=config sync
@@ -233,6 +220,30 @@ class Orchestrator:
         # Shared interactive confirmation gate for the orchestrator's out-of-order check
         # and any job-level prompt (e.g. FolderSyncJob first-sync overwrite, ADR-015).
         self._confirmer = TerminalUIConfirmer(self._console, self._ui, logger=self._logger)
+
+        # Create log file path and set up stdlib logging infrastructure.
+        # Passing ui + console lets setup_logging pick the UI-routed TUI
+        # handler when the console is a real terminal, falling back to plain
+        # stderr otherwise (CI/non-TTY runs).
+        log_file_path = get_logs_directory() / generate_log_filename(self._session_id)
+        self._queue_listener, _ = setup_logging(
+            log_file_path, self._config.logging, ui=self._ui, console=self._console
+        )
+
+        # Log session start with hostname mapping (LOG-FR-SESSION-HOSTNAMES)
+        self._logger.info(
+            "Starting sync session",
+            extra={
+                "job": "orchestrator",
+                "host": "source",
+                "source_hostname": self._source_hostname,
+                "target_hostname": self._target_hostname,
+                "session_id": self._session_id,
+            },
+        )
+
+        # Subscribe to event bus for UI (ProgressEvent, ConnectionEvent only)
+        ui_queue = self._event_bus.subscribe()
 
         # Start UI event consumer as background task (ProgressEvent, ConnectionEvent)
         self._ui_task = asyncio.create_task(self._ui.consume_events(queue=ui_queue))
