@@ -260,6 +260,17 @@ _ADDITION_MTIME = 1710000000  # 2024-03-09 16:00:00 UTC
 # pc-switcher runtime state dir (ADR-016 hardcoded exclude target).
 _STATE_DIR = "~/.local/share/pc-switcher"
 
+# SC3 INCLUSION markers (home-relative). The default config deliberately SYNCS
+# dev-tool caches and VS Code user state while excluding regenerable VS Code caches.
+# These live outside the pcsw-itest tree (so they don't affect the tree manifest);
+# each holds a distinctive content string so we can assert it transferred.
+_INCLUDED_MARKERS = {
+    ".cargo/pcsw-cache-marker.txt": "cargo-included",  # dev-tool cache — synced
+    ".config/Code/User/pcsw-user-marker.json": "vscode-user-included",  # VS Code user state — synced
+}
+# Sibling of Code/User that IS excluded by config — proves inclusion is selective.
+_EXCLUDED_MARKER = ".config/Code/Cache/pcsw-cache-marker.bin"
+
 
 def _tree(user: str) -> str:
     """Absolute path of the seeded rich test subtree within the real home."""
@@ -401,15 +412,26 @@ def _md5_manifest_cmd(tree: str) -> str:
     )
 
 
+async def _seed_included_markers(executor: BashLoginRemoteExecutor) -> None:
+    """Seed the SC3 inclusion/exclusion marker files in the real home dotdirs."""
+    parts = ["set -e"]
+    for rel, content in _INCLUDED_MARKERS.items():
+        parts.append(f'mkdir -p ~/"$(dirname {rel})" && printf %s {content!r} > ~/{rel}')
+    parts.append(f'mkdir -p ~/"$(dirname {_EXCLUDED_MARKER})" && printf excluded > ~/{_EXCLUDED_MARKER}')
+    result = await executor.run_command("\n".join(parts), timeout=15.0, login_shell=False)
+    assert result.success, f"Failed to seed inclusion markers: {result.stderr}"
+
+
 async def _remove_test_artifacts(
     pc1_exec: BashLoginRemoteExecutor,
     pc2_exec: BashLoginRemoteExecutor,
     tree: str,
 ) -> None:
-    """Remove the seeded test subtree and config from both VMs (best-effort cleanup)."""
+    """Remove the seeded test subtree, inclusion markers, and config from both VMs."""
+    markers = " ".join(f"~/{rel}" for rel in (*_INCLUDED_MARKERS, _EXCLUDED_MARKER))
     for name, exec_ in (("pc1", pc1_exec), ("pc2", pc2_exec)):
         res = await exec_.run_command(
-            f"sudo rm -rf {tree} && rm -f ~/.config/pc-switcher/config.yaml",
+            f"sudo rm -rf {tree} {markers} && rm -f ~/.config/pc-switcher/config.yaml",
             timeout=30.0,
             login_shell=False,
         )
@@ -453,6 +475,7 @@ class TestEndToEndSync:
         try:
             await _write_config(pc1_executor, _make_e2e_config())
             await _seed_rich_tree(pc1_executor, tree)
+            await _seed_included_markers(pc1_executor)
             await pc2_executor.run_command(f"sudo rm -rf {tree}", timeout=15.0, login_shell=False)
 
             # ADR-016 runtime-exclude sentinels: a marker inside each machine's own state dir
@@ -568,6 +591,25 @@ class TestEndToEndSync:
             assert runtime.success, (
                 "ADR-016 runtime exclusion failed: pc1's state reached pc2, or pc2's own state/install was "
                 "clobbered by the --delete mirror of /home."
+            )
+
+            # 3e. SC3 inclusion: non-excluded dev-tool cache + VS Code user state ARE synced,
+            # while a config-excluded sibling (VS Code Cache) is not.
+            marker_rels = list(_INCLUDED_MARKERS)
+            inc = await pc2_executor.run_command(
+                " && echo '|' && ".join(f"cat ~/{rel}" for rel in marker_rels)
+                + f" && echo '|' && ( test ! -e ~/{_EXCLUDED_MARKER} && echo EXCLUDED_ABSENT )",
+                timeout=10.0,
+                login_shell=False,
+            )
+            assert inc.success, f"SC3 inclusion checks failed on pc2: {inc.stderr}"
+            inc_parts = [p.strip() for p in inc.stdout.split("|")]
+            for rel, part in zip(marker_rels, inc_parts, strict=False):
+                assert part == _INCLUDED_MARKERS[rel], (
+                    f"Included path {rel} not synced to pc2 (SC3): got {part!r}, want {_INCLUDED_MARKERS[rel]!r}"
+                )
+            assert "EXCLUDED_ABSENT" in inc_parts[-1], (
+                f"Config-excluded {_EXCLUDED_MARKER} reached pc2 (SC3 exclusion failed)."
             )
 
             # --- Step 4: mutate pc2, then B→A ---
