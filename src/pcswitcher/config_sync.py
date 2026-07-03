@@ -103,17 +103,15 @@ def _prompt_new_config(console: Console, source_content: str) -> bool:
     return response.lower() == "y"
 
 
-def _prompt_config_diff(console: Console, source_content: str, target_content: str, diff: str) -> ConfigSyncAction:
-    """Prompt user to choose action when configs differ.
+def _display_config_diff(console: Console, diff: str) -> None:
+    """Print the config-differs warning panel and the diff itself.
+
+    Shared by `_prompt_config_diff` (interactive) and the dry-run preview path
+    (read-only, no action prompt), so the diff rendering isn't duplicated.
 
     Args:
         console: Rich console for display
-        source_content: Source config content
-        target_content: Target config content
         diff: Unified diff between configs
-
-    Returns:
-        User's chosen action
     """
     console.print()
     console.print(
@@ -129,6 +127,21 @@ def _prompt_config_diff(console: Console, source_content: str, target_content: s
     syntax = Syntax(diff, "diff", theme="monokai", line_numbers=False)
     console.print(Panel(syntax, title="Configuration Diff", border_style="blue"))
     console.print()
+
+
+def _prompt_config_diff(console: Console, source_content: str, target_content: str, diff: str) -> ConfigSyncAction:
+    """Prompt user to choose action when configs differ.
+
+    Args:
+        console: Rich console for display
+        source_content: Source config content
+        target_content: Target config content
+        diff: Unified diff between configs
+
+    Returns:
+        User's chosen action
+    """
+    _display_config_diff(console, diff)
 
     # Display options
     console.print("[bold]Choose an action:[/bold]")
@@ -190,12 +203,16 @@ async def _handle_no_target_config(
     dry_run: bool,
 ) -> bool:
     """Handle case when target has no config."""
+    if dry_run:
+        # ADR-014: a rehearsal never prompts; log the preview and proceed.
+        console.print(
+            "[dim][dry-run] Target has no config; source config would be applied (no changes made).[/dim]"
+        )
+        return True
+
     if auto_accept or _prompt_new_config(console, source_content):
-        if dry_run:
-            console.print("[dim]Configuration would be copied to target.[/dim]")
-        else:
-            await _copy_config_to_target(target, source_config_path)
-            console.print("[green]Configuration copied to target.[/green]")
+        await _copy_config_to_target(target, source_config_path)
+        console.print("[green]Configuration copied to target.[/green]")
         return True
     console.print("[red]Sync aborted: configuration required on target.[/red]")
     return False
@@ -220,14 +237,18 @@ async def _handle_config_diff(
         return True
 
     diff = _generate_diff(source_content, target_content)
+
+    if dry_run:
+        # ADR-014: a rehearsal never prompts; show the diff as a read-only preview.
+        _display_config_diff(console, diff)
+        console.print("[dim][dry-run] Config differs; source config would be applied (no changes made).[/dim]")
+        return True
+
     action = _prompt_config_diff(console, source_content, target_content, diff)
 
     if action == ConfigSyncAction.ACCEPT_SOURCE:
-        if dry_run:
-            console.print("[dim]Configuration would be copied to target.[/dim]")
-        else:
-            await _copy_config_to_target(target, source_config_path)
-            console.print("[green]Configuration copied to target.[/green]")
+        await _copy_config_to_target(target, source_config_path)
+        console.print("[green]Configuration copied to target.[/green]")
         return True
     if action == ConfigSyncAction.KEEP_TARGET:
         console.print("[yellow]Keeping existing target configuration.[/yellow]")
@@ -276,9 +297,12 @@ async def sync_config_to_target(
     # Fetch target config
     target_content = await _get_target_config(target)
 
-    # Pause UI for user interaction (only if we'll prompt)
-    if ui is not None and not auto_accept:
-        ui.stop()
+    # Pause UI for user interaction (only if we'll prompt; a dry-run rehearsal never
+    # prompts, so it must not pause the single Live instance either — ADR-014).
+    should_pause = ui is not None and not auto_accept and not dry_run
+    if should_pause:
+        assert ui is not None
+        ui.pause()
 
     try:
         should_continue = await _handle_config_sync(
@@ -286,9 +310,10 @@ async def sync_config_to_target(
         )
         return should_continue
     finally:
-        # Resume UI
-        if ui is not None:
-            ui.start()
+        # Resume UI (paired with whatever pause occurred above)
+        if should_pause:
+            assert ui is not None
+            ui.resume()
 
 
 async def _copy_config_to_target(target: RemoteExecutor, source_path: Path) -> None:
