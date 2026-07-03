@@ -21,6 +21,7 @@ __all__ = [
     "SessionStatus",
     "Snapshot",
     "SnapshotPhase",
+    "SyncAbortedByUser",
     "SyncSession",
     "ValidationError",
 ]
@@ -121,6 +122,20 @@ class DiskSpaceCriticalError(Exception):
         super().__init__(f"{hostname}: Disk space {free_space} below threshold {threshold}")
 
 
+class SyncAbortedByUser(Exception):
+    """Raised when the user declines a confirmation prompt during sync.
+
+    Represents expected control flow, not an unrecoverable error: a user
+    answering "no" to a confirmation is not a failure of the tool. Callers
+    MUST NOT log this at CRITICAL (see LogLevel.CRITICAL docstring); it is
+    caught separately from the generic exception path in both
+    Orchestrator.run() and the CLI so it is reported once, at WARNING.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class FirstSyncScope:
     """A SyncJob's self-described first-sync overwrite scope (ADR-015).
@@ -216,6 +231,7 @@ class SessionStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
+    ABORTED = "aborted"
 
 
 class JobStatus(StrEnum):

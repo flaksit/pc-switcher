@@ -46,6 +46,7 @@ from pcswitcher.models import (
     JobStatus,
     SessionStatus,
     SnapshotPhase,
+    SyncAbortedByUser,
     SyncSession,
     ValidationError,
 )
@@ -266,7 +267,7 @@ class Orchestrator:
             # Topology out-of-order / target-state check (between Phase 3 and 4):
             # runs after the target lock so we can read the target's sync-history over SSH.
             if not await self._check_out_of_order():
-                raise RuntimeError("Sync aborted at the out-of-order / target-state check")
+                raise SyncAbortedByUser("Sync aborted at the out-of-order / target-state check")
 
             # Phase 4: Job discovery and validation
             self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator", "host": "source"})
@@ -326,6 +327,16 @@ class Orchestrator:
             session.ended_at = datetime.now(UTC)
             session.error_message = "Sync interrupted by user (SIGINT)"
             self._logger.warning("Sync interrupted by user", extra={"job": "orchestrator", "host": "source"})
+            raise
+
+        except SyncAbortedByUser as e:
+            # A declined confirmation is expected control flow, not a failure:
+            # log once at WARNING (never CRITICAL) and re-raise so the CLI can
+            # set a non-zero exit code without re-printing a "failed" message.
+            session.status = SessionStatus.ABORTED
+            session.ended_at = datetime.now(UTC)
+            session.error_message = str(e)
+            self._logger.warning("Sync aborted by user: %s", e, extra={"job": "orchestrator", "host": "source"})
             raise
 
         except Exception as e:
@@ -409,7 +420,8 @@ class Orchestrator:
         3. Target config matches: Skip silently
 
         Raises:
-            RuntimeError: If user aborts or config sync fails
+            SyncAbortedByUser: If the user declines the config sync confirmation.
+            RuntimeError: If config sync fails for a reason other than user decline.
         """
         assert self._remote_executor is not None
         assert self._console is not None
@@ -426,7 +438,7 @@ class Orchestrator:
         )
 
         if not should_continue:
-            raise RuntimeError("Config sync aborted by user")
+            raise SyncAbortedByUser("Config sync aborted by user")
 
         self._logger.info("Configuration sync completed", extra={"job": "orchestrator", "host": "target"})
 
