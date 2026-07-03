@@ -33,9 +33,9 @@ __all__ = ["Confirmer", "PausableUI", "TerminalUIConfirmer"]
 class PausableUI(Protocol):
     """The subset of ``TerminalUI`` the confirmer needs to pause/resume the live display."""
 
-    def start(self) -> None: ...
+    def pause(self) -> None: ...
 
-    def stop(self) -> None: ...
+    def resume(self) -> None: ...
 
 
 @runtime_checkable
@@ -114,7 +114,7 @@ class TerminalUIConfirmer:
             return False
 
         # Interactive: pause the live display, show the warning, prompt, resume.
-        self._ui.stop()
+        self._ui.pause()
         try:
             self._console.print()
             self._console.print(Panel(message, title=title, border_style="yellow"))
@@ -126,4 +126,4 @@ class TerminalUIConfirmer:
             )
             return response.lower() == "y"
         finally:
-            self._ui.start()
+            self._ui.resume()

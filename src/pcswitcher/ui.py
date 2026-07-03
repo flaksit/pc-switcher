@@ -112,17 +112,45 @@ class TerminalUI:
         return Group(status, self._progress, log_panel)
 
     def start(self) -> None:
-        """Start the live display."""
-        self._live = Live(
-            self._render(),
-            console=self._console,
-            refresh_per_second=10,  # 10 Hz refresh rate
-            transient=False,
-        )
+        """Start the live display.
+
+        Constructs the Live instance only the first time; a subsequent call
+        (e.g. after a pause()) resumes the same instance so confirmation
+        prompts don't stack fresh Live regions on top of stale ones.
+        """
+        if self._live is None:
+            self._live = Live(
+                self._render(),
+                console=self._console,
+                refresh_per_second=10,  # 10 Hz refresh rate
+                transient=False,
+            )
         self._live.start()
 
+    def pause(self) -> None:
+        """Stop rendering without discarding the Live instance.
+
+        Used around confirmation prompts: the terminal region is handed back
+        to a blocking `Prompt.ask()` call, then reclaimed by resume().
+        """
+        if self._live is not None:
+            self._live.stop()
+
+    def resume(self) -> None:
+        """Restart the paused Live instance and force an immediate redraw.
+
+        State mutated while paused (job progress, connection status, step
+        number) is stored by the update methods but not rendered per the
+        is_started guard; resume() must redraw right away so that state is
+        reflected in the next frame instead of waiting for an unrelated
+        future update.
+        """
+        if self._live is not None:
+            self._live.start()
+            self._live.update(self._render())
+
     def stop(self) -> None:
-        """Stop the live display."""
+        """Stop the live display and discard the instance (final teardown)."""
         if self._live:
             self._live.stop()
             self._live = None
@@ -191,7 +219,7 @@ class TerminalUI:
             )
 
         # Refresh display
-        if self._live:
+        if self._live is not None and self._live.is_started:
             self._live.update(self._render())
 
     def add_log_message(self, message: str) -> None:
@@ -204,7 +232,7 @@ class TerminalUI:
             message: Formatted log message to display
         """
         self._log_panel.append(message)
-        if self._live:
+        if self._live is not None and self._live.is_started:
             self._live.update(self._render())
 
     def set_connection_status(
@@ -220,7 +248,7 @@ class TerminalUI:
         """
         self._connection_status = status
         self._connection_latency = latency
-        if self._live:
+        if self._live is not None and self._live.is_started:
             self._live.update(self._render())
 
     def set_current_step(self, step: int) -> None:
@@ -230,7 +258,7 @@ class TerminalUI:
             step: Current step number (1-indexed)
         """
         self._current_step = step
-        if self._live:
+        if self._live is not None and self._live.is_started:
             self._live.update(self._render())
 
     def set_total_steps(self, total: int) -> None:
@@ -244,7 +272,7 @@ class TerminalUI:
             total: Corrected total step count
         """
         self._total_steps = total
-        if self._live:
+        if self._live is not None and self._live.is_started:
             self._live.update(self._render())
 
     async def consume_events(
