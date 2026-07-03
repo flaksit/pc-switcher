@@ -40,6 +40,7 @@ from pcswitcher.logger import (
 )
 from pcswitcher.models import (
     ConfigError,
+    FirstSyncScope,
     Host,
     JobResult,
     JobStatus,
@@ -429,30 +430,77 @@ class Orchestrator:
 
         self._logger.info("Configuration sync completed", extra={"job": "orchestrator", "host": "target"})
 
-    def _first_sync_scope(self) -> list[str]:
-        """Return the enabled folder paths in scope of the folder_sync job, for messaging.
+    def _resolve_sync_job_class(self, job_name: str) -> type[SyncJob] | None:
+        """Resolve the SyncJob subclass registered for `job_name`.
 
-        Read from the folder_sync job config so the first-sync overwrite warning can
-        name exactly what will be replaced on the target. Returns an empty list when
-        folder_sync is absent or has no folders (the warning then falls back to a
-        generic phrasing).
+        Convention: job_name == module_name (e.g., "dummy_success" → pcswitcher.jobs.dummy_success).
+        Dynamically imports the module and scans its attributes for a SyncJob subclass whose
+        `name` ClassVar matches. Shared by `_discover_and_validate_jobs` (Phase 4 job discovery)
+        and `_first_sync_scopes` (pre-Phase-4 first-sync messaging) so the import/scan logic
+        lives in exactly one place.
+
+        Returns:
+            The matching SyncJob subclass, or None if the module doesn't exist or no matching
+            class is found (a warning is logged in either case).
         """
-        folder_cfg = self._config.job_configs.get("folder_sync", {})
-        folders = folder_cfg.get("folders", [])
-        return [
-            f["path"]
-            for f in folders
-            if isinstance(f, dict) and f.get("enabled", True) and isinstance(f.get("path"), str)
-        ]
+        try:
+            module = importlib.import_module(f"pcswitcher.jobs.{job_name}")
+        except ModuleNotFoundError:
+            self._logger.warning(
+                "Job module pcswitcher.jobs.%s not found",
+                job_name,
+                extra={"job": "orchestrator", "host": "source"},
+            )
+            return None
+
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if (
+                isinstance(attr, type)
+                and issubclass(attr, SyncJob)
+                and attr is not SyncJob
+                and getattr(attr, "name", None) == job_name
+            ):
+                return attr
+
+        self._logger.warning(
+            "No SyncJob with name=%s found in module pcswitcher.jobs.%s",
+            job_name,
+            job_name,
+            extra={"job": "orchestrator", "host": "source"},
+        )
+        return None
+
+    def _first_sync_scopes(self) -> list[FirstSyncScope]:
+        """Collect each enabled sync job's self-described first-sync overwrite scope (ADR-015).
+
+        Resolves every enabled job in `self._config.sync_jobs` (config order) to its SyncJob
+        class via `_resolve_sync_job_class`, then calls `describe_first_sync_scope()` on each —
+        this runs before Phase 4 job discovery, so classes (not instances) are used. Jobs that
+        return None (no overwrite scope, or nothing in scope for their config) contribute
+        nothing; the orchestrator's warning falls back to generic phrasing when this is empty.
+        """
+        scopes: list[FirstSyncScope] = []
+        for job_name, enabled in self._config.sync_jobs.items():
+            if not enabled:
+                continue
+            job_class = self._resolve_sync_job_class(job_name)
+            if job_class is None:
+                continue
+            scope = job_class.describe_first_sync_scope(self._config.job_configs.get(job_name, {}))
+            if scope is not None:
+                scopes.append(scope)
+        return scopes
 
     async def _confirm_first_sync(self) -> bool:
         """Confirm the overwrite of a target that has never been synced (first sync).
 
         A first sync (no readable target sync-history) is semantically distinct from an
-        out-of-order sync: there is no prior topology to reconcile, the destructive
-        `rsync --delete` transfer simply replaces everything in scope of the configured
-        sync jobs on the target. Because this question is common to all jobs, it is asked
-        once here (after the target lock) rather than per-job.
+        out-of-order sync: there is no prior topology to reconcile, the destructive transfer
+        simply replaces everything in scope of the configured sync jobs on the target. Because
+        this question is common to all jobs, it is asked once here (after the target lock)
+        rather than per-job — and each in-scope job describes its own scope and overwrite
+        mechanism (ADR-015), so this method names no job and no transport mechanism directly.
 
         Gated by --allow-first-sync (distinct from the W2/W3 --allow-out-of-order gate).
         Under --dry-run the warning is logged but never aborts (ADR-014).
@@ -463,13 +511,19 @@ class Orchestrator:
         assert self._confirmer is not None
 
         tgt = self._target_hostname
-        scope = self._first_sync_scope()
-        scope_line = "\n".join(f"  {path}" for path in scope) if scope else "  (all folders configured for sync)"
+        scopes = self._first_sync_scopes()
+        if scopes:
+            scope_line = "\n\n".join(
+                f"  {scope.job_name} ({scope.mechanism}):\n" + "\n".join(f"    {item}" for item in scope.scope_items)
+                for scope in scopes
+            )
+        else:
+            scope_line = "  (all data configured for sync)"
         warn_title = "First Sync — Target Will Be Overwritten"
         warning = (
             f"[bold]{tgt}[/bold] has never been synced by pc-switcher (no sync history).\n\n"
             "This first-ever sync will overwrite everything on the target that is in scope of "
-            "the configured sync jobs (rsync --delete), except configured exclusions. In scope:\n\n"
+            "the configured sync jobs, except configured exclusions. In scope:\n\n"
             f"{scope_line}\n\n"
             f"Any independent data on [bold]{tgt}[/bold] within that scope will be lost.\n\n"
             "Run [bold]pc-switcher sync --dry-run[/bold] to preview what would change first."
@@ -663,37 +717,8 @@ class Orchestrator:
                 )
                 continue
 
-            # Dynamic import: pcswitcher.jobs.{job_name}
-            try:
-                module = importlib.import_module(f"pcswitcher.jobs.{job_name}")
-            except ModuleNotFoundError:
-                self._logger.warning(
-                    "Job module pcswitcher.jobs.%s not found",
-                    job_name,
-                    extra={"job": "orchestrator", "host": "source"},
-                )
-                continue
-
-            # Find the SyncJob class in the module with matching name
-            job_class: type[SyncJob] | None = None
-            for attr_name in dir(module):
-                attr = getattr(module, attr_name)
-                if (
-                    isinstance(attr, type)
-                    and issubclass(attr, SyncJob)
-                    and attr is not SyncJob
-                    and getattr(attr, "name", None) == job_name
-                ):
-                    job_class = attr
-                    break
-
+            job_class = self._resolve_sync_job_class(job_name)
             if job_class is None:
-                self._logger.warning(
-                    "No SyncJob with name=%s found in module pcswitcher.jobs.%s",
-                    job_name,
-                    job_name,
-                    extra={"job": "orchestrator", "host": "source"},
-                )
                 continue
 
             # Validate job config (Phase 2)
