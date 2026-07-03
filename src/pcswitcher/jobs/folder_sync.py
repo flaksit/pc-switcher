@@ -18,10 +18,10 @@ import shlex
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, override
 
 from pcswitcher.jobs.base import SyncJob
-from pcswitcher.models import Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
 
 # Matches rsync --info=progress2 output, e.g.:
 #   "9.53G 21% 317.26MB/s 0:00:28 (xfr#83063, to-chk=443926/538653)"
@@ -129,6 +129,30 @@ class FolderSyncJob(SyncJob):
             for f in self.context.config["folders"]
             if f.get("enabled", True)
         ]
+
+    @classmethod
+    @override
+    def describe_first_sync_scope(cls, config: dict[str, Any]) -> FirstSyncScope | None:
+        """Describe the enabled folder paths this job would overwrite on a first sync.
+
+        Reproduces the same enabled-folder filter as `_active_folders`, but operates
+        on a raw config dict (this is a classmethod, called before job instances
+        exist) rather than `self.context.config`: an entry is in scope when it is a
+        dict, its `enabled` (default True) is truthy, and its `path` is a str.
+        """
+        folders = config.get("folders", [])
+        paths = [
+            f["path"]
+            for f in folders
+            if isinstance(f, dict) and f.get("enabled", True) and isinstance(f.get("path"), str)
+        ]
+        if not paths:
+            return None
+        return FirstSyncScope(
+            job_name=cls.name,
+            scope_items=paths,
+            mechanism="rsync --delete",
+        )
 
     async def validate(self) -> list[ValidationError]:
         """Validate system state before executing the folder sync.

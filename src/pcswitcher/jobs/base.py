@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import jsonschema
 
 from pcswitcher.events import ProgressEvent
-from pcswitcher.models import ConfigError, Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.models import ConfigError, FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
 
 from .context import JobContext
 
@@ -168,6 +168,31 @@ class SyncJob(Job):
     """
 
     required: ClassVar[bool] = False
+
+    @classmethod
+    def describe_first_sync_scope(cls, config: dict[str, Any]) -> FirstSyncScope | None:
+        """Describe this job's first-sync overwrite scope, if any (ADR-015).
+
+        A first sync (target has no readable sync-history) is a distinct question
+        from an out-of-order sync: there is no prior topology to reconcile, so any
+        job that destructively replaces in-scope target state overrides this to
+        name its own scope entries and overwrite mechanism. The orchestrator
+        composes its first-sync warning from these self-descriptions instead of
+        reaching into a specific job's config shape, so the warning stays correct
+        for future non-rsync jobs without any orchestrator change.
+
+        Called as a classmethod before job instances exist — the first-sync check
+        runs before Phase 4 job discovery.
+
+        Args:
+            config: This job's configuration dict from config.yaml.
+
+        Returns:
+            A FirstSyncScope describing this job's scope and mechanism, or None
+            if this job does not destructively overwrite target state (the
+            default) or has nothing in scope for the given config.
+        """
+        return None
 
 
 class BackgroundJob(Job):

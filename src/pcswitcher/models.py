@@ -12,6 +12,7 @@ __all__ = [
     "CommandResult",
     "ConfigError",
     "DiskSpaceCriticalError",
+    "FirstSyncScope",
     "Host",
     "JobResult",
     "JobStatus",
@@ -118,6 +119,22 @@ class DiskSpaceCriticalError(Exception):
         self.free_space = free_space
         self.threshold = threshold
         super().__init__(f"{hostname}: Disk space {free_space} below threshold {threshold}")
+
+
+@dataclass(frozen=True)
+class FirstSyncScope:
+    """A SyncJob's self-described first-sync overwrite scope (ADR-015).
+
+    Returned by SyncJob.describe_first_sync_scope() so the orchestrator can
+    compose the first-sync overwrite warning generically: each in-scope job
+    names what it will destructively replace on the target (scope_items) and
+    how (mechanism), instead of the orchestrator hardcoding one job's config
+    shape and transport wording.
+    """
+
+    job_name: str
+    scope_items: list[str]
+    mechanism: str
 
 
 class SnapshotPhase(StrEnum):
