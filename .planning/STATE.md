@@ -5,16 +5,16 @@ milestone_name: milestone
 current_phase: 01
 current_phase_name: home-sync-mvp-user-data-sync
 status: executing
-stopped_at: Completed 01-12-PLAN.md
-last_updated: "2026-07-02T12:50:27.535Z"
-last_activity: 2026-07-02
+stopped_at: Completed 01-15-PLAN.md
+last_updated: "2026-07-03T21:42:57.993Z"
+last_activity: 2026-07-03
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 7
-  completed_phases: 1
-  total_plans: 14
-  completed_plans: 14
-  percent: 14
+  completed_phases: 0
+  total_plans: 18
+  completed_plans: 15
+  percent: 0
 ---
 
 # Project State
@@ -31,11 +31,11 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 01 (home-sync-mvp-user-data-sync) — EXECUTING
 
-Plan: 6 of 14
+Plan: 2 of 18
 
 Status: Ready to execute
 
-Last activity: 2026-07-02 — Phase 01 execution started
+Last activity: 2026-07-03 — Phase 01 execution started
 
 Progress: [██████████] 100%
 
@@ -74,6 +74,7 @@ Progress: [██████████] 100%
 | Phase 01 P12 | 8min | 3 tasks | 2 files |
 | Phase 01 P13 | 20min | 3 tasks | 6 files |
 | Phase 01 P14 | 6min | 3 tasks | 3 files |
+| Phase 01 P15 | 6min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -105,6 +106,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: sync_history simplified to {last_role, last_peer} per ADR-015; generation store removed; parse_sync_state/get_last_sync_state added for topology check (plan 01-13)
 - [Phase 01]: Single --allow-out-of-order flag replaces --allow-consecutive + --allow-divergence (ADR-015 topology model; plan 01-13)
 - [Phase 01]: _check_out_of_order() inserted between Phase 3 and 4 with no new step counter — 8-phase formula unchanged; W1/W2/W3 warn+confirm never hard-aborts (#159); last_peer recorded on both ends (plan 01-13)
+- [Phase ?]: Phase 01 (01-15): first-sync warning mechanism phrase for FolderSyncJob stays literal 'rsync --delete', now owned by the job via describe_first_sync_scope() instead of the orchestrator
+- [Phase ?]: Phase 01 (01-15): _resolve_sync_job_class() factored out of _discover_and_validate_jobs, shared with the new _first_sync_scopes(), to avoid duplicating dynamic-import/class-scan logic
 
 ### Pending Todos
 
@@ -124,8 +127,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-02T12:50:27.530Z
+Last session: 2026-07-03T21:42:57.988Z
 
-Stopped at: Completed 01-12-PLAN.md
+Stopped at: Completed 01-15-PLAN.md
 
 Resume file: None
