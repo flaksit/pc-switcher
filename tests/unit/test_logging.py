@@ -364,7 +364,11 @@ class TestUILogHandlerRouting:
             sink = _FakeLogPanelSink()
             console = Console(file=io.StringIO(), force_terminal=True)
 
-            listener, _queue = setup_logging(log_path, config, ui=sink, console=console)
+            # Interactivity now requires BOTH stdout (force_terminal) and stdin
+            # to be TTYs (is_interactive), shared with the confirmer. Under
+            # pytest stdin is not a TTY, so patch it to exercise UI routing.
+            with patch.object(sys.stdin, "isatty", return_value=True):
+                listener, _queue = setup_logging(log_path, config, ui=sink, console=console)
             try:
                 tui_handler = listener.handlers[1]
                 assert isinstance(tui_handler, UILogHandler)

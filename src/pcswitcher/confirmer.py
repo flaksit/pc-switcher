@@ -5,13 +5,13 @@ FolderSyncJob's first-sync overwrite gate need the same "pause the TUI, show a
 yellow warning panel, ask the user to continue" behaviour. Rather than duplicate
 that block, both go through a `Confirmer`:
 
-- interactive (stdin is a TTY): pause the live TUI, print a Rich ``Panel`` with the
-  warning, prompt ``Continue anyway? [y/n]`` (default ``n``), resume the TUI, and
-  return whether the user chose ``y``.
-- non-interactive (no TTY): there is nobody to prompt, so the decision falls back to
-  the caller's ``--allow-*`` flag. When ``allow`` is True the action is auto-approved
-  (logged); otherwise it is refused (logged, with a hint to pass the flag) and False
-  is returned.
+- interactive (both stdin and stdout are TTYs, per ``is_interactive``): pause the live
+  TUI, print a Rich ``Panel`` with the warning, prompt ``Continue anyway? [y/n]``
+  (default ``n``), resume the TUI, and return whether the user chose ``y``.
+- non-interactive (either end is not a TTY): there is nobody who can both see and answer
+  the prompt, so the decision falls back to the caller's ``--allow-*`` flag. When
+  ``allow`` is True the action is auto-approved (logged); otherwise it is refused
+  (logged, with a hint to pass the flag) and False is returned.
 
 Dry-run is intentionally NOT handled here: callers decide how a rehearsal should
 behave (ADR-014) and short-circuit before calling ``confirm``.
@@ -20,12 +20,13 @@ behave (ADR-014) and short-circuit before calling ``confirm``.
 from __future__ import annotations
 
 import logging
-import sys
 from typing import Any, Protocol, runtime_checkable
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
+
+from pcswitcher.logger import is_interactive
 
 __all__ = ["Confirmer", "PausableUI", "TerminalUIConfirmer"]
 
@@ -97,8 +98,12 @@ class TerminalUIConfirmer:
     ) -> bool:
         extra: dict[str, Any] = {"job": "confirmer", "host": "source", **(log_extra or {})}
 
-        if not sys.stdin.isatty():
-            # No TTY: the ``--allow-*`` flag is the only way to express intent.
+        if not is_interactive(self._console):
+            # Not fully interactive (stdin and/or stdout is not a TTY): there is
+            # nobody who can both see the prompt and answer it, so the
+            # ``--allow-*`` flag is the only way to express intent. Shares
+            # ``is_interactive`` with setup_logging so the live UI and the
+            # prompt agree about interactivity under mixed redirection.
             if allow:
                 self._logger.info("%s — auto-approved by %s", title, allow_flag, extra=extra)
                 return True
