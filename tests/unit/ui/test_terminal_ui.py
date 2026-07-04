@@ -254,17 +254,21 @@ async def test_resume_forces_redraw_of_state_mutated_while_paused() -> None:
     ui.start()
     try:
         ui.set_current_step(2)
-        await asyncio.sleep(0.15)
 
         ui.pause()
         # Mutated while paused: stored, but the is_started guard prevents rendering.
         ui.set_current_step(3)
 
+        # Capture only the output produced by resume() itself, with no
+        # auto-refresh tick (no sleep) in between, so the assertion proves the
+        # redraw is forced immediately by resume() rather than masked by the
+        # 10 Hz auto-refresh thread.
+        output.truncate(0)
+        output.seek(0)
         ui.resume()
-        await asyncio.sleep(0.15)
 
         rendered = output.getvalue()
-        assert "Step 3/5" in rendered, "resume() must force a redraw reflecting state mutated while paused"
+        assert "Step 3/5" in rendered, "resume() must force an immediate redraw reflecting state mutated while paused"
     finally:
         ui.stop()
 

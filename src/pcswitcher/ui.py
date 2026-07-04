@@ -156,7 +156,10 @@ class TerminalUI:
         """
         if self._live is not None:
             self._live.start()
-            self._live.update(self._render())
+            # refresh=True forces the frame out immediately instead of only
+            # storing the renderable for the next auto-refresh tick, so state
+            # mutated while paused is visible the instant the display resumes.
+            self._live.update(self._render(), refresh=True)
 
     def stop(self) -> None:
         """Stop the live display and discard the instance (final teardown)."""
