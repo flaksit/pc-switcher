@@ -13,7 +13,7 @@ Use rsync-over-SSH as the user-data transport, running rsync as root on both end
 - Run rsync as root on the source: `sudo rsync ...`
 - Run rsync as root on the target: pass `--rsync-path='sudo rsync'` in the local rsync invocation, over the existing normal-user SSH connection
 - Both endpoints require a passwordless sudoers entry scoped to the rsync binary path: `username ALL=(ALL) NOPASSWD: /usr/bin/rsync`
-- Always pass `--numeric-ids` to preserve raw UID/GID numbers across machines (prevents ownership corruption when UID allocations differ — see RESEARCH Pitfall 3)
+- Always pass `--numeric-ids` to preserve raw UID/GID numbers across machines. rsync's default maps ownership by *name* — it rewrites each file's UID/GID to whatever the target's account table assigns that name. For exact machine-state replication that is wrong: it produces target-table-dependent, non-deterministic ownership and silently diverges from the source's numeric layout. `--numeric-ids` makes ownership a pure function of the source (see RESEARCH Pitfall 3)
 - Use the flag baseline `-aAXHS` (archive + ACLs + xattrs + hard links + sparse) per D-13
 - Drive rsync via asyncio subprocess (`asyncio.create_subprocess_exec` or equivalent) — never a blocking call (ADR-005)
 - Use rsync's own SSH transport via `-e 'ssh ...'`, honoring the user's `~/.ssh/config` for hostname, port, identity, and known_hosts (ADR-002 hostname model)
@@ -56,4 +56,4 @@ The asyncssh connection (ADR-002) handles orchestration only; rsync spawns its o
 - D-13: rsync flag baseline `-aAXHS` (01-CONTEXT.md)
 - RESEARCH.md Pattern 1: rsync invocation (root on both ends)
 - RESEARCH.md Pitfall 1: SSH identity breaks under sudo
-- RESEARCH.md Pitfall 3: `--numeric-ids` missing causes ownership corruption
+- RESEARCH.md Pitfall 3: `--numeric-ids` missing lets rsync remap ownership by name, breaking exact replication

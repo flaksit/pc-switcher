@@ -446,7 +446,7 @@ The `excludes` list maps to `--filter='- PATTERN'` arguments in the rsync invoca
 - **Blocking rsync call:** Must use `asyncio.create_subprocess_shell` (or `start_process`), never `subprocess.run()`. ADR-005 bans blocking calls in the event loop.
 - **Line-based stdout reader for --info=progress2:** Progress2 uses `\r`, not `\n`. The existing `LocalProcess.stdout()` iterator will block until `\n` arrives. Use chunk-based reading instead.
 - **Hardcoded exclusions in Python code:** All exclusions must be configurable (D-11). Default list lives in `default-config.yaml`, not in `folder_sync.py`.
-- **UID/GID name mapping across machines:** Without `--numeric-ids`, rsync tries to map UID 1000 on the source to a user with the same name on the target. Across machines with different users, this corrupts ownership. Always use `--numeric-ids`. [VERIFIED: webfetch rsync man page]
+- **UID/GID name mapping across machines:** Without `--numeric-ids`, rsync maps ownership by *name* — it rewrites each file's UID/GID to whatever the target's account table assigns that name. For exact machine-state replication that defeats the goal: ownership becomes target-table-dependent and non-deterministic instead of matching the source's numeric layout. Always use `--numeric-ids`. [VERIFIED: webfetch rsync man page]
 
 ## Don't Hand-Roll
 
@@ -484,15 +484,15 @@ The `excludes` list maps to `--filter='- PATTERN'` arguments in the rsync invoca
 
 **Warning signs:** TUI progress bar stuck at 0% for minutes despite transfer happening.
 
-### Pitfall 3: `--numeric-ids` Missing → Ownership Corruption
+### Pitfall 3: `--numeric-ids` Missing → Ownership Remapped by Name
 
-**What goes wrong:** rsync maps UID 1000 on source to the username "alice", then tries to find UID for "alice" on the target. If the target's "alice" has UID 1001 (different in /etc/passwd), files get the wrong owner.
+**What goes wrong:** rsync maps UID 1000 on source to the username "alice", then looks up "alice" on the target and chowns the file to the target's UID for that name. If the target's "alice" is UID 1001, the file lands on 1001 — a different number than the source. Where a source name has no match on the target, rsync silently falls back to the raw source number, so a single tree ends up with a mix of name-mapped and number-preserved ownership.
 
-**Why it happens:** Default rsync behavior maps UIDs by name, not number. This is wrong for two machines that may have different UID allocations for the same person.
+**Why it happens:** Default rsync behavior maps ownership by name, not number. Name-mapping is designed to preserve *logical* per-user ownership across differing account tables — the opposite of what exact machine-state replication wants, which is the source's numeric layout reproduced verbatim.
 
-**How to avoid:** Always pass `--numeric-ids`. This preserves the raw UID/GID numbers from the source, which is correct for replicating a machine state.
+**How to avoid:** Always pass `--numeric-ids`. This preserves the raw UID/GID numbers from the source and makes ownership a pure function of the source rather than of the target's account table.
 
-**Warning signs:** Files on target have wrong owner (showing numeric ID instead of username, or different user than expected).
+**Warning signs:** Files on target have a different numeric owner than the source, varying by target, even though the sync reported success.
 
 ### Pitfall 4: Divergence Marker Not Updated on Target Sync Role
 
