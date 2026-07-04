@@ -205,16 +205,16 @@ async def _handle_no_target_config(
     """Handle case when target has no config."""
     if dry_run:
         # ADR-014: a rehearsal never prompts; log the preview and proceed.
-        console.print(
-            "[dim][dry-run] Target has no config; source config would be applied (no changes made).[/dim]"
-        )
+        console.print("[dim][dry-run] Target has no config; source config would be applied (no changes made).[/dim]")
         return True
 
     if auto_accept or _prompt_new_config(console, source_content):
         await _copy_config_to_target(target, source_config_path)
         console.print("[green]Configuration copied to target.[/green]")
         return True
-    console.print("[red]Sync aborted: configuration required on target.[/red]")
+    # Decline silently: _sync_config_to_target raises SyncAbortedByUser and the
+    # single CLI `except SyncAbortedByUser` handler prints the one abort line
+    # (01-16 single-message decline contract). Printing here would duplicate it.
     return False
 
 
@@ -253,8 +253,9 @@ async def _handle_config_diff(
     if action == ConfigSyncAction.KEEP_TARGET:
         console.print("[yellow]Keeping existing target configuration.[/yellow]")
         return True
-    # ABORT
-    console.print("[red]Sync aborted by user.[/red]")
+    # ABORT: decline silently — the single CLI `except SyncAbortedByUser`
+    # handler owns the one user-facing abort line (01-16 single-message
+    # decline contract). Printing here would emit a second, conflicting line.
     return False
 
 
