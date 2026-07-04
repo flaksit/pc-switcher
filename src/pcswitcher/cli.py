@@ -217,8 +217,9 @@ def sync(
             "--allow-first-sync",
             help=(
                 "Proceed with a first-ever sync without interactive confirmation. "
-                "WARNING: every folder configured for folder_sync will be overwritten "
-                "on the target (rsync --delete), except configured exclusions."
+                "WARNING: everything on the target within the scope of the configured "
+                "sync jobs will be overwritten, except configured exclusions. "
+                "Run with --dry-run first to preview."
             ),
         ),
     ] = False,
