@@ -256,8 +256,8 @@ class TestConfigSyncIntegration:
         try:
             await sync_config_to_target(pc1_executor, local_path, ui, console)
 
-            ui.stop.assert_called_once()
-            ui.start.assert_called_once()
+            ui.pause.assert_called_once()
+            ui.resume.assert_called_once()
         finally:
             local_path.unlink()
             await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
