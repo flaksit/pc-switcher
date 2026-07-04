@@ -100,10 +100,19 @@ class TerminalUI:
 
         status.add_row(conn_text, step_text)
 
-        # Log panel with scrolling messages
-        log_text = "\n".join(self._log_panel) if self._log_panel else "[dim]No logs yet[/dim]"
+        # Log panel with scrolling messages. The joined log lines are wrapped in
+        # a Text object so Rich renders them literally: arbitrary log content
+        # (rsync file paths, rsync stderr) can embed markup-like sequences such
+        # as `[/old]`, which — if passed to Panel as a bare str — Rich would try
+        # to parse as console markup, silently swallowing `[token]` and raising
+        # MarkupError on `[/...]`. That crash fires on the Live auto-refresh
+        # thread and again during Live.stop() teardown. The "No logs yet"
+        # placeholder is trusted literal markup, so it is parsed via from_markup.
+        log_body: RenderableType = (
+            Text("\n".join(self._log_panel)) if self._log_panel else Text.from_markup("[dim]No logs yet[/dim]")
+        )
         log_panel = Panel(
-            log_text,
+            log_body,
             title="Recent Logs",
             border_style="blue",
             height=self._max_log_lines + 2,  # +2 for borders

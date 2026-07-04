@@ -347,3 +347,38 @@ async def test_core_us_tui_as3_progress_and_connection_events() -> None:
 
     finally:
         ui.stop()
+
+
+async def test_log_panel_renders_markup_like_content_literally() -> None:
+    """Log lines containing markup-like sequences must not crash the panel render.
+
+    Regression for the Recent Logs panel interpreting arbitrary log content as
+    Rich console markup: a real rsync deletion path such as `[/old]` raised
+    MarkupError when the joined log text was passed to Panel as a bare str,
+    killing the Live auto-refresh thread and the Live.stop() teardown frame.
+    Drives the real TerminalUI render (and stop) and asserts no exception plus
+    literal path/stderr text in the output.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=1)
+
+    ui.start()
+    try:
+        # Unbalanced closing tag: this is the sequence that raised MarkupError.
+        ui.add_log_message("12:00:00 [FULL] [folder_sync] *deleting home/user/[/old]/cache")
+        # rsync-stderr-style CRITICAL line with bracketed tokens.
+        ui.add_log_message("12:00:01 [CRITICAL] [folder_sync] rsync failed: rsync: [sender] link_stat failed")
+
+        # Force a full render + final teardown frame; neither may raise.
+        ui.stop()
+
+        rendered = output.getvalue()
+    finally:
+        # stop() already ran in the happy path; guard against a mid-test raise
+        # leaving the Live active without masking the original exception.
+        ui.stop()
+
+    assert "home/user/[/old]/cache" in rendered, "literal deletion path must render verbatim"
+    assert "[sender] link_stat failed" in rendered, "literal rsync stderr must render verbatim"
