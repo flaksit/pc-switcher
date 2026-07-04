@@ -931,6 +931,14 @@ class Orchestrator:
                             extra={"job": "orchestrator", "host": "source"},
                         )
 
+                    except SyncAbortedByUser:
+                        # A job-level declined confirmation (e.g. FolderSyncJob's
+                        # first-sync overwrite gate via the shared confirmer) is
+                        # expected control flow, not a job failure. Let it pass
+                        # through untouched so run() logs it once at WARNING and
+                        # records an ABORTED session, rather than a spurious
+                        # FAILED job result plus a duplicate CRITICAL log.
+                        raise
                     except Exception as e:
                         ended_at = datetime.now(UTC)
                         results.append(
