@@ -1,24 +1,27 @@
 ---
-status: diagnosed
+status: testing
 phase: 01-home-sync-mvp-user-data-sync
 source: [01-VERIFICATION.md]
-started: "2026-07-02T13:04:39Z"
-updated: "2026-07-03T19:20:00Z"
+started: "2026-07-04T16:03:13Z"
+updated: "2026-07-04T16:03:13Z"
 ---
 
 ## Current Test
 
-number: 1
+number: 7
 
-name: Install pc-switcher on machine A (first-run install UX)
+name: Live-progress flooding fix — dry-run repro (01-18 deferred check)
 
-expected: Following the documented install path, pc-switcher installs on A; `pc-switcher --version` works; `pc-switcher init` writes a default config.
+expected: |
+  On pc1, `pc-switcher sync pc2 --dry-run` with dummy_success active (per the flooding
+  debug recipe). No duplicate "Recent Logs" panel headers, no duplicate progress frames;
+  display updates in place at 10 Hz with no flicker/stacked frames.
 
-awaiting: user response (clean-reinstall result not yet confirmed — first attempt hit a pre-existing uv-tool install left over from prior session state; uninstalled and re-run requested, result pending)
+awaiting: user response
 
 ## Tests
 
-Scope: this UAT covers only what automation cannot — the interactive UX and a whole-flow walkthrough for maintainer confidence. The data-level guarantees (byte-identical content, numeric uid/gid, permissions incl. special bits, ACLs, mtime, hard/sym links across user/root/other-user files and dirs, config exclusions, ADR-016 runtime-file exclusion, directory-deletion propagation, the non-interactive `--yes`/`--allow-first-sync`/`--allow-out-of-order` paths) are covered by the automated suite (`test_end_to_end_sync.py::TestEndToEndSync::test_core_us_job_arch_as1_job_integration_via_interface`, green in CI) and are exercised implicitly as the walkthrough edits and syncs files.
+Scope: this UAT covers only what automation cannot — the interactive UX and a whole-flow walkthrough for maintainer confidence. The data-level guarantees (byte-identical content, numeric uid/gid, permissions incl. special bits, ACLs, mtime, hard/sym links across user/root/other-user files and dirs, config exclusions, ADR-016 runtime-file exclusion, directory-deletion propagation, the non-interactive `--yes`/`--allow-first-sync`/`--allow-out-of-order` paths) are covered by the automated suite and are proven by Test 8 (the VM integration run). This is a fresh restart re-testing against the fixed code from gap-closure round 01-15..01-18 + code-review.
 
 ### 1. Install pc-switcher on machine A (first-run install UX)
 
@@ -28,35 +31,37 @@ why_human: Validates the real install experience and documentation on a real mac
 
 result: pass
 
-note: First attempt found pc-switcher already registered via `uv tool list` (leftover from prior session state, masked by a non-interactive-SSH PATH check appearing to show it absent). After `uv tool uninstall pcswitcher` + `rm -rf ~/.config/pc-switcher ~/.local/share/pc-switcher` + re-running the install script, the clean first-run install passed.
+note: Installed on clean pc1 via `curl .../refs/tags/v0.1.0-alpha.14/install.sh | VERSION=v0.1.0-alpha.14 bash`; `pc-switcher --version` → 0.1.0-alpha.14 (clean release tag); `init` created config.yaml. Release must be an ANNOTATED tag (see issue #161 / memory) — lightweight tags install as a wrong dev version. Known first-run UX gap: installer puts binary in ~/.local/bin without adding it to the current shell or telling the user (fresh login shell fixes it) — user accepted Test 1 as pass.
 
-### 2. First-sync warning — abort (interactive)
+### 2. First-sync warning — abort (interactive, fixed code)
 
-expected: With target B having no prior sync history, run `pc-switcher sync <B>` from A on an interactive terminal (no `--yes`, no `--allow-first-sync`). A first-sync "target will be overwritten" warning appears and asks for confirmation. Answer NO. The sync aborts cleanly; B is not modified (no files transferred); A's sync-history is not written.
+expected: With target B having no prior sync history, run `pc-switcher sync <B>` from A on an interactive terminal (no `--yes`, no `--allow-first-sync`). A first-sync "target will be overwritten" warning appears and asks for confirmation. The warning's "In scope" block is built from the FolderSync job's own self-description — it names no transport mechanism directly (no hardcoded "rsync --delete" leaking from the orchestrator). Answer NO. The sync aborts with exactly one calm yellow "Sync aborted: ..." line — no red "Sync failed", no duplicate CRITICAL log line, logged at WARNING not CRITICAL. The terminal shows one continuous Live region throughout: no duplicate stacked "Recent Logs" panels, no skipped step number. B is not modified (no files transferred); A's sync-history is not written.
 
-why_human: Interactive confirmation over a TTY; the non-interactive suite cannot exercise the prompt or the human "no".
+why_human: Interactive TTY behavior + Rich Live terminal cursor rendering; the fix is unit-tested at the mechanism level (Live-instance reuse, single WARNING log, single CLI message) but not observed on a real terminal since these commits landed.
 
-result: issue
+result: pass
 
-reported: "Answered n at the first-sync warning: sync aborted cleanly (pc2 confirmed untouched: `ls ~` empty of new files, only the pre-existing lock file present), no history written. But: (1) layout showed two stacked 'Recent Logs' panels with a skipped step counter (1/11 then 3/11, no 2/11); (2) the decline is logged at [CRITICAL] and the 'Sync failed: ...' message is printed twice; (3) the warning text names /home, /root and '(rsync --delete)', which are FolderSync-specific details baked into orchestrator-level messaging."
-
-severity: minor
+note: Ran on pc1 → freshly-reset pc2, answered n. Core abort correct: single [WARNING] "Sync aborted by user", one calm yellow "Sync aborted: ..." CLI line, no red "Sync failed", no double-CRITICAL, no flooding, step counter 1→2→3 (no skip). Residual TUI artifact (accepted as pass, logged as minor gap): two stacked "Recent Logs" panels remain and the First Sync warning panel is truncated where the resumed Connection status line overwrote it — the same class as the original Test-2 complaint. 01-17 fixed flooding/step-skip/double-CRITICAL but not this confirm-boundary duplication.
 
 ### 3. First-sync warning — confirm (interactive)
 
 expected: Re-run `pc-switcher sync <B>` from A. The same first-sync warning appears. Answer YES. The sync proceeds: pc-switcher installs/updates on B, config syncs, the folder transfer runs, and B ends up matching A. A's sync-history records A as source, B as target.
 
-why_human: Interactive confirmation prompt.
+why_human: Interactive confirmation prompt; never run since the phase's original UAT pass. Requires a live machine pair.
 
-result: [pending]
+result: pass
+
+note: Ran on pc1 → freshly-reset pc2, answered y (config prompt appeared, answered y). Sync completed; pc-switcher installed on pc2 (0.1.0a14 via release-floor fallback), config applied, /home + /root transferred. Data-level copy/delete verified hands-on via planted fixtures + a 2nd (consecutive) sync: new files/nested dirs copied to pc2, executable perms preserved, symlink preserved as a symlink, and pc2-only files/dirs removed by rsync --delete. Findings from this test logged in Gaps (all minor): dry-run fidelity + log pointer, disk_space_monitor 0% bar, folder_sync 2% bar, install_on_target noisy WARNING, config-prompt decline aborts whole sync, and orchestrator dry-run-preview wording (job-specific "deleted" + log pointer).
 
 ### 4. Clean round-trip alternation (whole-flow walkthrough)
 
-expected: Edit a file under the synced tree on A, then `pc-switcher sync <B>` — change lands on B. Edit a file on B, then `pc-switcher sync <A>` from B — change lands on A. Edit again on A, then `pc-switcher sync <B>`. A clean A→B / B→A / A→B alternation proceeds each time WITHOUT any out-of-order/consecutive-push warning (the clean case is silent). This is the maintainer's confidence pass over the whole feature with real edits.
+expected: Edit a file under the synced tree on A, then `pc-switcher sync <B>` — change lands on B. Edit a file on B, then `pc-switcher sync <A>` from B — change lands on A. Edit again on A, then `pc-switcher sync <B>`. A clean A→B / B→A / A→B alternation proceeds each time WITHOUT any out-of-order/consecutive-push warning (the clean case is silent). The live display stays coherent across all three runs — this is the scenario most likely to reproduce (or definitively disprove) the original flooding bug under sustained job activity. This is the maintainer's confidence pass over the whole feature with real edits.
 
 why_human: End-to-end confidence walkthrough on a real machine pair with real edits and real timing.
 
-result: [pending]
+result: pass
+
+note: Reverse direction pc2→pc1 ran SILENTLY — no out-of-order/consecutive warning, no first-sync warning, no config prompt (the clean alternation case). pc2's change (from-pc2.txt + appended line to hello.txt) landed on pc1, confirmed by user. Data alternation A→B (Test 3) and B→A verified in both directions. Cosmetic finding logged: config_sync pauses/resumes the Live unconditionally on every interactive sync, leaving a stale 'Recent Logs' panel even with no prompt.
 
 ### 5. Consecutive-push heads-up — leave it waiting (interactive)
 
@@ -64,7 +69,9 @@ expected: Create a consecutive-push topology — e.g. from B, `pc-switcher sync 
 
 why_human: Interactive prompt; the "waiting for the human" state is itself the UX being validated, and it sets up the concurrent-lock test.
 
-result: [pending]
+result: pass
+
+note: From pc2, a 2nd consecutive pc2→pc1 surfaced the W3 "Consecutive Sync — No Back-Sync Received" heads-up and waited patiently at the prompt (held the lock). Answering y afterward completed the sync normally.
 
 ### 6. Concurrent sync blocked + how-to-unblock, then confirm the waiting one
 
@@ -72,96 +79,133 @@ expected: While test 5's sync is still waiting at its prompt (and therefore hold
 
 why_human: Requires two concurrent interactive invocations racing on the same machine; the messaging/timing UX is not covered by the automated single-conflict test (which pre-holds the lock out-of-band).
 
-result: [pending]
+result: pass
+
+note: While Test 5's sync waited (holding pc2's lock), a second pc2→pc1 in another terminal failed FAST (no hang) with "This machine is already involved in a sync (held by: source:pc2:…:pid=…)" plus genuinely useful how-to-unblock guidance (wait for it to finish / lock auto-releases on exit / fuser -k or pkill the holder, don't delete the lock file). Returning to Test 5's sync and answering y completed normally. Minor finding logged: that lock-conflict message prints twice (CRITICAL log + red CLI line) — user flagged very low prio.
+
+### 7. Live-progress flooding fix — dry-run repro (01-18 deferred check)
+
+expected: On pc1, run `pc-switcher sync pc2 --dry-run` with `dummy_success` active (per `.planning/debug/tui-live-progress-flooding.md`'s reproduction recipe) and observe the raw terminal output. No duplicate "Recent Logs" panel headers, no duplicate progress frames; the display updates in place at 10 Hz with no flicker or stacked frames.
+
+why_human: 01-18's own verification defers this to a manual/VM re-test — the log-routing mechanism is unit-tested but the absence of a live-terminal cursor-desync artifact needs direct observation.
+
+result: pass
+
+note: Validated on accumulated evidence across the user's dry-run + multiple full runs: dummy_success's frequent "Source phase: Ns elapsed" logs (the original flooding trigger) render cleanly inside the Recent Logs panel with no flooding (original bug rendered the panel header 761× / 326 duplicate frames). The only residual TUI artifacts are the pause-boundary duplicates logged separately (confirm-boundary + config_sync unconditional pause), which are distinct from the flooding and much milder. Strict folder_sync-disabled repro not run (would only reduce activity, can't surface worse).
+
+### 8. Full VM integration test suite (ROADMAP SC1–5)
+
+expected: Push the current branch to origin (or cut a fresh pre-release tag), then run `tests/run-integration-tests.sh tests/integration/test_end_to_end_sync.py` against live VMs. `test_core_us_job_arch_as1_job_integration_via_interface` passes — byte-identical content, numeric uid/gid, permission bits incl. setuid/setgid/sticky, POSIX ACL, mtime, hard-link/symlink handling, exclusions, ADR-016 runtime excludes, and the SC3 dev-tool-cache / VS Code `User/` inclusion assertions restored by commit 9d14f54, all green end-to-end.
+
+why_human: Requires live Hetzner VM infrastructure and a push to origin — the last green CI run predates every commit in this gap-closure round. Mark pass once CI is green on the pushed branch.
+
+result: pass
+
+note: Full VM integration suite GREEN on the fixed code — 57 passed, 0 failed (PR #160 run 28902021078, HEAD facad73, 13m09s). Covers byte-identical content, numeric uid/gid, permission bits incl. setuid/setgid/sticky, POSIX ACLs, mtime, hard/sym links, exclusions, ADR-016 runtime excludes, and SC3 dev-tool-cache/VS Code inclusion. First run (28896410635) had failed on: test_ui_lifecycle_during_sync (my conditional-pause change — fixed in facad73) and two install_on_target version-match tests (a race from cutting the alpha.15 tag mid-run — resolved by re-running with the tag stable).
 
 ## Summary
 
-total: 6
+total: 8
 
-passed: 1
+passed: 8
 
-issues: 1
+issues: 0
 
-pending: 4
+pending: 0
 
 skipped: 0
 
 blocked: 0
 
+<!-- All 8 tests passed. 9 minor findings (in Gaps) fixed in a gap-closure round
+     (commits 74bbe2a, 92a0455, d7ca229, e3b477e, f045218; integration-test fix
+     facad73), released as v0.1.0-alpha.15. Hands-on re-UAT of the fixes (esp. the
+     TUI visual ones #5/#8) pending on a real terminal. -->
+
+## Fix status (gap-closure round, 2026-07-07)
+
+All 9 Gaps below are fixed and committed on 01-folder-sync; unit suite 489 green, VM integration suite 57 green (Test 8). Released as v0.1.0-alpha.15 for re-UAT.
+
+- config-sync decline now explicit ("Abort the sync") — 74bbe2a
+- job-agnostic dry-run hint pointing to the log — 92a0455
+- install fallback WARNING→DEBUG; lock conflict → SyncLockedError single "Sync blocked" (not double CRITICAL) — d7ca229
+- disk_space_monitor bar dropped; folder_sync labels folder + ends 100% — e3b477e
+- TUI: transient-clear on pause; config-sync pauses only when prompting — f045218
+- integration test_ui_lifecycle_during_sync updated for conditional pause — facad73
+
 ## Gaps
 
-- SC3 dev-tool-cache INCLUSION is not asserted by automation. The default config deliberately SYNCS dev-tool caches (`~/.cargo`, `~/.npm`, `~/.cache/uv`, `~/.local/share/uv`) and VS Code user state (`~/.config/Code/User/`), but the consolidated integration test excludes `.cache` and `.local/share/uv/python` for speed, so it only verifies the EXCLUSION side of SC3, not that included caches actually transfer. This is automatable and should be added to the integration test (seed a small marker under a non-excluded dev-tool-cache path and assert it reaches the target), not verified by hand here.
+<!-- All minor; to be bundled into one fix round after UAT completes (user decision). -->
 
-- truth: "First-sync and config-sync confirmation messages are orchestrator-level and job-agnostic, per ADR-015's stated intent that the first-sync question is common to all jobs"
+- truth: "`--dry-run` faithfully previews what a real sync would change"
   status: failed
-  reason: "orchestrator.py's _first_sync_scope() (lines 432-446) reads the folder_sync job config by name (job_configs.get('folder_sync', {})) and _confirm_first_sync() (lines 448-493) hardcodes the literal mechanism phrase '(rsync --delete)' into the warning text (line 472) alongside the /home /root path listing. This is FolderSync-specific detail leaking into code ADR-015 intends to be job-agnostic; a future non-rsync job (packages/docker, listed as future jobs in default-config.yaml) added to first-sync scope would inherit an incorrect 'rsync --delete' description."
+  reason: "Dry-run reported 0 deletions; the real run deleted 1890 files, all under ~/.cache/uv/{git-v0,archive-v0} — exactly the uv install artifacts that install_on_target (phase 7) creates on the target. Dry-run skips install_on_target (install_on_target.py:91), so it never sees the files that folder_sync --delete then reconciles. Not a data-safety issue (only ~/.cache/uv, regenerable, only files the install job itself created; the sync never even invokes pc-switcher on the target — target ops are raw rsync/btrfs over SSH), but the preview is inaccurate."
+  severity: minor
+  test: 3
+  missing:
+    - "The first-sync warning's 'Run pc-switcher sync --dry-run to preview' line should point to the log file (~/.local/share/pc-switcher/logs/, or `pc-switcher logs`) where the per-file/*deleting detail actually is — the TUI only shows summary counts"
+    - "Optionally note (or avoid) that install_on_target's filesystem effects are not reflected in dry-run"
+
+- truth: "disk_space_monitor presents itself sensibly in the TUI"
+  status: failed
+  reason: "disk_space_monitor occupies a progress line pinned at 0%, which is meaningless — it's a check/monitor, not a unit of transfer progress."
+  severity: minor
+  test: 3
+  missing:
+    - "Don't render a progress bar for monitor-type jobs; stay silent and only surface output when relevant (e.g. warn — and stop — when free space is low)"
+
+- truth: "folder_sync progress bar reflects real progress and completes at 100%"
+  status: failed
+  reason: "The folder_sync bar flashes ~97% during /home, resets, and ends at 2% (from /root) instead of 100%. It is per-folder and never represents cumulative progress or reaches completion."
+  severity: minor
+  test: 3
+  missing:
+    - "Per-folder is acceptable, but show which folder is in progress, and the bar must end at 100% when the job completes"
+
+- truth: "install_on_target logs a WARNING only for genuinely unexpected failures"
+  status: failed
+  reason: "Every install-on-target logs '[WARNING] Installation with exact version v0.1.0a14 failed, falling back to release floor'. The exact-version attempt builds a PEP440 tag (0.1.0a14) that never matches the semver release tag (v0.1.0-alpha.14), so the fallback is the NORMAL path, not an error worth a WARNING."
+  severity: minor
+  test: 3
+  missing:
+    - "Treat the semver-tag path as the expected path (try it first, or demote the expected fallback to debug/info); only WARN on a genuinely unexpected install failure"
+
+- truth: "A confirmation prompt leaves a clean TUI — no duplicate stacked panels, warning panel intact"
+  status: failed
+  reason: "The confirm-around-Live flow leaves artifacts: ui.pause() = Live.stop() with transient=False (ui.py:135,146) leaves the pre-pause frame; the warning is printed as static text (confirmer.py:125); ui.resume() = Live.start() (ui.py:158) begins a fresh Live region below it and its Connection status line overwrites/truncates the warning panel's last line. Result: two stacked 'Recent Logs' panels + a truncated First Sync warning panel. Same class as the original Test-2 complaint; 01-17 fixed the flooding, step-skip and double-CRITICAL but not this confirmation-boundary duplication."
   severity: minor
   test: 2
-  root_cause: "orchestrator hardcodes a single job's config-shape and transport mechanism into generic messaging instead of each job describing its own scope/mechanism"
-  artifacts:
-    - path: "src/pcswitcher/orchestrator.py"
-      issue: "_first_sync_scope() (432-446) and _confirm_first_sync() (448-493) hardcode folder_sync's config shape and rsync-specific wording"
   missing:
-    - "A job-agnostic way for whichever job(s) are in first-sync scope to describe their own scope/mechanism to the orchestrator, instead of the orchestrator reading folder_sync's config dict and rsync wording directly"
-  debug_session: ""
+    - "Render the confirmation prompt inside the Live region (or clear/redraw the region on pause) instead of stop → static print → start, so the prompt neither leaves duplicate 'Recent Logs' panels nor truncates the warning panel"
 
-- truth: "Declining a confirmation prompt (first-sync, config-sync) aborts cleanly with an accurate, single, non-alarming message"
+- truth: "The 'Apply this config to target?' prompt makes clear what declining does"
   status: failed
-  reason: "User reported two 'Sync failed' messages (once as a [CRITICAL] log line, once as a bare red console line) when answering n to both the first-sync warning and the config-sync prompt. Declining raises a plain RuntimeError (orchestrator.py:268, and orchestrator.py:427-428 for config-sync) that falls into the generic `except Exception` handler (orchestrator.py:330-334), which logs every exception at CRITICAL and re-raises; cli.py's outer handler (cli.py:349-351) then prints the same message again. CRITICAL is documented as 'Unrecoverable errors, sync must abort' (models.py:47) but a user declining a prompt is expected control flow, not an unrecoverable error."
+  reason: "Answering n — which is ALSO the default (config_sync.py:101 default=\"n\", so pressing Enter does the same) — makes _handle_no_target_config return False (config_sync.py:218), and the orchestrator raises SyncAbortedByUser (orchestrator.py:451-452), aborting the ENTIRE sync (no config, no folders transferred). The prompt 'Apply this config to target? [y/n] (n)' doesn't convey that declining aborts everything; a user reasonably reads n as 'skip config / keep target config and continue', and the safe-looking default (n) silently aborts the whole sync."
   severity: minor
-  test: 2
-  root_cause: "user-declined-confirmation and genuine unrecoverable failures share the same generic except-Exception handling path, at both the orchestrator and CLI layers"
-  artifacts:
-    - path: "src/pcswitcher/orchestrator.py"
-      issue: "generic except Exception handler (lines 330-334) logs user-declined-confirmation at CRITICAL, same as genuine failures"
-    - path: "src/pcswitcher/cli.py"
-      issue: "outer except Exception (lines 349-351) reprints the same message the orchestrator already logged"
+  test: 3
   missing:
-    - "A distinct 'aborted by user choice' outcome (or exception subtype) that logs once at INFO/WARNING instead of flowing through the generic CRITICAL failure path, and that the CLI's outer handler recognizes to avoid re-printing"
-  debug_session: ""
+    - "Make the prompt state the consequence of declining (e.g. that it aborts the sync), and/or reconsider the n default; present 'apply config' vs 'abort sync' as an explicit, unambiguous choice"
 
-- truth: "The live TUI updates in place through confirmation pauses, without leaving duplicate stale panels in the terminal or skipping step numbers"
+- truth: "Orchestrator-level warnings use job-agnostic language and point users to the actual preview location"
   status: failed
-  reason: "User reported duplicated 'Recent Logs'/status blocks and a skipped step number (1/11 then 3/11, no 2/11) around confirmation prompts. TerminalUI.start() (ui.py:114-122) always constructs a brand-new rich.live.Live object rather than resuming the previous one; Confirmer.confirm() (confirmer.py:117,129) calls ui.stop() then ui.start() around every prompt, so each confirmation permanently leaves the prior Live's last frame in the scrollback (transient=False) and begins a fresh Live region below it."
+  reason: "The 'Run pc-switcher sync --dry-run to preview what would be deleted before committing to a live sync' line appears in the orchestrator's first-sync warning (orchestrator.py:552) and both out-of-order heads-ups — W2 (orchestrator.py:639-640) and W3 (orchestrator.py:651-652). (a) 'deleted' is FolderSync/rsync-specific, but these are orchestrator-level messages that will later coordinate packages/system-config jobs where a change isn't a file deletion — the wording should be generic (e.g. 'what would change on <target>'). (b) A --dry-run's per-item/deletion detail is only in the log file, not the TUI, so the line should point to ~/.local/share/pc-switcher/logs/ (or `pc-switcher logs`)."
   severity: minor
-  test: 2
-  root_cause: "TerminalUI.start() re-instantiates Live() on every resume instead of resuming a single persistent Live instance"
-  artifacts:
-    - path: "src/pcswitcher/ui.py"
-      issue: "start() (114-122) always creates a new Live() instance instead of resuming"
-    - path: "src/pcswitcher/confirmer.py"
-      issue: "stop()/start() around every confirm (117, 129) compounds the duplicate-frame effect"
+  test: 5
   missing:
-    - "TerminalUI should support pause/resume of a single Live instance instead of re-instantiating a new one on every resume"
-  debug_session: ""
+    - "Make the dry-run-preview line job-agnostic ('preview what would change on <target>') and point to the log file for the per-item detail; applies to the first-sync warning and both W2/W3 out-of-order heads-ups"
 
-- truth: "The live progress display updates job progress bars in place at 10Hz without visual corruption"
+- truth: "A silent sync (no prompts shown) leaves a single clean Live region"
   status: failed
-  reason: "User reported the screen flickering on every refresh with 'Connection: connected... Step 9/10 / dummy_success ...' lines repeatedly stacking underneath each other rather than being overwritten, escalating through the dummy_success job's 0%->100% progress with dozens of duplicate blocks and multiple duplicate 'Recent Logs' panels appearing. Observed on pc1 running `pc-switcher sync pc2 --dry-run` with folder_sync disabled (only dummy_success + disk_space_monitor jobs active), unrelated to any confirmation pause. NOT yet root-caused via static code reading -- ui.py's Live is configured with refresh_per_second=10 and update_job_progress()/set_connection_status() call self._live.update(self._render()) directly; why this produces growing duplicate frames instead of an in-place redraw needs live reproduction/debugging, not just code reading."
-  severity: major
-  test: null
-  root_cause: "setup_logging() (logger.py:268-271) installs a logging.StreamHandler(sys.stderr) that writes formatted log records directly to the terminal, uncoordinated with TerminalUI's rich.live.Live instance. Any INFO+ log emitted while Live is active (routine orchestrator phase logs, dummy_success's periodic progress logs) prints a raw line into the region Live believes it exclusively owns, desyncing Live's 'how many lines did I render last time' cursor bookkeeping. Confirmed via live raw-byte capture on pc1 (script + ssh -tt): the 'Recent Logs' panel header appeared 761 times and the dummy_success 0% frame 326 times in one run, with orchestrator INFO log lines visibly interleaved as plain \\r\\n-terminated text ahead of Live's own erase/redraw sequences."
-  artifacts:
-    - path: "src/pcswitcher/logger.py"
-      issue: "setup_logging() (268-271): stream_handler = logging.StreamHandler(sys.stderr) writes directly to the terminal instead of routing through TerminalUI's Live-managed render"
-    - path: "src/pcswitcher/ui.py"
-      issue: "TerminalUI already has an unused add_log_message()/log-panel mechanism designed for exactly this purpose (populated by nothing since ADR-010's migration); its Live cursor bookkeeping is the victim, corrupted by the independent stderr writes"
-    - path: "src/pcswitcher/config.py"
-      issue: "LogConfig.tui defaults to INFO (20), which is what makes the corruption trigger on routine orchestrator logs, not just dummy_success's frequent ones"
-  missing:
-    - "Route TUI-destined log output exclusively through TerminalUI's add_log_message()/log-panel mechanism (e.g. a custom logging.Handler whose emit() posts into the UI's event queue) instead of a separate stderr StreamHandler, so all terminal output funnels through one Live.update() path"
-    - "Fall back to a plain stderr StreamHandler only when no TerminalUI/Live is active (non-interactive or non-TTY runs)"
-  debug_session: ".planning/debug/tui-live-progress-flooding.md"
-
-- truth: "Confirmation prompts behave consistently under --dry-run across the codebase"
-  status: failed
-  reason: "User found it confusing that pc-switcher still asks 'Apply this config to target? [y/n]' during --dry-run. Confirmed the answer is a safe no-op (config_sync.py:184-201 only calls the real write _copy_config_to_target when dry_run is False, matching ADR-014), so there is no data-safety violation. But this is inconsistent with _confirm_first_sync (orchestrator.py:478-485), which checks dry_run BEFORE prompting and skips the question entirely. _prompt_new_config (config_sync.py:71-103) prompts unconditionally regardless of dry_run, only gating the write afterward."
+  reason: "config_sync pauses/resumes the Live even when no prompt is shown. sync_config_to_target sets should_pause = ui is not None and not auto_accept and not dry_run (config_sync.py:303) — true for ANY interactive sync — then ui.pause() (=Live.stop, leaves a stale frame) / ui.resume() (=Live.start, new region) around the whole config step (config_sync.py:306,317), regardless of whether a prompt actually fires. When the target config matches (common case, config_sync.py:188 just prints 'skipping'), no prompt occurs yet the Live is still stopped+restarted, leaving a stale 'Recent Logs' panel (observed frozen at Step 7/11) with a fresh region below. Same root mechanism as the Test-2 confirm-boundary finding, but this fires on every interactive sync with no user interaction at all."
   severity: minor
-  test: null
-  root_cause: "two confirmation call sites in the same codebase handle --dry-run inconsistently: one skips prompting, the other prompts and only gates the resulting write"
-  artifacts:
-    - path: "src/pcswitcher/config_sync.py"
-      issue: "_handle_no_target_config/_prompt_new_config (71-103, 184-201) prompt interactively even under --dry-run, unlike orchestrator's other confirmations"
+  test: 4
   missing:
-    - "Skip the config-sync prompt under --dry-run (log-and-proceed, matching _confirm_first_sync's pattern) for consistency"
-  debug_session: ""
+    - "Pause the Live only when a prompt is actually about to be shown (pause lazily inside the prompt paths), not unconditionally around the config-sync step; combine with rendering prompts inside the Live / redraw-on-resume so no stale 'Recent Logs' panel is left"
+
+- truth: "A lock-conflict failure shows a single, appropriately-leveled message"
+  status: failed
+  reason: "The lock-conflict ('This machine is already involved in a sync (held by: …)') prints twice: once as a [CRITICAL] orchestrator log line in the panel (orchestrator.py:357 generic 'except Exception' → logger.critical('Sync failed: %s')) and once as the red 'Sync failed:' CLI line (cli.py generic exception handler re-print). The 01-16 single-message contract only covers SyncAbortedByUser (user decline, logged once at WARNING); a lock conflict is a different generic exception, so it still double-prints and at CRITICAL — even though 'another sync is already running' is an expected, retryable condition, not an unrecoverable crash. User: very low prio."
+  severity: minor
+  test: 6
+  missing:
+    - "Route lock-conflict (and similar expected 'try again later' failures) through the single-message path like SyncAbortedByUser — print once at an appropriate level (not CRITICAL); don't fire both the orchestrator CRITICAL log and the CLI reprint"
