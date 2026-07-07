@@ -47,6 +47,7 @@ from pcswitcher.models import (
     SessionStatus,
     SnapshotPhase,
     SyncAbortedByUser,
+    SyncLockedError,
     SyncSession,
     ValidationError,
 )
@@ -350,6 +351,16 @@ class Orchestrator:
             self._logger.warning("Sync aborted by user: %s", e, extra={"job": "orchestrator", "host": "source"})
             raise
 
+        except SyncLockedError as e:
+            # A lock conflict is an expected, retryable condition (another sync is
+            # running), not an unrecoverable failure: log once at WARNING (never
+            # CRITICAL) and re-raise so the CLI reports it once with its unblock hint.
+            session.status = SessionStatus.ABORTED
+            session.ended_at = datetime.now(UTC)
+            session.error_message = str(e)
+            self._logger.warning("Sync blocked: %s", e, extra={"job": "orchestrator", "host": "source"})
+            raise
+
         except Exception as e:
             session.status = SessionStatus.FAILED
             session.ended_at = datetime.now(UTC)
@@ -372,7 +383,7 @@ class Orchestrator:
         holder_info = f"source:{self._source_hostname}:{self._session_id}:pid={os.getpid()}"
         if not self._source_lock.acquire(holder_info):
             existing_holder = self._source_lock.get_holder_info()
-            raise RuntimeError(
+            raise SyncLockedError(
                 f"This machine is already involved in a sync (held by: {existing_holder}).\n"
                 f"{_stuck_lock_hint('this machine', str(get_lock_path()))}"
             )
@@ -400,7 +411,7 @@ class Orchestrator:
             self._remote_executor, self._source_hostname, self._session_id
         )
         if self._target_lock_process is None:
-            raise RuntimeError(
+            raise SyncLockedError(
                 f"Target {self._target_hostname} is already involved in a sync.\n"
                 f"{_stuck_lock_hint(self._target_hostname, '~/.local/share/pc-switcher/pc-switcher.lock')}"
             )

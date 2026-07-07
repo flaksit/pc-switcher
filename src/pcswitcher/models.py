@@ -136,6 +136,20 @@ class SyncAbortedByUser(Exception):
         super().__init__(message)
 
 
+class SyncLockedError(Exception):
+    """Raised when a lock is already held — this or the target machine is busy.
+
+    Represents an expected, retryable condition (another sync is in progress, or
+    an orphaned holder left a stuck lock), not an unrecoverable crash. Like
+    SyncAbortedByUser, callers MUST NOT log this at CRITICAL; it is caught
+    separately from the generic exception path in both Orchestrator.run() and the
+    CLI so it is reported once, at WARNING, with its how-to-unblock guidance.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class FirstSyncScope:
     """A SyncJob's self-described first-sync overwrite scope (ADR-015).

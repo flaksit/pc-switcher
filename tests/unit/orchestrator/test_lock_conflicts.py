@@ -15,7 +15,15 @@ import pytest
 
 from pcswitcher.config import Configuration
 from pcswitcher.lock import SyncLock
+from pcswitcher.models import SessionStatus, SyncLockedError, SyncSession
 from pcswitcher.orchestrator import Orchestrator
+
+
+def _make_no_op_ui() -> MagicMock:
+    """A TerminalUI stand-in: sync methods no-op, consume_events is awaitable."""
+    ui = MagicMock()
+    ui.consume_events = AsyncMock()
+    return ui
 
 
 @pytest.fixture
@@ -57,7 +65,7 @@ class TestSourceLockConflictMessages:
             with patch("pcswitcher.orchestrator.get_lock_path", return_value=lock_path):
                 orchestrator = Orchestrator(target="test-target", config=mock_config)
 
-                with pytest.raises(RuntimeError) as exc_info:
+                with pytest.raises(SyncLockedError) as exc_info:
                     await orchestrator._acquire_source_lock()  # pyright: ignore[reportPrivateUsage]
 
                 # Verify error message format
@@ -85,7 +93,7 @@ class TestSourceLockConflictMessages:
             with patch("pcswitcher.orchestrator.get_lock_path", return_value=lock_path):
                 orchestrator = Orchestrator(target="test-target", config=mock_config)
 
-                with pytest.raises(RuntimeError) as exc_info:
+                with pytest.raises(SyncLockedError) as exc_info:
                     await orchestrator._acquire_source_lock()  # pyright: ignore[reportPrivateUsage]
 
                 # Check exact format for user-facing display
@@ -122,7 +130,7 @@ class TestTargetLockConflictMessages:
             "pcswitcher.orchestrator.start_persistent_remote_lock",
             return_value=None,
         ):
-            with pytest.raises(RuntimeError) as exc_info:
+            with pytest.raises(SyncLockedError) as exc_info:
                 await orchestrator._acquire_target_lock()  # pyright: ignore[reportPrivateUsage]
 
             # Verify error message includes target hostname
@@ -147,7 +155,7 @@ class TestTargetLockConflictMessages:
             "pcswitcher.orchestrator.start_persistent_remote_lock",
             return_value=None,
         ):
-            with pytest.raises(RuntimeError) as exc_info:
+            with pytest.raises(SyncLockedError) as exc_info:
                 await orchestrator._acquire_target_lock()  # pyright: ignore[reportPrivateUsage]
 
             error_msg = str(exc_info.value)
@@ -162,7 +170,7 @@ class TestLockErrorMessageClarity:
 
     @pytest.mark.asyncio
     async def test_source_lock_error_no_stack_trace_in_message(self, mock_config: MagicMock, tmp_path: Path) -> None:
-        """Source lock error is a clean RuntimeError without internal details.
+        """Source lock error is a clean SyncLockedError without internal details.
 
         The error should be suitable for display to users without exposing
         internal implementation details or stack traces in the message.
@@ -176,11 +184,11 @@ class TestLockErrorMessageClarity:
             with patch("pcswitcher.orchestrator.get_lock_path", return_value=lock_path):
                 orchestrator = Orchestrator(target="test-target", config=mock_config)
 
-                with pytest.raises(RuntimeError) as exc_info:
+                with pytest.raises(SyncLockedError) as exc_info:
                     await orchestrator._acquire_source_lock()  # pyright: ignore[reportPrivateUsage]
 
-                # Error should be RuntimeError (not OSError, BlockingIOError, etc.)
-                assert exc_info.type is RuntimeError
+                # Error should be SyncLockedError (not OSError, BlockingIOError, etc.)
+                assert exc_info.type is SyncLockedError
 
                 # Message should not contain internal details
                 error_msg = str(exc_info.value)
@@ -192,7 +200,7 @@ class TestLockErrorMessageClarity:
 
     @pytest.mark.asyncio
     async def test_target_lock_error_no_stack_trace_in_message(self, mock_config: MagicMock) -> None:
-        """Target lock error is a clean RuntimeError without internal details."""
+        """Target lock error is a clean SyncLockedError without internal details."""
         orchestrator = Orchestrator(target="test-target", config=mock_config)
         orchestrator._remote_executor = AsyncMock()  # pyright: ignore[reportPrivateUsage]
 
@@ -200,12 +208,60 @@ class TestLockErrorMessageClarity:
             "pcswitcher.orchestrator.start_persistent_remote_lock",
             return_value=None,
         ):
-            with pytest.raises(RuntimeError) as exc_info:
+            with pytest.raises(SyncLockedError) as exc_info:
                 await orchestrator._acquire_target_lock()  # pyright: ignore[reportPrivateUsage]
 
-            assert exc_info.type is RuntimeError
+            assert exc_info.type is SyncLockedError
 
             error_msg = str(exc_info.value)
             assert "SSH" not in error_msg
             assert "asyncssh" not in error_msg
             assert "Traceback" not in error_msg
+
+
+class TestRunCatchesSyncLockedError:
+    """run() must catch SyncLockedError before the generic Exception handler."""
+
+    @pytest.mark.asyncio
+    async def test_lock_conflict_logs_warning_never_critical_and_reraises(
+        self,
+        mock_config: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A lock conflict is ABORTED and logged once at WARNING, never CRITICAL.
+
+        Drives the real run() with _acquire_source_lock raising SyncLockedError,
+        so run()'s `except SyncLockedError` handler is exercised (single WARNING,
+        not the generic CRITICAL "Sync failed" path) without a real lock.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = Orchestrator(target="target-host", config=mock_config)
+        orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
+        orchestrator._acquire_source_lock = AsyncMock(  # pyright: ignore[reportPrivateUsage]
+            side_effect=SyncLockedError("This machine is already involved in a sync")
+        )
+
+        sessions: list[SyncSession] = []
+
+        def _capture_session(*args: object, **kwargs: object) -> SyncSession:
+            session = SyncSession(*args, **kwargs)  # type: ignore[arg-type]
+            sessions.append(session)
+            return session
+
+        with (
+            patch("pcswitcher.orchestrator.setup_logging", return_value=(MagicMock(), MagicMock())),
+            patch("pcswitcher.orchestrator.TerminalUI", return_value=_make_no_op_ui()),
+            patch("pcswitcher.orchestrator.SyncSession", side_effect=_capture_session),
+            pytest.raises(SyncLockedError),
+        ):
+            await orchestrator.run()
+
+        assert len(sessions) == 1
+        assert sessions[0].status == SessionStatus.ABORTED
+        assert sessions[0].ended_at is not None
+
+        logger = orchestrator._logger  # pyright: ignore[reportPrivateUsage]
+        logger.warning.assert_called_once()
+        logger.critical.assert_not_called()
