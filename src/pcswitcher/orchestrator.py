@@ -515,6 +515,22 @@ class Orchestrator:
                 scopes.append(scope)
         return scopes
 
+    @staticmethod
+    def _dry_run_preview_hint(tgt: str) -> str:
+        """Job-agnostic dry-run guidance shared by the first-sync and out-of-order warnings.
+
+        Stays job-neutral ("what would change", not "deleted") because the orchestrator
+        coordinates jobs beyond folder-sync (packages, system-config, …) where a change
+        is not a file deletion. Points at the log file because the live TUI only shows
+        summary counts — the per-item detail (files copied/removed, etc.) is written to
+        the log, not the Recent Logs panel.
+        """
+        return (
+            "Run [bold]pc-switcher sync --dry-run[/bold] first to preview what would change on "
+            f"[bold]{tgt}[/bold]; the per-item detail is written to the log file "
+            "([bold]pc-switcher logs[/bold] shows the log directory)."
+        )
+
     async def _confirm_first_sync(self) -> bool:
         """Confirm the overwrite of a target that has never been synced (first sync).
 
@@ -549,7 +565,7 @@ class Orchestrator:
             "the configured sync jobs, except configured exclusions. In scope:\n\n"
             f"{scope_line}\n\n"
             f"Any independent data on [bold]{tgt}[/bold] within that scope will be lost.\n\n"
-            "Run [bold]pc-switcher sync --dry-run[/bold] to preview what would change first."
+            + self._dry_run_preview_hint(tgt)
         )
 
         if self._dry_run:
@@ -636,8 +652,7 @@ class Orchestrator:
                 f"not this machine ([bold]{src}[/bold]).\n\n"
                 f"Proceeding will overwrite that state. If [bold]{target_peer}[/bold] "
                 f"pushed independent changes to [bold]{tgt}[/bold], those changes will be lost.\n\n"
-                "Run [bold]pc-switcher sync --dry-run[/bold] to preview "
-                "what would be deleted before committing to a live sync."
+                + self._dry_run_preview_hint(tgt)
             )
         else:
             # W3: consecutive push — target looks clean but this source is pushing again
@@ -647,9 +662,7 @@ class Orchestrator:
                 "without receiving a sync back first.\n\n"
                 f"[bold]{tgt}[/bold] shows it last synced with this machine. "
                 f"If you made changes on [bold]{tgt}[/bold] since then and have not "
-                "synced them back, those changes will be lost.\n\n"
-                "Run [bold]pc-switcher sync --dry-run[/bold] to preview "
-                "what would be deleted before committing to a live sync."
+                "synced them back, those changes will be lost.\n\n" + self._dry_run_preview_hint(tgt)
             )
 
         if self._dry_run:
