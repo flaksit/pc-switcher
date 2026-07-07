@@ -390,6 +390,7 @@ class FolderSyncJob(SyncJob):
                             percent=min(pct, 100),
                             current=files_xfr,
                             total=total_check,
+                            item=str(folder.path),
                         )
                     )
                 elif line[0] in (">", "<", "*", ".", "c", "h"):
@@ -465,3 +466,9 @@ class FolderSyncJob(SyncJob):
                 f"{bytes_transferred} bytes, "
                 f"{files_deleted} deletions",
             )
+
+        # Progress is reported per folder, so the bar resets for each one and would
+        # otherwise freeze at the last folder's final percentage (often <100% for a
+        # small folder). Mark the whole job complete so the bar reads 100% when done.
+        if folders:
+            self._report_progress(ProgressUpdate(percent=100))
