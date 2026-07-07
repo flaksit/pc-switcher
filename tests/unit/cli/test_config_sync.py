@@ -370,8 +370,12 @@ class TestSyncConfigToTarget:
 
         assert result is False
 
-    async def test_ui_paused_and_resumed(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
-        """Should pause UI during prompts and resume after."""
+    async def test_ui_not_paused_when_config_matches(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+        """Matching configs need no prompt, so the live display must NOT be paused.
+
+        Pausing unconditionally left a stale 'Recent Logs' panel on every interactive
+        sync; the pause is now gated on a prompt actually being shown.
+        """
         config_file = tmp_path / "config.yaml"
         config_file.write_text("log_level: INFO\n")
 
@@ -383,6 +387,24 @@ class TestSyncConfigToTarget:
         ui = MagicMock()
 
         await sync_config_to_target(mock_remote_executor, config_file, ui, console)
+
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+
+    async def test_ui_paused_and_resumed_when_prompting(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+        """When a prompt is needed (target has no config), the display pauses then resumes."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("log_level: INFO\n")
+
+        mock_remote_executor.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=1, stdout="", stderr="")  # no target config
+        )
+
+        console = MagicMock()
+        ui = MagicMock()
+
+        with patch("pcswitcher.config_sync._prompt_new_config", return_value=False):
+            await sync_config_to_target(mock_remote_executor, config_file, ui, console)
 
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()

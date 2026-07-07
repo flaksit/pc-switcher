@@ -298,9 +298,13 @@ async def sync_config_to_target(
     # Fetch target config
     target_content = await _get_target_config(target)
 
-    # Pause UI for user interaction (only if we'll prompt; a dry-run rehearsal never
-    # prompts, so it must not pause the single Live instance either — ADR-014).
-    should_pause = ui is not None and not auto_accept and not dry_run
+    # Pause the live display only when a prompt will actually be shown. Previously it
+    # paused for any interactive sync, so a config that matches (the common case) still
+    # stopped+restarted the single Live instance, leaving a stale "Recent Logs" panel on
+    # every sync. A prompt fires only when the target has no config or the configs differ
+    # (and we're interactive, non-dry-run) — mirror _handle_config_sync's decision here.
+    configs_match = target_content is not None and source_content.strip() == target_content.strip()
+    should_pause = ui is not None and not auto_accept and not dry_run and not configs_match
     if should_pause:
         assert ui is not None
         ui.pause()

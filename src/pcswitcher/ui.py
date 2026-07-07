@@ -137,13 +137,19 @@ class TerminalUI:
         self._live.start()
 
     def pause(self) -> None:
-        """Stop rendering without discarding the Live instance.
+        """Stop rendering without discarding the Live instance, clearing the region.
 
-        Used around confirmation prompts: the terminal region is handed back
-        to a blocking `Prompt.ask()` call, then reclaimed by resume().
+        Used around confirmation prompts: the live region is handed back to a
+        blocking `Prompt.ask()` call, then reclaimed by resume(). The stop is made
+        transient (region erased) so the pre-pause frame is not left behind as a
+        stale duplicate panel once the prompt is printed and the display resumes.
+        transient is restored to False so the final stop() still leaves the last
+        frame visible.
         """
         if self._live is not None:
+            self._live.transient = True
             self._live.stop()
+            self._live.transient = False
 
     def resume(self) -> None:
         """Restart the paused Live instance and force an immediate redraw.
