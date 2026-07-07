@@ -240,11 +240,16 @@ class TestConfigSyncIntegration:
             await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
 
     async def test_ui_lifecycle_during_sync(self, pc1_executor: RemoteExecutor) -> None:
-        """Should pause and resume UI during config sync."""
+        """Should pause and resume the UI around a config-sync prompt.
+
+        The pause is gated on a prompt actually being shown (a matching config
+        needs none), so drive the no-target-config path with the prompt mocked
+        and assert the live display is paused then resumed around it.
+        """
         config_content = "log_level: INFO\n"
 
-        await pc1_executor.run_command("mkdir -p ~/.config/pc-switcher")
-        await pc1_executor.run_command(f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{config_content}EOF")
+        # Ensure the target has no config so a prompt is required.
+        await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(config_content)
@@ -254,7 +259,8 @@ class TestConfigSyncIntegration:
         ui = MagicMock()
 
         try:
-            await sync_config_to_target(pc1_executor, local_path, ui, console)
+            with patch("pcswitcher.config_sync._prompt_new_config", return_value=False):
+                await sync_config_to_target(pc1_executor, local_path, ui, console)
 
             ui.pause.assert_called_once()
             ui.resume.assert_called_once()
