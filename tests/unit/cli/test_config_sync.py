@@ -142,7 +142,7 @@ class TestPromptConfigDiff:
         """Should return ACCEPT_SOURCE when user enters 'a'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="a"):
-            result = _prompt_config_diff(console, "source", "target", "diff")
+            result = _prompt_config_diff(console, "diff")
 
         assert result == ConfigSyncAction.ACCEPT_SOURCE
 
@@ -150,7 +150,7 @@ class TestPromptConfigDiff:
         """Should return KEEP_TARGET when user enters 'k'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="k"):
-            result = _prompt_config_diff(console, "source", "target", "diff")
+            result = _prompt_config_diff(console, "diff")
 
         assert result == ConfigSyncAction.KEEP_TARGET
 
@@ -158,7 +158,7 @@ class TestPromptConfigDiff:
         """Should return ABORT when user enters 'x'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="x"):
-            result = _prompt_config_diff(console, "source", "target", "diff")
+            result = _prompt_config_diff(console, "diff")
 
         assert result == ConfigSyncAction.ABORT
 
@@ -167,7 +167,7 @@ class TestPromptConfigDiff:
         console = MagicMock()
 
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="x"):
-            _prompt_config_diff(console, "source", "target", "--- diff ---")
+            _prompt_config_diff(console, "--- diff ---")
 
         # Verify console.print was called with options
         assert console.print.call_count >= 5  # Panel, diff, options

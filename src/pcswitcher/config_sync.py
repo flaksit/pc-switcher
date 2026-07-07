@@ -94,12 +94,14 @@ def _prompt_new_config(console: Console, source_content: str) -> bool:
     console.print(Panel(syntax, title="Source Configuration", border_style="blue"))
     console.print()
 
-    # Prompt for confirmation
-    response = Prompt.ask(
-        "[bold]Apply this config to target?[/bold]",
-        choices=["y", "n"],
-        default="n",
-    )
+    # Prompt for confirmation. Spell out that declining aborts the whole sync —
+    # a first sync needs the config applied, so "n" is not "skip config and
+    # continue" but "abort". The bare y/n default hid this (a footgun).
+    console.print("[bold]Apply this config to the target?[/bold]")
+    console.print("  [cyan]y[/cyan] - Apply the config and continue the sync")
+    console.print("  [cyan]n[/cyan] - Abort the sync (nothing is transferred)")
+    console.print()
+    response = Prompt.ask("Choice", choices=["y", "n"], default="n")
     return response.lower() == "y"
 
 
@@ -129,13 +131,11 @@ def _display_config_diff(console: Console, diff: str) -> None:
     console.print()
 
 
-def _prompt_config_diff(console: Console, source_content: str, target_content: str, diff: str) -> ConfigSyncAction:
+def _prompt_config_diff(console: Console, diff: str) -> ConfigSyncAction:
     """Prompt user to choose action when configs differ.
 
     Args:
         console: Rich console for display
-        source_content: Source config content
-        target_content: Target config content
         diff: Unified diff between configs
 
     Returns:
@@ -244,7 +244,7 @@ async def _handle_config_diff(
         console.print("[dim][dry-run] Config differs; source config would be applied (no changes made).[/dim]")
         return True
 
-    action = _prompt_config_diff(console, source_content, target_content, diff)
+    action = _prompt_config_diff(console, diff)
 
     if action == ConfigSyncAction.ACCEPT_SOURCE:
         await _copy_config_to_target(target, source_config_path)
