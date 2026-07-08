@@ -31,7 +31,11 @@ from pcswitcher.models import (
     SyncLockedError,
     ValidationError,
 )
-from pcswitcher.orchestrator import _unwrap_taskgroup_error
+from pcswitcher.orchestrator import (
+    _failure_already_logged,
+    _mark_failure_logged,
+    _unwrap_taskgroup_error,
+)
 
 
 class MockSyncJob(SyncJob):
@@ -404,3 +408,31 @@ class TestUnwrapTaskGroupError:
         locked = SyncLockedError("machine already syncing")
         group = ExceptionGroup("unhandled errors in a TaskGroup", [RuntimeError("noise"), locked])
         assert _unwrap_taskgroup_error(group) is locked
+
+
+class TestFailureLoggedMarker:
+    """The per-job handler marks a failure so run()'s top-level handler doesn't double-log it.
+
+    A job failure is logged once (with its job name) by the sequential per-job
+    handler; the marker rides the exception up so the generic top-level handler
+    skips logging the identical cause. It must survive the TaskGroup wrap/unwrap.
+    """
+
+    def test_unmarked_exception_reports_not_logged(self) -> None:
+        assert _failure_already_logged(RuntimeError("boom")) is False
+
+    def test_marked_exception_reports_logged(self) -> None:
+        err = RuntimeError("Dummy job failed at 12s")
+        _mark_failure_logged(err)
+        assert _failure_already_logged(err) is True
+
+    def test_marker_survives_taskgroup_wrap_and_unwrap(self) -> None:
+        """The mark set before wrapping must still be readable on the unwrapped leaf."""
+        cause = RuntimeError("Dummy job failed at 12s")
+        _mark_failure_logged(cause)
+        group = ExceptionGroup("unhandled errors in a TaskGroup", [cause])
+
+        unwrapped = _unwrap_taskgroup_error(group)
+
+        assert unwrapped is cause
+        assert _failure_already_logged(unwrapped) is True

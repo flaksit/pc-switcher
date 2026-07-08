@@ -113,6 +113,28 @@ def _unwrap_taskgroup_error(exc: BaseException) -> BaseException:
     return leaves[0] if leaves else exc
 
 
+_FAILURE_LOGGED_ATTR = "_pcswitcher_failure_logged"
+
+
+def _mark_failure_logged(exc: BaseException) -> None:
+    """Flag that this exception's failure was already logged with job context.
+
+    Set by the per-job failure handler so run()'s top-level handler does not log
+    the same cause a second time. The flag rides on the exception object, so it
+    survives being wrapped by the TaskGroup and unwrapped by
+    ``_unwrap_taskgroup_error`` (which returns the same leaf instance). A failure
+    that never passes a job handler — every non-job phase, and jobs once they run
+    in parallel via ``create_task`` rather than the sequential loop — stays
+    unflagged and is still logged at the top level.
+    """
+    setattr(exc, _FAILURE_LOGGED_ATTR, True)
+
+
+def _failure_already_logged(exc: BaseException) -> bool:
+    """Whether ``_mark_failure_logged`` already reported this exception's cause."""
+    return getattr(exc, _FAILURE_LOGGED_ATTR, False)
+
+
 class Orchestrator:
     """Main orchestrator coordinating the complete sync workflow.
 
@@ -396,7 +418,12 @@ class Orchestrator:
             session.status = SessionStatus.FAILED
             session.ended_at = datetime.now(UTC)
             session.error_message = str(e)
-            self._logger.critical("Sync failed: %s", e, extra={"job": "orchestrator", "host": "source"})
+            # A job failure is already logged with its job name by the per-job
+            # handler; only log here for causes not yet reported (every non-job
+            # phase, and — once jobs run in parallel — job failures that bypass
+            # the sequential per-job handler), so the same cause isn't doubled.
+            if not _failure_already_logged(e):
+                self._logger.critical("Sync failed: %s", e, extra={"job": "orchestrator", "host": "source"})
             raise
 
         finally:
@@ -1029,6 +1056,9 @@ class Orchestrator:
                             e,
                             extra={"job": "orchestrator", "host": "source"},
                         )
+                        # Already reported with the job name; stop run()'s top-level
+                        # handler from logging the identical cause a second time.
+                        _mark_failure_logged(e)
                         raise
             finally:
                 # Cancel monitor tasks so TaskGroup can exit
