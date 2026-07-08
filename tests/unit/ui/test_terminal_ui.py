@@ -201,13 +201,14 @@ async def test_set_total_steps_updates_total() -> None:
         ui.stop()
 
 
-async def test_pause_resume_reuses_same_live_instance() -> None:
-    """pause()/resume() must reuse the single Live instance, not rebuild it.
+async def test_pause_resume_rebuilds_fresh_live_instance() -> None:
+    """resume() must rebuild a fresh Live, not restart the pre-pause instance.
 
-    Rebuilding a fresh Live on every confirmation resume left the prior
-    frame in scrollback and reset step continuity. start() constructs the
-    Live only once; pause() stops without discarding it; resume() restarts
-    the same instance.
+    A reused Live retains the shape of its pre-pause frame, so its first
+    post-resume refresh moves the cursor up by that stale height and overwrites
+    the confirmation warning printed while paused. pause() therefore stops
+    transiently (erasing the region) and discards the instance; resume() builds
+    a new one that anchors at the current cursor, below the printed prompt.
     """
     output = StringIO()
     console = Console(file=output, force_terminal=True, width=120)
@@ -220,23 +221,37 @@ async def test_pause_resume_reuses_same_live_instance() -> None:
         assert live_after_start is not None
 
         ui.pause()
-        # pause() must not discard the instance.
-        assert ui._live is live_after_start, "pause() must keep the Live instance"  # pyright: ignore[reportPrivateUsage]
+        # pause() stops the old instance and discards it.
         assert live_after_start.is_started is False, "pause() must stop rendering"
+        assert ui._live is None, "pause() must discard the instance"  # pyright: ignore[reportPrivateUsage]
 
         ui.resume()
-        assert ui._live is live_after_start, "resume() must reuse the same Live instance"  # pyright: ignore[reportPrivateUsage]
-        assert live_after_start.is_started is True, "resume() must restart the same instance"
-
-        # A second start() (as happens if a caller resumes via start() instead of
-        # resume()) must also reuse the existing instance rather than building a new one.
-        ui.pause()
-        ui.start()
-        assert ui._live is live_after_start, "start() must not construct a new Live on resume"  # pyright: ignore[reportPrivateUsage]
+        assert ui._live is not None, "resume() must build a live instance"  # pyright: ignore[reportPrivateUsage]
+        assert ui._live is not live_after_start, "resume() must build a FRESH instance"  # pyright: ignore[reportPrivateUsage]
+        assert ui._live.is_started is True, "resume() must start the fresh instance"  # pyright: ignore[reportPrivateUsage]
     finally:
         ui.stop()
 
     assert ui._live is None, "stop() remains the final teardown and nulls the instance"  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_resume_without_prior_pause_is_silent() -> None:
+    """resume() must stay a no-op when no pause() actually stopped a live region.
+
+    pause() discards the instance, so resume() can no longer key off _live to
+    tell "was live, rebuild" from "never started". The _paused flag guards it:
+    a resume() on a UI that never started (or was already resumed) must not
+    spring a Live into existence.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=5)
+
+    # Never started: pause() is a no-op, so resume() must not create a Live.
+    ui.pause()
+    ui.resume()
+    assert ui._live is None, "resume() must not build a Live when nothing was paused"  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_resume_forces_redraw_of_state_mutated_while_paused() -> None:

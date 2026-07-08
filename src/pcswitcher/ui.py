@@ -68,6 +68,10 @@ class TerminalUI:
 
         # Live display
         self._live: Live | None = None
+        # True only between a pause() that actually stopped a running Live and its
+        # paired resume(); lets resume() distinguish "was live, rebuild" from
+        # "UI never started, stay silent" now that pause() discards the instance.
+        self._paused = False
 
     def _render(self) -> RenderableType:
         """Render the complete UI layout.
@@ -120,51 +124,60 @@ class TerminalUI:
 
         return Group(status, self._progress, log_panel)
 
-    def start(self) -> None:
-        """Start the live display.
+    def _build_live(self) -> Live:
+        """Construct a fresh Live bound to the current render.
 
-        Constructs the Live instance only the first time; a subsequent call
-        (e.g. after a pause()) resumes the same instance so confirmation
-        prompts don't stack fresh Live regions on top of stale ones.
+        A brand-new instance is used on every (re)start rather than reused
+        across a pause: a reused Live keeps the shape of its pre-pause frame in
+        its internal render state, so its first post-resume refresh moves the
+        cursor UP by that stale height — landing in the middle of whatever
+        static content (e.g. a confirmation warning panel) was printed while
+        paused and overwriting it. A fresh instance has no prior shape, so it
+        anchors at the current cursor and draws below the printed prompt.
         """
+        return Live(
+            self._render(),
+            console=self._console,
+            refresh_per_second=10,  # 10 Hz refresh rate
+            transient=False,
+        )
+
+    def start(self) -> None:
+        """Start the live display for the first time."""
         if self._live is None:
-            self._live = Live(
-                self._render(),
-                console=self._console,
-                refresh_per_second=10,  # 10 Hz refresh rate
-                transient=False,
-            )
+            self._live = self._build_live()
         self._live.start()
 
     def pause(self) -> None:
-        """Stop rendering without discarding the Live instance, clearing the region.
+        """Stop and erase the live region around a blocking prompt, discarding the instance.
 
         Used around confirmation prompts: the live region is handed back to a
-        blocking `Prompt.ask()` call, then reclaimed by resume(). The stop is made
-        transient (region erased) so the pre-pause frame is not left behind as a
-        stale duplicate panel once the prompt is printed and the display resumes.
-        transient is restored to False so the final stop() still leaves the last
-        frame visible.
+        blocking `Prompt.ask()` call, then reclaimed by resume(). The stop is
+        transient so the pre-pause frame is erased (not left behind as a stale
+        duplicate panel) before the prompt's warning is printed into the freed
+        space. The instance is then discarded so resume() rebuilds a fresh one —
+        see _build_live for why reuse corrupts the post-resume cursor position.
         """
         if self._live is not None:
             self._live.transient = True
             self._live.stop()
-            self._live.transient = False
+            self._live = None
+            self._paused = True
 
     def resume(self) -> None:
-        """Restart the paused Live instance and force an immediate redraw.
+        """Rebuild a fresh live region below the printed prompt and redraw immediately.
 
-        State mutated while paused (job progress, connection status, step
-        number) is stored by the update methods but not rendered per the
-        is_started guard; resume() must redraw right away so that state is
-        reflected in the next frame instead of waiting for an unrelated
-        future update.
+        No-op unless a paired pause() actually stopped a running Live, so a
+        resume() on a UI that was never started stays silent. State mutated
+        while paused (job progress, connection status, step number) is stored by
+        the update methods but not rendered per the is_started guard; the
+        immediate refresh reflects it at once instead of waiting for an
+        unrelated future auto-refresh tick.
         """
-        if self._live is not None:
+        if self._paused:
+            self._paused = False
+            self._live = self._build_live()
             self._live.start()
-            # refresh=True forces the frame out immediately instead of only
-            # storing the renderable for the next auto-refresh tick, so state
-            # mutated while paused is visible the instant the display resumes.
             self._live.update(self._render(), refresh=True)
 
     def stop(self) -> None:
