@@ -82,6 +82,37 @@ def _stuck_lock_hint(machine: str, lock_path: str) -> str:
     )
 
 
+def _unwrap_taskgroup_error(exc: BaseException) -> BaseException:
+    """Flatten an ``asyncio.TaskGroup`` ExceptionGroup to its primary cause.
+
+    A job that fails inside the job-execution TaskGroup surfaces as an
+    ExceptionGroup whose own message — "unhandled errors in a TaskGroup (N
+    sub-exceptions)" — is meaningless to users and developers alike. Jobs run
+    sequentially, so a failed sync normally has a single underlying cause; this
+    returns it so callers can report the real reason. Expected control-flow
+    exceptions (an aborted-by-user or lock conflict raised from within a job)
+    are preferred over other leaves so they still reach their dedicated WARNING
+    handlers instead of the generic CRITICAL "Sync failed" path. A non-group
+    exception is returned unchanged.
+    """
+    if not isinstance(exc, BaseExceptionGroup):
+        return exc
+
+    leaves: list[BaseException] = []
+    stack: list[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, BaseExceptionGroup):
+            stack.extend(reversed(current.exceptions))
+        else:
+            leaves.append(current)
+
+    for leaf in leaves:
+        if isinstance(leaf, (SyncAbortedByUser, SyncLockedError)):
+            return leaf
+    return leaves[0] if leaves else exc
+
+
 class Orchestrator:
     """Main orchestrator coordinating the complete sync workflow.
 
@@ -910,9 +941,27 @@ class Orchestrator:
         Returns:
             List of JobResult for each executed job
         """
-        assert self._ui is not None
-
         results: list[JobResult] = []
+
+        try:
+            await self._run_jobs_in_task_group(jobs, results)
+        except BaseExceptionGroup as eg:
+            # A job failing in the TaskGroup body raises an ExceptionGroup whose
+            # own message ("unhandled errors in a TaskGroup (N sub-exceptions)")
+            # is useless. Re-raise the underlying cause so run()'s handlers and
+            # the CLI report the real reason — and so a job-raised
+            # SyncAbortedByUser/SyncLockedError still reaches its WARNING handler.
+            raise _unwrap_taskgroup_error(eg) from None
+
+        return results
+
+    async def _run_jobs_in_task_group(self, jobs: list[Job], results: list[JobResult]) -> None:
+        """Run the disk-space monitors and sync jobs inside a single TaskGroup.
+
+        Extracted from ``_execute_jobs`` so the caller can unwrap the
+        ExceptionGroup this raises when a job fails (see ``_unwrap_taskgroup_error``).
+        """
+        assert self._ui is not None
 
         async with asyncio.TaskGroup() as tg:
             self._task_group = tg
@@ -986,8 +1035,6 @@ class Orchestrator:
                 # Monitors run forever (while True loop), so they must be cancelled
                 source_monitor_task.cancel()
                 target_monitor_task.cancel()
-
-        return results
 
     async def _cleanup(self) -> None:
         """Clean up resources (connection, locks, executors)."""

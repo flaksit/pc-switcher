@@ -22,7 +22,16 @@ import pytest
 from pcswitcher.events import ProgressEvent
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.base import SyncJob
-from pcswitcher.models import Host, JobResult, JobStatus, ProgressUpdate, ValidationError
+from pcswitcher.models import (
+    Host,
+    JobResult,
+    JobStatus,
+    ProgressUpdate,
+    SyncAbortedByUser,
+    SyncLockedError,
+    ValidationError,
+)
+from pcswitcher.orchestrator import _unwrap_taskgroup_error
 
 
 class MockSyncJob(SyncJob):
@@ -360,3 +369,38 @@ class TestEdgeCases:
         assert results[0].status == JobStatus.SUCCESS
         assert results[1].status == JobStatus.FAILED
         assert results[1].error_message == "Job 2 failed"
+
+
+class TestUnwrapTaskGroupError:
+    """_unwrap_taskgroup_error surfaces a failing job's real cause.
+
+    A job failing inside the job-execution asyncio.TaskGroup is re-raised as an
+    ExceptionGroup whose message is the useless "unhandled errors in a TaskGroup
+    (N sub-exceptions)". The orchestrator unwraps it so run() and the CLI report
+    the real reason instead of the wrapper.
+    """
+
+    def test_plain_exception_returned_unchanged(self) -> None:
+        err = RuntimeError("Dummy job failed at 12s")
+        assert _unwrap_taskgroup_error(err) is err
+
+    def test_single_leaf_group_unwrapped_to_cause(self) -> None:
+        cause = RuntimeError("Dummy job failed at 12s")
+        group = ExceptionGroup("unhandled errors in a TaskGroup", [cause])
+        assert _unwrap_taskgroup_error(group) is cause
+
+    def test_nested_group_flattened_to_leaf(self) -> None:
+        cause = RuntimeError("deep failure")
+        group = ExceptionGroup("outer", [ExceptionGroup("inner", [cause])])
+        assert _unwrap_taskgroup_error(group) is cause
+
+    def test_control_flow_abort_preferred_over_other_leaves(self) -> None:
+        """A job-raised SyncAbortedByUser must win so it routes to the WARNING handler."""
+        abort = SyncAbortedByUser("first-sync declined")
+        group = ExceptionGroup("unhandled errors in a TaskGroup", [RuntimeError("noise"), abort])
+        assert _unwrap_taskgroup_error(group) is abort
+
+    def test_control_flow_lock_conflict_preferred(self) -> None:
+        locked = SyncLockedError("machine already syncing")
+        group = ExceptionGroup("unhandled errors in a TaskGroup", [RuntimeError("noise"), locked])
+        assert _unwrap_taskgroup_error(group) is locked
