@@ -16,14 +16,13 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as get_pkg_version
 from typing import TYPE_CHECKING, Literal
 
 import semver
-from github import Auth, Github
+from github import Auth, BadCredentialsException, Github
 from packaging.version import Version as PkgVersion
 
 if TYPE_CHECKING:
@@ -128,8 +127,8 @@ def get_releases(
     repository: str = "flaksit/pc-switcher",
     *,
     include_prereleases: bool = True,
-) -> Iterator[Release]:
-    """Fetch all releases from GitHub API with pagination.
+) -> list[Release]:
+    """Fetch all non-draft releases from the GitHub API with pagination.
 
     Args:
         include_prereleases: If True, include pre-release versions
@@ -142,40 +141,53 @@ def get_releases(
         RuntimeError: If GitHub API request fails
 
     Note:
-        If GITHUB_TOKEN environment variable is set, authenticated requests
-        are used (5000 requests/hour). Otherwise, unauthenticated requests
-        are used (60 requests/hour).
+        If GITHUB_TOKEN is set, authenticated requests are used (5000 req/hr).
+        A set-but-invalid token (401 Bad credentials — revoked, rotated, or
+        mistyped) does not fail the call: the release data is public, so it
+        warns once and retries unauthenticated (60 req/hr). Unset the token to
+        skip the failed attempt and the warning.
     """
+    token = os.environ.get("GITHUB_TOKEN")
     try:
-        # Use GITHUB_TOKEN if available for higher rate limit (5000/hour vs 60/hour)
-        token = os.environ.get("GITHUB_TOKEN")
         if token:
-            logger.debug("Using GITHUB_TOKEN for authenticated GitHub API access (5000 req/hr)")
+            try:
+                releases = _fetch_releases(Github(auth=Auth.Token(token), retry=None), repository, include_prereleases)
+                logger.debug("Using GITHUB_TOKEN for authenticated GitHub API access (5000 req/hr)")
+                return releases
+            except BadCredentialsException as e:
+                logger.warning(
+                    "GITHUB_TOKEN is set but was rejected by GitHub (%s); "
+                    "falling back to unauthenticated access. Fix or unset GITHUB_TOKEN to silence this.",
+                    e,
+                )
         else:
             logger.debug("GITHUB_TOKEN not set, using unauthenticated GitHub API (60 req/hr)")
 
-        g = Github(auth=Auth.Token(token), retry=None) if token else Github(retry=None)
-        repo = g.get_repo(repository)
-
-        # Fetch all releases with pagination
-        for release in repo.get_releases():
-            # Skip drafts
-            if release.draft:
-                continue
-
-            # Filter prereleases if requested
-            if not include_prereleases and release.prerelease:
-                continue
-
-            try:
-                version = Version.parse(release.tag_name)
-            except ValueError:
-                logger.warning(f"Skipping release with invalid version tag: {release.tag_name}")
-                continue
-            yield Release(version, release.prerelease, release.tag_name)
-
+        return _fetch_releases(Github(retry=None), repository, include_prereleases)
     except Exception as e:
         raise RuntimeError(f"Failed to fetch GitHub releases: {e}") from e
+
+
+def _fetch_releases(client: Github, repository: str, include_prereleases: bool) -> list[Release]:
+    """Fetch and parse non-draft releases from ``repository`` using ``client``.
+
+    Split from ``get_releases`` so an authenticated attempt that fails with bad
+    credentials can be retried with an unauthenticated client.
+    """
+    releases: list[Release] = []
+    repo = client.get_repo(repository)
+    for release in repo.get_releases():
+        if release.draft:
+            continue
+        if not include_prereleases and release.prerelease:
+            continue
+        try:
+            version = Version.parse(release.tag_name)
+        except ValueError:
+            logger.warning(f"Skipping release with invalid version tag: {release.tag_name}")
+            continue
+        releases.append(Release(version, release.prerelease, release.tag_name))
+    return releases
 
 
 def get_highest_release(
