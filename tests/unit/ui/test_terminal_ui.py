@@ -201,6 +201,30 @@ async def test_set_total_steps_updates_total() -> None:
         ui.stop()
 
 
+async def test_set_current_step_renders_name() -> None:
+    """set_current_step's optional name is shown next to the number, and clears when omitted."""
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=10)
+
+    ui.start()
+    try:
+        ui.set_current_step(7, "Install on target")
+        await asyncio.sleep(0.1)
+        assert "Step 7/10" in output.getvalue()
+        assert "Install on target" in output.getvalue(), "step name must render next to the number"
+
+        # A subsequent step with no name clears the previous label.
+        output.truncate(0)
+        output.seek(0)
+        ui.set_current_step(8)
+        await asyncio.sleep(0.1)
+        assert "Install on target" not in output.getvalue(), "omitting the name must clear the previous label"
+    finally:
+        ui.stop()
+
+
 async def test_pause_resume_rebuilds_fresh_live_instance() -> None:
     """resume() must rebuild a fresh Live, not restart the pre-pause instance.
 

@@ -48,6 +48,7 @@ class TerminalUI:
         self._max_log_lines = max_log_lines
         self._total_steps = total_steps
         self._current_step = 0
+        self._current_step_name: str | None = None
 
         # Progress tracking
         self._progress = Progress(
@@ -101,6 +102,8 @@ class TerminalUI:
         step_text = Text()
         if self._total_steps is not None:
             step_text.append(f"Step {self._current_step}/{self._total_steps}", style="cyan")
+            if self._current_step_name:
+                step_text.append(f" — {self._current_step_name}", style="cyan")
 
         status.add_row(conn_text, step_text)
 
@@ -282,13 +285,16 @@ class TerminalUI:
         if self._live is not None and self._live.is_started:
             self._live.update(self._render())
 
-    def set_current_step(self, step: int) -> None:
-        """Update current step number for overall progress.
+    def set_current_step(self, step: int, name: str | None = None) -> None:
+        """Update current step number (and optional label) for overall progress.
 
         Args:
             step: Current step number (1-indexed)
+            name: Short human-readable name of the step, shown next to the number
+                (e.g. "Install on target"). None clears any previous label.
         """
         self._current_step = step
+        self._current_step_name = name
         if self._live is not None and self._live.is_started:
             self._live.update(self._render())
 

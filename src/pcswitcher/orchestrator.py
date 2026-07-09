@@ -316,18 +316,18 @@ class Orchestrator:
             # Phase 1: Acquire source lock
             self._logger.info("Acquiring source lock", extra={"job": "orchestrator", "host": "source"})
             await self._acquire_source_lock()
-            self._ui.set_current_step(1)
+            self._ui.set_current_step(1, "Source lock")
 
             # Phase 2: Establish SSH connection
             self._logger.info("Connecting to target", extra={"job": "orchestrator", "host": "source"})
             await self._establish_connection()
             assert self._remote_executor is not None
-            self._ui.set_current_step(2)
+            self._ui.set_current_step(2, "Connect to target")
 
             # Phase 3: Acquire target lock
             self._logger.info("Acquiring target lock", extra={"job": "orchestrator", "host": "target"})
             await self._acquire_target_lock()
-            self._ui.set_current_step(3)
+            self._ui.set_current_step(3, "Target lock")
 
             # Topology out-of-order / target-state check (between Phase 3 and 4):
             # runs after the target lock so we can read the target's sync-history over SSH.
@@ -341,16 +341,16 @@ class Orchestrator:
             # Disabled jobs and undiscoverable jobs must not inflate the denominator,
             # so the final set_current_step(8 + len(jobs) + 1) reaches exactly 100%.
             self._ui.set_total_steps(8 + len(jobs) + 1)
-            self._ui.set_current_step(4)
+            self._ui.set_current_step(4, "Discover jobs")
 
             # Phase 5: Disk space preflight check
             await self._check_disk_space_preflight()
-            self._ui.set_current_step(5)
+            self._ui.set_current_step(5, "Disk check")
 
             # Phase 6: Pre-sync snapshots
             self._logger.info("Creating pre-sync snapshots", extra={"job": "orchestrator", "host": "source"})
             await self._create_snapshots(SnapshotPhase.PRE)
-            self._ui.set_current_step(6)
+            self._ui.set_current_step(6, "Pre-sync snapshots")
 
             # Phase 7: Install/upgrade pc-switcher on target (after snapshots for rollback safety)
             self._logger.info(
@@ -358,12 +358,12 @@ class Orchestrator:
                 extra={"job": "orchestrator", "host": "target"},
             )
             await self._install_on_target_job()
-            self._ui.set_current_step(7)
+            self._ui.set_current_step(7, "Install on target")
 
             # Phase 8: Sync config from source to target
             self._logger.info("Syncing configuration to target", extra={"job": "orchestrator", "host": "target"})
             await self._sync_config_to_target()
-            self._ui.set_current_step(8)
+            self._ui.set_current_step(8, "Sync config")
 
             # Phase 9: Execute sync jobs with background monitoring
             self._logger.info("Starting sync operations", extra={"job": "orchestrator", "host": "source"})
@@ -373,7 +373,7 @@ class Orchestrator:
             # Phase 10: Post-sync snapshots
             self._logger.info("Creating post-sync snapshots", extra={"job": "orchestrator", "host": "source"})
             await self._create_snapshots(SnapshotPhase.POST)
-            self._ui.set_current_step(8 + len(jobs) + 1)
+            self._ui.set_current_step(8 + len(jobs) + 1, "Post-sync snapshots")
 
             # Success - update sync history on both machines
             session.status = SessionStatus.COMPLETED
@@ -1011,8 +1011,9 @@ class Orchestrator:
             try:
                 # Execute sync jobs sequentially
                 for job_index, job in enumerate(jobs):
-                    # Update step counter (base 8 system steps + current job index)
-                    self._ui.set_current_step(8 + job_index + 1)
+                    # Update step counter (base 8 system steps + current job index),
+                    # labelled with the job name so the TUI shows what is running.
+                    self._ui.set_current_step(8 + job_index + 1, job.name)
                     started_at = datetime.now(UTC)
                     try:
                         await job.execute()
