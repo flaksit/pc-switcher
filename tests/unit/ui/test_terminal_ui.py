@@ -425,3 +425,62 @@ async def test_log_panel_renders_markup_like_content_literally() -> None:
 
     assert "home/user/[/old]/cache" in rendered, "literal deletion path must render verbatim"
     assert "[sender] link_stat failed" in rendered, "literal rsync stderr must render verbatim"
+
+
+def _render_to_str(ui: TerminalUI) -> str:
+    """Render the UI's current frame to a string, independent of Live mechanics.
+
+    Rich Live redraws its stored renderable on auto-refresh rather than calling
+    _render() afresh, so asserting on Live's own output would not reflect a
+    just-captured warning without an intervening update. Rendering _render()
+    directly tests the frame's content deterministically.
+    """
+    buf = StringIO()
+    Console(file=buf, force_terminal=True, width=120).print(ui._render())
+    return buf.getvalue()
+
+
+async def test_warning_counter_renders_in_status_bar() -> None:
+    """Captured warnings surface as a persistent ⚠ N cell in the status bar.
+
+    The counter lives in the render (status bar), not the rolling log panel, so
+    it survives every refresh and cannot be scrolled away — the live cue that
+    warnings occurred this run.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=3)
+    ui.add_warning("12:00:00 [WARNING] [folder_sync] partial transfer")
+    ui.add_warning("12:00:01 [ERROR] [disk] low space")
+
+    assert "⚠ 2" in _render_to_str(ui), "status bar must show the persistent warning count"
+
+
+async def test_no_warning_counter_when_none_captured() -> None:
+    """With no warnings captured, no ⚠ indicator is rendered."""
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=3)
+
+    assert "⚠" not in _render_to_str(ui)
+
+
+async def test_collected_warnings_returns_captured_lines_in_order() -> None:
+    """collected_warnings returns every captured line verbatim, in capture order.
+
+    This is what the orchestrator reads to print the end-of-run summary; the
+    lines (arbitrary log content) are reprinted wrapped in Text there, so the
+    buffer itself just preserves them literally.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=1)
+    first = "12:00:00 [WARNING] [folder_sync] deleting home/user/[/old]/cache"
+    second = "12:00:01 [ERROR] [folder_sync] rsync: [sender] link_stat failed"
+    ui.add_warning(first)
+    ui.add_warning(second)
+
+    assert ui.collected_warnings() == [first, second]

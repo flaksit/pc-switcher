@@ -63,12 +63,24 @@ class TerminalUI:
         # Log panel
         self._log_panel: deque[str] = deque(maxlen=max_log_lines)
 
+        # Persistent warning buffer (every >=WARNING line captured this run).
+        # Written from the QueueListener background thread via add_warning
+        # (atomic list.append under the GIL) and read on the event-loop thread:
+        # len() for the live status-bar counter, and the full list for the
+        # end-of-run summary the orchestrator prints after the Live stops.
+        # Unbounded on purpose: a run's warnings must all survive to the summary.
+        self._warnings: list[str] = []
+
         # Connection status
         self._connection_status = "disconnected"
         self._connection_latency: float | None = None
 
         # Live display
         self._live: Live | None = None
+        # Event loop captured at start(): lets add_warning (called on the logging
+        # background thread) marshal its live refresh back onto the loop thread,
+        # keeping every Live.update on a single thread. None until start().
+        self._loop: asyncio.AbstractEventLoop | None = None
         # True only between a pause() that actually stopped a running Live and its
         # paired resume(); lets resume() distinguish "was live, rebuild" from
         # "UI never started, stay silent" now that pause() discards the instance.
@@ -97,6 +109,13 @@ class TerminalUI:
         else:
             conn_text.append("Connection: ", style="dim")
             conn_text.append("disconnected", style="red")
+
+        # Persistent warning counter: rendered as part of the status bar (not the
+        # rolling log), so it survives every refresh, pause, and scroll until the
+        # run ends — the live cue that warnings occurred and were captured.
+        warn_count = len(self._warnings)
+        if warn_count:
+            conn_text.append(f"   ⚠ {warn_count}", style="bold yellow")
 
         # Overall progress
         step_text = Text()
@@ -147,6 +166,7 @@ class TerminalUI:
 
     def start(self) -> None:
         """Start the live display for the first time."""
+        self._loop = asyncio.get_running_loop()
         if self._live is None:
             self._live = self._build_live()
         self._live.start()
@@ -268,6 +288,41 @@ class TerminalUI:
         self._log_panel.append(message)
         if self._live is not None and self._live.is_started:
             self._live.update(self._render())
+
+    def add_warning(self, line: str) -> None:
+        """Capture a `>=WARNING` line for the persistent counter and end-of-run summary.
+
+        Called from the QueueListener background thread (WarningCaptureHandler).
+        The buffer append is atomic under the GIL and happens synchronously so
+        the buffer is complete for the summary the moment logging is flushed. The
+        status-bar counter must be re-rendered to reflect the new count (Rich Live
+        redraws the *stored* renderable on auto-refresh, not a fresh `_render()`),
+        so the live update is marshalled back onto the event-loop thread via
+        `call_soon_threadsafe` — keeping every Live.update single-threaded, as the
+        cursor-desync fix requires. Warnings logged before start() (no loop yet)
+        are buffered and surface on the next render.
+
+        Args:
+            line: Pre-formatted plain-text warning line (no ANSI/markup).
+        """
+        self._warnings.append(line)
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._refresh_live)
+
+    def _refresh_live(self) -> None:
+        """Re-render the Live display if active. Must run on the event-loop thread."""
+        if self._live is not None and self._live.is_started:
+            self._live.update(self._render())
+
+    def collected_warnings(self) -> list[str]:
+        """Return a copy of every `>=WARNING` line captured this run (order preserved).
+
+        Read by the orchestrator after the Live display stops to print the
+        end-of-run summary into scrollback. Safe to call once logging has been
+        flushed (QueueListener stopped): no concurrent appends remain.
+        """
+        return list(self._warnings)
 
     def set_connection_status(
         self,

@@ -35,9 +35,11 @@ logging.Logger.full = _full  # type: ignore[method-assign]
 __all__ = [
     "FULL",
     "JsonFormatter",
-    "LogPanelSink",
     "RichFormatter",
     "UILogHandler",
+    "UISink",
+    "WarningCaptureHandler",
+    "format_log_line",
     "generate_log_filename",
     "get_latest_log_file",
     "get_logs_directory",
@@ -45,17 +47,45 @@ __all__ = [
 ]
 
 
-class LogPanelSink(Protocol):
-    """Structural type for a UI component that accepts log-panel lines.
+class UISink(Protocol):
+    """Structural type for the UI component the logging handlers feed.
 
-    Matches `TerminalUI.add_log_message` (src/pcswitcher/ui.py) without
-    importing TerminalUI directly into logger.py, keeping the logging module
-    free of a UI dependency.
+    Matches `TerminalUI` (src/pcswitcher/ui.py) without importing it into
+    logger.py, keeping the logging module free of a UI dependency. Groups the
+    two log-facing entry points the UI exposes: `add_log_message` (rolling
+    Recent Logs panel) and `add_warning` (the resurfaced warning buffer that
+    backs the live counter and the end-of-run summary).
     """
 
     def add_log_message(self, message: str) -> None:
-        """Append a formatted line to the UI's log panel."""
+        """Append a formatted line to the UI's rolling log panel."""
         ...
+
+    def add_warning(self, line: str) -> None:
+        """Append a formatted `>=WARNING` line to the UI's persistent warning buffer."""
+        ...
+
+
+def format_log_line(record: logging.LogRecord) -> str:
+    """Build a compact plain-text line: HH:MM:SS [LEVEL] [job] (host) message.
+
+    No ANSI escape codes or Rich markup: the destinations (Recent Logs panel,
+    warning summary) render strings as-is, so raw ANSI would show literally and
+    Rich markup would risk markup-injection from arbitrary message content.
+    """
+    timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+    parts = [timestamp, f"[{record.levelname}]"]
+
+    job = getattr(record, "job", None)
+    if job is not None:
+        parts.append(f"[{job}]")
+
+    host = getattr(record, "host", None)
+    if host is not None:
+        parts.append(f"({host})")
+
+    parts.append(record.getMessage())
+    return " ".join(parts)
 
 
 class JsonFormatter(logging.Formatter):
@@ -235,7 +265,7 @@ class UILogHandler(logging.Handler):
     redraw bookkeeping (see .planning/debug/tui-live-progress-flooding.md).
     """
 
-    def __init__(self, sink: LogPanelSink) -> None:
+    def __init__(self, sink: UISink) -> None:
         """Initialize the handler, capturing the currently-running event loop.
 
         Must be constructed from within the running orchestrator loop —
@@ -246,14 +276,9 @@ class UILogHandler(logging.Handler):
         self._loop = asyncio.get_running_loop()
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Format the record as plain text and hand it to the event loop.
-
-        No ANSI escape codes or Rich markup: the Recent Logs panel renders
-        strings as-is, so raw ANSI would show literally and Rich markup
-        would risk markup-injection from arbitrary message content.
-        """
+        """Format the record as plain text and hand it to the event loop."""
         try:
-            line = self._format_line(record)
+            line = format_log_line(record)
             self._loop.call_soon_threadsafe(self._sink.add_log_message, line)
         except RuntimeError:
             # Loop closed (late record during shutdown) -- swallow via the
@@ -261,21 +286,39 @@ class UILogHandler(logging.Handler):
             # QueueListener's background thread.
             self.handleError(record)
 
-    def _format_line(self, record: logging.LogRecord) -> str:
-        """Build a compact plain-text line: HH:MM:SS [LEVEL] [job] (host) message."""
-        timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
-        parts = [timestamp, f"[{record.levelname}]"]
 
-        job = getattr(record, "job", None)
-        if job is not None:
-            parts.append(f"[{job}]")
+class WarningCaptureHandler(logging.Handler):
+    """Tee every `>=WARNING` record into the UI's persistent warning buffer.
 
-        host = getattr(record, "host", None)
-        if host is not None:
-            parts.append(f"({host})")
+    Solves the "warnings scroll past unread" problem: the rolling Recent Logs
+    panel overwrites a warning within a few frames, so a distracted user never
+    sees it. This handler captures each `>=WARNING` line so the UI can (a) show
+    a persistent `⚠ N` counter in the status bar and (b) reprint the full list
+    into scrollback after the Live display stops (orchestrator `_cleanup`).
 
-        parts.append(record.getMessage())
-        return " ".join(parts)
+    Its level is fixed to WARNING independently of the display handler's level,
+    so warnings are captured even when the TUI is configured to show only a
+    higher floor. emit() runs on the QueueListener's background thread and
+    appends synchronously — `list.append` is atomic under the GIL, and the
+    status-bar counter surfaces via Live's own 10 Hz auto-refresh, so no
+    cross-thread `Live.update` (and thus no cursor desync) is needed. By the
+    time `QueueListener.stop()` returns, every record has been emitted, so the
+    buffer is complete and safe to read for the end-of-run summary.
+    """
+
+    def __init__(self, sink: UISink) -> None:
+        """Initialize the handler and pin its level to WARNING."""
+        super().__init__(level=logging.WARNING)
+        self._sink = sink
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Append the formatted record to the UI's warning buffer."""
+        # Never let a capture failure escape the listener thread; route it
+        # through the standard handler-error path instead.
+        try:
+            self._sink.add_warning(format_log_line(record))
+        except Exception:
+            self.handleError(record)
 
 
 def is_interactive(console: Console) -> bool:
@@ -320,7 +363,7 @@ def setup_logging(
     log_file_path: Path,
     log_config: LogConfig,
     *,
-    ui: LogPanelSink | None = None,
+    ui: UISink | None = None,
     console: Console | None = None,
 ) -> tuple[QueueListener, Queue[logging.LogRecord]]:
     """Set up stdlib logging infrastructure with QueueHandler/QueueListener.
@@ -330,8 +373,17 @@ def setup_logging(
 
     The logger hierarchy implements a 3-setting model:
     - Root logger level = external (filters external libs at this level)
-    - pcswitcher logger level = min(file, tui) (allows pcswitcher logs to handlers)
-    - Each handler applies its own level filter (file vs tui)
+    - pcswitcher logger level = min(file, tui[, WARNING when capturing]) (allows
+      pcswitcher logs, and always warnings, to reach the handlers)
+    - Each handler applies its own level filter (file vs tui vs the WARNING capture)
+
+    In the interactive UI path a WarningCaptureHandler (level WARNING) is added
+    so every `>=WARNING` record is teed into the UI's persistent warning buffer,
+    which backs the status-bar `⚠ N` counter and the end-of-run summary. Its
+    fixed WARNING level is independent of `log_config.tui`; the pcswitcher logger
+    floor is lowered to include WARNING so records still reach the queue even
+    when the TUI display floor is set higher. `respect_handler_level` keeps the
+    file/TUI display handlers filtering at their own levels regardless.
 
     The TUI-floor handler is chosen by interactivity (`is_interactive`): when
     `ui` is given and both stdout and stdin are terminals, log records are
@@ -347,8 +399,8 @@ def setup_logging(
     Args:
         log_file_path: Path to the JSON log file
         log_config: Logging level configuration with file, tui, and external settings
-        ui: Sink for the UI's Recent Logs panel. None disables UI routing
-            (stderr fallback), which also keeps existing callers unaffected.
+        ui: Sink for the UI's Recent Logs panel and warning buffer. None disables
+            UI routing (stderr fallback), which also keeps existing callers unaffected.
         console: Console whose terminal status (with stdin's, via
             `is_interactive`) decides UI vs stderr routing. Required (together
             with `ui`) to select the UI sink.
@@ -382,12 +434,19 @@ def setup_logging(
         tui_handler.setFormatter(RichFormatter())
     tui_handler.setLevel(log_config.tui)
 
+    # In the interactive path also capture every >=WARNING record so the UI can
+    # resurface it (persistent counter + end-of-run summary). Not installed in
+    # the stderr fallback: there warnings already land in scrollback unerased.
+    handlers: list[logging.Handler] = [file_handler, tui_handler]
+    if use_ui:
+        assert ui is not None  # narrowed by use_ui
+        handlers.append(WarningCaptureHandler(ui))
+
     # Create and start listener with respect_handler_level=True
     # This ensures each handler's level is used as an additional filter
     listener = QueueListener(
         queue,
-        file_handler,
-        tui_handler,
+        *handlers,
         respect_handler_level=True,
     )
     listener.start()
@@ -404,9 +463,15 @@ def setup_logging(
     # Root logger handles external library logs (asyncssh, etc.) and filters
     # them at the external level.
 
-    # pcswitcher logger - direct handler, no propagation to root
+    # pcswitcher logger - direct handler, no propagation to root.
+    # When capturing warnings, floor at WARNING too so they reach the queue even
+    # if both display levels are set above WARNING (the display handlers still
+    # filter at their own levels via respect_handler_level).
     pcswitcher_logger = logging.getLogger("pcswitcher")
-    pcswitcher_logger.setLevel(min(log_config.file, log_config.tui))
+    logger_level = min(log_config.file, log_config.tui)
+    if use_ui:
+        logger_level = min(logger_level, logging.WARNING)
+    pcswitcher_logger.setLevel(logger_level)
     pcswitcher_logger.addHandler(QueueHandler(queue))
     pcswitcher_logger.propagate = False  # Don't propagate to root (avoids external filter)
 

@@ -12,6 +12,7 @@ from logging.handlers import QueueListener
 from typing import Any
 
 from rich.console import Console
+from rich.text import Text
 
 from pcswitcher.btrfs_snapshots import session_folder_name
 from pcswitcher.config import Configuration
@@ -1107,3 +1108,31 @@ class Orchestrator:
         # Stop UI live display
         if self._ui is not None:
             self._ui.stop()
+
+        # Resurface captured warnings into scrollback, after the Live has fully
+        # stopped so the block cannot be overwritten by a later refresh. This is
+        # the load-bearing guarantee that warnings which scrolled past in the
+        # rolling Recent Logs panel are still seen — on success as well as
+        # failure. Naturally a no-op outside the interactive path (nothing is
+        # captured there; warnings already went to stderr).
+        self._print_warning_summary()
+
+    def _print_warning_summary(self) -> None:
+        """Print a static end-of-run block listing every captured `>=WARNING` line.
+
+        Each message is wrapped in a Rich `Text` (not markup) so arbitrary log
+        content — rsync paths, stderr containing `[...]`/`[/...]` — renders
+        literally instead of raising MarkupError, mirroring the Recent Logs panel.
+        """
+        if self._ui is None or self._console is None:
+            return
+        warnings = self._ui.collected_warnings()
+        if not warnings:
+            return
+
+        count = len(warnings)
+        self._console.print()
+        self._console.print(Text(f"⚠ {count} warning(s) this run:", style="bold yellow"))
+        for line in warnings:
+            self._console.print(Text(f"  {line}", style="yellow"))
+        self._console.print("[dim]Run [bold]pc-switcher logs[/bold] for the full log.[/dim]")
