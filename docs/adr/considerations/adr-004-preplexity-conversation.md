@@ -143,7 +143,7 @@ echo "Add ~/.local/bin or ~/.cargo/bin to PATH if needed (e.g., via uv tool upda
 
 [^2_6]: https://www.reddit.com/r/learnpython/comments/1lmpbtu/question_uv_uvx_install_tool_from_github_repo_and/
 
-[^2_7]: https://github.com/astral-sh/setup-uv
+[^2_7]: https://github.com/astral-sh/setup-uv@v8.3.2
 
 [^2_8]: https://pydevtools.com/handbook/how-to/how-to-add-dynamic-versioning-to-uv-projects/
 

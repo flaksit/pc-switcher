@@ -21,7 +21,7 @@ jobs:
           fi
 
       - name: Install Hetzner Cloud CLI
-        uses: hetznercloud/setup-hcloud@v1
+        uses: hetznercloud/setup-hcloud@v2
 
       - name: Resolve VM IPs
         id: vm_ips
@@ -66,7 +66,7 @@ jobs:
 
       - name: Checkout
         if: steps.vm_ips.outputs.vms_exist == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Upgrade VMs (with retry on lock)
         if: steps.vm_ips.outputs.vms_exist == 'true'
