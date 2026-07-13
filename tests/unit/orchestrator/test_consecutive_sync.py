@@ -1,29 +1,38 @@
-"""Unit tests for orchestrator consecutive sync warning feature.
+"""Unit tests for the orchestrator target-state pre-flight check (_check_out_of_order).
 
-These tests verify that the orchestrator correctly detects and warns about
-consecutive syncs from the same source machine without receiving a sync back.
+Covers both gates the pre-flight dispatches to (ADR-015):
+- Clean case (target_peer == source, no consecutive push) → silent True
+- W1 (no readable target history = FIRST SYNC): confirmed via --allow-first-sync
+- W2: machine-C (target last synced with a different peer) → confirmed via --allow-out-of-order
+- W3: consecutive push to a clean target → confirmed via --allow-out-of-order
+- --allow-out-of-order → bypass W2/W3 (still reads history to detect first sync)
+- dry-run with any warn condition → True without prompting (ADR-014)
+
+Per the ADR-015 refinement, first-sync (W1) and out-of-order (W2/W3) are distinct
+gates with distinct flags, but BOTH are orchestrator-level pre-flight checks — the
+"first sync overwrites the target" question is asked once centrally, not per-job.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from rich.panel import Panel
 
 from pcswitcher.config import Configuration
+from pcswitcher.confirmer import TerminalUIConfirmer
+from pcswitcher.models import CommandResult
 from pcswitcher.orchestrator import Orchestrator
 
 
-def _mock_isatty() -> MagicMock:
-    """Create a mock for sys.stdin that returns True for isatty().
-
-    Used to simulate interactive TTY mode in tests.
-    """
+def _mock_isatty(interactive: bool = True) -> MagicMock:
+    """Create a mock for sys.stdin that returns `interactive` for isatty()."""
     mock_stdin = MagicMock()
-    mock_stdin.isatty.return_value = True
+    mock_stdin.isatty.return_value = interactive
     return mock_stdin
 
 
@@ -44,238 +53,679 @@ def mock_config() -> MagicMock:
     return config
 
 
-class TestCheckConsecutiveSync:
-    """Test the _check_consecutive_sync method."""
+def _make_orchestrator(
+    mock_config: MagicMock,
+    *,
+    target: str = "target-host",
+    allow_out_of_order: bool = False,
+    allow_first_sync: bool = False,
+    dry_run: bool = False,
+    remote_stdout: str = "",
+    remote_exit_code: int = 0,
+) -> Orchestrator:
+    """Create an Orchestrator wired for _check_out_of_order tests.
+
+    Sets _console, _ui, _logger, and _remote_executor to mocks.
+    The remote executor's run_command returns a CommandResult with
+    `remote_stdout` and `remote_exit_code` so callers can inject a
+    target sync-history JSON payload.
+    """
+    orchestrator = Orchestrator(
+        target=target,
+        config=mock_config,
+        allow_out_of_order=allow_out_of_order,
+        allow_first_sync=allow_first_sync,
+        dry_run=dry_run,
+    )
+    orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
+    orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
+    orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
+    # Wire the real shared confirmer to the mock console/ui so the interactive path
+    # exercises Panel/Prompt and the ui.pause()/resume() pause exactly as in production.
+    orchestrator._confirmer = TerminalUIConfirmer(  # pyright: ignore[reportPrivateUsage]
+        orchestrator._console,  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+        orchestrator._ui,  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+        logger=orchestrator._logger,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    mock_result = CommandResult(exit_code=remote_exit_code, stdout=remote_stdout, stderr="")
+    mock_executor = AsyncMock()
+    mock_executor.run_command.return_value = mock_result
+    orchestrator._remote_executor = mock_executor  # pyright: ignore[reportPrivateUsage]
+
+    return orchestrator
+
+
+def _history_json(role: str, peer: str) -> str:
+    """Produce a sync-history JSON payload."""
+    return json.dumps({"last_role": role, "last_peer": peer})
+
+
+# ---------------------------------------------------------------------------
+# Clean case: no prompt, returns True
+# ---------------------------------------------------------------------------
+
+
+class TestCheckOutOfOrderCleanCase:
+    """The clean A→B / B→A / A→B pattern must always proceed silently."""
 
     @pytest.mark.asyncio
-    async def test_no_history_continues_without_warning(
-        self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    async def test_clean_case_proceeds_silently(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When no sync history exists, sync should continue without warning."""
+        """target_peer == source AND no consecutive push → True, no prompt."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        orchestrator = Orchestrator(target="test-target", config=mock_config)
-        # Mock console and UI
-        orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
+        source_name = "source-host"
+        target_name = "target-host"
 
-        result = await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
+        # Local history: this machine last synced as SOURCE to target
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text(_history_json("target", source_name))
+
+        # Target history: target last synced with source (clean case)
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target=target_name,
+            remote_stdout=_history_json("source", source_name),
+        )
+        # Override source hostname for deterministic test
+        orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
+
+        result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is True
-        # UI should not have been stopped (no warning shown)
-        orchestrator._ui.stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+
+# ---------------------------------------------------------------------------
+# W3: consecutive push warning
+# ---------------------------------------------------------------------------
+
+
+class TestCheckOutOfOrderW3ConsecutivePush:
+    """W3: this source pushes to the same target again without a back-sync."""
 
     @pytest.mark.asyncio
-    async def test_last_role_target_continues_without_warning(
-        self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    async def test_consecutive_push_interactive_accepts(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When last role was TARGET, sync should continue without warning."""
+        """Interactive user answers 'y' → returns True."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Create history file showing last role was target
+        source_name = "source-host"
+        target_name = "target-host"
+
+        # Local: this machine was SOURCE to target-host (consecutive push setup)
         history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
         history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text('{"last_role": "target"}')
+        history_path.write_text(_history_json("source", target_name))
 
-        orchestrator = Orchestrator(target="test-target", config=mock_config)
-        orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target=target_name,
+            remote_stdout=_history_json("target", source_name),
+        )
+        orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
 
-        result = await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
-
-        assert result is True
-        orchestrator._ui.stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
-
-    @pytest.mark.asyncio
-    async def test_last_role_source_shows_warning(
-        self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """When last role was SOURCE, warning should be shown and user prompted."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        # Create history file showing last role was source
-        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text('{"last_role": "source"}')
-
-        orchestrator = Orchestrator(target="test-target", config=mock_config)
-        orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
-
-        # Mock user input to decline and simulate TTY mode
-        with (
-            patch("rich.prompt.Prompt.ask", return_value="n"),
-            patch.object(sys, "stdin", _mock_isatty()),
-        ):
-            result = await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
-
-        assert result is False
-        # UI should have been stopped and started for the warning
-        orchestrator._ui.stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._ui.start.assert_called_once()  # pyright: ignore[reportPrivateUsage]
-        # Warning panel should have been printed
-        orchestrator._console.print.assert_called()  # pyright: ignore[reportPrivateUsage]
-
-    @pytest.mark.asyncio
-    async def test_user_accepts_warning_continues(
-        self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """When user accepts the warning, sync should continue."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text('{"last_role": "source"}')
-
-        orchestrator = Orchestrator(target="test-target", config=mock_config)
-        orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
-
-        # Mock user input to accept and simulate TTY mode
         with (
             patch("rich.prompt.Prompt.ask", return_value="y"),
-            patch.object(sys, "stdin", _mock_isatty()),
+            patch.object(sys, "stdin", _mock_isatty(True)),
         ):
-            result = await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is True
+        cast(MagicMock, orchestrator._ui).pause.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).resume.assert_called_once()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
-    async def test_corrupted_history_shows_warning(
-        self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    async def test_consecutive_push_interactive_declines(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When history file is corrupted, warning should be shown (safety-first)."""
+        """Interactive user answers 'n' → returns False."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Create corrupted history file
+        source_name = "source-host"
+        target_name = "target-host"
+
         history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
         history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text("not valid json")
+        history_path.write_text(_history_json("source", target_name))
 
-        orchestrator = Orchestrator(target="test-target", config=mock_config)
-        orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target=target_name,
+            remote_stdout=_history_json("target", source_name),
+        )
+        orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
 
-        # Simulate TTY mode for the prompt
         with (
             patch("rich.prompt.Prompt.ask", return_value="n"),
-            patch.object(sys, "stdin", _mock_isatty()),
+            patch.object(sys, "stdin", _mock_isatty(True)),
         ):
-            result = await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is False
-        orchestrator._ui.stop.assert_called_once()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
-    async def test_non_interactive_mode_returns_false_immediately(
-        self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    async def test_consecutive_push_non_interactive_returns_false(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When stdin is not a TTY, should return False without prompting."""
+        """Non-interactive mode → returns False without prompting."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Create history file showing last role was source
+        source_name = "source-host"
+        target_name = "target-host"
+
         history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
         history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text('{"last_role": "source"}')
+        history_path.write_text(_history_json("source", target_name))
 
-        orchestrator = Orchestrator(target="test-target", config=mock_config)
-        orchestrator._console = MagicMock()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target=target_name,
+            remote_stdout=_history_json("target", source_name),
+        )
+        orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
 
-        # Simulate non-interactive mode (no TTY)
-        mock_stdin = MagicMock()
-        mock_stdin.isatty.return_value = False
-        with patch.object(sys, "stdin", mock_stdin):
-            result = await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
 
         assert result is False
-        # UI should NOT have been stopped (no interactive prompt)
-        orchestrator._ui.stop.assert_not_called()  # pyright: ignore[reportPrivateUsage]
-        # Warning message should have been printed
-        orchestrator._console.print.assert_called()  # pyright: ignore[reportPrivateUsage]
+        # UI must NOT be paused in non-interactive path
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        # Warning message must be printed
+        cast(MagicMock, orchestrator._console).print.assert_called()  # pyright: ignore[reportPrivateUsage]
 
 
-class TestAllowConsecutiveFlag:
-    """Test the --allow-consecutive flag behavior."""
+# ---------------------------------------------------------------------------
+# W2: machine-C warning
+# ---------------------------------------------------------------------------
 
-    def test_orchestrator_accepts_allow_consecutive_flag(self, mock_config: MagicMock) -> None:
-        """Orchestrator should accept allow_consecutive parameter."""
+
+class TestCheckOutOfOrderW2MachineC:
+    """W2: target last synced with a machine other than this source."""
+
+    @pytest.mark.asyncio
+    async def test_machine_c_non_interactive_returns_false(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Target synced with 'other-host', not this source → warns, returns False."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        source_name = "source-host"
+        target_name = "target-host"
+        other_machine = "other-host"
+
+        # Local: no meaningful history on this source
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text(_history_json("target", target_name))
+
+        # Target: last synced with 'other-host'
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target=target_name,
+            remote_stdout=_history_json("source", other_machine),
+        )
+        orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is False
+        cast(MagicMock, orchestrator._console).print.assert_called()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_machine_c_interactive_prompts_user(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Machine-C in interactive mode shows panel and prompts."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        source_name = "source-host"
+        target_name = "target-host"
+        other_machine = "other-host"
+
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text(_history_json("target", target_name))
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target=target_name,
+            remote_stdout=_history_json("source", other_machine),
+        )
+        orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
+
+        with (
+            patch("rich.prompt.Prompt.ask", return_value="y"),
+            patch.object(sys, "stdin", _mock_isatty(True)),
+        ):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        cast(MagicMock, orchestrator._ui).pause.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+
+
+# ---------------------------------------------------------------------------
+# W1: no / unreadable target history → first sync (orchestrator-level, --allow-first-sync)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckFirstSync:
+    """W1: a target with no readable sync history is a first-ever sync.
+
+    Handled by the orchestrator pre-flight and gated by --allow-first-sync (distinct
+    from the W2/W3 --allow-out-of-order gate). The overwrite question is asked once
+    centrally, not per-job (ADR-015).
+    """
+
+    @pytest.mark.asyncio
+    async def test_first_sync_interactive_accepts(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Missing target history, interactive user answers 'y' → True, prompt shown."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            remote_stdout="",  # empty → no readable history → first sync
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with (
+            patch("rich.prompt.Prompt.ask", return_value="y"),
+            patch.object(sys, "stdin", _mock_isatty(True)),
+        ):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        cast(MagicMock, orchestrator._ui).pause.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).resume.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_first_sync_interactive_declines(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Missing target history, interactive user answers 'n' → False."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with (
+            patch("rich.prompt.Prompt.ask", return_value="n"),
+            patch.object(sys, "stdin", _mock_isatty(True)),
+        ):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_first_sync_corrupt_json_prompts(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Corrupt target history (parse → None) is treated as a first sync and prompts."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            remote_stdout="not valid json",
+            remote_exit_code=0,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with (
+            patch("rich.prompt.Prompt.ask", return_value="y"),
+            patch.object(sys, "stdin", _mock_isatty(True)),
+        ):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        cast(MagicMock, orchestrator._ui).pause.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_first_sync_non_interactive_without_flag_returns_false(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First sync, no TTY, no --allow-first-sync → False, message printed."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is False
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._console).print.assert_called()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_first_sync_non_interactive_with_flag_returns_true(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First sync, no TTY, --allow-first-sync set → auto-approved (True)."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            allow_first_sync=True,
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_first_sync_not_gated_by_allow_out_of_order(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """--allow-out-of-order does NOT bypass the first-sync gate (distinct flag)."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            allow_out_of_order=True,  # must not auto-approve a first sync
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_first_sync_dry_run_returns_true(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First sync under --dry-run logs a warning and proceeds without prompting."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            dry_run=True,
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        cast(MagicMock, orchestrator._logger).warning.assert_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+
+# ---------------------------------------------------------------------------
+# --allow-out-of-order bypass (W2/W3 only; history is still read for first-sync)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckOutOfOrderBypass:
+    """--allow-out-of-order bypasses the W2/W3 prompt but not the first-sync gate."""
+
+    @pytest.mark.asyncio
+    async def test_allow_out_of_order_bypasses_w2_prompt(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With allow_out_of_order=True a W2 (machine-C) history proceeds without prompting."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            allow_out_of_order=True,
+            remote_stdout=_history_json("source", "other-host"),  # W2, readable history
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        # History IS read (needed to distinguish first-sync from out-of-order),
+        # but no prompt is shown for the bypassed W2/W3 case.
+        cast(MagicMock, orchestrator._remote_executor).run_command.assert_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+    def test_orchestrator_accepts_allow_out_of_order(self, mock_config: MagicMock) -> None:
+        """Orchestrator.__init__ stores allow_out_of_order."""
         orchestrator = Orchestrator(
             target="test-target",
             config=mock_config,
-            allow_consecutive=True,
+            allow_out_of_order=True,
         )
-        assert orchestrator._allow_consecutive is True  # pyright: ignore[reportPrivateUsage]
+        assert orchestrator._allow_out_of_order is True  # pyright: ignore[reportPrivateUsage]
 
-    def test_orchestrator_defaults_allow_consecutive_to_false(self, mock_config: MagicMock) -> None:
-        """Orchestrator should default allow_consecutive to False."""
+    def test_orchestrator_defaults_allow_out_of_order_to_false(self, mock_config: MagicMock) -> None:
+        """allow_out_of_order defaults to False."""
         orchestrator = Orchestrator(target="test-target", config=mock_config)
-        assert orchestrator._allow_consecutive is False  # pyright: ignore[reportPrivateUsage]
+        assert orchestrator._allow_out_of_order is False  # pyright: ignore[reportPrivateUsage]
+
+    def test_orchestrator_accepts_allow_first_sync(self, mock_config: MagicMock) -> None:
+        """Orchestrator.__init__ stores allow_first_sync."""
+        orchestrator = Orchestrator(
+            target="test-target",
+            config=mock_config,
+            allow_first_sync=True,
+        )
+        assert orchestrator._allow_first_sync is True  # pyright: ignore[reportPrivateUsage]
+
+    def test_orchestrator_defaults_allow_first_sync_to_false(self, mock_config: MagicMock) -> None:
+        """allow_first_sync defaults to False."""
+        orchestrator = Orchestrator(target="test-target", config=mock_config)
+        assert orchestrator._allow_first_sync is False  # pyright: ignore[reportPrivateUsage]
 
 
-class TestUpdateSyncHistory:
-    """Test the _update_sync_history method."""
+# ---------------------------------------------------------------------------
+# dry-run: warns but never aborts
+# ---------------------------------------------------------------------------
+
+
+class TestCheckOutOfOrderDryRun:
+    """dry-run mode: the warning is logged but _check_out_of_order returns True."""
 
     @pytest.mark.asyncio
-    async def test_updates_local_history_to_source(
-        self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    async def test_dry_run_with_consecutive_push_returns_true(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """After sync, local history should be updated to SOURCE."""
+        """A W3 (consecutive push) condition under --dry-run must not abort; returns True."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        orchestrator = Orchestrator(target="test-target", config=mock_config)
-        orchestrator._remote_executor = None  # pyright: ignore[reportPrivateUsage]
+        source_name = "source-host"
+        target_name = "target-host"
 
-        # Create mock event_bus and logger
-        orchestrator._event_bus = MagicMock()  # pyright: ignore[reportPrivateUsage]
+        # Local: this machine was SOURCE to target-host (consecutive push setup)
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text(_history_json("source", target_name))
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target=target_name,
+            dry_run=True,
+            remote_stdout=_history_json("target", source_name),
+        )
+        orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
+
+        # Non-interactive mode (guarantees no Prompt.ask is reached)
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        # Logger.warning must have been called (warning logged, not silenced)
+        cast(MagicMock, orchestrator._logger).warning.assert_called()  # pyright: ignore[reportPrivateUsage]
+        # Prompt must NOT have been shown
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_dry_run_with_machine_c_returns_true(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A W2 condition under --dry-run returns True without prompting."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            dry_run=True,
+            remote_stdout=_history_json("source", "other-host"),
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        cast(MagicMock, orchestrator._logger).warning.assert_called()  # pyright: ignore[reportPrivateUsage]
+
+
+# ---------------------------------------------------------------------------
+# _update_sync_history: last_peer is recorded on both ends
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateSyncHistoryWithPeer:
+    """_update_sync_history records last_peer on both source and target."""
+
+    @pytest.mark.asyncio
+    async def test_local_history_records_peer(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """After sync, local history includes last_peer = target hostname."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = Orchestrator(target="target-host", config=mock_config)
+        orchestrator._remote_executor = None  # pyright: ignore[reportPrivateUsage]
         orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
 
         await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]
 
-        # Verify local history was updated
         history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
         assert history_path.exists()
-        content = history_path.read_text()
-        assert '"last_role": "source"' in content
+        data = json.loads(history_path.read_text())
+        assert data["last_role"] == "source"
+        assert data["last_peer"] == "target-host"
 
     @pytest.mark.asyncio
-    async def test_updates_remote_history_to_target(
-        self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    async def test_remote_history_command_includes_peer(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """After sync, remote history should be updated to TARGET via SSH."""
+        """Remote history command must include last_peer = source hostname."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        orchestrator = Orchestrator(target="test-target", config=mock_config)
+        orchestrator = Orchestrator(target="target-host", config=mock_config)
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+        orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
 
-        # Mock remote executor
         mock_result = MagicMock()
         mock_result.success = True
         mock_executor = AsyncMock()
         mock_executor.run_command.return_value = mock_result
         orchestrator._remote_executor = mock_executor  # pyright: ignore[reportPrivateUsage]
 
-        # Create mock event_bus and logger
-        orchestrator._event_bus = MagicMock()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
-
         await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]
 
-        # Verify remote command was called
         mock_executor.run_command.assert_called_once()
         cmd = mock_executor.run_command.call_args[0][0]
-        assert "mkdir -p ~/.local/share/pc-switcher" in cmd
-        assert '"last_role": "target"' in cmd
+        assert "last_role" in cmd
+        assert "target" in cmd
+        assert "last_peer" in cmd
+        assert "source-host" in cmd
 
     @pytest.mark.asyncio
-    async def test_remote_history_failure_raises_error(
-        self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    async def test_remote_history_failure_raises(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Remote history update failure should raise RuntimeError."""
+        """Remote history update failure raises RuntimeError."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        orchestrator = Orchestrator(target="test-target", config=mock_config)
+        orchestrator = Orchestrator(target="target-host", config=mock_config)
+        orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
 
-        # Mock remote executor to fail
         mock_result = MagicMock()
         mock_result.success = False
         mock_result.stderr = "Permission denied"
@@ -283,55 +733,5 @@ class TestUpdateSyncHistory:
         mock_executor.run_command.return_value = mock_result
         orchestrator._remote_executor = mock_executor  # pyright: ignore[reportPrivateUsage]
 
-        # Create mock event_bus and logger
-        mock_event_bus = MagicMock()
-        orchestrator._event_bus = mock_event_bus  # pyright: ignore[reportPrivateUsage]
-        orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
-
-        # Should raise RuntimeError
         with pytest.raises(RuntimeError, match="Failed to update sync history on target"):
             await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]
-
-
-class TestWarningMessageContent:
-    """Test the content of the consecutive sync warning message."""
-
-    @pytest.mark.asyncio
-    async def test_warning_message_includes_workflow_explanation(
-        self, mock_config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Warning message should explain the normal workflow."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text('{"last_role": "source"}')
-
-        orchestrator = Orchestrator(target="test-target", config=mock_config)
-        mock_console = MagicMock()
-        orchestrator._console = mock_console  # pyright: ignore[reportPrivateUsage]
-        orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
-
-        # Simulate TTY mode for the prompt
-        with (
-            patch("rich.prompt.Prompt.ask", return_value="n"),
-            patch.object(sys, "stdin", _mock_isatty()),
-        ):
-            await orchestrator._check_consecutive_sync()  # pyright: ignore[reportPrivateUsage]
-
-        # Check that the warning message was printed
-        # The Panel is passed to console.print()
-        assert mock_console.print.call_count >= 1
-
-        # Find the Panel in the call args
-        panel_found = False
-        for call in mock_console.print.call_args_list:
-            if call.args and isinstance(call.args[0], Panel):
-                panel = call.args[0]
-                # The renderable inside the Panel contains the warning text
-                renderable_str = str(panel.renderable)
-                if "without receiving a sync back first" in renderable_str:
-                    panel_found = True
-                    break
-
-        assert panel_found, "Warning panel with expected message not found"

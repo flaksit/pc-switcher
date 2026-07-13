@@ -5,6 +5,7 @@ Tests cover LOG-SC-FILE-DEBUG, LOG-SC-EXT-FILTER, LOG-SC-NO-REGRESS, LOG-SC-INVA
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -16,15 +17,38 @@ from queue import Queue
 from unittest.mock import patch
 
 import pytest
+from rich.console import Console
 
 from pcswitcher.config import Configuration, ConfigurationError, LogConfig
 from pcswitcher.logger import (
     FULL,
     JsonFormatter,
     RichFormatter,
+    UILogHandler,
+    WarningCaptureHandler,
+    format_log_line,
     get_latest_log_file,
     setup_logging,
 )
+
+
+class _FakeLogPanelSink:
+    """Fake UISink (see pcswitcher.logger.UISink) that records delivered log-panel
+    lines and captured warnings for assertions, without depending on
+    TerminalUI/Rich Live.
+    """
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+        self.warnings: list[str] = []
+
+    def add_log_message(self, message: str) -> None:
+        """Record a delivered log-panel line."""
+        self.messages.append(message)
+
+    def add_warning(self, line: str) -> None:
+        """Record a captured `>=WARNING` line."""
+        self.warnings.append(line)
 
 
 class TestLogLevelRegistration:
@@ -328,6 +352,205 @@ class TestSetupLogging:
             listener, _queue = setup_logging(log_path, config)
             # Should not raise
             listener.stop()
+
+
+class TestUILogHandlerRouting:
+    """Test setup_logging's TTY-aware TUI-handler selection (gap closure 01-18).
+
+    Proves the fix for the live-progress flooding root cause: an interactive
+    console routes log records into the UI's Recent Logs panel (through the
+    event loop) instead of writing them directly to stderr, which used to
+    desync rich.live.Live's cursor bookkeeping (see
+    .planning/debug/tui-live-progress-flooding.md).
+    """
+
+    async def test_interactive_setup_routes_to_ui_handler_no_stderr(self) -> None:
+        """Interactive setup selects UILogHandler and delivers a plain-text line."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            config = LogConfig()
+            sink = _FakeLogPanelSink()
+            console = Console(file=io.StringIO(), force_terminal=True)
+
+            # Interactivity now requires BOTH stdout (force_terminal) and stdin
+            # to be TTYs (is_interactive), shared with the confirmer. Under
+            # pytest stdin is not a TTY, so patch it to exercise UI routing.
+            with patch.object(sys.stdin, "isatty", return_value=True):
+                listener, _queue = setup_logging(log_path, config, ui=sink, console=console)
+            try:
+                tui_handler = listener.handlers[1]
+                assert isinstance(tui_handler, UILogHandler)
+
+                # The corrupting handler (a StreamHandler writing to sys.stderr
+                # while Live owns the terminal) must be absent entirely.
+                assert not any(
+                    isinstance(h, logging.StreamHandler) and h.stream is sys.stderr for h in listener.handlers
+                )
+
+                logger = logging.getLogger("pcswitcher.test")
+                logger.info("Routed log line", extra={"job": "test", "host": "source"})
+
+                # The record crosses the QueueListener's background thread and
+                # is delivered via call_soon_threadsafe; poll briefly for the
+                # loop to process the scheduled callback.
+                for _ in range(100):
+                    if sink.messages:
+                        break
+                    await asyncio.sleep(0.01)
+
+                assert sink.messages, "expected the UI sink to receive a delivered line"
+                line = sink.messages[0]
+                assert "Routed log line" in line
+                assert "INFO" in line
+                assert "\x1b" not in line  # plain text -- no raw ANSI escape codes
+            finally:
+                listener.stop()
+
+    async def test_non_interactive_setup_falls_back_to_stderr(self) -> None:
+        """Non-interactive setup keeps the stderr StreamHandler and JSON file output."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            config = LogConfig()
+            sink = _FakeLogPanelSink()
+            console = Console(file=io.StringIO(), force_terminal=False)
+
+            listener, _queue = setup_logging(log_path, config, ui=sink, console=console)
+            try:
+                tui_handler = listener.handlers[1]
+                assert isinstance(tui_handler, logging.StreamHandler)
+                assert tui_handler.stream is sys.stderr
+                assert not isinstance(tui_handler, UILogHandler)
+
+                logger = logging.getLogger("pcswitcher.test")
+                logger.info("Fallback log line", extra={"job": "test", "host": "source"})
+
+                listener.stop()
+
+                # No line should have reached the (unused) UI sink.
+                assert sink.messages == []
+
+                # The file handler still writes JSON at the file floor.
+                content = log_path.read_text()
+                assert "Fallback log line" in content
+            finally:
+                if listener._thread and listener._thread.is_alive():
+                    listener.stop()
+
+    async def test_no_ui_argument_keeps_default_stderr_behavior(self) -> None:
+        """Omitting ui/console (the pre-existing call signature) keeps stderr."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            config = LogConfig()
+
+            listener, _queue = setup_logging(log_path, config)
+            try:
+                tui_handler = listener.handlers[1]
+                assert isinstance(tui_handler, logging.StreamHandler)
+                assert tui_handler.stream is sys.stderr
+            finally:
+                listener.stop()
+
+
+def _make_record(level: int, msg: str, *, job: str | None = None, host: str | None = None) -> logging.LogRecord:
+    """Build a LogRecord with optional job/host extras for handler tests."""
+    record = logging.LogRecord("pcswitcher.test", level, __file__, 0, msg, None, None)
+    if job is not None:
+        record.job = job  # type: ignore[attr-defined]
+    if host is not None:
+        record.host = host  # type: ignore[attr-defined]
+    return record
+
+
+class TestWarningCapture:
+    """Warnings that scroll past in the rolling log must be resurfaced.
+
+    Covers the capture side of the two-part scheme: a WarningCaptureHandler tees
+    every `>=WARNING` record into the UI's persistent buffer (which backs the
+    status-bar counter and the end-of-run summary). The display side (counter
+    render, scrollback summary) is covered in the TerminalUI and orchestrator tests.
+    """
+
+    def test_handler_tees_warning_to_sink_as_plain_line(self) -> None:
+        """emit() forwards a plain-text formatted line (no ANSI/markup) to add_warning."""
+        sink = _FakeLogPanelSink()
+        handler = WarningCaptureHandler(sink)
+
+        handler.emit(_make_record(logging.WARNING, "disk almost full", job="disk", host="target"))
+
+        assert len(sink.warnings) == 1, "expected exactly one captured line"
+        line = sink.warnings[0]
+        assert "disk almost full" in line
+        assert "[WARNING]" in line
+        assert "[disk]" in line and "(target)" in line
+        assert "\x1b" not in line  # plain text -- no raw ANSI escape codes
+
+    def test_handler_level_is_fixed_at_warning(self) -> None:
+        """The capture floor is WARNING regardless of the configured TUI display level."""
+        assert WarningCaptureHandler(_FakeLogPanelSink()).level == logging.WARNING
+
+    def test_format_log_line_omits_missing_job_host(self) -> None:
+        """format_log_line drops the [job]/(host) segments when the extras are absent."""
+        line = format_log_line(_make_record(logging.WARNING, "bare message"))
+        assert "[WARNING]" in line and "bare message" in line
+        assert "[" not in line.split("[WARNING]", 1)[1]  # no [job] after the level tag
+        assert "(" not in line  # no (host)
+
+    async def test_interactive_setup_installs_capture_handler(self) -> None:
+        """Interactive setup adds a WarningCaptureHandler and delivers >=WARNING lines to it."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            config = LogConfig()
+            sink = _FakeLogPanelSink()
+            console = Console(file=io.StringIO(), force_terminal=True)
+
+            with patch.object(sys.stdin, "isatty", return_value=True):
+                listener, _queue = setup_logging(log_path, config, ui=sink, console=console)
+            try:
+                assert any(isinstance(h, WarningCaptureHandler) for h in listener.handlers)
+
+                logger = logging.getLogger("pcswitcher.test")
+                logger.info("just info", extra={"job": "t", "host": "source"})
+                logger.warning("a real warning", extra={"job": "t", "host": "source"})
+
+                listener.stop()  # flush: all records emitted before this returns
+
+                assert any("a real warning" in line for line in sink.warnings)
+                assert not any("just info" in line for line in sink.warnings), "INFO must not be captured"
+            finally:
+                if listener._thread and listener._thread.is_alive():
+                    listener.stop()
+
+    async def test_warning_captured_even_when_tui_display_floor_above_warning(self) -> None:
+        """A WARNING is captured even if file+tui are both set above WARNING (ERROR)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            config = LogConfig(file=logging.ERROR, tui=logging.ERROR)
+            sink = _FakeLogPanelSink()
+            console = Console(file=io.StringIO(), force_terminal=True)
+
+            with patch.object(sys.stdin, "isatty", return_value=True):
+                listener, _queue = setup_logging(log_path, config, ui=sink, console=console)
+            try:
+                logging.getLogger("pcswitcher.test").warning("still captured", extra={"job": "t"})
+                listener.stop()
+                assert any("still captured" in line for line in sink.warnings)
+            finally:
+                if listener._thread and listener._thread.is_alive():
+                    listener.stop()
+
+    def test_non_interactive_setup_omits_capture_handler(self) -> None:
+        """The stderr fallback path installs no capture handler (warnings hit scrollback)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "test.log"
+            config = LogConfig()
+            sink = _FakeLogPanelSink()
+            console = Console(file=io.StringIO(), force_terminal=False)
+
+            listener, _queue = setup_logging(log_path, config, ui=sink, console=console)
+            try:
+                assert not any(isinstance(h, WarningCaptureHandler) for h in listener.handlers)
+            finally:
+                listener.stop()
 
 
 class TestInvalidLogLevel:

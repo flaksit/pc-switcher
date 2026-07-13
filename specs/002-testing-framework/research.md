@@ -303,7 +303,7 @@ jobs:
     # Runs on every push, no concurrency restriction
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # ... setup steps ...
       - run: uv run basedpyright
       - run: uv run ruff check
@@ -318,7 +318,7 @@ jobs:
       group: integration-tests
       cancel-in-progress: false  # Queue instead of cancel
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # ... setup steps ...
       - name: Provision VMs
         run: ./tests/infrastructure/scripts/provision-vms.sh

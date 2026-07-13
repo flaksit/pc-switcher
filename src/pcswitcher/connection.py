@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import getpass
 
 import asyncssh
 
@@ -46,6 +47,23 @@ class Connection:
     def connected(self) -> bool:
         """Check if connection is established."""
         return self._conn is not None
+
+    @property
+    def username(self) -> str:
+        """Return the SSH username negotiated for the target connection.
+
+        asyncssh resolves the username from ~/.ssh/config, the target alias, or
+        the local user during connect().  Falls back to getpass.getuser() if
+        asyncssh does not expose the attribute (guards against API drift across
+        asyncssh versions without breaking callers).
+
+        Raises:
+            RuntimeError: If not connected (mirrors the ssh_connection property).
+        """
+        if self._conn is None:
+            raise RuntimeError("Not connected to target")
+        user: str | None = self._conn.get_extra_info("username")
+        return user if user is not None else getpass.getuser()
 
     @property
     def ssh_connection(self) -> asyncssh.SSHClientConnection:

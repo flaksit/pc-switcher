@@ -1,0 +1,22 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/adr/adr-009-ai-readiness-labels.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "ADR-009: AI Readiness Labels for Issue Triage",
+  "summary": "Use three GitHub labels (ai:ready, ai:needs-speckit, ai:unclear) to classify issues by AI implementation readiness.",
+  "scope": [
+    "GitHub issue labels",
+    "AI readiness triage",
+    "ai:ready",
+    "ai:needs-speckit",
+    "ai:unclear",
+    "issue delegation"
+  ],
+  "cross_refs": [
+    "../../specs/"
+  ],
+  "locked": false,
+  "precedence": 0,
+  "notes": ""
+}

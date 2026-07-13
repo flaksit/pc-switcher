@@ -1,0 +1,36 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/system/architecture.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "System Architecture",
+  "summary": "Defines pc-switcher's core components, their relationships, event-bus logging, job class hierarchy, data flow, and key design patterns.",
+  "scope": [
+    "CLI",
+    "Orchestrator",
+    "Config",
+    "Connection",
+    "Logger",
+    "TerminalUI",
+    "LocalExecutor",
+    "RemoteExecutor",
+    "Job hierarchy",
+    "InstallOnTargetJob",
+    "BtrfsSnapshotJob",
+    "DiskSpaceMonitorJob",
+    "EventBus",
+    "JobContext",
+    "Lock mechanism",
+    "Self-installation flow",
+    "Disk space preflight"
+  ],
+  "cross_refs": [
+    "_index.md",
+    "data-model.md",
+    "core.md",
+    "logging.md"
+  ],
+  "locked": false,
+  "precedence": 2,
+  "notes": ""
+}

@@ -37,7 +37,6 @@ env.bak/
 venv.bak/
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -76,3 +75,9 @@ logs/
 tmp/
 temp/
 *.tmp
+
+# Personal markdownlint config (extends a per-user ~/.markdownlint.jsonc)
+.markdownlint.jsonc
+
+.antigravitycli
+.planning/research/.cache/

@@ -1,0 +1,34 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/planning/High level requirements.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "PC-switcher",
+  "summary": "Project vision, scope, and requirements for a system-state synchronization tool that replicates near-complete Linux desktop state between machines over SSH.",
+  "scope": [
+    "user data sync (/home, /root)",
+    "selective dev tool caches",
+    "installed packages sync (apt/snap/flatpak/PPAs/debs)",
+    "application and system configurations sync",
+    "file metadata preservation (owner/permissions/ACLs/timestamps)",
+    "KVM/virt-manager VM sync",
+    "Docker state sync",
+    "k3s cluster sync",
+    "machine-specific exclusions",
+    "btrfs filesystem environment",
+    "SSH connectivity (LAN/VPN/Tailscale)",
+    "manual sync workflow",
+    "conflict detection (no resolution)",
+    "terminal-based UX",
+    "reliability/rollback/logging principles",
+    "project structure and documentation principles"
+  ],
+  "cross_refs": [
+    "adr/_index.md",
+    "../specs/",
+    "../specs/001-core/"
+  ],
+  "locked": false,
+  "precedence": 1,
+  "notes": ""
+}

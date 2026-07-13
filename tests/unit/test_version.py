@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from importlib.metadata import PackageNotFoundError
 from unittest.mock import MagicMock, patch
 
 import pytest
+from github import BadCredentialsException
 
 from pcswitcher.version import (
     Release,
@@ -613,6 +615,34 @@ class TestGetReleasesGithubToken:
             list(get_releases())
             # Github() should be called with only retry=None (unauthenticated)
             mock_github.assert_called_once_with(retry=None)
+
+    def test_invalid_token_warns_and_falls_back_to_unauthenticated(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A set-but-invalid GITHUB_TOKEN (401) warns once and retries unauthenticated.
+
+        The release data is public, so a rejected token must not fail the whole
+        call — it should degrade to unauthenticated access.
+        """
+        auth_client = MagicMock()
+        auth_client.get_repo.side_effect = BadCredentialsException(401, {"message": "Bad credentials"}, None)
+
+        unauth_release = MagicMock(draft=False, prerelease=True, tag_name="v0.1.0-alpha.18")
+        unauth_client = MagicMock()
+        unauth_client.get_repo.return_value.get_releases.return_value = [unauth_release]
+
+        # First Github(...) call (authenticated) yields the failing client;
+        # the second (unauthenticated fallback) yields the working one.
+        mock_github = MagicMock(side_effect=[auth_client, unauth_client])
+
+        with (
+            patch.dict("os.environ", {"GITHUB_TOKEN": "revoked-token"}),
+            patch("pcswitcher.version.Github", mock_github),
+            caplog.at_level(logging.WARNING, logger="pcswitcher.version"),
+        ):
+            result = get_releases()
+
+        assert [r.tag for r in result] == ["v0.1.0-alpha.18"], "must return the unauthenticated results"
+        assert mock_github.call_count == 2, "must attempt authenticated, then fall back to unauthenticated"
+        assert any("rejected by GitHub" in rec.getMessage() for rec in caplog.records), "must warn about the token"
 
 
 class TestGithubReleaseFloor:

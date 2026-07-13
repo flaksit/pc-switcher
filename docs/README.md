@@ -2,6 +2,10 @@
 
 This directory contains all project documentation, organized by audience.
 
+## Configuration
+
+- [configuration.md](configuration.md) - Complete reference for `~/.config/pc-switcher/config.yaml` (all options, defaults, folder-sync exclude syntax)
+
 ## For AI Agents (`dev/`)
 
 Instructions and expectations for AI agents when developing:

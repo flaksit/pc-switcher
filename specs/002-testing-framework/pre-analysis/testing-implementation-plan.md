@@ -877,8 +877,8 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2@v6
         with:
           version: ${{ env.UV_VERSION }}
       - run: uv run ruff check .
@@ -890,10 +890,10 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v8.3.2@v6
         with:
           version: ${{ env.UV_VERSION }}
       - run: uv run pytest tests/unit tests/contract -v --tb=short
@@ -918,7 +918,7 @@ jobs:
       cancel-in-progress: false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -940,7 +940,7 @@ jobs:
           echo "This is expected for forked PRs. Unit tests still run."
           exit 0
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v8.3.2@v6
         if: steps.secrets-check.outputs.skip != 'true'
         with:
           version: ${{ env.UV_VERSION }}
@@ -1003,7 +1003,7 @@ jobs:
       # Upload artifacts for debugging (FR-017c)
       - name: Upload test artifacts
         if: always() && steps.secrets-check.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: integration-test-logs
           path: |

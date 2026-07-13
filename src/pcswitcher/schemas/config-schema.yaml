@@ -63,6 +63,11 @@ properties:
         type: boolean
         default: false
         description: "Test job that fails at configurable time"
+      # Jobs implemented in Phase 1:
+      folder_sync:
+        type: boolean
+        default: true
+        description: "Generic folder sync job (syncs /home and /root by default)"
       # Future jobs (add when features 5-10 are implemented):
       # user_data:
       #   type: boolean
@@ -171,6 +176,37 @@ properties:
         minimum: 2
         default: 12
         description: "Elapsed seconds at which to fail"
+    additionalProperties: false
+
+  # Folder sync job configuration (FolderSyncJob)
+  # NOTE: Config key matches job name ("folder_sync") per naming convention below
+  folder_sync:
+    type: object
+    description: "Configuration for FolderSyncJob (generic folder sync via rsync)"
+    properties:
+      folders:
+        type: array
+        items:
+          type: object
+          properties:
+            path:
+              type: string
+              description: "Absolute path to sync (e.g., /home)"
+            enabled:
+              type: boolean
+              default: true
+              description: "Whether to sync this folder (default true)"
+            excludes:
+              type: array
+              items:
+                type: string
+              default: []
+              description: "rsync filter patterns to exclude, relative to folder path"
+          required: [path]
+          additionalProperties: false
+        minItems: 1
+        description: "List of folder entries to sync"
+    required: [folders]
     additionalProperties: false
 
 # =============================================================================

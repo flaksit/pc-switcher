@@ -71,87 +71,44 @@ pc-switcher logs
 
 After sync completes, power off the source machine and resume work on target.
 
+## What Happens During a Sync
+
+`pc-switcher sync <target>` runs a fixed sequence of steps, orchestrated by `Orchestrator.run()` (`src/pcswitcher/orchestrator.py`). The order matters: each step sets up the environment the next one depends on. All steps run on the **source** machine, acting on the **target** over a single SSH connection.
+
+The sequence stops at the first failure (raising an exception), and the `finally` cleanup always runs (release locks, kill remote processes, close the connection).
+
+1. **Load config & arm interrupt handling** (CLI, before the orchestrator). Read `~/.config/pc-switcher/config.yaml`, start the asyncio loop, install the SIGINT handler that triggers graceful cleanup.
+2. **Acquire source lock.** Local lock file; this machine cannot join any other sync (as source or target) while this one runs.
+3. **Establish SSH connection.** Creates the local and remote executors every later step uses. Nothing touches the target before this point.
+4. **Acquire target lock.** A persistent remote process holds the same unified lock on the target; released during cleanup.
+5. **Out-of-order / target-state check.** Reads `last_role` and `last_peer` from the local and target sync history to detect situations where the target may hold independent state — for example, no prior sync history exists (W1), the target last synced with a different machine (W2 — machine-C scenario), or this source is pushing again without receiving a back-sync first (W3). Shows a warning and asks for confirmation; the sync is never hard-aborted for any of these cases since the A→B / work-on-A / A→B again workflow is legitimate (GitHub #159). Skipped with `--allow-out-of-order`. In `--dry-run` mode the warning is logged and the sync continues.
+6. **Discover & validate jobs.**
+   - Load enabled jobs from config
+   - Validate their config
+   - Run each job's `validate()` against live system state: checks `sudo rsync` availability, `acl` package installation, and source folder existence. Nothing has been mutated yet.
+7. **Disk-space preflight.** Check free space on both hosts in parallel against `preflight_minimum`; abort if either is short — so snapshots and rsync don't run a disk into ENOSPC.
+8. **Pre-sync snapshots.** Create btrfs snapshots on both hosts. This is the rollback point; every mutating step below happens after it.
+9. **Install/upgrade pc-switcher on target.** Ensures the target has a compatible version to run its side of later jobs. After snapshots, so a bad install is recoverable.
+10. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs with identical settings.
+11. **Run sync jobs sequentially.** The actual data movement (e.g. `folder_sync` via rsync-over-SSH as root on both ends). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
+12. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state.
+13. **Record sync history.** On success, write `last_role` and `last_peer` on both machines to enable the step 5 topology check next time. Skipped in `--dry-run`.
+
+With `--dry-run`, the workflow previews without writing state (no history update, no snapshots, no mutations). rsync `--dry-run` lists the exact files and deletions that would occur; deletions are recorded in the FULL-level log so you can audit what would be destroyed before committing to a live sync. `--allow-out-of-order` skips the step 5 target-state confirmation.
+
 ## Configuration
 
-Run `pc-switcher init` to create the default configuration file at `~/.config/pc-switcher/config.yaml`, or create it manually:
+Run `pc-switcher init` to write the default configuration to `~/.config/pc-switcher/config.yaml`. The generated file is annotated with inline comments for every setting.
 
-```yaml
-# Logging configuration (see Logging Configuration section below for details)
-logging:
-  file: DEBUG      # Floor level for file output
-  tui: INFO        # Floor level for terminal output
-  external: WARNING  # Floor for third-party libraries
+Top-level sections:
 
-# Sync jobs (true = enabled, false = disabled)
-sync_jobs:
-  dummy_success: true
-  dummy_fail: false
+- `logging` — per-destination log-level floors (file, terminal, third-party libraries)
+- `sync_jobs` — which sync jobs are enabled
+- `disk_space_monitor` — free-space thresholds checked before and during a sync
+- `btrfs_snapshots` — subvolumes to snapshot and retention policy
+- `folder_sync` — folders to mirror via rsync, with per-folder exclude patterns
 
-# Disk space monitoring
-disk_space_monitor:
-  preflight_minimum: "20%"  # Or absolute like "50GiB"
-  runtime_minimum: "15%"    # CRITICAL abort if below
-  warning_threshold: "25%"  # WARNING log if below
-  check_interval: 30        # Seconds
-
-# Btrfs snapshots
-btrfs_snapshots:
-  subvolumes:
-    - "@"
-    - "@home"
-  keep_recent: 3
-  # max_age_days: 30  # Optional - enables age-based cleanup
-```
-
-See default configuration in `src/pcswitcher/default-config.yaml`.
-
-## Logging Configuration
-
-Configure log levels in your `~/.config/pc-switcher/config.yaml`:
-
-```yaml
-logging:
-  file: DEBUG      # Log level floor for file output (default: DEBUG)
-  tui: INFO        # Log level floor for TUI output (default: INFO)
-  external: WARNING  # Log level floor for external libraries (default: WARNING)
-```
-
-### Log Levels
-
-| Level | Value | Description |
-|-------|-------|-------------|
-| DEBUG | 10 | Internal diagnostics |
-| FULL | 15 | Operational details (file-level sync info) |
-| INFO | 20 | High-level operations (job start/complete) |
-| WARNING | 30 | Unexpected but non-fatal conditions |
-| ERROR | 40 | Recoverable errors |
-| CRITICAL | 50 | Unrecoverable errors, sync must abort |
-
-### Default Behavior
-
-- `file: DEBUG` - All log levels written to file
-- `tui: INFO` - Only INFO and above shown in terminal
-- `external: WARNING` - External library logs (asyncssh, etc.) filtered to WARNING+
-
-Log files are written to `~/.local/share/pc-switcher/logs/` in JSON lines format.
-
-### Common Configurations
-
-**Debug SSH connection issues:**
-```yaml
-logging:
-  file: DEBUG
-  tui: INFO
-  external: DEBUG  # Show asyncssh debug logs
-```
-
-**Quiet mode (errors only):**
-```yaml
-logging:
-  file: DEBUG     # Still log everything to file
-  tui: ERROR      # Only show errors in terminal
-  external: ERROR
-```
+See the **[Configuration Reference](docs/configuration.md)** for every option, defaults, and the folder-sync exclude pattern syntax.
 
 ## Available Commands
 
@@ -194,7 +151,7 @@ pc-switcher self update [VERSION] [--prerelease]
 
 When running `pc-switcher --version`, `self update`, or sync (which installs pc-switcher on target), you may see rate limit errors like:
 
-```
+```text
 RuntimeError: Failed to fetch GitHub releases: 403 {"message": "API rate limit exceeded..."}
 ```
 

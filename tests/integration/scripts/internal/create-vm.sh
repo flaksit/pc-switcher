@@ -169,10 +169,29 @@ run_installimage() {
     local vm_ip
     vm_ip=$(hcloud server ip "$vm_name")
 
+    # Discover the current Ubuntu 24.04 amd64 base image on the rescue system.
+    # Hetzner names these tarballs by release codename (24.04 LTS == "noble") and
+    # periodically changes the scheme, so resolve the name at runtime rather than
+    # hardcoding it (installimage fails early with "Loading image file variables
+    # ... failed" when the IMAGE path does not exist). Older versioned names
+    # (Ubuntu-2404-*/Ubuntu-24.04-*) are kept as fallbacks.
+    local image_dir="/root/.oldroot/nfs/install/../images"
+    local image_path
+    image_path=$(ssh_run "root@$vm_ip" "ls -1 ${image_dir}/Ubuntu-noble-*amd64-base.tar.gz ${image_dir}/Ubuntu-2404-*amd64-base.tar.gz ${image_dir}/Ubuntu-24.04-*amd64-base.tar.gz 2>/dev/null | sort -V | tail -1")
+    if [[ -z "$image_path" ]]; then
+        log_error_prefixed "No Ubuntu 24.04 amd64 base image found in ${image_dir}. Available images:"
+        ssh_run "root@$vm_ip" "ls -1 ${image_dir}/ 2>/dev/null || echo '(image dir not found: ${image_dir})'" | while IFS= read -r line; do
+            echo -e "   ${LOG_PREFIX} $line"
+        done
+        return 1
+    fi
+    log_info_prefixed "Using image: $image_path"
+
     # Create installimage config
     # NOTE: ESP partition requires minimum 256MB per installimage validation
+    # (unquoted heredoc so $image_path is interpolated; no other $ tokens here)
     local config
-    config=$(cat << 'CONFIGEOF'
+    config=$(cat << CONFIGEOF
 DRIVE1 /dev/sda
 USE_KERNEL_MODE_SETTING yes
 PART /boot/efi esp 256M
@@ -180,7 +199,7 @@ PART btrfs.1 btrfs all
 SUBVOL btrfs.1 @ /
 SUBVOL btrfs.1 @home /home
 SUBVOL btrfs.1 @snapshots /.snapshots
-IMAGE /root/.oldroot/nfs/install/../images/Ubuntu-2404-noble-amd64-base.tar.gz
+IMAGE $image_path
 CONFIGEOF
 )
     # Add hostname separately to avoid quoting issues

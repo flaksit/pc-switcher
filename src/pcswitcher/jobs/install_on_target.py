@@ -104,11 +104,16 @@ class InstallOnTargetJob(SystemJob):
             # Get the GitHub floor release for this version (the highest release <= this version).
             # For dev versions like 0.1.0a3.post23.dev0, this returns the base release (e.g., 0.1.0a3).
             source_release = self.source_version.get_release_floor()
+            # Expected path for a released source version: the exact-version attempt
+            # targets a PEP440 tag (e.g. 0.1.0a14) that never matches the semver release
+            # tag (v0.1.0-alpha.14), so it falls through to the release floor. This is
+            # normal, not an error — log at DEBUG (file only). A genuine failure surfaces
+            # via the RuntimeError below when the fallback itself fails.
             self._log(
                 Host.TARGET,
-                LogLevel.WARNING,
-                f"Installation with exact version v{self.source_version} failed, "
-                f"falling back to release floor {source_release.tag}",
+                LogLevel.DEBUG,
+                f"Exact-version install (v{self.source_version}) not available as a tag; "
+                f"installing via release {source_release.tag}",
             )
             result = await self._run_install(source_release)
             if not result.success:

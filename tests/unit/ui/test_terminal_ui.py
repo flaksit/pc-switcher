@@ -169,6 +169,149 @@ async def test_core_us_tui_as2_multi_job_progress() -> None:
         ui.stop()
 
 
+async def test_set_total_steps_updates_total() -> None:
+    """Test that set_total_steps updates _total_steps and refreshes the live render.
+
+    Mirrors set_current_step: assigns the value and calls self._live.update(self._render())
+    when a live display is active, so a mid-run total correction is reflected immediately.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=10)
+
+    # Without live display: only the stored value changes
+    ui.set_total_steps(15)
+    assert ui._total_steps == 15, "set_total_steps should update _total_steps without live"
+
+    # With live display active: stored value updates and render is refreshed immediately
+    ui.start()
+    try:
+        ui.set_current_step(5)
+        ui.set_total_steps(20)
+        assert ui._total_steps == 20, "set_total_steps should update _total_steps with live active"
+
+        # Allow the live display to flush the render to the output buffer
+        await asyncio.sleep(0.1)
+        rendered = output.getvalue()
+
+        # The step display shows "Step 5/20" — the updated total must appear
+        assert "20" in rendered, "Updated total from set_total_steps should appear in rendered output"
+    finally:
+        ui.stop()
+
+
+async def test_set_current_step_renders_name() -> None:
+    """set_current_step's optional name is shown next to the number, and clears when omitted."""
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=10)
+
+    ui.start()
+    try:
+        ui.set_current_step(7, "Install on target")
+        await asyncio.sleep(0.1)
+        assert "Step 7/10" in output.getvalue()
+        assert "Install on target" in output.getvalue(), "step name must render next to the number"
+
+        # A subsequent step with no name clears the previous label.
+        output.truncate(0)
+        output.seek(0)
+        ui.set_current_step(8)
+        await asyncio.sleep(0.1)
+        assert "Install on target" not in output.getvalue(), "omitting the name must clear the previous label"
+    finally:
+        ui.stop()
+
+
+async def test_pause_resume_rebuilds_fresh_live_instance() -> None:
+    """resume() must rebuild a fresh Live, not restart the pre-pause instance.
+
+    A reused Live retains the shape of its pre-pause frame, so its first
+    post-resume refresh moves the cursor up by that stale height and overwrites
+    the confirmation warning printed while paused. pause() therefore stops
+    transiently (erasing the region) and discards the instance; resume() builds
+    a new one that anchors at the current cursor, below the printed prompt.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=5)
+
+    ui.start()
+    try:
+        live_after_start = ui._live  # pyright: ignore[reportPrivateUsage]
+        assert live_after_start is not None
+
+        ui.pause()
+        # pause() stops the old instance and discards it.
+        assert live_after_start.is_started is False, "pause() must stop rendering"
+        assert ui._live is None, "pause() must discard the instance"  # pyright: ignore[reportPrivateUsage]
+
+        ui.resume()
+        assert ui._live is not None, "resume() must build a live instance"  # pyright: ignore[reportPrivateUsage]
+        assert ui._live is not live_after_start, "resume() must build a FRESH instance"  # pyright: ignore[reportPrivateUsage]
+        assert ui._live.is_started is True, "resume() must start the fresh instance"  # pyright: ignore[reportPrivateUsage]
+    finally:
+        ui.stop()
+
+    assert ui._live is None, "stop() remains the final teardown and nulls the instance"  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_resume_without_prior_pause_is_silent() -> None:
+    """resume() must stay a no-op when no pause() actually stopped a live region.
+
+    pause() discards the instance, so resume() can no longer key off _live to
+    tell "was live, rebuild" from "never started". The _paused flag guards it:
+    a resume() on a UI that never started (or was already resumed) must not
+    spring a Live into existence.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=5)
+
+    # Never started: pause() is a no-op, so resume() must not create a Live.
+    ui.pause()
+    ui.resume()
+    assert ui._live is None, "resume() must not build a Live when nothing was paused"  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_resume_forces_redraw_of_state_mutated_while_paused() -> None:
+    """resume() must redraw immediately, not wait for an unrelated future update.
+
+    Isolates resume()'s own redraw: mutate state while paused (stored via the
+    is_started guard but not rendered), call resume() with no further mutator
+    calls, and assert the rendered output already reflects the new state.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=5)
+
+    ui.start()
+    try:
+        ui.set_current_step(2)
+
+        ui.pause()
+        # Mutated while paused: stored, but the is_started guard prevents rendering.
+        ui.set_current_step(3)
+
+        # Capture only the output produced by resume() itself, with no
+        # auto-refresh tick (no sleep) in between, so the assertion proves the
+        # redraw is forced immediately by resume() rather than masked by the
+        # 10 Hz auto-refresh thread.
+        output.truncate(0)
+        output.seek(0)
+        ui.resume()
+
+        rendered = output.getvalue()
+        assert "Step 3/5" in rendered, "resume() must force an immediate redraw reflecting state mutated while paused"
+    finally:
+        ui.stop()
+
+
 async def test_core_us_tui_as3_progress_and_connection_events() -> None:
     """Test progress and connection event handling via EventBus.
 
@@ -247,3 +390,97 @@ async def test_core_us_tui_as3_progress_and_connection_events() -> None:
 
     finally:
         ui.stop()
+
+
+async def test_log_panel_renders_markup_like_content_literally() -> None:
+    """Log lines containing markup-like sequences must not crash the panel render.
+
+    Regression for the Recent Logs panel interpreting arbitrary log content as
+    Rich console markup: a real rsync deletion path such as `[/old]` raised
+    MarkupError when the joined log text was passed to Panel as a bare str,
+    killing the Live auto-refresh thread and the Live.stop() teardown frame.
+    Drives the real TerminalUI render (and stop) and asserts no exception plus
+    literal path/stderr text in the output.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=1)
+
+    ui.start()
+    try:
+        # Unbalanced closing tag: this is the sequence that raised MarkupError.
+        ui.add_log_message("12:00:00 [FULL] [folder_sync] *deleting home/user/[/old]/cache")
+        # rsync-stderr-style CRITICAL line with bracketed tokens.
+        ui.add_log_message("12:00:01 [CRITICAL] [folder_sync] rsync failed: rsync: [sender] link_stat failed")
+
+        # Force a full render + final teardown frame; neither may raise.
+        ui.stop()
+
+        rendered = output.getvalue()
+    finally:
+        # stop() already ran in the happy path; guard against a mid-test raise
+        # leaving the Live active without masking the original exception.
+        ui.stop()
+
+    assert "home/user/[/old]/cache" in rendered, "literal deletion path must render verbatim"
+    assert "[sender] link_stat failed" in rendered, "literal rsync stderr must render verbatim"
+
+
+def _render_to_str(ui: TerminalUI) -> str:
+    """Render the UI's current frame to a string, independent of Live mechanics.
+
+    Rich Live redraws its stored renderable on auto-refresh rather than calling
+    _render() afresh, so asserting on Live's own output would not reflect a
+    just-captured warning without an intervening update. Rendering _render()
+    directly tests the frame's content deterministically.
+    """
+    buf = StringIO()
+    Console(file=buf, force_terminal=True, width=120).print(ui._render())
+    return buf.getvalue()
+
+
+async def test_warning_counter_renders_in_status_bar() -> None:
+    """Captured warnings surface as a persistent ⚠ N cell in the status bar.
+
+    The counter lives in the render (status bar), not the rolling log panel, so
+    it survives every refresh and cannot be scrolled away — the live cue that
+    warnings occurred this run.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=3)
+    ui.add_warning("12:00:00 [WARNING] [folder_sync] partial transfer")
+    ui.add_warning("12:00:01 [ERROR] [disk] low space")
+
+    assert "⚠ 2" in _render_to_str(ui), "status bar must show the persistent warning count"
+
+
+async def test_no_warning_counter_when_none_captured() -> None:
+    """With no warnings captured, no ⚠ indicator is rendered."""
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=3)
+
+    assert "⚠" not in _render_to_str(ui)
+
+
+async def test_collected_warnings_returns_captured_lines_in_order() -> None:
+    """collected_warnings returns every captured line verbatim, in capture order.
+
+    This is what the orchestrator reads to print the end-of-run summary; the
+    lines (arbitrary log content) are reprinted wrapped in Text there, so the
+    buffer itself just preserves them literally.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=1)
+    first = "12:00:00 [WARNING] [folder_sync] deleting home/user/[/old]/cache"
+    second = "12:00:01 [ERROR] [folder_sync] rsync: [sender] link_stat failed"
+    ui.add_warning(first)
+    ui.add_warning(second)
+
+    assert ui.collected_warnings() == [first, second]

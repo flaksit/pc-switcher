@@ -1,0 +1,25 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/system/logging.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Logging System",
+  "summary": "Authoritative spec for the six-level logging hierarchy, level configuration, external library capture, stdlib migration, output formats, and aggregation.",
+  "scope": [
+    "Six-level log hierarchy",
+    "Log level configuration (file, tui, external)",
+    "External library logging",
+    "Stdlib logging migration",
+    "JSON Lines file format",
+    "TUI format",
+    "Log aggregation",
+    "LogConfig",
+    "LogHandler",
+    "LogRecord",
+    "LogEntry"
+  ],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": 2,
+  "notes": ""
+}

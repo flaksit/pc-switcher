@@ -11,7 +11,6 @@ from pcswitcher.models import (
     DiskSpaceCriticalError,
     Host,
     LogLevel,
-    ProgressUpdate,
 )
 
 from .base import BackgroundJob
@@ -154,10 +153,9 @@ class DiskSpaceMonitorJob(BackgroundJob):
                 # Check disk space
                 disk_space = await check_disk_space(executor, self.mount_point)
 
-                # Report heartbeat
-                self._report_progress(
-                    ProgressUpdate(heartbeat=True),
-                )
+                # A monitor has no meaningful "progress" — emitting a heartbeat here
+                # rendered a permanently-0% bar in the TUI (misleading). Stay silent
+                # and only surface output below when free space is actually low.
 
                 # Check against critical threshold
                 is_critical = False

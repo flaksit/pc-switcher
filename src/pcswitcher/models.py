@@ -12,6 +12,7 @@ __all__ = [
     "CommandResult",
     "ConfigError",
     "DiskSpaceCriticalError",
+    "FirstSyncScope",
     "Host",
     "JobResult",
     "JobStatus",
@@ -20,6 +21,7 @@ __all__ = [
     "SessionStatus",
     "Snapshot",
     "SnapshotPhase",
+    "SyncAbortedByUser",
     "SyncSession",
     "ValidationError",
 ]
@@ -120,6 +122,50 @@ class DiskSpaceCriticalError(Exception):
         super().__init__(f"{hostname}: Disk space {free_space} below threshold {threshold}")
 
 
+class SyncAbortedByUser(Exception):
+    """Raised when the user declines a confirmation prompt during sync.
+
+    Represents expected control flow, not an unrecoverable error: a user
+    answering "no" to a confirmation is not a failure of the tool. Callers
+    MUST NOT log this at CRITICAL (see LogLevel.CRITICAL docstring); it is
+    caught separately from the generic exception path in both
+    Orchestrator.run() and the CLI so it is reported once, at WARNING.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+class SyncLockedError(Exception):
+    """Raised when a lock is already held — this or the target machine is busy.
+
+    Represents an expected, retryable condition (another sync is in progress, or
+    an orphaned holder left a stuck lock), not an unrecoverable crash. Like
+    SyncAbortedByUser, callers MUST NOT log this at CRITICAL; it is caught
+    separately from the generic exception path in both Orchestrator.run() and the
+    CLI so it is reported once, at WARNING, with its how-to-unblock guidance.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class FirstSyncScope:
+    """A SyncJob's self-described first-sync overwrite scope (ADR-015).
+
+    Returned by SyncJob.describe_first_sync_scope() so the orchestrator can
+    compose the first-sync overwrite warning generically: each in-scope job
+    names what it will destructively replace on the target (scope_items) and
+    how (mechanism), instead of the orchestrator hardcoding one job's config
+    shape and transport wording.
+    """
+
+    job_name: str
+    scope_items: list[str]
+    mechanism: str
+
+
 class SnapshotPhase(StrEnum):
     """Phase in sync workflow when snapshot is created."""
 
@@ -199,6 +245,7 @@ class SessionStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
+    ABORTED = "aborted"
 
 
 class JobStatus(StrEnum):

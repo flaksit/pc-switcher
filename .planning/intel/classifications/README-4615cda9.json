@@ -1,0 +1,34 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/README.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "PC-switcher",
+  "summary": "User-facing readme covering what gets synced, installation, quick start, configuration, logging, available commands, requirements, and development workflow.",
+  "scope": [
+    "Project overview",
+    "What gets synced",
+    "Installation",
+    "Quick start",
+    "Configuration",
+    "Logging configuration",
+    "CLI commands",
+    "Requirements",
+    "Design principles",
+    "Troubleshooting",
+    "Development workflow",
+    "SpecKit commands"
+  ],
+  "cross_refs": [
+    "docs/README.md",
+    "docs/planning/High level requirements.md",
+    "docs/system/architecture.md",
+    "docs/adr/_index.md",
+    "docs/dev/development-guide.md",
+    "CLAUDE.md",
+    "src/pcswitcher/default-config.yaml"
+  ],
+  "locked": false,
+  "precedence": 5,
+  "notes": ""
+}

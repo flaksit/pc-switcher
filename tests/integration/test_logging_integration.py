@@ -120,9 +120,11 @@ async def test_log_fr_aggregate(
     pc1_executor = logging_test_source
     _ = pc2_executor  # Used implicitly as sync target
 
-    # Run pc-switcher sync from pc1 to pc2
+    # Run pc-switcher sync from pc1 to pc2.
+    # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
+    # (no TTY) to bypass the first-sync overwrite confirmation.
     sync_result = await pc1_executor.run_command(
-        "pc-switcher sync pc2 --yes",
+        "pc-switcher sync pc2 --yes --allow-first-sync",
         timeout=180.0,
         login_shell=True,
     )

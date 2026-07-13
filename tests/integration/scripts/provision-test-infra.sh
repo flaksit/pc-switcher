@@ -241,6 +241,16 @@ else
     log_info "pc2: $PC2_IP"
 fi
 
+# Re-affirm the lock now that the lock server exists. On a from-scratch provision
+# acquire_lock ran in bootstrap mode (no lock server, so the persistent label was
+# deferred); set it now so the configuration + test phase is protected by the
+# Hetzner label lock too. Idempotent: a no-op when we already hold it (VMs
+# pre-existed and the label was set at acquire time).
+if [[ -n "${PCSWITCHER_LOCK_HOLDER:-}" ]]; then
+    "$SCRIPT_DIR/internal/lock.sh" acquire "$PCSWITCHER_LOCK_HOLDER" \
+        || log_warn "Could not set persistent lock after VM creation (continuing)"
+fi
+
 # Configure VMs in parallel
 log_step "Configuring VMs in parallel..."
 log_info "Installing packages and setting up users on both VMs"

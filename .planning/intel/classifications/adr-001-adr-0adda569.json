@@ -1,0 +1,13 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/adr/adr-001-adr.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "ADR-001: Use Architecture Decision Records (ADR)",
+  "summary": "Adopt immutable Architecture Decision Records to document key architectural decisions following a defined folder and document structure.",
+  "scope": ["Architecture Decision Records", "documentation process", "docs/adr folder structure", "ADR immutability", "ADR granularity guidelines", "AI agent integration"],
+  "cross_refs": ["docs/adr/002-postgresql-timescaledb.md", "_index.md", "docs/adr/considerations/"],
+  "locked": true,
+  "precedence": 0,
+  "notes": ""
+}

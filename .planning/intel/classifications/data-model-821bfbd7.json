@@ -1,0 +1,28 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/system/data-model.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "System Data Model",
+  "summary": "Defines core entities, their relationships, and validation rules for pc-switcher, including enums, dataclasses, and context objects.",
+  "scope": [
+    "Host enum",
+    "LogLevel enum",
+    "LogConfig",
+    "LogContext",
+    "CommandResult",
+    "ProgressUpdate",
+    "JobContext",
+    "Snapshot",
+    "Entity relationships"
+  ],
+  "cross_refs": [
+    "_index.md",
+    "architecture.md",
+    "core.md",
+    "logging.md"
+  ],
+  "locked": false,
+  "precedence": 2,
+  "notes": ""
+}

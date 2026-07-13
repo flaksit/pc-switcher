@@ -16,7 +16,13 @@ if TYPE_CHECKING:
     from pcswitcher.executor import RemoteExecutor
     from pcswitcher.ui import TerminalUI
 
-__all__ = ["ConfigSyncAction", "sync_config_to_target"]
+# Single source of truth for the remote pc-switcher config directory and file path.
+# folder_sync derives its tool-state filter token from CONFIG_REMOTE_DIR rather than
+# hardcoding a second copy of the literal (CR-01 empty-prefix tool-state filter).
+CONFIG_REMOTE_DIR: str = "~/.config/pc-switcher"
+CONFIG_REMOTE_PATH: str = f"{CONFIG_REMOTE_DIR}/config.yaml"
+
+__all__ = ["CONFIG_REMOTE_DIR", "CONFIG_REMOTE_PATH", "ConfigSyncAction", "sync_config_to_target"]
 
 
 class ConfigSyncAction(Enum):
@@ -33,10 +39,7 @@ async def _get_target_config(target: RemoteExecutor) -> str | None:
     Returns:
         Config file content as string, or None if file doesn't exist.
     """
-    # Use ~ expansion on remote
-    remote_path = "~/.config/pc-switcher/config.yaml"
-
-    result = await target.run_command(f"cat {remote_path} 2>/dev/null")
+    result = await target.run_command(f"cat {CONFIG_REMOTE_PATH} 2>/dev/null")
     if result.success and result.stdout.strip():
         return result.stdout
     return None
@@ -91,26 +94,26 @@ def _prompt_new_config(console: Console, source_content: str) -> bool:
     console.print(Panel(syntax, title="Source Configuration", border_style="blue"))
     console.print()
 
-    # Prompt for confirmation
-    response = Prompt.ask(
-        "[bold]Apply this config to target?[/bold]",
-        choices=["y", "n"],
-        default="n",
-    )
+    # Prompt for confirmation. Spell out that declining aborts the whole sync —
+    # a first sync needs the config applied, so "n" is not "skip config and
+    # continue" but "abort". The bare y/n default hid this (a footgun).
+    console.print("[bold]Apply this config to the target?[/bold]")
+    console.print("  [cyan]y[/cyan] - Apply the config and continue the sync")
+    console.print("  [cyan]n[/cyan] - Abort the sync (nothing is transferred)")
+    console.print()
+    response = Prompt.ask("Choice", choices=["y", "n"], default="n")
     return response.lower() == "y"
 
 
-def _prompt_config_diff(console: Console, source_content: str, target_content: str, diff: str) -> ConfigSyncAction:
-    """Prompt user to choose action when configs differ.
+def _display_config_diff(console: Console, diff: str) -> None:
+    """Print the config-differs warning panel and the diff itself.
+
+    Shared by `_prompt_config_diff` (interactive) and the dry-run preview path
+    (read-only, no action prompt), so the diff rendering isn't duplicated.
 
     Args:
         console: Rich console for display
-        source_content: Source config content
-        target_content: Target config content
         diff: Unified diff between configs
-
-    Returns:
-        User's chosen action
     """
     console.print()
     console.print(
@@ -126,6 +129,19 @@ def _prompt_config_diff(console: Console, source_content: str, target_content: s
     syntax = Syntax(diff, "diff", theme="monokai", line_numbers=False)
     console.print(Panel(syntax, title="Configuration Diff", border_style="blue"))
     console.print()
+
+
+def _prompt_config_diff(console: Console, diff: str) -> ConfigSyncAction:
+    """Prompt user to choose action when configs differ.
+
+    Args:
+        console: Rich console for display
+        diff: Unified diff between configs
+
+    Returns:
+        User's chosen action
+    """
+    _display_config_diff(console, diff)
 
     # Display options
     console.print("[bold]Choose an action:[/bold]")
@@ -187,14 +203,18 @@ async def _handle_no_target_config(
     dry_run: bool,
 ) -> bool:
     """Handle case when target has no config."""
-    if auto_accept or _prompt_new_config(console, source_content):
-        if dry_run:
-            console.print("[dim]Configuration would be copied to target.[/dim]")
-        else:
-            await _copy_config_to_target(target, source_config_path)
-            console.print("[green]Configuration copied to target.[/green]")
+    if dry_run:
+        # ADR-014: a rehearsal never prompts; log the preview and proceed.
+        console.print("[dim][dry-run] Target has no config; source config would be applied (no changes made).[/dim]")
         return True
-    console.print("[red]Sync aborted: configuration required on target.[/red]")
+
+    if auto_accept or _prompt_new_config(console, source_content):
+        await _copy_config_to_target(target, source_config_path)
+        console.print("[green]Configuration copied to target.[/green]")
+        return True
+    # Decline silently: _sync_config_to_target raises SyncAbortedByUser and the
+    # single CLI `except SyncAbortedByUser` handler prints the one abort line
+    # (01-16 single-message decline contract). Printing here would duplicate it.
     return False
 
 
@@ -217,20 +237,25 @@ async def _handle_config_diff(
         return True
 
     diff = _generate_diff(source_content, target_content)
-    action = _prompt_config_diff(console, source_content, target_content, diff)
+
+    if dry_run:
+        # ADR-014: a rehearsal never prompts; show the diff as a read-only preview.
+        _display_config_diff(console, diff)
+        console.print("[dim][dry-run] Config differs; source config would be applied (no changes made).[/dim]")
+        return True
+
+    action = _prompt_config_diff(console, diff)
 
     if action == ConfigSyncAction.ACCEPT_SOURCE:
-        if dry_run:
-            console.print("[dim]Configuration would be copied to target.[/dim]")
-        else:
-            await _copy_config_to_target(target, source_config_path)
-            console.print("[green]Configuration copied to target.[/green]")
+        await _copy_config_to_target(target, source_config_path)
+        console.print("[green]Configuration copied to target.[/green]")
         return True
     if action == ConfigSyncAction.KEEP_TARGET:
         console.print("[yellow]Keeping existing target configuration.[/yellow]")
         return True
-    # ABORT
-    console.print("[red]Sync aborted by user.[/red]")
+    # ABORT: decline silently — the single CLI `except SyncAbortedByUser`
+    # handler owns the one user-facing abort line (01-16 single-message
+    # decline contract). Printing here would emit a second, conflicting line.
     return False
 
 
@@ -273,9 +298,16 @@ async def sync_config_to_target(
     # Fetch target config
     target_content = await _get_target_config(target)
 
-    # Pause UI for user interaction (only if we'll prompt)
-    if ui is not None and not auto_accept:
-        ui.stop()
+    # Pause the live display only when a prompt will actually be shown. Previously it
+    # paused for any interactive sync, so a config that matches (the common case) still
+    # stopped+restarted the single Live instance, leaving a stale "Recent Logs" panel on
+    # every sync. A prompt fires only when the target has no config or the configs differ
+    # (and we're interactive, non-dry-run) — mirror _handle_config_sync's decision here.
+    configs_match = target_content is not None and source_content.strip() == target_content.strip()
+    should_pause = ui is not None and not auto_accept and not dry_run and not configs_match
+    if should_pause:
+        assert ui is not None
+        ui.pause()
 
     try:
         should_continue = await _handle_config_sync(
@@ -283,9 +315,10 @@ async def sync_config_to_target(
         )
         return should_continue
     finally:
-        # Resume UI
-        if ui is not None:
-            ui.start()
+        # Resume UI (paired with whatever pause occurred above)
+        if should_pause:
+            assert ui is not None
+            ui.resume()
 
 
 async def _copy_config_to_target(target: RemoteExecutor, source_path: Path) -> None:
@@ -298,10 +331,8 @@ async def _copy_config_to_target(target: RemoteExecutor, source_path: Path) -> N
     Raises:
         RuntimeError: If copy fails
     """
-    remote_dir = "~/.config/pc-switcher"
-
     # Ensure directory exists on target
-    result = await target.run_command(f"mkdir -p {remote_dir}")
+    result = await target.run_command(f"mkdir -p {CONFIG_REMOTE_DIR}")
     if not result.success:
         raise RuntimeError(f"Failed to create config directory on target: {result.stderr}")
 
@@ -312,5 +343,7 @@ async def _copy_config_to_target(target: RemoteExecutor, source_path: Path) -> N
         raise RuntimeError("Failed to get home directory on target")
     home_dir = result.stdout.strip()
 
-    absolute_remote_path = f"{home_dir}/.config/pc-switcher/config.yaml"
+    # Derive the absolute path from CONFIG_REMOTE_PATH by expanding the ~ prefix
+    config_remote_relpath = CONFIG_REMOTE_PATH.removeprefix("~/")
+    absolute_remote_path = f"{home_dir}/{config_remote_relpath}"
     await target.send_file(source_path, absolute_remote_path)

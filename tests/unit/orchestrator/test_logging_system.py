@@ -18,9 +18,15 @@ References:
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from pcswitcher.config import Configuration
 from pcswitcher.logger import generate_log_filename
-from pcswitcher.models import LogLevel
+from pcswitcher.models import LogLevel, SyncAbortedByUser
+from pcswitcher.orchestrator import Orchestrator
 
 
 class TestLogLevelOrdering:
@@ -82,3 +88,80 @@ class TestFileLoggerTimestampedFile:
 
         # Verify it can be parsed as datetime
         datetime.strptime(timestamp_part, "%Y%m%dT%H%M%S")
+
+
+@pytest.fixture
+def mock_config() -> MagicMock:
+    """Create a mock Configuration for orchestrator initialization."""
+    config = MagicMock(spec=Configuration)
+    config.logging = MagicMock()
+    config.logging.file = 10  # DEBUG
+    config.logging.tui = 20  # INFO
+    config.logging.external = 30  # WARNING
+    config.sync_jobs = {}
+    config.job_configs = {}
+    config.btrfs_snapshots = MagicMock()
+    config.btrfs_snapshots.subvolumes = ["@", "@home"]
+    config.disk = MagicMock()
+    config.disk.preflight_minimum = "10%"
+    return config
+
+
+def _make_no_op_ui() -> MagicMock:
+    """A TerminalUI stand-in: sync methods no-op, consume_events is awaitable."""
+    ui = MagicMock()
+    ui.consume_events = AsyncMock()
+    return ui
+
+
+class TestOrchestratorCreatesUiBeforeLogging:
+    """run() creates console/UI/confirmer before calling setup_logging (gap closure 01-18).
+
+    Proves the fix for the live-progress flooding root cause: setup_logging
+    must receive the UI/console so it can route the TUI-floor handler through
+    the UI's Recent Logs panel instead of a raw stderr write that fights with
+    rich.live.Live for the same terminal region (see
+    .planning/debug/tui-live-progress-flooding.md).
+    """
+
+    @pytest.mark.asyncio
+    async def test_setup_logging_receives_ui_and_console(
+        self,
+        mock_config: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """setup_logging is called with the orchestrator's own ui/console, not None.
+
+        Drives the real run() with lock/connection phases stubbed and
+        _check_out_of_order patched to decline, so the fast SyncAbortedByUser
+        path is reached right after the UI-before-logging wiring runs,
+        without needing SSH, snapshots, or jobs.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = Orchestrator(target="target-host", config=mock_config)
+        orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
+        orchestrator._remote_executor = AsyncMock()  # pyright: ignore[reportPrivateUsage]
+        orchestrator._acquire_source_lock = AsyncMock()  # pyright: ignore[reportPrivateUsage]
+        orchestrator._establish_connection = AsyncMock()  # pyright: ignore[reportPrivateUsage]
+        orchestrator._acquire_target_lock = AsyncMock()  # pyright: ignore[reportPrivateUsage]
+        orchestrator._check_out_of_order = AsyncMock(return_value=False)  # pyright: ignore[reportPrivateUsage]
+
+        setup_logging_mock = MagicMock(return_value=(MagicMock(), MagicMock()))
+        no_op_ui = _make_no_op_ui()
+
+        with (
+            patch("pcswitcher.orchestrator.setup_logging", setup_logging_mock),
+            patch("pcswitcher.orchestrator.TerminalUI", return_value=no_op_ui),
+            pytest.raises(SyncAbortedByUser),
+        ):
+            await orchestrator.run()
+
+        # console/ui/confirmer must exist by the time setup_logging is called.
+        setup_logging_mock.assert_called_once()
+        _args, kwargs = setup_logging_mock.call_args
+        assert kwargs["ui"] is no_op_ui
+        assert kwargs["console"] is orchestrator._console  # pyright: ignore[reportPrivateUsage]
+        assert orchestrator._console is not None  # pyright: ignore[reportPrivateUsage]
+        assert orchestrator._confirmer is not None  # pyright: ignore[reportPrivateUsage]

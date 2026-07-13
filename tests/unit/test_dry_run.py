@@ -202,3 +202,9 @@ class TestOrchestratorDryRunPropagation:
         sig = inspect.signature(Orchestrator.__init__)
         param_names = list(sig.parameters.keys())
         assert "dry_run" in param_names, "Orchestrator.__init__ should accept dry_run parameter"
+
+    def test_orchestrator_accepts_allow_out_of_order_parameter(self) -> None:
+        """Verify Orchestrator.__init__ accepts allow_out_of_order (topology bypass)."""
+        sig = inspect.signature(Orchestrator.__init__)
+        param_names = list(sig.parameters.keys())
+        assert "allow_out_of_order" in param_names, "Orchestrator.__init__ should accept allow_out_of_order parameter"

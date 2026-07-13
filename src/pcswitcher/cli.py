@@ -19,14 +19,9 @@ from rich.text import Text
 from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
-from pcswitcher.models import SyncSession
+from pcswitcher.models import SyncAbortedByUser, SyncLockedError, SyncSession
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
-
-# Cleanup timeout for graceful shutdown after SIGINT.
-# After first SIGINT, cleanup has this many seconds to complete.
-# Second SIGINT or timeout expiry forces immediate termination.
-CLEANUP_TIMEOUT_SECONDS = 30
 
 # Create Typer app
 app = typer.Typer(
@@ -205,17 +200,35 @@ def sync(
             help="Auto-accept prompts (e.g., config sync confirmation)",
         ),
     ] = False,
-    allow_consecutive: Annotated[
+    allow_out_of_order: Annotated[
         bool,
         typer.Option(
-            "--allow-consecutive",
-            help="Skip warning about consecutive syncs without receiving a sync back first",
+            "--allow-out-of-order",
+            help=(
+                "Proceed even if this sync is out of the normal back-and-forth order. "
+                "Skips the target-state confirmation prompt. Use after manually reviewing "
+                "the target machine's current state."
+            ),
+        ),
+    ] = False,
+    allow_first_sync: Annotated[
+        bool,
+        typer.Option(
+            "--allow-first-sync",
+            help=(
+                "Proceed with a first-ever sync without interactive confirmation. "
+                "WARNING: everything on the target within the scope of the configured "
+                "sync jobs will be overwritten, except configured exclusions. "
+                "Run with --dry-run first to preview."
+            ),
         ),
     ] = False,
 ) -> None:
     """Sync to target machine.
 
     Loads configuration, creates orchestrator, and runs the complete sync workflow.
+    Use --allow-out-of-order to bypass the out-of-order topology check after manual review.
+    Use --allow-first-sync to auto-approve the first-sync overwrite of a target with no history.
     """
     # Determine config path
     config_path = config or Configuration.get_default_config_path()
@@ -224,7 +237,14 @@ def sync(
     cfg = _load_configuration(config_path)
 
     # Run the sync operation
-    exit_code = _run_sync(target, cfg, auto_accept=yes, allow_consecutive=allow_consecutive, dry_run=dry_run)
+    exit_code = _run_sync(
+        target,
+        cfg,
+        auto_accept=yes,
+        allow_out_of_order=allow_out_of_order,
+        allow_first_sync=allow_first_sync,
+        dry_run=dry_run,
+    )
     sys.exit(exit_code)
 
 
@@ -233,7 +253,8 @@ def _run_sync(
     cfg: Configuration,
     *,
     auto_accept: bool = False,
-    allow_consecutive: bool = False,
+    allow_out_of_order: bool = False,
+    allow_first_sync: bool = False,
     dry_run: bool = False,
 ) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
@@ -242,14 +263,22 @@ def _run_sync(
         target: Target hostname
         cfg: Loaded configuration
         auto_accept: If True, auto-accept prompts (e.g., config sync)
-        allow_consecutive: If True, skip warning about consecutive syncs
+        allow_out_of_order: If True, skip the out-of-order target-state confirmation
+        allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
         dry_run: If True, preview sync without making changes
 
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
     """
     return asyncio.run(
-        _async_run_sync(target, cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive, dry_run=dry_run)
+        _async_run_sync(
+            target,
+            cfg,
+            auto_accept=auto_accept,
+            allow_out_of_order=allow_out_of_order,
+            allow_first_sync=allow_first_sync,
+            dry_run=dry_run,
+        )
     )
 
 
@@ -258,7 +287,8 @@ async def _async_run_sync(
     cfg: Configuration,
     *,
     auto_accept: bool = False,
-    allow_consecutive: bool = False,
+    allow_out_of_order: bool = False,
+    allow_first_sync: bool = False,
     dry_run: bool = False,
 ) -> int:
     """Async implementation of sync with interrupt handling.
@@ -267,11 +297,13 @@ async def _async_run_sync(
         target: Target hostname
         cfg: Loaded configuration
         auto_accept: If True, auto-accept prompts (e.g., config sync)
+        allow_out_of_order: If True, skip the out-of-order target-state confirmation
+        allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
         dry_run: If True, preview sync without making changes
 
     Interrupt behavior:
-    - First SIGINT: Cancel sync task, allow CLEANUP_TIMEOUT_SECONDS for cleanup
-    - Second SIGINT or timeout: Force terminate immediately
+    - First SIGINT: Cancel sync task; cleanup runs in orchestrator's finally block
+    - Second SIGINT: Force terminate immediately
     """
     loop = asyncio.get_running_loop()
     main_task: asyncio.Task[SyncSession] | None = None
@@ -282,10 +314,7 @@ async def _async_run_sync(
 
         if sigint_count[0] == 1:
             console.print("\n[yellow]Interrupt received, cleaning up...[/yellow]")
-            console.print(
-                f"[dim](Press Ctrl+C again to force quit, "
-                f"or wait up to {CLEANUP_TIMEOUT_SECONDS}s for graceful cleanup)[/dim]"
-            )
+            console.print("[dim](Press Ctrl+C again to force quit immediately)[/dim]")
             if main_task is not None and not main_task.done():
                 main_task.cancel()
         else:
@@ -299,7 +328,12 @@ async def _async_run_sync(
 
     try:
         orchestrator = Orchestrator(
-            target=target, config=cfg, auto_accept=auto_accept, allow_consecutive=allow_consecutive, dry_run=dry_run
+            target=target,
+            config=cfg,
+            auto_accept=auto_accept,
+            allow_out_of_order=allow_out_of_order,
+            allow_first_sync=allow_first_sync,
+            dry_run=dry_run,
         )
         main_task = asyncio.create_task(orchestrator.run())
 
@@ -308,21 +342,24 @@ async def _async_run_sync(
             return 0
 
         except asyncio.CancelledError:
-            # First cancellation - wait for cleanup with timeout
-            if sigint_count[0] == 1:
-                try:
-                    # Give orchestrator time to clean up (it has a finally block)
-                    await asyncio.wait_for(
-                        asyncio.shield(asyncio.sleep(0)),  # Allow pending cleanup
-                        timeout=CLEANUP_TIMEOUT_SECONDS,
-                    )
-                except TimeoutError:
-                    console.print(
-                        f"[red]Cleanup timeout ({CLEANUP_TIMEOUT_SECONDS}s) exceeded, forcing termination[/red]"
-                    )
-
+            # Cleanup runs in the orchestrator's finally block before CancelledError
+            # propagates here, so there is nothing further to wait on.
             console.print("[yellow]Sync interrupted by user[/yellow]")
             return 130
+
+    except SyncAbortedByUser as e:
+        # The orchestrator already logged this once at WARNING; print a single
+        # calm summary here instead of falling through to the red "Sync failed"
+        # message, which would duplicate what the user just declined.
+        console.print(f"[yellow]Sync aborted:[/yellow] {e}")
+        return 1
+
+    except SyncLockedError as e:
+        # The orchestrator already logged this once at WARNING; print a single
+        # calm summary (with the how-to-unblock guidance carried in the message)
+        # instead of the red "Sync failed" path — a lock conflict is retryable.
+        console.print(f"[yellow]Sync blocked:[/yellow] {e}")
+        return 1
 
     except Exception as e:
         console.print(f"\n[bold red]Sync failed:[/bold red] {e}")

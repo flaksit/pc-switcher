@@ -8,6 +8,7 @@ from .context import JobContext
 from .disk_space_monitor import DiskSpaceMonitorJob
 from .dummy_fail import DummyFailJob
 from .dummy_success import DummySuccessJob
+from .folder_sync import FolderEntry, FolderSyncJob
 from .install_on_target import InstallOnTargetJob
 
 __all__ = [
@@ -16,6 +17,8 @@ __all__ = [
     "DiskSpaceMonitorJob",
     "DummyFailJob",
     "DummySuccessJob",
+    "FolderEntry",
+    "FolderSyncJob",
     "InstallOnTargetJob",
     "Job",
     "JobContext",

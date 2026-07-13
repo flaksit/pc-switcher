@@ -90,6 +90,13 @@ get_lock_holder() {
         return 1
     fi
 
+    # The lock lives as a label on $LOCK_SERVER. On a from-scratch provision the
+    # server does not exist yet, so treat that as "no holder" instead of failing
+    # the pipeline under `set -euo pipefail`.
+    if ! hcloud server describe "$LOCK_SERVER" -o json >/dev/null 2>&1; then
+        return 0
+    fi
+
     hcloud server describe "$LOCK_SERVER" -o json | jq -r '.labels.lock_holder // empty'
 }
 
@@ -132,6 +139,18 @@ acquire() {
     if [[ -z "$HOLDER" ]]; then
         log_error "HOLDER must not be empty for acquire operation"
         exit 1
+    fi
+
+    # Bootstrap: the lock label lives on $LOCK_SERVER, which does not exist on a
+    # from-scratch provision (the persistent VMs were torn down). There is nothing
+    # to lock against yet — local runs are blocked while the VMs are absent, and CI
+    # integration runs are already serialized by the GitHub Actions concurrency
+    # group (pc-switcher-integration). Defer the persistent label: the provisioning
+    # script re-acquires once the VMs exist so the configuration + test phase is
+    # still protected.
+    if ! hcloud server describe "$LOCK_SERVER" -o json >/dev/null 2>&1; then
+        log_warn "Lock server '$LOCK_SERVER' does not exist yet — bootstrap mode; deferring persistent lock until VMs are created"
+        return 0
     fi
 
     local holder=$(get_lock_holder)

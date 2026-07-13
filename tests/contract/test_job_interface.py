@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import logging
 from typing import Any, ClassVar
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from pcswitcher.jobs import BackgroundJob, JobContext, SyncJob, SystemJob
-from pcswitcher.models import ConfigError, Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.jobs.folder_sync import FolderSyncJob
+from pcswitcher.models import CommandResult, ConfigError, Host, LogLevel, ProgressUpdate, ValidationError
 
 
 class ExampleTestJob(SyncJob):
@@ -252,6 +253,49 @@ class TestJobContract:
         assert event.job == "example_test"
         assert event.update.current == 5
         assert event.update.total == 10
+
+
+class TestFolderSyncJobContract:
+    """Verify FolderSyncJob satisfies the standard job interface contract.
+
+    Checks that FolderSyncJob: has a `name` ClassVar, has a `CONFIG_SCHEMA`
+    dict, and that `validate()` returns a list.  The full execute() unit tests
+    live in tests/unit/jobs/test_folder_sync.py.
+    """
+
+    @pytest.fixture
+    def folder_sync_context(self) -> JobContext:
+        """Minimal JobContext for FolderSyncJob contract tests."""
+        source = MagicMock()
+        source.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        target = MagicMock()
+        target.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        return JobContext(
+            config={"folders": [{"path": "/home"}]},
+            source=source,
+            target=target,
+            event_bus=MagicMock(),
+            session_id="test1234",
+            source_hostname="source-host",
+            target_hostname="target-host",
+        )
+
+    def test_folder_sync_has_name(self) -> None:
+        """FolderSyncJob.name must be the string 'folder_sync'."""
+        assert hasattr(FolderSyncJob, "name")
+        assert FolderSyncJob.name == "folder_sync"
+
+    def test_folder_sync_has_config_schema(self) -> None:
+        """FolderSyncJob.CONFIG_SCHEMA must be a dict."""
+        assert hasattr(FolderSyncJob, "CONFIG_SCHEMA")
+        assert isinstance(FolderSyncJob.CONFIG_SCHEMA, dict)
+
+    @pytest.mark.asyncio
+    async def test_folder_sync_validate_returns_list(self, folder_sync_context: JobContext) -> None:
+        """FolderSyncJob.validate() must return a list (of ValidationError)."""
+        job = FolderSyncJob(folder_sync_context)
+        errors = await job.validate()
+        assert isinstance(errors, list)
 
 
 class TestJobHierarchy:

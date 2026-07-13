@@ -1,0 +1,13 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/adr/adr-005-asyncio-concurrency.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "ADR-005: Use Asyncio for Concurrency",
+  "summary": "Adopt Python asyncio as the core concurrency model for all I/O and job execution to enable immediate cancellation and proper resource cleanup.",
+  "scope": ["asyncio concurrency model", "async Job interface", "asyncssh", "asyncio.TaskGroup structured concurrency", "signal handling cancellation", "subprocess execution"],
+  "cross_refs": ["docs/adr/considerations/async-vs-sync-concurrency-analysis.md"],
+  "locked": true,
+  "precedence": 0,
+  "notes": ""
+}

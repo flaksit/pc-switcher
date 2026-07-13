@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import io
 import json
@@ -11,7 +12,7 @@ from datetime import datetime
 from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from queue import Queue
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol
 
 from rich.console import Console
 from rich.text import Text
@@ -35,11 +36,56 @@ __all__ = [
     "FULL",
     "JsonFormatter",
     "RichFormatter",
+    "UILogHandler",
+    "UISink",
+    "WarningCaptureHandler",
+    "format_log_line",
     "generate_log_filename",
     "get_latest_log_file",
     "get_logs_directory",
     "setup_logging",
 ]
+
+
+class UISink(Protocol):
+    """Structural type for the UI component the logging handlers feed.
+
+    Matches `TerminalUI` (src/pcswitcher/ui.py) without importing it into
+    logger.py, keeping the logging module free of a UI dependency. Groups the
+    two log-facing entry points the UI exposes: `add_log_message` (rolling
+    Recent Logs panel) and `add_warning` (the resurfaced warning buffer that
+    backs the live counter and the end-of-run summary).
+    """
+
+    def add_log_message(self, message: str) -> None:
+        """Append a formatted line to the UI's rolling log panel."""
+        ...
+
+    def add_warning(self, line: str) -> None:
+        """Append a formatted `>=WARNING` line to the UI's persistent warning buffer."""
+        ...
+
+
+def format_log_line(record: logging.LogRecord) -> str:
+    """Build a compact plain-text line: HH:MM:SS [LEVEL] [job] (host) message.
+
+    No ANSI escape codes or Rich markup: the destinations (Recent Logs panel,
+    warning summary) render strings as-is, so raw ANSI would show literally and
+    Rich markup would risk markup-injection from arbitrary message content.
+    """
+    timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+    parts = [timestamp, f"[{record.levelname}]"]
+
+    job = getattr(record, "job", None)
+    if job is not None:
+        parts.append(f"[{job}]")
+
+    host = getattr(record, "host", None)
+    if host is not None:
+        parts.append(f"({host})")
+
+    parts.append(record.getMessage())
+    return " ".join(parts)
 
 
 class JsonFormatter(logging.Formatter):
@@ -207,6 +253,88 @@ class RichFormatter(logging.Formatter):
         return capture.get()
 
 
+class UILogHandler(logging.Handler):
+    """Route log records into a UI's Recent Logs panel via the event loop.
+
+    emit() runs on the QueueListener's background thread. Handing the
+    formatted line to `sink.add_log_message` through
+    `loop.call_soon_threadsafe` — rather than calling it directly — keeps
+    every Live.update call on the single event-loop thread (the same thread
+    that drives progress updates), so there is exactly one Live-render path
+    and no cursor desync between an uncoordinated stderr write and Live's own
+    redraw bookkeeping (see .planning/debug/tui-live-progress-flooding.md).
+    """
+
+    def __init__(self, sink: UISink) -> None:
+        """Initialize the handler, capturing the currently-running event loop.
+
+        Must be constructed from within the running orchestrator loop —
+        the loop is captured once here, not re-resolved per emit().
+        """
+        super().__init__()
+        self._sink = sink
+        self._loop = asyncio.get_running_loop()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Format the record as plain text and hand it to the event loop."""
+        try:
+            line = format_log_line(record)
+            self._loop.call_soon_threadsafe(self._sink.add_log_message, line)
+        except RuntimeError:
+            # Loop closed (late record during shutdown) -- swallow via the
+            # standard handler error path instead of raising from the
+            # QueueListener's background thread.
+            self.handleError(record)
+
+
+class WarningCaptureHandler(logging.Handler):
+    """Tee every `>=WARNING` record into the UI's persistent warning buffer.
+
+    Solves the "warnings scroll past unread" problem: the rolling Recent Logs
+    panel overwrites a warning within a few frames, so a distracted user never
+    sees it. This handler captures each `>=WARNING` line so the UI can (a) show
+    a persistent `⚠ N` counter in the status bar and (b) reprint the full list
+    into scrollback after the Live display stops (orchestrator `_cleanup`).
+
+    Its level is fixed to WARNING independently of the display handler's level,
+    so warnings are captured even when the TUI is configured to show only a
+    higher floor. emit() runs on the QueueListener's background thread and
+    appends synchronously — `list.append` is atomic under the GIL, and the
+    status-bar counter surfaces via Live's own 10 Hz auto-refresh, so no
+    cross-thread `Live.update` (and thus no cursor desync) is needed. By the
+    time `QueueListener.stop()` returns, every record has been emitted, so the
+    buffer is complete and safe to read for the end-of-run summary.
+    """
+
+    def __init__(self, sink: UISink) -> None:
+        """Initialize the handler and pin its level to WARNING."""
+        super().__init__(level=logging.WARNING)
+        self._sink = sink
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Append the formatted record to the UI's warning buffer."""
+        # Never let a capture failure escape the listener thread; route it
+        # through the standard handler-error path instead.
+        try:
+            self._sink.add_warning(format_log_line(record))
+        except Exception:
+            self.handleError(record)
+
+
+def is_interactive(console: Console) -> bool:
+    """Return True only when the run is fully interactive on both stdin and stdout.
+
+    A run is interactive only if BOTH ends are a terminal: a real terminal on
+    stdout (``console.is_terminal``) so a live UI / prompt is actually visible,
+    AND a TTY on stdin (``sys.stdin.isatty()``) so the user can actually answer
+    a prompt. Requiring both keeps logging setup and the confirmer in agreement
+    under mixed redirection (e.g. stdout is a TTY but stdin is ``/dev/null``):
+    a single split signal previously let the live UI + UILogHandler activate
+    while confirmations silently fell back to ``--allow-*`` flags.
+    """
+    return console.is_terminal and sys.stdin.isatty()
+
+
 def generate_log_filename(session_id: str) -> str:
     """Generate log filename for a sync session.
 
@@ -234,6 +362,9 @@ def get_latest_log_file() -> Path | None:
 def setup_logging(
     log_file_path: Path,
     log_config: LogConfig,
+    *,
+    ui: UISink | None = None,
+    console: Console | None = None,
 ) -> tuple[QueueListener, Queue[logging.LogRecord]]:
     """Set up stdlib logging infrastructure with QueueHandler/QueueListener.
 
@@ -242,12 +373,37 @@ def setup_logging(
 
     The logger hierarchy implements a 3-setting model:
     - Root logger level = external (filters external libs at this level)
-    - pcswitcher logger level = min(file, tui) (allows pcswitcher logs to handlers)
-    - Each handler applies its own level filter (file vs tui)
+    - pcswitcher logger level = min(file, tui[, WARNING when capturing]) (allows
+      pcswitcher logs, and always warnings, to reach the handlers)
+    - Each handler applies its own level filter (file vs tui vs the WARNING capture)
+
+    In the interactive UI path a WarningCaptureHandler (level WARNING) is added
+    so every `>=WARNING` record is teed into the UI's persistent warning buffer,
+    which backs the status-bar `⚠ N` counter and the end-of-run summary. Its
+    fixed WARNING level is independent of `log_config.tui`; the pcswitcher logger
+    floor is lowered to include WARNING so records still reach the queue even
+    when the TUI display floor is set higher. `respect_handler_level` keeps the
+    file/TUI display handlers filtering at their own levels regardless.
+
+    The TUI-floor handler is chosen by interactivity (`is_interactive`): when
+    `ui` is given and both stdout and stdin are terminals, log records are
+    routed into the UI's Recent Logs panel (UILogHandler) so they render
+    through the same single Live.update path as progress updates, instead of
+    writing independently to stderr and desyncing Live's cursor bookkeeping.
+    Otherwise (ui/console omitted, or either end is not a terminal) the plain
+    stderr StreamHandler is used, unchanged — this is the fallback for CI and
+    piped/non-TTY output. Sharing `is_interactive` with the confirmer keeps
+    UI routing and prompt interactivity from disagreeing under mixed
+    redirection.
 
     Args:
         log_file_path: Path to the JSON log file
         log_config: Logging level configuration with file, tui, and external settings
+        ui: Sink for the UI's Recent Logs panel and warning buffer. None disables
+            UI routing (stderr fallback), which also keeps existing callers unaffected.
+        console: Console whose terminal status (with stdin's, via
+            `is_interactive`) decides UI vs stderr routing. Required (together
+            with `ui`) to select the UI sink.
 
     Returns:
         Tuple of (QueueListener, queue) for lifecycle management.
@@ -265,17 +421,32 @@ def setup_logging(
     file_handler.setLevel(log_config.file)
     file_handler.setFormatter(JsonFormatter())
 
-    # Create stream handler with Rich formatter for TUI output
-    stream_handler = logging.StreamHandler(sys.stderr)
-    stream_handler.setLevel(log_config.tui)
-    stream_handler.setFormatter(RichFormatter())
+    # Create the TUI-floor handler: UI-routed when an interactive Live display
+    # owns the terminal, otherwise the plain stderr StreamHandler (unchanged
+    # behavior for CI / piped output).
+    use_ui = ui is not None and console is not None and is_interactive(console)
+    tui_handler: logging.Handler
+    if use_ui:
+        assert ui is not None  # narrowed by use_ui
+        tui_handler = UILogHandler(ui)
+    else:
+        tui_handler = logging.StreamHandler(sys.stderr)
+        tui_handler.setFormatter(RichFormatter())
+    tui_handler.setLevel(log_config.tui)
+
+    # In the interactive path also capture every >=WARNING record so the UI can
+    # resurface it (persistent counter + end-of-run summary). Not installed in
+    # the stderr fallback: there warnings already land in scrollback unerased.
+    handlers: list[logging.Handler] = [file_handler, tui_handler]
+    if use_ui:
+        assert ui is not None  # narrowed by use_ui
+        handlers.append(WarningCaptureHandler(ui))
 
     # Create and start listener with respect_handler_level=True
     # This ensures each handler's level is used as an additional filter
     listener = QueueListener(
         queue,
-        file_handler,
-        stream_handler,
+        *handlers,
         respect_handler_level=True,
     )
     listener.start()
@@ -292,9 +463,15 @@ def setup_logging(
     # Root logger handles external library logs (asyncssh, etc.) and filters
     # them at the external level.
 
-    # pcswitcher logger - direct handler, no propagation to root
+    # pcswitcher logger - direct handler, no propagation to root.
+    # When capturing warnings, floor at WARNING too so they reach the queue even
+    # if both display levels are set above WARNING (the display handlers still
+    # filter at their own levels via respect_handler_level).
     pcswitcher_logger = logging.getLogger("pcswitcher")
-    pcswitcher_logger.setLevel(min(log_config.file, log_config.tui))
+    logger_level = min(log_config.file, log_config.tui)
+    if use_ui:
+        logger_level = min(logger_level, logging.WARNING)
+    pcswitcher_logger.setLevel(logger_level)
     pcswitcher_logger.addHandler(QueueHandler(queue))
     pcswitcher_logger.propagate = False  # Don't propagate to root (avoids external filter)
 

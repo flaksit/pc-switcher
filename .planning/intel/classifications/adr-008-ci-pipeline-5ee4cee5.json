@@ -1,0 +1,23 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/adr/adr-008-ci-pipeline.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "ADR-008: CI Pipeline with Draft-Aware Integration Tests",
+  "summary": "Run lint and unit tests on all branches while PR-triggered integration tests skip draft PRs before merge.",
+  "scope": [
+    "CI pipeline",
+    "integration tests",
+    "draft PR handling",
+    "branch protection",
+    "merge queue removal"
+  ],
+  "cross_refs": [
+    "../ops/ci-setup.md",
+    "../dev/testing-guide.md",
+    "adr-006-testing-framework.md"
+  ],
+  "locked": true,
+  "precedence": 0,
+  "notes": ""
+}

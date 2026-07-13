@@ -1,0 +1,21 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/adr/adr-007-tdd-implementation.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "ADR-007: Test-Driven Development for Implementation",
+  "summary": "Adopt Test-Driven Development with the red-green-refactor cycle for all SpecKit implementation phases.",
+  "scope": [
+    "test-driven development",
+    "red-green-refactor cycle",
+    "SpecKit implementation phase",
+    "tasks.md derivation",
+    "verification evidence"
+  ],
+  "cross_refs": [
+    "ADR-006: VM-Based Testing Framework"
+  ],
+  "locked": true,
+  "precedence": 0,
+  "notes": ""
+}

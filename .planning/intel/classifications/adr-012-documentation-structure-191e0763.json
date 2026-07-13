@@ -1,0 +1,22 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/docs/adr/adr-012-documentation-structure.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "ADR-012: Documentation Structure and Strategy",
+  "summary": "Organize docs by audience in subfolders and keep CLAUDE.md and AGENTS.md as lean AI context with pointers.",
+  "scope": [
+    "documentation structure",
+    "audience-based folders",
+    "dev ops planning system folders",
+    "CLAUDE.md and AGENTS.md",
+    "no-duplication principle",
+    "manual playbooks in tests"
+  ],
+  "cross_refs": [
+    "ADR-011"
+  ],
+  "locked": true,
+  "precedence": 0,
+  "notes": ""
+}

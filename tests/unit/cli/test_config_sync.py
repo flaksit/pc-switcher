@@ -12,6 +12,8 @@ from pcswitcher.config_sync import (
     _copy_config_to_target,
     _generate_diff,
     _get_target_config,
+    _handle_config_diff,
+    _handle_no_target_config,
     _prompt_config_diff,
     _prompt_new_config,
     sync_config_to_target,
@@ -140,7 +142,7 @@ class TestPromptConfigDiff:
         """Should return ACCEPT_SOURCE when user enters 'a'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="a"):
-            result = _prompt_config_diff(console, "source", "target", "diff")
+            result = _prompt_config_diff(console, "diff")
 
         assert result == ConfigSyncAction.ACCEPT_SOURCE
 
@@ -148,7 +150,7 @@ class TestPromptConfigDiff:
         """Should return KEEP_TARGET when user enters 'k'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="k"):
-            result = _prompt_config_diff(console, "source", "target", "diff")
+            result = _prompt_config_diff(console, "diff")
 
         assert result == ConfigSyncAction.KEEP_TARGET
 
@@ -156,7 +158,7 @@ class TestPromptConfigDiff:
         """Should return ABORT when user enters 'x'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="x"):
-            result = _prompt_config_diff(console, "source", "target", "diff")
+            result = _prompt_config_diff(console, "diff")
 
         assert result == ConfigSyncAction.ABORT
 
@@ -165,7 +167,7 @@ class TestPromptConfigDiff:
         console = MagicMock()
 
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="x"):
-            _prompt_config_diff(console, "source", "target", "--- diff ---")
+            _prompt_config_diff(console, "--- diff ---")
 
         # Verify console.print was called with options
         assert console.print.call_count >= 5  # Panel, diff, options
@@ -368,8 +370,12 @@ class TestSyncConfigToTarget:
 
         assert result is False
 
-    async def test_ui_paused_and_resumed(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
-        """Should pause UI during prompts and resume after."""
+    async def test_ui_not_paused_when_config_matches(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+        """Matching configs need no prompt, so the live display must NOT be paused.
+
+        Pausing unconditionally left a stale 'Recent Logs' panel on every interactive
+        sync; the pause is now gated on a prompt actually being shown.
+        """
         config_file = tmp_path / "config.yaml"
         config_file.write_text("log_level: INFO\n")
 
@@ -382,8 +388,26 @@ class TestSyncConfigToTarget:
 
         await sync_config_to_target(mock_remote_executor, config_file, ui, console)
 
-        ui.stop.assert_called_once()
-        ui.start.assert_called_once()
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+
+    async def test_ui_paused_and_resumed_when_prompting(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+        """When a prompt is needed (target has no config), the display pauses then resumes."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("log_level: INFO\n")
+
+        mock_remote_executor.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=1, stdout="", stderr="")  # no target config
+        )
+
+        console = MagicMock()
+        ui = MagicMock()
+
+        with patch("pcswitcher.config_sync._prompt_new_config", return_value=False):
+            await sync_config_to_target(mock_remote_executor, config_file, ui, console)
+
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()
 
     async def test_ui_resumed_even_on_exception(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
         """Should resume UI even if an exception occurs."""
@@ -407,8 +431,8 @@ class TestSyncConfigToTarget:
             await sync_config_to_target(mock_remote_executor, config_file, ui, console)
 
         # UI should still be resumed in finally block
-        ui.stop.assert_called_once()
-        ui.start.assert_called_once()
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()
 
     async def test_whitespace_differences_ignored(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
         """Should treat configs as equal if only whitespace differs."""
@@ -538,4 +562,69 @@ class TestSyncConfigToTarget:
 
         assert result is True
         # Should not copy config when it matches
+        mock_remote_executor.send_file.assert_not_called()
+
+
+class TestDryRunSkipsPrompting:
+    """ADR-014: a --dry-run rehearsal never prompts, matching _confirm_first_sync."""
+
+    async def test_handle_no_target_config_dry_run_skips_prompt_and_write(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """Under dry_run, _handle_no_target_config must not prompt or copy, and returns True."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("log_level: INFO")
+        console = MagicMock()
+
+        with patch("pcswitcher.config_sync._prompt_new_config") as mock_prompt:
+            result = await _handle_no_target_config(
+                mock_remote_executor, config_file, "log_level: INFO", console, False, True
+            )
+
+        assert result is True
+        mock_prompt.assert_not_called()
+        mock_remote_executor.send_file.assert_not_called()
+
+    async def test_handle_config_diff_dry_run_skips_prompt(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """Under dry_run (and not auto-accepted), _handle_config_diff must not prompt, returns True."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("log_level: DEBUG\n")
+        console = MagicMock()
+
+        with patch("pcswitcher.config_sync._prompt_config_diff") as mock_prompt:
+            result = await _handle_config_diff(
+                mock_remote_executor,
+                config_file,
+                "log_level: DEBUG\n",
+                "log_level: INFO\n",
+                console,
+                False,
+                True,
+            )
+
+        assert result is True
+        mock_prompt.assert_not_called()
+        mock_remote_executor.send_file.assert_not_called()
+
+    async def test_sync_config_to_target_dry_run_does_not_pause_ui(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """sync_config_to_target(dry_run=True) must not pause the single Live instance."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("log_level: DEBUG\n")
+
+        mock_remote_executor.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=0, stdout="log_level: INFO\n", stderr="")
+        )
+
+        console = MagicMock()
+        ui = MagicMock()
+
+        result = await sync_config_to_target(mock_remote_executor, config_file, ui, console, dry_run=True)
+
+        assert result is True
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
         mock_remote_executor.send_file.assert_not_called()

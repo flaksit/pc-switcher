@@ -1,0 +1,37 @@
+{
+  "source_path": "/home/janfr/dev/pc-switcher/specs/001-core/spec.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Feature Specification: Core Infrastructure Complete",
+  "summary": "Detailed requirements for the core sync orchestration infrastructure: job contract, self-installation, btrfs snapshot safety, logging, interrupt handling, configuration, and terminal UI.",
+  "scope": [
+    "Job interface contract and lifecycle (validate/execute)",
+    "SystemJob/SyncJob/BackgroundJob types",
+    "self-installing orchestrator and version matching",
+    "config sync to target",
+    "btrfs pre/post-sync snapshots safety infrastructure",
+    "snapshot cleanup command and retention",
+    "disk space monitoring (preflight/runtime)",
+    "six-level logging hierarchy (DEBUG/FULL/INFO/WARNING/ERROR/CRITICAL)",
+    "JSON Lines log files",
+    "graceful SIGINT interrupt handling",
+    "YAML configuration system and schema validation",
+    "dummy_success and dummy_fail test jobs",
+    "terminal UI progress reporting",
+    "pc-switcher sync CLI and locking",
+    "install.sh installation script"
+  ],
+  "cross_refs": [
+    "../../docs/High%20level%20requirements.md",
+    "../../docs/adr/_index.md",
+    "architecture.md",
+    "data-model.md",
+    "plan.md",
+    "tasks.md",
+    "specs/001-core/contracts/config-schema.yaml"
+  ],
+  "locked": false,
+  "precedence": 3,
+  "notes": ""
+}

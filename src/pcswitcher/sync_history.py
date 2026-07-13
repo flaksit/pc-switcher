@@ -1,11 +1,19 @@
-"""Sync history tracking to detect consecutive syncs from the same source.
+"""Sync history tracking for the topology-based sync-safety model (ADR-015).
 
-Tracks whether this machine's last role in a sync was SOURCE or TARGET.
-Used to warn users when they try to sync from the same machine twice
-without receiving a sync back first.
+Tracks this machine's last sync role (SOURCE or TARGET) and the peer hostname
+(the other machine involved in that sync).
 
 State file: ~/.local/share/pc-switcher/sync-history.json
-Format: {"last_role": "source" | "target"}
+Format (backward-compatible; old files with only `last_role` still work):
+    {
+        "last_role": "source" | "target",
+        "last_peer": "<hostname>",
+        "timestamp": "<ISO-8601>"    # optional; not written by this module
+    }
+
+Every write to this file is merge-preserving — record_role reads existing
+keys, updates only `last_role` and `last_peer`, and leaves any unrecognised
+keys intact. Writes are atomic (temp file + rename) to prevent corruption.
 """
 
 from __future__ import annotations
@@ -23,7 +31,10 @@ __all__ = [
     "SyncRole",
     "get_history_path",
     "get_last_role",
+    "get_last_role_with_error",
+    "get_last_sync_state",
     "get_record_role_command",
+    "parse_sync_state",
     "record_role",
 ]
 
@@ -99,18 +110,32 @@ def get_last_role_with_error() -> tuple[SyncRole | None, bool]:
         return None, True
 
 
-def record_role(role: SyncRole) -> None:
+def record_role(role: SyncRole, peer: str | None = None) -> None:
     """Record this machine's role in the most recent sync.
+
+    Merge-preserving: reads any existing data and keeps it intact, updating
+    only `last_role` and (when provided) `last_peer`.
 
     Uses atomic write (temp file + rename) to prevent corruption.
 
     Args:
-        role: The role this machine played (SOURCE or TARGET)
+        role: The role this machine played (SOURCE or TARGET).
+        peer: Hostname of the other machine in the sync, if known.
     """
     history_path = get_history_path()
     history_path.parent.mkdir(parents=True, exist_ok=True)
 
-    data = {"last_role": role.value}
+    # Read existing data to preserve any other keys.
+    # json.loads returns Any, so isinstance is needed to narrow the type.
+    try:
+        raw = json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else {}
+        existing: dict[str, object] = raw if isinstance(raw, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        existing = {}
+
+    data = {**existing, "last_role": role.value}
+    if peer is not None:
+        data["last_peer"] = peer
     content = json.dumps(data)
 
     # Atomic write: write to temp file in same directory, then rename
@@ -133,17 +158,103 @@ def record_role(role: SyncRole) -> None:
         raise
 
 
-def get_record_role_command(role: SyncRole) -> str:
+def get_record_role_command(role: SyncRole, peer: str | None = None) -> str:
     """Get the shell command to record a role on a remote machine.
 
-    This returns a shell command that can be executed via SSH to update
-    the sync history on a remote machine.
+    The returned command is merge-preserving: it reads any existing
+    sync-history.json on the remote, updates `last_role` and (when provided)
+    `last_peer`, preserves all other keys, and writes atomically via a
+    temp-file rename.
 
     Args:
-        role: The role to record (SOURCE or TARGET)
+        role: The role to record (SOURCE or TARGET).
+        peer: Hostname of the other machine in the sync, if known. Injected
+            as a `repr()`-escaped Python string literal so it cannot break
+            out of the script or the shell -c argument (hostnames are ASCII
+            identifiers, but repr() handles any edge case defensively).
 
     Returns:
-        Shell command string that creates the directory and writes the history file.
+        Shell command string executable on the remote via SSH.
+        Requires python3 on the remote (available on all Ubuntu 24.04 targets).
     """
-    data = json.dumps({"last_role": role.value})
-    return f"mkdir -p {HISTORY_DIR} && echo '{data}' > {HISTORY_PATH}"
+    role_val = role.value
+    # The script uses single-quoted Python string literals throughout so it can
+    # be safely wrapped in double quotes for the shell -c argument.
+    # Actual newline characters (not \n) separate statements so python3 receives
+    # a valid multi-line script via -c.
+    lines = [
+        "import json,os,tempfile",
+        "from pathlib import Path",
+        "p=Path.home()/'.local/share/pc-switcher/sync-history.json'",
+        "p.parent.mkdir(parents=True,exist_ok=True)",
+        "d={}",
+        "try:",
+        "    tmp=json.loads(p.read_text()) if p.exists() else {}",
+        "    if isinstance(tmp,dict):d=tmp",
+        "except Exception:pass",
+        f"d['last_role']='{role_val}'",
+    ]
+    if peer is not None:
+        # repr() produces a valid Python string literal with proper escaping;
+        # hostnames are plain ASCII so this will always yield a single-quoted literal.
+        peer_lit = repr(peer)
+        lines.append(f"d['last_peer']={peer_lit}")
+    lines.extend(
+        [
+            "c=json.dumps(d)",
+            "fd,t=tempfile.mkstemp(dir=p.parent,prefix='.sync-history-',suffix='.tmp')",
+            "os.write(fd,c.encode());os.close(fd)",
+            "Path(t).rename(p)",
+        ]
+    )
+    script = "\n".join(lines)
+    return f'mkdir -p {HISTORY_DIR} && python3 -c "{script}"'
+
+
+def parse_sync_state(content: str) -> tuple[SyncRole | None, str | None]:
+    """Parse a sync-history JSON string and return (role, peer).
+
+    Used to interpret a remote machine's sync-history.json fetched over SSH
+    without touching the local file. The source is untrusted (T-01-12-01):
+    any malformed, non-dict, or invalid-role input is treated as (None, None)
+    and never raises.
+
+    Args:
+        content: JSON string (e.g. the raw text of a remote sync-history.json).
+
+    Returns:
+        (SyncRole, peer_hostname) on valid input, (None, None) otherwise.
+    """
+    try:
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            return None, None
+        last_role_str = data.get("last_role")
+        if last_role_str == "source":
+            role: SyncRole | None = SyncRole.SOURCE
+        elif last_role_str == "target":
+            role = SyncRole.TARGET
+        else:
+            return None, None
+        peer_raw = data.get("last_peer")
+        peer: str | None = peer_raw if isinstance(peer_raw, str) else None
+        return role, peer
+    except Exception:
+        return None, None
+
+
+def get_last_sync_state() -> tuple[SyncRole | None, str | None]:
+    """Get the last sync role and peer of this machine from the local history file.
+
+    Returns:
+        (SyncRole, peer_hostname) on valid history, (None, None) if the
+        history file is missing, unreadable, or corrupt.
+    """
+    history_path = get_history_path()
+    if not history_path.exists():
+        return None, None
+    try:
+        content = history_path.read_text(encoding="utf-8")
+    except OSError:
+        return None, None
+    return parse_sync_state(content)

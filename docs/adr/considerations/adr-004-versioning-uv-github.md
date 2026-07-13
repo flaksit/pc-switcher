@@ -57,11 +57,11 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Required to fetch tags for versioning!
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v8.3.2@v3
 
       - name: Build package
         run: uv build  # uv will use hatchling to pull version from the tag

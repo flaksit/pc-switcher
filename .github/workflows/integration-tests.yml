@@ -19,7 +19,7 @@ jobs:
       should-run: ${{ steps.filter.outputs.integration }}
     steps:
       - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -46,7 +46,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v8.3.2
 
       - name: Check secrets
         run: |
@@ -56,7 +56,7 @@ jobs:
           fi
 
       - name: Install Hetzner Cloud CLI
-        uses: hetznercloud/setup-hcloud@v1
+        uses: hetznercloud/setup-hcloud@v2
 
       - name: Setup SSH key and get existing VM IPs
         id: vm_ips
@@ -116,7 +116,7 @@ jobs:
 
       - name: Upload test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-logs
           path: |
