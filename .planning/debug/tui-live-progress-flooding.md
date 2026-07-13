@@ -1,8 +1,9 @@
 ---
-status: diagnosed
+status: resolved
 trigger: "tui-live-progress-flooding: During pc-switcher sync <target>, the live terminal UI does not redraw in place. Each refresh tick prints a brand new copy of the status bar + job progress lines underneath the previous one, producing dozens of duplicate stacked lines as dummy_success's progress climbs, with multiple duplicate 'Recent Logs' panel headers interspersed. NOT the confirm pause/resume issue (already diagnosed)."
 created: 2026-07-03T00:00:00Z
-updated: 2026-07-03T00:00:00Z
+updated: 2026-07-13T12:17:28Z
+resolution: "Fixed in plan 01-18 — UILogHandler routes log records into TerminalUI's Recent Logs panel via loop.call_soon_threadsafe, replacing the stderr StreamHandler that bypassed Live's cursor bookkeeping. Confirmed absent on a real terminal in UAT Test 7 (01-UAT.md)."
 ---
 
 ## Current Focus

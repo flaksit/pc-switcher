@@ -1,7 +1,7 @@
 ---
 phase: 01-home-sync-mvp-user-data-sync
 verified: 2026-07-04T00:30:00Z
-status: human_needed
+status: passed
 score: 15/22 truths verified
 behavior_unverified: 7
 overrides_applied: 0
@@ -9,6 +9,7 @@ re_verification:
   previous_status: human_needed
   previous_score: 15/20
   gaps_closed:
+
     - "UAT gap 1 (Test 2): first-sync warning leaked folder_sync/rsync-specific wording into orchestrator-level messaging — CLOSED by 01-15 (FirstSyncScope contract + describe_first_sync_scope hook; orchestrator.py contains no folder_sync/rsync literal, grep-verified)."
     - "UAT gap 2 (Test 2): declined confirmation was logged CRITICAL and printed twice ('Sync failed' x2) — CLOSED by 01-16 (SyncAbortedByUser + SessionStatus.ABORTED; single WARNING log, single calm CLI message; caught before the generic except Exception in both orchestrator.run() and cli._async_run_sync)."
     - "UAT gap 3 (Test 2): TUI showed duplicate stacked 'Recent Logs' panels and a skipped step number around a confirmation prompt — CLOSED at the mechanism level by 01-17 (single persistent rich.live.Live with pause()/resume(); resume() forces an immediate redraw). Actual on-terminal appearance still needs a human re-test (see human_verification)."
@@ -23,47 +24,59 @@ re_verification:
   gaps_remaining: []
   regressions: []
 behavior_unverified_items:
+
   - truth: "On a real interactive terminal, a confirmation pause/resume (first-sync, out-of-order, config-sync) does not leave duplicate stale 'Recent Logs'/status panels in scrollback and does not skip a step number (the visual symptom UAT Test 2 originally reported)"
     test: "Re-run UAT Test 2 (decline) and Test 3 (confirm) on the VM pair: pc-switcher sync <B> from A over a real interactive SSH session, answer n then y, and visually inspect the terminal for stacked panels or a skipped step counter (e.g. '1/11 then 3/11, no 2/11')."
     expected: "Exactly one live region is visible throughout; the step counter increments without skipping; only one 'Sync aborted: ...' line prints on decline (yellow, not red 'Sync failed'); the decline is not attributed to a specific job/transport mechanism."
     why_human: "rich.live.Live's terminal cursor bookkeeping and the visual absence of stacked frames can only be observed on a real TTY; the unit tests (test_pause_resume_reuses_same_live_instance, test_resume_forces_redraw_of_state_mutated_while_paused) prove the internal Live-instance-reuse and forced-redraw mechanism but do not render to a real terminal."
+
   - truth: "During an interactive sync with routine INFO-level job logs active (e.g. dummy_success + folder_sync), the live display no longer floods with duplicated 'Recent Logs' panel headers and duplicated 0%->100% progress frames (the major bug: 761 duplicate panel headers / 326 duplicate 0% frames observed pre-fix in one run)"
     test: "On pc1, run `pc-switcher sync pc2 --dry-run` with dummy_success enabled (per the debug session's reproduction recipe in .planning/debug/tui-live-progress-flooding.md) and observe the raw terminal output for the duration of the sync."
     expected: "No duplicate 'Recent Logs' panel headers or duplicate progress frames; the display updates in place at 10 Hz with a single coherent frame per refresh."
     why_human: "This is the exact scenario 01-18's own <verification> section and SUMMARY (coverage item D4) explicitly defer to a manual/VM re-test — the fix (UILogHandler routes all TUI-floor logs through the single event-loop Live.update path) is proven at the unit level (no stray stderr StreamHandler while the UI sink is active) but the absence of a live-terminal cursor-desync artifact cannot be reproduced in a unit-test harness."
+
   - truth: "A→B sync copies configured folders byte-identically with every included file present (ROADMAP SC1)"
     test: "Run pc-switcher sync <target> on machine A with the default /home and /root config; compare md5sum of all included files on both machines after sync."
     expected: "Every included file exists on the target and has the same md5sum as the source."
     why_human: "Requires real rsync-as-root execution over SSH to live VMs; mechanism unchanged by this round's gap-closure plans. The relevant integration test (tests/integration/test_end_to_end_sync.py::TestEndToEndSync::test_core_us_job_arch_as1_job_integration_via_interface) exists and asserts this, but the current branch (29 commits ahead of origin, unpushed) has not triggered a CI/VM run since these commits landed."
+
   - truth: "File metadata preserved: owner, group, permissions, ACLs, timestamps (ROADMAP SC2)"
     test: "After A->B sync, compare stat/getfacl output on source and target for the same files."
     expected: "Numeric uid/gid, permissions, mtime, and POSIX ACL entries are identical on source and target."
     why_human: "Requires real rsync with --numeric-ids on btrfs VMs; unchanged by this round. Same unpushed-branch caveat as SC1."
+
   - truth: "Machine-specific items excluded; dev-tool caches included (ROADMAP SC3)"
     test: "After A->B sync, verify .ssh/id_*, .config/tailscale, VS Code cache dirs are absent on target; .config/Code/User/ and .cargo/ are present."
     expected: "Excluded paths absent; explicitly synced dev caches present."
     why_human: "Requires live VM execution. Note: 01-UAT.md's own Gaps section claims 'SC3 dev-tool-cache INCLUSION is not asserted by automation' — this verification found that claim is now stale: commit 9d14f54 ('restore SC3 dev-tool-cache / VS Code inclusion coverage', 2026-07-03 17:33, before 01-UAT.md's last update at 19:20) added inclusion assertions for .cargo/pcsw-cache-marker.txt and .config/Code/User/pcsw-user-marker.json in test_end_to_end_sync.py (lines 596-613), alongside the pre-existing exclusion assertion. The test coverage exists in code; it has simply never been executed against the current HEAD (unpushed branch)."
+
   - truth: "B->A round-trip propagates all changes byte-identically, exclusions hold in reverse (ROADMAP SC4)"
     test: "After A->B, mutate B (add/modify/delete), run pc-switcher sync A from B, compare A and B state."
     expected: "Additions present on A, modifications byte-identical, deletions absent on A, exclusions honored in reverse."
     why_human: "Requires bidirectional VM execution; unchanged by this round. Same unpushed-branch caveat."
+
   - truth: "VM integration test automates A->B/mutate/B->A round-trip and asserts criteria 1-4 (ROADMAP SC5)"
     test: "Run: tests/run-integration-tests.sh tests/integration/test_end_to_end_sync.py on the Hetzner pc1/pc2 VMs with the current branch pushed to origin."
     expected: "test_core_us_job_arch_as1_job_integration_via_interface passes end-to-end (job discovery, snapshots, config sync, folder-sync content/metadata/ACL/hardlink/exclusion/SC3-inclusion checks, out-of-order gate, round-trip)."
     why_human: "Requires live Hetzner VMs, branch pushed to origin, and a fresh CI run — the last green integration run (PR #160, 2026-07-03 15:33-15:45) predates all four gap-closure plans (01-15..01-18) and all six code-review-fix commits (dated 2026-07-03 23:xx - 2026-07-04 00:xx); the local branch is 29 commits ahead of origin and unpushed."
 human_verification:
+
   - test: "Re-run UAT Test 2 (First-sync warning — abort) on the VM pair with the fixed code: answer n; confirm a single calm yellow 'Sync aborted: ...' line (no red 'Sync failed', no duplicate CRITICAL log), the warning text names no job or transport mechanism, and the terminal shows one continuous Live region with no skipped step number."
     expected: "Exactly one abort message; log level WARNING not CRITICAL; no duplicate/stale panels; step counter does not skip."
     why_human: "Interactive TTY behavior and Rich Live terminal rendering; the fix is unit-tested at the mechanism level but not observed on a real terminal since these commits landed."
+
   - test: "Run UAT Test 3 (First-sync warning — confirm): answer y; sync proceeds, B ends up matching A, sync-history updated."
     expected: "Sync completes; the warning's In-scope block lists the configured folder paths and 'rsync --delete' under the folder_sync job's own self-description (not orchestrator-hardcoded)."
     why_human: "Never run since the phase's original UAT pass (marked [pending] in 01-UAT.md); requires a live machine pair."
+
   - test: "Run UAT Test 4 (clean round-trip alternation): edit-and-sync A->B, edit-and-sync B->A, edit-and-sync A->B again, all without any out-of-order warning."
     expected: "All three syncs proceed silently in the clean case; no confirmation prompt fires; live display remains coherent across all three runs (exercises 01-18's fix under sustained job activity)."
     why_human: "Whole-flow confidence walkthrough on a real machine pair with real edits and timing; never run since UAT started ([pending] in 01-UAT.md)."
+
   - test: "Run UAT Test 5 (consecutive-push heads-up) and Test 6 (concurrent-sync lock + resume the waiting prompt)."
     expected: "Test 5: the out-of-order/consecutive-push warning appears and waits; Test 6: a second concurrent sync fails fast with the lock-holder message and how-to-unblock guidance, then the waiting sync from Test 5 can be answered and completes normally."
     why_human: "Requires two concurrent interactive invocations racing on the same machine; never run since UAT started ([pending] in 01-UAT.md)."
+
   - test: "Full VM Integration Test Suite: tests/run-integration-tests.sh tests/integration/test_end_to_end_sync.py after pushing the current branch (or a fresh pre-release tag) to origin."
     expected: "test_core_us_job_arch_as1_job_integration_via_interface passes, exercising byte-identical content, numeric uid/gid, permission bits incl. setuid/setgid/sticky, POSIX ACL, mtime, hard-link/symlink handling, exclusions, ADR-016 runtime excludes, and the restored SC3 inclusion assertions (.cargo, VS Code User) end-to-end on real VMs."
     why_human: "Requires live Hetzner VM infrastructure, a push to origin, and a fresh CI run — the last green run predates all of this round's commits."
