@@ -1,6 +1,7 @@
 # PC-switcher configuration file
 # Location: ~/.config/pc-switcher/config.yaml
 # Documentation: https://github.com/flaksit/pc-switcher
+# Full config reference: https://github.com/flaksit/pc-switcher/blob/main/docs/configuration.md
 
 # =============================================================================
 # Logging Configuration (3-setting model)
@@ -113,12 +114,22 @@ dummy_fail:
 # =============================================================================
 # Folder Sync Configuration
 # =============================================================================
-# Defines folders to sync via rsync. Each entry has its own exclude list.
-# Excludes are relative to the folder path and passed as rsync --filter rules.
+# Defines folders to sync via rsync. Each entry is a full mirror (rsync
+# --delete): everything under `path` is synced EXCEPT the paths matched by
+# that folder's exclude list. There is no include mechanism — to narrow what
+# is synced, use a deeper `path` or add more excludes.
 #
-# Explicitly SYNCED (not excluded):
-#   - Dev-tool caches: ~/.local/share/uv, pip cache, ~/.cargo, ~/.npm
-#   - VS Code user state: ~/.config/Code/User/ (settings, keybindings, extensions)
+# Each exclude is an rsync filter pattern, relative to the folder's transfer
+# root (for /home the root is its contents, so `.ssh/id_*` matches every
+# user's .ssh). Rules are evaluated top-to-bottom, first match wins. Syntax:
+#   - No leading / floats: matches at any depth (`.cache/nvidia` matches
+#     `.cache/nvidia` and `alice/.cache/nvidia`).
+#   - Leading / anchors to the folder root (`/lost+found`).
+#   - A pattern with no / matches the final path component only (`nvidia`);
+#     one containing a / or ** matches the full path.
+#   - Trailing / restricts to directories (`node_modules/`).
+#   - `*` matches within a segment, `**` matches across /.
+# Full syntax (rsync "FILTER RULES"): https://download.samba.org/pub/rsync/rsync.1
 #
 # Excluded below: machine-specific keys/config, GPU/shader caches, VS Code
 # regenerable caches. Users can override by editing this file.

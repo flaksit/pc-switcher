@@ -98,85 +98,17 @@ With `--dry-run`, the workflow previews without writing state (no history update
 
 ## Configuration
 
-Run `pc-switcher init` to create the default configuration file at `~/.config/pc-switcher/config.yaml`, or create it manually:
+Run `pc-switcher init` to write the default configuration to `~/.config/pc-switcher/config.yaml`. The generated file is annotated with inline comments for every setting.
 
-```yaml
-# Logging configuration (see Logging Configuration section below for details)
-logging:
-  file: DEBUG      # Floor level for file output
-  tui: INFO        # Floor level for terminal output
-  external: WARNING  # Floor for third-party libraries
+Top-level sections:
 
-# Sync jobs (true = enabled, false = disabled)
-sync_jobs:
-  dummy_success: true
-  dummy_fail: false
+- `logging` — per-destination log-level floors (file, terminal, third-party libraries)
+- `sync_jobs` — which sync jobs are enabled
+- `disk_space_monitor` — free-space thresholds checked before and during a sync
+- `btrfs_snapshots` — subvolumes to snapshot and retention policy
+- `folder_sync` — folders to mirror via rsync, with per-folder exclude patterns
 
-# Disk space monitoring
-disk_space_monitor:
-  preflight_minimum: "20%"  # Or absolute like "50GiB"
-  runtime_minimum: "15%"    # CRITICAL abort if below
-  warning_threshold: "25%"  # WARNING log if below
-  check_interval: 30        # Seconds
-
-# Btrfs snapshots
-btrfs_snapshots:
-  subvolumes:
-    - "@"
-    - "@home"
-  keep_recent: 3
-  # max_age_days: 30  # Optional - enables age-based cleanup
-```
-
-See default configuration in `src/pcswitcher/default-config.yaml`.
-
-## Logging Configuration
-
-Configure log levels in your `~/.config/pc-switcher/config.yaml`:
-
-```yaml
-logging:
-  file: DEBUG      # Log level floor for file output (default: DEBUG)
-  tui: INFO        # Log level floor for TUI output (default: INFO)
-  external: WARNING  # Log level floor for external libraries (default: WARNING)
-```
-
-### Log Levels
-
-| Level | Value | Description |
-|-------|-------|-------------|
-| DEBUG | 10 | Internal diagnostics |
-| FULL | 15 | Operational details (file-level sync info) |
-| INFO | 20 | High-level operations (job start/complete) |
-| WARNING | 30 | Unexpected but non-fatal conditions |
-| ERROR | 40 | Recoverable errors |
-| CRITICAL | 50 | Unrecoverable errors, sync must abort |
-
-### Default Behavior
-
-- `file: DEBUG` - All log levels written to file
-- `tui: INFO` - Only INFO and above shown in terminal
-- `external: WARNING` - External library logs (asyncssh, etc.) filtered to WARNING+
-
-Log files are written to `~/.local/share/pc-switcher/logs/` in JSON lines format.
-
-### Common Configurations
-
-**Debug SSH connection issues:**
-```yaml
-logging:
-  file: DEBUG
-  tui: INFO
-  external: DEBUG  # Show asyncssh debug logs
-```
-
-**Quiet mode (errors only):**
-```yaml
-logging:
-  file: DEBUG     # Still log everything to file
-  tui: ERROR      # Only show errors in terminal
-  external: ERROR
-```
+See the **[Configuration Reference](docs/configuration.md)** for every option, defaults, and the folder-sync exclude pattern syntax.
 
 ## Available Commands
 
@@ -219,7 +151,7 @@ pc-switcher self update [VERSION] [--prerelease]
 
 When running `pc-switcher --version`, `self update`, or sync (which installs pc-switcher on target), you may see rate limit errors like:
 
-```
+```text
 RuntimeError: Failed to fetch GitHub releases: 403 {"message": "API rate limit exceeded..."}
 ```
 
