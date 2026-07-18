@@ -254,8 +254,7 @@ class FolderSyncJob(SyncJob):
                     errors.append(
                         self._validation_error(
                             Host.SOURCE,
-                            f"filter_file {folder.filter_file!r} for folder {folder.path!r} "
-                            "does not exist on source",
+                            f"filter_file {folder.filter_file!r} for folder {folder.path!r} does not exist on source",
                         )
                     )
 
