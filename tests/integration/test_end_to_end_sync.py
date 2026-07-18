@@ -311,6 +311,7 @@ folder_sync:
         - .config/Code/CachedData
         - .config/Code/GPUCache
         - .ssh/known_hosts
+        - .ssh/authorized_keys
         - .cache
         - .local/share/uv/python
         - {_TESTTREE}/secret
