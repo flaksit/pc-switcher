@@ -186,6 +186,20 @@ class TestSeedingPassProtectsTargetOnFirstSync:
         self._mirror(src, dst)
         assert not (dst / "proj/secret.env").exists()
 
+    def test_single_pass_protects_when_filter_already_on_target(self, tmp_path: Path) -> None:
+        """Steady state: with the .pcswitcher-filter already on the target, ONE deleting pass protects it.
+
+        This is exactly what _needs_seeding_pass relies on to skip the seeding pass when the source
+        and target filter files already match — the common case after a first successful sync.
+        """
+        src = tmp_path / "src"
+        dst = tmp_path / "dst"
+        _write(src / "proj/.pcswitcher-filter", "- secret.env\n")
+        _write(dst / "proj/.pcswitcher-filter", "- secret.env\n")  # already present on the target
+        _write(dst / "proj/secret.env", "tgt-only-secret")
+        self._mirror(src, dst)  # single --delete pass, no seeding
+        assert (dst / "proj/secret.env").read_text() == "tgt-only-secret"
+
     def test_two_pass_protects_a_target_only_excluded_file(self, tmp_path: Path) -> None:
         """delete case: seeding pass then mirror keeps a target-only rule-excluded file."""
         src = tmp_path / "src"

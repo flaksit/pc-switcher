@@ -322,20 +322,36 @@ class FolderSyncJob(SyncJob):
         # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
         return [f"-e {shlex.quote(ssh_cmd)}", f"--rsync-path={shlex.quote('sudo rsync')}"]
 
-    async def _tree_has_per_dir_filters(self, folder: FolderEntry) -> bool:
-        """Whether the source tree contains any `.pcswitcher-filter` file.
+    async def _needs_seeding_pass(self, folder: FolderEntry) -> bool:
+        """Whether a no-delete seeding pass must run before the deleting mirror.
 
-        Gates the no-delete seeding pass (`execute`): that pass exists only to put
-        per-directory filter files onto the target before the deleting mirror, so it
-        is pure overhead when the tree uses none (the common case — the default config
-        relies on the central `filter_file`).  Runs as root, like the mirror, so files
-        under directories the invoking user cannot read are still seen; `-print -quit`
-        stops at the first match, so a tree that uses per-directory filters answers
-        quickly and only a tree with none pays a full walk.
+        A dir-merge rule is read from the *receiver* during the delete scan, so the
+        deleting mirror protects the target correctly only when every source
+        `.pcswitcher-filter` is already present and byte-identical on the target.  In
+        the steady state that already holds — filter files sync like any other file —
+        so a single pass is safe and the whole tree is walked only once.  A seeding
+        pass is needed only when a per-directory filter was added or changed on the
+        source (or on a first sync): then the source's filter files are not yet
+        reflected on the target and the mirror must align them first.
+
+        Detects this by hashing just the (few, small) `.pcswitcher-filter` files on
+        each side and comparing — far cheaper than the second full rsync pass it
+        avoids.  Short-circuits when the source has none (the common case — the
+        default config uses only the central `filter_file`), skipping the target
+        round-trip.  Runs as root, like the mirror, so filter files under directories
+        the invoking user cannot read are still seen and hashed.  Target-only extra
+        filter files do not force a seeding pass (they only ever add protection).
         """
         path = shlex.quote(folder.path.rstrip("/") or "/")
-        result = await self.source.run_command(f"sudo find {path} -name .pcswitcher-filter -print -quit")
-        return bool(result.stdout.strip())
+        manifest_cmd = f"sudo find {path} -name .pcswitcher-filter -exec sha256sum {{}} +"
+        src = await self.source.run_command(manifest_cmd)
+        src_manifest = set(src.stdout.splitlines())
+        if not src_manifest:
+            return False  # no per-directory filters on the source -> nothing to seed
+        tgt = await self.target.run_command(manifest_cmd, login_shell=False)
+        tgt_manifest = set(tgt.stdout.splitlines())
+        # Seed unless every source filter file is present and identical on the target.
+        return not src_manifest.issubset(tgt_manifest)
 
     def _build_rsync_cmd(self, folder: FolderEntry, dry_run: bool, delete: bool = True) -> str:
         """Build the rsync shell command for syncing a single folder.
@@ -523,9 +539,9 @@ class FolderSyncJob(SyncJob):
         """Sync each active folder via rsync-over-SSH.
 
         For each active folder (D-10):
-        1. When this is a real sync and the source tree contains per-directory
-           `.pcswitcher-filter` files (`_tree_has_per_dir_filters`), runs a seeding
-           pass first — the same mirror WITHOUT `--delete` — so every source
+        1. When this is a real sync and the source's per-directory `.pcswitcher-filter`
+           files are not already reflected on the target (`_needs_seeding_pass`), runs
+           a seeding pass first — the same mirror WITHOUT `--delete` — so every source
            `.pcswitcher-filter` reaches the target before the deleting mirror.  A
            dir-merge rule only protects the target once the filter file is on the
            receiver, so without this the deleting mirror would remove (not protect)
@@ -533,8 +549,8 @@ class FolderSyncJob(SyncJob):
            chain, so the central `filter_file` and per-directory rules are respected
            exactly.  Skipped in dry-run (must not write to the target, D-12), which
            makes the dry-run deletion preview pessimistic for per-dir-protected paths
-           (the safe direction), and skipped when the tree has no per-directory
-           filters (the common case — no seeding is needed).
+           (the safe direction), and skipped when the per-directory filters already
+           match on both ends (the steady state — no seeding is needed).
         2. Runs the deleting mirror (D-13 baseline, D-11 filters, D-12 dry-run toggle).
         3. On non-zero exit from either pass, logs CRITICAL and raises RuntimeError.
         """
@@ -551,7 +567,7 @@ class FolderSyncJob(SyncJob):
 
             seed_files = 0
             seed_bytes = 0
-            if not self.context.dry_run and await self._tree_has_per_dir_filters(folder):
+            if not self.context.dry_run and await self._needs_seeding_pass(folder):
                 self._log(
                     Host.SOURCE,
                     LogLevel.FULL,

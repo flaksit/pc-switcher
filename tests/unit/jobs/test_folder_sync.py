@@ -808,6 +808,51 @@ class TestStreamRsync:
 
 
 @pytest.mark.asyncio
+class TestNeedsSeedingPass:
+    """_needs_seeding_pass compares source vs target `.pcswitcher-filter` content hashes.
+
+    Single pass is safe iff every source filter file is present & identical on the target
+    (target-only extras are fine); otherwise a seeding pass is needed to align them.
+    """
+
+    def _job(self, source_out: str, target_out: str) -> tuple[FolderSyncJob, AsyncMock]:
+        ctx = make_context(config={"folders": [{"path": "/home"}]})
+        ctx.source.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout=source_out, stderr=""))
+        target_rc = AsyncMock(return_value=CommandResult(exit_code=0, stdout=target_out, stderr=""))
+        ctx.target.run_command = target_rc
+        return FolderSyncJob(ctx), target_rc
+
+    async def test_no_source_filters_skips_target_round_trip(self) -> None:
+        """No source filter files -> single pass, and the target is never queried."""
+        job, target_rc = self._job(source_out="", target_out="ignored")
+        assert await job._needs_seeding_pass(FolderEntry(path="/home")) is False
+        target_rc.assert_not_called()
+
+    async def test_identical_manifests_need_no_seeding(self) -> None:
+        line = "abc123  /home/alice/proj/.pcswitcher-filter"
+        job, _ = self._job(source_out=line + "\n", target_out=line + "\n")
+        assert await job._needs_seeding_pass(FolderEntry(path="/home")) is False
+
+    async def test_source_filter_absent_on_target_needs_seeding(self) -> None:
+        job, _ = self._job(source_out="abc  /home/a/.pcswitcher-filter\n", target_out="")
+        assert await job._needs_seeding_pass(FolderEntry(path="/home")) is True
+
+    async def test_source_filter_content_differs_needs_seeding(self) -> None:
+        """Same path, different hash (edited filter) -> different line -> not a subset -> seed."""
+        job, _ = self._job(
+            source_out="NEWHASH  /home/a/.pcswitcher-filter\n",
+            target_out="OLDHASH  /home/a/.pcswitcher-filter\n",
+        )
+        assert await job._needs_seeding_pass(FolderEntry(path="/home")) is True
+
+    async def test_target_only_extra_filters_need_no_seeding(self) -> None:
+        """A filter present only on the target never forces a seeding pass (it only adds protection)."""
+        line = "abc  /home/a/.pcswitcher-filter"
+        job, _ = self._job(source_out=line + "\n", target_out=line + "\nxyz  /home/b/.pcswitcher-filter\n")
+        assert await job._needs_seeding_pass(FolderEntry(path="/home")) is False
+
+
+@pytest.mark.asyncio
 class TestExecuteDryRun:
     """execute() in dry-run mode: rsync runs with --dry-run."""
 
@@ -823,19 +868,19 @@ class TestExecuteDryRun:
         called_cmd: str = ctx.source.start_process.call_args[0][0]
         assert "--dry-run" in called_cmd
 
-    async def test_dry_run_skips_seeding_and_the_find_gate(self) -> None:
-        """Dry-run must not write to the target: neither the find gate nor the seeding pass runs."""
+    async def test_dry_run_skips_seeding_and_the_manifest_check(self) -> None:
+        """Dry-run must not write to the target: neither the manifest check nor the seeding pass runs."""
         ctx = make_context(dry_run=True)
-        # Even if a per-dir filter would be found, dry-run short-circuits before the gate.
+        # Even if the manifests would differ, dry-run short-circuits before the check.
         ctx.source.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="/home/alice/.pcswitcher-filter\n", stderr="")
+            return_value=CommandResult(exit_code=0, stdout="h  /home/alice/.pcswitcher-filter\n", stderr="")
         )
         ctx.source.start_process = AsyncMock(return_value=make_fake_process())
 
         job = FolderSyncJob(ctx)
         await job.execute()
 
-        ctx.source.run_command.assert_not_called()  # find gate skipped in dry-run
+        ctx.source.run_command.assert_not_called()  # manifest check skipped in dry-run
         assert ctx.source.start_process.call_count == 1  # only the read-only preview pass
         assert "--dry-run" in ctx.source.start_process.call_args[0][0]
 
@@ -879,17 +924,17 @@ class TestExecuteNormalMode:
         # A CRITICAL-level record must have been emitted
         assert any(r.levelno == LogLevel.CRITICAL for r in caplog.records)
 
-    async def test_seeding_pass_runs_before_the_mirror_when_per_dir_filters_exist(self) -> None:
-        """When the tree has .pcswitcher-filter files, a no-delete seeding pass precedes the mirror.
+    async def test_seeding_pass_runs_before_the_mirror_when_filters_differ(self) -> None:
+        """When a source per-dir filter isn't yet on the target, a no-delete seeding pass precedes the mirror.
 
         Both passes carry the same dir-merge filter, so per-directory (and central) rules are
         respected in each — the seeding pass just omits --delete so it can put the filter files
         onto the target before the deleting mirror runs.
         """
         ctx = make_context()
-        # find gate reports that a per-directory filter file exists in the tree.
+        # Source has a per-dir filter; the target's manifest (default empty) lacks it -> seed.
         ctx.source.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="/home/alice/.pcswitcher-filter\n", stderr="")
+            return_value=CommandResult(exit_code=0, stdout="hash  /home/alice/.pcswitcher-filter\n", stderr="")
         )
         ctx.source.start_process = AsyncMock(return_value=make_fake_process())
 
@@ -904,10 +949,12 @@ class TestExecuteNormalMode:
         assert "dir-merge /.pcswitcher-filter" in seed_cmd
         assert "dir-merge /.pcswitcher-filter" in mirror_cmd
 
-    async def test_seeding_pass_skipped_when_no_per_dir_filters(self) -> None:
-        """With no .pcswitcher-filter in the tree, only the single deleting mirror runs (common case)."""
+    async def test_seeding_pass_skipped_when_no_source_filters(self) -> None:
+        """With no .pcswitcher-filter on the source, only the single deleting mirror runs (common case)."""
         ctx = make_context()
         ctx.source.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        target_rc = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        ctx.target.run_command = target_rc
         ctx.source.start_process = AsyncMock(return_value=make_fake_process())
 
         job = FolderSyncJob(ctx)
@@ -915,12 +962,13 @@ class TestExecuteNormalMode:
 
         assert ctx.source.start_process.call_count == 1
         assert "--delete" in ctx.source.start_process.call_args[0][0]
+        target_rc.assert_not_called()  # short-circuit: no target manifest round-trip
 
     async def test_seeding_pass_failure_aborts_before_the_mirror(self) -> None:
         """A non-zero exit in the seeding pass raises RuntimeError; the deleting mirror never runs."""
         ctx = make_context()
         ctx.source.run_command = AsyncMock(
-            return_value=CommandResult(exit_code=0, stdout="/home/alice/.pcswitcher-filter\n", stderr="")
+            return_value=CommandResult(exit_code=0, stdout="hash  /home/alice/.pcswitcher-filter\n", stderr="")
         )
         # The first (seeding) pass fails.
         ctx.source.start_process = AsyncMock(return_value=make_fake_process(exit_code=23, stderr="boom"))
