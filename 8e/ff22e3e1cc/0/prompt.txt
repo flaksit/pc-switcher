@@ -1,0 +1,8 @@
+Indeed, change the VM e2e config.yaml and fileset-that-gets-synced so we touch and verify all cases:
+- global filter file
+- per-dir-filter file, nested
+- includes and excludes and a misc (similar to the example from #166)
+Verifying that
+- what should be included effectively deletes/overwrites/adds files on target
+- that what should be excluded effectively leaves the target as-is, in case it (or something conflicting) exists on the source and in case nothing of that exists on the source at all (important difference!)
+- per-dir-filter files are transfered
