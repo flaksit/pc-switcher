@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>brfqfwfcl</task-id>
+<tool-use-id>toolu_01FKwZwzw8eYxyG3yb6mPtuC</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-166/c4320c6a-5df9-4349-ba0d-bb77817e26a7/tasks/brfqfwfcl.output</output-file>
+<status>failed</status>
+<summary>Background command "Background-monitor integration CI to terminal state" failed with exit code 8</summary>
+</task-notification>
