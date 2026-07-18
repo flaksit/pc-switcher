@@ -1,0 +1,29 @@
+# Dependabot keeps Python packages (uv) and GitHub Actions up to date.
+# Chosen over Renovate because Dependabot natively supports every ecosystem
+# this repo uses: uv (uv.lock, incl. PEP 735 [dependency-groups]) and
+# GitHub Actions. See docs: https://docs.astral.sh/uv/guides/integration/dependabot/
+version: 2
+updates:
+  # Python dependencies resolved from pyproject.toml + uv.lock.
+  # Covers both [project.dependencies] and the [dependency-groups] dev group.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Bundle minor/patch bumps into one PR to cut noise; major bumps stay
+    # separate so breaking changes get individual review.
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Actions referenced by .github/workflows/*.yml.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
