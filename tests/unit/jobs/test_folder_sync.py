@@ -9,7 +9,6 @@ All executor interactions are mocked; no real SSH connections are made.
 from __future__ import annotations
 
 import logging
-import re
 import shlex
 from collections.abc import Callable
 from pathlib import Path
@@ -80,21 +79,25 @@ class TestFolderEntry:
     """Tests for the FolderEntry dataclass."""
 
     def test_defaults(self) -> None:
-        """FolderEntry defaults enabled=True and excludes=[]."""
+        """FolderEntry defaults enabled=True and filter_file=None."""
         entry = FolderEntry(path="/home")
         assert entry.enabled is True
-        assert entry.excludes == []
+        assert entry.filter_file is None
 
-    def test_to_rsync_filter_args_empty(self) -> None:
-        """No excludes → empty filter arg list."""
-        entry = FolderEntry(path="/home", excludes=[])
-        assert entry.to_rsync_filter_args() == []
+    def test_expanded_filter_file_none_when_unset(self) -> None:
+        """expanded_filter_file() returns None when filter_file is unset."""
+        entry = FolderEntry(path="/home")
+        assert entry.expanded_filter_file() is None
 
-    def test_to_rsync_filter_args_preserves_order(self) -> None:
-        """Filter args are generated in config order (first-match-wins)."""
-        entry = FolderEntry(path="/home", excludes=[".ssh/id_*", ".config/tailscale"])
-        args = entry.to_rsync_filter_args()
-        assert args == ["--filter=- .ssh/id_*", "--filter=- .config/tailscale"]
+    def test_expanded_filter_file_expands_home_and_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """expanded_filter_file() ~-expands and env-var-expands the configured path."""
+        monkeypatch.setenv("HOME", "/fake/home")
+        monkeypatch.setenv("MY_FILTER_DIR", "/fake/filters")
+        entry = FolderEntry(path="/home", filter_file="~/x/home.filter")
+        assert entry.expanded_filter_file() == "/fake/home/x/home.filter"
+
+        entry2 = FolderEntry(path="/home", filter_file="$MY_FILTER_DIR/home.filter")
+        assert entry2.expanded_filter_file() == "/fake/filters/home.filter"
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +280,40 @@ class TestValidatePreflight:
             f"Expected shell-quoted path {expected_quoted!r} in folder check commands, got: {folder_checks}"
         )
 
+    async def test_missing_filter_file(self) -> None:
+        """validate() returns a Host.SOURCE ValidationError naming the filter file when it is absent."""
+        ctx = make_context(config={"folders": [{"path": "/home", "filter_file": "/abs/home.filter"}]})
+        ctx.source.run_command = AsyncMock(side_effect=fail_when("test -f", "no such file"))
+        job = FolderSyncJob(ctx)
+        errors = await job.validate()
+        assert any(e.host == Host.SOURCE and "home.filter" in e.message for e in errors)
+
+    async def test_existing_filter_file_produces_no_error(self) -> None:
+        """validate() returns no filter_file error when the file exists on source."""
+        ctx = make_context(config={"folders": [{"path": "/home", "filter_file": "/abs/home.filter"}]})
+        job = FolderSyncJob(ctx)
+        errors = await job.validate()
+        assert not any("filter_file" in e.message for e in errors)
+
+    async def test_filter_file_check_uses_expanded_path(self) -> None:
+        """The test -f command for filter_file uses the expanded path, not a literal ~."""
+        ctx = make_context(config={"folders": [{"path": "/home", "filter_file": "~/x.filter"}]})
+        source_cmds: list[str] = []
+
+        async def record(cmd: str, **kw: object) -> CommandResult:
+            source_cmds.append(cmd)
+            return CommandResult(exit_code=0, stdout="", stderr="")
+
+        ctx.source.run_command = AsyncMock(side_effect=record)
+        job = FolderSyncJob(ctx)
+        await job.validate()
+        filter_checks = [c for c in source_cmds if "test -f" in c]
+        assert filter_checks, "expected at least one test -f call"
+        assert not any("~/x.filter" in c for c in filter_checks)
+        expanded = FolderEntry(path="/home", filter_file="~/x.filter").expanded_filter_file()
+        assert expanded is not None
+        assert any(expanded in c for c in filter_checks)
+
     async def test_execute_stub_no_longer_raises_not_implemented(self) -> None:
         """execute() no longer raises NotImplementedError — it is implemented."""
         ctx = make_context()
@@ -311,18 +348,18 @@ class TestBuildRsyncCmd:
     def _build(
         self,
         path: str = "/home",
-        excludes: list[str] | None = None,
+        filter_file: str | None = None,
         dry_run: bool = False,
         target_username: str | None = "testuser",
         home: str = "/nonhome",
     ) -> str:
         # Default home is OUTSIDE any typical sync path, so the hardcoded runtime
         # excludes (which anchor to the invoking user's home) are absent unless a
-        # test opts in by passing a `home` under `path`. This keeps the user-exclude
+        # test opts in by passing a `home` under `path`. This keeps the user-filter
         # assertions below deterministic regardless of the machine running them.
         ctx = make_context(config={"folders": [{"path": path}]}, target_username=target_username)
         job = FolderSyncJob(ctx)
-        folder = FolderEntry(path=path, excludes=excludes or [])
+        folder = FolderEntry(path=path, filter_file=filter_file)
         with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path(home)):
             return job._build_rsync_cmd(folder, dry_run)
 
@@ -352,29 +389,50 @@ class TestBuildRsyncCmd:
 
     def test_no_forbidden_flags(self) -> None:
         """Command never includes --delete-excluded or --checksum (D-06, D-14)."""
-        cmd = self._build(excludes=[".ssh/id_*"])
+        cmd = self._build(filter_file="/abs/path with space/home.filter")
         assert "--delete-excluded" not in cmd
         assert "--checksum" not in cmd
 
-    def test_filter_args_count_equals_excludes(self) -> None:
-        """Number of --filter args in the command equals the number of excludes."""
+    def test_no_built_in_per_dir_flags(self) -> None:
+        """Command never enables rsync's own per-dir mechanisms (-F/-FF/-C/--cvs-exclude).
 
-        excludes = [".ssh/id_*", ".config/tailscale"]
-        cmd = self._build(excludes=excludes)
-        matches = re.findall(r"--filter", cmd)
-        assert len(matches) == len(excludes)
+        ssh's own -F (config file flag) only appears when ~/.ssh/config exists; the
+        default `home="/nonhome"` fixture has no such file, so it is absent here too.
+        """
+        cmd = self._build()
+        tokens = cmd.split()
+        assert "-F" not in tokens
+        assert "-FF" not in tokens
+        assert "-C" not in tokens
+        assert "--cvs-exclude" not in cmd
 
-    def test_filter_args_preserve_order(self) -> None:
-        """Filter args appear in config order (first-match-wins preserved for rsync)."""
-        cmd = self._build(excludes=[".ssh/id_*", ".config/tailscale"])
-        idx_ssh = cmd.index(".ssh/id_*")
-        idx_tailscale = cmd.index(".config/tailscale")
-        assert idx_ssh < idx_tailscale
+    def test_merge_arg_ordering(self) -> None:
+        """merge appears after runtime excludes and before dir-merge (GLOBAL-FIRST)."""
+        cmd = self._build(
+            path="/home", filter_file="/abs/home.filter", home="/home/alice"
+        )  # home under path -> runtime excludes present
+        idx_runtime = cmd.index(".local/share/pc-switcher")
+        idx_merge = cmd.index("merge /abs/home.filter")
+        idx_dir_merge = cmd.index("dir-merge /.pcswitcher-filter")
+        assert idx_runtime < idx_merge < idx_dir_merge
 
-    def test_no_filter_args_when_no_excludes(self) -> None:
-        """A folder with no excludes produces no --filter args."""
-        cmd = self._build(excludes=[])
-        assert "--filter" not in cmd
+    def test_no_merge_arg_when_no_filter_file_but_dir_merge_present(self) -> None:
+        """No filter_file -> no central `merge` arg, but `dir-merge /.pcswitcher-filter` still present."""
+        cmd = self._build(filter_file=None)
+        assert "--filter='merge " not in cmd
+        assert "--filter='dir-merge /.pcswitcher-filter'" in cmd
+
+    def test_merge_arg_present_when_filter_file_set(self) -> None:
+        """filter_file set -> `merge <expanded>` present in the command."""
+        cmd = self._build(filter_file="/abs/home.filter")
+        assert "merge /abs/home.filter" in cmd
+
+    def test_dir_merge_always_present(self) -> None:
+        """dir-merge /.pcswitcher-filter is present whether or not filter_file is set."""
+        cmd_without = self._build(filter_file=None)
+        cmd_with = self._build(filter_file="/abs/home.filter")
+        assert "--filter='dir-merge /.pcswitcher-filter'" in cmd_without
+        assert "--filter='dir-merge /.pcswitcher-filter'" in cmd_with
 
     def test_dry_run_true_adds_flag(self) -> None:
         """dry_run=True includes --dry-run in the command."""
@@ -399,11 +457,41 @@ class TestBuildRsyncCmd:
         assert "/home/" in cmd
 
     def test_config_derived_values_are_shell_quoted(self) -> None:
-        """Paths and exclude patterns with special characters are shell-quoted (T-05-01)."""
-        excludes = [".ssh/id_*"]
-        cmd = self._build(path="/home/user name", excludes=excludes)
+        """Paths and filter_file with special characters are shell-quoted (T-05-01)."""
+        cmd = self._build(path="/home/user name", filter_file="/abs/path with space/home.filter")
         # The path with a space must be quoted in the command
         assert "/home/user name/" not in cmd or "'/home/user name/'" in cmd
+        # A filter_file path with a space is shlex-quoted as a single argv token
+        assert "'merge /abs/path with space/home.filter'" in cmd
+
+
+class TestBuildRsyncCmdDeleteToggle:
+    """_build_rsync_cmd's `delete` flag drives the no-delete seeding pass vs the deleting mirror.
+
+    The seeding pass (delete=False) is the same command minus `--delete`, so it applies the
+    identical filter chain (central merge + dir-merge) and thus respects every filter exactly.
+    """
+
+    def _build(self, delete: bool, filter_file: str | None = "/abs/home.filter") -> str:
+        ctx = make_context(config={"folders": [{"path": "/home"}]}, target_username="testuser")
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path="/home", filter_file=filter_file)
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path("/nonhome")):
+            return job._build_rsync_cmd(folder, dry_run=False, delete=delete)
+
+    def test_delete_present_by_default(self) -> None:
+        """The mirror pass includes --delete."""
+        assert "--delete" in self._build(delete=True)
+
+    def test_delete_omitted_when_false(self) -> None:
+        """The seeding pass omits --delete (it seeds without removing anything)."""
+        assert "--delete" not in self._build(delete=False)
+
+    def test_seeding_pass_keeps_the_full_filter_chain(self) -> None:
+        """delete=False still emits the central merge and dir-merge, so filters are respected."""
+        cmd = self._build(delete=False)
+        assert "merge /abs/home.filter" in cmd
+        assert "dir-merge /.pcswitcher-filter" in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -447,13 +535,13 @@ class TestRuntimeExcludeFilters:
         assert self._filters("/root", "/home/alice") == []
 
     def test_runtime_excludes_precede_user_excludes_in_command(self) -> None:
-        """Protective excludes appear before user excludes so an include can't re-expose them."""
+        """Protective excludes appear before the central merge filter so an include can't re-expose them."""
         ctx = make_context(config={"folders": [{"path": "/home"}]}, target_username="testuser")
         job = FolderSyncJob(ctx)
-        folder = FolderEntry(path="/home", excludes=[".ssh/id_*"])
+        folder = FolderEntry(path="/home", filter_file="/abs/home.filter")
         with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path("/home/alice")):
             cmd = job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
-        assert cmd.index("/alice/.local/share/pc-switcher") < cmd.index(".ssh/id_*")
+        assert cmd.index("/alice/.local/share/pc-switcher") < cmd.index("merge /abs/home.filter")
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +808,51 @@ class TestStreamRsync:
 
 
 @pytest.mark.asyncio
+class TestNeedsSeedingPass:
+    """_needs_seeding_pass compares source vs target `.pcswitcher-filter` content hashes.
+
+    Single pass is safe iff every source filter file is present & identical on the target
+    (target-only extras are fine); otherwise a seeding pass is needed to align them.
+    """
+
+    def _job(self, source_out: str, target_out: str) -> tuple[FolderSyncJob, AsyncMock]:
+        ctx = make_context(config={"folders": [{"path": "/home"}]})
+        ctx.source.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout=source_out, stderr=""))
+        target_rc = AsyncMock(return_value=CommandResult(exit_code=0, stdout=target_out, stderr=""))
+        ctx.target.run_command = target_rc
+        return FolderSyncJob(ctx), target_rc
+
+    async def test_no_source_filters_skips_target_round_trip(self) -> None:
+        """No source filter files -> single pass, and the target is never queried."""
+        job, target_rc = self._job(source_out="", target_out="ignored")
+        assert await job._needs_seeding_pass(FolderEntry(path="/home")) is False
+        target_rc.assert_not_called()
+
+    async def test_identical_manifests_need_no_seeding(self) -> None:
+        line = "abc123  /home/alice/proj/.pcswitcher-filter"
+        job, _ = self._job(source_out=line + "\n", target_out=line + "\n")
+        assert await job._needs_seeding_pass(FolderEntry(path="/home")) is False
+
+    async def test_source_filter_absent_on_target_needs_seeding(self) -> None:
+        job, _ = self._job(source_out="abc  /home/a/.pcswitcher-filter\n", target_out="")
+        assert await job._needs_seeding_pass(FolderEntry(path="/home")) is True
+
+    async def test_source_filter_content_differs_needs_seeding(self) -> None:
+        """Same path, different hash (edited filter) -> different line -> not a subset -> seed."""
+        job, _ = self._job(
+            source_out="NEWHASH  /home/a/.pcswitcher-filter\n",
+            target_out="OLDHASH  /home/a/.pcswitcher-filter\n",
+        )
+        assert await job._needs_seeding_pass(FolderEntry(path="/home")) is True
+
+    async def test_target_only_extra_filters_need_no_seeding(self) -> None:
+        """A filter present only on the target never forces a seeding pass (it only adds protection)."""
+        line = "abc  /home/a/.pcswitcher-filter"
+        job, _ = self._job(source_out=line + "\n", target_out=line + "\nxyz  /home/b/.pcswitcher-filter\n")
+        assert await job._needs_seeding_pass(FolderEntry(path="/home")) is False
+
+
+@pytest.mark.asyncio
 class TestExecuteDryRun:
     """execute() in dry-run mode: rsync runs with --dry-run."""
 
@@ -734,6 +867,22 @@ class TestExecuteDryRun:
 
         called_cmd: str = ctx.source.start_process.call_args[0][0]
         assert "--dry-run" in called_cmd
+
+    async def test_dry_run_skips_seeding_and_the_manifest_check(self) -> None:
+        """Dry-run must not write to the target: neither the manifest check nor the seeding pass runs."""
+        ctx = make_context(dry_run=True)
+        # Even if the manifests would differ, dry-run short-circuits before the check.
+        ctx.source.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=0, stdout="h  /home/alice/.pcswitcher-filter\n", stderr="")
+        )
+        ctx.source.start_process = AsyncMock(return_value=make_fake_process())
+
+        job = FolderSyncJob(ctx)
+        await job.execute()
+
+        ctx.source.run_command.assert_not_called()  # manifest check skipped in dry-run
+        assert ctx.source.start_process.call_count == 1  # only the read-only preview pass
+        assert "--dry-run" in ctx.source.start_process.call_args[0][0]
 
 
 @pytest.mark.asyncio
@@ -774,3 +923,57 @@ class TestExecuteNormalMode:
 
         # A CRITICAL-level record must have been emitted
         assert any(r.levelno == LogLevel.CRITICAL for r in caplog.records)
+
+    async def test_seeding_pass_runs_before_the_mirror_when_filters_differ(self) -> None:
+        """When a source per-dir filter isn't yet on the target, a no-delete seeding pass precedes the mirror.
+
+        Both passes carry the same dir-merge filter, so per-directory (and central) rules are
+        respected in each — the seeding pass just omits --delete so it can put the filter files
+        onto the target before the deleting mirror runs.
+        """
+        ctx = make_context()
+        # Source has a per-dir filter; the target's manifest (default empty) lacks it -> seed.
+        ctx.source.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=0, stdout="hash  /home/alice/.pcswitcher-filter\n", stderr="")
+        )
+        ctx.source.start_process = AsyncMock(return_value=make_fake_process())
+
+        job = FolderSyncJob(ctx)
+        await job.execute()
+
+        assert ctx.source.start_process.call_count == 2, "expected a seeding pass then the mirror"
+        seed_cmd = ctx.source.start_process.call_args_list[0].args[0]
+        mirror_cmd = ctx.source.start_process.call_args_list[1].args[0]
+        assert "--delete" not in seed_cmd, "the seeding pass must not delete"
+        assert "--delete" in mirror_cmd, "the mirror pass deletes"
+        assert "dir-merge /.pcswitcher-filter" in seed_cmd
+        assert "dir-merge /.pcswitcher-filter" in mirror_cmd
+
+    async def test_seeding_pass_skipped_when_no_source_filters(self) -> None:
+        """With no .pcswitcher-filter on the source, only the single deleting mirror runs (common case)."""
+        ctx = make_context()
+        ctx.source.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        target_rc = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        ctx.target.run_command = target_rc
+        ctx.source.start_process = AsyncMock(return_value=make_fake_process())
+
+        job = FolderSyncJob(ctx)
+        await job.execute()
+
+        assert ctx.source.start_process.call_count == 1
+        assert "--delete" in ctx.source.start_process.call_args[0][0]
+        target_rc.assert_not_called()  # short-circuit: no target manifest round-trip
+
+    async def test_seeding_pass_failure_aborts_before_the_mirror(self) -> None:
+        """A non-zero exit in the seeding pass raises RuntimeError; the deleting mirror never runs."""
+        ctx = make_context()
+        ctx.source.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=0, stdout="hash  /home/alice/.pcswitcher-filter\n", stderr="")
+        )
+        # The first (seeding) pass fails.
+        ctx.source.start_process = AsyncMock(return_value=make_fake_process(exit_code=23, stderr="boom"))
+
+        job = FolderSyncJob(ctx)
+        with pytest.raises(RuntimeError):
+            await job.execute()
+        assert ctx.source.start_process.call_count == 1, "mirror must not run after a failed seeding pass"

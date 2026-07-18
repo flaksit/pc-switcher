@@ -177,3 +177,37 @@ class TestLogsCommand:
         # Should exit with non-zero and show "no log" message
         assert result.exit_code == 1, f"Expected exit code 1, got {result.exit_code}"
         assert "no log" in result.stdout.lower(), f"Expected 'no log' message.\nstdout: {result.stdout}"
+
+
+class TestInitCommand:
+    """Tests for the 'pc-switcher init' command.
+
+    Verifies init writes config.yaml plus the starter home.filter/root.filter
+    package-data files next to it, honoring --force for all three (#166).
+    """
+
+    def test_init_writes_config_and_filter_files(self, tmp_path: Path) -> None:
+        """init writes config.yaml, home.filter, and root.filter into the config dir."""
+        config_path = tmp_path / "config.yaml"
+        with patch.object(Configuration, "get_default_config_path", return_value=config_path):
+            result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, f"init failed: {result.stdout}"
+        assert config_path.exists()
+        assert (tmp_path / "home.filter").exists()
+        assert (tmp_path / "root.filter").exists()
+        assert "+ .cache/uv/***" in (tmp_path / "home.filter").read_text()
+
+    def test_init_force_overwrites_all_three_files(self, tmp_path: Path) -> None:
+        """init --force overwrites config.yaml and both filter files without error."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("stale config")
+        (tmp_path / "home.filter").write_text("stale home filter")
+        (tmp_path / "root.filter").write_text("stale root filter")
+
+        with patch.object(Configuration, "get_default_config_path", return_value=config_path):
+            result = runner.invoke(app, ["init", "--force"])
+
+        assert result.exit_code == 0, f"init --force failed: {result.stdout}"
+        assert "+ .cache/uv/***" in (tmp_path / "home.filter").read_text()
+        assert "stale root filter" not in (tmp_path / "root.filter").read_text()

@@ -24,6 +24,10 @@ The default folder-sync scope is the real `/home` (and `/root`) mirrored with `r
 - Keep every other exclusion user-configurable; hardcode nothing else.
 - Logs are machine-local: each machine keeps its own; the whole `.local/share/pc-switcher/` directory is excluded rather than enumerating individual files.
 
+## Interaction with user filter rules (#166)
+
+Folder sync now emits user filter rules via two rsync surfaces: a per-folder central `merge <filter_file>` and a tree-wide `dir-merge /.pcswitcher-filter`. The runtime-protection excludes in this ADR remain FIRST of all three groups — ahead of both the central merge and the dir-merge (GLOBAL-FIRST: merge before dir-merge) — so no central `+` and no per-dir `+` rule can ever re-expose pc-switcher's own runtime files.
+
 ## Consequences
 **Positive**:
 - A `/home` mirror can never clobber the target's sync-history, lock, logs, or running install.
@@ -37,4 +41,4 @@ The default folder-sync scope is the real `/home` (and `/root`) mirrored with `r
 ## References
 - ADR-013: rsync-over-SSH as user-data transport
 - ADR-015: Topology-based sync-safety model
-- `src/pcswitcher/jobs/folder_sync.py` (`_RUNTIME_EXCLUDE_RELPATHS`, `_runtime_exclude_filters`)
+- `src/pcswitcher/jobs/folder_sync.py` (`_RUNTIME_EXCLUDE_RELPATHS`, `_runtime_exclude_filters`, and `_build_rsync_cmd` for the merge/dir-merge emission point)

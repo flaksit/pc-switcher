@@ -13,10 +13,11 @@ rsync transfer.
 from __future__ import annotations
 
 import getpass
+import os
 import re
 import shlex
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, override
 
@@ -45,23 +46,31 @@ _RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
 
 @dataclass
 class FolderEntry:
-    """A single folder to sync with its include/exclude configuration.
+    """A single folder to sync, with its optional central rsync filter file.
 
-    Excludes map to rsync `--filter=- <pattern>` arguments in order (first-match-wins).
+    `filter_file` is a per-folder central rsync merge filter file (native
+    rsync `+`/`-` filter syntax, first-match-wins); unset/empty means no
+    central merge rule for that folder (runtime excludes and the tree-wide
+    `dir-merge /.pcswitcher-filter` still apply).
     """
 
     path: str
     enabled: bool = True
-    excludes: list[str] = field(default_factory=list)
+    filter_file: str | None = None
 
-    def to_rsync_filter_args(self) -> list[str]:
-        """Convert excludes to rsync --filter arguments.
+    def expanded_filter_file(self) -> str | None:
+        """Return the ~- and env-var-expanded absolute filter_file path, or None if unset.
 
-        Returns a list of `--filter=- <pattern>` strings in config order.
-        First-match-wins semantics are preserved because the order of the list
-        is the order in which rsync evaluates the filter rules.
+        Expansion uses the invoking user's environment because the source is
+        always the local machine and rsync reads the merge file locally there
+        (the merge/dir-merge rules only take effect on the source side of the
+        transfer; see `_build_rsync_cmd`).
         """
-        return [f"--filter=- {pattern}" for pattern in self.excludes]
+        if not self.filter_file:
+            return None
+        # Path.expanduser() has no env-var equivalent, so expandvars runs first (os.path,
+        # no pathlib alternative exists), then Path.expanduser() resolves the leading ~.
+        return str(Path(os.path.expandvars(self.filter_file)).expanduser())
 
 
 class FolderSyncJob(SyncJob):
@@ -74,7 +83,7 @@ class FolderSyncJob(SyncJob):
         folders:
           - path: /home
             enabled: true          # default
-            excludes: [...]        # rsync filter patterns, optional
+            filter_file: ~/...     # central rsync merge filter file, optional
     """
 
     name: ClassVar[str] = "folder_sync"
@@ -89,10 +98,12 @@ class FolderSyncJob(SyncJob):
                     "properties": {
                         "path": {"type": "string"},
                         "enabled": {"type": "boolean", "default": True},
-                        "excludes": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "default": [],
+                        "filter_file": {
+                            "type": "string",
+                            "description": (
+                                "Path to a central rsync merge filter file for this folder "
+                                "(~ and env vars expanded); unset means no central filter rule"
+                            ),
                         },
                     },
                     "required": ["path"],
@@ -135,7 +146,7 @@ class FolderSyncJob(SyncJob):
             FolderEntry(
                 path=f["path"],
                 enabled=f.get("enabled", True),
-                excludes=f.get("excludes", []),
+                filter_file=f.get("filter_file"),
             )
             for f in self.context.config["folders"]
             if f.get("enabled", True)
@@ -172,7 +183,10 @@ class FolderSyncJob(SyncJob):
         1. `sudo rsync --version` succeeds on source and target.
         2. `acl` package is installed on source and target (required for -A flag;
            without it rsync silently drops ACLs — RESEARCH Pitfall 5).
-        3. Each active folder path exists on the source.
+        3. Each active folder path exists on the source; if a folder configures a
+           `filter_file`, its (expanded) path must also exist on the source, else
+           a configured-but-absent filter file could silently degrade to a full
+           `--delete` mirror with no filter rules applied.
 
         Returns the list of validation errors (empty on success).
         """
@@ -218,7 +232,7 @@ class FolderSyncJob(SyncJob):
                 )
             )
 
-        # --- Step 3: active folder existence on source ---
+        # --- Step 3: active folder existence on source, and filter_file existence ---
         for folder in self._active_folders():
             quoted = shlex.quote(folder.path)
             result = await self.source.run_command(f"test -d {quoted}")
@@ -229,6 +243,20 @@ class FolderSyncJob(SyncJob):
                         f"folder {folder.path!r} does not exist on source",
                     )
                 )
+
+            expanded_filter_file = folder.expanded_filter_file()
+            if expanded_filter_file is not None:
+                # Check the EXPANDED path so no literal `~` reaches the shell (mirrors
+                # the folder existence check above for consistency and correct host).
+                quoted_filter = shlex.quote(expanded_filter_file)
+                result = await self.source.run_command(f"test -f {quoted_filter}")
+                if result.exit_code != 0:
+                    errors.append(
+                        self._validation_error(
+                            Host.SOURCE,
+                            f"filter_file {folder.filter_file!r} for folder {folder.path!r} does not exist on source",
+                        )
+                    )
 
         return errors
 
@@ -251,61 +279,22 @@ class FolderSyncJob(SyncJob):
         prefix = "/" if str(rel) == "." else f"/{rel}/"
         return [f"--filter={shlex.quote(f'- {prefix}{sub}')}" for sub in _RUNTIME_EXCLUDE_RELPATHS]
 
-    def _build_rsync_cmd(self, folder: FolderEntry, dry_run: bool) -> str:
-        """Build the rsync shell command for syncing a single folder.
+    def _transport_args(self) -> list[str]:
+        """Build the rsync `-e <ssh>` transport and `--rsync-path='sudo rsync'` args.
 
-        Produces a command that:
-        - Runs as root on source via `sudo -E rsync` (preserves SSH_AUTH_SOCK
-          so the ssh agent socket remains accessible).
-        - Elevates to root on target via `--rsync-path='sudo rsync'` over the
-          normal-user SSH connection (D-05); root SSH login stays disabled.
-        - Uses the D-13 flag baseline: -aAXHS + --numeric-ids + --delete.
-        - Adds --dry-run only when `dry_run` is True (D-12).
-        - Never includes --delete-excluded (excluded files must survive on target
-          — D-06) or --checksum (rsync's built-in verification is trusted — D-14).
+        Shared by the main mirror (`_build_rsync_cmd`) and the filter pre-seed pass
+        (`_build_preseed_cmd`) so both use identical SSH credentials and target-side
+        sudo elevation.
 
-        All config-derived values (folder path, exclude patterns, target hostname)
-        are shlex.quote'd to prevent shell injection (T-05-01).
-
-        SSH transport note: `sudo -E rsync` runs rsync as root, and the ssh it
-        spawns also runs as root.  OpenSSH resolves `~/.ssh` from the running
-        uid's passwd entry (root → /root/.ssh) regardless of the $HOME variable.
-        Passing explicit credentials (-l, -i, -o UserKnownHostsFile=, -F) with
-        the invoking user's paths is the correct fix; relying on $HOME does NOT
-        work (empirically verified on target VMs: ssh fails with "Host key
-        verification failed" / rsync exit 255 without explicit credentials).
+        SSH transport note: `sudo -E rsync` runs rsync as root, and the ssh it spawns
+        also runs as root.  OpenSSH resolves `~/.ssh` from the running uid's passwd
+        entry (root → /root/.ssh) regardless of the $HOME variable.  Passing explicit
+        credentials (-l, -i, -o UserKnownHostsFile=, -F) with the invoking user's paths
+        is the correct fix; relying on $HOME does NOT work (empirically verified on
+        target VMs: ssh fails with "Host key verification failed" / rsync exit 255
+        without explicit credentials).
         """
-        parts = [
-            "sudo",
-            "-E",
-            # Force the C locale so rsync's --info=progress2 byte counter is
-            # printed ungrouped.  Under a grouping locale (e.g. LC_NUMERIC=nl_BE)
-            # rsync prints "80.153.795.479"; the progress2 regex captures the
-            # whole token and float() then rejects the thousands separators,
-            # aborting the sync over a purely cosmetic figure (WR-01).  `env`
-            # runs after sudo so it sets the locale for rsync as root regardless
-            # of sudo's own env policy.
-            "env",
-            "LC_ALL=C",
-            "rsync",
-            "-aAXHS",
-            "--numeric-ids",
-            "--delete",
-            "--info=progress2",
-            f"--out-format={shlex.quote('%i %n%L')}",
-            "--partial",
-            "--mkpath",
-        ]
-
-        if dry_run:
-            parts.append("--dry-run")
-
-        # Build explicit SSH credentials for the -e transport.
-        # Background: sudo launches rsync as root; root's ssh resolves ~/.ssh
-        # from /root/.ssh (uid lookup), not from $HOME.  Passing the invoking
-        # user's assets explicitly is the verified fix (see docstring).
-        home = Path.home()
-        ssh_dir = home / ".ssh"
+        ssh_dir = Path.home() / ".ssh"
         target_user = self.context.target_username or getpass.getuser()
 
         ssh_tokens: list[str] = ["ssh", "-T", "-q", "-l", target_user]
@@ -330,19 +319,109 @@ class FolderSyncJob(SyncJob):
         # shlex.join quotes individual tokens (handles spaces in paths).
         # shlex.quote wraps the assembled command for the outer -e argument.
         ssh_cmd = shlex.join(ssh_tokens)
-        parts.append(f"-e {shlex.quote(ssh_cmd)}")
-
         # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
-        parts.append(f"--rsync-path={shlex.quote('sudo rsync')}")
+        return [f"-e {shlex.quote(ssh_cmd)}", f"--rsync-path={shlex.quote('sudo rsync')}"]
 
-        # Hardcoded protective excludes come FIRST (before user rules) so no user
-        # include rule can re-expose pc-switcher's own runtime files (ADR-016).
+    async def _needs_seeding_pass(self, folder: FolderEntry) -> bool:
+        """Whether a no-delete seeding pass must run before the deleting mirror.
+
+        A dir-merge rule is read from the *receiver* during the delete scan, so the
+        deleting mirror protects the target correctly only when every source
+        `.pcswitcher-filter` is already present and byte-identical on the target.  In
+        the steady state that already holds — filter files sync like any other file —
+        so a single pass is safe and the whole tree is walked only once.  A seeding
+        pass is needed only when a per-directory filter was added or changed on the
+        source (or on a first sync): then the source's filter files are not yet
+        reflected on the target and the mirror must align them first.
+
+        Detects this by hashing just the (few, small) `.pcswitcher-filter` files on
+        each side and comparing — far cheaper than the second full rsync pass it
+        avoids.  Short-circuits when the source has none (the common case — the
+        default config uses only the central `filter_file`), skipping the target
+        round-trip.  Runs as root, like the mirror, so filter files under directories
+        the invoking user cannot read are still seen and hashed.  Target-only extra
+        filter files do not force a seeding pass (they only ever add protection).
+        """
+        path = shlex.quote(folder.path.rstrip("/") or "/")
+        manifest_cmd = f"sudo find {path} -name .pcswitcher-filter -exec sha256sum {{}} +"
+        src = await self.source.run_command(manifest_cmd)
+        src_manifest = set(src.stdout.splitlines())
+        if not src_manifest:
+            return False  # no per-directory filters on the source -> nothing to seed
+        tgt = await self.target.run_command(manifest_cmd, login_shell=False)
+        tgt_manifest = set(tgt.stdout.splitlines())
+        # Seed unless every source filter file is present and identical on the target.
+        return not src_manifest.issubset(tgt_manifest)
+
+    def _build_rsync_cmd(self, folder: FolderEntry, dry_run: bool, delete: bool = True) -> str:
+        """Build the rsync shell command for syncing a single folder.
+
+        Produces a command that:
+        - Runs as root on source via `sudo -E rsync` (preserves SSH_AUTH_SOCK
+          so the ssh agent socket remains accessible).
+        - Elevates to root on target via `--rsync-path='sudo rsync'` over the
+          normal-user SSH connection (D-05); root SSH login stays disabled.
+        - Uses the D-13 flag baseline: -aAXHS + --numeric-ids + --delete.
+        - Adds --dry-run only when `dry_run` is True (D-12).
+        - Omits --delete when `delete` is False: `execute` runs a no-delete seeding
+          pass first (when the tree has per-directory filters) so every source
+          `.pcswitcher-filter` reaches the target before the deleting mirror — a
+          dir-merge rule only protects the target once the filter file is on the
+          receiver, else --delete would remove (not protect) the files it names.
+        - Never includes --delete-excluded (excluded files must survive on target
+          — D-06) or --checksum (rsync's built-in verification is trusted — D-14).
+
+        All config-derived values (folder path, exclude patterns, target hostname)
+        are shlex.quote'd to prevent shell injection (T-05-01).
+
+        The SSH transport and target-side sudo elevation are built by
+        `_transport_args`.  The filter chain (runtime excludes → central merge →
+        dir-merge) is identical with and without --delete, so both passes respect the
+        central `filter_file` and per-directory `.pcswitcher-filter` files exactly.
+        """
+        parts = [
+            "sudo",
+            "-E",
+            # Force the C locale so rsync's --info=progress2 byte counter is
+            # printed ungrouped.  Under a grouping locale (e.g. LC_NUMERIC=nl_BE)
+            # rsync prints "80.153.795.479"; the progress2 regex captures the
+            # whole token and float() then rejects the thousands separators,
+            # aborting the sync over a purely cosmetic figure (WR-01).  `env`
+            # runs after sudo so it sets the locale for rsync as root regardless
+            # of sudo's own env policy.
+            "env",
+            "LC_ALL=C",
+            "rsync",
+            "-aAXHS",
+            "--numeric-ids",
+            "--info=progress2",
+            f"--out-format={shlex.quote('%i %n%L')}",
+            "--partial",
+            "--mkpath",
+        ]
+
+        if delete:
+            parts.append("--delete")
+
+        if dry_run:
+            parts.append("--dry-run")
+
+        # SSH transport + target-side sudo elevation (shared with the pre-seed pass).
+        parts.extend(self._transport_args())
+
+        # GLOBAL-FIRST filter precedence: runtime excludes (un-overridable, ADR-016)
+        # come first; the folder's central `merge` filter (when configured) comes
+        # next so its rules win over any per-directory file under first-match-wins;
+        # the tree-wide `dir-merge /.pcswitcher-filter` is always last and gives
+        # users a per-directory (gitignore-like) authoring surface. DO NOT add
+        # --delete-excluded — excluded files (e.g. .ssh/id_*, .config/tailscale)
+        # must survive on the target (D-06).
         parts.extend(self._runtime_exclude_filters(folder.path))
 
-        # Per-folder filter rules in config order (first-match-wins for rsync).
-        # DO NOT add --delete-excluded — excluded machine-specific files (e.g.
-        # .ssh/id_*, .config/tailscale) must survive on the target (D-06).
-        parts.extend(f"--filter={shlex.quote(f'- {pattern}')}" for pattern in folder.excludes)
+        expanded_filter_file = folder.expanded_filter_file()
+        if expanded_filter_file is not None:
+            parts.append(f"--filter={shlex.quote(f'merge {expanded_filter_file}')}")
+        parts.append(f"--filter={shlex.quote('dir-merge /.pcswitcher-filter')}")
 
         # Source: trailing slash syncs contents, not the directory itself.
         src = shlex.quote(folder.path.rstrip("/") + "/")
@@ -432,16 +511,48 @@ class FolderSyncJob(SyncJob):
 
         return files_xfr, bytes_xfr, files_deleted
 
+    async def _run_rsync_pass(self, cmd: str, folder: FolderEntry) -> tuple[int, int, int]:
+        """Run one rsync pass: spawn, stream progress/logs, and raise on non-zero exit.
+
+        Spawns rsync as an async subprocess (ADR-005 — no blocking calls), streams
+        stdout through `_stream_rsync` for TUI progress (D-15) and per-file FULL logs
+        (D-16), then checks the exit code.  Returns the pass's
+        (files_transferred, bytes_transferred, files_deleted).  Shared by the no-delete
+        seeding pass and the deleting mirror in `execute`.
+        """
+        proc = await self.source.start_process(cmd)
+        files_transferred, bytes_transferred, files_deleted = await self._stream_rsync(
+            proc.read_stdout_chunks(), folder
+        )
+        result = await proc.wait_result()
+        if result.exit_code != 0:
+            self._log(
+                Host.SOURCE,
+                LogLevel.CRITICAL,
+                f"rsync failed for {folder.path!r}: {result.stderr.strip()}",
+                exit_code=result.exit_code,
+            )
+            raise RuntimeError(f"rsync failed for {folder.path!r} with exit code {result.exit_code}")
+        return files_transferred, bytes_transferred, files_deleted
+
     async def execute(self) -> None:
         """Sync each active folder via rsync-over-SSH.
 
         For each active folder (D-10):
-        1. Builds the rsync command with the D-13 flag baseline, machine-specific
-           filter rules (D-11), and the dry-run toggle (D-12).
-        2. Spawns rsync as an async subprocess (ADR-005 — no blocking calls).
-        3. Streams stdout through `_stream_rsync` for TUI progress (D-15) and
-           per-file FULL logs (D-16).
-        4. On non-zero exit, logs CRITICAL and raises RuntimeError (sync aborts).
+        1. When this is a real sync and the source's per-directory `.pcswitcher-filter`
+           files are not already reflected on the target (`_needs_seeding_pass`), runs
+           a seeding pass first — the same mirror WITHOUT `--delete` — so every source
+           `.pcswitcher-filter` reaches the target before the deleting mirror.  A
+           dir-merge rule only protects the target once the filter file is on the
+           receiver, so without this the deleting mirror would remove (not protect)
+           the files a per-dir rule names.  Both passes apply the identical filter
+           chain, so the central `filter_file` and per-directory rules are respected
+           exactly.  Skipped in dry-run (must not write to the target, D-12), which
+           makes the dry-run deletion preview pessimistic for per-dir-protected paths
+           (the safe direction), and skipped when the per-directory filters already
+           match on both ends (the steady state — no seeding is needed).
+        2. Runs the deleting mirror (D-13 baseline, D-11 filters, D-12 dry-run toggle).
+        3. On non-zero exit from either pass, logs CRITICAL and raises RuntimeError.
         """
         folders = self._active_folders()
 
@@ -454,28 +565,27 @@ class FolderSyncJob(SyncJob):
                 session_id=self.context.session_id,
             )
 
-            cmd = self._build_rsync_cmd(folder, self.context.dry_run)
-
-            # Spawn rsync; in dry_run mode the command already includes --dry-run
-            # so rsync performs a real read-only preview without writing any files.
-            proc = await self.source.start_process(cmd)
-
-            # Stream progress and per-file output
-            files_transferred, bytes_transferred, files_deleted = await self._stream_rsync(
-                proc.read_stdout_chunks(), folder
-            )
-
-            # Obtain exit code and stderr after stdout is fully consumed
-            result = await proc.wait_result()
-
-            if result.exit_code != 0:
+            seed_files = 0
+            seed_bytes = 0
+            if not self.context.dry_run and await self._needs_seeding_pass(folder):
                 self._log(
                     Host.SOURCE,
-                    LogLevel.CRITICAL,
-                    f"rsync failed for {folder.path!r}: {result.stderr.strip()}",
-                    exit_code=result.exit_code,
+                    LogLevel.FULL,
+                    f"Seeding per-directory filter files for {folder.path!r} (no-delete pass)",
                 )
-                raise RuntimeError(f"rsync failed for {folder.path!r} with exit code {result.exit_code}")
+                seed_files, seed_bytes, _ = await self._run_rsync_pass(
+                    self._build_rsync_cmd(folder, dry_run=False, delete=False), folder
+                )
+
+            # Deleting mirror (or, in dry-run, the read-only preview).
+            mirror_files, mirror_bytes, files_deleted = await self._run_rsync_pass(
+                self._build_rsync_cmd(folder, self.context.dry_run, delete=True), folder
+            )
+
+            # On a seeding run the bulk transfer happened in the first pass and the
+            # mirror transfers ~nothing; sum so the summary reflects the real work.
+            files_transferred = seed_files + mirror_files
+            bytes_transferred = seed_bytes + mirror_bytes
 
             # Per-folder summary (D-16)
             self._log(

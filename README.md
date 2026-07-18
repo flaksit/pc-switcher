@@ -106,9 +106,9 @@ Top-level sections:
 - `sync_jobs` — which sync jobs are enabled
 - `disk_space_monitor` — free-space thresholds checked before and during a sync
 - `btrfs_snapshots` — subvolumes to snapshot and retention policy
-- `folder_sync` — folders to mirror via rsync, with per-folder exclude patterns
+- `folder_sync` — folders to mirror via rsync, filtered by a per-folder filter file (native rsync `+`/`-` rules) plus optional per-directory `.pcswitcher-filter` files. Filter rules can exclude a subtree and re-include selected children (e.g. drop `~/.cache` but keep `~/.cache/uv`)
 
-See the **[Configuration Reference](docs/configuration.md)** for every option, defaults, and the folder-sync exclude pattern syntax.
+See the **[Configuration Reference](docs/configuration.md)** for every option, defaults, the folder-sync filter-rule syntax, and a "coming from `.gitignore`" guide.
 
 ## Available Commands
 

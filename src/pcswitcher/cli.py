@@ -477,18 +477,33 @@ def init(
         console.print("Use --force to overwrite")
         raise typer.Exit(1)
 
-    # Create parent directory if needed
-    config_path.parent.mkdir(parents=True, exist_ok=True)
+    # config.yaml plus the two starter filter files it references are written as
+    # one unit under a shared error boundary: a mid-sequence write failure would
+    # otherwise leave a partial config dir (e.g. config.yaml pointing at a
+    # filter_file that was never written) and surface as a raw traceback.
+    filter_file_names = ("home.filter", "root.filter")
+    try:
+        # Create parent directory if needed
+        config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Read default config from package resources
-    default_config = files("pcswitcher").joinpath("default-config.yaml").read_text()
+        # Write config.yaml from package resources
+        config_path.write_text(files("pcswitcher").joinpath("default-config.yaml").read_text())
 
-    # Write to config file
-    config_path.write_text(default_config)
+        # Ship the starter filter files (default-config.yaml's filter_file entries
+        # reference these by name) next to config.yaml, honoring --force the same
+        # way as config.yaml above.
+        for name in filter_file_names:
+            (config_path.parent / name).write_text(files("pcswitcher").joinpath(name).read_text())
+    except OSError as e:
+        console.print(f"[bold red]Error writing configuration:[/bold red] {e}")
+        raise typer.Exit(1) from e
 
     console.print(f"[green]Created configuration file:[/green] {config_path}")
+    for name in filter_file_names:
+        console.print(f"[green]Created filter file:[/green] {config_path.parent / name}")
     console.print("\n[dim]Please review and customize the configuration, especially:[/dim]")
     console.print("[dim]  - btrfs_snapshots.subvolumes (must match your system)[/dim]")
+    console.print("[dim]  - home.filter / root.filter (edit to add your own filter rules)[/dim]")
 
 
 GITHUB_REPO_URL = "https://github.com/flaksit/pc-switcher"

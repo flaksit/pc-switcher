@@ -1,0 +1,36 @@
+# pc-switcher central filter file for the /home folder_sync entry.
+# Native rsync filter syntax: `+` includes, `-` excludes, first-match-wins.
+# Patterns here are FLOATING (no leading /): pc-switcher syncs /home with each
+# user's directory as the transfer root's immediate content (e.g. alice/.cache/uv),
+# so a leading-slash pattern would anchor to /home itself and never match.
+# See docs/configuration.md "Filter rules" and "Coming from .gitignore" for the
+# full syntax and the anchored-vs-floating distinction.
+
+# Machine-identity excludes — never synced between machines.
+- .ssh/id_*
+- .ssh/known_hosts
+# authorized_keys is machine-local access control: mirroring it overwrites the
+# target's copy (which does not list the source), so the target rejects the
+# source's next connection and locks the sync out of its own target.
+- .ssh/authorized_keys
+- .config/tailscale
+
+# Non-.cache regenerable GPU state (nvidia kernel module cache).
+- .nv
+
+# VS Code regenerable caches (NOT Code/User — that IS synced).
+- .config/Code/Cache
+- .config/Code/CachedData
+- .config/Code/GPUCache
+- .config/Code/Code Cache
+- .config/Code/CachedExtensionVSIXs
+
+# Cache include-override (issue #166 example): drop all of .cache except the
+# dev package caches below. .cache/nvidia, .cache/mesa_shader_cache, and
+# .cache/fontconfig are now subsumed by the trailing `- .cache/*` rule (no
+# separate lines needed). .npm lives outside .cache; add your own rule for it
+# if you want it kept.
++ .cache/
++ .cache/uv/***
++ .cache/pip/***
+- .cache/*

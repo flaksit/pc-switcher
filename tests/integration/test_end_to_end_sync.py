@@ -28,8 +28,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 import pytest
 import pytest_asyncio
@@ -272,14 +274,139 @@ _INCLUDED_MARKERS = {
 _EXCLUDED_MARKER = ".config/Code/Cache/pcsw-cache-marker.bin"
 
 
+# ---------------------------------------------------------------------------
+# #166 filter-rule scenario (separate from the strict-manifest _TESTTREE).
+#
+# Rides on the same first A→B sync. Exercises, through the REAL rsync command
+# built by _build_rsync_cmd, every filter surface:
+#   - central include-override (keep pcsw-filter/cache/keep-uv + keep-pip, drop the rest);
+#   - a wholly-excluded central subtree (pcsw-filter/excluded);
+#   - nested per-directory .pcswitcher-filter files (pcsw-filter/nest and .../nest/deep);
+# and verifies BOTH directions of correctness:
+#   - included paths ADD / OVERWRITE / DELETE on the target (rsync --delete within);
+#   - excluded paths leave the target AS-IS, both when a conflicting copy exists on the
+#     source AND when the path exists ONLY on the target (the --delete survival case —
+#     the important difference: no --delete-excluded, so excluded target files are never
+#     removed even with no source counterpart);
+#   - per-directory filter files themselves transfer to the target (no `e` modifier).
+#
+# This tree lives outside _TESTTREE so its intentional source/target divergences do not
+# perturb the strict ownership/content manifest equality asserted for _TESTTREE.
+# ---------------------------------------------------------------------------
+
+_FILTER_TREE = "pcsw-filter"
+
+# Files present on the SOURCE (pc1), home-relative → exact content.
+_FILTER_SRC: dict[str, str] = {
+    f"{_FILTER_TREE}/synced/add_me.txt": "src-add",  # source-only, included → added on target
+    f"{_FILTER_TREE}/synced/overwrite_me.txt": "src-new",  # differs on target → overwrites it
+    f"{_FILTER_TREE}/synced/keep_me.txt": "same",  # identical on target → unchanged
+    f"{_FILTER_TREE}/cache/keep-uv/tool.txt": "uv-src",  # include-override kept subfolder
+    f"{_FILTER_TREE}/cache/keep-pip/tool.txt": "pip-src",  # include-override kept subfolder
+    f"{_FILTER_TREE}/cache/junk/blob.txt": "junk-src",  # dropped sibling → must not transfer
+    f"{_FILTER_TREE}/excluded/on_both.txt": "src-version",  # excluded → must not overwrite target
+    f"{_FILTER_TREE}/nest/keep.txt": "nest-keep-src",  # per-dir subtree, not excluded → synced
+    f"{_FILTER_TREE}/nest/nested_secret.txt": "src-secret",  # per-dir excluded → must not transfer
+    f"{_FILTER_TREE}/nest/deep/keep.txt": "deep-keep-src",  # nested, not excluded → synced
+    f"{_FILTER_TREE}/nest/deep/nested_secret.txt": "src-deep-secret",  # inherited exclude → no transfer
+    f"{_FILTER_TREE}/nest/deep/deep_only.txt": "src-deep-only",  # deep per-dir exclude → no transfer
+}
+
+# Per-directory filter files on the SOURCE (transfer to target; govern their subtree).
+_FILTER_SRC_PERDIR: dict[str, str] = {
+    f"{_FILTER_TREE}/nest/.pcswitcher-filter": "- nested_secret.txt",
+    f"{_FILTER_TREE}/nest/deep/.pcswitcher-filter": "- deep_only.txt",
+}
+
+# Files PRE-EXISTING on the TARGET (pc2) before the first sync (drive the --delete cases).
+# The `overwrite_me` target copy differs in SIZE from the source's, not just content, so
+# rsync's default (size, mtime) quick-check always transfers it regardless of seed timing.
+# The target deliberately does NOT hold the .pcswitcher-filter files: this models a genuine
+# first sync. A dir-merge rule is read per-side, so a per-directory exclude protects a
+# pre-existing target file from --delete only once the filter file is on the receiver
+# (verified against rsync 3.2.7). folder_sync closes that gap: because the source filter
+# files are not yet on the target (_needs_seeding_pass detects the mismatch), execute()
+# runs the mirror WITHOUT --delete first to seed them, then the deleting mirror — so the
+# per-dir survivors below are protected on this first sync. That seeding pass is exactly
+# what this scenario exercises end-to-end.
+_FILTER_TGT: dict[str, str] = {
+    f"{_FILTER_TREE}/synced/overwrite_me.txt": "old",  # included, differing size → overwritten by source
+    f"{_FILTER_TREE}/synced/keep_me.txt": "same",  # identical → untouched
+    f"{_FILTER_TREE}/synced/delete_me.txt": "tgt-doomed",  # included, source-absent → deleted
+    f"{_FILTER_TREE}/cache/junk/tgt_junk.txt": "tgt-junk",  # central-excluded, source-absent → survives
+    f"{_FILTER_TREE}/excluded/on_both.txt": "tgt-version",  # central-excluded, source-present → not overwritten
+    f"{_FILTER_TREE}/excluded/tgt_only.txt": "tgt-survivor",  # central-excluded, source-absent → survives
+    f"{_FILTER_TREE}/nest/nested_secret.txt": "tgt-secret",  # per-dir excluded (pre-seeded rule) → survives
+    f"{_FILTER_TREE}/nest/deep/nested_secret.txt": "tgt-deep-secret",  # inherited exclude → survives
+    f"{_FILTER_TREE}/nest/deep/deep_only.txt": "tgt-deep",  # deep per-dir exclude → survives
+}
+
+# Expected TARGET state after the first A→B sync (None ⇒ must be absent).
+_FILTER_EXPECT: dict[str, str | None] = {
+    # Included subtree: add / overwrite / keep / delete.
+    f"{_FILTER_TREE}/synced/add_me.txt": "src-add",
+    f"{_FILTER_TREE}/synced/overwrite_me.txt": "src-new",
+    f"{_FILTER_TREE}/synced/keep_me.txt": "same",
+    f"{_FILTER_TREE}/synced/delete_me.txt": None,
+    # Include-override (#166): kept dev caches sync; the dropped sibling never arrives.
+    f"{_FILTER_TREE}/cache/keep-uv/tool.txt": "uv-src",
+    f"{_FILTER_TREE}/cache/keep-pip/tool.txt": "pip-src",
+    f"{_FILTER_TREE}/cache/junk/blob.txt": None,
+    f"{_FILTER_TREE}/cache/junk/tgt_junk.txt": "tgt-junk",
+    # Central exclusion protects the target both ways (conflicting copy, and target-only).
+    f"{_FILTER_TREE}/excluded/on_both.txt": "tgt-version",
+    f"{_FILTER_TREE}/excluded/tgt_only.txt": "tgt-survivor",
+    # Nested per-directory filters: the files transfer; their rules protect the target subtree.
+    f"{_FILTER_TREE}/nest/.pcswitcher-filter": "- nested_secret.txt",
+    f"{_FILTER_TREE}/nest/deep/.pcswitcher-filter": "- deep_only.txt",
+    f"{_FILTER_TREE}/nest/keep.txt": "nest-keep-src",
+    f"{_FILTER_TREE}/nest/deep/keep.txt": "deep-keep-src",
+    f"{_FILTER_TREE}/nest/nested_secret.txt": "tgt-secret",
+    f"{_FILTER_TREE}/nest/deep/nested_secret.txt": "tgt-deep-secret",
+    f"{_FILTER_TREE}/nest/deep/deep_only.txt": "tgt-deep",
+}
+
+
 def _tree(user: str) -> str:
     """Absolute path of the seeded rich test subtree within the real home."""
     return f"/home/{user}/{_TESTTREE}"
 
 
+def _make_e2e_home_filter() -> str:
+    """Central `merge` filter for the /home folder_sync entry (#166).
+
+    Exercises, end-to-end through the real rsync command, every central filter surface:
+    the machine-identity/regenerable excludes (as before); the #166 include-override idiom
+    (keep the dev caches under pcsw-filter/cache while dropping the rest, via `+` re-includes
+    ordered before a `-` on the parent's children — the exact ancestor-descent shape the
+    shipped home.filter uses); and a wholly-excluded subtree (pcsw-filter/excluded). The
+    per-directory .pcswitcher-filter files seeded under pcsw-filter/nest are activated by the
+    job's own always-emitted `dir-merge /.pcswitcher-filter` rule, not by this file. Patterns
+    are floating (no leading /), matching the shipped home.filter, because /home syncs with
+    each user's directory one level below the transfer root.
+    """
+    return f"""\
+- .ssh/id_*
+- .ssh/known_hosts
+- .ssh/authorized_keys
+- .config/tailscale
+- .config/Code/Cache
+- .config/Code/CachedData
+- .config/Code/GPUCache
+- .cache
+- .local/share/uv/python
++ {_FILTER_TREE}/cache/
++ {_FILTER_TREE}/cache/keep-uv/***
++ {_FILTER_TREE}/cache/keep-pip/***
+- {_FILTER_TREE}/cache/*
+- {_FILTER_TREE}/excluded
+- {_TESTTREE}/secret
+"""
+
+
 def _make_e2e_config() -> str:
     """Config exercising both a generic job (dummy_success) and folder_sync of /home."""
-    return f"""\
+    return """\
 logging:
   file: DEBUG
   tui: INFO
@@ -304,17 +431,7 @@ folder_sync:
   folders:
     - path: /home
       enabled: true
-      excludes:
-        - .ssh/id_*
-        - .config/tailscale
-        - .config/Code/Cache
-        - .config/Code/CachedData
-        - .config/Code/GPUCache
-        - .ssh/known_hosts
-        - .ssh/authorized_keys
-        - .cache
-        - .local/share/uv/python
-        - {_TESTTREE}/secret
+      filter_file: ~/.config/pc-switcher/home.filter
 """
 
 
@@ -325,6 +442,80 @@ async def _write_config(executor: BashLoginRemoteExecutor, config: str) -> None:
         timeout=10.0,
     )
     assert result.success, f"Failed to write config: {result.stderr}"
+
+
+async def _write_filter_file(executor: BashLoginRemoteExecutor, contents: str) -> None:
+    """Write the folder_sync filter_file referenced by the e2e config to a VM (#166)."""
+    cmd = (
+        "mkdir -p ~/.config/pc-switcher && "
+        f"cat > ~/.config/pc-switcher/home.filter << 'FILTER_EOF'\n{contents}FILTER_EOF"
+    )
+    result = await executor.run_command(cmd, timeout=10.0)
+    assert result.success, f"Failed to write filter file: {result.stderr}"
+
+
+def _seed_files_script(files: dict[str, str]) -> str:
+    """Build a `set -e` shell script writing each home-relative path with its exact content.
+
+    `.pcswitcher-filter` files get a trailing newline (rsync merge-file convention); every
+    other file is written with `printf %s` (no trailing newline) so an exact content
+    comparison on the target is unambiguous.
+    """
+    lines = ["set -e"]
+    for rel, content in files.items():
+        rel_path = PurePosixPath(rel)
+        fmt = r"'%s\n'" if rel_path.name == ".pcswitcher-filter" else "%s"
+        lines.append(f"mkdir -p ~/{rel_path.parent}")
+        lines.append(f"printf {fmt} {shlex.quote(content)} > ~/{rel}")
+    return "\n".join(lines)
+
+
+async def _seed_filter_source(executor: BashLoginRemoteExecutor) -> None:
+    """Seed the #166 filter-scenario files (incl. per-directory filter files) on the source."""
+    script = _seed_files_script({**_FILTER_SRC, **_FILTER_SRC_PERDIR})
+    result = await executor.run_command(script, timeout=30.0, login_shell=False)
+    assert result.success, f"Failed to seed filter-scenario source files: {result.stderr}"
+
+
+async def _seed_filter_target(executor: BashLoginRemoteExecutor) -> None:
+    """Seed the pre-existing target-side files that the #166 filter assertions check against."""
+    result = await executor.run_command(_seed_files_script(_FILTER_TGT), timeout=30.0, login_shell=False)
+    assert result.success, f"Failed to seed filter-scenario target files: {result.stderr}"
+
+
+async def _assert_filter_outcomes(executor: BashLoginRemoteExecutor) -> None:
+    """Assert the target's #166 filter tree matches `_FILTER_EXPECT` after the first sync.
+
+    One command probes every expected path, emitting `<path>@@F@@<content-or-__ABSENT__>@@R@@`
+    records (printable separators, robust to any file content); the parsed results are then
+    compared here so a single assertion reports all discrepancies at once.
+    """
+    probe = "\n".join(
+        f"printf %s {shlex.quote(rel)}; printf '@@F@@'; "
+        f"if [ -e ~/{rel} ]; then cat ~/{rel}; else printf %s __ABSENT__; fi; printf '@@R@@'"
+        for rel in _FILTER_EXPECT
+    )
+    result = await executor.run_command(probe, timeout=30.0, login_shell=False)
+    assert result.success, f"filter-outcome probe failed on target: {result.stderr}"
+
+    got: dict[str, str] = {}
+    for record in result.stdout.split("@@R@@"):
+        if not record:
+            continue
+        path, _, content = record.partition("@@F@@")
+        got[path] = content
+
+    errors: list[str] = []
+    for rel, expected in _FILTER_EXPECT.items():
+        actual = got.get(rel)
+        if expected is None:
+            if actual != "__ABSENT__":
+                errors.append(f"{rel}: expected ABSENT on target, got {actual!r}")
+        elif actual is None or actual == "__ABSENT__":
+            errors.append(f"{rel}: expected {expected!r}, but the file is ABSENT on target")
+        elif actual.strip() != expected.strip():
+            errors.append(f"{rel}: expected {expected!r}, got {actual!r}")
+    assert not errors, "Filter-rule outcomes on target are wrong:\n" + "\n".join(errors)
 
 
 async def _seed_rich_tree(executor: BashLoginRemoteExecutor, tree: str) -> None:
@@ -428,11 +619,12 @@ async def _remove_test_artifacts(
     pc2_exec: BashLoginRemoteExecutor,
     tree: str,
 ) -> None:
-    """Remove the seeded test subtree, inclusion markers, and config from both VMs."""
+    """Remove the seeded test subtree, filter tree, inclusion markers, and config from both VMs."""
     markers = " ".join(f"~/{rel}" for rel in (*_INCLUDED_MARKERS, _EXCLUDED_MARKER))
     for name, exec_ in (("pc1", pc1_exec), ("pc2", pc2_exec)):
         res = await exec_.run_command(
-            f"sudo rm -rf {tree} {markers} && rm -f ~/.config/pc-switcher/config.yaml",
+            f"sudo rm -rf {tree} {markers} ~/{_FILTER_TREE} && "
+            "rm -f ~/.config/pc-switcher/config.yaml ~/.config/pc-switcher/home.filter",
             timeout=30.0,
             login_shell=False,
         )
@@ -463,7 +655,12 @@ class TestEndToEndSync:
            - folder_sync of the real /home: byte-identical content; numeric uid/gid; permissions incl.
              setuid/setgid/sticky; POSIX ACL; mtime; hard-link inode sharing; symlink; across user-,
              root-, and other-user-owned files AND directories the invoking user cannot read; config
-             exclusions honoured; and the ADR-016 runtime-file excludes (state/install/logs) via sentinels.
+             exclusions honoured; the ADR-016 runtime-file excludes (state/install/logs) via sentinels;
+             and (3f) the full #166 filter surface end-to-end — a central include-override (keep
+             pcsw-filter/cache/keep-uv+keep-pip, drop the rest), a wholly-excluded subtree, and nested
+             per-directory .pcswitcher-filter files — proving included paths add/overwrite/delete on
+             the target, excluded paths survive on the target whether or not a source copy exists, and
+             per-directory filter files themselves transfer.
         4. Mutate pc2 (add / modify / delete file / delete directory / chmod) then B→A: all propagate.
         5. A→B again with no override: a clean round-trip must not trip the out-of-order gate (ADR-015 #159).
 
@@ -475,9 +672,15 @@ class TestEndToEndSync:
 
         try:
             await _write_config(pc1_executor, _make_e2e_config())
+            await _write_filter_file(pc1_executor, _make_e2e_home_filter())
             await _seed_rich_tree(pc1_executor, tree)
             await _seed_included_markers(pc1_executor)
+            await _seed_filter_source(pc1_executor)
             await pc2_executor.run_command(f"sudo rm -rf {tree}", timeout=15.0, login_shell=False)
+            # Pre-seed the target-side files that drive the #166 --delete filter cases
+            # (overwrite / delete-within-included / excluded-survivor). NOT under `tree`,
+            # so the pc2 tree removal above leaves them in place for the first sync.
+            await _seed_filter_target(pc2_executor)
 
             # ADR-016 runtime-exclude sentinels: a marker inside each machine's own state dir
             # (reset_pcswitcher_state wiped the dir, so create it fresh here).
@@ -612,6 +815,13 @@ class TestEndToEndSync:
             assert "EXCLUDED_ABSENT" in inc_parts[-1], (
                 f"Config-excluded {_EXCLUDED_MARKER} reached pc2 (SC3 exclusion failed)."
             )
+
+            # 3f. #166 filter rules end-to-end (central include-override + wholly-excluded
+            # subtree + nested per-directory .pcswitcher-filter files). Verifies that
+            # included paths add/overwrite/delete on the target, that excluded paths leave
+            # the target as-is whether or not a source counterpart exists (the --delete
+            # survival case), and that per-directory filter files themselves transfer.
+            await _assert_filter_outcomes(pc2_executor)
 
             # --- Step 4: mutate pc2, then B→A ---
             mutate = await pc2_executor.run_command(
