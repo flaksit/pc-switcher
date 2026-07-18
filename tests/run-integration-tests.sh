@@ -199,13 +199,25 @@ check_vm_ready() {
     local user="$2"
 
     # Try to connect and check baseline snapshot exists
-    if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
         "${user}@${vm_host}" \
-        "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null; then
+        "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
         return 0
-    else
-        return 1
     fi
+
+    # Exit 255 = SSH transport failure (unreachable, timeout, or a rejected host
+    # key). accept-new auto-trusts a *new* key but refuses a *changed* one, so a
+    # stale known_hosts entry lands here rather than in the "not provisioned" path.
+    if [[ $exit_code -eq 255 ]]; then
+        log_error "SSH connection to ${vm_host} failed (could not run remote command)."
+        log_error "The VM may be unreachable, or its host key in ~/.ssh/known_hosts is stale."
+        log_error "Diagnose with: ssh ${user}@${vm_host} 'echo ok'"
+        log_error "If the key changed, refresh it: ssh-keygen -R ${vm_host}"
+    fi
+    return 1
 }
 
 # Check both VMs are ready
