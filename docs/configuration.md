@@ -173,12 +173,12 @@ rsync's filter rules resemble `.gitignore` but differ in a few load-bearing ways
 To re-include a subtree (e.g. `~/.cache/uv`) while dropping the rest of its parent (`~/.cache`), rsync must be able to *descend into* the parent first, so list the ancestor, the leaf, and the trailing exclude together, in that order:
 
 ```
-+ .cache/
-+ .cache/uv/***
-- .cache/*
++ /.cache/
++ /.cache/uv/***
+- /.cache/*
 ```
 
-Patterns anchor to the transfer root. Because pc-switcher syncs `/home` with the folder's *contents* as the transfer root, each user's home sits one level below that root (`alice/.cache/uv`, not `/.cache/uv`), so the shipped `home.filter` uses **floating** (non-leading-slash) patterns — the leading-slash form above is the transfer-root-relative template; drop the leading `/` when editing a filter file meant to apply under `/home`, and keep it when the transfer root itself is the directory you mean (e.g. a `path:` that is already the user's own home).
+Patterns anchor to the transfer root. Because pc-switcher syncs `/home` with the folder's *contents* as the transfer root, each user's home sits one level below that root (`alice/.cache/uv`, not `/.cache/uv`), so the shipped `home.filter` uses **floating** (non-leading-slash) patterns — the leading-slash form above is the transfer-root-relative template; drop the leading `/` (`+ .cache/`, `+ .cache/uv/***`, `- .cache/*`) when editing a filter file meant to apply under `/home`, and keep it when the transfer root itself is the directory you mean (e.g. a `path:` that is already the user's own home).
 
 ### Always-excluded runtime files
 
