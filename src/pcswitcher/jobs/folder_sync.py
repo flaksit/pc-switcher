@@ -13,10 +13,11 @@ rsync transfer.
 from __future__ import annotations
 
 import getpass
+import os
 import re
 import shlex
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, override
 
@@ -45,23 +46,31 @@ _RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
 
 @dataclass
 class FolderEntry:
-    """A single folder to sync with its include/exclude configuration.
+    """A single folder to sync, with its optional central rsync filter file.
 
-    Excludes map to rsync `--filter=- <pattern>` arguments in order (first-match-wins).
+    `filter_file` is a per-folder central rsync merge filter file (native
+    rsync `+`/`-` filter syntax, first-match-wins); unset/empty means no
+    central merge rule for that folder (runtime excludes and the tree-wide
+    `dir-merge /.pcswitcher-filter` still apply).
     """
 
     path: str
     enabled: bool = True
-    excludes: list[str] = field(default_factory=list)
+    filter_file: str | None = None
 
-    def to_rsync_filter_args(self) -> list[str]:
-        """Convert excludes to rsync --filter arguments.
+    def expanded_filter_file(self) -> str | None:
+        """Return the ~- and env-var-expanded absolute filter_file path, or None if unset.
 
-        Returns a list of `--filter=- <pattern>` strings in config order.
-        First-match-wins semantics are preserved because the order of the list
-        is the order in which rsync evaluates the filter rules.
+        Expansion uses the invoking user's environment because the source is
+        always the local machine and rsync reads the merge file locally there
+        (the merge/dir-merge rules only take effect on the source side of the
+        transfer; see `_build_rsync_cmd`).
         """
-        return [f"--filter=- {pattern}" for pattern in self.excludes]
+        if not self.filter_file:
+            return None
+        # Path.expanduser() has no env-var equivalent, so expandvars runs first (os.path,
+        # no pathlib alternative exists), then Path.expanduser() resolves the leading ~.
+        return str(Path(os.path.expandvars(self.filter_file)).expanduser())
 
 
 class FolderSyncJob(SyncJob):
@@ -74,7 +83,7 @@ class FolderSyncJob(SyncJob):
         folders:
           - path: /home
             enabled: true          # default
-            excludes: [...]        # rsync filter patterns, optional
+            filter_file: ~/...     # central rsync merge filter file, optional
     """
 
     name: ClassVar[str] = "folder_sync"
@@ -89,10 +98,12 @@ class FolderSyncJob(SyncJob):
                     "properties": {
                         "path": {"type": "string"},
                         "enabled": {"type": "boolean", "default": True},
-                        "excludes": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "default": [],
+                        "filter_file": {
+                            "type": "string",
+                            "description": (
+                                "Path to a central rsync merge filter file for this folder "
+                                "(~ and env vars expanded); unset means no central filter rule"
+                            ),
                         },
                     },
                     "required": ["path"],
@@ -135,7 +146,7 @@ class FolderSyncJob(SyncJob):
             FolderEntry(
                 path=f["path"],
                 enabled=f.get("enabled", True),
-                excludes=f.get("excludes", []),
+                filter_file=f.get("filter_file"),
             )
             for f in self.context.config["folders"]
             if f.get("enabled", True)
@@ -172,7 +183,10 @@ class FolderSyncJob(SyncJob):
         1. `sudo rsync --version` succeeds on source and target.
         2. `acl` package is installed on source and target (required for -A flag;
            without it rsync silently drops ACLs — RESEARCH Pitfall 5).
-        3. Each active folder path exists on the source.
+        3. Each active folder path exists on the source; if a folder configures a
+           `filter_file`, its (expanded) path must also exist on the source, else
+           a configured-but-absent filter file could silently degrade to a full
+           `--delete` mirror with no filter rules applied.
 
         Returns the list of validation errors (empty on success).
         """
@@ -218,7 +232,7 @@ class FolderSyncJob(SyncJob):
                 )
             )
 
-        # --- Step 3: active folder existence on source ---
+        # --- Step 3: active folder existence on source, and filter_file existence ---
         for folder in self._active_folders():
             quoted = shlex.quote(folder.path)
             result = await self.source.run_command(f"test -d {quoted}")
@@ -229,6 +243,21 @@ class FolderSyncJob(SyncJob):
                         f"folder {folder.path!r} does not exist on source",
                     )
                 )
+
+            expanded_filter_file = folder.expanded_filter_file()
+            if expanded_filter_file is not None:
+                # Check the EXPANDED path so no literal `~` reaches the shell (mirrors
+                # the folder existence check above for consistency and correct host).
+                quoted_filter = shlex.quote(expanded_filter_file)
+                result = await self.source.run_command(f"test -f {quoted_filter}")
+                if result.exit_code != 0:
+                    errors.append(
+                        self._validation_error(
+                            Host.SOURCE,
+                            f"filter_file {folder.filter_file!r} for folder {folder.path!r} "
+                            "does not exist on source",
+                        )
+                    )
 
         return errors
 
@@ -335,14 +364,19 @@ class FolderSyncJob(SyncJob):
         # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
         parts.append(f"--rsync-path={shlex.quote('sudo rsync')}")
 
-        # Hardcoded protective excludes come FIRST (before user rules) so no user
-        # include rule can re-expose pc-switcher's own runtime files (ADR-016).
+        # GLOBAL-FIRST filter precedence: runtime excludes (un-overridable, ADR-016)
+        # come first; the folder's central `merge` filter (when configured) comes
+        # next so its rules win over any per-directory file under first-match-wins;
+        # the tree-wide `dir-merge /.pcswitcher-filter` is always last and gives
+        # users a per-directory (gitignore-like) authoring surface. DO NOT add
+        # --delete-excluded — excluded files (e.g. .ssh/id_*, .config/tailscale)
+        # must survive on the target (D-06).
         parts.extend(self._runtime_exclude_filters(folder.path))
 
-        # Per-folder filter rules in config order (first-match-wins for rsync).
-        # DO NOT add --delete-excluded — excluded machine-specific files (e.g.
-        # .ssh/id_*, .config/tailscale) must survive on the target (D-06).
-        parts.extend(f"--filter={shlex.quote(f'- {pattern}')}" for pattern in folder.excludes)
+        expanded_filter_file = folder.expanded_filter_file()
+        if expanded_filter_file is not None:
+            parts.append(f"--filter={shlex.quote(f'merge {expanded_filter_file}')}")
+        parts.append(f"--filter={shlex.quote('dir-merge /.pcswitcher-filter')}")
 
         # Source: trailing slash syncs contents, not the directory itself.
         src = shlex.quote(folder.path.rstrip("/") + "/")

@@ -196,12 +196,9 @@ properties:
               type: boolean
               default: true
               description: "Whether to sync this folder (default true)"
-            excludes:
-              type: array
-              items:
-                type: string
-              default: []
-              description: "rsync filter patterns to exclude, relative to folder path"
+            filter_file:
+              type: string
+              description: "Path to a central rsync merge filter file for this folder (~ and env vars expanded); unset means no central filter rule"
           required: [path]
           additionalProperties: false
         minItems: 1

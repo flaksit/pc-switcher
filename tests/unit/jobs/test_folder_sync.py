@@ -9,7 +9,6 @@ All executor interactions are mocked; no real SSH connections are made.
 from __future__ import annotations
 
 import logging
-import re
 import shlex
 from collections.abc import Callable
 from pathlib import Path
@@ -80,21 +79,25 @@ class TestFolderEntry:
     """Tests for the FolderEntry dataclass."""
 
     def test_defaults(self) -> None:
-        """FolderEntry defaults enabled=True and excludes=[]."""
+        """FolderEntry defaults enabled=True and filter_file=None."""
         entry = FolderEntry(path="/home")
         assert entry.enabled is True
-        assert entry.excludes == []
+        assert entry.filter_file is None
 
-    def test_to_rsync_filter_args_empty(self) -> None:
-        """No excludes → empty filter arg list."""
-        entry = FolderEntry(path="/home", excludes=[])
-        assert entry.to_rsync_filter_args() == []
+    def test_expanded_filter_file_none_when_unset(self) -> None:
+        """expanded_filter_file() returns None when filter_file is unset."""
+        entry = FolderEntry(path="/home")
+        assert entry.expanded_filter_file() is None
 
-    def test_to_rsync_filter_args_preserves_order(self) -> None:
-        """Filter args are generated in config order (first-match-wins)."""
-        entry = FolderEntry(path="/home", excludes=[".ssh/id_*", ".config/tailscale"])
-        args = entry.to_rsync_filter_args()
-        assert args == ["--filter=- .ssh/id_*", "--filter=- .config/tailscale"]
+    def test_expanded_filter_file_expands_home_and_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """expanded_filter_file() ~-expands and env-var-expands the configured path."""
+        monkeypatch.setenv("HOME", "/fake/home")
+        monkeypatch.setenv("MY_FILTER_DIR", "/fake/filters")
+        entry = FolderEntry(path="/home", filter_file="~/x/home.filter")
+        assert entry.expanded_filter_file() == "/fake/home/x/home.filter"
+
+        entry2 = FolderEntry(path="/home", filter_file="$MY_FILTER_DIR/home.filter")
+        assert entry2.expanded_filter_file() == "/fake/filters/home.filter"
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +280,40 @@ class TestValidatePreflight:
             f"Expected shell-quoted path {expected_quoted!r} in folder check commands, got: {folder_checks}"
         )
 
+    async def test_missing_filter_file(self) -> None:
+        """validate() returns a Host.SOURCE ValidationError naming the filter file when it is absent."""
+        ctx = make_context(config={"folders": [{"path": "/home", "filter_file": "/abs/home.filter"}]})
+        ctx.source.run_command = AsyncMock(side_effect=fail_when("test -f", "no such file"))
+        job = FolderSyncJob(ctx)
+        errors = await job.validate()
+        assert any(e.host == Host.SOURCE and "home.filter" in e.message for e in errors)
+
+    async def test_existing_filter_file_produces_no_error(self) -> None:
+        """validate() returns no filter_file error when the file exists on source."""
+        ctx = make_context(config={"folders": [{"path": "/home", "filter_file": "/abs/home.filter"}]})
+        job = FolderSyncJob(ctx)
+        errors = await job.validate()
+        assert not any("filter_file" in e.message for e in errors)
+
+    async def test_filter_file_check_uses_expanded_path(self) -> None:
+        """The test -f command for filter_file uses the expanded path, not a literal ~."""
+        ctx = make_context(config={"folders": [{"path": "/home", "filter_file": "~/x.filter"}]})
+        source_cmds: list[str] = []
+
+        async def record(cmd: str, **kw: object) -> CommandResult:
+            source_cmds.append(cmd)
+            return CommandResult(exit_code=0, stdout="", stderr="")
+
+        ctx.source.run_command = AsyncMock(side_effect=record)
+        job = FolderSyncJob(ctx)
+        await job.validate()
+        filter_checks = [c for c in source_cmds if "test -f" in c]
+        assert filter_checks, "expected at least one test -f call"
+        assert not any("~/x.filter" in c for c in filter_checks)
+        expanded = FolderEntry(path="/home", filter_file="~/x.filter").expanded_filter_file()
+        assert expanded is not None
+        assert any(expanded in c for c in filter_checks)
+
     async def test_execute_stub_no_longer_raises_not_implemented(self) -> None:
         """execute() no longer raises NotImplementedError — it is implemented."""
         ctx = make_context()
@@ -311,18 +348,18 @@ class TestBuildRsyncCmd:
     def _build(
         self,
         path: str = "/home",
-        excludes: list[str] | None = None,
+        filter_file: str | None = None,
         dry_run: bool = False,
         target_username: str | None = "testuser",
         home: str = "/nonhome",
     ) -> str:
         # Default home is OUTSIDE any typical sync path, so the hardcoded runtime
         # excludes (which anchor to the invoking user's home) are absent unless a
-        # test opts in by passing a `home` under `path`. This keeps the user-exclude
+        # test opts in by passing a `home` under `path`. This keeps the user-filter
         # assertions below deterministic regardless of the machine running them.
         ctx = make_context(config={"folders": [{"path": path}]}, target_username=target_username)
         job = FolderSyncJob(ctx)
-        folder = FolderEntry(path=path, excludes=excludes or [])
+        folder = FolderEntry(path=path, filter_file=filter_file)
         with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path(home)):
             return job._build_rsync_cmd(folder, dry_run)
 
@@ -352,29 +389,50 @@ class TestBuildRsyncCmd:
 
     def test_no_forbidden_flags(self) -> None:
         """Command never includes --delete-excluded or --checksum (D-06, D-14)."""
-        cmd = self._build(excludes=[".ssh/id_*"])
+        cmd = self._build(filter_file="/abs/path with space/home.filter")
         assert "--delete-excluded" not in cmd
         assert "--checksum" not in cmd
 
-    def test_filter_args_count_equals_excludes(self) -> None:
-        """Number of --filter args in the command equals the number of excludes."""
+    def test_no_built_in_per_dir_flags(self) -> None:
+        """Command never enables rsync's own per-dir mechanisms (-F/-FF/-C/--cvs-exclude).
 
-        excludes = [".ssh/id_*", ".config/tailscale"]
-        cmd = self._build(excludes=excludes)
-        matches = re.findall(r"--filter", cmd)
-        assert len(matches) == len(excludes)
+        ssh's own -F (config file flag) only appears when ~/.ssh/config exists; the
+        default `home="/nonhome"` fixture has no such file, so it is absent here too.
+        """
+        cmd = self._build()
+        tokens = cmd.split()
+        assert "-F" not in tokens
+        assert "-FF" not in tokens
+        assert "-C" not in tokens
+        assert "--cvs-exclude" not in cmd
 
-    def test_filter_args_preserve_order(self) -> None:
-        """Filter args appear in config order (first-match-wins preserved for rsync)."""
-        cmd = self._build(excludes=[".ssh/id_*", ".config/tailscale"])
-        idx_ssh = cmd.index(".ssh/id_*")
-        idx_tailscale = cmd.index(".config/tailscale")
-        assert idx_ssh < idx_tailscale
+    def test_merge_arg_ordering(self) -> None:
+        """merge appears after runtime excludes and before dir-merge (GLOBAL-FIRST)."""
+        cmd = self._build(
+            path="/home", filter_file="/abs/home.filter", home="/home/alice"
+        )  # home under path -> runtime excludes present
+        idx_runtime = cmd.index(".local/share/pc-switcher")
+        idx_merge = cmd.index("merge /abs/home.filter")
+        idx_dir_merge = cmd.index("dir-merge /.pcswitcher-filter")
+        assert idx_runtime < idx_merge < idx_dir_merge
 
-    def test_no_filter_args_when_no_excludes(self) -> None:
-        """A folder with no excludes produces no --filter args."""
-        cmd = self._build(excludes=[])
-        assert "--filter" not in cmd
+    def test_no_merge_arg_when_no_filter_file_but_dir_merge_present(self) -> None:
+        """No filter_file -> no central `merge` arg, but `dir-merge /.pcswitcher-filter` still present."""
+        cmd = self._build(filter_file=None)
+        assert "--filter='merge " not in cmd
+        assert "--filter='dir-merge /.pcswitcher-filter'" in cmd
+
+    def test_merge_arg_present_when_filter_file_set(self) -> None:
+        """filter_file set -> `merge <expanded>` present in the command."""
+        cmd = self._build(filter_file="/abs/home.filter")
+        assert "merge /abs/home.filter" in cmd
+
+    def test_dir_merge_always_present(self) -> None:
+        """dir-merge /.pcswitcher-filter is present whether or not filter_file is set."""
+        cmd_without = self._build(filter_file=None)
+        cmd_with = self._build(filter_file="/abs/home.filter")
+        assert "--filter='dir-merge /.pcswitcher-filter'" in cmd_without
+        assert "--filter='dir-merge /.pcswitcher-filter'" in cmd_with
 
     def test_dry_run_true_adds_flag(self) -> None:
         """dry_run=True includes --dry-run in the command."""
@@ -399,11 +457,12 @@ class TestBuildRsyncCmd:
         assert "/home/" in cmd
 
     def test_config_derived_values_are_shell_quoted(self) -> None:
-        """Paths and exclude patterns with special characters are shell-quoted (T-05-01)."""
-        excludes = [".ssh/id_*"]
-        cmd = self._build(path="/home/user name", excludes=excludes)
+        """Paths and filter_file with special characters are shell-quoted (T-05-01)."""
+        cmd = self._build(path="/home/user name", filter_file="/abs/path with space/home.filter")
         # The path with a space must be quoted in the command
         assert "/home/user name/" not in cmd or "'/home/user name/'" in cmd
+        # A filter_file path with a space is shlex-quoted as a single argv token
+        assert "'merge /abs/path with space/home.filter'" in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -447,13 +506,13 @@ class TestRuntimeExcludeFilters:
         assert self._filters("/root", "/home/alice") == []
 
     def test_runtime_excludes_precede_user_excludes_in_command(self) -> None:
-        """Protective excludes appear before user excludes so an include can't re-expose them."""
+        """Protective excludes appear before the central merge filter so an include can't re-expose them."""
         ctx = make_context(config={"folders": [{"path": "/home"}]}, target_username="testuser")
         job = FolderSyncJob(ctx)
-        folder = FolderEntry(path="/home", excludes=[".ssh/id_*"])
+        folder = FolderEntry(path="/home", filter_file="/abs/home.filter")
         with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path("/home/alice")):
             cmd = job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
-        assert cmd.index("/alice/.local/share/pc-switcher") < cmd.index(".ssh/id_*")
+        assert cmd.index("/alice/.local/share/pc-switcher") < cmd.index("merge /abs/home.filter")
 
 
 # ---------------------------------------------------------------------------
