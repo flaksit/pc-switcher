@@ -64,6 +64,7 @@ addopts = [
 ]
 markers = [
     "integration: Integration tests (require VM infrastructure)",
+    "local_rsync: Tests that shell out to a real local rsync binary (no VM/SSH; skipped if rsync is absent)",
     "slow: Tests that take >5 seconds",
     "benchmark: Performance benchmarks (not run by default)",
 ]
