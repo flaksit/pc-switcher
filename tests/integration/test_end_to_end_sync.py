@@ -277,9 +277,28 @@ def _tree(user: str) -> str:
     return f"/home/{user}/{_TESTTREE}"
 
 
+def _make_e2e_home_filter() -> str:
+    """Filter file content for the /home folder_sync entry (#166 filter_file migration).
+
+    Carries the same patterns the old inline `excludes:` block used, as `-` rsync
+    filter rules (native syntax; floating, no leading /).
+    """
+    return f"""\
+- .ssh/id_*
+- .config/tailscale
+- .config/Code/Cache
+- .config/Code/CachedData
+- .config/Code/GPUCache
+- .ssh/known_hosts
+- .cache
+- .local/share/uv/python
+- {_TESTTREE}/secret
+"""
+
+
 def _make_e2e_config() -> str:
     """Config exercising both a generic job (dummy_success) and folder_sync of /home."""
-    return f"""\
+    return """\
 logging:
   file: DEBUG
   tui: INFO
@@ -304,16 +323,7 @@ folder_sync:
   folders:
     - path: /home
       enabled: true
-      excludes:
-        - .ssh/id_*
-        - .config/tailscale
-        - .config/Code/Cache
-        - .config/Code/CachedData
-        - .config/Code/GPUCache
-        - .ssh/known_hosts
-        - .cache
-        - .local/share/uv/python
-        - {_TESTTREE}/secret
+      filter_file: ~/.config/pc-switcher/home.filter
 """
 
 
@@ -324,6 +334,16 @@ async def _write_config(executor: BashLoginRemoteExecutor, config: str) -> None:
         timeout=10.0,
     )
     assert result.success, f"Failed to write config: {result.stderr}"
+
+
+async def _write_filter_file(executor: BashLoginRemoteExecutor, contents: str) -> None:
+    """Write the folder_sync filter_file referenced by the e2e config to a VM (#166)."""
+    cmd = (
+        "mkdir -p ~/.config/pc-switcher && "
+        f"cat > ~/.config/pc-switcher/home.filter << 'FILTER_EOF'\n{contents}FILTER_EOF"
+    )
+    result = await executor.run_command(cmd, timeout=10.0)
+    assert result.success, f"Failed to write filter file: {result.stderr}"
 
 
 async def _seed_rich_tree(executor: BashLoginRemoteExecutor, tree: str) -> None:
@@ -474,6 +494,7 @@ class TestEndToEndSync:
 
         try:
             await _write_config(pc1_executor, _make_e2e_config())
+            await _write_filter_file(pc1_executor, _make_e2e_home_filter())
             await _seed_rich_tree(pc1_executor, tree)
             await _seed_included_markers(pc1_executor)
             await pc2_executor.run_command(f"sudo rm -rf {tree}", timeout=15.0, login_shell=False)
