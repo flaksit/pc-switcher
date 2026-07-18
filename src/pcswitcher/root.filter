@@ -1,0 +1,9 @@
+# pc-switcher central filter file for the /root folder_sync entry.
+# Native rsync filter syntax: `+` includes, `-` excludes, first-match-wins.
+# root's home IS the transfer root for a /root sync, but these patterns stay
+# floating (no leading /) for consistency with home.filter.
+
+# Machine-identity excludes — never synced between machines.
+- .ssh/id_*
+- .ssh/known_hosts
+- .config/tailscale

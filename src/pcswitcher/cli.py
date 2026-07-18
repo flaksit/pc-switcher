@@ -486,9 +486,20 @@ def init(
     # Write to config file
     config_path.write_text(default_config)
 
+    # Ship the starter filter files (default-config.yaml's filter_file entries
+    # reference these by name) next to config.yaml, honoring --force the same
+    # way as config.yaml above.
+    filter_file_names = ("home.filter", "root.filter")
+    for name in filter_file_names:
+        contents = files("pcswitcher").joinpath(name).read_text()
+        (config_path.parent / name).write_text(contents)
+
     console.print(f"[green]Created configuration file:[/green] {config_path}")
+    for name in filter_file_names:
+        console.print(f"[green]Created filter file:[/green] {config_path.parent / name}")
     console.print("\n[dim]Please review and customize the configuration, especially:[/dim]")
     console.print("[dim]  - btrfs_snapshots.subvolumes (must match your system)[/dim]")
+    console.print("[dim]  - home.filter / root.filter (edit to add your own filter rules)[/dim]")
 
 
 GITHUB_REPO_URL = "https://github.com/flaksit/pc-switcher"

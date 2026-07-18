@@ -114,65 +114,31 @@ dummy_fail:
 # =============================================================================
 # Folder Sync Configuration
 # =============================================================================
-# Defines folders to sync via rsync. Each entry is a full mirror (rsync
-# --delete): everything under `path` is synced EXCEPT the paths matched by
-# that folder's exclude list. There is no include mechanism — to narrow what
-# is synced, use a deeper `path` or add more excludes.
+# Defines folders to sync via rsync. Each entry mirrors `path` (rsync --delete)
+# minus the paths matched by its filter rules. Two authoring surfaces are
+# available, both native rsync filter syntax (`+` include, `-` exclude,
+# first-match-wins):
+#   - filter_file: a per-folder central filter, spliced via rsync `merge`.
+#   - .pcswitcher-filter: a tree-wide per-directory file, spliced via rsync
+#     `dir-merge`; it inherits into subdirectories and can re-include a
+#     subtree a broader exclude would otherwise drop (e.g. keep ~/.cache/uv
+#     while dropping the rest of ~/.cache).
+# GLOBAL-FIRST precedence: the central filter_file is evaluated before any
+# .pcswitcher-filter, so central policy always wins. pc-switcher's own runtime
+# files (ADR-016) are excluded first of all and can never be re-exposed by
+# either surface.
 #
-# Each exclude is an rsync filter pattern, relative to the folder's transfer
-# root (for /home the root is its contents, so `.ssh/id_*` matches every
-# user's .ssh). Rules are evaluated top-to-bottom, first match wins. Syntax:
-#   - No leading / floats: matches at any depth (`.cache/nvidia` matches
-#     `.cache/nvidia` and `alice/.cache/nvidia`).
-#   - Leading / anchors to the folder root (`/lost+found`).
-#   - A pattern with no / matches the final path component only (`nvidia`);
-#     one containing a / or ** matches the full path.
-#   - Trailing / restricts to directories (`node_modules/`).
-#   - `*` matches within a segment, `**` matches across /.
-# Full syntax (rsync "FILTER RULES"): https://download.samba.org/pub/rsync/rsync.1
-#
-# Excluded below: machine-specific keys/config, GPU/shader caches, VS Code
-# regenerable caches. Users can override by editing this file.
-#
-# Always excluded automatically (not listed here, cannot be overridden): pc-switcher's
-# own runtime files — ~/.local/share/pc-switcher/ (state, lock, logs), the uv-tool
-# install, and the ~/.local/bin/pc-switcher shim (ADR-016).
+# See docs/configuration.md for the full filter-rule syntax and a guide for
+# users coming from .gitignore.
 
 folder_sync:
   folders:
     - path: /home
       enabled: true
-      excludes:
-        # Machine-specific SSH private keys — never synced between machines
-        - .ssh/id_*
-        # SSH known_hosts is machine-local: mirroring it (rsync --delete) overwrites
-        # the target's copy with the source's, which lacks the source's own host key.
-        # The target would then lose the source's key and fail the reverse sync
-        # (source→target works, target→source fails host-key verification).
-        - .ssh/known_hosts
-        # Tailscale machine-specific config (node key, network identity)
-        - .config/tailscale
-        # GPU shader caches (regenerable; GPU-model specific — wrong on different hardware)
-        - .cache/nvidia
-        - .cache/mesa_shader_cache
-        - .nv
-        # Fontconfig cache (regenerable; font paths differ per machine)
-        - .cache/fontconfig
-        # VS Code regenerable caches (NOT Code/User — that IS synced)
-        - .config/Code/Cache
-        - .config/Code/CachedData
-        - .config/Code/GPUCache
-        - .config/Code/Code Cache
-        - .config/Code/CachedExtensionVSIXs
+      filter_file: ~/.config/pc-switcher/home.filter
 
     - path: /root
       enabled: true
-      excludes:
-        # Machine-specific SSH private keys
-        - .ssh/id_*
-        # SSH known_hosts is machine-local (see /home note above)
-        - .ssh/known_hosts
-        # Tailscale machine-specific config
-        - .config/tailscale
+      filter_file: ~/.config/pc-switcher/root.filter
 
 # Future job configurations will be added here when features are implemented:
