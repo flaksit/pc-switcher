@@ -336,6 +336,11 @@ class TestBuildRsyncCmd:
         assert "--partial" in cmd
         assert "--mkpath" in cmd
 
+    def test_rsync_forced_to_c_locale(self) -> None:
+        """rsync runs under `env LC_ALL=C` so its progress2 byte counter is ungrouped."""
+        cmd = self._build()
+        assert "env LC_ALL=C rsync" in cmd
+
     def test_root_via_sudo_and_ssh_transport(self) -> None:
         """Command uses --rsync-path='sudo rsync' for remote root and an -e ssh option with -T and -l."""
         cmd = self._build()
@@ -691,6 +696,16 @@ class TestStreamRsync:
         assert FolderSyncJob._parse_size_to_bytes("1M") == 1024**2
         assert FolderSyncJob._parse_size_to_bytes("1G") == 1024**3
         assert FolderSyncJob._parse_size_to_bytes("1T") == 1024**4
+
+    async def test_parse_size_to_bytes_tolerates_thousands_separators(self) -> None:
+        """A locale-grouped byte counter parses instead of aborting the sync (WR-01).
+
+        Under a grouping locale (e.g. LC_NUMERIC=nl_BE) rsync's progress2 counter
+        is printed with thousands separators, e.g. '80.153.795.479'.  The parser
+        must strip the grouping rather than raise on float().
+        """
+        assert FolderSyncJob._parse_size_to_bytes("80.153.795.479") == 80153795479
+        assert FolderSyncJob._parse_size_to_bytes("80,153,795,479") == 80153795479
 
     async def test_created_and_hardlink_change_types_logged_at_full(self) -> None:
         """Per-file lines beginning with 'c' (created) or 'h' (hard link) are logged at FULL (IN-03)."""

@@ -107,16 +107,27 @@ class FolderSyncJob(SyncJob):
 
     @staticmethod
     def _parse_size_to_bytes(value: str) -> int:
-        """Convert an rsync size token (e.g. '9.53G', '317K', '512') to an integer byte count.
+        """Convert an rsync progress figure (e.g. '9.53G', '317K', '80.153.795.479') to bytes.
 
-        Multipliers: K=1024, M=1024**2, G=1024**3, T=1024**4.  A bare number (no suffix)
-        is returned as-is.  Conversion is best-effort — rsync rounds progress figures, so
-        the result is an approximation of the true cumulative byte count (WR-01).
+        Two shapes occur in --info=progress2 output:
+        - the plain byte counter, which rsync groups with the locale thousands
+          separator ('.' under nl_BE, ',' under en_US), e.g. '80.153.795.479';
+        - a human-readable figure with a K/M/G/T suffix (only when rsync runs
+          with -h), e.g. '9.53G', where the '.' is a decimal point.
+
+        rsync is forced to the C locale in `_build_rsync_cmd` so the counter is
+        ungrouped in practice, but this parser stays tolerant of grouping so a
+        stray locale-formatted figure can never abort the sync: the byte count
+        is best-effort progress metadata (WR-01), not sync-critical.
+
+        Multipliers: K=1024, M=1024**2, G=1024**3, T=1024**4.
         """
         multipliers: dict[str, int] = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
         if value and value[-1].upper() in multipliers:
-            return int(float(value[:-1]) * multipliers[value[-1].upper()])
-        return int(float(value))
+            # Suffixed figure carries a single decimal point; strip any comma grouping.
+            return int(float(value[:-1].replace(",", "")) * multipliers[value[-1].upper()])
+        # Plain integer counter: every '.'/',' is a thousands separator.
+        return int(value.replace(".", "").replace(",", "") or "0")
 
     def _active_folders(self) -> list[FolderEntry]:
         """Return only enabled folder entries from config."""
@@ -267,6 +278,15 @@ class FolderSyncJob(SyncJob):
         parts = [
             "sudo",
             "-E",
+            # Force the C locale so rsync's --info=progress2 byte counter is
+            # printed ungrouped.  Under a grouping locale (e.g. LC_NUMERIC=nl_BE)
+            # rsync prints "80.153.795.479"; the progress2 regex captures the
+            # whole token and float() then rejects the thousands separators,
+            # aborting the sync over a purely cosmetic figure (WR-01).  `env`
+            # runs after sudo so it sets the locale for rsync as root regardless
+            # of sudo's own env policy.
+            "env",
+            "LC_ALL=C",
             "rsync",
             "-aAXHS",
             "--numeric-ids",
