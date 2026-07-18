@@ -1,0 +1,2 @@
+Finding 1: isn't this a risk? I add the .pcswitcher-filter to a folder to protect the target, but the target gets overwritten/deleted anyway.
+Is there something to do about this other than document clearly that these cases should be defined in the central filter_file?
