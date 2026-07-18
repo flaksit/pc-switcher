@@ -321,13 +321,13 @@ _FILTER_SRC_PERDIR: dict[str, str] = {
 # Files PRE-EXISTING on the TARGET (pc2) before the first sync (drive the --delete cases).
 # The `overwrite_me` target copy differs in SIZE from the source's, not just content, so
 # rsync's default (size, mtime) quick-check always transfers it regardless of seed timing.
-# The per-directory .pcswitcher-filter files are pre-seeded on the target too: a dir-merge
-# exclude protects a pre-existing target file from --delete ONLY when the filter file is
-# already present on the receiver during its deletion scan (verified against rsync 3.2.7).
-# Without it on the target, a per-dir-excluded target file is DELETED on the first sync —
-# like .gitignore not protecting a path it didn't cover before. Central-filter excludes
-# (the pcsw-filter/excluded cases above) protect the target unconditionally; per-dir files
-# reach parity only once they exist on both ends (the steady state modelled here).
+# The target deliberately does NOT hold the .pcswitcher-filter files: this models a genuine
+# first sync. A dir-merge rule is read per-side, so a per-directory exclude protects a
+# pre-existing target file from --delete only once the filter file is on the receiver
+# (verified against rsync 3.2.7). folder_sync closes that gap by pre-seeding all source
+# .pcswitcher-filter files onto the target (execute() -> _build_preseed_cmd) BEFORE the
+# --delete mirror, so the per-dir survivors below are protected on this first sync — that
+# pre-seed pass is exactly what this scenario exercises end-to-end.
 _FILTER_TGT: dict[str, str] = {
     f"{_FILTER_TREE}/synced/overwrite_me.txt": "old",  # included, differing size → overwritten by source
     f"{_FILTER_TREE}/synced/keep_me.txt": "same",  # identical → untouched
@@ -335,9 +335,7 @@ _FILTER_TGT: dict[str, str] = {
     f"{_FILTER_TREE}/cache/junk/tgt_junk.txt": "tgt-junk",  # central-excluded, source-absent → survives
     f"{_FILTER_TREE}/excluded/on_both.txt": "tgt-version",  # central-excluded, source-present → not overwritten
     f"{_FILTER_TREE}/excluded/tgt_only.txt": "tgt-survivor",  # central-excluded, source-absent → survives
-    f"{_FILTER_TREE}/nest/.pcswitcher-filter": "- nested_secret.txt",  # present on target → protection active
-    f"{_FILTER_TREE}/nest/deep/.pcswitcher-filter": "- deep_only.txt",
-    f"{_FILTER_TREE}/nest/nested_secret.txt": "tgt-secret",  # per-dir excluded → not overwritten/deleted
+    f"{_FILTER_TREE}/nest/nested_secret.txt": "tgt-secret",  # per-dir excluded (pre-seeded rule) → survives
     f"{_FILTER_TREE}/nest/deep/nested_secret.txt": "tgt-deep-secret",  # inherited exclude → survives
     f"{_FILTER_TREE}/nest/deep/deep_only.txt": "tgt-deep",  # deep per-dir exclude → survives
 }

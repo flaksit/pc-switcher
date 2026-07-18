@@ -142,3 +142,57 @@ class TestGlobalFirstEnforcement:
         )
 
         assert "proj/secret.env" not in transferred
+
+
+class TestPreseedProtectsTargetOnFirstSync:
+    """The filter pre-seed pass makes a per-directory exclude protect a pre-existing target
+    file on the FIRST sync — when the target does not yet have the `.pcswitcher-filter`.
+
+    A dir-merge rule is read per-side, so without the filter file on the receiver, the
+    main `--delete` mirror deletes (not protects) the target file the rule names. folder_sync
+    runs a preliminary pass (execute() -> _build_preseed_cmd) that copies only the
+    `.pcswitcher-filter` files to the target first; these tests reproduce both commands with
+    real rsync (no --dry-run, so deletions actually happen) and pin both the bug and the fix.
+    """
+
+    @staticmethod
+    def _seed(tmp_path: Path) -> tuple[Path, Path]:
+        src = tmp_path / "src"
+        dst = tmp_path / "dst"
+        _write(src / "proj/.pcswitcher-filter", "- secret.env\n")  # rule lives on the source
+        _write(src / "proj/keep.txt", "keep-src")
+        _write(dst / "proj/secret.env", "tgt-only-secret")  # target-only file the rule names
+        return src, dst
+
+    @staticmethod
+    def _mirror(src: Path, dst: Path) -> None:
+        # Mirrors _build_rsync_cmd: the real --delete pass with dir-merge.
+        subprocess.run(
+            ["rsync", "-a", "--delete", "--filter=dir-merge /.pcswitcher-filter", f"{src}/", f"{dst}/"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_single_pass_deletes_the_excluded_target_file(self, tmp_path: Path) -> None:
+        """Without pre-seeding, the main mirror DELETES the rule-excluded target file (the bug)."""
+        src, dst = self._seed(tmp_path)
+        self._mirror(src, dst)
+        assert not (dst / "proj/secret.env").exists()
+
+    def test_preseed_then_mirror_protects_the_excluded_target_file(self, tmp_path: Path) -> None:
+        """Pre-seeding the .pcswitcher-filter first makes the main mirror PROTECT the target file."""
+        src, dst = self._seed(tmp_path)
+        # Pass 1 (mirrors _build_preseed_cmd): seed only .pcswitcher-filter files, NO --delete.
+        subprocess.run(
+            ["rsync", "-a", "--filter=+ */", "--filter=+ .pcswitcher-filter", "--filter=- *", f"{src}/", f"{dst}/"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        # Pass 2: the real --delete mirror.
+        self._mirror(src, dst)
+
+        assert (dst / "proj/secret.env").read_text() == "tgt-only-secret"  # protected, not deleted
+        assert (dst / "proj/keep.txt").read_text() == "keep-src"  # non-excluded file still syncs
+        assert (dst / "proj/.pcswitcher-filter").exists()  # the filter file itself transferred

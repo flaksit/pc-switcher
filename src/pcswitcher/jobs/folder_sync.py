@@ -279,6 +279,99 @@ class FolderSyncJob(SyncJob):
         prefix = "/" if str(rel) == "." else f"/{rel}/"
         return [f"--filter={shlex.quote(f'- {prefix}{sub}')}" for sub in _RUNTIME_EXCLUDE_RELPATHS]
 
+    def _transport_args(self) -> list[str]:
+        """Build the rsync `-e <ssh>` transport and `--rsync-path='sudo rsync'` args.
+
+        Shared by the main mirror (`_build_rsync_cmd`) and the filter pre-seed pass
+        (`_build_preseed_cmd`) so both use identical SSH credentials and target-side
+        sudo elevation.
+
+        SSH transport note: `sudo -E rsync` runs rsync as root, and the ssh it spawns
+        also runs as root.  OpenSSH resolves `~/.ssh` from the running uid's passwd
+        entry (root → /root/.ssh) regardless of the $HOME variable.  Passing explicit
+        credentials (-l, -i, -o UserKnownHostsFile=, -F) with the invoking user's paths
+        is the correct fix; relying on $HOME does NOT work (empirically verified on
+        target VMs: ssh fails with "Host key verification failed" / rsync exit 255
+        without explicit credentials).
+        """
+        ssh_dir = Path.home() / ".ssh"
+        target_user = self.context.target_username or getpass.getuser()
+
+        ssh_tokens: list[str] = ["ssh", "-T", "-q", "-l", target_user]
+
+        # -F before host-name flags so it takes effect for all connection params.
+        config_file = ssh_dir / "config"
+        if config_file.exists():
+            ssh_tokens += ["-F", str(config_file)]
+
+        known_hosts_file = ssh_dir / "known_hosts"
+        if known_hosts_file.exists():
+            ssh_tokens += ["-o", f"UserKnownHostsFile={known_hosts_file}"]
+
+        # Offer all default key types that exist; ssh tries each in order.
+        # SSH_AUTH_SOCK (preserved by sudo -E) is also available when an agent
+        # is running, but explicit -i keys cover the no-agent case.
+        for key_name in ("id_ed25519", "id_ecdsa", "id_rsa"):
+            key_file = ssh_dir / key_name
+            if key_file.exists():
+                ssh_tokens += ["-i", str(key_file)]
+
+        # shlex.join quotes individual tokens (handles spaces in paths).
+        # shlex.quote wraps the assembled command for the outer -e argument.
+        ssh_cmd = shlex.join(ssh_tokens)
+        # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
+        return [f"-e {shlex.quote(ssh_cmd)}", f"--rsync-path={shlex.quote('sudo rsync')}"]
+
+    def _build_preseed_cmd(self, folder: FolderEntry) -> str:
+        """Build the preliminary rsync that copies only `.pcswitcher-filter` files to the target.
+
+        WHY this pass exists: a `dir-merge /.pcswitcher-filter` rule is read by rsync
+        from whichever side is scanning.  On the main `--delete` mirror the receiver
+        can only apply a per-directory rule if that filter file is already present on
+        the target; otherwise a target file the rule names is not protected but
+        *deleted* (an excluded-on-source file is simply absent from the send list, so
+        `--delete` reaps the target's copy — verified against rsync 3.2.7).  Running
+        this pass first puts every source `.pcswitcher-filter` onto the target so the
+        main pass's per-directory rules protect the target on the very same sync,
+        including the first sync and whenever a new per-dir filter is introduced.
+
+        The pass never deletes (`--delete` is omitted) and transfers nothing but the
+        filter files themselves: it recurses all directories (`+ */`), includes only
+        `.pcswitcher-filter`, and excludes everything else (`- *`).  The runtime
+        excludes (ADR-016) stay first so pc-switcher's own state is never traversed or
+        seeded.  It walks the whole in-scope tree (central `filter_file` prunes are not
+        re-applied here), which costs a metadata traversal but transfers only tiny
+        files.  Only run for a real sync — never in dry-run, which must not write to
+        the target (D-12); the dry-run deletion preview is therefore pessimistic for
+        per-directory-protected paths (the safe direction).
+        """
+        parts = [
+            "sudo",
+            "-E",
+            "env",
+            "LC_ALL=C",
+            "rsync",
+            "-aAXHS",
+            "--numeric-ids",
+            "--mkpath",
+        ]
+        parts.extend(self._transport_args())
+
+        # Runtime excludes FIRST (never traverse or seed pc-switcher's own dirs, ADR-016).
+        parts.extend(self._runtime_exclude_filters(folder.path))
+
+        # Recurse every directory, transfer only `.pcswitcher-filter`, drop the rest.
+        parts.append(f"--filter={shlex.quote('+ */')}")
+        parts.append(f"--filter={shlex.quote('+ .pcswitcher-filter')}")
+        parts.append(f"--filter={shlex.quote('- *')}")
+
+        src = shlex.quote(folder.path.rstrip("/") + "/")
+        parts.append(src)
+        dst_raw = f"{self.context.target_hostname}:{folder.path.rstrip('/') + '/'}"
+        parts.append(shlex.quote(dst_raw))
+
+        return " ".join(parts)
+
     def _build_rsync_cmd(self, folder: FolderEntry, dry_run: bool) -> str:
         """Build the rsync shell command for syncing a single folder.
 
@@ -295,13 +388,10 @@ class FolderSyncJob(SyncJob):
         All config-derived values (folder path, exclude patterns, target hostname)
         are shlex.quote'd to prevent shell injection (T-05-01).
 
-        SSH transport note: `sudo -E rsync` runs rsync as root, and the ssh it
-        spawns also runs as root.  OpenSSH resolves `~/.ssh` from the running
-        uid's passwd entry (root → /root/.ssh) regardless of the $HOME variable.
-        Passing explicit credentials (-l, -i, -o UserKnownHostsFile=, -F) with
-        the invoking user's paths is the correct fix; relying on $HOME does NOT
-        work (empirically verified on target VMs: ssh fails with "Host key
-        verification failed" / rsync exit 255 without explicit credentials).
+        The SSH transport and target-side sudo elevation are built by
+        `_transport_args` (shared with the pre-seed pass).  A preliminary
+        `_build_preseed_cmd` pass runs first (see `execute`) so per-directory
+        `.pcswitcher-filter` rules protect the target on this same `--delete` run.
         """
         parts = [
             "sudo",
@@ -328,40 +418,8 @@ class FolderSyncJob(SyncJob):
         if dry_run:
             parts.append("--dry-run")
 
-        # Build explicit SSH credentials for the -e transport.
-        # Background: sudo launches rsync as root; root's ssh resolves ~/.ssh
-        # from /root/.ssh (uid lookup), not from $HOME.  Passing the invoking
-        # user's assets explicitly is the verified fix (see docstring).
-        home = Path.home()
-        ssh_dir = home / ".ssh"
-        target_user = self.context.target_username or getpass.getuser()
-
-        ssh_tokens: list[str] = ["ssh", "-T", "-q", "-l", target_user]
-
-        # -F before host-name flags so it takes effect for all connection params.
-        config_file = ssh_dir / "config"
-        if config_file.exists():
-            ssh_tokens += ["-F", str(config_file)]
-
-        known_hosts_file = ssh_dir / "known_hosts"
-        if known_hosts_file.exists():
-            ssh_tokens += ["-o", f"UserKnownHostsFile={known_hosts_file}"]
-
-        # Offer all default key types that exist; ssh tries each in order.
-        # SSH_AUTH_SOCK (preserved by sudo -E) is also available when an agent
-        # is running, but explicit -i keys cover the no-agent case.
-        for key_name in ("id_ed25519", "id_ecdsa", "id_rsa"):
-            key_file = ssh_dir / key_name
-            if key_file.exists():
-                ssh_tokens += ["-i", str(key_file)]
-
-        # shlex.join quotes individual tokens (handles spaces in paths).
-        # shlex.quote wraps the assembled command for the outer -e argument.
-        ssh_cmd = shlex.join(ssh_tokens)
-        parts.append(f"-e {shlex.quote(ssh_cmd)}")
-
-        # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
-        parts.append(f"--rsync-path={shlex.quote('sudo rsync')}")
+        # SSH transport + target-side sudo elevation (shared with the pre-seed pass).
+        parts.extend(self._transport_args())
 
         # GLOBAL-FIRST filter precedence: runtime excludes (un-overridable, ADR-016)
         # come first; the folder's central `merge` filter (when configured) comes
@@ -469,12 +527,16 @@ class FolderSyncJob(SyncJob):
         """Sync each active folder via rsync-over-SSH.
 
         For each active folder (D-10):
-        1. Builds the rsync command with the D-13 flag baseline, machine-specific
+        1. Pre-seeds per-directory `.pcswitcher-filter` files onto the target
+           (`_build_preseed_cmd`) so their rules protect the target on the same
+           `--delete` run; skipped in dry-run (must not write to the target, D-12).
+        2. Builds the rsync command with the D-13 flag baseline, machine-specific
            filter rules (D-11), and the dry-run toggle (D-12).
-        2. Spawns rsync as an async subprocess (ADR-005 — no blocking calls).
-        3. Streams stdout through `_stream_rsync` for TUI progress (D-15) and
+        3. Spawns rsync as an async subprocess (ADR-005 — no blocking calls).
+        4. Streams stdout through `_stream_rsync` for TUI progress (D-15) and
            per-file FULL logs (D-16).
-        4. On non-zero exit, logs CRITICAL and raises RuntimeError (sync aborts).
+        5. On non-zero exit (pre-seed or mirror), logs CRITICAL and raises
+           RuntimeError (sync aborts).
         """
         folders = self._active_folders()
 
@@ -486,6 +548,29 @@ class FolderSyncJob(SyncJob):
                 f"{prefix}Syncing {folder.path!r} → {self.context.target_hostname!r}",
                 session_id=self.context.session_id,
             )
+
+            # Pre-seed per-directory filter files onto the target BEFORE the --delete
+            # mirror so their rules are in effect on the receiver during this same sync
+            # (see _build_preseed_cmd for why: without this, a per-dir rule would delete
+            # rather than protect the target files it names). Skipped in dry-run, which
+            # must not write to the target (D-12).
+            if not self.context.dry_run:
+                preseed_result = await self.source.run_command(self._build_preseed_cmd(folder))
+                if preseed_result.exit_code != 0:
+                    self._log(
+                        Host.SOURCE,
+                        LogLevel.CRITICAL,
+                        f"filter pre-seed failed for {folder.path!r}: {preseed_result.stderr.strip()}",
+                        exit_code=preseed_result.exit_code,
+                    )
+                    raise RuntimeError(
+                        f"filter pre-seed failed for {folder.path!r} with exit code {preseed_result.exit_code}"
+                    )
+                self._log(
+                    Host.SOURCE,
+                    LogLevel.FULL,
+                    f"Pre-seeded per-directory filter files for {folder.path!r}",
+                )
 
             cmd = self._build_rsync_cmd(folder, self.context.dry_run)
 

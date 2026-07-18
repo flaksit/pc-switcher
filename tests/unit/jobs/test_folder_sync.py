@@ -465,6 +465,67 @@ class TestBuildRsyncCmd:
         assert "'merge /abs/path with space/home.filter'" in cmd
 
 
+class TestBuildPreseedCmd:
+    """Tests for FolderSyncJob._build_preseed_cmd — the per-directory filter pre-seed pass.
+
+    The pre-seed copies only `.pcswitcher-filter` files to the target (no --delete) so
+    per-directory rules are in effect on the receiver during the main --delete mirror.
+    """
+
+    def _build(self, path: str = "/home", home: str = "/nonhome") -> str:
+        ctx = make_context(config={"folders": [{"path": path}]}, target_username="testuser")
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path=path)
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path(home)):
+            return job._build_preseed_cmd(folder)
+
+    def test_never_deletes(self) -> None:
+        """The pre-seed pass must NOT delete (it only adds filter files to the target)."""
+        cmd = self._build()
+        assert "--delete" not in cmd
+
+    def test_transfers_only_pcswitcher_filter_files(self) -> None:
+        """Recurse all dirs, include only .pcswitcher-filter, exclude everything else, in order."""
+        cmd = self._build()
+        idx_dirs = cmd.index("+ */")
+        idx_filter = cmd.index("+ .pcswitcher-filter")
+        idx_rest = cmd.index("- *'")  # trailing "- *" (quoted) excludes all other files
+        assert idx_dirs < idx_filter < idx_rest
+
+    def test_no_central_merge_or_dir_merge(self) -> None:
+        """The pre-seed applies neither the central merge (its `+` rules would leak bulk files)
+        nor dir-merge (it is seeding those files, not consuming them)."""
+        cmd = self._build()
+        assert "merge " not in cmd  # excludes both 'merge <file>' and 'dir-merge ...'
+
+    def test_runtime_excludes_precede_include_rules(self) -> None:
+        """Runtime excludes (ADR-016) come first so pc-switcher's own dirs are never seeded."""
+        cmd = self._build(path="/home", home="/home/alice")  # home under path -> runtime excludes present
+        idx_runtime = cmd.index(".local/share/pc-switcher")
+        idx_dirs = cmd.index("+ */")
+        assert idx_runtime < idx_dirs
+
+    def test_base_flags_and_transport_present(self) -> None:
+        """Metadata baseline + shared SSH transport / target-side sudo, but no progress/dry-run."""
+        cmd = self._build()
+        assert "-aAXHS" in cmd
+        assert "--numeric-ids" in cmd
+        assert "--mkpath" in cmd
+        assert "--rsync-path='sudo rsync'" in cmd
+        assert "-l testuser" in cmd
+        assert "--dry-run" not in cmd
+        assert "--info=progress2" not in cmd
+
+    def test_no_built_in_per_dir_flags(self) -> None:
+        """The pre-seed never enables rsync's own per-dir mechanisms (-F/-FF/-C)."""
+        cmd = self._build()
+        tokens = cmd.split()
+        assert "-F" not in tokens
+        assert "-FF" not in tokens
+        assert "-C" not in tokens
+        assert "--cvs-exclude" not in cmd
+
+
 # ---------------------------------------------------------------------------
 # Hardcoded runtime-file excludes (ADR-016)
 # ---------------------------------------------------------------------------
@@ -794,6 +855,17 @@ class TestExecuteDryRun:
         called_cmd: str = ctx.source.start_process.call_args[0][0]
         assert "--dry-run" in called_cmd
 
+    async def test_dry_run_skips_the_preseed(self) -> None:
+        """Dry-run must not write to the target, so the pre-seed pass is skipped entirely."""
+        ctx = make_context(dry_run=True)
+        ctx.source.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        ctx.source.start_process = AsyncMock(return_value=make_fake_process())
+
+        job = FolderSyncJob(ctx)
+        await job.execute()
+
+        ctx.source.run_command.assert_not_called()
+
 
 @pytest.mark.asyncio
 class TestExecuteNormalMode:
@@ -833,3 +905,31 @@ class TestExecuteNormalMode:
 
         # A CRITICAL-level record must have been emitted
         assert any(r.levelno == LogLevel.CRITICAL for r in caplog.records)
+
+    async def test_preseed_runs_before_the_mirror(self) -> None:
+        """A real sync pre-seeds per-dir filter files (run_command) before the --delete mirror."""
+        ctx = make_context()
+        fake_proc = make_fake_process()
+        ctx.source.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        ctx.source.start_process = AsyncMock(return_value=fake_proc)
+
+        job = FolderSyncJob(ctx)
+        await job.execute()
+
+        preseed_cmds = [c.args[0] for c in ctx.source.run_command.call_args_list]
+        assert any("+ .pcswitcher-filter" in c and "--delete" not in c for c in preseed_cmds), (
+            "execute() must run the filter pre-seed (no --delete) via run_command"
+        )
+        # The mirror (with --delete) still runs via start_process.
+        assert "--delete" in ctx.source.start_process.call_args[0][0]
+
+    async def test_preseed_failure_aborts_before_mirror(self) -> None:
+        """A non-zero pre-seed exit raises RuntimeError and the --delete mirror never runs."""
+        ctx = make_context()
+        ctx.source.run_command = AsyncMock(return_value=CommandResult(exit_code=23, stdout="", stderr="boom"))
+        ctx.source.start_process = AsyncMock(return_value=make_fake_process())
+
+        job = FolderSyncJob(ctx)
+        with pytest.raises(RuntimeError):
+            await job.execute()
+        ctx.source.start_process.assert_not_called()
