@@ -1,0 +1,20 @@
+<task-notification>
+<task-id>a81633407c6ad20ca</task-id>
+<tool-use-id>toolu_01WnUVM3Jondo8fcaRq4Nc1J</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-166/c4320c6a-5df9-4349-ba0d-bb77817e26a7/tasks/a81633407c6ad20ca.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review folder_sync changes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review complete. Findings written to `/home/janfr/dev/pc-166/.planning/quick/260718-np8-folder-sync-include-override-filter-rule/260718-np8-REVIEW.md`.
+
+**Verdict: no blockers.** All five focus areas the request called out (shell-injection safety, GLOBAL-FIRST ordering, floating-vs-leading-slash patterns, `validate()`'s missing-filter_file check, `init`'s starter-file writing, and the `+ .cache/` ancestor-line correctness) checked out correct — verified not just by reading but by running the real-rsync acceptance tests (`tests/local_rsync/test_folder_sync_filters.py`, 4/4 pass against the actual rsync binary) and by independently constructing additional rsync experiments (space-containing merge filenames, `a/**/b` vs `a/b`, removing the `+ .cache/` line).
+
+One WARNING and two INFO findings:
+
+- **WR-01** (`docs/configuration.md:171-181`): the "ancestor-descent idiom" section's code example shows the floating (no-leading-slash) form, but the prose immediately below calls it "the leading-slash form above" — a self-contradiction that would mislead a user trying to write an anchored filter for a non-`/home` path.
+- **IN-01**: the `+ .cache/` ancestor line in the shipped `home.filter` is empirically redundant given the surrounding rules (verified by diffing rsync `--dry-run` output with/without it) — harmless, matches the locked CONTEXT.md idiom, just worth a comment if precision is wanted.
+- **IN-02** (`src/pcswitcher/cli.py:483-499`): `init`'s three file writes (config.yaml + 2 filter files) have no shared error boundary, so a mid-sequence `OSError` leaves partial state and surfaces as a raw traceback instead of the Rich-formatted error style used elsewhere.
+
+Full quality gate (`ruff format --check`, `ruff check`, `basedpyright`, `pytest` — 594 passed, `codespell`) is clean.</result>
+<usage><subagent_tokens>159578</subagent_tokens><tool_uses>44</tool_uses><duration_ms>477010</duration_ms></usage>
+</task-notification>
