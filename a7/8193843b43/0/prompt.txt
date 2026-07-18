@@ -1,0 +1,30 @@
+<task-notification>
+<task-id>aa1498da870376f33</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-166/c4320c6a-5df9-4349-ba0d-bb77817e26a7/tasks/aa1498da870376f33.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify folder_sync filter goal" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The write succeeded with no hook error this time.
+
+## Verification Complete
+
+**Status:** passed
+**Score:** 6/6 must-haves verified
+**Report:** /home/janfr/dev/pc-166/.planning/quick/260718-np8-folder-sync-include-override-filter-rule/260718-np8-VERIFICATION.md
+
+All must-haves verified against actual codebase and re-executed tests (not trusted from SUMMARY.md). Key evidence independently gathered this session:
+
+- Read `src/pcswitcher/jobs/folder_sync.py` in full — confirmed `FolderEntry.filter_file`/`expanded_filter_file()`, `validate()`'s source-side `test -f` check on the expanded path, and `_build_rsync_cmd`'s GLOBAL-FIRST emission order (runtime excludes → merge → dir-merge, never `-F`/`-FF`/`-C`/`--cvs-exclude`).
+- Ran `uv run pytest tests/local_rsync/ -v` myself — 4/4 real-rsync acceptance tests passed (not skipped), covering all three issue #166 acceptance criteria plus GLOBAL-FIRST enforcement.
+- Ran `uv run pytest tests/unit/jobs/test_folder_sync.py tests/unit/cli/test_commands.py -q` — 73 passed, including the new `TestInitCommand` and filter_file validation tests.
+- Confirmed `local_rsync` marker is registered but not excluded from the default `-m "not integration"` filter in `pyproject.toml`.
+- Ran the full whole-repo gates independently: `ruff check`/`ruff format --check` clean, `basedpyright` 0 errors, `uv run pytest -q` → 594 passed/61 deselected, `codespell` clean.
+- Confirmed via `grep -rn "excludes" src/pcswitcher/` that no config field remains (only comment prose).
+- Read `src/pcswitcher/home.filter`, `root.filter`, `default-config.yaml`, `cli.py` init wiring, ADR-016, and `docs/configuration.md` — all match the plan's must_haves exactly.
+- Fetched GitHub issue #166 directly and confirmed the three acceptance criteria wording matches what Task 3's tests A/B/C actually verify.
+- Confirmed integration e2e test collects cleanly (7 tests, 0 errors) with the migrated `filter_file` config.
+
+No gaps found. Phase goal achieved.</result>
+<usage><subagent_tokens>121134</subagent_tokens><tool_uses>36</tool_uses><duration_ms>190134</duration_ms></usage>
+</task-notification>
