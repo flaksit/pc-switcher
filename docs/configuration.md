@@ -120,28 +120,30 @@ folder_sync:
       filter_file: ~/.config/pc-switcher/root.filter
 ```
 
-Each folder is mirrored to the target, minus the paths its filter rules exclude. Set `enabled: false` to skip a folder. A filtered-out file is left untouched on the target if it already exists there, so machine-specific files (SSH keys, Tailscale config) stay independent on each machine.
+Each folder is mirrored to the target, minus the paths its filter rules exclude. Set `enabled: false` to skip a folder. A filtered-out file is left untouched on the target if it already exists there, so machine-specific files (SSH keys, Tailscale config) can stay independent on each machine.
 
 ### Filter rules
 
-Filter rules decide what is and isn't synced, and live in two kinds of file:
+Filter rules decide what is and isn't synced. They live in two kinds of file:
 
-- **`filter_file`** — the folder's main rule list. `pc-switcher init` writes `home.filter` and `root.filter` next to `config.yaml`; edit them to taste. If a configured filter file is missing, the sync stops with an error.
+- **`filter_file`** — the folder's main rule list. Optional: omit it for a folder that needs no central rule list, and only the runtime excludes and any `.pcswitcher-filter` files apply. `pc-switcher init` writes `home.filter` and `root.filter` next to `config.yaml`; edit them to taste. If a folder *does* configure a `filter_file` but the file is missing, the sync stops with an error.
 - **`.pcswitcher-filter`** — a per-directory rule file that works like `.gitignore`: drop one into any directory and its rules apply to that directory and everything below. These files sync to the target too.
 
-Each rule is `- pattern` to exclude or `+ pattern` to re-include. The **first** matching rule wins, so put a `+` re-include before the broader `-` it carves out of. If a path is matched in both a `filter_file` and a `.pcswitcher-filter`, the `filter_file` wins.
+Each rule is `- pattern` to exclude or `+ pattern` to re-include. The **first** matching rule wins, so put a `+` re-include before the broader `-` it carves out of. If a path is matched in both a `filter_file` and a `.pcswitcher-filter`, the `filter_file` wins. This allows for central policy that can not be overridden by a per-directory file.
 
 Pattern syntax:
 
+- names match in full, never as substrings: each wildcard-free component must match a whole file or directory name — `foo` matches an entry named exactly `foo`, not `fool` or `afoo`. Use wildcards for partial names (`foo*`, `*foo*`).
+- a pattern with no `/` is matched against the final path component (a single file or directory name); a pattern with a `/` is matched against the whole path below the folder root
 - a leading `/` anchors to the folder root; without it a pattern matches at any depth
-- a trailing `/` matches directories only
-- `?` matches one character, `*` matches within a path segment, `**` matches across `/`, `[…]` is a character class, and a trailing `/***` matches a directory and everything in it
-- a pattern with no `/` matches that name at any depth
+- a trailing `/` matches directories only; without it a pattern matches either a file or a directory of that name
+- `?` matches one character, `*` matches within a path segment, `**` matches across `/`, and `[…]` is a character class
+- `dir/**` matches a directory's contents but **not** the directory entry itself; `dir/***` matches the directory *and* everything in it. Reach for `/***` when a later exclude (like `- .cache/*`) would otherwise drop the directory and stop rsync from descending into it
 
 | Pattern | Matches |
 |---------|---------|
 | `.ssh/id_*` | `id_*` inside any `.ssh` directory |
-| `.config/tailscale` | a `tailscale` entry inside any `.config` |
+| `.config/tailscale` | a `tailscale` file or directory inside any `.config` |
 | `/lost+found` | `lost+found` only at the folder root |
 | `*.tmp` | any `.tmp` file, at any depth |
 | `node_modules/` | any directory named `node_modules` |
@@ -159,7 +161,7 @@ To drop most of a directory but keep selected children — for example drop `~/.
 - .cache/*
 ```
 
-The shipped `home.filter` already does this; add more `+ .cache/<tool>/***` lines for other caches you want to keep.
+The `/***` (not `/**`) matters here: it re-includes the `uv` and `pip` directory entries themselves, so the following `- .cache/*` can't drop them and rsync descends to copy their contents. The shipped `home.filter` already does this; add more `+ .cache/<tool>/***` lines for other caches you want to keep.
 
 ### Coming from .gitignore
 

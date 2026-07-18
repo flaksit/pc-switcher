@@ -119,6 +119,8 @@ dummy_fail:
 # available, both native rsync filter syntax (`+` include, `-` exclude,
 # first-match-wins):
 #   - filter_file: a per-folder central filter, spliced via rsync `merge`.
+#     Optional; omit it for a folder that needs no central rule list (the
+#     runtime excludes and any .pcswitcher-filter files still apply).
 #   - .pcswitcher-filter: a tree-wide per-directory file, spliced via rsync
 #     `dir-merge`; it inherits into subdirectories and can re-include a
 #     subtree a broader exclude would otherwise drop (e.g. keep ~/.cache/uv
