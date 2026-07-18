@@ -388,6 +388,7 @@ def _make_e2e_home_filter() -> str:
     return f"""\
 - .ssh/id_*
 - .ssh/known_hosts
+- .ssh/authorized_keys
 - .config/tailscale
 - .config/Code/Cache
 - .config/Code/CachedData

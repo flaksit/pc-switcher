@@ -9,6 +9,10 @@
 # Machine-identity excludes — never synced between machines.
 - .ssh/id_*
 - .ssh/known_hosts
+# authorized_keys is machine-local access control: mirroring it overwrites the
+# target's copy (which does not list the source), so the target rejects the
+# source's next connection and locks the sync out of its own target.
+- .ssh/authorized_keys
 - .config/tailscale
 
 # Non-.cache regenerable GPU state (nvidia kernel module cache).

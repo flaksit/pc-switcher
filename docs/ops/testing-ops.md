@@ -399,7 +399,7 @@ hcloud server describe pc1 -o json | jq '.labels'
 | SSH permission denied | Add public key as `SSH_AUTHORIZED_KEY_*` secret, reprovision |
 | Reset timeout | Check VM status, manually reboot if needed |
 | Integration tests skip | Check environment variables or CI secrets |
-| GitHub API rate limit | Set `GITHUB_TOKEN` secret |
+| GitHub API rate limit | Set `GH_API_TOKEN_RO` Actions secret (CI) or `GITHUB_TOKEN` env var (local) |
 
 ## Environment Variables
 

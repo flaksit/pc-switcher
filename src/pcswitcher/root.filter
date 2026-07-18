@@ -6,4 +6,7 @@
 # Machine-identity excludes — never synced between machines.
 - .ssh/id_*
 - .ssh/known_hosts
+# authorized_keys is machine-local access control (see home.filter note); syncing
+# it locks the sync out of its own target.
+- .ssh/authorized_keys
 - .config/tailscale

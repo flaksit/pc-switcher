@@ -18,7 +18,7 @@ jobs:
     outputs:
       should-run: ${{ steps.filter.outputs.integration }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -41,7 +41,7 @@ jobs:
       group: pc-switcher-integration
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -84,6 +84,10 @@ jobs:
         env:
           SECRETS_JSON: ${{ toJSON(secrets) }}
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          # Long-lived read-only PAT baked into the VM at provision time, so
+          # GitHub API calls keep working after this job ends (unlike the
+          # ephemeral Actions GITHUB_TOKEN). See issue #163.
+          GITHUB_TOKEN: ${{ secrets.GH_API_TOKEN_RO }}
         run: |
           set -o pipefail
           # Collect all SSH_AUTHORIZED_KEY_* secrets into single variable
@@ -111,7 +115,9 @@ jobs:
           PC_SWITCHER_TEST_PC2_HOST: ${{ steps.vm_ips.outputs.pc2_ip || steps.provision.outputs.pc2_ip }}
           PC_SWITCHER_TEST_USER: testuser
           CI_JOB_ID: ${{ github.run_id }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Long-lived read-only PAT, not the ephemeral Actions token, so reused
+          # or pre-provisioned VMs (conftest injection path) stay authenticated.
+          GITHUB_TOKEN: ${{ secrets.GH_API_TOKEN_RO }}
         timeout-minutes: 30
 
       - name: Upload test logs
