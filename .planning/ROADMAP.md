@@ -12,7 +12,7 @@ The orchestration framework is already built (Job architecture, self-installing 
 - Decimal phases (2.1, 2.2): Urgent insertions (marked INSERTED), appearing between their surrounding integers in numeric order.
 
 - [x] **Foundation: Core framework, testing, logging, CI** — Complete (pre-GSD; specs 001-004)
-- [x] **Phase 1: Home-Sync MVP (User Data Sync)** — Single-command replication of configured folders (`/home` and `/root` by default) over rsync-over-SSH, per-folder exclusions and metadata preserved, proven by a bidirectional round-trip (completed 2026-06-30)
+- [x] **Phase 1: Folder Sync MVP (User Data Sync)** — Single-command replication of configured folders (`/home` and `/root` by default) over rsync-over-SSH, per-folder exclusions and metadata preserved, proven by a bidirectional round-trip (completed 2026-06-30)
 - [ ] **Phase 2: Package Management Sync** — Replicate apt/snap/flatpak/.deb/PPA/script packages with conflict and version-mismatch detection
 - [ ] **Phase 3: System & Application Configuration Sync** — Replicate GNOME, cloud mounts, systemd, `/etc`, users/groups with conflicting-change detection
 - [ ] **Phase 4: Docker State Sync** — Replicate images, containers, volumes, and cache with running-container / incompatible-state detection
@@ -29,7 +29,7 @@ The orchestration framework is already built (Job architecture, self-installing 
 **Requirements**: REQ-core-001-infrastructure, REQ-testing-framework-002, REQ-core-tests-003, REQ-python-logging-004, REQ-feature-modular-architecture, REQ-environment-constraints
 **Note**: Not a plannable GSD phase. Listed so the roadmap reflects what already exists; sync phases extend this framework rather than rebuild it.
 
-### Phase 1: Home-Sync MVP (User Data Sync)
+### Phase 1: Folder Sync MVP (User Data Sync)
 
 **Goal**: A user can run one command to replicate configured folders (`/home` and `/root` by default) from the source machine to the target over rsync-over-SSH, with machine-specific items excluded and file metadata preserved — and the result is proven correct in both directions. The job is a generic folder-sync mechanism (per-folder include/exclude), usable for any path; `/root` is included because rsync must run as root anyway to preserve cross-owner files. (`/etc` and other system config remain Phase 3.)
 **Depends on**: Foundation
@@ -169,7 +169,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Home-Sync MVP (User Data Sync) | 18/18 | Complete    | 2026-07-03 |
+| 1. Folder Sync MVP (User Data Sync) | 18/18 | Complete    | 2026-07-03 |
 | 2. Package Management Sync | 0/TBD | Not started | - |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |

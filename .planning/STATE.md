@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 **Core value:** After a single sync command, the target machine is a faithful, reliable replica of the source — no data loss, conflicts detected, metadata intact.
 
-**Current focus:** Phase 01 — home-sync-mvp-user-data-sync
+**Current focus:** Phase 02 — Package Management Sync
 
 ## Current Position
 
