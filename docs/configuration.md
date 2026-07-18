@@ -135,6 +135,8 @@ Precedence is **GLOBAL-FIRST**: pc-switcher's own runtime-file excludes (below) 
 
 A configured `filter_file` that does not exist on the source fails validation before any transfer runs (fail-fast) — a missing filter file never silently degrades to a full unfiltered mirror.
 
+On a `--delete` mirror the two surfaces differ in one safety-relevant way. The central `filter_file` is passed to rsync on every run, so a `-` rule in it protects a matching file that already exists on the target from deletion immediately — even on the very first sync, and whether or not the source has a counterpart. A per-directory `.pcswitcher-filter` protects a pre-existing target file from deletion only once that filter file is itself present on the target: its rules are read from the source side, so on a first sync to a target that does not yet have the `.pcswitcher-filter`, a target file the rule would exclude is still deleted — the same way adding a line to `.gitignore` does not retroactively untrack a file. The `.pcswitcher-filter` transfers like any other file, so from the next sync onward the exclusion protects the target. For rules that must never delete or expose something (secrets, machine-specific state), prefer the central `filter_file`.
+
 Core syntax, applied relative to the folder's transfer root (for `path: /home`, the root is the *contents* of `/home`, so `.ssh/id_*` matches `<user>/.ssh/id_*` for every user):
 
 - A pattern **containing a `/`** (other than a trailing one) or `**` is matched against the full path; a pattern with **no `/`** is matched against the final path component only. So `nvidia` excludes any file or directory named `nvidia` at any depth, while `.cache/nvidia` matches the two-element path ending.
