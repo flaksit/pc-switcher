@@ -139,7 +139,7 @@ flowchart TD
 | `HETZNER_SSH_PRIVATE_KEY` | SSH access to test VMs |
 | `SSH_AUTHORIZED_KEY_CI` | Public key for CI runner |
 | `SSH_AUTHORIZED_KEY_*` | Developer SSH keys for VM access |
-| `GITHUB_TOKEN` | Auto-provided, used for API rate limiting |
+| `GH_API_TOKEN_RO` | Long-lived read-only PAT (Contents: read) baked into test VMs for GitHub API rate limiting; must outlive the CI job, so the ephemeral auto-provided `GITHUB_TOKEN` is not used (issue #163) |
 
 ## Local Development
 
