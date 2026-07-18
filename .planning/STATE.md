@@ -7,8 +7,8 @@ current_phase_name: Package Management Sync
 status: executing
 stopped_at: Completed 01-18-PLAN.md
 last_updated: "2026-07-13T12:19:36.228Z"
-last_activity: 2026-07-13
-last_activity_desc: Phase 01 complete, transitioned to Phase 2
+last_activity: 2026-07-18
+last_activity_desc: "Completed quick task 260718-np8: folder_sync include-override filter rules (#166)"
 progress:
   total_phases: 7
   completed_phases: 1
@@ -125,6 +125,12 @@ None yet.
 ### Blockers/Concerns
 
 - Phase 1: The rsync-over-SSH transport choice is not yet captured in an ADR. ADR-002 mandates SSH as the channel but does not fix the file-sync protocol. Formalize this as a new ADR before or during Phase 1 planning so the decision has a locked source.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 260718-np8 | folder_sync include-override filter rules (#166) | 2026-07-18 | 2a2c003 | Verified | [260718-np8-folder-sync-include-override-filter-rule](./quick/260718-np8-folder-sync-include-override-filter-rule/) |
 
 ## Deferred Items
 
