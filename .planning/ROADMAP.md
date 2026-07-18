@@ -4,13 +4,6 @@
 
 The orchestration framework is already built (Job architecture, self-installing orchestrator, btrfs snapshot safety, config, logging, locking, terminal UI, three-tier testing, CI). What remains is the actual sync work: a series of self-contained modular sync Jobs layered on that framework. The journey starts with the smallest vertical slice that proves the end-to-end workflow — replicating user data between two machines and verifying it with a bidirectional round-trip (Phase 1) — then broadens scope job by job (packages, system config, Docker, VMs, k3s) until the machine is a near-complete replica, and closes with rollback so any sync is reversible.
 
-## Milestones
-
-- Foundation (Complete) — Core framework, testing, logging, CI. Shipped before GSD adoption.
-- Milestone 1: Home-Sync MVP (current focus) — Phase 1. The first working sync job, proven by a bidirectional round-trip integration test.
-- Milestone 2: Full System-State Replication (planned) — Phases 2-6. Packages, system/app config, Docker, VMs, k3s.
-- Milestone 3: Reliability Hardening (planned) — Phase 7. Rollback from pre-sync snapshots.
-
 ## Phases
 
 **Phase Numbering:**
