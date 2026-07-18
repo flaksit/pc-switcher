@@ -144,29 +144,32 @@ class TestGlobalFirstEnforcement:
         assert "proj/secret.env" not in transferred
 
 
-class TestPreseedProtectsTargetOnFirstSync:
-    """The filter pre-seed pass makes a per-directory exclude protect a pre-existing target
-    file on the FIRST sync — when the target does not yet have the `.pcswitcher-filter`.
+class TestSeedingPassProtectsTargetOnFirstSync:
+    """A per-directory exclude protects a pre-existing target file on the FIRST sync — when the
+    target does not yet have the `.pcswitcher-filter` — via folder_sync's no-delete seeding pass.
 
-    A dir-merge rule is read per-side, so without the filter file on the receiver, the
-    main `--delete` mirror deletes (not protects) the target file the rule names. folder_sync
-    runs a preliminary pass (execute() -> _build_preseed_cmd) that copies only the
-    `.pcswitcher-filter` files to the target first; these tests reproduce both commands with
-    real rsync (no --dry-run, so deletions actually happen) and pin both the bug and the fix.
+    A dir-merge rule is read per-side, so without the filter file on the receiver the `--delete`
+    mirror deletes (not protects) the target file the rule names, and an excluded-on-source file
+    is never sent, so an update collapses into a deletion too. folder_sync runs the same mirror
+    WITHOUT `--delete` first (execute() -> _build_rsync_cmd(delete=False)), which seeds every
+    `.pcswitcher-filter` onto the target while respecting the full filter chain; the deleting pass
+    then protects correctly. These tests reproduce both passes with real rsync (no --dry-run) and
+    pin the single-pass bug plus the two-pass fix for the delete AND update cases.
     """
 
     @staticmethod
-    def _seed(tmp_path: Path) -> tuple[Path, Path]:
-        src = tmp_path / "src"
-        dst = tmp_path / "dst"
-        _write(src / "proj/.pcswitcher-filter", "- secret.env\n")  # rule lives on the source
-        _write(src / "proj/keep.txt", "keep-src")
-        _write(dst / "proj/secret.env", "tgt-only-secret")  # target-only file the rule names
-        return src, dst
+    def _no_delete_pass(src: Path, dst: Path) -> None:
+        # Mirrors _build_rsync_cmd(delete=False): full filter chain, no --delete (seeds filter files).
+        subprocess.run(
+            ["rsync", "-a", "--filter=dir-merge /.pcswitcher-filter", f"{src}/", f"{dst}/"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
     @staticmethod
     def _mirror(src: Path, dst: Path) -> None:
-        # Mirrors _build_rsync_cmd: the real --delete pass with dir-merge.
+        # Mirrors _build_rsync_cmd(delete=True): the real --delete pass with dir-merge.
         subprocess.run(
             ["rsync", "-a", "--delete", "--filter=dir-merge /.pcswitcher-filter", f"{src}/", f"{dst}/"],
             check=True,
@@ -175,24 +178,38 @@ class TestPreseedProtectsTargetOnFirstSync:
         )
 
     def test_single_pass_deletes_the_excluded_target_file(self, tmp_path: Path) -> None:
-        """Without pre-seeding, the main mirror DELETES the rule-excluded target file (the bug)."""
-        src, dst = self._seed(tmp_path)
+        """Without the seeding pass, the deleting mirror DELETES the rule-excluded target file (the bug)."""
+        src = tmp_path / "src"
+        dst = tmp_path / "dst"
+        _write(src / "proj/.pcswitcher-filter", "- secret.env\n")
+        _write(dst / "proj/secret.env", "tgt-only-secret")  # target-only, rule-excluded
         self._mirror(src, dst)
         assert not (dst / "proj/secret.env").exists()
 
-    def test_preseed_then_mirror_protects_the_excluded_target_file(self, tmp_path: Path) -> None:
-        """Pre-seeding the .pcswitcher-filter first makes the main mirror PROTECT the target file."""
-        src, dst = self._seed(tmp_path)
-        # Pass 1 (mirrors _build_preseed_cmd): seed only .pcswitcher-filter files, NO --delete.
-        subprocess.run(
-            ["rsync", "-a", "--filter=+ */", "--filter=+ .pcswitcher-filter", "--filter=- *", f"{src}/", f"{dst}/"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        # Pass 2: the real --delete mirror.
+    def test_two_pass_protects_a_target_only_excluded_file(self, tmp_path: Path) -> None:
+        """delete case: seeding pass then mirror keeps a target-only rule-excluded file."""
+        src = tmp_path / "src"
+        dst = tmp_path / "dst"
+        _write(src / "proj/.pcswitcher-filter", "- secret.env\n")
+        _write(src / "proj/keep.txt", "keep-src")
+        _write(dst / "proj/secret.env", "tgt-only-secret")  # target-only
+        self._no_delete_pass(src, dst)
         self._mirror(src, dst)
+        assert (dst / "proj/secret.env").read_text() == "tgt-only-secret"  # protected
+        assert (dst / "proj/keep.txt").read_text() == "keep-src"  # non-excluded still syncs
+        assert (dst / "proj/.pcswitcher-filter").exists()  # filter file itself transferred
 
-        assert (dst / "proj/secret.env").read_text() == "tgt-only-secret"  # protected, not deleted
-        assert (dst / "proj/keep.txt").read_text() == "keep-src"  # non-excluded file still syncs
-        assert (dst / "proj/.pcswitcher-filter").exists()  # the filter file itself transferred
+    def test_two_pass_does_not_overwrite_or_delete_an_excluded_update(self, tmp_path: Path) -> None:
+        """update case: source has a rule-excluded file with NEW content, target has OLD; target keeps OLD.
+
+        This is the case that fails in a single pass (the target file is deleted). The seeding pass
+        puts the filter onto the target first, so the deleting mirror neither overwrites nor deletes it.
+        """
+        src = tmp_path / "src"
+        dst = tmp_path / "dst"
+        _write(src / "proj/.pcswitcher-filter", "- secret.env\n")
+        _write(src / "proj/secret.env", "SRC-NEW")  # excluded on the source (not sent)
+        _write(dst / "proj/secret.env", "TGT-OLD")  # target's existing copy, no filter on target yet
+        self._no_delete_pass(src, dst)
+        self._mirror(src, dst)
+        assert (dst / "proj/secret.env").read_text() == "TGT-OLD"  # neither overwritten nor deleted

@@ -322,57 +322,22 @@ class FolderSyncJob(SyncJob):
         # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
         return [f"-e {shlex.quote(ssh_cmd)}", f"--rsync-path={shlex.quote('sudo rsync')}"]
 
-    def _build_preseed_cmd(self, folder: FolderEntry) -> str:
-        """Build the preliminary rsync that copies only `.pcswitcher-filter` files to the target.
+    async def _tree_has_per_dir_filters(self, folder: FolderEntry) -> bool:
+        """Whether the source tree contains any `.pcswitcher-filter` file.
 
-        WHY this pass exists: a `dir-merge /.pcswitcher-filter` rule is read by rsync
-        from whichever side is scanning.  On the main `--delete` mirror the receiver
-        can only apply a per-directory rule if that filter file is already present on
-        the target; otherwise a target file the rule names is not protected but
-        *deleted* (an excluded-on-source file is simply absent from the send list, so
-        `--delete` reaps the target's copy — verified against rsync 3.2.7).  Running
-        this pass first puts every source `.pcswitcher-filter` onto the target so the
-        main pass's per-directory rules protect the target on the very same sync,
-        including the first sync and whenever a new per-dir filter is introduced.
-
-        The pass never deletes (`--delete` is omitted) and transfers nothing but the
-        filter files themselves: it recurses all directories (`+ */`), includes only
-        `.pcswitcher-filter`, and excludes everything else (`- *`).  The runtime
-        excludes (ADR-016) stay first so pc-switcher's own state is never traversed or
-        seeded.  It walks the whole in-scope tree (central `filter_file` prunes are not
-        re-applied here), which costs a metadata traversal but transfers only tiny
-        files.  Only run for a real sync — never in dry-run, which must not write to
-        the target (D-12); the dry-run deletion preview is therefore pessimistic for
-        per-directory-protected paths (the safe direction).
+        Gates the no-delete seeding pass (`execute`): that pass exists only to put
+        per-directory filter files onto the target before the deleting mirror, so it
+        is pure overhead when the tree uses none (the common case — the default config
+        relies on the central `filter_file`).  Runs as root, like the mirror, so files
+        under directories the invoking user cannot read are still seen; `-print -quit`
+        stops at the first match, so a tree that uses per-directory filters answers
+        quickly and only a tree with none pays a full walk.
         """
-        parts = [
-            "sudo",
-            "-E",
-            "env",
-            "LC_ALL=C",
-            "rsync",
-            "-aAXHS",
-            "--numeric-ids",
-            "--mkpath",
-        ]
-        parts.extend(self._transport_args())
+        path = shlex.quote(folder.path.rstrip("/") or "/")
+        result = await self.source.run_command(f"sudo find {path} -name .pcswitcher-filter -print -quit")
+        return bool(result.stdout.strip())
 
-        # Runtime excludes FIRST (never traverse or seed pc-switcher's own dirs, ADR-016).
-        parts.extend(self._runtime_exclude_filters(folder.path))
-
-        # Recurse every directory, transfer only `.pcswitcher-filter`, drop the rest.
-        parts.append(f"--filter={shlex.quote('+ */')}")
-        parts.append(f"--filter={shlex.quote('+ .pcswitcher-filter')}")
-        parts.append(f"--filter={shlex.quote('- *')}")
-
-        src = shlex.quote(folder.path.rstrip("/") + "/")
-        parts.append(src)
-        dst_raw = f"{self.context.target_hostname}:{folder.path.rstrip('/') + '/'}"
-        parts.append(shlex.quote(dst_raw))
-
-        return " ".join(parts)
-
-    def _build_rsync_cmd(self, folder: FolderEntry, dry_run: bool) -> str:
+    def _build_rsync_cmd(self, folder: FolderEntry, dry_run: bool, delete: bool = True) -> str:
         """Build the rsync shell command for syncing a single folder.
 
         Produces a command that:
@@ -382,6 +347,11 @@ class FolderSyncJob(SyncJob):
           normal-user SSH connection (D-05); root SSH login stays disabled.
         - Uses the D-13 flag baseline: -aAXHS + --numeric-ids + --delete.
         - Adds --dry-run only when `dry_run` is True (D-12).
+        - Omits --delete when `delete` is False: `execute` runs a no-delete seeding
+          pass first (when the tree has per-directory filters) so every source
+          `.pcswitcher-filter` reaches the target before the deleting mirror — a
+          dir-merge rule only protects the target once the filter file is on the
+          receiver, else --delete would remove (not protect) the files it names.
         - Never includes --delete-excluded (excluded files must survive on target
           — D-06) or --checksum (rsync's built-in verification is trusted — D-14).
 
@@ -389,9 +359,9 @@ class FolderSyncJob(SyncJob):
         are shlex.quote'd to prevent shell injection (T-05-01).
 
         The SSH transport and target-side sudo elevation are built by
-        `_transport_args` (shared with the pre-seed pass).  A preliminary
-        `_build_preseed_cmd` pass runs first (see `execute`) so per-directory
-        `.pcswitcher-filter` rules protect the target on this same `--delete` run.
+        `_transport_args`.  The filter chain (runtime excludes → central merge →
+        dir-merge) is identical with and without --delete, so both passes respect the
+        central `filter_file` and per-directory `.pcswitcher-filter` files exactly.
         """
         parts = [
             "sudo",
@@ -408,12 +378,14 @@ class FolderSyncJob(SyncJob):
             "rsync",
             "-aAXHS",
             "--numeric-ids",
-            "--delete",
             "--info=progress2",
             f"--out-format={shlex.quote('%i %n%L')}",
             "--partial",
             "--mkpath",
         ]
+
+        if delete:
+            parts.append("--delete")
 
         if dry_run:
             parts.append("--dry-run")
@@ -523,20 +495,48 @@ class FolderSyncJob(SyncJob):
 
         return files_xfr, bytes_xfr, files_deleted
 
+    async def _run_rsync_pass(self, cmd: str, folder: FolderEntry) -> tuple[int, int, int]:
+        """Run one rsync pass: spawn, stream progress/logs, and raise on non-zero exit.
+
+        Spawns rsync as an async subprocess (ADR-005 — no blocking calls), streams
+        stdout through `_stream_rsync` for TUI progress (D-15) and per-file FULL logs
+        (D-16), then checks the exit code.  Returns the pass's
+        (files_transferred, bytes_transferred, files_deleted).  Shared by the no-delete
+        seeding pass and the deleting mirror in `execute`.
+        """
+        proc = await self.source.start_process(cmd)
+        files_transferred, bytes_transferred, files_deleted = await self._stream_rsync(
+            proc.read_stdout_chunks(), folder
+        )
+        result = await proc.wait_result()
+        if result.exit_code != 0:
+            self._log(
+                Host.SOURCE,
+                LogLevel.CRITICAL,
+                f"rsync failed for {folder.path!r}: {result.stderr.strip()}",
+                exit_code=result.exit_code,
+            )
+            raise RuntimeError(f"rsync failed for {folder.path!r} with exit code {result.exit_code}")
+        return files_transferred, bytes_transferred, files_deleted
+
     async def execute(self) -> None:
         """Sync each active folder via rsync-over-SSH.
 
         For each active folder (D-10):
-        1. Pre-seeds per-directory `.pcswitcher-filter` files onto the target
-           (`_build_preseed_cmd`) so their rules protect the target on the same
-           `--delete` run; skipped in dry-run (must not write to the target, D-12).
-        2. Builds the rsync command with the D-13 flag baseline, machine-specific
-           filter rules (D-11), and the dry-run toggle (D-12).
-        3. Spawns rsync as an async subprocess (ADR-005 — no blocking calls).
-        4. Streams stdout through `_stream_rsync` for TUI progress (D-15) and
-           per-file FULL logs (D-16).
-        5. On non-zero exit (pre-seed or mirror), logs CRITICAL and raises
-           RuntimeError (sync aborts).
+        1. When this is a real sync and the source tree contains per-directory
+           `.pcswitcher-filter` files (`_tree_has_per_dir_filters`), runs a seeding
+           pass first — the same mirror WITHOUT `--delete` — so every source
+           `.pcswitcher-filter` reaches the target before the deleting mirror.  A
+           dir-merge rule only protects the target once the filter file is on the
+           receiver, so without this the deleting mirror would remove (not protect)
+           the files a per-dir rule names.  Both passes apply the identical filter
+           chain, so the central `filter_file` and per-directory rules are respected
+           exactly.  Skipped in dry-run (must not write to the target, D-12), which
+           makes the dry-run deletion preview pessimistic for per-dir-protected paths
+           (the safe direction), and skipped when the tree has no per-directory
+           filters (the common case — no seeding is needed).
+        2. Runs the deleting mirror (D-13 baseline, D-11 filters, D-12 dry-run toggle).
+        3. On non-zero exit from either pass, logs CRITICAL and raises RuntimeError.
         """
         folders = self._active_folders()
 
@@ -549,51 +549,27 @@ class FolderSyncJob(SyncJob):
                 session_id=self.context.session_id,
             )
 
-            # Pre-seed per-directory filter files onto the target BEFORE the --delete
-            # mirror so their rules are in effect on the receiver during this same sync
-            # (see _build_preseed_cmd for why: without this, a per-dir rule would delete
-            # rather than protect the target files it names). Skipped in dry-run, which
-            # must not write to the target (D-12).
-            if not self.context.dry_run:
-                preseed_result = await self.source.run_command(self._build_preseed_cmd(folder))
-                if preseed_result.exit_code != 0:
-                    self._log(
-                        Host.SOURCE,
-                        LogLevel.CRITICAL,
-                        f"filter pre-seed failed for {folder.path!r}: {preseed_result.stderr.strip()}",
-                        exit_code=preseed_result.exit_code,
-                    )
-                    raise RuntimeError(
-                        f"filter pre-seed failed for {folder.path!r} with exit code {preseed_result.exit_code}"
-                    )
+            seed_files = 0
+            seed_bytes = 0
+            if not self.context.dry_run and await self._tree_has_per_dir_filters(folder):
                 self._log(
                     Host.SOURCE,
                     LogLevel.FULL,
-                    f"Pre-seeded per-directory filter files for {folder.path!r}",
+                    f"Seeding per-directory filter files for {folder.path!r} (no-delete pass)",
+                )
+                seed_files, seed_bytes, _ = await self._run_rsync_pass(
+                    self._build_rsync_cmd(folder, dry_run=False, delete=False), folder
                 )
 
-            cmd = self._build_rsync_cmd(folder, self.context.dry_run)
-
-            # Spawn rsync; in dry_run mode the command already includes --dry-run
-            # so rsync performs a real read-only preview without writing any files.
-            proc = await self.source.start_process(cmd)
-
-            # Stream progress and per-file output
-            files_transferred, bytes_transferred, files_deleted = await self._stream_rsync(
-                proc.read_stdout_chunks(), folder
+            # Deleting mirror (or, in dry-run, the read-only preview).
+            mirror_files, mirror_bytes, files_deleted = await self._run_rsync_pass(
+                self._build_rsync_cmd(folder, self.context.dry_run, delete=True), folder
             )
 
-            # Obtain exit code and stderr after stdout is fully consumed
-            result = await proc.wait_result()
-
-            if result.exit_code != 0:
-                self._log(
-                    Host.SOURCE,
-                    LogLevel.CRITICAL,
-                    f"rsync failed for {folder.path!r}: {result.stderr.strip()}",
-                    exit_code=result.exit_code,
-                )
-                raise RuntimeError(f"rsync failed for {folder.path!r} with exit code {result.exit_code}")
+            # On a seeding run the bulk transfer happened in the first pass and the
+            # mirror transfers ~nothing; sum so the summary reflects the real work.
+            files_transferred = seed_files + mirror_files
+            bytes_transferred = seed_bytes + mirror_bytes
 
             # Per-folder summary (D-16)
             self._log(
