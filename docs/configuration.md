@@ -120,76 +120,57 @@ folder_sync:
       filter_file: ~/.config/pc-switcher/root.filter
 ```
 
-Each folder mirrors `path` (`rsync --delete`) minus the paths matched by its filter rules. Include-override is possible: you can exclude a subtree and re-include selected children of it (e.g. drop all of `~/.cache` but keep `~/.cache/uv`), because pc-switcher passes native rsync filter syntax straight through.
-
-Setting `enabled: false` skips a folder. Excluded files are never deleted on the target (`--delete-excluded` is deliberately not used), so a machine-specific file such as `.ssh/id_ed25519` survives on both ends.
+Each folder is mirrored to the target, minus the paths its filter rules exclude. Set `enabled: false` to skip a folder. A filtered-out file is left untouched on the target if it already exists there, so machine-specific files (SSH keys, Tailscale config) stay independent on each machine.
 
 ### Filter rules
 
-Two authoring surfaces are available per folder, both native rsync filter syntax (`+ pattern` include, `- pattern` exclude, first-match-wins):
+Filter rules decide what is and isn't synced, and live in two kinds of file:
 
-- **`filter_file`** — a per-folder central filter file, spliced in via rsync `merge`. `pc-switcher init` ships `home.filter` and `root.filter` next to `config.yaml`; edit them directly.
-- **`.pcswitcher-filter`** — a per-directory file, spliced in tree-wide via rsync `dir-merge`. Drop one anywhere in the synced tree and it takes effect for that subtree, inheriting into deeper directories. `.pcswitcher-filter` files themselves sync to the target, like a committed `.gitignore`. This is pc-switcher's own filename — it is **not** rsync's built-in `.rsync-filter`, which pc-switcher never activates (no `-F`/`-FF`/`-C`/`--cvs-exclude` are ever passed, so a stray `.rsync-filter` in a synced tree has no effect).
+- **`filter_file`** — the folder's main rule list. `pc-switcher init` writes `home.filter` and `root.filter` next to `config.yaml`; edit them to taste. If a configured filter file is missing, the sync stops with an error.
+- **`.pcswitcher-filter`** — a per-directory rule file that works like `.gitignore`: drop one into any directory and its rules apply to that directory and everything below. These files sync to the target too.
 
-Precedence is **GLOBAL-FIRST**: pc-switcher's own runtime-file excludes (below) are evaluated first and can never be overridden; the folder's central `filter_file` is evaluated next, before any `.pcswitcher-filter`. Because rsync is first-match-wins, a central `-` rule always beats a later per-directory `+` rule — central policy is authoritative and a per-directory file can never re-expose something the central filter excluded.
+Each rule is `- pattern` to exclude or `+ pattern` to re-include. The **first** matching rule wins, so put a `+` re-include before the broader `-` it carves out of. If a path is matched in both a `filter_file` and a `.pcswitcher-filter`, the `filter_file` wins.
 
-A configured `filter_file` that does not exist on the source fails validation before any transfer runs (fail-fast) — a missing filter file never silently degrades to a full unfiltered mirror.
+Pattern syntax:
 
-On a `--delete` mirror an exclude rule does two things: it keeps the matching files from transferring, and it protects a copy that already exists on the target from being deleted or overwritten (rsync never removes an excluded path — `--delete-excluded` is deliberately not used). So an excluded machine-specific file survives on both ends. Both surfaces give this protection; for rules that must never delete or expose something (secrets, machine-specific state), keep them in the central `filter_file`, which is authoritative under GLOBAL-FIRST and always in effect.
-
-The two surfaces differ only in *when* a newly-written rule starts protecting the target, and pc-switcher handles the difference for you. A central `filter_file` rule protects immediately, on every sync. A per-directory `.pcswitcher-filter` is read by rsync from each side as it walks the tree, so its rules can only protect the target once the file itself is on the target — on a plain mirror, a per-directory rule you *just added* would delete (not protect) the target files it names, turning even an edit into a deletion. To prevent that, when the source's `.pcswitcher-filter` files are not yet identical on the target (a first sync, or a filter you added or edited), pc-switcher runs the mirror twice — once without `--delete` to copy the filter files across, then once with `--delete` so the now-present per-directory rules protect correctly. It detects this by hashing just the `.pcswitcher-filter` files on each side, so an ordinary sync where they already match — including the common case of no per-directory filters at all — stays a single pass. One side effect: a `--dry-run` preview is taken without the extra pass, so it may list *more* deletions than a real sync performs for per-directory-protected paths — never fewer.
-
-Core syntax, applied relative to the folder's transfer root (for `path: /home`, the root is the *contents* of `/home`, so `.ssh/id_*` matches `<user>/.ssh/id_*` for every user):
-
-- A pattern **containing a `/`** (other than a trailing one) or `**` is matched against the full path; a pattern with **no `/`** is matched against the final path component only. So `nvidia` excludes any file or directory named `nvidia` at any depth, while `.cache/nvidia` matches the two-element path ending.
-- A pattern **without a leading `/`** floats — it matches at the *end* of the path, i.e. at any depth. `.cache/nvidia` therefore matches both `.cache/nvidia` and `alice/.cache/nvidia`.
-- A pattern **with a leading `/`** is anchored to the transfer root. `/lost+found` matches only at the top of the synced folder.
-- A **trailing `/`** restricts the match to directories: `foo/` excludes only a directory named `foo`.
-- Wildcards: `?` matches one non-slash character; `*` matches zero or more non-slash characters (stops at `/`); `**` matches across `/`; `[…]` is a character class; a trailing `/***` matches a directory and all its contents.
-
-Examples:
+- a leading `/` anchors to the folder root; without it a pattern matches at any depth
+- a trailing `/` matches directories only
+- `?` matches one character, `*` matches within a path segment, `**` matches across `/`, `[…]` is a character class, and a trailing `/***` matches a directory and everything in it
+- a pattern with no `/` matches that name at any depth
 
 | Pattern | Matches |
 |---------|---------|
-| `.ssh/id_*` | `id_*` files inside any `.ssh` directory at any depth |
-| `.config/tailscale` | a `tailscale` entry inside any `.config` directory |
-| `.cache/nvidia` | a `nvidia` entry inside any `.cache` directory |
+| `.ssh/id_*` | `id_*` inside any `.ssh` directory |
+| `.config/tailscale` | a `tailscale` entry inside any `.config` |
 | `/lost+found` | `lost+found` only at the folder root |
-| `*.tmp` | any file ending in `.tmp` at any depth |
+| `*.tmp` | any `.tmp` file, at any depth |
 | `node_modules/` | any directory named `node_modules` |
 
-For the full specification (all wildcard forms, anchoring, merge files, modifiers), see the rsync manpage "FILTER RULES" / "INCLUDE/EXCLUDE PATTERN RULES" section: https://download.samba.org/pub/rsync/rsync.1
+Full pattern reference: rsync's manpage, "FILTER RULES" section — https://download.samba.org/pub/rsync/rsync.1
+
+### Keep a subfolder inside an excluded one
+
+To drop most of a directory but keep selected children — for example drop `~/.cache` but keep the dev-tool caches so offline work doesn't re-download them — re-include the children before excluding the rest:
+
+```
++ .cache/
++ .cache/uv/***
++ .cache/pip/***
+- .cache/*
+```
+
+The shipped `home.filter` already does this; add more `+ .cache/<tool>/***` lines for other caches you want to keep.
 
 ### Coming from .gitignore
 
-rsync's filter rules resemble `.gitignore` but differ in a few load-bearing ways:
+The syntax resembles `.gitignore`, with three differences worth knowing:
 
-- **Signs, not `!`**: rsync uses `+`/`-` prefixes instead of gitignore's bare pattern / `!`-negated pattern. A `.pcswitcher-filter` with only `-` lines behaves like an ordinary `.gitignore`.
-- **First-match-wins, the opposite of gitignore's last-match-wins.** In rsync, the *first* rule that matches a path decides it; later rules never override an earlier match. In gitignore, later lines override earlier ones.
-- **A leading `/` anchors to the transfer root; a middle slash does not anchor.** `/a/direct` matches only the root's `a/direct`, while `a/direct` (slash present but not leading) matches `a/direct` at *any* depth. This differs from gitignore, where a middle slash anchors the pattern to the `.gitignore`'s own directory.
-- **A trailing `/` means directory-only** — same as gitignore.
-- **A no-slash pattern matches the final path component at any depth** — like a gitignore basename pattern (e.g. `nvidia` matches both `.cache/nvidia` and `alice/.cache/nvidia`).
-- **`a/**/b` does not match `a/b`.** `**` requires at least the slash-structure it spans, so the zero-intermediate-directory case is not covered; use `a/b` (or `a/**b`) if you also need that case.
-- In `dir-merge /.pcswitcher-filter`, the leading `/` only means the filename has no path component (it is a bare name) — it does **not** restrict the file to the root. The dir-merge rule is honored in *any* directory of the tree, exactly like `.gitignore` is honored in any directory that has one.
+- **Signs, not `!`** — `- pattern` excludes, `+ pattern` re-includes.
+- **First match wins** (the opposite of gitignore) — order rules from specific to general.
+- **Only a leading `/` anchors** — a middle slash does not, so for `/home` keep patterns unanchored to match under every user's home.
 
-### The ancestor-descent idiom
+Otherwise it matches gitignore (basenames, a trailing `/` for directories, `*`/`**`/`[…]`), and a `.pcswitcher-filter` behaves like a committed `.gitignore`.
 
-To re-include a subtree (e.g. `~/.cache/uv`) while dropping the rest of its parent (`~/.cache`), rsync must be able to *descend into* the parent first, so list the ancestor, the leaf, and the trailing exclude together, in that order:
+### Always excluded
 
-```
-+ /.cache/
-+ /.cache/uv/***
-- /.cache/*
-```
-
-Patterns anchor to the transfer root. Because pc-switcher syncs `/home` with the folder's *contents* as the transfer root, each user's home sits one level below that root (`alice/.cache/uv`, not `/.cache/uv`), so the shipped `home.filter` uses **floating** (non-leading-slash) patterns — the leading-slash form above is the transfer-root-relative template; drop the leading `/` (`+ .cache/`, `+ .cache/uv/***`, `- .cache/*`) when editing a filter file meant to apply under `/home`, and keep it when the transfer root itself is the directory you mean (e.g. a `path:` that is already the user's own home).
-
-### Always-excluded runtime files
-
-pc-switcher's own runtime files are excluded automatically, before any user rule, and **cannot** be re-included (ADR-016). These are the only hardcoded excludes:
-
-- `~/.local/share/pc-switcher/` — sync state, lock file, logs
-- `~/.local/share/uv/tools/pcswitcher` — the uv-tool install
-- `~/.local/bin/pc-switcher` — the entry-point shim
-
-Mirroring these would clobber the target's own sync-history state mid-sync or overwrite the running install, so they stay machine-local regardless of config.
+pc-switcher's own files are always excluded and cannot be re-included, so a sync never disturbs the target's sync state or the running install: `~/.local/share/pc-switcher/`, `~/.local/share/uv/tools/pcswitcher`, and `~/.local/bin/pc-switcher`.
