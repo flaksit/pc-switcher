@@ -1,0 +1,3 @@
+For FolderSync: In realistic scenarios, is the rsync mtime good enough for detection? I guess there can be many operation during "normal" life of a developer like me, that create files with a backdated mtime, like running an rsync or extracting a tar or cp -a from another folder. Or is backdated mtime not possible and are all these things using another file time for this?
+
+What do you think?
