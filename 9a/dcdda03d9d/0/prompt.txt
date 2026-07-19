@@ -1,0 +1,86 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   - Create a "production" `config.yaml` for pc-switcher on this machine (P17), syncing a **single folder: `/home/janfr`**.
+   - Determine what under `/home/janfr` should be EXCLUDED because it is: (a) not useful (caches), (b) machine-specific, (c) secrets that should stay machine-specific (like ssh keys), (d) stuff that won't work on another PC (machine-dependent hashes/profiles), (e) other reasons.
+   - Each exclude must have a clear comment explaining why.
+   - Overarching philosophy that emerged: the purpose of syncing is to continue work offline on a travel-laptop (e.g., on a train) WITHOUT re-downloading tens of GB over cellular. So big-but-useful regenerable data (dev/, package caches, interpreters) is KEPT; only genuinely useless/machine-specific/secret/conflict-causing items are excluded. All synced machines assumed amd64 + Ubuntu 24.04 + same username `janfr`.
+   - Follow-up intents: fix known_hosts so this machine's own host key is present (pc-switcher SSHes between laptops); verify travel-laptop key present (couldn't); decide Dropbox/Koofr config/content/binary handling; understand and correctly handle Claude Desktop vm_bundles; handle snap.
+
+2. Key Technical Concepts:
+   - pc-switcher: rsync-over-SSH folder sync with `--delete` (full mirror, excludes-only, NO include mechanism). Config schema uses jsonschema Draft7, `additionalProperties: false` (strict).
+   - Config structure: `logging` (file/tui/external), `sync_jobs` (dummy_success/dummy_fail/folder_sync booleans), `disk_space_monitor`, `btrfs_snapshots` (subvolumes must start with `@`), and `folder_sync` (folders[].path/enabled/excludes).
+   - rsync filter patterns: leading `/` anchors to transfer root; pattern with `/` or `**` matched against full path; trailing `/` = dirs only; `*` within segment, `**` across `/`.
+   - btrfs subvolume layout on this machine (nvme0n1p5): `@`(/), `@home`(/home), `@var_log`, `@var_cache`, `@libvirt_images`, `@swap`, `@snapshots`.
+   - Hashed known_hosts (`|1|salt|hash`), `ssh-keygen -F <name>` for lookup, `ssh-keygen -H` to hash (lowercases hostnames).
+   - Tailscale: this machine is `p17` (100.117.27.68); tailnet has only p17, ha (100.84.133.108), s22 (android). MagicDNS.
+   - Cloud sync daemon internals: Dropbox `.dropbox/instance1/config.dbx` (encrypted, machine-bound, holds selective-sync + device link), `.dropbox-dist` (self-downloaded ~150M daemon). Koofr `.koofr/config.json` (OAuth tokens + sync pairs), `.koofr/syncdb` (per-machine state), `~/.koofr-dist` (the actual app binaries, url-installed).
+   - Claude Desktop Cowork VM: `.config/Claude/vm_bundles/claudevm.bundle` (30G): rootfs.img (10G, materialized from versioned base per `.origin` markers), sessiondata.img (10G, formatted fresh each daemon start), plus vhdx/qcow2 format duplicates. `coworkd` runs as background daemon when Desktop is open.
+   - flatpak (per-user OSTree store in `~/.local/share/flatpak` → excluded) vs snap (binaries system-side in `/snap`+`/var/lib/snapd`; `~/snap` is only user data → NOT excluded).
+   - GNOME autostart apps run as `app-gnome-*.scope` session scopes; `Linger=yes` is set for the user; `KillUserProcesses` undetermined → post-logout daemon survival uncertain.
+
+3. Files and Code Sections:
+   - `/home/janfr/.config/pc-switcher/config.yaml` (THE deliverable, created/installed/edited multiple times)
+     - Old content was a 170-byte stale-schema stub (`global_settings`, `user_data`/`packages` jobs) that would fail current schema validation; backed up to `config.yaml.bak-stale-schema`.
+     - Current state: valid, 41 excludes, single folder `/home/janfr`, snapshots `subvolumes: [@home]`, `keep_recent: 3`, test jobs off, `folder_sync: true`.
+     - Excludes cover: secrets (`/.ssh/id_*`, `/.local/share/keyrings` — but `.gnupg`+`.password-store`+`known_hosts` SYNCED); hardware/machine-specific (`/.cache/nvidia`, mesa, `/.nv`, `/.cache/fontconfig`, `/.config/monitors.xml`, `/.local/share/kscreen`); desktop indexes (`/.local/share/baloo`, `/.cache/tracker3`, thumbnails, gnome-software, `/.cache/*.kcache`); app runtime caches (chrome/spotify/electron/IBKR/plasmashell, `/.config/Code/{Cache,CachedData,GPUCache,Code Cache,CachedExtensionVSIXs}`, `/.config/Claude/{Cache,Code Cache,GPUCache,DawnWebGPUCache,DawnGraphiteCache}`, `/.var/app/*/cache`); large machine-local (`/.config/Claude/vm_bundles`, `/.local/share/Trash`); `/.local/share/flatpak`; `/.var/app/org.signal.Signal`; cloud state+content (`/.dropbox`, `/Dropbox`, `/.koofr`, `/Koofr`) but NOT `.dropbox-dist`/`.koofr-dist`; `/.xsession-errors`.
+     - Most recent edit (cloud section) — final text:
+       ```
+       # --- Cloud-synced folders: each machine runs its own daemon ---
+       # Only the machine-STATE and the CONTENT are excluded, NOT the client binaries.
+       # ... (explanation of daemon confusion, conflicted copies) ...
+       # NOTE: .dropbox-dist and .koofr-dist (the client binaries) ARE synced.
+       # Koofr has no package-manager install — ~/.koofr-dist IS the whole app ...
+       - /.dropbox                      # daemon state (host id, file DB) — per machine
+       - /Dropbox                       # content — handled by the Dropbox daemon
+       - /.koofr                        # daemon state + config.json (per-machine link/selective-sync)
+       - /Koofr                         # content — handled by the Koofr daemon
+       ```
+     - vm_bundles comment edit — final text explains it's Claude Desktop's Cowork VM, rootfs re-hydratable, sessiondata local, nothing lost by excluding, sync with Desktop CLOSED if adopting Cowork.
+   - `src/pcswitcher/default-config.yaml`, `src/pcswitcher/schemas/config-schema.yaml`, `src/pcswitcher/config.py` — read to understand exact config format, schema constraints, and job-config routing (top-level key = job name).
+   - `~/.ssh/known_hosts` — MODIFIED: added this machine's host keys. Backup `known_hosts.bak-before-selfkey`. Added 15 hashed lines (5 names × 3 keytypes) via constructing lines from `/etc/ssh/ssh_host_*_key.pub` and `ssh-keygen -H`. Verified present: p17, 100.117.27.68, 192.168.129.35, 192.168.129.40. NOT resolved: `P17` uppercase (ssh-keygen -H lowercases).
+   - `~/.ssh/config` — read: has Host aliases (s, dev, storage1/2, ha, pc1=91.99.178.190/testuser, pc2=138.199.146.229/testuser, hedgeye-rpi); pc1/pc2 are Hetzner integration-test VMs.
+   - `~/.koofr/config.json` — inspected (redacted): contains `token`, `oauth2Token`, and `users.<id>.syncs[0]` with `remotePath: /`, `localPath: /home/janfr/Koofr`.
+
+4. Errors and fixes:
+   - Edit failed "File has been modified since read" (user had config open in IDE) → re-read the section before editing, then edit succeeded.
+   - Initial exclude of `.koofr-dist`/`.dropbox-dist` was WRONG — user feedback: "if user-installed through a url instead of with package manager, we probably need them." Verified Koofr has no apt/snap package (url-installed, `~/.koofr-dist` IS the app, autostart runs `/home/janfr/.koofr-dist/storagegui`). Removed both from excludes (now synced).
+   - Initial "dev artifacts break when copied" framing was too strong — user pushback (same arch/OS/username). Corrected: with identical env they mostly work; kept dev/ fully synced.
+   - Initial "vm_bundles only cowork, nothing happens" premise falsified — user: "I never used cowork. Used claude desktop last night, so 00:34 matches that." Found coworkd runs as background daemon regardless; sessiondata formatted fresh each start. Comment slightly overstates but conclusion (exclude) correct; user said leave as-is.
+
+5. Problem Solving:
+   - Established a coherent exclude philosophy prioritizing offline continuation (keep uv/npm/pip caches ~21G, dev/ in full, `.local/share/uv` interpreters).
+   - Solved known_hosts self-key gap so mirrored known_hosts carries P17's key for reverse sync.
+   - Resolved Dropbox/Koofr binary handling by install-method (url vs package manager).
+   - Clarified snap vs flatpak asymmetry (why snap needs no exclude).
+   - Ongoing/unresolved: cannot confirm travel-laptop key in known_hosts (not in tailnet, hashed file); cannot confirm daemons stop on GNOME logout (Linger=yes, KillUserProcesses undetermined) — user will test empirically.
+
+6. All user messages:
+   - "create a 'production' config.yaml for this machine. A single folder to sync: /home/janfr. Check /home/janfr for anything that should not be synced because - not useful at all (some caches?) - machine-specific - secrets that should stay machine-specific (like ssh keys) - stuff that wouldn't work anyhow on another pc. E.g. cache/config/profiles that are machine-dependent (e.g. with machine-specific hash) and that won't work anyway when we just copy them to - other reasons? Put them in the config.yaml with clear comments why they are there"
+   - (AskUserQuestion answers) Secrets: "I tilt towards option 1. But explain why exclude known-hosts?"; Cloud: "Won't it work if we copy the daemon-state dirs? Will their contents be ignored and will the daemons be confused if we copy the Dropbox and Koofr data folders?"; Dev: "Explain why 'break when copied'? We suppose all machines we sync to have same arch (amd64) and linux (ubuntu 24.04 now)"; Apps: "Sync profiles, drop caches + Signal"
+   - "'Big regenerable data': not sure that we want to leave this out. Syncing from desk-laptop to travel-laptop is to continue work on travel-laptop while travelling, e.g. on train. Then I don't want to need to download 10's of GB over cellular network to continue work!"
+   - "your note on known_hosts: 'if the two laptops ever SSH into each other': of course they will do: pc-switcher does! known_hosts should contain host key of this machine as well. add if not yet there"
+   - "travel laptop is already there I think"
+   - "dropbox/koofr: can we sync the config? E.g. the selection of which folders to sync"
+   - ".config/Claude/vm_bundles: not used by claude (is for claude desktop, I suppose)? If claude needs them, we need to sync them. Or very volatile (these are VM images, for which maybe another sync mechanism is needed)?"
+   - "Again: I don't want to download 10GB over cellular when I start claude desktop on laptop. Isn't the vm stopped when I'm logged out of gnome (and claude desktop closed, of course)? Is the VM updating disk constantly, or is the disk reset after every session? Do I loose important state if I don't have the state from the source laptop? Can I continue work? Only used for cowork? I don't use that yet, so if only for cowork, we can safely leave this out."
+   - "I never used cowork. Used claude desktop last night, so 00:34 matches that."
+   - (interrupt) "Just leave as it is now. Not important. I use only for questions; they are visible to any other claude desktop instance or claude.ai anyway: claude desktop is just a frontend for a saas (the way I use it, anyway)"
+   - "koofr/dropbox: client binaries? Depends on how installed, no? If user-installed through an url instead of with package manager, we probably need them. You have excludes for flatpak. Snap not in /home/janfr?"
+   - "dropbox/koofr content: We sync when logged out from gnome. So I guess both daemons are not running then. Verify/confirm that. If we would sync content, would that give a problem? Would the daemons on the target laptop get confused? Advantage of syncing ourselves: we sync fast over LAN; dropbox/koofr sync over the internet."
+   - "no, we leave like it is. Want will test this now. Log out and do from console tty" (plus a CRITICAL instruction to respond with TEXT ONLY / no tools — this is the compaction request wrapper)
+   - Security-relevant constraints stated by user (preserve): secrets per "option 1" = sync `.gnupg` + `.password-store`, exclude `.ssh/id_*` and `.local/share/keyrings`; Signal excluded (device-linked); do not sync Dropbox/Koofr content or daemon state (leave to their daemons).
+
+7. Pending Tasks:
+   - None actionable by me right now. The config is complete and installed. The user is going to empirically test whether Dropbox/Koofr daemons stop on GNOME logout via a console TTY.
+   - Latent/optional (only if user requests): verify travel-laptop host key once its address is known; offer final end-to-end exclude-list sanity check; `pc-switcher sync <target> --dry-run`.
+
+8. Current Work:
+   Immediately before this summary, the user decided to leave the config as-is (Dropbox/Koofr content stays EXCLUDED — not enabling the guardrailed LAN pre-seed) and stated they will now test whether the daemons stop on logout themselves. My last substantive output had provided: (a) verification that both daemons currently run as GNOME session-scope apps (`app-gnome-dropbox.scope`, `app-gnome-koofr.scope`), no system service; (b) that `Linger=yes` + undetermined `KillUserProcesses` means I could NOT confirm they stop on logout; (c) the exact verification command to run after logout from SSH/TTY: `pgrep -af 'dropbox|storagegui|storagesync'` (empty = stopped/safe; any output = still running/unsafe); (d) analysis that a blind `rsync --delete` mirror of the content risks silent data loss on divergence, selective-sync churn, and `.dropbox.cache` leakage (`~/Dropbox/.dropbox.cache` exists). The user accepted keeping it excluded. No file changes are in progress; the config file is in its final agreed state.
+
+9. Optional Next Step:
+   None. The user's most recent message ("no, we leave like it is. Want will test this now. Log out and do from console tty") concludes the current task — they are leaving the config unchanged and will run the logout/`pgrep` test themselves. I should wait for the user to report their test result before taking any further action. Per the user's explicit "we leave like it is," no config edits should be made. If they return with the test result, the relevant follow-up would be interpreting it against the already-provided guidance (empty pgrep output = daemons stopped = content-sync would be technically safe but remains excluded by their choice).
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/janfr/.claude/projects/-home-janfr-dev-pc-switcher/0310df11-d1d1-4ec7-80ec-9b120a9d64b6.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
