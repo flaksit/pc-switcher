@@ -1,0 +1,1 @@
+B: pc2 message ok, pc1 completes cleanly
