@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bgknu89iv</task-id>
+<tool-use-id>toolu_01AxbS67u1sq5WmW3U4F4uSN</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/bgknu89iv.output</output-file>
+<status>completed</status>
+<summary>Background command "Run cross-AI reviews in background" completed (exit code 0)</summary>
+</task-notification>
