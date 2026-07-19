@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -14,11 +15,12 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.prompt import Prompt
 from rich.text import Text
 
 from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
-from pcswitcher.logger import get_latest_log_file, get_logs_directory
+from pcswitcher.logger import get_latest_log_file, get_logs_directory, is_interactive
 from pcswitcher.models import SyncAbortedByUser, SyncLockedError, SyncSession
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
@@ -93,16 +95,24 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     version_flag: Annotated[
         bool,
         typer.Option("--version", "-v", callback=_version_callback, is_eager=True, help="Show version and exit"),
+    ] = False,
+    no_version_check: Annotated[
+        bool,
+        typer.Option("--no-version-check", help="Skip the startup version check"),
     ] = False,
 ) -> None:
     """PC-switcher synchronization system."""
     # Logging is configured by setup_logging() in orchestrator.py when a sync runs.
     # No basicConfig here - it would install a plain handler that bypasses the
     # queue-based pipeline and breaks TUI formatting (see ADR-010).
-    pass
+    # Skip for bare invocation (no subcommand) and for `self` (avoids a circular
+    # prompt during manual `self update`); --version is eager and never reaches here.
+    if ctx.invoked_subcommand is not None and ctx.invoked_subcommand != "self":
+        _maybe_check_for_update(console, no_version_check=no_version_check)
 
 
 def _display_log_file(log_file: Path) -> None:
@@ -509,6 +519,20 @@ def init(
 GITHUB_REPO_URL = "https://github.com/flaksit/pc-switcher"
 
 
+class UpdateFailedError(Exception):
+    """Raised when installing/verifying a new pc-switcher release fails.
+
+    The optional `detail` carries install stderr so a call site can still
+    render it as a second, dimmed line (matching the pre-refactor `self
+    update` output).
+    """
+
+    def __init__(self, message: str, *, detail: str | None = None) -> None:
+        """Store `message` as the exception text and `detail` for optional display."""
+        super().__init__(message)
+        self.detail = detail
+
+
 def _run_uv_tool_install(release: Release) -> subprocess.CompletedProcess[str]:
     """Run uv tool install to install/upgrade pc-switcher.
 
@@ -545,6 +569,40 @@ def _verify_installed_version() -> Version | None:
         except ValueError:
             return None
     return None
+
+
+def _install_and_verify(release: Release) -> Version:
+    """Install `release` via `uv tool install` and verify it took effect.
+
+    Shared core reused by both `self update` (exit-on-failure) and the
+    startup auto-upgrade (warn-and-continue) — the behavioral fork on
+    failure lives at the call sites, not here. No user-facing "Updating..."
+    / "Successfully..." prints happen in this helper.
+
+    Args:
+        release: Release to install.
+
+    Returns:
+        The verified installed Version.
+
+    Raises:
+        UpdateFailedError: If install, verification, or the post-install
+            version check fails.
+    """
+    result = _run_uv_tool_install(release)
+    if result.returncode != 0:
+        raise UpdateFailedError("Update failed", detail=(result.stderr.strip() or None))
+
+    installed = _verify_installed_version()
+    if installed is None:
+        raise UpdateFailedError("Verification failed - pc-switcher not working after update")
+
+    if installed != release.version:
+        raise UpdateFailedError(
+            f"Version mismatch after update. Expected {release.version.semver_str()}, got {installed.semver_str()}"
+        )
+
+    return installed
 
 
 def _get_current_version_or_exit() -> Version:
@@ -619,28 +677,70 @@ def update(
 
     # Perform the update
     console.print(f"Updating pc-switcher from {current_display} to {target_display}...")
-    result = _run_uv_tool_install(target_release)
-
-    if result.returncode != 0:
-        console.print("[bold red]Error:[/bold red] Update failed")
-        if result.stderr:
-            console.print(f"[dim]{result.stderr.strip()}[/dim]")
-        sys.exit(1)
-
-    # Verify installation
-    installed = _verify_installed_version()
-    if installed is None:
-        console.print("[bold red]Error:[/bold red] Verification failed - pc-switcher not working after update")
-        sys.exit(1)
-
-    if installed != target_release.version:
-        console.print(
-            f"[bold red]Error:[/bold red] Version mismatch after update. "
-            f"Expected {target_display}, got {installed.semver_str()}"
-        )
+    try:
+        _install_and_verify(target_release)
+    except UpdateFailedError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        if e.detail:
+            console.print(f"[dim]{e.detail}[/dim]")
         sys.exit(1)
 
     console.print(f"[green]Successfully updated to version {target_display}[/green]")
+
+
+def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None:
+    """Best-effort startup check for a newer stable release; offer to upgrade inline.
+
+    Never fatal: any check failure, upgrade failure, or re-exec failure prints
+    a warning and returns so the invoking command proceeds unaffected. Skips
+    entirely for `--no-version-check`, `PCSWITCHER_SKIP_VERSION_CHECK`, and
+    non-interactive runs (either stdin or stdout not a TTY).
+
+    Args:
+        console: Rich console to print status to.
+        no_version_check: If True, skip the check (from `--no-version-check`).
+    """
+    if no_version_check or os.environ.get("PCSWITCHER_SKIP_VERSION_CHECK") or not is_interactive(console):
+        return
+
+    try:
+        current = get_this_version()
+        latest = get_highest_release(include_prereleases=False)
+    except Exception as e:
+        console.print(f"[yellow]Warning:[/yellow] Could not check for updates: {e}")
+        return
+
+    if latest.version <= current:
+        return
+
+    console.print(
+        f"A new stable version of pc-switcher is available: {current.semver_str()} -> {latest.version.semver_str()}"
+    )
+    response = Prompt.ask("Upgrade now?", choices=["y", "n"], default="n")
+    if response.lower() != "y":
+        return
+
+    console.print(f"Updating pc-switcher to {latest.version.semver_str()}...")
+    try:
+        _install_and_verify(latest)
+    except UpdateFailedError as e:
+        console.print(f"[yellow]Warning:[/yellow] {e}")
+        if e.detail:
+            console.print(f"[dim]{e.detail}[/dim]")
+        return
+
+    console.print("[green]Updated.[/green] Restarting with the new version...")
+    # Set right before exec so this run's own check never saw it - it's only
+    # meant for the re-exec'd child, preventing an infinite check loop.
+    os.environ["PCSWITCHER_SKIP_VERSION_CHECK"] = "1"
+    # execvp does not flush Python's buffered I/O before replacing the process
+    # image, so flush explicitly or the messages above could be lost.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        os.execvp(sys.argv[0], sys.argv)
+    except OSError as e:
+        console.print(f"[yellow]Warning:[/yellow] Could not restart automatically: {e}")
 
 
 if __name__ == "__main__":
