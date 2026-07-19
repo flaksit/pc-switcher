@@ -1,0 +1,1 @@
+i see claude.md still contains stuff that is now in a ~/.claude/rules
