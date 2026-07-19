@@ -1,0 +1,1 @@
+you already state the probable cause: you did a rerun. That probably doesn't do any concurrency checking. Do we need an issue for that? Is there a solution? We won't write complex workarounds for a scenario that github doesn't support. Most important: we need to know and be aware when doing re-run
