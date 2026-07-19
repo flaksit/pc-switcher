@@ -1,0 +1,2 @@
+Same error is actually logged twice now. It seems it is logged as critical already when the exception first reaches the orchestrator. And then a second time in the TaskGroup-exception.
+Find out if we can safely leave out the second printout or if we still need it in case of (maybe later) running multiple jobs in parallel.
