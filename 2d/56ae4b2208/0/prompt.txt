@@ -1,0 +1,60 @@
+<task-notification>
+<task-id>a68cb2c50635622dd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/837453ef-0782-46f4-8c3a-1320c669779c/tasks/a68cb2c50635622dd.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify Phase 01 fix plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## VERIFICATION PASSED (with one warning)
+
+**Phase:** 01-home-sync-mvp-user-data-sync (gap closure re-plan)
+**Plans verified:** 01-15, 01-16, 01-17, 01-18
+
+### Gap coverage (5 diagnosed UAT gaps, exactly-one-plan-each)
+
+| Gap (UAT.md `## Gaps`) | Plan | Task | Status |
+|---|---|---|---|
+| 1. First-sync warning hardcodes `folder_sync`/`rsync --delete` | 01-15 | Tasks 1-2 | Covered — `FirstSyncScope` contract + `describe_first_sync_scope` hook + orchestrator assembly; grep-enforced absence of `folder_sync`/`rsync --delete` in orchestrator.py |
+| 2. Declined confirmation double-logs at CRITICAL | 01-16 | Tasks 1-2 | Covered — `SyncAbortedByUser` + `SessionStatus.ABORTED`, caught before generic `except Exception` in both orchestrator and CLI |
+| 3. Duplicate stacked "Recent Logs" panels / skipped step number on confirm resume | 01-17 | Task 1 | Covered — single persistent `Live`, `pause()`/`resume()` replacing `stop()`/`start()` in `Confirmer` |
+| 4. Live progress flooding (761 duplicate panel headers, root-caused in tui-live-progress-flooding.md) | 01-18 | Tasks 1-2 | Covered — `UILogHandler` routes records via `loop.call_soon_threadsafe` onto the same event-loop thread that drives `Live.update`; stderr `StreamHandler` retained only for non-TTY |
+| 5. Config-sync prompts unconditionally under `--dry-run` (inconsistent with `_confirm_first_sync`) | 01-17 | Task 2 | Covered — dry-run skips `_prompt_new_config`/`_prompt_config_diff`, prints preview, no pause |
+
+No gap is dropped, duplicated across plans, or only partially covered. The SC3 automation item at the top of the Gaps section is explicitly an automation-coverage note, not one of the 5 diagnosed truths, and is correctly out of scope for these 4 plans.
+
+### Dependency / wave re-derivation (from files_modified, not the plans' own summary)
+
+- 01-15 (wave 1, `depends_on: []`): models.py, jobs/base.py, jobs/folder_sync.py, orchestrator.py
+- 01-17 (wave 1, `depends_on: []`): ui.py, confirmer.py, config_sync.py — **zero file overlap** with 01-15. Safe to run in parallel.
+- 01-16 (wave 2, `depends_on: [01-15]`): models.py, orchestrator.py, cli.py — overlaps 01-15 on models.py/orchestrator.py; correctly sequenced after it. No overlap with 01-17's files, so the `depends_on` list is minimal-and-correct (wave assignment of 2 = max(deps)+1 is consistent).
+- 01-18 (wave 3, `depends_on: [01-15, 01-16, 01-17]`): logger.py, orchestrator.py — overlaps orchestrator.py with both 01-15 and 01-16, and functionally depends on 01-17's `pause()`/`resume()`/is_started-guard rework (Task 2's claim that pre-`ui.start()` log lines "land in the deque and render once the Live starts" depends on `add_log_message`'s unconditional `deque.append()`, unchanged by 01-17 — confirmed by reading `src/pcswitcher/ui.py`). Dependency set is correct and non-circular.
+
+No cycles, no missing references, no forward references.
+
+### Task completeness / specificity
+
+All 12 tasks across the 4 plans have concrete `&lt;files&gt;`, `&lt;action&gt;` (exact class/method signatures, exact line ranges to read/modify, precise behavioral rules), `&lt;verify&gt;` (runnable commands), and `&lt;done&gt;`. This meets the "fresh Claude could implement without clarifying questions" bar — line-range citations plus explicit dataclass fields/method signatures are given without embedding verbatim source.
+
+### Same-bug-class re-introduction check (the specific ask)
+
+- **UILogHandler threadsafety (01-18):** Sound. `emit()` runs on the `QueueListener` background thread; it hands off via `loop.call_soon_threadsafe(sink.add_log_message, line)`, which executes `add_log_message` on the event-loop thread — the same thread all other `Live.update()` calls already run on (progress/connection/step updates). This directly closes the root cause recorded in `tui-live-progress-flooding.md` (uncoordinated writer thread desyncing Live's cursor bookkeeping): there is now exactly one thread writing to the terminal via one `Live.update` path.
+- **Pre-`ui.start()` log lines:** Verified against actual `ui.py` — `add_log_message()` appends to `self._log_panel` unconditionally, and only the `Live.update()` call is guarded. So logs emitted before `start()` are retained and rendered on the first post-start update, as 01-18 Task 2 claims.
+
+**WARNING — resume() does not force a redraw (dimension: task_completeness / key_links)**
+- Plan: 01-17, Task 1
+- 01-17 specifies `resume()` as "call `self._live.start()` on the existing instance" only. `Live.start()` does not itself re-evaluate `self._render()` — every mutator (`update_job_progress`, `add_log_message`, `set_current_step`, etc.) still runs its state mutation while paused (only the trailing `self._live.update(self._render())` call is skipped, gated by the new `is_started` guard), so the cached renderable inside `Live` is stale relative to accumulated state changes made during the pause window (e.g. `dummy_success`'s periodic progress ticks during a confirmation pause). As written, `resume()` restarts the Live's internal auto-refresh loop but does not force one fresh `self._live.update(self._render())` call, so the terminal could briefly show a stale frame immediately after resume until the next unrelated event happens to trigger a redraw — a lesser instance of the same "display doesn't reflect real state" defect class this phase is closing.
+- The Task 3 test for this ("step-continuity check") calls `set_current_step(3)` *after* `resume()` before asserting, which forces a fresh update and would not catch the staleness gap if `resume()` alone were called with no subsequent mutator.
+- Fix hint: specify that `resume()` must end with an explicit `self._live.update(self._render())` after `self._live.start()`, and add a test that calls only `pause()` → mutate state (e.g. `set_current_step`, guarded so it doesn't render) → `resume()` → assert the rendered output already reflects the mutated state without any further mutator call.
+
+This is a WARNING, not a blocker: it does not undermine gap coverage, dependency correctness, or the core fix for gaps 3/4/5, and is a narrow, easily-specified addition to an otherwise sound task. Execution can proceed; recommend the planner add the one-line clarification to 01-17 Task 1 before or during execution.
+
+### Files referenced
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-15-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-16-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-17-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-18-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-UAT.md`
+- `/home/janfr/dev/pc-switcher/.planning/debug/tui-live-progress-flooding.md`
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/ui.py` (read to confirm `add_log_message`/guard behavior)</result>
+<usage><subagent_tokens>82162</subagent_tokens><tool_uses>7</tool_uses><duration_ms>109354</duration_ms></usage>
+</task-notification>
