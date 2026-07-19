@@ -1,0 +1,6 @@
+Oops, I didn't realize I was logged out from pc1.
+The install worked perfectly on pc1 to upgrade the existing installation. So remove the gh issue you created for that.
+
+
+I ran with dummy_fail=true to test that. Output: [Image #7].
+The message "unhandled errors in a TaskGroup" is not useful to user and not even to developer. I see "1 sub-exception". Shouldn't that one be shown instead?
