@@ -92,7 +92,7 @@ class SyncLock:
         """
         try:
             content = self._lock_path.read_text().strip()
-            return content if content else None
+            return content or None
         except FileNotFoundError:
             return None
 
