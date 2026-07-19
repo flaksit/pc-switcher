@@ -1,0 +1,60 @@
+<task-notification>
+<task-id>a1aac91916245a50f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a1aac91916245a50f.output</output-file>
+<status>completed</status>
+<summary>Agent "Update integration tests for new flags" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Commit hash: `f6eee4f`
+
+---
+
+Here is a summary of every change made and the reasoning behind each:
+
+## Per-file summary
+
+### `tests/integration/test_end_to_end_sync.py`
+
+| Sync call | Old | New | Why |
+|---|---|---|---|
+| `test_core_us_job_arch_as1` | `--yes` | `--yes --allow-first-sync` | Fresh VM, pc2 has no history → W1 gate |
+| `test_core_us_job_arch_as7` (nohup) | `--yes` | `--yes --allow-first-sync` | Must reach job execution phase to send SIGINT |
+| `test_core_edge_target_unreachable` (nohup) | `--yes` | `--yes --allow-first-sync` | Must reach job execution phase to inject network failure |
+| `test_install_on_target_fresh_machine` | `--yes` | `--yes --allow-first-sync` | Fresh VM, no history |
+| `test_install_on_target_upgrade_older_version` | `--yes` | `--yes --allow-first-sync` | Old pc-switcher install ≠ sync history; W1 still fires |
+| Consecutive test — step 1 (first sync) | `--yes` | `--yes --allow-first-sync` | W1 gate; history updated after |
+| Consecutive test — step 2 (second sync) | unchanged `--yes` | unchanged `--yes` | Must hit W3 gate and abort |
+| Consecutive test — step 3 | `--allow-consecutive` | `--allow-out-of-order` | Only flag that bypasses W3 |
+| Back-sync test — step 1 | `--yes` | `--yes --allow-first-sync` | W1 gate |
+| Back-sync test — step 2 (B→A) | unchanged | unchanged | Clean case: pc1 has history, no consecutive push |
+| Back-sync test — step 3 (A→B again) | unchanged | unchanged | Clean round-trip, no gate fires |
+
+`TestConsecutiveSyncWarning` class docstring updated to drop `--allow-consecutive` and name both gates (W1/W3). All step comments updated. The step-2 assertion (`"consecutive" in output.lower() and "abort" in output.lower()`) remains correct because:
+- `"consecutive"` matches the W3 warning title `"Consecutive Sync — No Back-Sync Received"` printed by the confirmer
+- `"abort"` matches `"Sync aborted at the out-of-order / target-state check"` (the RuntimeError message)
+
+### `tests/integration/test_folder_sync.py`
+
+| Location | Change |
+|---|---|
+| Module-level criterion-5 description | Updated to describe two independent gates (W1/W3) and their respective flags |
+| `test_a_to_b_content_metadata_and_exclusions` sync call | `--allow-out-of-order` → `--allow-first-sync` (comment already said "W1 case") |
+| `test_round_trip_and_no_false_divergence` step-1 sync | `--allow-out-of-order` → `--allow-first-sync`; docstring workflow line updated |
+| `test_out_of_order_and_dry_run` step-2 comment | "topology check W1" → clearer "W1 (first-sync) gate fires" |
+| `test_out_of_order_and_dry_run` step-4 command | `--allow-out-of-order` → `--allow-first-sync` (dry-run in step 3 does not update history, so pc2 still has no history at step 4) |
+| `test_out_of_order_and_dry_run` step-4 assertion message | `--allow-out-of-order` → `--allow-first-sync` |
+| Test docstring step 4 description | Same flag swap |
+
+The step-2 assertion (`"out-of-order" in combined or "target" in combined`) still holds: `"out-of-order"` appears in the `RuntimeError` message (`"Sync aborted at the out-of-order / target-state check"`) which fires for both W1 and W2/W3 aborts, and `"target"` appears in the W1 warning title `"First Sync — Target Will Be Overwritten"`.
+
+### `tests/integration/test_logging_integration.py`
+
+Single sync call in `test_log_fr_aggregate` gained `--allow-first-sync` (fresh VM, no history on pc2).
+
+## Verification results
+
+- `uv run python -m py_compile` on all three files: **OK**
+- `uv run ruff check tests/integration`: **clean** (two E501 overflows from the nohup f-strings were fixed by splitting into implicit concatenated string literals)
+- `uv run ruff format --check tests/integration`: **17 files already formatted**</result>
+<usage><subagent_tokens>114371</subagent_tokens><tool_uses>38</tool_uses><duration_ms>666654</duration_ms></usage>
+</task-notification>
