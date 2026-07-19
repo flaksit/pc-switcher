@@ -1,0 +1,34 @@
+<task-notification>
+<task-id>a499c12467bfcbc73</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a499c12467bfcbc73.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review phase 1 changes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The review is written and passed the hook. Here is the summary of what I found.
+
+## Code Review Complete
+
+REVIEW.md written to `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-REVIEW.md` (not committed — orchestrator handles that).
+
+**Status:** issues_found — 2 BLOCKER, 3 WARNING, 5 INFO.
+
+### What held up
+Shell-injection safety is solid: every config-derived value reaching `asyncio.create_subprocess_shell` is `shlex.quote`'d (paths, exclude patterns, `-e 'ssh -T -q'`, `--rsync-path='sudo rsync'`, and the `host:path` destination), in both `_build_rsync_cmd` and the `validate()` preflight/divergence commands. The remote `python3 -c` role-record script is also safe (single-quoted Python literals inside double quotes, only trusted enum values interpolated). Dry-run side-effect freedom holds — rsync gets `--dry-run` and both the `set_target_generation` marker write and the orchestrator's post-sync history update are gated on `not dry_run`.
+
+### The two BLOCKERs (both in the divergence guard — the data-loss linchpin)
+
+**CR-01** — The shipped default config syncs `/home`, which resolves to `prefix=""`, making the divergence matcher (`folder_sync.py:341`) treat *any* changed path as divergence. The divergence baseline is captured inside `execute()` (Phase 9), but the orchestrator's `_update_sync_history()` later writes `sync-history.json` onto the **target's** `/home/&lt;user&gt;/.local` (Phase 10+), bumping `@home`'s generation past the baseline. Result: every second sync of the default config self-triggers a false divergence and is blocked. The integration test misses this because it deliberately syncs a *subdirectory* (non-empty prefix that excludes `~/.local`), never the default `/home`.
+
+**CR-02** — The guard fails **open**: when `findmnt` or `btrfs subvolume find-new` fails after a baseline exists, it logs a warning and `return False`, allowing the destructive `rsync --delete` to proceed against an unverified target. A safety linchpin must fail closed when it cannot verify.
+
+### WARNINGs
+- **WR-01** `bytes_transferred` is hardcoded 0 (regex never captures bytes) → audit log always says "0 bytes".
+- **WR-02** A `_get_subvolume_generation` failure *after* the destructive rsync aborts the job as FAILED even though the target was already mirrored, leaving inconsistent state.
+- **WR-03** TOCTOU: divergence is checked at Phase 4 but the destructive rsync runs at Phase 9; target writes in between are deleted unseen.
+
+INFO items cover dead SIGINT cleanup-wait code (`cli.py`), a progress-bar step over-count, incomplete rsync itemize parsing (`c`/`h`), non-atomic `os.write`/missing fsync in `sync_history.py`, and excluded-file changes triggering (safe) false-positive divergence.
+
+Most load-bearing detail: the CR-01 phase-ordering bug is only reachable with the default `/home` (empty-prefix) config, which the test suite never exercises end-to-end.</result>
+<usage><subagent_tokens>170459</subagent_tokens><tool_uses>24</tool_uses><duration_ms>509442</duration_ms></usage>
+</task-notification>
