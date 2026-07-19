@@ -1,0 +1,1 @@
+Ran "pc-switcher sync fleksi --dry-run". Got critical during FolderSync. See tail of (only) log file
