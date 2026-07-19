@@ -1,0 +1,2 @@
+"FolderSyncJob owns the first-sync overwrite warning" "detects "target has no sync history"". I don't see how a job could detect that.
+Before, I said "For non-interactive, we could have an option "--allow-first-sync" whose description explicitly says that this will overwrite anything on the target that is in scope of the configured jobs." because many/all jobs will have the same question. So do it once, on the level of the orchestrator.
