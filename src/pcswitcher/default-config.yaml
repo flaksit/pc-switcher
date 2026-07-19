@@ -130,6 +130,15 @@ dummy_fail:
 # files (ADR-016) are excluded first of all and can never be re-exposed by
 # either surface.
 #
+# ~/.ssh/authorized_keys: the shipped home.filter/root.filter EXCLUDE it, so
+# each machine keeps its own SSH access list. pc-switcher connects as the normal
+# user, so the target authorizes the sync against that user's authorized_keys;
+# mirroring a copy that omits the source machine's own key would delete the key
+# the next sync needs and lock the sync out of its own target. To sync it anyway,
+# make it one shared fleet list containing EVERY machine's public key (its own
+# included), then drop the exclude line. See docs/configuration.md
+# "authorized_keys".
+#
 # See docs/configuration.md for the full filter-rule syntax and a guide for
 # users coming from .gitignore.
 

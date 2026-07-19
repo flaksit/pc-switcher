@@ -1,5 +1,8 @@
 # pc-switcher central filter file for the /home folder_sync entry.
 # Native rsync filter syntax: `+` includes, `-` excludes, first-match-wins.
+# Comments must be on their OWN line: rsync does NOT strip a trailing `# ...`
+# from a rule, so `- .nv  # comment` matches the literal `.nv  # comment` and
+# silently does nothing. Never put an end-of-line comment after a rule.
 # Patterns here are FLOATING (no leading /): pc-switcher syncs /home with each
 # user's directory as the transfer root's immediate content (e.g. alice/.cache/uv),
 # so a leading-slash pattern would anchor to /home itself and never match.
@@ -9,9 +12,13 @@
 # Machine-identity excludes — never synced between machines.
 - .ssh/id_*
 - .ssh/known_hosts
-# authorized_keys is machine-local access control: mirroring it overwrites the
-# target's copy (which does not list the source), so the target rejects the
-# source's next connection and locks the sync out of its own target.
+# authorized_keys is excluded so each machine keeps its own SSH access list.
+# pc-switcher connects as the normal user, so the target authorizes the sync
+# against this file; mirroring a copy that omits the source machine's own key
+# deletes the key the next sync needs and locks the sync out of its own target.
+# To sync it instead, make it one shared fleet list holding EVERY machine's
+# public key (its own included) and remove this line. See docs/configuration.md
+# "authorized_keys".
 - .ssh/authorized_keys
 - .config/tailscale
 
