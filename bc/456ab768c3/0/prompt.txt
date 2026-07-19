@@ -1,0 +1,9 @@
+I still see the first-sync warning mention rsync --delete and /home and /root. Who writes this? Did FolderSyncJob generate this or hardcoded in the orchestrator? Orchestrator should not know anything about that (as discussed before).
+"Run pc-switcher sync --dry-run to preview what would change first": but then need to look at log file (because dry run doesn't show what is/will be copied/deleted in TUI). This line should say that and where to find the log file.
+
+First a dry-run: [Image #3]
+- disk_space_monitor occupies a progress line that stays on 0%. What does that show? Progress? Then don't show! Occupied disk space?
+- folder-sync showed 97% in a flash (from sync /home?) and then finished at 2% (from sync /root?)
+
+Full run: [Image #4] [Image #5]
+At end: folder-sync only starts giving progress quite late. rsync is fast, so probably ok.
