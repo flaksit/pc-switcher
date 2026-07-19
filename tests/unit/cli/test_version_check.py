@@ -176,6 +176,18 @@ class TestMaybeCheckForUpdateSkipConditions:
 
         mock_get_highest.assert_not_called()
 
+    def test_help_request_skips(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`<cmd> --help` skips the check so help renders without blocking on the prompt (WR-01, #176)."""
+        console = _capture_console()
+        monkeypatch.setattr(cli.sys, "argv", ["pc-switcher", "sync", "--help"])
+        with (
+            patch("pcswitcher.cli.is_interactive", return_value=True),
+            patch("pcswitcher.cli.get_highest_release") as mock_get_highest,
+        ):
+            cli._maybe_check_for_update(console, no_version_check=False)  # pyright: ignore[reportPrivateUsage]
+
+        mock_get_highest.assert_not_called()
+
 
 class TestMaybeCheckForUpdateFailureFallbacks:
     """check raises; upgrade fails; execvp OSError - all warn and continue, never fatal."""
@@ -208,6 +220,23 @@ class TestMaybeCheckForUpdateFailureFallbacks:
             patch("pcswitcher.cli.subprocess.run", return_value=failed_install),
             patch("pcswitcher.cli.os.execvp") as mock_execvp,
         ):
+            cli._maybe_check_for_update(console, no_version_check=False)  # pyright: ignore[reportPrivateUsage]
+
+        mock_execvp.assert_not_called()
+        assert "warning" in console.file.getvalue().lower()  # pyright: ignore[reportAttributeAccessIssue]
+
+    def test_upgrade_oserror_warns_and_continues(self) -> None:
+        """`uv` missing from PATH makes subprocess.run raise OSError; must not crash startup (CR-01, #176)."""
+        console = _capture_console()
+        with (
+            patch("pcswitcher.cli.is_interactive", return_value=True),
+            patch("pcswitcher.cli.get_this_version", return_value=CURRENT_VERSION),
+            patch("pcswitcher.cli.get_highest_release", return_value=HIGHER_RELEASE),
+            patch("pcswitcher.cli.Prompt.ask", return_value="y"),
+            patch("pcswitcher.cli.subprocess.run", side_effect=FileNotFoundError("uv not found")),
+            patch("pcswitcher.cli.os.execvp") as mock_execvp,
+        ):
+            # Must return normally (never propagate) so the invoking command still runs.
             cli._maybe_check_for_update(console, no_version_check=False)  # pyright: ignore[reportPrivateUsage]
 
         mock_execvp.assert_not_called()
@@ -267,3 +296,21 @@ class TestMainCallbackWiring:
 
         assert result.exit_code == 0, result.stdout
         mock_check.assert_called_once()
+
+
+class TestSelfUpdateFailureModes:
+    """`self update` failure handling that the startup path shares (#176)."""
+
+    def test_uv_missing_shows_clean_error_not_traceback(self) -> None:
+        """A missing `uv` binary (OSError) yields a clean error + exit 1, not a raw traceback (WR-02, #176)."""
+        with (
+            patch("pcswitcher.cli._get_current_version_or_exit", return_value=CURRENT_VERSION),
+            patch("pcswitcher.cli._resolve_target_version", return_value=HIGHER_RELEASE),
+            patch("pcswitcher.cli.subprocess.run", side_effect=FileNotFoundError("uv not found")),
+        ):
+            result = runner.invoke(cli.app, ["self", "update"])
+
+        assert result.exit_code == 1
+        # Exited cleanly via sys.exit, not by letting the OSError escape as a traceback.
+        assert isinstance(result.exception, SystemExit)
+        assert "Could not run the upgrade" in result.stdout

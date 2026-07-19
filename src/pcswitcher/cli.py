@@ -686,6 +686,11 @@ def update(
         if e.detail:
             console.print(f"[dim]{e.detail}[/dim]")
         sys.exit(1)
+    except OSError as e:
+        # `uv` missing from PATH (FileNotFoundError) or otherwise unspawnable —
+        # surface a clean error instead of a raw traceback.
+        console.print(f"[bold red]Error:[/bold red] Could not run the upgrade: {e}")
+        sys.exit(1)
 
     console.print(f"[green]Successfully updated to version {target_display}[/green]")
 
@@ -695,14 +700,23 @@ def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None
 
     Never fatal: any check failure, upgrade failure, or re-exec failure prints
     a warning and returns so the invoking command proceeds unaffected. Skips
-    entirely for `--no-version-check`, `PCSWITCHER_SKIP_VERSION_CHECK`, and
-    non-interactive runs (either stdin or stdout not a TTY).
+    entirely for `--no-version-check`, `PCSWITCHER_SKIP_VERSION_CHECK`, a help
+    request (`--help`/`-h`), and non-interactive runs (either stdin or stdout
+    not a TTY).
 
     Args:
         console: Rich console to print status to.
         no_version_check: If True, skip the check (from `--no-version-check`).
     """
-    if no_version_check or os.environ.get("PCSWITCHER_SKIP_VERSION_CHECK") or not is_interactive(console):
+    # A help request would otherwise block on the upgrade prompt before the help
+    # text renders; `pc-switcher <cmd> --help` should print help immediately.
+    help_requested = "--help" in sys.argv or "-h" in sys.argv
+    if (
+        no_version_check
+        or help_requested
+        or os.environ.get("PCSWITCHER_SKIP_VERSION_CHECK")
+        or not is_interactive(console)
+    ):
         return
 
     try:
@@ -729,6 +743,12 @@ def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None
         console.print(f"[yellow]Warning:[/yellow] {e}")
         if e.detail:
             console.print(f"[dim]{e.detail}[/dim]")
+        return
+    except OSError as e:
+        # subprocess.run raises OSError (e.g. FileNotFoundError when `uv` is not
+        # on PATH) before any exit code. Must stay non-fatal: warn and let the
+        # user's actual command proceed on the current version.
+        console.print(f"[yellow]Warning:[/yellow] Could not run the upgrade: {e}")
         return
 
     console.print("[green]Updated.[/green] Restarting with the new version...")
