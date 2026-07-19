@@ -1,0 +1,5 @@
+I first leaned towards per-dir-first for most flexibility and gitignore-convention. But global-first probably better:
+- if I want gitignore convention, I can leave global file empty and just have a .pcswitcher-filter in the root folder
+- global-first allows for enforcing some rules that can't be overridden by local per-fir-files. This is a valuable feature that is impossible with the gitignore convention.
+
+Add that to the "open decision"
