@@ -1,0 +1,3 @@
+"The sub-agent nailed it: root cause is the inter-VM known_hosts frozen in the @home baseline drifting from the peer's @ host keys": the applied fix is just a band-aid. It doesn't explain where the drift comes from and doesn't fix that root cause.
+
+"a single-VM reprovision regenerates that VM's host key": when is a single-VM reprovision done?
