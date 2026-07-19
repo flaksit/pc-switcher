@@ -1,0 +1,5 @@
+1 : bump
+2: revert
+3: you are wrong. (your knowledge outdated) 
+4: commit
+5: gitignore
