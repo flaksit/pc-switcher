@@ -1,0 +1,1 @@
+in claude code, when I "/clear", is the session history still kept in the session .json file in .claude/ ?
