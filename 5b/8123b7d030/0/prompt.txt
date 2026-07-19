@@ -1,0 +1,24 @@
+Did you test the token, like I asked you?
+I ran "pc-switcher sync pc2" and saw no warning. Didn't find warning in log files either. So either the token works (= temporary github hiccup; that is why I asked you already 10 times to just test the token), or the code is not emitting the warning as it should.
+
+Output of the run:
+Connection: disconnected  Step 9/10
+dummy_fail              ━━━━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━                                                 60%    
+╭──────────────────────────────────────────────────── Recent Logs ─────────────────────────────────────────────────────╮
+│ 22:07:05 [INFO] [orchestrator] (source) Starting sync operations                                                     │
+│ 22:07:05 [INFO] [dummy_fail] (source) Dummy fail job will fail at 12s                                                │
+│ 22:07:05 [INFO] [dummy_fail] (source) Source phase: 2s elapsed                                                       │
+│ 22:07:07 [INFO] [dummy_fail] (source) Source phase: 4s elapsed                                                       │
+│ 22:07:09 [INFO] [dummy_fail] (source) Source phase: 6s elapsed                                                       │
+│ 22:07:11 [INFO] [dummy_fail] (source) Source phase: 8s elapsed                                                       │
+│ 22:07:13 [INFO] [dummy_fail] (source) Source phase: 10s elapsed                                                      │
+│ 22:07:15 [INFO] [dummy_fail] (target) Target phase: 12s elapsed (remote: tick 1)                                     │
+│ 22:07:15 [CRITICAL] [dummy_fail] (target) Simulated failure at 12s                                                   │
+│ 22:07:15 [CRITICAL] [orchestrator] (source) Job dummy_fail failed: Dummy job failed at 12s                           │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+Sync failed: Dummy job failed at 12s
+
+
+
+BTW It would be good that not only "Step n/10" is shown, but the name of the step as well.
