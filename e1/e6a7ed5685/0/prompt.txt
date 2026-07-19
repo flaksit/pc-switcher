@@ -1,0 +1,137 @@
+<task-notification>
+<task-id>ade338a03b41551c2</task-id>
+<tool-use-id>toolu_01B9E4of47SwBEWxqxU131jb</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/ade338a03b41551c2.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify Phase 1 plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now I have all the information needed. Let me compile the verification results.
+
+---
+
+## VERIFICATION PASSED (with 2 warnings)
+
+**Phase:** 01 — Home-Sync MVP (User Data Sync)
+**Plans verified:** 6 (01-01 through 01-06)
+**Blockers:** 0
+**Warnings:** 2
+
+---
+
+### Requirement Coverage
+
+| Requirement | Covered by Plans | Status |
+|---|---|---|
+| REQ-sync-scope-user-data | 01-01, 01-02, 01-04, 01-05, 01-06 | Covered |
+| REQ-machine-specific-exclusions | 01-02, 01-05, 01-06 | Covered |
+| REQ-sync-scope-file-metadata | 01-05, 01-06 | Covered |
+| REQ-manual-sync-workflow | 01-01, 01-03, 01-04, 01-05, 01-06 | Covered |
+| REQ-terminal-ux | 01-05, 01-06 | Covered |
+
+All five Phase 1 requirements are covered.
+
+---
+
+### Plan Summary
+
+| Plan | Wave | Tasks | Files | Status |
+|---|---|---|---|---|
+| 01-01 (ADRs) | 1 | 2 | 3 | Valid |
+| 01-02 (config schema + defaults) | 1 | 2 | 2 | Valid |
+| 01-03 (allow_divergence + history store) | 1 | 2 | 6 | Valid |
+| 01-04 (FolderSyncJob + divergence guard) | 2 | 2 | 3 | Valid |
+| 01-05 (execute + streaming) | 3 | 2 | 4 | Valid |
+| 01-06 (integration round-trip test) | 4 | 2 | 1 | Valid |
+
+---
+
+### Specific Checks Requested
+
+**ROADMAP success criteria 1–5**
+All five criteria trace to concrete deliverables. Criteria 1–2 (byte-identical content, metadata preserved) are asserted in plan 06 Task 1 via `md5sum`, `stat -c '%u %g %a'`, `stat -c '%Y'`, and `getfacl`. Criterion 3 (exclusions) is asserted in plan 06 Task 1 with `test ! -e` for excluded files and positive presence checks for VS Code `User/` state and dev-tool caches. Criterion 4 (bidirectional exclusions + deletions) is asserted in plan 06 Task 2. Criterion 5 (VM-isolated A→B / mutate / B→A automation) is the explicit objective of plan 06 and uses the real Hetzner pc1/pc2 VMs.
+
+**Target-divergence guard (D-06/D-07/D-08/D-18)**
+Plan 04 Task 2 specifies the guard concretely: `_resolve_subvolume` maps the folder to its enclosing btrfs subvolume, `_get_subvolume_generation` reads the generation via `btrfs subvolume show`, and `_target_diverged_since` runs `btrfs subvolume find-new &lt;mount&gt; &lt;stored_gen&gt;` and returns True only if a listed file falls under the folder's path prefix. The D-07 semantics (divergence = target changed, NOT last role) are explicitly verified: behavior "Two consecutive source→target syncs with an untouched target (find-new empty) → no error" is named `test_consecutive_source_syncs_ok`. The find-new file-level check correctly avoids false-positives from btrfs snapshot operations (snapshots bump the generation but add no user files under the prefix). Plan 06 Task 2 asserts the guard on real btrfs.
+
+**Deletion safety**
+Plan 05 has an explicit prohibition: "The rsync command MUST NOT include `--delete-excluded`". The `_build_rsync_cmd` behavior spec asserts "The command never contains the delete-excluded option." The default excludes (`.ssh/id_*`, `.config/tailscale`) ship in plan 02 as `--filter` rules, meaning those files are invisible to rsync's delete sweep — they are neither copied nor deleted from the target. Plan 06 Task 1 asserts these are absent on the target (not copied to B), and plan 06 Task 2 asserts the same exclusions hold in the reverse direction (not deleted from A).
+
+**`&lt;threat_model&gt;` blocks**
+All six plans contain a `&lt;threat_model&gt;` block with a STRIDE register. High-severity items (injection, data loss, secret leakage, divergence guard correctness) are classified as `high` with concrete mitigations. ASVS categories V4 (access control) and V5 (input validation) are explicitly mapped in RESEARCH.md and reflected in the threat models.
+
+**Deferred items not in scope**
+D-09 (per-file conflict detection), D-17/D-19 (automated precondition enforcement), reflink, and `/etc` are absent from all plans. Plan 04 calls the session-quiescence preconditions "documented user-responsibility assumptions in Phase 1" — correctly scoped. No scope reduction language detected in any plan.
+
+**Task structure (`&lt;read_first&gt;` + `&lt;acceptance_criteria&gt;`)**
+Every task in all six plans has `&lt;read_first&gt;`, `&lt;action&gt;`, `&lt;verify&gt;&lt;automated&gt;`, `&lt;acceptance_criteria&gt;`, and `&lt;done&gt;`. Plan 04 and plan 05 tasks use `tdd="true"` with `&lt;behavior&gt;` blocks.
+
+**Wave ordering + file disjointness**
+Wave 1 (01-01, 01-02, 01-03): file sets are disjoint — 01-01 touches `docs/adr/`, 01-02 touches config YAML files, 01-03 touches Python source and test files. Wave 2 (01-04) depends on 01-03. Wave 3 (01-05) depends on 01-04. Wave 4 (01-06) depends on 01-02 and 01-05. The implicit dependency of plan 01-04 on plan 01-01 (which creates ADRs plan 04 reads in `&lt;read_first&gt;`) is satisfied transitively: both are Wave 1, so 01-01 completes before Wave 2 begins.
+
+**"Artifacts this phase produces" section**
+Present in all six plans.
+
+---
+
+### Warnings (should fix, execution can proceed)
+
+```yaml
+issues:
+  - plan: "01-VALIDATION.md"
+    dimension: nyquist_compliance
+    severity: warning
+    description: &gt;
+      VALIDATION.md exists but contains only template placeholders (all fields show
+      {placeholder} text). The frontmatter declares nyquist_compliant: false.
+      The plans themselves have adequate automated &lt;verify&gt; blocks on every task,
+      and the RESEARCH.md Validation Architecture maps all requirements to named
+      test methods — but the VALIDATION.md per-task verification table and Wave 0
+      checklist are unfilled, leaving execution without a phase-level sampling contract.
+    fix_hint: &gt;
+      Fill in VALIDATION.md from the RESEARCH.md Validation Architecture section:
+      populate the Test Infrastructure table (pytest, uv run pytest ..., ~5s for
+      unit suite), the Per-Task Verification Map rows, and the Wave 0 checklist.
+      Set nyquist_compliant: true when done.
+
+  - plan: "01-RESEARCH.md"
+    dimension: research_resolution
+    severity: warning
+    description: &gt;
+      The ## Open Questions section lists 3 questions with no formal RESOLVED
+      marker on the section heading or per question. The questions are substantively
+      resolved in the plans (Q1: independent SSH transport accepted, per ADR-002
+      and plan 05; Q2: validate() tests sudo rsync --version locally, plan 04 Task 1;
+      Q3: subvolume fallback when /root is not its own subvolume, plan 04 Task 2)
+      but RESEARCH.md itself does not reflect that resolution.
+    fix_hint: &gt;
+      Rename the section to "## Open Questions (RESOLVED)" and add a RESOLVED
+      annotation to each question entry referencing the plan and decision that
+      closed it.
+```
+
+---
+
+### Dimension Results
+
+| Dimension | Status | Notes |
+|---|---|---|
+| 1. Requirement Coverage | PASS | All 5 REQ IDs covered |
+| 2. Task Completeness | PASS | All 12 tasks have required fields |
+| 3. Dependency Correctness | PASS | No cycles; wave ordering correct |
+| 4. Key Links | PASS | Critical wiring (config→job→sync_history→validate→execute) traced across plans |
+| 5. Scope Sanity | PASS | 2 tasks/plan throughout; within budget |
+| 6. Verification Derivation | PASS | must_haves truths are observable/testable |
+| 7. Context Compliance (D-01..D-19) | PASS | All 19 decisions implemented; deferred items absent |
+| 7b. Scope Reduction | PASS | No v1/static/placeholder language detected |
+| 7c. Architectural Tier Compliance | PASS | Plans match Architectural Responsibility Map |
+| 8. Nyquist Compliance | WARN | VALIDATION.md is a stub; plans have adequate sampling inline |
+| 9. Cross-Plan Data Contracts | PASS | sync_history JSON extension is backward-compatible and additive |
+| 10. CLAUDE.md Compliance | PASS | uv run, async, from __future__, modern types, six-level logging all honored |
+| 11. Research Resolution | WARN | Open Questions unresolved formally; substantively addressed in plans |
+| 12. Pattern Compliance | N/A | 01-PATTERNS.md referenced in plan read_first blocks; present in phase dir |
+
+**No blockers.** Plans are ready for execution. Fixing the two warnings before running improves the audit trail and Nyquist compliance record, but neither blocks the phase from delivering its goal.
+
+Run `/gsd-execute-phase 01` to proceed.</result>
+<usage><subagent_tokens>82472</subagent_tokens><tool_uses>13</tool_uses><duration_ms>242755</duration_ms></usage>
+</task-notification>
