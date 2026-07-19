@@ -1,0 +1,8 @@
+<bash-stdout>remote: Bypassed rule violations for refs/heads/main:        
+remote: 
+remote: - 2 of 2 required status checks are expected.        
+remote: 
+remote: - Cannot force-push to this branch        
+remote: 
+To github.com:flaksit/pc-switcher.git
+ + 5c2f6a7...896fa74 main -&gt; main (forced update)</bash-stdout><bash-stderr></bash-stderr>
