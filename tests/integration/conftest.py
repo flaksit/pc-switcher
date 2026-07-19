@@ -181,7 +181,7 @@ def current_git_branch() -> str:
             # )
             # return commit_result.stdout.strip()
         return branch
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except subprocess.CalledProcessError, FileNotFoundError:
         # Not a git repository or git not installed; default to 'main'
         return "main"
 
