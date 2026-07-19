@@ -3,7 +3,7 @@
   "checkpoint_id": "b8b5f682824b",
   "strategy": "manual-commit",
   "branch": "dependabot/uv/python-minor-patch-09c94a499e",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "src/pcswitcher/sync_history.py",
     "tests/integration/conftest.py"
@@ -15,13 +15,20 @@
       "compact_transcript": "/b8/b5f682824b/0/transcript.jsonl",
       "content_hash": "/b8/b5f682824b/0/content_hash.txt",
       "prompt": "/b8/b5f682824b/0/prompt.txt"
+    },
+    {
+      "metadata": "/b8/b5f682824b/1/metadata.json",
+      "transcript": "/b8/b5f682824b/1/full.jsonl",
+      "compact_transcript": "/b8/b5f682824b/1/transcript.jsonl",
+      "content_hash": "/b8/b5f682824b/1/content_hash.txt",
+      "prompt": "/b8/b5f682824b/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 7,
-    "cache_creation_tokens": 57605,
-    "cache_read_tokens": 162027,
-    "output_tokens": 1075,
-    "api_call_count": 4
+    "input_tokens": 28,
+    "cache_creation_tokens": 114321,
+    "cache_read_tokens": 633656,
+    "output_tokens": 7806,
+    "api_call_count": 15
   }
 }
