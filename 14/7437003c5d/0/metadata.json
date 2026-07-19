@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "147437003c5d",
+  "session_id": "912f76ec-840b-4ccc-bee8-ba13fdaf82db",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-19T15:59:25.550772892Z",
+  "branch": "docs/dedupe-claude-md-153",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "94665a3b0d54",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 5397,
+    "cache_read_tokens": 220620,
+    "output_tokens": 5132,
+    "api_call_count": 6
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 14,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/config.json": 5
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 52,
+      "agent_lines_removed": 9,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}
