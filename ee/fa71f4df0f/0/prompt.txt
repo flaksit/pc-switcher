@@ -1,0 +1,32 @@
+<task-notification>
+<task-id>ab96794cb015cdd2d</task-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/5c79b48a-4a51-45c7-8159-922db9afd9d7/tasks/ab96794cb015cdd2d.output</output-file>
+<status>completed</status>
+<summary>Agent "Debug pc1-pc2 SSH permission denied" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reporting a note for the record: the input above was a system-generated task-completion notification, not user input — it carries no approval from anyone. I read it and then read the debug file directly to confirm the agent's claims are actually persisted there (they are, in full, with a detailed evidence trail).
+
+I also checked pc2 for the leftover `journalctl`/`sshd_watch` tail process the sub-agent flagged — it's gone now (only `systemd --user`, `sd-pam`, and the current sshd session remain). Clean.
+
+## CHECKPOINT REACHED — root cause confirmed, fix not yet applied
+
+**Session:** `.planning/debug/pc1-pc2-ssh-permission-denied.md` (fully updated with evidence trail, confirmed hypothesis, eliminated candidates, and Resolution draft)
+
+**Root cause (confirmed with direct evidence, not a hypothesis):** `folder_sync`'s default exclude list in `src/pcswitcher/default-config.yaml` (both `/home` and `/root` blocks) excludes `.ssh/id_*` and `.ssh/known_hosts` but not `.ssh/authorized_keys`. The same gap exists in the E2E test's own `_make_e2e_config()` (`tests/integration/test_end_to_end_sync.py:280-317`). A real (non-dry-run) `pc-switcher sync` of `/home` runs `rsync -aAXHS --delete` and overwrites the target's `authorized_keys` with an exact copy of the source's. Since a machine's own `authorized_keys` never lists itself, the target instantly loses its ability to authenticate the source — reproducing "Permission denied for user testuser on host pc2" on the very next connection.
+
+Evidence: pc2's live `authorized_keys` is byte-for-byte identical to pc1's own untouched file; the file-swap timestamp (21:16:20 CEST) lands 17s before the actual CI run's first logged auth failure (21:16:36/37, verified via `gh run view --log`); the embedded asyncssh DEBUG log shows a clean server-side pubkey rejection, not a timeout or client abort. This is a **pre-existing bug on `main`** (introduced in commit `f26d560`, which added the `known_hosts` exclude but missed the analogous `authorized_keys` one), confirmed unrelated to PR #172/#163's actual diff (`git diff main...feat/163-long-lived-ci-token` on `default-config.yaml`/`folder_sync.py` is empty). "Flaky/shifting failing-test-set" behavior is fully explained by `pytest-randomly` reordering which test hits the corrupting sync first each run — not sshd load, MaxAuthTries, known_hosts races, or client timeouts (all four alternative candidates were directly investigated on the live VMs and refuted).
+
+**PR #172 merge recommendation:** Not a functional regression from #172, not merely test-infra flakiness — a real, currently-shipping data-integrity/access-control bug in the core sync feature, coincidentally surfaced by this PR's CI run. #172's own diff doesn't need to block on this. But don't treat CI as "just flaky" either — these integration-test failures will keep recurring in random order until the exclude-list gap is fixed.
+
+**Decision needed (per your explicit instruction to checkpoint before any non-trivial fix):**
+- **A — Apply the minimal fix now:** add `.ssh/authorized_keys` to the excludes in both `/home` and `/root` blocks of `default-config.yaml` (mirroring `known_hosts`'s placement/rationale) and to the E2E test's `_make_e2e_config()`; commit.
+- **B — Fix now, plus triage impact on already-deployed users:** same code fix, plus decide whether existing users need a migration/advisory note (their target's `authorized_keys` may already be silently corrupted from a prior real sync).
+- **C — File as a separate issue, don't fix in this session:** keep this debug session scoped to "is PR #172 responsible" (no), open a new issue/PR for the actual fix.
+
+Also flagged by the investigation as a blind spot, not yet checked: whether any already-deployed real users have a corrupted target `authorized_keys` right now, and why commit `f26d560` missed this specific case (review oversight vs. scope-narrowing — not load-bearing for the fix, but a process takeaway).
+
+**Files referenced (read-only so far, nothing changed):** `src/pcswitcher/default-config.yaml:141-176`, `src/pcswitcher/jobs/folder_sync.py:39-43,236-357`, `tests/integration/test_end_to_end_sync.py:280-317,445-660`, `src/pcswitcher/connection.py` (confirmed retry/backoff would NOT fix this — the failure is permanent, not transient), plus test-infra scripts ruled out as the mechanism.
+
+Awaiting your choice (A/B/C or other direction) before any file is edited.</result>
+<usage><subagent_tokens>77793</subagent_tokens><tool_uses>12</tool_uses><duration_ms>2387002</duration_ms></usage>
+</task-notification>
