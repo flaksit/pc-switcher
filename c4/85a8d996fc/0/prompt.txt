@@ -1,0 +1,1 @@
+you said "test_folder_sync.py — rewritten to sync real /home". Is this integrated in the full integration test, or still a separate run?
