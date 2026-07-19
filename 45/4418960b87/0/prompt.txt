@@ -1,0 +1,1 @@
+90s too long. Most projects don't have such long-running CI as this. 10s reasonable? Or even 5s?
