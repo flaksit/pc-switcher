@@ -1,0 +1,39 @@
+<task-notification>
+<task-id>ae37b90df06bbf573</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/ae37b90df06bbf573.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01-04 of phase 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 01-04
+**Tasks:** 2/2
+**SUMMARY:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-04-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"01-04","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `6773f95`: test(01-04): add failing tests for FolderSyncJob preflight and divergence guard (RED)
+- `8eb38cc`: feat(01-04): implement FolderSyncJob with validate() preflight and divergence guard (GREEN)
+- `7550a2a`: docs(01-04): complete folder-sync job plan
+
+**Duration:** ~8 minutes
+
+**What was built:**
+
+`FolderSyncJob(SyncJob)` in `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/folder_sync.py`:
+
+- `FolderEntry` dataclass with `to_rsync_filter_args()` returning rsync `--filter=- &lt;pattern&gt;` args in config order.
+- `CONFIG_SCHEMA` matching the `folder_sync` section in config-schema.yaml (folders array, required path, optional enabled/excludes).
+- `_active_folders()` parsing config folders and filtering disabled entries.
+- `validate()` in four steps: sudo rsync on both ends, acl package on both ends, folder existence on source, then the divergence guard.
+- Divergence guard: `_resolve_subvolume` (findmnt to find btrfs mount), `_target_diverged_since` (find-new file-level scan), `_check_divergence` (reads stored gen from sync_history, logs WARNING under dry_run/allow_divergence, returns ValidationError otherwise).
+- Conservative fallback when findmnt fails (e.g. /root not on its own subvolume — logs WARNING, allows sync).
+- All config-derived paths shell-quoted via `shlex.quote` (T-04-01).
+- `execute()` stub with `NotImplementedError` for plan 05.
+- 23 unit tests covering all behaviors; 450 total tests passing.</result>
+<usage><subagent_tokens>128354</subagent_tokens><tool_uses>59</tool_uses><duration_ms>644175</duration_ms></usage>
+</task-notification>
