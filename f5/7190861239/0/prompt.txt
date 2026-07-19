@@ -1,0 +1,29 @@
+Continue the Phase 01 folder-sync re-UAT on branch 01-folder-sync. Read .planning/phases/01-home-sync-mvp-user-data-sync/01-UAT.md (the "Fix status" section + Gaps) and
+the pcswitcher-phase01-verification-handoff memory first.
+
+Where we are: all 9 UAT findings are fixed + committed, unit suite 489 green, Test 8 VM integration suite 57 green, and release v0.1.0-alpha.15 is cut. Both VMs (pc1, pc2) are reset pristine. We're doing a hands-on re-UAT to visually confirm the fixes on a real terminal.
+
+I'm running Step A now: on pc1, install alpha.15 (`curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/tags/v0.1.0-alpha.15/install.sh | VERSION=v0.1.0-alpha.15 bash`, then `exec bash -l`, `pc-switcher init`), then `pc-switcher sync pc2`.
+
+Answered n on "first sync" warning. Got following output while running:
+- First: shows recent logs [Image #1] 
+- On warning: overwrites recent logs and all else [Image #2]
+- After answering n: [Image #3] not so nice.
+Low prio.
+Ah, now I understand: the ongoing TUI output starts at the "Connection: ... Step ./11" line.
+It would be better if the warning block and the answer would stay in the scrollback log instead of be (half) overwritten. So when the TUI starts again, it would be nice if it would write on new lines instead of overwriting what is already written on the terminal. I don't know if that is feasible / standard practice.
+Same for the "Config Sync" warning.
+
+Answered y on "first sync" warning.
+[Image #4]
+
+Answered y on "config" warning. Done.
+
+#6 config prompt is ok 
+#1/#7 first-sync warning ok
+#4 ok (no warning of exact-version on install-on-target)
+#2 ok (no diskspace progress bar)
+#3 ok (folder sync bar)
+#5/#8 not ok (see above)
+
+Give me copy-paste commands, don't drive the tests yourself. After Step A, set up Step B (lock race: two pc2 terminals running pc-switcher sync pc1). Then update the UAT doc and, if all fixes confirmed, finish verification (mark the phase complete / GSD transition).
