@@ -1,0 +1,3 @@
+on install:
+error: Executable already exists: pc-switcher (use `--force` to overwrite)
+ERROR: Failed to install pc-switcher
