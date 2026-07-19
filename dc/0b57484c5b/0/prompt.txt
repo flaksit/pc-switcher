@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b7jptkivj</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/36eacdec-e876-4673-b358-4a4291fb449f/tasks/b7jptkivj.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for checks to register and poll once" completed (exit code 0)</summary>
+</task-notification>
