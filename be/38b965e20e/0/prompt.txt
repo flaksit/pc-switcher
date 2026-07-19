@@ -1,0 +1,3 @@
+mapping done. Do you need to check the milestone and phase scopes?
+
+should I run "/gsd-plan-phase 1" here so you can run it with the knowledge in your context, or in fresh session?
