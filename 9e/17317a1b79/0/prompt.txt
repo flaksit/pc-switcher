@@ -1,0 +1,2 @@
+1. install.sh should allow reinstall. make gh issue for this; not in scope to fix now.
+2. I just ran "pc-switcher self update" and that worked.
