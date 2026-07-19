@@ -1,0 +1,1 @@
+are you doing all of this yourself or should your gsd-debug-session-manager do that?
