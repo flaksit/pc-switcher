@@ -1,0 +1,1 @@
+I just did "/gsd-ingest-docs", without "--mode new". Problem?
