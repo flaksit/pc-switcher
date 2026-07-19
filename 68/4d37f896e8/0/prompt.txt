@@ -1,0 +1,4 @@
+In same screenshot: the warning states things that are specifically to FolderSync: "rsync --delete, /home, /root". Who generates that? Orchestrator should not.
+
+When I enter n to abort, I get following output: [Image #3].
+From UX standpoint, strange to get two error messages and again a "Recent logs"
