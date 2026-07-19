@@ -1,0 +1,3 @@
+Here some quirky UI as well. Did not get prompts or error messages, so don't know where the double "Recent logs" might come from
+- while running: [Image #8]
+- final: [Image #9]
