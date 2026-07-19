@@ -1,0 +1,10 @@
+I choose n: [Image #7]
+
+When I choose y: [Image #8] Screen flickers on each refresh and the lines 
+  Connection: connected (0.0ms)  Step 9/10
+  dummy_success                       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━                                      75%   
+are not overwritten but written under each other
+
+Final screenshot: [Image #9]
+
+FYI, for this dry-run, I set FolderSync: false in the config.
