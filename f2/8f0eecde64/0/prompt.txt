@@ -1,0 +1,15 @@
+It asks the following. What should I answer?
+
+  Before I hand off to the roadmapper, two fields aren't derivable from the docs and shape the entire ROADMAP. The intel captures the full vision (all sync scopes), but the project is at
+  "core infrastructure complete, sync functionality in development," so the roadmap's near-term ordering is a real decision:
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ First milestone  ☐ Success metric  ✔ Submit  →
+
+What should the FIRST roadmap milestone deliver as the near-term focus?
+
+❯ 1. Home-sync MVP (Recommended)
+     First working sync job: user data (/home, /root) over rsync-over-SSH. Smallest vertical slice that proves the end-to-end sync workflow. Matches the established MVP direction.
+  2. Config + packages too
+     Broader first milestone: /home plus apt/snap/flatpak packages and application/system configs in one milestone. More value per milestone, larger scope/risk.
+  3. Full vision, phased
+     Roadmap every sync scope (home, packages, configs, metadata, Docker, VMs, k3s) as sequential phases through to completion. Most complete, longest horizon.
