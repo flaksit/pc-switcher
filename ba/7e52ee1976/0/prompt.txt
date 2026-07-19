@@ -1,0 +1,1 @@
+Check the dry-run config-sync research agent. Use its findings to tell the user definitively whether answering 'y' at the "Apply this config to target?" prompt during --dry-run actually writes to the target or is a safe no-op, citing file:line. Then continue the phase-01 UAT (currently mid Test 3 / dry-run investigation on pc1/pc2 VMs).
