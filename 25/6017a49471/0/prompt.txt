@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b8y3xu9ad</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a808d676-a5ab-4ca8-9292-dec2315e91bb/tasks/b8y3xu9ad.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch integration run to completion" completed (exit code 0)</summary>
+</task-notification>
