@@ -1,0 +1,2 @@
+"per-file conflict detection (Phase 2)": not necessary if preconditions fulfilled, right?
+"Consistency preconditions (Phase later)": specify them now in this phase; check and enforce them (or user override) later.
