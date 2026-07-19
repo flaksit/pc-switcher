@@ -1,0 +1,2 @@
+testuser@pc2:~$ ls ~; ls ~/.local/share/pc-switcher/ 2>&1
+pc-switcher.lock
