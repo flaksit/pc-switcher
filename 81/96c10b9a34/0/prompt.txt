@@ -1,0 +1,5 @@
+I miss a document that explains (in terms for advanced user / high-level dev) the sequence of the steps executed when running the pc-switcher. Is not in README and not in docs/, not even in the gold docs/system.
+Maybe best in README.md, as that is really overview documentation for user "What happens when I run pc-switcher".
+
+Very concise, just for me to understand and remember: which steps, in which order, are executed.
+E.g. needed to be able to reason about how actions of one step influence the environment the next step runs in.
