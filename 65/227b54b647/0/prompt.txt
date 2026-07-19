@@ -1,0 +1,47 @@
+<task-notification>
+<task-id>a7e43a0d84c69a51c</task-id>
+<tool-use-id>toolu_016c4UEERxvHXHHKPV4GoJi8</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a682436b-65e6-45a8-9535-3dac71f4ad7b/tasks/a7e43a0d84c69a51c.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix inter-VM host-key drift" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The revert is clean and syntactically valid. The live VMs remain in a correct, usable state (both `known_hosts` files hold the correct peer keys, matching baseline). Investigation complete.
+
+## Report
+
+### (a) When is a single-VM reprovision actually done?
+
+The only script that performs a per-VM reprovision (rescue-system + `installimage`, which regenerates SSH host keys) is `internal/create-vm.sh`. It is invoked **only** by `provision-test-infra.sh`, and **only when a VM does not already exist** — the `SKIP_VM_CREATION` logic (`provision-test-infra.sh:104-166, 220-234`) explicitly skips `create-vm.sh` when both VMs already exist with a btrfs filesystem. Provisioning is also CI-gated (blocked outside `CI`). Neither `reset-vm.sh` nor `upgrade-vms.sh` ever regenerates host keys (both reset from baseline and reboot; host keys don't change on reboot).
+
+It did **not** run recently for pc1 or pc2. Hard evidence: `hcloud server describe` shows `rebuilt: null` on both, both `created: 2026-07-02T14:36:33Z` (same provisioning run), and the ed25519 host-key mtimes are provisioning-time and unchanged since.
+
+### (b) Reconstructed timeline (UTC)
+
+- `2026-07-02 14:36:33` — both VMs created (single run; `rebuilt: null`).
+- `2026-07-02 14:39:04` — pc2 SSH host keys generated (`installimage`); `2026-07-02 14:39:29` — pc1 host keys generated. Never regenerated since.
+- `2026-07-02 14:41:31` — baseline `@` and `@home` snapshots created on both VMs (≈2 min after host keys, and after `configure-hosts.sh` ran).
+- Verified now: pc2's baseline `@home/known_hosts` holds pc1's correct ed25519 (`49QM…`); pc1's baseline `@home/known_hosts` holds pc2's correct ed25519 (`rphz…`). Both baselines match the running host keys exactly. **No drift between any baseline and any host key.**
+- `2026-07-03 14:01:4x` — running `known_hosts` mtimes = the maintainer's live fix + my refresh (today). Before that, the running copy had been corrupted.
+
+Additional decisive fact: each VM's `known_hosts` has exactly 3 lines, ALL for the **peer**, and **zero self-entries** (pc1 has no `pc1` entry; pc2 has no `pc2` entry).
+
+### (c) Definitive root cause
+
+Not host-key drift. The failure is a `known_hosts` **content overwrite** by pc-switcher's own forward sync. `folder_sync` mirrors `/home` with rsync `--delete`. A forward sync pc1→pc2 therefore replaces pc2's `~/.ssh/known_hosts` with pc1's copy. Because pc1's `known_hosts` contains only a `pc2` entry and **no `pc1` self-entry**, pc2 ends up with a `known_hosts` that has zero entries for pc1. The subsequent reverse sync pc2→pc1 then fails with exactly `No ED25519 host key is known for pc1` — the error the maintainer saw. This is precisely the mechanism the codebase already documents (`test_end_to_end_sync.py:244` "`.ssh/known_hosts` is excluded because…", and `:570` "clobbered by the --delete mirror of /home").
+
+The two hypotheses from my first pass are **disproven** by the evidence above: no single-VM reprovision (`rebuilt: null`, shared creation time), no host-key regeneration (mtimes = provisioning time), no baseline drift (both baselines match running keys).
+
+### (d) Is a source-level fix warranted? What I changed
+
+No source fix under `tests/integration/scripts/` is warranted, and I **reverted my Step 6.5 self-heal** from `reset-vm.sh` (working tree now removes it; the block currently lives in HEAD, folded into commit `4a9d2b4` — my revert is a clean −53-line deletion, `bash -n` passes). Reasoning:
+
+- The correct fix already exists and is the right layer: excluding `.ssh/known_hosts` (and `.ssh/id_*`) from the `/home` sync (`test_end_to_end_sync.py:302`) plus ADR-016 hardcoded runtime excludes. That fix is in `test_*.py`/app config — outside my allowed edit scope, and already implemented.
+- The Step 6.5 self-heal does **not** address the real failure: the clobber happens mid-run during a sync, *after* the reset. Refreshing `known_hosts` at reset time cannot prevent or repair it.
+- It is redundant: the `@home` baseline `known_hosts` is provably correct, so `reset-vm.sh` already restores correct inter-VM trust on every run without it.
+- It introduces a regression: it converts the previously-independent, per-VM `reset-vm.sh` into a cross-VM-dependent operation (up to a 120s peer wait, and `exit 1` if the peer isn't reachable). Since resets run in parallel (`run-integration-tests.sh:231-234`, `upgrade-vms.sh:258-261`), one VM's slow/failed reboot could now fail the *other* VM's reset too — and a single-VM `reset-vm.sh pc1` fails if pc2 happens to be down.
+
+The "freezing cross-VM trust in per-VM baselines is inherently fragile" argument does not hold for this system: host keys are immutable after provisioning, the baseline is created after trust is established, and `upgrade-vms.sh` re-baselines from a correct running state (apt never regenerates existing host keys). So the coupling is latent but not actually triggerable here.
+
+Live VMs remain correct and usable: both `known_hosts` files hold the correct peer keys (identical to baseline), and strict-checking ssh works both directions. If you nonetheless want the band-aid retained as defense-in-depth, I'd recommend re-adding it only in a **non-fatal** form (warn instead of `exit 1`, to avoid coupling the parallel resets) and with the comment corrected to the true root cause — but my recommendation is to leave it reverted.</result>
+<usage><subagent_tokens>129941</subagent_tokens><tool_uses>14</tool_uses><duration_ms>380094</duration_ms></usage>
+</task-notification>
