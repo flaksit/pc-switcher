@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b0gmprfq9</task-id>
+<tool-use-id>toolu_01MfjrBRZ9QoJz1uWWprs3LP</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a682436b-65e6-45a8-9535-3dac71f4ad7b/tasks/b0gmprfq9.output</output-file>
+<status>completed</status>
+<summary>Background command "Run merged + lock + back_sync tests against fixed VMs" completed (exit code 0)</summary>
+</task-notification>
