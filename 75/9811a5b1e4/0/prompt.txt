@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bcct5iyz6</task-id>
+<tool-use-id>toolu_01Vt55Xkt21xdCSSvVtZDzFy</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/3e7dcbc5-d17f-473b-ab02-fa471b6b61a8/tasks/bcct5iyz6.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for pc2 reset completion" completed (exit code 0)</summary>
+</task-notification>
