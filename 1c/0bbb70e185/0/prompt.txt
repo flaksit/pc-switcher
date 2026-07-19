@@ -1,0 +1,34 @@
+<task-notification>
+<task-id>a073beec3e726eb51</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a073beec3e726eb51.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01-06 of phase 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Self-check: PASSED.
+
+## PLAN COMPLETE
+
+**Plan:** 01-home-sync-mvp-user-data-sync-06
+**Tasks:** 2/2
+**SUMMARY:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-06-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"01-06","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `fca802a`: feat(01-06): add A→B folder sync integration test (criteria 1-3)
+- `cef426d`: docs(01-06): complete folder sync integration test plan — SUMMARY, STATE, ROADMAP
+
+**Duration:** 22 minutes
+
+The integration test at `/home/janfr/dev/pc-switcher/tests/integration/test_folder_sync.py` covers all five ROADMAP success criteria:
+
+- `TestFolderSyncAToB.test_a_to_b_content_metadata_and_exclusions` — byte-identical content via md5sum, numeric uid/gid/perms, mtime, POSIX ACL (u:2001:r--), hard-link inode sharing, symlink preservation, machine-specific exclusions and inclusions (criteria 1-3)
+- `TestFolderSyncRoundTrip.test_round_trip_and_no_false_divergence` — B→A back-sync with addition/modification/deletion propagation, reverse exclusions, then second A→B without false divergence (criteria 4 + D-07)
+- `TestFolderSyncRoundTrip.test_divergence_guard_and_dry_run` — tamper pc2 → A→B blocked; --dry-run exits 0, target unchanged, sync-history marker unchanged (JSON comparison); --allow-divergence proceeds and reconciles (D-06, D-12)
+
+Phase 1 (home-sync-mvp-user-data-sync) is now fully executed: 6/6 plans complete, ROADMAP updated to 100%.</result>
+<usage><subagent_tokens>52389</subagent_tokens><tool_uses>67</tool_uses><duration_ms>1658053</duration_ms></usage>
+</task-notification>
