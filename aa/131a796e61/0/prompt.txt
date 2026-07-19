@@ -1,0 +1,44 @@
+<task-notification>
+<task-id>a21335585d95a095b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a21335585d95a095b.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 01 goal" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The hook passes with no output (no violations). The file is clean.
+
+## Verification Complete
+
+**Status:** gaps_found
+**Score:** 9/16 must-haves verified
+**Report:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-VERIFICATION.md`
+
+### Re-verification Summary
+
+**8 previous gaps/findings CLOSED** by plans 07, 08, 09 (all completed 2026-07-01):
+- T6 (original BLOCKER): false divergence from depth-1 tool-state writes — fixed by plan 07's tool-state filter
+- Old CR-02: guard fails open when btrfs unqueryable — fixed by `DivergenceStatus.UNVERIFIABLE` + fail-closed
+- WR-02: baseline capture failure aborts successful sync — fixed by `UNKNOWN_GENERATION` sentinel
+- IN-01: dead SIGINT cleanup code — fixed by plan 08
+- IN-02: progress bar never 100% — fixed by `set_total_steps()` in plan 08
+- WR-01: bytes_transferred always 0 — fixed by `_parse_size_to_bytes()` in plan 09
+- IN-03: c/h change types missing from FULL log — fixed by plan 09
+- WR-03 TOCTOU window — fixed by pre-transfer re-check in plan 09
+
+### 2 New BLOCKERS Found
+
+**BLOCKER 1 — CR-01 (false-negative → silent data loss)**
+
+`src/pcswitcher/jobs/folder_sync.py:395`: The tool-state filter uses `any(token in line for token in tool_state_tokens)` — an unanchored substring check across the entire btrfs find-new output line. Token `/.config/pc-switcher/` also matches `janfr/dotfiles/.config/pc-switcher/config.yaml` (depth &gt; 1), which is a real user file. The divergence guard classifies it CLEAN, then `rsync --delete` destroys the user's diverged data. The target audience (users with dotfile repos via chezmoi/yadm/stow) makes this realistic. Existing tests only cover depth-1.
+
+Fix: Extract the path field from the find-new line (`line.rsplit(" ", 1)[-1]`) and match with an anchored regex (`^[^/]+/(?:\.local/share|\.config)/pc-switcher/`) so only `&lt;username&gt;/.{local/share,config}/pc-switcher/...` at the expected depth is excluded.
+
+**BLOCKER 2 — CR-02 (false-positive → breaks every upgrade+sync)**
+
+`src/pcswitcher/jobs/folder_sync.py:569-586` combined with `src/pcswitcher/orchestrator.py:265,275`: The plan 09 pre-transfer re-check runs in Phase 9 AFTER Phase 7 (`_install_on_target_job`). When `target_version != source_version`, Phase 7 runs `install.sh` which writes `$HOME/.local/bin/uv`, `$HOME/.local/share/uv/tools/pcswitcher/...`, and `$HOME/.local/bin/pc-switcher` under @home. These paths are not excluded by the tool-state filter (`/.local/share/pc-switcher/` and `/.config/pc-switcher/` only). The Phase-9 re-check sees the install artifacts as DIVERGED and raises RuntimeError before rsync runs — breaking every upgrade-then-sync. The only escape is `--allow-divergence`, which disables the entire guard.
+
+Fix: Either extend the anchored regex to also cover the install footprint (`/.local/bin/{pc-switcher,uv}` and `/.local/share/uv`) for the empty-prefix case, or capture the @home generation after Phases 7-8 complete as the re-check baseline instead of reusing the last-sync generation.
+
+Structured gaps in VERIFICATION.md frontmatter for `/gsd-plan-phase 01 --gaps`.</result>
+<usage><subagent_tokens>147524</subagent_tokens><tool_uses>45</tool_uses><duration_ms>679141</duration_ms></usage>
+</task-notification>
