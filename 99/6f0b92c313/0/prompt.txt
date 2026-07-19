@@ -1,0 +1,11 @@
+1: good.
+
+2: Got again a warning that GITHUB_TOKEN was rejected. Leave it. I resolve that elsewhere.
+
+The new problem is: the WARNING appear swiftly in the "Recent logs" block, but then that block got overwritten by the "Config Sync" and "Source Cofniguration" blocks. I didn't even have the time to read the warning well.
+And if I hadn't paid attention, I would have missed it completely.
+We need a better way to ensure that I as a user at least get to see all warnings. I won't go and look at the log file on every run. I need at least some indicator that there are warnings and a way to view them.
+
+What do you propose?
+
+Actually, better to talk this through in new session with fresh context. Can I just put this same prompt in new session? Or need more context?
