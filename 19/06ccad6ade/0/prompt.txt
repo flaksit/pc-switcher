@@ -1,0 +1,1 @@
+First, you said "Next Up Phase 2: Package Management Sync" Now you say "PR completes Milestone 1; do /gsd-complete-milestone". What is it?
