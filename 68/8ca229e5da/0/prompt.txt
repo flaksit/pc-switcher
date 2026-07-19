@@ -1,0 +1,98 @@
+<task-notification>
+<task-id>a109c405fa446f2d3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a109c405fa446f2d3.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify Phase 01 gap-closure plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have read all required files. I can now deliver the full verification.
+
+---
+
+## VERIFICATION PASSED
+
+**Phase:** 01-home-sync-mvp-user-data-sync (gap closure)
+**Plans verified:** 01-07, 01-08, 01-09
+**Issues:** 0 blockers, 0 warnings
+
+---
+
+### Gap Contract Coverage
+
+Every actionable finding from `01-VERIFICATION.md` is mapped to a concrete task:
+
+| Finding | Severity | Covered by | Task | Concrete check |
+|---------|----------|------------|------|----------------|
+| CR-01 false divergence | BLOCKER | 01-07 | Task 2 + Task 3 | Path filter on `.local/share/pc-switcher/` in `_target_diverged_since`; offline unit test (`test_toolstate_write_under_empty_prefix_not_divergence`); VM integration scenario (`test_toolstate_change_under_synced_root_not_divergence`) |
+| CR-02 guard fails open | WARNING | 01-07 | Task 2 | `DivergenceStatus.UNVERIFIABLE` on findmnt/find-new failure when baseline exists → blocking `ValidationError`; no-baseline path (`stored is None`) stays fail-open; `UNKNOWN_GENERATION` short-circuits to UNVERIFIABLE without querying target |
+| WR-02 baseline-capture aborts successful sync | WARNING | 01-07 | Task 2 | Non-fatal try/except around baseline capture; writes `UNKNOWN_GENERATION` sentinel on failure; job does not raise; no sentinel written in dry-run |
+| WR-01 byte counter always 0 | WARNING | 01-09 | Task 1 | Capturing group added to `_PROGRESS2_RE`; `_parse_size_to_bytes` helper; `bytes_xfr` updated per progress line; unit tests assert `&gt; 0` and K/M/G/T conversions |
+| WR-03 TOCTOU Phase-4→Phase-9 | WARNING | 01-09 | Task 2 | `await self._check_divergence(folder)` called in execute() per-folder loop immediately before `_build_rsync_cmd`/`start_process`; blocking result raises before any rsync/`--delete`; test asserts `start_process` NOT called for diverged folder |
+| IN-01 dead SIGINT wait | INFO | 01-08 | Task 1 | `asyncio.wait_for(asyncio.shield(asyncio.sleep(0)), ...)` removed; unreachable `except TimeoutError` removed; messaging reworded to omit false numeric grace-period |
+| IN-02 progress bar never 100% | INFO | 01-08 | Task 2 | `TerminalUI.set_total_steps()` setter added; initial estimate counts only enabled jobs; correction called after Phase-4 discovery with `8 + len(jobs) + 1` |
+| IN-03 `c`/`h` change types dropped | INFO | 01-09 | Task 1 | `c` and `h` added to recognized leading characters in both main-loop branch and trailing-fragment flush; unit test `test_created_and_hardlink_change_types_logged_at_full` |
+
+---
+
+### CR-01 Fix Choice: Path Filtering vs. Re-ordering
+
+The planner chose path filtering (exclude `.local/share/pc-switcher/` from divergence scope) and justified rejecting re-ordering on the grounds that the lock file is released in `_cleanup()` (the `finally` block at orchestrator.py:302–304) AFTER `_update_sync_history()`. This justification is directionally sound: even if baseline capture were moved to after line 284 (`_update_sync_history()`), the lock file is held by a persistent remote process that exits during cleanup, potentially modifying file state after the baseline. However, the planner's justification does not need to be airtight, because path filtering is independently justified and explicitly offered as a valid fix option in `01-VERIFICATION.md` ("OR have `_target_diverged_since` ignore paths matching `.local/share/pc-switcher/`..."). It is also architecturally cleaner: it stays entirely within `FolderSyncJob`, requires no orchestrator changes, and is robust to any future tool-state additions under that directory.
+
+**Is the filter too broad?** No. `.local/share/pc-switcher/` is a tool-owned directory (`sync_history.HISTORY_DIR`, lock.py `get_lock_path()`). It contains only `sync-history.json`, `pc-switcher.lock`, and `logs/`. No user legitimately stores files there. The filter cannot mask real user divergence.
+
+---
+
+### Wave Safety
+
+**Wave 1 (01-07 ∥ 01-08):**
+
+| Plan | files_modified |
+|------|----------------|
+| 01-07 | sync_history.py, jobs/folder_sync.py, unit/test_sync_history.py, unit/jobs/test_folder_sync.py, integration/test_folder_sync.py |
+| 01-08 | cli.py, orchestrator.py, ui.py, unit/orchestrator/test_interrupt_handling.py, unit/ui/test_terminal_ui.py |
+
+Zero file overlap confirmed. Parallel execution is safe.
+
+**Wave 2 (01-09, depends_on 01-07):**
+
+01-09 modifies `jobs/folder_sync.py` and `unit/jobs/test_folder_sync.py` — both written by 01-07. The `depends_on: [01-07]` ordering is correct. 01-09's WR-03 re-check explicitly relies on 01-07's corrected `_check_divergence` (returns `ValidationError | None`, honors dry_run/allow_divergence, inherits sentinel and UNVERIFIABLE semantics). The `&lt;dependency_note&gt;` in 01-09 documents this dependency and instructs the executor to read the post-01-07 on-disk state before editing. 01-09 does not depend on 01-08, which is correct since 01-08 touches no files that 01-09 reads.
+
+---
+
+### VM-Dependent Proofs
+
+01-07 Task 3's `&lt;verify&gt;` uses `uv run pytest tests/integration/test_folder_sync.py --collect-only -q` — this is a collection-only check runnable offline. The actual VM execution is documented in 01-07's `&lt;verification&gt;` block as a non-draft PR action. The integration test method carries the `integration` marker (auto-applied by `tests/integration/conftest.py` per the `read_first` reference), so it is properly deselected offline. This is the correct pattern for VM-dependent proofs in this codebase.
+
+---
+
+### Requirement Coverage
+
+| Requirement | Plans | Status |
+|-------------|-------|--------|
+| REQ-sync-scope-user-data | 01-07, 01-09 | Covered — CR-01 fix makes repeated default-/home syncs work; WR-01/WR-03 close audit and safety gaps |
+| REQ-machine-specific-exclusions | 01-07 | Covered — divergence guard no longer false-positives on tool-state writes; machine-specific exclusion behavior preserved |
+| REQ-sync-scope-file-metadata | 01-07 | Covered — WR-02 ensures baseline recording never silently disables the guard, so metadata-preserving syncs remain guarded |
+| REQ-manual-sync-workflow | 01-07, 01-09 | Covered — single-command workflow unblocked (CR-01); TOCTOU gap closed (WR-03) |
+| REQ-terminal-ux | 01-08, 01-09 | Covered — progress bar reaches 100% (IN-02); SIGINT messaging truthful (IN-01); FULL logs include all change types (IN-03) |
+
+---
+
+### CLAUDE.md Compliance
+
+All `&lt;verify&gt;` and `&lt;acceptance_criteria&gt;` blocks use `uv run pytest`, `uv run ruff check`, and `uv run basedpyright` — consistent with the project's Python-via-uv rule. No plan introduces system Python, `pip`, or any forbidden pattern. The new `DivergenceStatus` enum and `_parse_size_to_bytes` helper are consistent with the project's modern-type-syntax and `StrEnum`-preference conventions (the planner leaves exact style to the executor, which is appropriate per the global CLAUDE.md principle that plans specify behavior, not code).
+
+---
+
+### Context Compliance (D-06, D-07, D-12)
+
+- **D-06** (divergence guard as reliability linchpin): CR-02 and WR-03 fixes strengthen the guard — confirmed in 01-07 and 01-09.
+- **D-07** (guard is about target divergence, not last role): CR-01 fix correctly scopes the filter to tool-state paths only, leaving real user divergence detectable.
+- **D-12** (dry-run must not write state): 01-07 prohibition "execute() MUST NOT write any divergence baseline (real or sentinel) in dry-run mode" is explicit in the `prohibitions` frontmatter and repeated in the task action. 01-09's WR-03 re-check inherits dry_run semantics from `_check_divergence` (returns None when dry_run → proceeds). No new state writes in dry-run are introduced.
+
+No deferred items (e.g., per-file conflict detection D-09, session-quiescence D-17/D-19) appear in any of the three plans.
+
+---
+
+Plans verified. Run `/gsd-execute-phase 01` to proceed.</result>
+<usage><subagent_tokens>65929</subagent_tokens><tool_uses>10</tool_uses><duration_ms>210167</duration_ms></usage>
+</task-notification>
