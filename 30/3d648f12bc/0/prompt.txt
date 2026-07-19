@@ -1,0 +1,43 @@
+<task-notification>
+<task-id>a53c4f333a62d55af</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a53c4f333a62d55af.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 01 goal achievement" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification Complete
+
+**Status:** human_needed
+**Score:** 15/20 must-haves verified (5 behavior-unverified — require VM execution)
+**Report:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-VERIFICATION.md`
+
+### Summary
+
+This is a re-verification after the divergence-safety design pivot (plans 01-10 through 01-14). All previous gaps are closed.
+
+**Gaps Closed (2)**
+
+Both previous BLOCKERS are resolved by eliminating the code that contained the bugs:
+
+1. **CR-01 (unanchored tool-state filter)** — CLOSED. The entire btrfs divergence guard (`DivergenceStatus`, `_target_diverged_since`, `_check_divergence`, tool-state filter) was deleted from `folder_sync.py`. No filter means no false-negative data-loss path.
+2. **CR-02 (Phase-7 install artifacts in pre-transfer re-check)** — CLOSED. Same deletion removes the pre-transfer re-check that false-positived after `install_on_target`. No check means no false-positive on every upgrade+sync.
+
+**New Topology Model: All Technical Truths Verified**
+
+Plans 01-10 through 01-14 implemented ADR-015 cleanly. Every must-have was verified against the actual code:
+
+- `folder_sync.py` contains zero divergence symbols (confirmed by grep)
+- `sync_history.py` contains zero generation symbols; `last_peer`, `parse_sync_state`, `get_last_sync_state` are present and functional
+- `orchestrator._check_out_of_order()` implements the W1/W2/W3/clean truth table correctly, called after the target lock and before job discovery
+- `_update_sync_history()` records `last_peer` on both machines
+- `--allow-out-of-order` is the only override flag; old flags are completely absent
+- Deletion audit trail proven by 3 passing tests: `*deleting` lines persist at FULL for both dry-run and real runs
+- 486 unit tests pass; basedpyright clean across all pivot files
+
+**No Regressions.** All 5 previously-verified regression checks (ADRs, config schema, validate() steps, rsync flags, dry-run guard) are still VERIFIED.
+
+**Human Verification Required (5 items)**
+
+The same 5 ROADMAP success criteria that have always required live VM execution remain pending — byte-identical content sync, metadata preservation, exclusion correctness, round-trip propagation, and the full integration test suite. These are unchanged in nature. The two-consecutive-sync live check (D-07) is now unblocked (no longer waiting on CR-01/CR-02 fixes).</result>
+<usage><subagent_tokens>117206</subagent_tokens><tool_uses>42</tool_uses><duration_ms>616709</duration_ms></usage>
+</task-notification>
