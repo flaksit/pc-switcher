@@ -1,0 +1,2 @@
+I didn't touch the VMs. They were spun up yesterday by your push to PR, no? And you fixed something about the selection of linux image in the rescue system. Investigate and fix (maybe best to delegate to sub-agent to avoid polluting your context, which should stay focused on the work at hand here).
+So you can proceed concurrently with your work
