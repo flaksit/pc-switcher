@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b754t9cl8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/5c79b48a-4a51-45c7-8159-922db9afd9d7/tasks/b754t9cl8.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch rerun to completion" completed (exit code 0)</summary>
+</task-notification>
