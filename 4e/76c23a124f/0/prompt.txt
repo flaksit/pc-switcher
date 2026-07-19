@@ -1,0 +1,1 @@
+[Image #2] Layout a bit strange: twice the "Recent Logs" header. I see Step 1/11 and 3/11 and not 2/11.
