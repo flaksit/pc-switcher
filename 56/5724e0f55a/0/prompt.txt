@@ -1,0 +1,36 @@
+<task-notification>
+<task-id>a5a73a8c93ec9d1a4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a5a73a8c93ec9d1a4.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01-14 of phase 01" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All done. Here is the completion report:
+
+## PLAN COMPLETE
+
+**Plan:** 01-14
+**Tasks:** 3/3
+**SUMMARY:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-14-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"01-14","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `e13bb63`: docs(01-14): correct README sync sequence to topology model
+- `2b8a4ee`: test(01-14): prove deletion audit trail persists at FULL for dry-run and real runs
+- `d6f4b1f`: test(01-14): rework integration divergence scenarios to topology model
+- `e4b4766`: docs(01-14): complete documentation-and-test pivot plan (SUMMARY + STATE + ROADMAP)
+
+**Duration:** ~6 minutes
+
+### What was done
+
+**Task 1 — README** (`README.md`): Rewrote "What Happens During a Sync" to match the post-pivot orchestrator — removed the consecutive-sync check step, inserted the new out-of-order / target-state check (step 5 with W1/W2/W3 explanation), removed the btrfs `find-new` validate() paragraph, updated the closing note to document `--allow-out-of-order` and the dry-run deletion log.
+
+**Task 2 — Unit test** (`tests/unit/jobs/test_folder_sync_deletion_log.py`): New file with 3 tests proving `*deleting` lines reach the JSON-lines log at FULL level: `test_deletion_persisted_at_full_in_real_run`, `test_deletion_persisted_at_full_in_dry_run`, and `test_default_file_log_floor_is_at_or_below_full`. Uses real `setup_logging` / `QueueListener` infrastructure with proper handler cleanup. All 436 unit tests pass.
+
+**Task 3 — Integration test** (`tests/integration/test_folder_sync.py`): Updated module docstring to topology model; added `--allow-out-of-order` to baseline A→B syncs; updated round-trip test to assert back-and-forth proceeds without override (ADR-015 #159); replaced `test_divergence_guard_and_dry_run` with `test_out_of_order_and_dry_run` covering the W1 heads-up, `--dry-run` read-only preview, and `--allow-out-of-order` reconciliation. No `--allow-divergence` or `find-new` references remain.</result>
+<usage><subagent_tokens>123581</subagent_tokens><tool_uses>64</tool_uses><duration_ms>737282</duration_ms></usage>
+</task-notification>
