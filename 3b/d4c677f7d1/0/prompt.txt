@@ -1,0 +1,32 @@
+<task-notification>
+<task-id>aa2a4a209155f7772</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/837453ef-0782-46f4-8c3a-1320c669779c/tasks/aa2a4a209155f7772.output</output-file>
+<status>completed</status>
+<summary>Agent "Trace dry-run behavior of config sync confirmation" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Findings
+
+**1. Is the write gated by `dry_run`?** Yes — no real write happens. In `_handle_no_target_config` (`src/pcswitcher/config_sync.py:184-201`):
+
+```python
+async def _handle_no_target_config(...) -&gt; bool:
+    """Handle case when target has no config."""
+    if auto_accept or _prompt_new_config(console, source_content):
+        if dry_run:
+            console.print("[dim]Configuration would be copied to target.[/dim]")
+        else:
+            await _copy_config_to_target(target, source_config_path)
+            console.print("[green]Configuration copied to target.[/green]")
+        return True
+```
+
+Answering `y` at the prompt only reaches `_copy_config_to_target` (which does `mkdir -p` + `send_file` to write `~/.config/pc-switcher/config.yaml`, `config_sync.py:294-319`) when `dry_run` is `False`. Under `--dry-run`, the `else` branch is skipped and only a `[dim]` message is printed — **no file is written**.
+
+**2. Exact code path.** `_prompt_new_config` (`config_sync.py:71-103`) is what shows the exact prompt text quoted in the task ("Target has no configuration file... Apply this config to target? [y/n] (n):", lines 84-102). It is called from `_handle_no_target_config:193` unconditionally whenever `auto_accept` is false — i.e., **the prompt itself fires regardless of `dry_run`**. Only the subsequent write (`_copy_config_to_target`) is gated by `if not dry_run` (inverted as `if dry_run: ... else:` at `config_sync.py:194-198`).
+
+**3. ADR-014.** `docs/adr/adr-014-unified-dry-run-contract.md:8`: *"`--dry-run` is a tool-wide policy: every SyncJob must perform a full read-only preview... without writing files, taking snapshots, or updating any history or divergence markers."* Forbidden list (lines 17-21) includes "Writing, creating, or modifying any file on source or target." ADR-014 says nothing explicit about suppressing confirmation *prompts* under dry-run — only that no writes/state-mutations may occur. So the write-gating in `config_sync.py` complies with ADR-014's letter.
+
+**4. Compare to `_confirm_first_sync`.** In `orchestrator.py:478-485`, dry-run is checked *before* any prompt: `if self._dry_run: ... return True` (never calls `self._confirmer.confirm`), with the docstring at line 458 explicitly citing ADR-014 ("Under --dry-run the warning is logged but never aborts"). `sync_config_to_target` does **not** follow this pattern — it still calls the interactive `Prompt.ask` (`config_sync.py:98-103`) even when `dry_run=True`, only gating the resulting *write*. This is inconsistent with the rest of the orchestrator's dry-run convention (prompt-skipping), even though it doesn't violate ADR-014's no-write guarantee.</result>
+<usage><subagent_tokens>28130</subagent_tokens><tool_uses>7</tool_uses><duration_ms>28476</duration_ms></usage>
+</task-notification>
