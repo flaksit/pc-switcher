@@ -1,0 +1,3 @@
+I see a file ".claud-locale-test.skip". What is it doing there? Seems leftover from a test, but you reset the vms before we started. So baked into the "@home" subvol snapshot?
+
+Step 3 ran. But I didn't verify the copy/delete operations: didn't put test files (last time we tested, you put some testfiles/folders for me to verify.
