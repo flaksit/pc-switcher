@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bro6uxxt5</task-id>
+<tool-use-id>toolu_012hEQeAU1oCqPFc7RzAvPk7</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/bro6uxxt5.output</output-file>
+<status>completed</status>
+<summary>Background command "Background-poll confirming integration run and report results" completed (exit code 0)</summary>
+</task-notification>
