@@ -1,0 +1,4 @@
+your question was the following:
+
+Two non-blocking warnings the checker raised (execution can proceed without fixing them, but they improve the audit trail). I left them rather than silently auto-fixing — want me to address either before you execute?
+VALIDATION.md is still the stub I created in §5.5 (frontmatter only; nyquist_compliant: false). The per-task verification map and Test Infrastructure table are template placeholders. The plans themselves carry adequate inline <verify> blocks, and RESEARCH.md's Validation Architecture maps every requirement to named tests — so this is an audit-trail gap, not a coverage gap. I can populate it from RESEARCH.md (pytest infra, the 12 task→command rows, Wave 0 checklist) and flip nyquist_compliant: true.
