@@ -1,0 +1,4 @@
+dropbox/koofr content:
+We sync when logged out from gnome. So I guess both daemons are not running then. Verify/confirm that.
+If we would sync content, would that give a problem? Would the daemons on the target laptop get confused?
+Advantage of syncing ourselves: we sync fast over LAN; dropbox/koofr sync over the internet.
