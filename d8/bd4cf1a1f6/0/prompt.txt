@@ -1,0 +1,2 @@
+What happens when I say "n" to "Apply this config to target?"
+As it is not clear for me now, it won't be clear to any other user either. So need to clarify.
