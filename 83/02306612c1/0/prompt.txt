@@ -1,0 +1,1 @@
+commit that change in ~/.claude (it is a git repo)
