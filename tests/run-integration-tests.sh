@@ -198,24 +198,43 @@ check_vm_ready() {
     local vm_host="$1"
     local user="$2"
 
-    # Try to connect and check baseline snapshot exists
-    ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-        "${user}@${vm_host}" \
-        "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1" 2>/dev/null
+    # Try to connect and check baseline snapshot exists. ssh_verified never
+    # auto-accepts a new/changed host key: by this point the VM is provisioned
+    # and its key should already be trusted, so an unexpected key is an error,
+    # not something to silently accept. (Behavior varies by execution context —
+    # see ssh_verified / ssh_exec_context in common.sh.) The remote command
+    # silences its own output; ssh's stderr is left attached so an interactive
+    # host-key prompt stays visible.
+    ssh_verified "${user}@${vm_host}" \
+        "sudo btrfs subvolume show /.snapshots/baseline/@ >/dev/null 2>&1"
     local exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
         return 0
     fi
 
-    # Exit 255 = SSH transport failure (unreachable, timeout, or a rejected host
-    # key). accept-new auto-trusts a *new* key but refuses a *changed* one, so a
-    # stale known_hosts entry lands here rather than in the "not provisioned" path.
+    # Exit 255 = SSH transport failure: unreachable, timeout, or a rejected host
+    # key. Strict checking refuses a new/changed key rather than trusting it, so
+    # a stale known_hosts entry lands here rather than in the "not provisioned"
+    # path. Tailor the guidance to the execution context.
     if [[ $exit_code -eq 255 ]]; then
-        log_error "SSH connection to ${vm_host} failed (could not run remote command)."
-        log_error "The VM may be unreachable, or its host key in ~/.ssh/known_hosts is stale."
-        log_error "Diagnose with: ssh ${user}@${vm_host} 'echo ok'"
-        log_error "If the key changed, refresh it: ssh-keygen -R ${vm_host}"
+        case "$(ssh_exec_context)" in
+            claude)
+                log_error "SSH to ${vm_host} failed. Host keys are not accepted automatically here (running non-interactively as claude)."
+                log_error "If the VM's key is new or changed, verify it out-of-band, then trust it:"
+                log_error "  ssh-keygen -R ${vm_host} && ssh-keyscan -H ${vm_host} >> ~/.ssh/known_hosts"
+                ;;
+            ci)
+                log_error "SSH to ${vm_host} failed. In CI, host keys must already be in known_hosts (populated by the workflow); new or changed keys are rejected."
+                log_error "The VM may be unreachable, or its key changed since known_hosts was set up."
+                ;;
+            *)
+                log_error "SSH connection to ${vm_host} failed."
+                log_error "The VM may be unreachable, or you declined its host key at the prompt."
+                log_error "Diagnose with: ssh ${user}@${vm_host} 'echo ok'"
+                log_error "If the key changed, refresh it: ssh-keygen -R ${vm_host}"
+                ;;
+        esac
     fi
     return 1
 }
