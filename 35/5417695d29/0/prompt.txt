@@ -1,0 +1,54 @@
+<task-notification>
+<task-id>acee56e40909a4a04</task-id>
+<tool-use-id>toolu_01C9od5vsKhyFqRgFJAtnC1K</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/acee56e40909a4a04.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement first-sync split + job prompts" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Course correction complete. All gates green.
+
+## Adjusted approach — confirmed
+
+I moved the first-sync check into the orchestrator as directed. Here is the final state.
+
+### 1. Confirmer infra + JobContext wiring — KEPT (unchanged)
+`src/pcswitcher/confirmer.py` (`Confirmer` protocol + `TerminalUIConfirmer`), and `JobContext.confirmer` / `JobContext.allow_first_sync` remain in place for future interactive jobs. `TerminalUIConfirmer.confirm(*, title, message, allow, allow_flag, log_extra=None)`: interactive → pause TUI, yellow panel, `Continue anyway? [y/n]`; non-interactive → honor the `--allow-*` flag.
+
+### 2. Orchestrator now owns BOTH gates
+`_check_out_of_order` (post-target-lock) reads the target sync-history over SSH once, then dispatches:
+- W1 (no readable/empty/unparsable history = first sync) → `_confirm_first_sync()`, gated by `--allow-first-sync`. Message names the in-scope `folder_sync` folders (via new `_first_sync_scope()` helper reading `job_configs["folder_sync"]["folders"]`) and states the first sync overwrites everything in scope of the configured sync jobs except configured exclusions.
+- W2/W3 (out-of-order) → gated by `--allow-out-of-order`.
+- Neither flag bypasses the other's gate (important change: `--allow-out-of-order` no longer short-circuits before the SSH read, since the history is needed to distinguish first-sync from out-of-order).
+- Dry-run logs a warning and proceeds for both. All prompts go through the shared Confirmer.
+
+### 3. FolderSyncJob — REVERTED
+`src/pcswitcher/jobs/folder_sync.py` restored to its exact pre-session state (pure rsync mirror; no sync-history read, no first-sync confirmation, no `Confirmer` use).
+
+### 4. Tests relocated
+- Removed the first-sync tests from `tests/unit/jobs/test_folder_sync.py` (reverted to original).
+- First-sync tests now live in `tests/unit/orchestrator/test_consecutive_sync.py` (`TestCheckFirstSync`): interactive yes/no, corrupt-JSON prompts, non-interactive with/without `--allow-first-sync`, first-sync not bypassed by `--allow-out-of-order`, dry-run proceeds; plus `allow_first_sync` accept/default tests, and the bypass test updated to reflect that history is still read.
+- Confirmer unit tests (`tests/unit/test_confirmer.py`) unchanged.
+
+### 5. ADR-015
+Refinement section corrected to state first-sync is an orchestrator-level pre-flight with its own `--allow-first-sync` flag (distinct from `--allow-out-of-order` W2/W3), asked once centrally; FolderSyncJob does not read sync-history; the Confirmer mechanism remains introduced for future jobs.
+
+CLI `--allow-first-sync` flag and its threading (already committed) are unchanged and still correct.
+
+### Correction I had to make mid-task
+My initial revert accidentally used `d9949ff` (from the session-start "recent commits" snapshot) as the base, but that commit predates the btrfs find-new removal. I caught it via basedpyright (references to removed `sync_history` symbols), identified the true pre-session HEAD as `d1944d2` (parent of my first commit), and restored `folder_sync.py`/`test_folder_sync.py` from there — now verified clean (371 lines, no find-new/first-sync/Confirmer references).
+
+### Commits added this correction (on top of the earlier five)
+- `917836f` refactor(sync-safety): make first-sync an orchestrator pre-flight, not a job check
+- `fc31e98` docs(adr-015): first-sync check is orchestrator-level, not job-level
+
+Earlier commit `c9b4050` (the now-superseded job-level attempt) and `7a1d430` remain in history, cleanly reverted/reworked by the two new commits rather than rewritten (per the no-history-rewrite rule).
+
+### Final gates
+- `uv run basedpyright` → 0 errors, 0 warnings
+- `uv run ruff check .` → passed; `uv run ruff format --check .` → clean
+- `uv run codespell` → clean
+- `uv run pytest tests/unit tests/contract` → 497 passed
+
+Note (unchanged from before): ADR-001 marks ADRs immutable; per your explicit instruction I refined ADR-015 in place with a clearly-marked precedence note rather than creating a superseding ADR. Say the word if you'd prefer it converted to a new superseding ADR. Did not push, tag, or touch `tests/integration/`. Left the pre-existing untracked `.planning/config.json` alone.</result>
+<usage><subagent_tokens>203047</subagent_tokens><tool_uses>82</tool_uses><duration_ms>1076359</duration_ms></usage>
+</task-notification>
