@@ -1,0 +1,35 @@
+<task-notification>
+<task-id>ad0404036ca451954</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/ad0404036ca451954.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01-01 of phase 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 01-01
+**Tasks:** 2/2
+**SUMMARY:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-01-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"01-01","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `6c87c25`: docs(01-01): author ADR-013 — rsync-over-SSH user-data transport (root via sudo)
+- `729ec3e`: docs(01-01): author ADR-014 — unified dry-run contract; update ADR index
+- `8c821d8`: docs(01-01): complete ADR authoring plan
+
+**Duration:** 4 min
+
+---
+
+The plan closed the STATE.md blocker. Two new immutable ADRs are now in place:
+
+- `/home/janfr/dev/pc-switcher/docs/adr/adr-013-rsync-over-ssh-user-data-transport.md` — locks the rsync-over-SSH transport (D-04/D-05): root on both ends via sudo, `--rsync-path='sudo rsync'` on target, root SSH login forbidden, `--numeric-ids` and `-aAXHS` required, asyncio subprocess mandatory.
+- `/home/janfr/dev/pc-switcher/docs/adr/adr-014-unified-dry-run-contract.md` — locks the tool-wide `--dry-run` contract (D-12): all SyncJobs must do a full read-only preview; forbidden operations enumerated; plan 01-03 named as the orchestrator enforcement point.
+- `/home/janfr/dev/pc-switcher/docs/adr/_index.md` — updated with both entries in numeric order, date bumped to 2026-06-30.
+
+One issue to carry forward: the markdown hard-wrap hook requires Status and Date metadata fields in new ADRs to be separated by blank lines (each its own paragraph), which differs from ADR-001 through ADR-012. Future ADR authors should follow the new pattern.</result>
+<usage><subagent_tokens>88353</subagent_tokens><tool_uses>47</tool_uses><duration_ms>557841</duration_ms></usage>
+</task-notification>
