@@ -1,0 +1,39 @@
+<task-notification>
+<task-id>ae5af6f75842b6b08</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/ae5af6f75842b6b08.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 01 gap closure" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLANNING COMPLETE
+
+Gap closure for Phase 01 (`home-sync-mvp-user-data-sync`). Created 3 new plans; the executed 01-01…01-06 PLAN/SUMMARY files are untouched. Committed as `dd92b65`.
+
+New plans (all frontmatter + structure validated):
+
+| Plan | Wave | depends_on | One-line objective |
+|------|------|-----------|--------------------|
+| `01-07-PLAN.md` | 1 | — | Divergence-guard correctness BLOCKER cluster — CR-01 false divergence (filter `.local/share/pc-switcher/` tool state), CR-02 fail-closed on unverifiable target, WR-02 robust baseline via `UNKNOWN_GENERATION` sentinel; adds the CR-01 unit test (empty-prefix `/home`) and the VM-executable integration scenario. |
+| `01-08-PLAN.md` | 1 | — | Terminal-UX correctness — IN-01 remove the no-op SIGINT cleanup wait + truthful messaging, IN-02 progress bar reaches 100% via `TerminalUI.set_total_steps` set from enabled+valid jobs. |
+| `01-09-PLAN.md` | 2 | `01-07` | folder_sync observability + TOCTOU — WR-01 real transferred-byte parsing, IN-03 `c`/`h` itemize change types, WR-03 pre-transfer divergence re-check closing the Phase-4→Phase-9 window. |
+
+Scope-table coverage (all 8 findings):
+- BLOCKER **CR-01** → 01-07 (filter in `_target_diverged_since`; unit `test_toolstate_write_under_empty_prefix_not_divergence`; integration `test_toolstate_change_under_synced_root_not_divergence`)
+- **CR-02** → 01-07 (`DivergenceStatus.UNVERIFIABLE` → fail-closed; `must_haves.prohibitions`)
+- **WR-02** → 01-07 (`sync_history.UNKNOWN_GENERATION` sentinel + non-fatal capture)
+- **WR-01** → 01-09 Task 1 · **IN-03** → 01-09 Task 1 · **WR-03** → 01-09 Task 2
+- **IN-01** → 01-08 Task 1 · **IN-02** → 01-08 Task 2
+
+Wave plan: Wave 1 runs 01-07 ∥ 01-08 (zero `files_modified` overlap — 07 owns `folder_sync.py`/`sync_history.py`, 08 owns `cli.py`/`orchestrator.py`/`ui.py`). Wave 2 runs 01-09 (shares `folder_sync.py`/`test_folder_sync.py` with 07 and re-uses its corrected `_check_divergence`).
+
+CR-01 fix choice: I picked the path-filtering option (exclude `.local/share/pc-switcher/` from the divergence scope), not "move baseline recording after `_update_sync_history`". Justification: the remote lock file at `$HOME/.local/share/pc-switcher/pc-switcher.lock` (verified in `lock.py:40,133`) is deleted during `_cleanup` in the orchestrator's `finally` block — i.e. *after* any conceivable baseline-capture point — so re-ordering alone cannot fix it; filtering tool-state writes is robust to write ordering and a localized `folder_sync.py` change requiring no orchestrator restructuring.
+
+VM-dependent proofs are recorded, not faked: the 5 `behavior_unverified_items` (SC1–SC5) plus the new CR-01 integration scenario are closed by one run of `tests/integration/test_folder_sync.py` on the pc1/pc2 VMs (offline acceptance = `--collect-only`; behavioral proof recorded as a `&lt;verification&gt;` step in 01-07 and 01-09 — run locally via `provision-test-infra.sh` + `run-integration-tests.sh`, or push a non-draft PR).
+
+Requirements coverage: REQ-sync-scope-user-data (07, 09), REQ-machine-specific-exclusions (07), REQ-sync-scope-file-metadata (07), REQ-manual-sync-workflow (07, 09), REQ-terminal-ux (08, 09) — all 5 phase IDs covered.
+
+One note (not blocking): the markdown hard-wrap hook flags pre-existing `**Goal:**`/`**Status:**`/`**Requirements:**` adjacent-line blocks across all 7 phases of `ROADMAP.md` — the file's established convention, unrelated to this gap-closure work. My inserted Gap Closure entries are blank-line-separated list items and are not flagged; I did not mass-reformat the existing phase blocks.
+
+Next: `/gsd-execute-phase 01` (runs Wave 1: 01-07 ∥ 01-08, then Wave 2: 01-09), then re-verify on the VMs.</result>
+<usage><subagent_tokens>235857</subagent_tokens><tool_uses>31</tool_uses><duration_ms>904372</duration_ms></usage>
+</task-notification>
