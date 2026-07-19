@@ -1,0 +1,1 @@
+your note on known_hosts: "if the two laptops ever SSH into each other": of course they will do: pc-switcher does! known_hosts should contain host key of this machine as well. add if not yet there
