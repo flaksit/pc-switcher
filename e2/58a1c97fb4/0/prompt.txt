@@ -1,0 +1,163 @@
+<task-notification>
+<task-id>a1e09b05209d25f62</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/5023206f-3c90-47ef-8cce-0f88d3a9c8ab/tasks/a1e09b05209d25f62.output</output-file>
+<status>completed</status>
+<summary>Agent "Assess test suite state and pain" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Based on my comprehensive exploration, here's your critical assessment:
+
+## Test Suite Summary
+
+**Size**: 443 tests across 37 files
+- 343 unit tests (4,849 lines)
+- 40 contract tests (635 lines)  
+- 60 integration tests (357 lines)
+- Plus 2,300+ lines of infrastructure shell scripts
+
+---
+
+## What Makes Test Setup HEAVY
+
+1. **VM Infrastructure Complexity** (the elephant in the room):
+   - Two persistent Hetzner Cloud VMs (pc1, pc2) with btrfs filesystems
+   - ~2,300 lines of shell scripts: `/home/janfr/dev/pc-switcher/tests/integration/scripts/`
+     - VM provisioning via rescue mode + `installimage` (create-vm.sh: 338 lines)
+     - VM configuration (configure-vm.sh: 141 lines)
+     - Network setup, SSH keypairs, firewall (configure-hosts.sh)
+     - Lock management via Hetzner server labels (not local files)
+     - btrfs snapshot creation/rollback for reset
+   - Reset flow (reset-vm.sh) requires: unmount subvolumes → mv old → snapshot new → reboot (~20-60s per VM)
+   - Lock acquisition/release prevents concurrent runs (necessary but adds latency)
+
+2. **Fixture Heavy Integration Tests** (conftest.py: 473 lines):
+   - Module-scoped SSH connections to both VMs
+   - Parallel executors (BashLoginRemoteExecutor wrapping SSH)
+   - Installation fixtures (uv, GitHub releases, version management)
+   - State cleanup fixtures (config removal, snapshot deletion)
+   - 4 different installation scenarios (with/without pc-switcher, old versions)
+
+3. **Test Environment Requirements**:
+   - Integration tests require: HCLOUD_TOKEN, PC_SWITCHER_TEST_PC1_HOST, PC_SWITCHER_TEST_PC2_HOST, PC_SWITCHER_TEST_USER
+   - Manual VM IP lookup + known_hosts updates (run-integration-tests.sh)
+   - Credentials in GitHub secrets + env vars
+   - Can't run locally without Hetzner account + API token
+
+---
+
+## Obvious Over-Engineering/Duplication
+
+**Critical structural duplication**:
+- `tests/unit_jobs/` (1 file: test_disk_space_monitor.py) — OLD location
+- `tests/unit/jobs/` (3 files: test_dummy_jobs.py, test_install_on_target_job.py, test_snapshot_job.py) — NEW location
+- `tests/unit/test_jobs/` (empty directory, orphaned)
+- `tests/integration/jobs/` (1 file for integration-specific job test)
+
+**Migration incomplete**: `unit_jobs/` should be deleted; `unit/test_jobs/` doesn't exist; inconsistent naming across 4 job-related directories.
+
+**Contract Tests: Marginal ROI**:
+- 40 contract tests, 635 lines, but testing mostly trivial interface compliance
+- test_job_interface.py: Verifies jobs have `name`, `CONFIG_SCHEMA`, `validate()`, `execute()` — essentially interface type-checks
+- test_executor_contract.py: Verifies mock executor has same methods as real one (14 trivial tests like "run_command returns CommandResult")
+- test_logging_contract.py: Checks JSON/Rich formatters produce valid output (15 tests)
+- **Value**: Low. These should either be unit tests of the actual implementation OR removed if mocks are trusted. Separate "contract" layer adds ceremony without catching real bugs.
+
+**Integration Test Benchmarks** (tests/integration/benchmarks/):
+- Excluded from CI by default (`-m "integration and not benchmark"`)
+- Seems to measure SSH overhead (~80ms per call)
+- Questionable: benchmarking infrastructure overhead isn't actionable without context (what's acceptable?)
+
+---
+
+## Unit Tests: Fast &amp; Standalone?
+
+**Yes, they run fast** (~30 seconds for full suite, per docs):
+```bash
+uv run pytest tests/unit tests/contract -v
+```
+No external infra needed. Mocks are extensive (mock_executor, mock_connection, mock_event_bus in conftest.py).
+
+**BUT**: 343 tests in 4,849 lines = ~14 lines per test (heavy fixtures). Many tests have setup boilerplate; lots of mocking. Tests are thorough but not lean.
+
+---
+
+## Contract Test Layer: Is It Pulling Weight?
+
+**No. Kill it (or merge into unit tests).**
+
+Rationale:
+- Tests trivial interface compliance ("does this method exist?" "does it return the right type?")
+- Mock/real executor parity isn't the risk — implementation bugs are the risk
+- More value in unit tests that exercise behavior (success/failure paths, edge cases)
+- Adds 635 lines of ceremony without catching real logic errors
+- If you don't trust mocks, mocks aren't the solution anyway
+
+---
+
+## Infrastructure Test Requirements
+
+**Integration tests need**:
+- **VMs**: Two CX23 instances (~EUR 7/month total)
+- **Provisioning**: btrfs root filesystem (not standard Linux — required Hetzner rescue mode + installimage)
+- **SSH**: Key-based auth, known_hosts management
+- **Locking**: Hetzner API access to set server labels (prevents race conditions)
+- **Reset**: Btrfs snapshot rollback (fast) rather than VM recreation (slower)
+- **State isolation**: Tests must clean up after themselves (VM state shared within session, reset only between sessions)
+
+**Not needed** (good news):
+- Load balancers, databases, or complex infra
+- Docker/containers (bare metal VMs)
+- File storage beyond default filesystem
+
+---
+
+## Blunt Assessment: Over-Engineered &amp; What's Essential
+
+### ❌ Over-Engineered (Delete or Simplify)
+| What | Why | Action |
+|------|-----|--------|
+| `tests/unit_jobs/` | Incomplete migration, now redundant with `unit/jobs/` | Delete directory |
+| `tests/unit/test_jobs/` | Empty; orphaned directory | Delete directory |
+| **Contract tests** (635 lines) | Trivial interface checks; low signal | Merge useful tests into unit suite or delete entirely |
+| **Benchmarks** (test_executor_overhead.py) | Measures SSH overhead; excludes from CI; unclear actionability | Delete unless you need this data regularly |
+| Lock/retry logic in run-integration-tests.sh | 2300+ LOC of shell for VM orchestration — necessary but verbose. Could move to Python. | As-is for now; consider Python rewrite if touched again |
+
+### ✅ Essential (Keep)
+| What | Why | Keep |
+|------|-----|------|
+| **Unit tests** (343 tests, ~4900 LOC) | Fast, safe, catch logic errors locally | Yes, but prune unnecessary fixtures |
+| **Integration tests** (60 tests) | Real btrfs, SSH, destructive ops — can't mock safely | Yes; vm-isolated testing is non-negotiable |
+| **VM infrastructure** (provisioning, reset) | VM isolation is core safety model | Yes; but document better, consider Python rewrite |
+| **Hetzner lock mechanism** | Prevents concurrent test runs corrupting shared VMs | Yes |
+| **btrfs snapshot reset** | Fast reset without recreating VMs | Yes |
+
+---
+
+## Recommended Quick Wins
+
+1. **Delete orphaned directories**: `unit_jobs/`, `unit/test_jobs/` (5 min)
+2. **Consolidate job tests**: Move `tests/unit_jobs/test_disk_space_monitor.py` → `tests/unit/jobs/` (2 min)
+3. **Decide on contract tests**: Either delete all 40 tests or merge important ones into unit suite (30 min decision + execution)
+4. **Document infrastructure assumptions**: Add comment block in `/home/janfr/dev/pc-switcher/tests/run-integration-tests.sh` explaining why 2300 LOC is unavoidable (why not hcloud CLI, why not cloud-init, why btrfs snapshots not Hetzner snapshots, etc.)
+
+## Core Problem (Not Quick-Fixable)
+
+The **real complexity isn't bugs; it's the problem domain**. PC-switcher does destructive filesystem ops as root. Safe testing requires:
+- VM isolation (can't test locally)
+- btrfs snapshots (kernel feature, not a library)
+- SSH orchestration (two-machine sync)
+- Concurrency control (shared VMs)
+
+The framework reflects the problem, not poor design choices. **The over-engineering is organizational (duplicate directories), not architectural.**
+
+---
+
+**File references**:
+- `/home/janfr/dev/pc-switcher/tests/unit_jobs/` — DELETE
+- `/home/janfr/dev/pc-switcher/tests/unit/test_jobs/` — DELETE
+- `/home/janfr/dev/pc-switcher/tests/contract/` — CONSIDER DELETING (635 lines, 40 tests of low value)
+- `/home/janfr/dev/pc-switcher/tests/integration/scripts/` — KEEP (2300 LOC, necessary)
+- `/home/janfr/dev/pc-switcher/tests/conftest.py` — REVIEW for bloat (106 lines, mostly OK)
+- `/home/janfr/dev/pc-switcher/tests/integration/conftest.py` — NECESSARY (473 lines, fixture-heavy but unavoidable)</result>
+<usage><subagent_tokens>60487</subagent_tokens><tool_uses>40</tool_uses><duration_ms>157358</duration_ms></usage>
+</task-notification>
