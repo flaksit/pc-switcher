@@ -1,0 +1,1 @@
+As already said: running CI (creating pr for this branch) should spin up the vms. Verify what you already can. At least integration tests should run. CI does this.
