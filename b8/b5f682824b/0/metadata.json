@@ -1,0 +1,54 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b8b5f682824b",
+  "session_id": "093b22ce-c6e7-4342-a8f0-d5b832b9b1c3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-19T15:00:32.628336195Z",
+  "branch": "dependabot/uv/python-minor-patch-09c94a499e",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/sync_history.py",
+    "tests/integration/conftest.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "acec7a6adc2d",
+  "checkpoint_transcript_start": 55,
+  "transcript_lines_at_start": 55,
+  "compact_transcript_start": 10,
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 57605,
+    "cache_read_tokens": 162027,
+    "output_tokens": 1075,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-19T15:00:32.616321019Z",
+    "agent_lines": 3,
+    "agent_removed": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3,
+    "total_lines_changed": 6,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 14,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/config.json": 5
+      }
+    }
+  ]
+}
