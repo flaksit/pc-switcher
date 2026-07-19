@@ -1,0 +1,1 @@
+I'm running pc-switcher sync pc2 --dry-run. Could that be the source of the lock?
