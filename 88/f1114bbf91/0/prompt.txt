@@ -1,0 +1,7 @@
+UAT = 
+- what can't be tested automatically = UX
+- a kind of walkthrough so user validates the whole
+
+Didn't UAT contain anything my scenario doesn't?
+
+Yes, update UAT
