@@ -1,0 +1,1 @@
+what the hell. Of course, a push fires CI. And no, you shouldn't avoid that. That is what CI is.
