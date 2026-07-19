@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b2nblopnf</task-id>
+<tool-use-id>toolu_01USFntJRXCE6kMko7FpbJu7</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/fe7d8468-20f7-4c91-a5ba-b9f0858beeee/tasks/b2nblopnf.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch CI to completion in background" completed (exit code 0)</summary>
+</task-notification>
