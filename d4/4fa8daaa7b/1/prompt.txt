@@ -1,0 +1,1 @@
+My local home.filter excludes some parts of some /.* folders. Very all other .* folders if they are relevant to sync or should be excluded
