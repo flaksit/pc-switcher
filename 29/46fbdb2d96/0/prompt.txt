@@ -1,0 +1,3 @@
+koofr/dropbox: client binaries? Depends on how installed, no? If user-installed through an url instead of with package manager, we probably need them.
+
+You have excludes for flatpak. Snap not in /home/janfr?
