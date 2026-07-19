@@ -1,0 +1,2 @@
+Dry-run shows the config file that "will be" applied. See screenshots [Image #5] [Image #6]
+It asks for confirmation to apply this config to target, even in --dry-run. A bit weird. As user, I'm confused. What if I choose y?
