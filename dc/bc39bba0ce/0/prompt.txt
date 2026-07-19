@@ -1,0 +1,1 @@
+I (and probably many other users) are more used to gitignore syntax. Are both functionally equivalent? Easy to convert gitignore syntax to rsync filter syntax?
