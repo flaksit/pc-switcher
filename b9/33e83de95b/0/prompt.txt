@@ -1,0 +1,1 @@
+remove "optionally auto-generate ancestor includes", so behavior is clear and simple and follows rsync syntax strictly
