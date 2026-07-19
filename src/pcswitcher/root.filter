@@ -1,12 +1,16 @@
 # pc-switcher central filter file for the /root folder_sync entry.
 # Native rsync filter syntax: `+` includes, `-` excludes, first-match-wins.
+# Comments must be on their OWN line: rsync does NOT strip a trailing `# ...`
+# from a rule, so `- .nv  # comment` matches the literal `.nv  # comment` and
+# silently does nothing. Never put an end-of-line comment after a rule.
 # root's home IS the transfer root for a /root sync, but these patterns stay
 # floating (no leading /) for consistency with home.filter.
 
 # Machine-identity excludes — never synced between machines.
 - .ssh/id_*
 - .ssh/known_hosts
-# authorized_keys is machine-local access control (see home.filter note); syncing
-# it locks the sync out of its own target.
+# authorized_keys is excluded so each machine keeps its own SSH access list
+# (see home.filter note and docs/configuration.md "authorized_keys"). To sync it
+# instead, make it a shared fleet list with every machine's key and drop this line.
 - .ssh/authorized_keys
 - .config/tailscale

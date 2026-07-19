@@ -131,6 +131,8 @@ Filter rules decide what is and isn't synced. They live in two kinds of file:
 
 Each rule is `- pattern` to exclude or `+ pattern` to re-include. The **first** matching rule wins, so put a `+` re-include before the broader `-` it carves out of. If a path is matched in both a `filter_file` and a `.pcswitcher-filter`, the `filter_file` wins. This allows for central policy that can not be overridden by a per-directory file.
 
+A comment is a line whose first non-blank character is `#`. **End-of-line comments are not supported**: rsync does not strip a trailing `# …` from a rule, so `- .nv  # gpu cache` makes the pattern the literal `.nv  # gpu cache` — it matches nothing and the rule silently does nothing (no error). Trailing whitespace is likewise part of the pattern. Always put comments on their own line above the rule.
+
 Pattern syntax:
 
 - names match in full, never as substrings: each wildcard-free component must match a whole file or directory name — `foo` matches an entry named exactly `foo`, not `fool` or `afoo`. Use wildcards for partial names (`foo*`, `*foo*`).
@@ -162,6 +164,38 @@ To drop most of a directory but keep selected children — for example drop `~/.
 ```
 
 The `/***` (not `/**`) matters here: it re-includes the `uv` and `pip` directory entries themselves, so the following `- .cache/*` can't drop them and rsync descends to copy their contents. The shipped `home.filter` already does this; add more `+ .cache/<tool>/***` lines for other caches you want to keep.
+
+### `authorized_keys`
+
+pc-switcher connects to the target **as the normal login user** (root SSH login is never used — only the `rsync` binary is elevated with `sudo` on each end; see ADR-013), authenticating with that user's SSH identity. The target therefore checks the connection against **that user's** `~/.ssh/authorized_keys`, which must contain the source machine's public key.
+
+Because `~/.ssh/authorized_keys` is under a synced folder, a full mirror overwrites the target's copy with the source's. If the source's copy does not list the source machine's own public key, the mirror deletes the key the target was using to authorize the sync — and the **next** sync's SSH connection is rejected. The sync locks itself out of its own target.
+
+Pick one of two approaches:
+
+1. **Exclude it (safest default).** Each machine keeps its own independent access list. The shipped `home.filter` and `root.filter` do this:
+
+   ```
+   - .ssh/authorized_keys
+   ```
+
+2. **Sync it as one shared fleet access list.** Only safe if the file lists **every** pc-switcher machine's public key — including the machine's own — so a mirror can never drop the key the next sync needs. Since the file is identical everywhere once synced, it must be the union of all machines' keys.
+
+   To set this up, before the first sync build that union in `~/.ssh/authorized_keys` on one machine, then let the sync propagate it. On each machine the key to add is the public half of the SSH identity pc-switcher connects with (the one your agent offers, e.g. `~/.ssh/id_ed25519.pub`):
+
+   ```bash
+   # Collect each machine's public key (run per machine, copy the output)
+   cat ~/.ssh/id_ed25519.pub
+
+   # On the machine you're seeding, append every machine's key (its own included),
+   # deduplicate, and keep permissions tight:
+   sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys
+   chmod 600 ~/.ssh/authorized_keys
+   ```
+
+   Then remove the `- .ssh/authorized_keys` line from the relevant filter file so it syncs.
+
+Note that `/root` has its own `~/.ssh/authorized_keys` (`/root/.ssh/authorized_keys`) — but the SSH session is the normal user's, not root's, so only the **user's** `authorized_keys` gates the connection. Apply the same reasoning to `root.filter` only if you have a workflow that logs into the fleet as root directly.
 
 ### Coming from .gitignore
 

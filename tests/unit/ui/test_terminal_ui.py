@@ -29,6 +29,24 @@ from pcswitcher.models import ProgressUpdate
 from pcswitcher.ui import TerminalUI
 
 
+async def _wait_for_render(output: StringIO, needle: str, *, timeout: float = 2.0) -> str:
+    """Return the rendered buffer once `needle` appears, or after `timeout` seconds.
+
+    TerminalUI's setters store the new renderable and rely on Rich's 10 Hz
+    auto-refresh thread to draw it, so a fixed ``sleep(0.1)`` waits exactly one
+    refresh period and races under scheduling jitter. Poll on a short interval
+    with a generous deadline so the assertion is deterministic (and usually
+    faster than a fixed sleep on the happy path).
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    rendered = output.getvalue()
+    while needle not in rendered and loop.time() < deadline:
+        await asyncio.sleep(0.01)
+        rendered = output.getvalue()
+    return rendered
+
+
 async def test_core_us_tui_as1_progress_display() -> None:
     """Test CORE-US-TUI-AS1: Display progress bar, percentage, and job name.
 
@@ -191,11 +209,11 @@ async def test_set_total_steps_updates_total() -> None:
         ui.set_total_steps(20)
         assert ui._total_steps == 20, "set_total_steps should update _total_steps with live active"
 
-        # Allow the live display to flush the render to the output buffer
-        await asyncio.sleep(0.1)
-        rendered = output.getvalue()
+        # The step display shows "Step 5/20"; wait for the auto-refresh thread to
+        # draw it instead of sleeping exactly one refresh period (races).
+        rendered = await _wait_for_render(output, "Step 5/20")
 
-        # The step display shows "Step 5/20" — the updated total must appear
+        # The updated total must appear
         assert "20" in rendered, "Updated total from set_total_steps should appear in rendered output"
     finally:
         ui.stop()
@@ -211,16 +229,18 @@ async def test_set_current_step_renders_name() -> None:
     ui.start()
     try:
         ui.set_current_step(7, "Install on target")
-        await asyncio.sleep(0.1)
-        assert "Step 7/10" in output.getvalue()
-        assert "Install on target" in output.getvalue(), "step name must render next to the number"
+        rendered = await _wait_for_render(output, "Step 7/10")
+        assert "Step 7/10" in rendered
+        assert "Install on target" in rendered, "step name must render next to the number"
 
         # A subsequent step with no name clears the previous label.
         output.truncate(0)
         output.seek(0)
         ui.set_current_step(8)
-        await asyncio.sleep(0.1)
-        assert "Install on target" not in output.getvalue(), "omitting the name must clear the previous label"
+        # Wait for the redraw (Step 8/10) before asserting the old label is gone;
+        # otherwise the freshly truncated buffer trivially lacks it.
+        rendered = await _wait_for_render(output, "Step 8/10")
+        assert "Install on target" not in rendered, "omitting the name must clear the previous label"
     finally:
         ui.stop()
 
