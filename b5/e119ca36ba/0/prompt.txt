@@ -1,0 +1,8 @@
+I see README.md documents behavior of the "logging:" part of config.yaml extensively, but nothing else.
+Use should have good doc about ALL config options. Maybe too much for README. Better separate doc in docs that README refers to?
+And default-config.yaml should link to that doc (github url) and contain much of it for the user while they are editing (it already does; except that I just saw it misses explanation on exclude filter).
+
+The doc must contain description of exclude filter as you gave it, + ref to official rsync doc.
+
+I see default-config.yaml under Folder Sync has "Explicitly SYNCED". What is that? Incorrect, I hope. FolderSync should not sync anything at all except what is explicitly specified in the config. Check the code to see if it is true. If it is, fix it. If not, remove that line from default-config.yaml.
+Only the "excluded automatically" should stay in code and docs, because this protects the very pc-switcher functionality.
