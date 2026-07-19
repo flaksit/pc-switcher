@@ -1,0 +1,3 @@
+"repo secret": be more specific: Action secret?
+
+This same token should be baked in during provisioning (configure-vm.sh or wherever). That is the whole point.
