@@ -1,0 +1,9 @@
+CI shouldn't start integration tests when unit tests fail. Probably they are started in parallel now. But integration tests take very long. Better to wait for successful lint and unit tests.
+
+---
+
+update adr 008. I allow you to
+
+---
+
+commit to main

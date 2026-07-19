@@ -3,7 +3,7 @@
   "checkpoint_id": "28ba54712e89",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 4,
+  "checkpoints_count": 6,
   "files_touched": [
     ".github/workflows/integration-tests.yml",
     "docs/adr/adr-008-ci-pipeline.md",
@@ -31,13 +31,20 @@
       "compact_transcript": "/28/ba54712e89/2/transcript.jsonl",
       "content_hash": "/28/ba54712e89/2/content_hash.txt",
       "prompt": "/28/ba54712e89/2/prompt.txt"
+    },
+    {
+      "metadata": "/28/ba54712e89/3/metadata.json",
+      "transcript": "/28/ba54712e89/3/full.jsonl",
+      "compact_transcript": "/28/ba54712e89/3/transcript.jsonl",
+      "content_hash": "/28/ba54712e89/3/content_hash.txt",
+      "prompt": "/28/ba54712e89/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 4333,
-    "cache_creation_tokens": 188603,
-    "cache_read_tokens": 1593769,
-    "output_tokens": 20415,
-    "api_call_count": 34
+    "input_tokens": 4376,
+    "cache_creation_tokens": 263650,
+    "cache_read_tokens": 2896232,
+    "output_tokens": 37425,
+    "api_call_count": 57
   }
 }
