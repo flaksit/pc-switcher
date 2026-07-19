@@ -1,0 +1,1 @@
+where is the pc-switcher config file installed when i do "pc-switcher init"?
