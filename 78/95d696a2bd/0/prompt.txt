@@ -1,0 +1,124 @@
+<task-notification>
+<task-id>a147492c8eea763d8</task-id>
+<tool-use-id>toolu_01JS5ZbqvvvBogePePk2prH7</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/5023206f-3c90-47ef-8cce-0f88d3a9c8ab/tasks/a147492c8eea763d8.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyze home-sync transport options" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything I need. Verified against the repo; here is the memo.
+
+---
+
+# Decision Memo: `/home` Transport — rsync-over-SSH vs btrfs send/receive
+
+Prepared for the technical owner. Claims are tagged **[V]** verified in-repo/this session, **[I]** inferred from tool behavior (not measured here), **[?]** open/needs design.
+
+## 1. Constraints established from the repo
+
+### ADR-002 — does it forbid the `rsync` CLI?
+
+No. ADR-002 governs the *orchestration/control* channel, and it explicitly anticipates external file-sync tools.
+
+`docs/adr/adr-002-ssh-communication-channel.md`, Decision (line 43, verbatim):
+
+&gt; File syncing protocols (rsync, rclone, custom) are invoked through this SSH communication channel
+
+Forbidden Approaches (lines 18–23, verbatim):
+
+&gt; - Do not build custom protocols or daemons on target machine
+&gt; - Do not poll for progress (use streaming stdout instead)
+&gt; - Do not create new SSH connections per operation (reuse via multiplexing)
+&gt; - Do not require persistent services running on target outside of sync operation
+
+The considerations doc even uses rsync as the *recommended* worked example (`docs/adr/considerations/adr-002-ssh-communication-channel.md` lines 196, 215). **[V]**
+
+Caveat worth flagging now: line 43 says data tools are "invoked *through this* SSH communication channel," and the Forbidden list says "Do not create new SSH connections per operation (reuse via multiplexing)." A plain `rsync -e ssh …` or `btrfs send … | ssh target btrfs receive` opens a *second, independent* SSH connection alongside the asyncssh `ControlMaster` channel. Strictly read, that is in tension with "reuse via multiplexing." See §5 for the amendment needed. **[V]** that the text exists; **[I]** that it creates the tension.
+
+### ADR-003 — is delegating data movement to CLIs allowed?
+
+Yes, explicitly. `docs/adr/adr-003-implementation-language.md`:
+
+&gt; (line 23) Delegate to bash scripts (or other languages) for specific sync operations when appropriate
+
+&gt; (lines 59–63) **Task-specific languages** (bash, or others) for: Individual sync operations where appropriate (e.g., apt package sync, docker sync); System-level operations where bash is more natural
+
+Forbidden (lines 28–32) only bars putting *core orchestration logic* in bash and using `pip`/system `python`. Neither rsync nor `btrfs send/receive` is "core orchestration," so both transports are permitted by ADR-003 with no amendment. **[V]**
+
+### Existing snapshot harness (Option B's reuse premise)
+
+- `create_snapshot()` runs `sudo btrfs subvolume snapshot -r &lt;src&gt; &lt;dst&gt;` → snapshots are **read-only** (`src/pcswitcher/btrfs_snapshots.py:80`). **[V]** RO snapshots are the prerequisite for `btrfs send`.
+- `BtrfsSnapshotJob.execute()` creates snapshots **on both source and target**, for **every configured subvolume**, under `/.snapshots/pc-switcher/&lt;session_folder&gt;/` (`src/pcswitcher/jobs/btrfs.py:122–210`). **[V]**
+- Configured subvolumes are `@` and `@home`; `subvolume_to_mount_point()` maps `@home → /home`, `@ → /` (`jobs/btrfs.py:21–45`, `src/pcswitcher/default-config.yaml:83–85`). The snapshot is taken of the *mount point* (`/home`). **[V]**
+- Phase is `pre`/`post`; a `pre` snapshot therefore exists on both machines before sync runs. **[V]**
+
+Critical correction to Option B's stated premise: the target's pre-sync snapshot is a snapshot of the **target's own** `/home`, an independent RO copy with its own UUID lineage. It is **not** a received twin of any source snapshot. `btrfs send -p &lt;parent&gt;` requires that the parent existing on the target be a *received copy* of a source snapshot (matching `received_uuid` lineage). The current harness does **not** produce that lineage. So Option B's incremental path needs an *additional* "last-synced" snapshot kept on the source plus its received twin retained on the target — separate from the pre/post safety snapshots. **[V]** that harness snapshots are independent; **[I]** the send-parent lineage requirement (standard btrfs behavior).
+
+### Relevant requirements
+
+`docs/planning/High level requirements.md`: "near-complete system-state replication" (overview); `/home` + `/root`; "dev tool caches (`uv`, `pip`, `cargo`, `npm`) synced; browser/IDE caches excluded" (line 34); "Owner, permissions, ACLs, timestamps must be preserved" (line 39); "Never Synced" machine-specific paths — SSH keys, Tailscale config, GPU/fontconfig caches (lines 46–48); single btrfs fs on all machines (line 55); only one machine active at a time (line 58). **[V]**
+
+The selective include/exclude rule (line 34) and the per-machine "never synced" set (lines 46–48) are exactly the "excepted paths" of Option B.
+
+## 2. How each maps onto this codebase
+
+Both transports run as subprocesses through the existing `Executor` (`src/pcswitcher/executor.py`: `LocalExecutor` via `asyncio.create_subprocess_shell`, `RemoteExecutor` via asyncssh). **[V]** Either fits the job/orchestrator model; neither requires a target daemon.
+
+- **A — rsync:** `rsync -aAXH --delete --exclude-from=&lt;rules&gt; --partial --info=progress2 &lt;src&gt;/ ssh://target/&lt;dst&gt;/`. Per-path include/exclude is native. Best practice here is `-e 'ssh -o ControlPath=&lt;asyncssh master socket&gt;'` so it *reuses* the existing multiplexed connection (satisfies ADR-002's multiplexing intent). **[I]**
+- **B — btrfs send/receive + overlay:** take new RO snapshot of source `@home`; `btrfs send [-p parent]` → `btrfs receive` on target (stream piped through the asyncssh session to stay in-channel, or via its own SSH); then `cp --reflink` the excepted paths from the target's pre-sync snapshot into the received subvol; then swap the received subvol into place as the new `/home`. **[I]**
+
+## 3. Comparison
+
+| Criterion | A — rsync over SSH | B — btrfs send/receive + reflink overlay |
+|---|---|---|
+| First/full sync speed | Must stat whole tree; transfers all data. Moderate. **[I]** | `send` streams extents linearly, no per-file stat negotiation; typically faster for full. **[I]** |
+| Incremental speed | Stats entire tree every run to find diffs; cost scales with file count even when little changed. **[I]** | `send -p` ships only changed extents; cost scales with *change size*, not tree size. Big win on large static trees. **[I]** — but needs parent-lineage discipline **[?]** |
+| Metadata fidelity | `-aAX` = owner/perm/ACL/xattr/times. Needs explicit `-H` (hardlinks), `-S` (sparse). **Reflinks/shared extents NOT preserved** → CoW-shared files expand to independent copies (space blow-up). **[I]** | Bit-exact: ownership, ACL, xattr, hardlinks, sparse, special files, **and reflink/shared-extent topology** all preserved. Strongest fit for "near-complete replication." **[I]** |
+| Crash consistency / atomicity | `--delete` is **not** atomic; interrupt leaves a half-updated tree. Mitigated by existing target pre-snapshot rollback. **[V] rollback exists / [I] non-atomicity** | `receive` is atomic per subvol (all-or-nothing); final swap can be made atomic. Partial receive = discardable garbage. **[I]** |
+| SSD writes on target | Whole changed file rewritten (temp+rename) even for 1-byte change unless `--inplace`. No CoW dedup. Higher wear. **[I]** | Only changed extents written (`-p`). **But** `send` writes the *excluded* paths too, then they're orphaned by the overlay — wasted writes proportional to excluded-cache churn. **[I]** |
+| Selective exclude | First-class: `--exclude-from`, include caches / exclude browser-IDE / drop never-synced paths. Exactly the HLR rule. **[I]** | `send` has **no exclude** — all-or-nothing. Must transfer+write excluded data, then overlay target's prior copy via reflink. Awkward and wasteful for churny caches. **[I]** |
+| Resumability / cancel | Resumable: `--partial`/rerun continues; good over flaky VPN. asyncio-cancel = kill subprocess, partial state reused. **[I]** | **Not resumable**: interrupt → delete partial subvol, restart from last good parent. **[I]** |
+| Transient space on target | Minimal (per-file temp). **[I]** | Received subvol is a fresh write (no dedup vs existing target data) → up to ~1× changed-set extra until old `/home` freed; `-p` keeps it small. **[I]** |
+| Integration w/ snapshot safety net | Rollback = restore `@home` from target pre-snapshot. Clean. **[V] snapshots exist** | Same rollback available; *and* `send -p` refuses on `received_uuid` mismatch = built-in divergence guard. **[I]** |
+| Divergence detection | None; `--delete` overwrites blindly. **[I]** | `-p` parent check refuses if target diverged from expected parent — real safety. Requires lineage discipline. **[I]/[?]** |
+| Dry-run / preview / debug | Excellent: `--dry-run --itemize-changes`; trivially testable via `ssh target` (ADR-002 line 60). **[I]** | No real dry-run; no per-file preview. Harder to debug. **[I]** |
+| Implementation complexity | Low: one command + exclude file. fs-agnostic. **[I]** | High: parent-snapshot lineage + `received_uuid` tracking, stream piping, **live-`/home` subvol swap** (can't `mv` a mounted subvol while a user session holds it — needs set-default + remount/relogin), reflink overlay, rollback. **[I]/[?]** |
+| Coupling | None to filesystem. **[I]** | Hard-coupled to btrfs on both ends (already an HLR assumption, line 55). **[V]** |
+
+## 4. Recommendation
+
+**Adopt Option A (rsync over SSH) as the default `/home` transport now. Treat Option B as a later, opt-in optimization for large mostly-static datasets, not the general mechanism.**
+
+Rationale, tied to this project's actual constraints:
+
+1. The HLR's defining `/home` requirement is **selective sync** (include dev caches, exclude browser/IDE caches, never-sync machine-specific paths — lines 34, 46–48). rsync does this natively. Option B *structurally cannot* exclude during transfer (`send` is all-or-nothing), so it transfers and writes exactly the data you want to drop, then overlays it away — wasted bandwidth and SSD writes on every sync, proportional to cache churn. That inverts the project's stated intent.
+2. rsync is resumable and previewable (`--dry-run --itemize-changes`), which matters over VPN/Tailscale and aligns with ADR-002's "test manually via `ssh target`" debuggability (line 60). Option B is non-resumable and has no dry-run.
+3. Lowest complexity and no new lineage state machine. Option B requires maintaining a synced-snapshot lineage that the current harness does **not** provide (§1), plus a live-`/home` subvol swap that is genuinely tricky on an in-use mount.
+4. Both transports get the same crash-safety from the **already-implemented** pre/post snapshot rollback (`jobs/btrfs.py`), so rsync's non-atomicity is adequately covered without B's complexity.
+
+Use `rsync -aAXH --delete --partial` (add `-S` for sparse, e.g. VM images), driven over the existing `ControlMaster` socket via `-e 'ssh -o ControlPath=…'`.
+
+### Where Option B wins (revisit conditions)
+
+- `/home` dominated by **large, mostly-static files with high reflink/CoW sharing** — VM images, container layers, big git repos — where `send -p` cuts both bandwidth and SSD writes dramatically and rsync's reflink-expansion would balloon space. **[I]**
+- **Bit-exact replication including hardlink graph, sparseness, and shared-extent topology** becomes a hard requirement that rsync's `-aAXHS` cannot fully honor. **[I]**
+- The excepted/excluded set is **small and low-churn**, so B's transfer-then-discard waste is negligible.
+- Team is willing to build the synced-snapshot lineage + atomic subvol-swap machinery.
+
+A pragmatic middle path worth a spike: rsync as the general transport, with `btrfs send -p` used *only* for a few explicitly-configured large-static subtrees — but that adds two code paths and is not justified until the dataset proves it. **[I]**
+
+## 5. ADR amendments required
+
+- **ADR-002 — needs a clarifying amendment regardless of choice.** State that the SSH *communication/orchestration* channel (asyncssh `ControlMaster`) is distinct from *bulk data transfer*, and that data tools (rsync, or a piped `btrfs send`) MAY move bytes either by reusing the `ControlMaster` socket (preferred — honors "reuse via multiplexing") or by streaming through the asyncssh session. Without this, line 43 ("invoked through this SSH communication channel") read against the Forbidden "Do not create new SSH connections per operation" is ambiguous for any out-of-band transport. rsync-over-`ControlPath` is the cleanest fit with the existing wording. **[V]** the tension; amendment is editorial.
+- **ADR-003 — no amendment needed.** Delegating `/home` movement to the rsync (or btrfs) CLI is already authorized by lines 23 and 59–63.
+
+### Files cited
+- `/home/janfr/dev/pc-switcher/docs/adr/adr-002-ssh-communication-channel.md`
+- `/home/janfr/dev/pc-switcher/docs/adr/adr-003-implementation-language.md`
+- `/home/janfr/dev/pc-switcher/docs/adr/considerations/adr-002-ssh-communication-channel.md`
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/btrfs_snapshots.py`
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/btrfs.py`
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/executor.py`
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/default-config.yaml`
+- `/home/janfr/dev/pc-switcher/docs/planning/High level requirements.md`</result>
+<usage><subagent_tokens>49419</subagent_tokens><tool_uses>12</tool_uses><duration_ms>169254</duration_ms></usage>
+</task-notification>
