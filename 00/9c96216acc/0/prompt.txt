@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bln9ms1ui</task-id>
+<tool-use-id>toolu_0176N61ejaiRNu76V3osYTep</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/bln9ms1ui.output</output-file>
+<status>completed</status>
+<summary>Background command "Background-poll integration retry (configure fix) to terminal state" completed (exit code 0)</summary>
+</task-notification>
