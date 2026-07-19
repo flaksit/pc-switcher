@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b85giu8rc</task-id>
+<tool-use-id>toolu_01Cy1EdzEEG8deQMHgDfxwH8</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/b85giu8rc.output</output-file>
+<status>killed</status>
+<summary>Background command "Poll final integration run for green result" was stopped</summary>
+</task-notification>
