@@ -1,0 +1,43 @@
+<task-notification>
+<task-id>a3c7ffc1903344277</task-id>
+<tool-use-id>toolu_01Du9Ya7Mt8VzkVuZiZB2rAy</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a3c7ffc1903344277.output</output-file>
+<status>completed</status>
+<summary>Agent "Replan Phase 01 with review feedback" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All edits validate and the wave-1 no-overlap invariant holds (adding `config_sync.py` to 01-07 shares zero files with 01-08). Plans 01-01…01-06 were not touched.
+
+## PLANNING COMPLETE
+
+Revised the three peer-reviewed gap-closure plans in place; 01-01…01-06 untouched. All five actionable Codex findings are now visible in executable PLAN.md content (no hidden REVIEWS.md dependency). Frontmatter + structure validate for all three; every task retains `&lt;read_first&gt;` and `&lt;acceptance_criteria&gt;`.
+
+### Files revised
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-07-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-08-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-09-PLAN.md`
+
+### Per-plan change summary
+
+01-07 (CR-01/CR-02/WR-02) — addresses Findings 1, 2, 3, 4
+- Finding 1 (config-path filter): Task 2 now introduces `config_sync.CONFIG_REMOTE_DIR`/`CONFIG_REMOTE_PATH` as the source-of-truth constant (refactoring the duplicated `~/.config/pc-switcher/config.yaml` literals) and broadens the tool-state filter to exclude BOTH `.local/share/pc-switcher/` (from `sync_history.HISTORY_DIR`) and `.config/pc-switcher/` (from the new constant). `config_sync.py` added to `files_modified`.
+- Finding 2 (scoping): filter fires ONLY when `prefix == ""` (subvolume root); for non-empty prefixes the existing prefix-scoping is untouched. Added a `must_haves.prohibitions` entry plus a negative unit test (`test_toolstate_path_under_nonempty_prefix_is_divergence`) and a `_FIND_NEW_CONFIG_ONLY` empty-prefix positive test.
+- Finding 3 (test reframe): Task 3 no longer adds the misleading `test_toolstate_change_under_synced_root_not_divergence` VM test (which the now-scoped filter would make wrong). The empty-prefix proof is the offline unit tests; the existing `test_round_trip_and_no_false_divergence` gets a clarifying note that pc-switcher's out-of-prefix writes (state + config) are ignored via prefix-scoping; the destructive default-`/home` path is recorded as a MANUAL/LIVE verification item in `&lt;verification&gt;`.
+- Finding 4 (exception catch): WR-02 baseline-capture wrapper now catches `RuntimeError` AND `ValueError` (unparseable `Generation:` line). Reflected in truths, acceptance, and success criteria.
+
+01-08 (IN-01/IN-02) — addresses Finding 5
+- `set_total_steps()` now mirrors `set_current_step()` exactly: assigns `self._total_steps` AND refreshes the live render (`if self._live: self._live.update(self._render())`). Updated the artifact description, action, acceptance criterion, and the unit test to assert the live-refresh parity.
+
+01-09 (WR-01/IN-03/WR-03) — addresses Finding 1 (re-check side)
+- Objective/dependency note now call out the source-confirmed Phase-8→Phase-9 ordering: config sync writes `~/.config/pc-switcher/config.yaml` before the execute-time re-check. Added a `must_haves` truth + prohibition + key_link that the re-check must NOT re-flag that write for the default `/home`, and a dedicated unit test `test_recheck_ignores_phase8_config_write_for_empty_prefix` (reusing 01-07's `_FIND_NEW_CONFIG_ONLY`). Threat register T-09-01 and success criteria updated. 01-09 relies on 01-07's constant but does not modify `config_sync.py`, so `files_modified` is unchanged and the wave-2 dependency on 01-07 still holds.
+
+### Deferrals / rejections
+- None. All five findings were incorporated as executable edits. The one intentional non-addition is the fake-tool-state VM test in 01-07 Task 3 — explicitly rejected in-plan with rationale (it would encode wrong behavior under the scoped filter and prove the over-broad filter, not the real empty-prefix bug), replaced by the offline unit proof + an explicit manual/live verification item, per Codex MEDIUM #3.
+
+### Invariants preserved
+- Original gap contract intact: CR-01/CR-02/WR-02 (01-07), IN-01/IN-02 (01-08), WR-01/IN-03/WR-03 (01-09) all still covered.
+- Wave-1 no-overlap (01-07 ∥ 01-08) verified empty even after adding `config_sync.py` to 01-07.
+- `requirements` fields on all three plans unchanged; all five phase requirement IDs remain covered.
+
+Changes are written to disk but not committed — leaving the commit to the reviews orchestrator (which typically re-runs the plan checker first). If you want me to commit these plan revisions, say so and I will.</result>
+<usage><subagent_tokens>148516</subagent_tokens><tool_uses>39</tool_uses><duration_ms>641494</duration_ms></usage>
+</task-notification>
