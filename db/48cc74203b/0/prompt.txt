@@ -1,0 +1,20 @@
+You refer to Phase 3, Phase 10, ... where are these defined/documented?
+
+No timeout on the locking? Does the TUI tell that it is waiting for a lock, or does it just hang indefinitely?
+
+You are right, the sceanrios I mentioned always already block on the source lock, never on the target lock. With the second scenario, I wanted to test the target lock. But this must be done from a third system, if I understand well? How can we test? Is already covered by a test? How?
+
+"Tell me how to unblock" is important. Should tell as well in case the normal unlocking procedure fails and a lockfile sticks around. Or is this not possible?
+
+flock-over-ssh must be tested.
+
+Extend the A>B with the missing coverage.
+
+Is integration/test_folder_sync.py a new full run? Shouldn't this be integrated in the existing full run? That was the idea, right? To minimize the number of runs in the integration test: test as much as possible in one go.
+"keep the integration test on the scratch dir" "mirroring real /home is exactly what the existing tests deliberately avoid". Why avoid? This is the normal scenario, so this should be the test.
+
+You didn't answer if the full scenario I described is already covered by an integration test. If not, it should be added.
+
+So first ensure integration tests cover all this, before we do UAT.
+
+But first answer my questions. More challenging/sparring/questions/remarks? Tell me.
