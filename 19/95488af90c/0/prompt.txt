@@ -1,0 +1,2 @@
+Let's go on with the UAT.
+I want you to edit config.yaml if needed and create the necessary set of files (with all ownership, permissions, ...) need for the following steps
