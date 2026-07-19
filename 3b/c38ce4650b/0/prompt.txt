@@ -1,0 +1,3 @@
+rsync
+
+Can you just start GSD phase or first need gsd-codebase to bootstrap GSD for this repo? I can run in separate session
