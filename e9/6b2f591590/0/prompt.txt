@@ -1,0 +1,1 @@
+.config/Claude/vm_bundles: not used by claude (is for claude desktop, I suppose)? If claude needs them, we need to sync them. Or very volatile (these are VM images, for which maybe another sync mechanism is needed)?
