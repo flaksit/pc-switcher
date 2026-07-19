@@ -1,0 +1,1 @@
+1. Nyquist compliance must be true. That was the main reason for using GSD.
