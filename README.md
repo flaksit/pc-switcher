@@ -128,7 +128,14 @@ pc-switcher cleanup-snapshots --older-than 7d [--dry-run]
 
 # Self-update pc-switcher
 pc-switcher self update [VERSION] [--prerelease]
+
+# Skip the startup version check (applies to any command, e.g. pc-switcher --no-version-check sync <target>)
+pc-switcher --no-version-check <command>
 ```
+
+### Startup version check
+
+On every command (except `self`), in an interactive terminal, pc-switcher checks GitHub for a newer stable release and offers to upgrade and restart in place. It never runs for non-interactive/scripted invocations (stdin or stdout not a TTY), and can be disabled with `--no-version-check` or by setting `PCSWITCHER_SKIP_VERSION_CHECK`.
 
 ## Requirements
 
@@ -149,7 +156,7 @@ pc-switcher self update [VERSION] [--prerelease]
 
 ### GitHub API Rate Limits
 
-When running `pc-switcher --version`, `self update`, or sync (which installs pc-switcher on target), you may see rate limit errors like:
+When running `pc-switcher --version`, `self update`, sync (which installs pc-switcher on target), or the startup version check (runs on every command; see above), you may see rate limit errors like:
 
 ```text
 RuntimeError: Failed to fetch GitHub releases: 403 {"message": "API rate limit exceeded..."}
