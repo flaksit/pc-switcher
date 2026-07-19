@@ -1,0 +1,1 @@
+will that ref 01-folder-sync work well when the pc-switcher run installs to pc2? Will it install the exact same version? Before, we always created release
