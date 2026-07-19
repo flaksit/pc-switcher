@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b6gs0168a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/3e7dcbc5-d17f-473b-ab02-fa471b6b61a8/tasks/b6gs0168a.output</output-file>
+<status>completed</status>
+<summary>Background command "Reset both VMs in parallel for re-UAT" completed (exit code 0)</summary>
+</task-notification>
