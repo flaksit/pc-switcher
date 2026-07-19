@@ -1,0 +1,48 @@
+<task-notification>
+<task-id>a1d75ea0f8d177ff0</task-id>
+<tool-use-id>toolu_011XK4XuLRCWLJTrpi17QyR8</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a1d75ea0f8d177ff0.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 1 home-sync" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## RESEARCH COMPLETE
+
+**Phase:** 01 - Home-Sync MVP (User Data Sync)
+**Confidence:** MEDIUM
+
+### Key Findings
+
+- **rsync-as-root wiring:** Local `sudo rsync -aAXHS --numeric-ids --delete` with remote `--rsync-path='sudo rsync'`. rsync spawns its own SSH transport independently from the asyncssh orchestration connection. Both source and target need `NOPASSWD: /usr/bin/rsync` in sudoers. The asyncssh connection is NOT reused for rsync's data channel — this is expected and correct per ADR-002's intent.
+
+- **Divergence detection (D-08 resolved):** Use `btrfs subvolume show &lt;mount_point&gt;` to read the subvolume's "Generation:" field. Post-sync: record target's generation per folder in an extended `sync_history.json` (`target_generations[hostname][path]`). Pre-sync: compare current generation to stored value — any increase means writes happened after the last sync. This is O(1), reuses existing btrfs infrastructure, and requires no snapshot comparison.
+
+- **rsync progress streaming (carriage-return problem):** `--info=progress2` uses `\r` not `\n`; the existing `LocalProcess.stdout()` iterator blocks on `\n` and will freeze the TUI during large transfers. Must use chunk-based reading (`proc.stdout.read(N)`) splitting on both `\r` and `\n`. `--out-format='%i %n%L'` provides per-file events on newlines (feeds FULL-level log).
+
+- **`config-schema.yaml` additionalProperties guard:** The existing schema has `additionalProperties: false` at the top level. Adding `folder_sync:` to config.yaml will break validation until the schema is updated with a `folder_sync:` property AND `sync_jobs.properties` gains a `folder_sync: boolean` entry.
+
+- **`--delete` is safe without `--delete-excluded`:** Machine-specific excluded files on the target (`.ssh/id_*`, Tailscale config) are protected from deletion by rsync's default behavior. Never pass `--delete-excluded`.
+
+### File Created
+
+`/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-RESEARCH.md`
+
+### Confidence Assessment
+
+| Area | Level | Reason |
+|------|-------|--------|
+| rsync flags and metadata | MEDIUM | Verified via man page fetch (man7.org) |
+| btrfs generation query | MEDIUM | Verified via official btrfs docs fetch |
+| Codebase integration points | HIGH | Direct read of all relevant source files |
+| rsync-as-root wiring | MEDIUM | Pattern confirmed by blog + man page; asyncssh ControlMaster limitation inferred |
+| Progress streaming | LOW | asyncio pattern from stdlib; rsync `\r` behavior from websearch |
+
+### Open Questions
+
+1. Whether the Hetzner test VMs have `/root` as a separate btrfs subvolume or part of `@` root — affects divergence tracking for `/root` folder.
+2. Whether `sudo rsync` on the developer's source machine is already passwordless or needs setup instructions.
+
+### Ready for Planning
+
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><subagent_tokens>126281</subagent_tokens><tool_uses>68</tool_uses><duration_ms>640702</duration_ms></usage>
+</task-notification>
