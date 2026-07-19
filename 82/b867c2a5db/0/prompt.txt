@@ -1,0 +1,1 @@
+I dropped allowed-tools. The script is only working for github CI, not other things like gitlab or so. I renamed the script in line with that. But best to ensure the skill only uses the script for github and rolls their own bash wait-command/script for other CI systems
