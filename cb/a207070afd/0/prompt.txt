@@ -1,0 +1,65 @@
+<task-notification>
+<task-id>a5af3280082249bf9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/10ab428d-ebff-4b92-9772-16326464de20/tasks/a5af3280082249bf9.output</output-file>
+<status>completed</status>
+<summary>Agent "Generate planning artifacts" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Those STATE.md flags are the GSD template's structured labeled blocks — Project Reference (`**Core value:**`/`**Current focus:**`), Current Position (`Phase:`/`Plan:`/`Status:`/`Last activity:`), and Session Continuity (`Last session:`/`Stopped at:`/`Resume file:`). These are read by label by downstream state tooling and must stay as adjacent lines per the template. Intentional false positives, hook is non-blocking — moving on.
+
+All four artifacts are written. Here is the result.
+
+## ROADMAP CREATED
+
+**Files written:**
+- `/home/janfr/dev/pc-switcher/.planning/PROJECT.md`
+- `/home/janfr/dev/pc-switcher/.planning/REQUIREMENTS.md`
+- `/home/janfr/dev/pc-switcher/.planning/ROADMAP.md`
+- `/home/janfr/dev/pc-switcher/.planning/STATE.md`
+
+### Summary
+
+**Phases:** 7 plannable (plus a completed, non-plannable Foundation)
+**Granularity:** standard (defaulted — no `config.json` present)
+**Phase IDs:** sequential, no project code (GSD defaults)
+**Coverage:** 19/19 requirements mapped — no orphans
+
+| Phase | Goal | Requirements |
+|-------|------|--------------|
+| Foundation (Complete) | Framework already shipped | REQ-core-001, REQ-testing-002, REQ-core-tests-003, REQ-python-logging-004, REQ-feature-modular-architecture, REQ-environment-constraints |
+| 1 - Home-Sync MVP (User Data) | One-command `/home`+`/root` replication over rsync-over-SSH, proven by bidirectional round-trip | REQ-sync-scope-user-data, REQ-machine-specific-exclusions, REQ-sync-scope-file-metadata, REQ-manual-sync-workflow, REQ-terminal-ux |
+| 2 - Package Management Sync | Replicate apt/snap/flatpak/.deb/PPA/script packages with conflict detection | REQ-sync-scope-packages, REQ-conflict-detection-no-resolution |
+| 3 - System &amp; App Config Sync | Replicate GNOME/cloud-mounts/systemd/`/etc`/users with conflict detection | REQ-sync-scope-app-and-system-config |
+| 4 - Docker State Sync | Replicate images/containers/volumes/cache with running-state detection | REQ-sync-scope-docker |
+| 5 - VM State Sync | Replicate KVM VMs with powered-off guard | REQ-sync-scope-vms |
+| 6 - k3s Cluster Sync | Replicate single-node k3s incl. PVCs with workload detection | REQ-sync-scope-k3s |
+| 7 - Rollback Capability | `pc-switcher rollback` from pre-sync snapshots | REQ-reliability-principles |
+
+### Milestone structure
+
+- **Foundation (Complete)** — marked done, not an upcoming phase (specs 001-004).
+- **Milestone 1 (current): Home-Sync MVP** = Phase 1.
+- **Milestone 2: Full System-State Replication** = Phases 2-6.
+- **Milestone 3: Reliability Hardening** = Phase 7.
+
+### Phase 1 success criteria (the headline milestone)
+
+1. `pc-switcher sync &lt;target&gt;` copies `/home`+`/root` A→B; included files byte-identical (checksum).
+2. Metadata preserved: owner, group, permissions, POSIX ACLs, timestamps.
+3. Exclusions honored — SSH keys, Tailscale, GPU/fontconfig caches, VS Code caches absent; dev-tool caches (uv/pip/cargo/npm) included.
+4. Reversible with exclusions intact both directions: B→A after mutating B reflects changes byte-identically, exclusions honored on the reverse sync.
+5. A VM-isolated integration test automates the full A→B → mutate-B → B→A round-trip and asserts 1-4 (the developer-facing success metric).
+
+### Notes / decisions surfaced
+
+- **rsync-over-SSH transport is not yet captured in an ADR.** Recorded in PROJECT.md Key Decisions as "Pending ADR", in Context, and as a Phase 1 blocker/concern in STATE.md. ADR-002 locks SSH as the channel but does not fix the file-sync protocol — formalize before/during Phase 1.
+- **ADR-009 recorded as Proposed (not locked)**; the other 11 ADRs recorded as Locked.
+- **"Bidirectional round-trip" clarified** as two sequential one-directional syncs (not concurrent merge), since simultaneous bi-directional sync is explicitly Out of Scope.
+- **No UI hints emitted.** Every phase is a CLI/backend sync job; the only "UI" is the existing Rich terminal TUI (covered by the manual playbook per ADR-006). Annotating UI hints would falsely trigger the web-frontend `/gsd-ui-phase` workflow, so it was deliberately omitted.
+- **Markdown hard-wrap hook fired** on the GSD-mandated `**Goal**:`/`**Depends on**:` phase fields and STATE.md labeled blocks. These are intentional adjacent short lines required by the downstream parser; the hook is non-blocking and explicitly tolerates this case. Genuine metadata/footer adjacencies in REQUIREMENTS.md were fixed.
+
+### Ready for planning
+
+STATE.md reflects bootstrap-from-ingest complete, milestone 1 = Home-Sync MVP, status "Ready to plan." Next: `/gsd-plan-phase 1`.</result>
+<usage><subagent_tokens>93269</subagent_tokens><tool_uses>20</tool_uses><duration_ms>491479</duration_ms></usage>
+</task-notification>
