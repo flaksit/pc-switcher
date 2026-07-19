@@ -1,0 +1,46 @@
+<task-notification>
+<task-id>a92ef835391188a4f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a92ef835391188a4f.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix folder_sync rsync SSH transport" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Commit: `660a506`**
+
+---
+
+## Summary
+
+**Root cause fixed:** `sudo -E rsync` spawned `ssh` as root; OpenSSH ignored `$HOME` and looked in `/root/.ssh` (no key, no known_hosts) → exit 255. The old comment claiming `sudo -E` makes ssh use the invoking user's `~/.ssh/config` was empirically wrong.
+
+### Changes made
+
+**`src/pcswitcher/connection.py`**
+Added `Connection.username` property: calls `self._conn.get_extra_info("username")`, falls back to `getpass.getuser()` if asyncssh returns `None`. Raises `RuntimeError` if not connected (mirrors `ssh_connection`).
+
+**`src/pcswitcher/jobs/context.py`**
+Added `target_username: str | None = None` field. Optional so all 16+ existing `JobContext` constructions in tests keep working without changes.
+
+**`src/pcswitcher/orchestrator.py`**
+`_create_job_context` now passes `target_username=self._connection.username if self._connection is not None else None`. The guard handles the unit-test pattern of mocking executors without a real connection.
+
+**`src/pcswitcher/jobs/folder_sync.py`**
+`_build_rsync_cmd` now builds the `-e` transport as:
+```python
+ssh_tokens = ["ssh", "-T", "-q", "-l", target_user]
+# + "-F config" if ~/.ssh/config exists
+# + "-o UserKnownHostsFile=..." if ~/.ssh/known_hosts exists
+# + "-i id_ed25519/id_ecdsa/id_rsa" for each present key
+ssh_cmd = shlex.join(ssh_tokens)  # quotes tokens individually
+parts.append(f"-e {shlex.quote(ssh_cmd)}")
+```
+`target_user = self.context.target_username or getpass.getuser()`. The incorrect Pitfall-1 comment is replaced with an accurate explanation.
+
+**`tests/unit/jobs/test_folder_sync.py`**
+- `make_context` accepts `target_username`
+- `TestBuildRsyncCmd._build` defaults `target_username="testuser"` for deterministic assertions
+- Added `TestBuildRsyncCmdSSHTransport` (8 tests) covering: username-from-context, getpass fallback, `-i`/`UserKnownHostsFile`/`-F` present/absent based on file existence
+
+**Gate results:** ruff ✓ · basedpyright 0 errors · codespell clean · 505 unit+contract tests passed.</result>
+<usage><subagent_tokens>101624</subagent_tokens><tool_uses>38</tool_uses><duration_ms>479194</duration_ms></usage>
+</task-notification>
