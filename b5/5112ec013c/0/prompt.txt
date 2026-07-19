@@ -1,0 +1,2 @@
+I still see the two agents.
+make the edit to the command. Best would even be to have a reliable script for it, turn merge-main command into a skill and let the skill call that script
