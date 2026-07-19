@@ -1,0 +1,7 @@
+Done.
+Final output gives [Image #6].
+- "Recent Logs" block repeated.
+- "Connection" line overwrites the last line of the "First Sync" warning block.
+
+Normal? To be expected?
+Looks a bit weird to me as user. Not entirely clean TUI.
