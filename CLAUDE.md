@@ -47,21 +47,3 @@ tests/run-integration-tests.sh tests/integration/test_end_to_end_sync.py::TestIn
 
 ## REMEMBER
 - When creating a PR on GitHub, ALWAYS set it as draft so that the integration tests don't run prematurely.
-
-## Python Standards
-
-This project uses Python 3.14 via uv. (The `uv run` / no-system-Python rule lives in the user global `~/.claude/CLAUDE.md`.)
-
-### Critical Rules
-- `from __future__ import annotations` in all files
-- Modern type syntax: `str | None`, `dict[str, int]`, `list[T]` (not `Optional`, `Dict`, `List`)
-- `Path` from pathlib for all file paths
-- Full type annotations on all function signatures
-- Import from `collections.abc` not `typing` for collection types
-- Use `@override` for method overrides
-- Prefer `StrEnum` for string-based enums
-
-### Testing
-- Test edge cases and error conditions
-- Mock external I/O, but create integration tests against real deps
-- Avoid trivial tests that just test the language
