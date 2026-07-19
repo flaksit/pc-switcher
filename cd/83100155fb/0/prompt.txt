@@ -1,0 +1,15 @@
+I think we are hunting a bug that could be avoided if we rethink with a wider scope:
+If I understand well, CR-01 and CR-02 are about detecting "user divergence":
+The requirement is that, when doing A>B, B was not changed since last B>A.
+The FolderSync job tries to do that and it seems we need to add a myriad of exceptions to that "user divergence" check because pc-switcher itself already touches files on target before FolderSync runs.
+
+Zooming out:
+This check should run during FolderSync.validate(), not during the run. If "What Happens During a Sync" in README.md is correct, the only things that happens between last snapshot on B on last B>A sync, and validate(), are
+- step 13 of previous B>A run: "record sync history"
+- step 5: "acquire target lock"
+These are two well defined files. I don't see why "upgrade-then-sync" would be the case here. Upgrade pc-switcher on target is step 9, AFTER validate().
+
+Zooming out more:
+As already explained in gh #159, the idea of step 2 is more to avoid A>B and A>B if in between work was done on B. If that check is done correctly, our FolderSync precondition "no divergence" is covered already. So FolderSync shouldn't even bother testing this.
+
+What do you think?
