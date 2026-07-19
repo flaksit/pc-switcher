@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bzxvk1ujz</task-id>
+<tool-use-id>toolu_01MpYBpCBmG7spEGNFAsZREG</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/e213a4b7-d0e2-46ba-9221-513fef187b52/tasks/bzxvk1ujz.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI on PR 175" completed (exit code 0)</summary>
+</task-notification>
