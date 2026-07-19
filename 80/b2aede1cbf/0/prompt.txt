@@ -1,0 +1,9 @@
+Actually, self-update didn't work.
+
+(pcswitcher) janfr@P17:~/dev/pc-switcher$ pc-switcher self update --prerelease
+Checking for latest version...
+Updating pc-switcher from 0.1.0-alpha.5+post.178.dev.0.8a92607 to 0.1.0-alpha.16...
+Error: Version mismatch after update. Expected 0.1.0-alpha.16, got 0.1.0-alpha.5+post.178.dev.0.8a92607
+
+(pcswitcher) janfr@P17:~/dev/pc-switcher$ pc-switcher --version
+pc-switcher 0.1.0-alpha.5+post.178.dev.0.8a92607
