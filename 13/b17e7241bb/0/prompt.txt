@@ -1,0 +1,36 @@
+<task-notification>
+<task-id>a01a7710f94096063</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a01a7710f94096063.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01-13 of phase 01" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 01-13
+**Tasks:** 3/3
+**SUMMARY:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-13-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"01-13","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `f3cc45d`: refactor(01-13): consolidate CLI onto --allow-out-of-order; remove allow_divergence from JobContext
+- `efe1f07`: feat(01-13): replace consecutive-sync check with topology out-of-order step
+- `87b5092`: test(01-13): rework consecutive-sync tests to cover _check_out_of_order topology step
+- `93cd004`: docs(01-13): complete topology out-of-order step plan
+
+**Duration:** ~20 minutes
+
+---
+
+**What was built:**
+
+**Task 1** — `src/pcswitcher/cli.py` and `src/pcswitcher/jobs/context.py`: `--allow-consecutive` and `--allow-divergence` replaced by a single `--allow-out-of-order` option threaded through the whole CLI call chain. `allow_divergence` removed from `JobContext` (no longer needed after ADR-015).
+
+**Task 2** — `src/pcswitcher/orchestrator.py`: `_check_consecutive_sync()` and all `allow_consecutive`/`allow_divergence` plumbing removed. New `_check_out_of_order()` runs after the target lock and reads both machines' sync-history over SSH to detect W1 (no target history), W2 (machine-C), and W3 (consecutive push). Clean A→B/B→A/A→B proceeds silently. `--dry-run` logs the warning but never aborts. `_update_sync_history()` now records `last_peer` on both source and target. One Rule 3 fix: `allow_divergence` removed from `make_context()` in `test_folder_sync.py`.
+
+**Task 3** — `tests/unit/orchestrator/test_consecutive_sync.py` and `tests/unit/test_dry_run.py`: test_consecutive_sync.py rewritten with 17 new tests covering all truth-table cases for `_check_out_of_order` plus `TestUpdateSyncHistoryWithPeer`. test_dry_run.py updated to remove allow_divergence tests and add `allow_out_of_order` parameter test. 433 unit tests pass.</result>
+<usage><subagent_tokens>135842</subagent_tokens><tool_uses>85</tool_uses><duration_ms>997771</duration_ms></usage>
+</task-notification>
