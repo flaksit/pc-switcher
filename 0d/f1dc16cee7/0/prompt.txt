@@ -1,0 +1,81 @@
+<task-notification>
+<task-id>a4cc7f6c17907f35f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a4cc7f6c17907f35f.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify review incorporation Phase 01" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## VERIFICATION PASSED
+
+**Phase:** 01 — Home-Sync MVP (User Data Sync)
+**Plans verified:** 01-07, 01-08, 01-09 (revised gap-closure set)
+**Mode:** reviews (re-verification after cross-AI review incorporation)
+
+---
+
+### Review Incorporation — All 5 Actionable Findings
+
+| Finding | Severity | Incorporated in |
+|---------|----------|-----------------|
+| [HIGH] Tool-state filter must cover `~/.config/pc-switcher/config.yaml` (Phase-8 write) in BOTH 01-07 filter definition AND 01-09 execute-time re-check | HIGH | 01-07: `must_haves.truths`, `key_links` (both dirs), Task 2 action + `test_config_write_under_empty_prefix_not_divergence`; 01-09: `must_haves.truths` + `prohibitions`, Task 2 `test_recheck_ignores_phase8_config_write_for_empty_prefix` |
+| [HIGH] Filter scoped to empty-prefix/subvolume-root ONLY — non-empty synced roots still report real divergence | HIGH | 01-07: `must_haves.truths` + `must_haves.prohibitions` (explicit); Task 2 adds `test_toolstate_path_under_nonempty_prefix_is_divergence` as the required negative test |
+| [MEDIUM] CR-01 integration test reframed — fake-tool-state VM test rejected, rationale in-plan | MEDIUM | 01-07 Task 3: "Do NOT add a fake-tool-state VM test" with inline rationale citing Codex MEDIUM #3; offline unit tests (Task 2) carry the automated proof; destructive default-`/home` path is an explicit manual/live verification item |
+| [LOW] Baseline-capture catch also handles `ValueError` | LOW | 01-07 `must_haves.truths` + Task 2 action: "Catch BOTH `RuntimeError` AND `ValueError`"; acceptance criteria call out both explicitly |
+| [LOW] `TerminalUI.set_total_steps()` refreshes `_live` like `set_current_step()` | LOW | 01-08 `artifacts_produced` + Task 2 action + acceptance criteria: assigns `self._total_steps` AND calls `if self._live: self._live.update(self._render())` |
+
+---
+
+### Config-Sync Mechanism Sanity Check (independent verification)
+
+The REVIEWS.md orchestrator verification note (confirmed against source: `orchestrator.py:261` Phase-8 config sync runs before `orchestrator.py:266` Phase-9 execute) is correctly captured in the plans:
+
+- 01-07 `&lt;objective&gt;` explicitly documents Phase-8 writes `~/.config/pc-switcher/config.yaml` BEFORE Phase-9, and that both `HISTORY_DIR` (`~/.local/share/pc-switcher/`) and `CONFIG_REMOTE_DIR` (`~/.config/pc-switcher/`) must be excluded.
+- `config_sync.CONFIG_REMOTE_DIR` is introduced as a module constant and exported in `__all__` so `folder_sync` derives the `.config/pc-switcher/` token without a second hardcoded literal.
+- 01-09 `&lt;dependency_note&gt;` explicitly calls out that the re-check must inherit 01-07's broadened+scoped filter to avoid re-flagging the Phase-8 write, and that this plan must NOT modify `config_sync.py` (the constant is 01-07's responsibility).
+- Filter is correctly scoped: ONLY when `prefix == ""` (subvolume root), NOT blanket-ignored under arbitrary non-empty roots.
+
+---
+
+### Regression Checks
+
+**Original gap coverage intact:**
+
+| Gap | Covered by | Status |
+|-----|-----------|--------|
+| CR-01 false divergence (D-07) | 01-07 Task 2 + Task 3 | Intact |
+| CR-02 fail-closed on unverifiable | 01-07 Task 2 | Intact |
+| WR-02 non-fatal baseline capture | 01-07 Task 2 | Intact |
+| IN-01 dead SIGINT code | 01-08 Task 1 | Intact |
+| IN-02 progress bar denominator | 01-08 Task 2 | Intact |
+| WR-01 transferred bytes | 01-09 Task 1 | Intact |
+| IN-03 itemize change types c/h | 01-09 Task 1 | Intact |
+| WR-03 TOCTOU re-check | 01-09 Task 2 | Intact |
+
+**Wave-1 no-overlap invariant:**
+
+- 01-07 `files_modified`: `sync_history.py`, `config_sync.py`, `jobs/folder_sync.py`, `tests/unit/test_sync_history.py`, `tests/unit/jobs/test_folder_sync.py`, `tests/integration/test_folder_sync.py`
+- 01-08 `files_modified`: `cli.py`, `orchestrator.py`, `ui.py`, `tests/unit/orchestrator/test_interrupt_handling.py`, `tests/unit/ui/test_terminal_ui.py`
+
+Zero file overlap. `config_sync.py` (added to 01-07) does not appear in 01-08. Invariant holds.
+
+**01-09 wave-2 dependency:** `depends_on: [01-07]` correctly set. 01-09 only touches `jobs/folder_sync.py` and `tests/unit/jobs/test_folder_sync.py` — both overlap with 01-07 (justifying wave 2). The `&lt;dependency_note&gt;` explicitly states 01-09 does NOT modify `config_sync.py`.
+
+**All 5 phase requirement IDs still covered:**
+
+| Requirement | Plans |
+|-------------|-------|
+| REQ-sync-scope-user-data | 01-07, 01-09 |
+| REQ-machine-specific-exclusions | 01-07 |
+| REQ-sync-scope-file-metadata | 01-07 |
+| REQ-manual-sync-workflow | 01-07, 01-09 |
+| REQ-terminal-ux | 01-08, 01-09 |
+
+**Task structure:** All tasks in all three plans have `&lt;files&gt;`, `&lt;read_first&gt;`, `&lt;action&gt;`, `&lt;acceptance_criteria&gt;`, `&lt;verify&gt;` (with `&lt;automated&gt;` using `uv run pytest`), and `&lt;done&gt;`. Actions are prose specs — no fenced code blocks. Acceptance criteria reference `uv run pytest`, `uv run basedpyright`, `uv run ruff` throughout, consistent with CLAUDE.md and project `uv`-only rules.
+
+**Frontmatter validity:** Wave assignments, `depends_on`, `gap_closure`, `autonomous`, and `requirements` fields are present and consistent across all three plans.
+
+---
+
+Plans verified. Run `/gsd-execute-phase 01` (plans 07, 08, 09) to proceed.</result>
+<usage><subagent_tokens>57439</subagent_tokens><tool_uses>7</tool_uses><duration_ms>80501</duration_ms></usage>
+</task-notification>
