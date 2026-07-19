@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "4cca540c45ff",
+  "strategy": "manual-commit",
+  "branch": "87-ssh-host-check",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/ops/testing-architecture.md",
+    "tests/integration/scripts/internal/common.sh",
+    "tests/run-integration-tests.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4c/ca540c45ff/0/metadata.json",
+      "transcript": "/4c/ca540c45ff/0/full.jsonl",
+      "compact_transcript": "/4c/ca540c45ff/0/transcript.jsonl",
+      "content_hash": "/4c/ca540c45ff/0/content_hash.txt",
+      "prompt": "/4c/ca540c45ff/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 57685,
+    "cache_read_tokens": 1322593,
+    "output_tokens": 18558,
+    "api_call_count": 22
+  }
+}
