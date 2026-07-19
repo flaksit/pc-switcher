@@ -497,6 +497,7 @@ class FolderSyncJob(SyncJob):
                     # Change-type characters (rsync %i first char):
                     #   > sent to remote   < received from remote   * special message
                     #   . attribute-only   c created (dir/symlink/device)   h hard link (IN-03)
+                    # Full itemize-code reference: docs/reading-sync-logs.md
                     self._log(Host.SOURCE, LogLevel.FULL, f"{folder.path}: {line}")
                     if line.startswith("*deleting"):
                         files_deleted += 1

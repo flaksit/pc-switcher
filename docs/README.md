@@ -2,9 +2,10 @@
 
 This directory contains all project documentation, organized by audience.
 
-## Configuration
+## For Users
 
 - [configuration.md](configuration.md) - Complete reference for `~/.config/pc-switcher/config.yaml` (all options, defaults, folder-sync exclude syntax)
+- [reading-sync-logs.md](reading-sync-logs.md) - Interpreting per-file rsync itemize codes (`<f+++++++++`, `cd+++++++++`, …) in FULL-level logs
 
 ## For AI Agents (`dev/`)
 
