@@ -1,0 +1,6 @@
+Actually, step 2 is worthless as it is now. For it to be able to check what it should (#159), that check should probably sit between step 5 and 6.
+So I think integrating #159 would be good.
+
+Or should I rather implement it in a separate session before we do on here?
+
+What do you think?
