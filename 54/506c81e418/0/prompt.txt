@@ -1,0 +1,4 @@
+statement-count lint threshold not so relevant for tests, or you could break up in sub-functions if needed for readability.
+
+"mergeable into the main scenario" what do you mean by "main scenario"?
+I meant to merge everything (test_home_sync_metadata_ownership_and_roundtrip as well!) into test_end_to_end_sync.py. TestEndToEndSync.test_core_us_job_arch_as1_job_integration_via_interface()
