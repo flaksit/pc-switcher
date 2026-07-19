@@ -1,0 +1,16 @@
+Connection: disconnected  Step 6/10
+╭──────────────────────────────────────────────────── Recent Logs ─────────────────────────────────────────────────────╮
+│ 21:02:53 [INFO] [orchestrator] (source) Discovering and validating jobs                                              │
+│ 21:02:53 [INFO] [orchestrator] (source) Checking disk space on both hosts                                            │
+│ 21:02:53 [INFO] [orchestrator] (source) Source disk space check passed: 31.6GiB (83.4%) free                         │
+│ 21:02:53 [INFO] [orchestrator] (target) Target disk space check passed: 31.2GiB (82.3%) free                         │
+│ 21:02:53 [INFO] [orchestrator] (source) Creating pre-sync snapshots                                                  │
+│ 21:02:54 [INFO] [btrfs_snapshots] (source) Creating pre-sync snapshots                                               │
+│ 21:02:54 [INFO] [btrfs_snapshots] (source) Completed pre-sync snapshots                                              │
+│ 21:02:54 [INFO] [orchestrator] (target) Ensuring pc-switcher is installed on target                                  │
+│ 21:02:55 [INFO] [install_on_target] (target) Upgrading pc-switcher on target from 0.1.0a17 to 0.1.0a18               │
+│ 21:03:00 [CRITICAL] [orchestrator] (source) Sync failed: Failed to fetch GitHub releases: 401 {"message": "Bad       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+Sync failed: Failed to fetch GitHub releases: 401 {"message": "Bad credentials", "documentation_url": 
+"https://docs.github.com/rest", "status": "401"}
