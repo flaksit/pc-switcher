@@ -1,0 +1,25 @@
+<task-notification>
+<task-id>a01a7710f94096063</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a01a7710f94096063.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01-13 of phase 01" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both gates are green.
+
+## Fix complete
+
+**Root cause:** In my Task 3 rewrite of `test_consecutive_sync.py`, mock-assertion calls read attributes off `orchestrator._ui`, `orchestrator._console`, `orchestrator._logger`, and `orchestrator._remote_executor`. Those attributes are declared as `... | None` on the orchestrator, and pyright sees the underlying methods as real bound methods rather than Mocks. The `# pyright: ignore[reportPrivateUsage]` I had placed only silenced the private-access diagnostic, not the actual `reportOptionalMemberAccess` and `reportAttributeAccessIssue` errors.
+
+**Fix:** Wrapped each private mock access in `cast(MagicMock, orchestrator._X)` (added `from typing import cast`). Casting to `MagicMock` narrows away the `| None` (kills `reportOptionalMemberAccess`) and lets the mock-assertion methods resolve through `MagicMock.__getattr__` (kills `reportAttributeAccessIssue`). The existing `reportPrivateUsage` ignore stays valid because the expression still reads a private attribute. No blanket `# type: ignore`, no widened suppression.
+
+**Results:**
+- `uv run basedpyright` → 0 errors, 0 warnings, 0 notes (whole project)
+- `uv run pytest` → 505 passed, 63 deselected
+- `uv run ruff format .` / `uv run ruff check .` → clean
+
+**Commit:** `de149e5` — `fix(01-13): resolve basedpyright errors in consecutive-sync tests` (also includes a short note appended to the existing `01-13-SUMMARY.md` Deviations section; no new SUMMARY created).
+
+Only `tests/unit/orchestrator/test_consecutive_sync.py` and the SUMMARY were touched; the source files from the original plan are unchanged. The untracked `.planning/config.json` was present before I started and is left alone.</result>
+<usage><subagent_tokens>171279</subagent_tokens><tool_uses>20</tool_uses><duration_ms>220684</duration_ms></usage>
+</task-notification>
