@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bp30pfran</task-id>
+<tool-use-id>toolu_016ngFP3fauLPsoRKK9hjotc</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a682436b-65e6-45a8-9535-3dac71f4ad7b/tasks/bp30pfran.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch alpha.11 integration CI" completed (exit code 0)</summary>
+</task-notification>
