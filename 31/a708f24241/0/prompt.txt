@@ -1,0 +1,5 @@
+Same incomplete text in the heads-up: "Run pc-switcher sync --dry-run to preview what would be deleted before committing to a live sync.". Same remark as before: should tell to look in the log file and where to find it for seeing the deletes.
+
+Actually, "what would be deleted" is very job-specific: this is about FolderSync. But later we'll sync packages and more. So this text should be more generic, like "to preview what would be changed on pc2"
+
+Otherwise pass
