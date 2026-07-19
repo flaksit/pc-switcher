@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bst4congy</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/62df018f-508c-4c34-a6c8-2706844328e0/tasks/bst4congy.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch integration run to completion, then report PR merge state" completed (exit code 0)</summary>
+</task-notification>
