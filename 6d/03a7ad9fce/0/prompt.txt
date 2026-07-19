@@ -1,0 +1,4 @@
+I logged out and logged in again to get the path.
+
+testuser@pc1:~$ pc-switcher --version
+pc-switcher 0.1.0-alpha.12+post.31.dev.0.78b43e4
