@@ -1,0 +1,28 @@
+My Q 1. "documented lifecycle would be useful": README has a section "What Happens During a Sync". But I think it is worth having an explicit section in the golden docs/system/architecture.md with it. Add that (or create new file if you estimate that's better). The sequence diagrams are too detailed and don't give the overview and naming we need.
+
+My Q 2. No wait needed
+
+My Q 3. Implement
+
+My Q 4. Implement
+
+About integration test with /home:
+We need hardcoded exceptions to FolderSync, with at least the lock file, sync-history.json, the pc-switcher install (not entire ~/.local/bin, only the pc-switcher files, including ~/.local/share/uv/tools/pcswitcher) and the current log file.
+How about other log files? Should be sync them or should each machine keep their own log files?
+
+More sparring 1: "same state-clobber issue": no, because to FolderSync, /root is just a plain folder and it does NOT contain .local/share/pc-switcher or any other pc-switcher files. That is why I thought it isn't even needed to test explicitly.
+
+More sparring 2: Add whatever you deem good to the exclude-list for the integration test. Just don't hardcode. This is not ADR.
+ADR **could** be: no hardcoded excludes except for the runtime pc-switcher files (previously mentioned).
+
+More sparring 3: Ok, I do UAT. But first want non-interactive to be fully tested so I don't waste time on UAT if there are still issues.
+
+More sparring 4: Are you sure? I thought that was tested. If not, add verification during integration test.
+
+More sparring 5: "any real-/home variant" is not new ones. "/home" is the only one we have, should be in full integration test and round-trip. Is round-trip not in full integration test? I think it could be.
+
+Decision 1: do a) and b), fix as hardcoded, not just in default-config.yaml.
+Decision 2: do a) and I already said b) must be folded in the normal integration test
+Decision 3: leave as UAT
+
+So yes, implement all the fixes/features we discussed, extend the integration tests and run them (CI). UAT only when the integration tests pass.
