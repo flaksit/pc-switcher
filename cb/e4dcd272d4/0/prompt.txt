@@ -1,0 +1,2 @@
+Functionally ok, but terminal 2 not nice: [Image #10]
+No need for repeated error message. But very low prio.
