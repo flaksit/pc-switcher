@@ -1,0 +1,2 @@
+"add the Home Sync phase": what do you mean?
+And don't we need to define a milestone before we can add a phase?
