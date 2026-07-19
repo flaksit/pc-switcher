@@ -1,0 +1,2 @@
+I merged. Fetch main, switch to main, delete current feature branch.
+Make release
