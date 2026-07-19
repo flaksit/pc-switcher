@@ -1,0 +1,34 @@
+<task-notification>
+<task-id>a619dbe7456b59770</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a619dbe7456b59770.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01-12 of phase 01" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 01-12
+**Tasks:** 3/3
+**SUMMARY:** /home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-12-SUMMARY.md
+
+&lt;worktree_metadata&gt;
+{"agent_id":"01-12","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- 8b45531: feat(01-12): add last_peer support and (role, peer) readers to sync_history
+- 2ad8228: refactor(01-12): remove btrfs per-target generation store from sync_history
+- 590962c: test(01-12): rework sync_history tests for {last_role, last_peer} schema
+- be4a443: docs(01-12): complete sync-history topology simplification plan
+
+**Duration:** 8 minutes
+
+The `sync_history` module is now the clean {last_role, last_peer} store the topology check (plan 01-13) needs:
+
+- `record_role(role, peer=None)` and `get_record_role_command(role, peer=None)` — back-compatible signatures that persist `last_peer` when provided. Peer value is injected into the remote script via `repr()` so it cannot escape the shell `-c` argument.
+- `parse_sync_state(content)` — pure parser for arbitrary JSON (e.g. fetched remotely over SSH); returns `(role, peer)` or `(None, None)` and never raises, satisfying the untrusted-input threat (T-01-12-01).
+- `get_last_sync_state()` — reads the local history file and delegates to `parse_sync_state`.
+- `UNKNOWN_GENERATION`, `get_target_generation`, and `set_target_generation` are fully removed — no generation symbols remain anywhere in the module.
+- 40 unit tests, all green.</result>
+<usage><subagent_tokens>84190</subagent_tokens><tool_uses>53</tool_uses><duration_ms>473597</duration_ms></usage>
+</task-notification>
