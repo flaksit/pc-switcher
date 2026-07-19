@@ -1,0 +1,1 @@
+Exclude mechanism not flexible enough: we only leave out a few folders from ~/.cache. But ideally, the rule is "exclude ~/.cache but include a few select subfolders". That can't be expressed now. Create gh issue for that
