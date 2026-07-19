@@ -1,0 +1,124 @@
+<task-notification>
+<task-id>acf9588d578c920c6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/acf9588d578c920c6.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify Phase 01 gap-closure plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All data is in. Here is the verdict.
+
+---
+
+## VERIFICATION PASSED
+
+**Phase:** 01 — Home-Sync MVP (User Data Sync)
+**Plans verified:** 01-10, 01-11, 01-12, 01-13, 01-14
+**Status:** All checks passed
+
+### Dimension 1: Requirement Coverage
+
+| Requirement | Plans | Status |
+|---|---|---|
+| REQ-sync-scope-user-data | 01-11, 01-14 | Covered |
+| REQ-machine-specific-exclusions | 01-11 | Covered |
+| REQ-sync-scope-file-metadata | 01-11, 01-14 | Covered |
+| REQ-manual-sync-workflow | 01-10, 01-12, 01-13 | Covered |
+| REQ-terminal-ux | 01-13, 01-14 | Covered |
+
+All five phase requirement IDs appear in at least one plan's `requirements` field.
+
+### Dimension 2: Task Completeness
+
+All 15 tasks across 5 plans carry `&lt;read_first&gt;`, `&lt;action&gt;`, `&lt;verify&gt;` with `&lt;automated&gt;`, `&lt;acceptance_criteria&gt;`, and `&lt;done&gt;`. Actions are concrete: they name specific line ranges, method signatures, symbols to delete, and tooling steps (`uv run ruff`, `uv run basedpyright`, `uv run codespell`). No vague "implement X" tasks.
+
+### Dimension 3: Dependency Correctness
+
+| Plan | Wave | Depends On | Valid? |
+|---|---|---|---|
+| 01-10 | 1 | [] | Yes |
+| 01-11 | 1 | [] | Yes |
+| 01-12 | 2 | [01-11] | Yes |
+| 01-13 | 3 | [01-11, 01-12] | Yes |
+| 01-14 | 4 | [01-11, 01-13] | Yes |
+
+Wave numbers are consistent with the dependency chain. No cycles. All referenced plans exist. 01-10 and 01-11 run in parallel (both wave 1, independent work — docs vs code).
+
+### Dimension 4: Key Links Planned
+
+All critical wiring is explicit:
+
+- 01-12 `key_links`: `record_role / get_record_role_command` persist `last_peer` → `parse_sync_state` reads it for the orchestrator check (plan 01-13).
+- 01-13 `key_links`: `cli.sync --allow-out-of-order` → `Orchestrator(allow_out_of_order=...)` → `_check_out_of_order()` → `sync_history.get_last_sync_state()` + SSH `cat` → `parse_sync_state()`. And `_update_sync_history()` → `record_role(SOURCE, peer=target)` + `get_record_role_command(TARGET, peer=source)`.
+- 01-14 `key_links`: `_stream_rsync` FULL log `*deleting` → logger file handler (DEBUG ≤ FULL) → persisted JSON-lines log.
+
+### Dimension 5: Scope Sanity
+
+All plans are 3 tasks each. File counts range from 2 (01-12) to 5 (01-13). Well within thresholds.
+
+### Dimension 6: Verification Derivation (must_haves)
+
+Truths are user/operator observable throughout: "FolderSyncJob still transfers every active folder via rsync -aAXHS..."; "The CLI exposes a single --allow-out-of-order flag"; "rsync deletions are persisted to the JSON-lines log at FULL level for BOTH dry-run and real runs, proven by a test that reads the written log file." Not implementation detail language. Artifacts map directly to truths. Prohibitions are enumerated precisely.
+
+### Dimension 7: Context Compliance
+
+D-06/D-07/D-08 supersession is the stated intent. Plan 01-10 preserves the original text and adds a supersession marker — consistent with the user-approved pivot. No deferred ideas are implemented. The `--allow-out-of-order` consolidation replacing two old flags matches the new design summary exactly.
+
+### Dimension 7b: Scope Reduction Detection
+
+No "v1", "static for now", "placeholder", or "future enhancement" language appears in any task action. The topology check truth table is fully specified (clean case, consecutive-push W3, machine-C W2, no-history W1, dry-run skip, non-interactive abort). The last_peer schema change is fully wired from schema through readers through orchestrator through remote command construction. No scope reduction detected.
+
+### Dimension 8: Nyquist Compliance
+
+Every task in all five plans contains an `&lt;automated&gt;` verify command. No watch-mode flags. No full E2E suite in unit task verify blocks (unit test files are targeted directly, e.g. `uv run pytest tests/unit/jobs/test_folder_sync.py`). Dimension 8: PASS.
+
+### Dimension 9: Cross-Plan Data Contracts
+
+01-12 adds `last_peer` to `sync_history`; 01-13 consumes it via `get_last_sync_state()` and `parse_sync_state()`. These are the same functions introduced in 01-12. 01-13 depends on 01-12, so execution order guarantees the functions exist before they are called. No conflicting transformations on shared data entities.
+
+### Dimension 10: CLAUDE.md Compliance
+
+All verify blocks use `uv run` (never bare `python3`/`pytest`). Plan 01-12 Task 1 uses `str | None` modern union syntax. Ruff format/check and codespell are invoked in task actions. Basedpyright is run per-file in automated verify commands. No system Python references. Plans do not introduce bold-as-heading or `---` separators in documentation tasks (prohibited by CLAUDE.md and enforced explicitly in 01-10 Task 3's acceptance criteria). The "no tombstone comments" rule is cited in 01-11 and 01-12 actions. PASS.
+
+### Dimension 11: Research Resolution
+
+SKIPPED — no RESEARCH.md for this gap-closure phase.
+
+### Dimension 12: Pattern Compliance
+
+SKIPPED — no PATTERNS.md for this phase.
+
+### Dimension 7c: Architectural Tier Compliance
+
+All code changes remain in the Python application tier (orchestrator, jobs, sync_history, CLI). The SSH cat of the target's sync-history is read-only and parsed defensively. The peer hostname injection into the remote record command is flagged for defensive construction in 01-12's threat model (T-01-12-02) and the action text. No tier mismatches. PASS.
+
+### New Design Completeness (goal-backward verification)
+
+| New design element | Covered in | Evidence |
+|---|---|---|
+| Remove DivergenceStatus / _target_diverged_since / _check_divergence / find-new | 01-11 T1 | Prohibition list + basedpyright + grep verify |
+| Remove generation store (get/set_target_generation, UNKNOWN_GENERATION) | 01-11 T1, 01-12 T2 | Prohibitions in must_haves of both plans |
+| Remove --allow-divergence / --allow-consecutive / allow_divergence from CLI + context + orchestrator | 01-13 T1+T2 | Prohibition + grep verify in acceptance criteria |
+| Add last_peer to sync_history schema + readers | 01-12 T1 | parse_sync_state + get_last_sync_state in __all__ |
+| New _check_out_of_order step (post-lock, pre-discovery) | 01-13 T2 | Full truth table, warn+confirm, non-interactive abort, dry-run skip, #159 back-and-forth silence |
+| --allow-out-of-order CLI flag | 01-13 T1 | Typer option + Orchestrator wiring |
+| Record last_peer on both machines on success | 01-13 T2 | _update_sync_history action |
+| Dry-run FULL-log deletion persistence test | 01-14 T2 | Real log file written + JSON record asserted |
+| ADR-015 | 01-10 T1 | Accepted ADR, find-new rejection, ADR-001 structure |
+| ADR index + CONTEXT.md supersession | 01-10 T2+T3 | Automated grep verify |
+| README corrected | 01-14 T1 | Automated grep for allow-out-of-order + absence of old terms |
+| Integration test reworked | 01-14 T3 | --collect-only offline verify + grep prohibitions |
+| Mirror mechanics unchanged (rsync -aAXHS, no --delete-excluded) | 01-11 must_haves.truths[0] + threat model | TestBuildRsyncCmd kept; exclusion invariant stated |
+
+### Plan Summary
+
+| Plan | Wave | Tasks | Files | Status |
+|---|---|---|---|---|
+| 01-10 | 1 | 3 | 3 | Valid |
+| 01-11 | 1 | 3 | 4 | Valid |
+| 01-12 | 2 | 3 | 2 | Valid |
+| 01-13 | 3 | 3 | 5 | Valid |
+| 01-14 | 4 | 3 | 3 | Valid |
+
+Plans verified. Run `/gsd-execute-phase 01` (from plan 10 onward) to proceed.</result>
+<usage><subagent_tokens>56175</subagent_tokens><tool_uses>10</tool_uses><duration_ms>118604</duration_ms></usage>
+</task-notification>
