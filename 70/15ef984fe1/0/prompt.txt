@@ -1,0 +1,54 @@
+<task-notification>
+<task-id>a50c6fe10c3a4fbc4</task-id>
+<tool-use-id>toolu_0148JhXE6hqztP2EhPUsgkkj</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a50c6fe10c3a4fbc4.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 1 home-sync" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The ROADMAP Phase 1 section landed correctly. The hard-wrap hook flagged only pre-existing `**Label**:` lines (the project's established ROADMAP style across every phase block) — my inserted plan list uses proper `- [ ]` list items. I won't reformat the user's existing ROADMAP convention (pervasive, unrelated change).
+
+I'm not running the git commit: we're on the default branch (`main`) and the git policy is to commit only when asked / branch first. I'll surface the ready-to-run command for the orchestrator/user instead.
+
+Final self-checks pass: all 6 plans validate, all 5 requirement IDs are distributed across plans, all decisions D-01..D-19 are cited, every plan has `&lt;read_first&gt;` + `&lt;acceptance_criteria&gt;` + `&lt;threat_model&gt;` + an "Artifacts this phase produces" section, and same-wave plans are file-disjoint.
+
+## PLANNING COMPLETE
+
+**Phase:** 01 — Home-Sync MVP (User Data Sync)
+**Plans created:** 6 (each 2 tasks), across 4 waves. All frontmatter + structure validated.
+
+**One line per plan:**
+- **01-01** (Wave 1) — ADR-013 (rsync-over-SSH transport, root via sudo: D-04/D-05) + ADR-014 (unified dry-run contract: D-12); closes the STATE.md "transport not yet in an ADR" blocker.
+- **01-02** (Wave 1) — `folder_sync` config schema (sync_jobs flag + top-level object, fixes the `additionalProperties:false` guard) + default `/home`+`/root` entries with D-11 default exclusions.
+- **01-03** (Wave 1) — divergence-marker store (`target_generations` in sync_history, D-08) with merge-preserving `record_role`/remote-record (prevents Pitfall-4 marker erasure), `--allow-divergence` plumbing, and dry-run history skip (D-12).
+- **01-04** (Wave 2, ← 01-03) — `FolderSyncJob` skeleton, `validate()` preflight (sudo rsync + acl both ends, source-folder existence), and the **target-divergence guard** (D-06/D-07/D-08/D-18) — the reliability linchpin, using `btrfs find-new` so it's robust to snapshot generation bumps and `/root`-on-`@`.
+- **01-05** (Wave 3, ← 01-04) — `execute()`: rsync command (`-aAXHS --numeric-ids --delete`, never `--delete-excluded`/`--checksum`), async progress streaming (D-15/D-16), true dry-run preview, post-sync marker recording; carries the full STRIDE security model.
+- **01-06** (Wave 4, ← 01-02, 01-05) — VM-isolated A→B / mutate-on-B / B→A round-trip integration test asserting criteria 1-4 + divergence-block + dry-run (success criterion 5).
+
+**Wave structure (max parallelism):**
+- Wave 1: 01-01, 01-02, 01-03 run in parallel (docs / YAML / Python — file-disjoint).
+- Wave 2: 01-04 · Wave 3: 01-05 (same file `folder_sync.py`, sequential) · Wave 4: 01-06.
+
+**Multi-source coverage audit — all COVERED, no unplanned items, no phase split needed:**
+- **GOAL** (single-command rsync-over-SSH replication of `/home`+`/root`, exclusions, metadata, bidirectional proof) → 02/04/05/06.
+- **REQ** (5 IDs): `sync-scope-user-data` (01,02,04,05,06), `machine-specific-exclusions` (02,05,06), `sync-scope-file-metadata` (05,06), `manual-sync-workflow` (01,03,04,05,06), `terminal-ux` (05,06).
+- **RESEARCH** (flag baseline, divergence mechanism, progress streaming, Pitfall-6 schema guard, acl check, sudoers, no-new-packages) → 02/03/04/05.
+- **CONTEXT** D-01..D-19: all cited. Deferred items (D-09 per-file detection; D-17/D-19 automated precondition enforcement; reflink; `/etc`) correctly excluded and noted as scope boundaries in 01-04's objective.
+
+**Notable design decisions surfaced for executors:**
+- Divergence override modeled as `--allow-divergence` (frozen-context + batch-`validate()` architecture, mirroring `--allow-consecutive`) rather than an in-job prompt; diverged + dry-run/override → WARNING audit log, not abort.
+- `record_role` and the remote role-record were overwriting the history file and would erase divergence markers — made merge-preserving in 01-03 (required for the round-trip test to detect real divergence without false positives).
+- D-12 had a real orchestrator gap (`_update_sync_history` ran unconditionally) — gated on `not dry_run` in 01-03.
+- Integration test mirrors a **dedicated test directory** (not real `/home`/`/root`) so `--delete` can't harm VM data, while still exercising the generic any-path mechanism.
+
+**Traceability note:** the `/root`-into-Phase-1 move flagged in my context was already applied by recent commits (REQUIREMENTS.md and ROADMAP Phase 1/Phase 3 are already consistent) — no redundant edits made.
+
+**Not committed** (on `main`; per git policy, commit only when asked / branch first). Ready-to-run:
+```
+node ~/.claude/gsd-core/bin/gsd-tools.cjs query commit "docs(01): create phase plan" --files .planning/phases/01-home-sync-mvp-user-data-sync/01-*-PLAN.md .planning/ROADMAP.md
+```
+
+Plan files written to `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-0{1..6}-PLAN.md`; `/home/janfr/dev/pc-switcher/.planning/ROADMAP.md` Phase 1 finalized (6 plans, `0/6`).
+
+One pre-existing item to flag (not introduced by this work): ROADMAP.md uses stacked `**Goal**:`/`**Depends on**:`/`**Requirements**:` label lines that trip your markdown hard-wrap hook on every phase block. I left them as-is rather than reformat the whole file's existing convention — let me know if you want that cleaned up separately.</result>
+<usage><subagent_tokens>283272</subagent_tokens><tool_uses>55</tool_uses><duration_ms>1417536</duration_ms></usage>
+</task-notification>
