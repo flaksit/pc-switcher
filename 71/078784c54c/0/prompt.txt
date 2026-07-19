@@ -1,0 +1,3 @@
+Yes on both.
+
+Fix wording in @.planning/ROADMAP.md to follow the strict GSD definition of terms. Current situation is confusing.
