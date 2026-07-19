@@ -440,6 +440,15 @@ The infrastructure scripts use proper SSH host key verification. For each host, 
 | `configure-vm.sh` | `ssh_run` only | Key established by create-vm.sh |
 | `configure-hosts.sh` | `ssh_run` only | Key established |
 | `reset-vm.sh` | `ssh_accept_new` | First from test runner |
+| `run-integration-tests.sh` | `ssh_verified` (strict) | Readiness check; VMs already provisioned |
+
+The provisioning scripts above may legitimately encounter new or changed host keys (fresh VMs, reprovisioning), so they use `accept-new`. By the time `run-integration-tests.sh` runs its VM-readiness check, the VMs are already provisioned and their keys should already be trusted — so `check_vm_ready` uses `ssh_verified`, which **never** auto-accepts a new key. Its host-key policy depends on the execution context (`ssh_exec_context` in `common.sh`):
+
+| Context | Detection | Host-key policy |
+|---------|-----------|-----------------|
+| CI | `CI_JOB_ID` / `GITHUB_RUN_ID` set | `StrictHostKeyChecking=yes` + `BatchMode=yes`. known_hosts is pre-populated by the workflow (`ssh-keyscan`); a new or changed key is a hard failure. |
+| Non-interactive agent | `CLAUDECODE=1` | Same strict + batch policy. No TTY to prompt on, so an unknown key fails fast with an explicit, actionable error. |
+| Interactive developer | neither of the above | Default ssh (`StrictHostKeyChecking=ask`); prompts to accept an unknown key. |
 
 ## Session-Scoped Fixtures
 

@@ -172,6 +172,49 @@ ssh_accept_new() {
     ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$@"
 }
 
+# Report the execution context, controlling how strictly host keys are checked.
+# Detection mirrors the lock-holder logic in _generate_lock_holder.
+#
+# Echoes one of:
+#   ci          - CI job (CI_JOB_ID or GITHUB_RUN_ID set); known_hosts is
+#                 pre-populated by the workflow.
+#   claude      - non-interactive agent run (CLAUDECODE=1); no TTY to prompt on.
+#   interactive - a developer at a terminal.
+ssh_exec_context() {
+    if [[ -n "${CI_JOB_ID:-${GITHUB_RUN_ID:-}}" ]]; then
+        echo "ci"
+    elif [[ "${CLAUDECODE:-}" == "1" ]]; then
+        echo "claude"
+    else
+        echo "interactive"
+    fi
+}
+
+# Strict, context-aware SSH that never auto-accepts a new or changed host key.
+# Use for connections to already-provisioned hosts whose keys should already be
+# trusted (unlike ssh_first/ssh_accept_new, which are for provisioning).
+#
+# Host-key policy by execution context (see ssh_exec_context):
+#   ci, claude  - StrictHostKeyChecking=yes + BatchMode=yes. An unknown or
+#                 changed key is a hard failure (exit 255): CI pre-populates
+#                 known_hosts, and claude has no TTY to prompt on.
+#   interactive - default ssh (StrictHostKeyChecking=ask); prompts the developer
+#                 to accept an unknown key. stderr is left attached so the
+#                 prompt is visible — do NOT redirect it away at the call site.
+#
+# Usage: ssh_verified <user@host> [ssh args...]
+# Example: ssh_verified testuser@192.168.1.100 "echo hello"
+ssh_verified() {
+    case "$(ssh_exec_context)" in
+        ci | claude)
+            ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=yes -o BatchMode=yes "$@"
+            ;;
+        *)
+            ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=ask "$@"
+            ;;
+    esac
+}
+
 # Subsequent connections: normal SSH (verifies stored key)
 # Use after key has been established by wait_for_ssh, ssh_first, or ssh_accept_new.
 # Fails if host key is not in known_hosts or doesn't match.
