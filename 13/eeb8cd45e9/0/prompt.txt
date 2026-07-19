@@ -1,0 +1,9 @@
+Unsetting is not a solution. Will happen again.
+
+But in GitHub, I see the following token. Transitional issue?
+
+r/o public access for pc-switcher
+Created on Sun, Dec 14 2025
+This token has no expiration date
+
+pc-switcher should warn on invalid token and fallback to not using it if invalid.
