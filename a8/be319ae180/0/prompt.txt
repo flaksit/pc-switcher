@@ -1,0 +1,36 @@
+<task-notification>
+<task-id>ace8f5c20bd6b5b4b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/ace8f5c20bd6b5b4b.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01-11 of phase 01" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All done. Here is the completion report:
+
+## PLAN COMPLETE
+
+**Plan:** 01-11
+**Tasks:** 3/3
+**SUMMARY:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-11-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"01-11","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `a02db77`: refactor(01-11): remove btrfs divergence guard from FolderSyncJob
+- `a1536a6`: fix(01-11): use removeprefix instead of lstrip for config path derivation (WR-01)
+- `d0678a8`: test(01-11): prune divergence-related tests from folder_sync and contract suites
+- `12b9b57`: docs(01-11): complete divergence-guard removal plan (CR-01/CR-02 + WR-01)
+
+**Duration:** ~10 min
+
+**What was done:**
+
+**Task 1** — Removed all btrfs content-divergence machinery from `folder_sync.py`: the `DivergenceStatus` enum, `_resolve_subvolume`, `_get_subvolume_generation`, `_target_diverged_since`, `_check_divergence` methods, the pre-transfer re-check in `execute()`, and the post-sync baseline capture loop. Removed now-unused `enum.Enum`, `config_sync`, and `sync_history` imports. Updated docstrings to describe `validate()` as a prerequisites-only check and reference ADR-015 as the safety model.
+
+**Task 2** — Fixed the WR-01 bug in `config_sync.py`: `CONFIG_REMOTE_PATH.lstrip("~/")` strips any leading run of `~` and `/` characters, silently mangling paths like `~/.config/...`. Replaced with `CONFIG_REMOTE_PATH.removeprefix("~/")` which strips only the exact two-character prefix.
+
+**Task 3** — Pruned all divergence-related tests: removed `TestDivergenceGuard` (14 tests), `TestExecuteDivergenceRecheck` (4 tests), four generation-baseline tests from `TestExecuteNormalMode`, and `test_dry_run_does_not_call_set_target_generation`. Removed `sync_history` patches from remaining execute tests. Fixed `test_folder_sync_validate_returns_list` in the contract suite to call `validate()` directly without patching the removed generation function. All 59 remaining tests pass.</result>
+<usage><subagent_tokens>114871</subagent_tokens><tool_uses>52</tool_uses><duration_ms>671008</duration_ms></usage>
+</task-notification>
