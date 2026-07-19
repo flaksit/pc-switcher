@@ -1,0 +1,9 @@
+We don't want "e", just like we always commit .gitignore files to git repo.
+
+One dir-merge rule and it includes ALL .pcswitcher-filter files anywhere in the tree? Or need a dir-merge rule for each individual .pcswitcher-filter file?
+
+Of course we could do per-dir .pcswitcher-ignore as well, but more work.
+
+But I agree, this is about file sync, not git repo. So more natural to stick with rsync.
+Add to issue.
+Add as well that we need explanation for those "coming from git"
