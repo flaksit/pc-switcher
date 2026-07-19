@@ -1,0 +1,2 @@
+The block "workbench.editorAssociations" part in @.vscode/settings.json appears in every project I open in vscode. Why?
+Will moving that block to the user settings.json avoid this from happening?
