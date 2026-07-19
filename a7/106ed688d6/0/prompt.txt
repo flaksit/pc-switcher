@@ -1,0 +1,2 @@
+Got again a warning that GITHUB_TOKEN was rejected.
+I understand: VM's were provisioned by CI, with the github_token of ci. It is normal that the CI-token has a limited lifetime. I should provision the VMs from my laptop with a long-term github token. Or add such token to the github action secrets and let CI use that token on for provisioning. Create gh issue for that.
