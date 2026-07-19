@@ -1,0 +1,1 @@
+What's next following the GSD flow? Validation by me? Can you guide me to do that on the VMs? I don't want to do it on my own laptops yet.
