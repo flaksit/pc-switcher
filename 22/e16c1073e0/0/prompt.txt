@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>brpj4pfnm</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/brpj4pfnm.output</output-file>
+<status>completed</status>
+<summary>Background command "Background-poll integration tests to terminal state" completed (exit code 0)</summary>
+</task-notification>
