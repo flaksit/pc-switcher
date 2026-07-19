@@ -1,0 +1,1 @@
+the correct message is: don't push a release if CI didn't confirm that the code is healthy
