@@ -1,0 +1,1 @@
+ALWAYS run integration tests before you come back to me. You are agent. Push, let CI run. That is just standard, normal dev practice. Why are you always waiting for me telling you?
