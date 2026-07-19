@@ -1,0 +1,9 @@
+create a "production" config.yaml for this machine. A single folder to sync: /home/janfr.
+Check /home/janfr for anything that should not be synced because
+- not useful at all (some caches?)
+- machine-specific
+- secrets that should stay machine-specific (like ssh keys)
+- stuff that wouldn't work anyhow on another pc. E.g. cache/config/profiles that are machine-dependent (e.g. with machine-specific hash) and that won't work anyway when we just copy them to 
+- other reasons?
+
+Put them in the config.yaml with clear comments why they are there
