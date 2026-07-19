@@ -1,0 +1,5 @@
+test yourself if still valid.
+
+You should know that it is impossible to view an existing token from github. Doesn't ever show it again after creation.
+
+If need new, there is a mechanism that puts the token where the VMs and the integration tests need them. That is what I asked you. Not generic blahblah of "no plaintext dot file". Concrete info for this project!
