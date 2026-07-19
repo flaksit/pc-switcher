@@ -1,0 +1,10 @@
+WARNINGs during pc-switcher sync appear swiftly in the "Recent logs" block, but then that block gets overwritten by other blocks like the "Config Sync" and "Source Configuration", or is just pushed away by newer log lines. Use hasn't the time to read the warning well.
+Need better way to ensure that user at least gets to see all warnings. I won't go and look at the log file on every run. I need at least some indicator that there are warnings and a way to view them.
+
+Proposal: capture-and-resurface, two parts:
+  1. Live counter: a persistent ⚠ N in the status bar (part of the render, not the rolling log, so pauses/scrolls don't lose it).
+  2. End-of-run summary: buffer every ≥WARNING record during the run; after the Live stops, print a static block — ⚠ N warnings this run: then each message — into
+  scrollback (can't be overwritten), ending with a pc-switcher logs pointer for detail. Show it on success too, not just failure.
+
+  Mechanism: a small logging handler that tees ≥WARNING records into a buffer the UI owns. The end-summary is the load-bearing part (guarantees you see them); the counter
+  is the live cue.
