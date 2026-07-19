@@ -1,0 +1,3 @@
+Indeed, and the message should not show /home and /root either. This is FolderSync-config specific as well.
+
+[Image #4]
