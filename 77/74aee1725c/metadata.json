@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "7774aee1725c",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "docs/README.md",
+    "docs/reading-sync-logs.md",
+    "src/pcswitcher/jobs/folder_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/77/74aee1725c/0/metadata.json",
+      "transcript": "/77/74aee1725c/0/full.jsonl",
+      "compact_transcript": "/77/74aee1725c/0/transcript.jsonl",
+      "content_hash": "/77/74aee1725c/0/content_hash.txt",
+      "prompt": "/77/74aee1725c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 78004,
+    "cache_read_tokens": 1706264,
+    "output_tokens": 18758,
+    "api_call_count": 31
+  }
+}

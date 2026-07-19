@@ -1,0 +1,21 @@
+folder sync logs each file on FULL level. What is the meaning of the "cd+++++++++", "<f+++++++++" parts in the output?
+
+---
+
+document this for the user
+
+---
+
+document this for the user (and link to the original doc of rsync for reference)
+
+---
+
+read the code to know. document give exact, specific info
+
+---
+
+reading sync logs is user doc, not only for ops
+
+---
+
+user doc, so not code internals for devs, please
