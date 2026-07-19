@@ -1,0 +1,21 @@
+Q1: indeed, need to do this.
+
+Q2: You're talking all the time about "step-6's generation guard". It is not. It is FolderSyncJob.validate(). That is not the same. The idea of step 2 was to have one single check that always runs, whatever Jobs are enabled. So this generic check does not belong in FolderSync, it belongs in the orchestrator (or whoever it is that coordinates the steps 1-13) in a new step between step 5 and 6, entirely replacing worthless step 2.
+So take option 2b.
+
+Q3: indeed, not needed.
+
+2a is not lean, it is wrong architecture that will make for wrong next steps.
+
+Should we do conversion of "step 2 consecutive-sync check" to "insert new step 5 did-target-change check" (because renumbering of 3>2, 4>3, 5>4, so the new position for this check is 5) here or in a separate session and come back here later?
+
+Anyway, I think #159 is not simply "btrfs find-new". Which btrfs subvolumes should we check? /home is in "@home", but /root doesn't have its own subvol (it is on "@") and we want to just check the entire system. And don't we have the risk that subvolumes get changed even just by shutdown and startup and login into a system? So risk that btrfs find-new will always find new stuff (probably not important stuff, but stuff anyway).
+One example of stuff that can even be quite big: auto security updates of packages.
+That becomes complicated and difficult to foresee what are allowed changes and what is really "user did work on the target, so it is not clean".
+
+Should we maybe drop this altogether and trust the user?
+Then we could still have a few very limited guards to ask user confirmation:
+- The current step 2 as warning+confirmation
+- The same check, but done based on the sync history file that is in the target system (in case it is different from the one in source system, which could happen when a third system C is in the game): check that target was not a target last time. For this, we need ssh to target, so I would put both these checks in a single step, again between "acquire target lock" and "discover & validate jobs"
+
+What do you think?
