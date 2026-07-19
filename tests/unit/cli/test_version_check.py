@@ -20,6 +20,7 @@ from collections.abc import Callable, Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
+import typer
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -190,7 +191,12 @@ class TestMaybeCheckForUpdateSkipConditions:
 
 
 class TestMaybeCheckForUpdateFailureFallbacks:
-    """check raises; upgrade fails; execvp OSError - all warn and continue, never fatal."""
+    """Failure handling, scoped to the disk-mutation boundary.
+
+    Before `uv` touches the install (check error, `uv` not launchable) → warn +
+    continue. Once `uv` has run (upgrade failed, or succeeded but re-exec failed)
+    → exit rather than keep running a now-stale process (#176).
+    """
 
     def test_check_raises_warns_and_continues(self) -> None:
         """A RuntimeError from get_highest_release (offline/rate-limit/API) is swallowed."""
@@ -208,25 +214,13 @@ class TestMaybeCheckForUpdateFailureFallbacks:
         mock_execvp.assert_not_called()
         assert "warning" in console.file.getvalue().lower()  # pyright: ignore[reportAttributeAccessIssue]
 
-    def test_upgrade_fails_warns_and_continues(self) -> None:
-        """Accepting the prompt but the install failing warns and returns (no SystemExit)."""
-        console = _capture_console()
-        failed_install = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="install exploded")
-        with (
-            patch("pcswitcher.cli.is_interactive", return_value=True),
-            patch("pcswitcher.cli.get_this_version", return_value=CURRENT_VERSION),
-            patch("pcswitcher.cli.get_highest_release", return_value=HIGHER_RELEASE),
-            patch("pcswitcher.cli.Prompt.ask", return_value="y"),
-            patch("pcswitcher.cli.subprocess.run", return_value=failed_install),
-            patch("pcswitcher.cli.os.execvp") as mock_execvp,
-        ):
-            cli._maybe_check_for_update(console, no_version_check=False)  # pyright: ignore[reportPrivateUsage]
+    def test_uv_not_launchable_warns_and_continues(self) -> None:
+        """`uv` missing from PATH raises before any disk write, so the command still runs (#176).
 
-        mock_execvp.assert_not_called()
-        assert "warning" in console.file.getvalue().lower()  # pyright: ignore[reportAttributeAccessIssue]
-
-    def test_upgrade_oserror_warns_and_continues(self) -> None:
-        """`uv` missing from PATH makes subprocess.run raise OSError; must not crash startup (CR-01, #176)."""
+        subprocess.run raising FileNotFoundError means `uv` never executed - the
+        on-disk install is untouched, so the current process is not stale and we
+        warn + continue rather than exit.
+        """
         console = _capture_console()
         with (
             patch("pcswitcher.cli.is_interactive", return_value=True),
@@ -236,14 +230,34 @@ class TestMaybeCheckForUpdateFailureFallbacks:
             patch("pcswitcher.cli.subprocess.run", side_effect=FileNotFoundError("uv not found")),
             patch("pcswitcher.cli.os.execvp") as mock_execvp,
         ):
-            # Must return normally (never propagate) so the invoking command still runs.
+            # Must return normally (no typer.Exit) so the invoking command still runs.
             cli._maybe_check_for_update(console, no_version_check=False)  # pyright: ignore[reportPrivateUsage]
 
         mock_execvp.assert_not_called()
         assert "warning" in console.file.getvalue().lower()  # pyright: ignore[reportAttributeAccessIssue]
 
-    def test_reexec_oserror_warns_and_continues(self) -> None:
-        """A successful install followed by execvp raising OSError is swallowed, not propagated."""
+    def test_upgrade_fails_after_install_exits_with_recovery_hint(self) -> None:
+        """A non-zero `uv` install already touched disk: exit (not continue) with a recovery hint (#176)."""
+        console = _capture_console()
+        failed_install = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="install exploded")
+        with (
+            patch("pcswitcher.cli.is_interactive", return_value=True),
+            patch("pcswitcher.cli.get_this_version", return_value=CURRENT_VERSION),
+            patch("pcswitcher.cli.get_highest_release", return_value=HIGHER_RELEASE),
+            patch("pcswitcher.cli.Prompt.ask", return_value="y"),
+            patch("pcswitcher.cli.subprocess.run", return_value=failed_install),
+            patch("pcswitcher.cli.os.execvp") as mock_execvp,
+            pytest.raises(typer.Exit) as exc_info,
+        ):
+            cli._maybe_check_for_update(console, no_version_check=False)  # pyright: ignore[reportPrivateUsage]
+
+        assert exc_info.value.exit_code == 1
+        mock_execvp.assert_not_called()
+        output = console.file.getvalue()  # pyright: ignore[reportAttributeAccessIssue]
+        assert "self update" in output  # recovery hint present
+
+    def test_reexec_oserror_exits_asking_rerun(self) -> None:
+        """A verified install then an execvp OSError must exit, asking to re-run, not continue stale (#176)."""
         console = _capture_console()
         with (
             patch("pcswitcher.cli.is_interactive", return_value=True),
@@ -252,11 +266,13 @@ class TestMaybeCheckForUpdateFailureFallbacks:
             patch("pcswitcher.cli.Prompt.ask", return_value="y"),
             patch("pcswitcher.cli.subprocess.run", side_effect=_subprocess_side_effect("pc-switcher 1.1.0")),
             patch("pcswitcher.cli.os.execvp", side_effect=OSError("no such file")) as mock_execvp,
+            pytest.raises(typer.Exit) as exc_info,
         ):
             cli._maybe_check_for_update(console, no_version_check=False)  # pyright: ignore[reportPrivateUsage]
 
+        assert exc_info.value.exit_code == 1
         mock_execvp.assert_called_once()
-        assert "warning" in console.file.getvalue().lower()  # pyright: ignore[reportAttributeAccessIssue]
+        assert "re-run" in console.file.getvalue().lower()  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class TestMainCallbackWiring:

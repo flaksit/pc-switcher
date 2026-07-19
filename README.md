@@ -137,6 +137,8 @@ pc-switcher --no-version-check <command>
 
 On every command (except `self`), in an interactive terminal, pc-switcher checks GitHub for a newer stable release and offers to upgrade and restart in place. It never runs for non-interactive/scripted invocations (stdin or stdout not a TTY), and can be disabled with `--no-version-check` or by setting `PCSWITCHER_SKIP_VERSION_CHECK`.
 
+The check never blocks your command *before* it touches the installation: if the check fails (offline, rate-limited), you decline, or `uv` cannot be launched, pc-switcher just warns and continues. Once you accept and the upgrade actually runs, it does not keep running the old process (which would be stale against the freshly installed files): on success it restarts into the new version, and if the upgrade fails or the restart cannot happen it stops and tells you how to recover (`pc-switcher self update`) or to re-run your command.
+
 ## Requirements
 
 - Ubuntu 24.04 LTS on all machines

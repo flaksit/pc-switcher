@@ -522,7 +522,13 @@ GITHUB_REPO_URL = "https://github.com/flaksit/pc-switcher"
 
 
 class UpdateFailedError(Exception):
-    """Raised when installing/verifying a new pc-switcher release fails.
+    """Raised when a started install/verify of a new release fails.
+
+    IMPORTANT: this means `uv tool install` HAS run and may have modified the
+    on-disk installation, even though it did not end in a verified-good state.
+    A currently-running process is therefore potentially stale (a later lazy
+    import could load a mismatched new module), so callers must NOT keep
+    executing after this — exit and let the user recover.
 
     The optional `detail` carries install stderr so a call site can still
     render it as a second, dimmed line (matching the pre-refactor `self
@@ -533,6 +539,15 @@ class UpdateFailedError(Exception):
         """Store `message` as the exception text and `detail` for optional display."""
         super().__init__(message)
         self.detail = detail
+
+
+class UpgradeNotStartedError(Exception):
+    """Raised when the upgrade could not even be launched (e.g. `uv` not on PATH).
+
+    Distinct from `UpdateFailedError`: `uv tool install` never executed, so the
+    on-disk installation is UNCHANGED. The running process is not stale, so a
+    caller may safely warn and continue on the current version.
+    """
 
 
 def _run_uv_tool_install(release: Release) -> subprocess.CompletedProcess[str]:
@@ -588,14 +603,30 @@ def _install_and_verify(release: Release) -> Version:
         The verified installed Version.
 
     Raises:
-        UpdateFailedError: If install, verification, or the post-install
-            version check fails.
+        UpgradeNotStartedError: If `uv` could not be launched at all, so the
+            on-disk install is untouched (caller may safely continue).
+        UpdateFailedError: If `uv` ran but the install or the post-install
+            verification failed, so the on-disk install may have been modified
+            (caller must not keep running).
     """
-    result = _run_uv_tool_install(release)
+    # Anything before uv actually runs leaves the on-disk install untouched.
+    try:
+        result = _run_uv_tool_install(release)
+    except OSError as e:
+        # subprocess could not spawn `uv` (e.g. FileNotFoundError, not on PATH):
+        # nothing was written to disk.
+        raise UpgradeNotStartedError(str(e)) from e
+
+    # From here on, uv HAS run and may have altered the on-disk installation, so
+    # every failure below is an UpdateFailedError (disk-touched), never continuable.
     if result.returncode != 0:
         raise UpdateFailedError("Update failed", detail=(result.stderr.strip() or None))
 
-    installed = _verify_installed_version()
+    try:
+        installed = _verify_installed_version()
+    except OSError as e:
+        raise UpdateFailedError(f"Could not verify the update: {e}") from e
+
     if installed is None:
         raise UpdateFailedError("Verification failed - pc-switcher not working after update")
 
@@ -681,15 +712,15 @@ def update(
     console.print(f"Updating pc-switcher from {current_display} to {target_display}...")
     try:
         _install_and_verify(target_release)
+    except UpgradeNotStartedError as e:
+        # `uv` missing from PATH or otherwise unspawnable — surface a clean error
+        # instead of a raw traceback. Nothing was installed.
+        console.print(f"[bold red]Error:[/bold red] Could not run the upgrade: {e}")
+        sys.exit(1)
     except UpdateFailedError as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         if e.detail:
             console.print(f"[dim]{e.detail}[/dim]")
-        sys.exit(1)
-    except OSError as e:
-        # `uv` missing from PATH (FileNotFoundError) or otherwise unspawnable —
-        # surface a clean error instead of a raw traceback.
-        console.print(f"[bold red]Error:[/bold red] Could not run the upgrade: {e}")
         sys.exit(1)
 
     console.print(f"[green]Successfully updated to version {target_display}[/green]")
@@ -698,15 +729,27 @@ def update(
 def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None:
     """Best-effort startup check for a newer stable release; offer to upgrade inline.
 
-    Never fatal: any check failure, upgrade failure, or re-exec failure prints
-    a warning and returns so the invoking command proceeds unaffected. Skips
-    entirely for `--no-version-check`, `PCSWITCHER_SKIP_VERSION_CHECK`, a help
-    request (`--help`/`-h`), and non-interactive runs (either stdin or stdout
-    not a TTY).
+    Non-fatal ONLY up to the point the on-disk installation is modified. Once
+    `uv tool install` runs, the current process may be stale (a later lazy
+    import would load a mismatched new module), so we must not keep executing:
+    on a successful upgrade we re-exec the new binary, and on any failure after
+    the install started we exit and tell the user how to recover. Everything
+    before that boundary (check failure, offline, declined prompt, or `uv` not
+    even launchable) warns and lets the current command proceed.
+
+    Skips entirely for `--no-version-check`, `PCSWITCHER_SKIP_VERSION_CHECK`, a
+    help request (`--help`/`-h`), and non-interactive runs (either stdin or
+    stdout not a TTY).
 
     Args:
         console: Rich console to print status to.
         no_version_check: If True, skip the check (from `--no-version-check`).
+
+    Raises:
+        typer.Exit: After the install has touched disk and either failed
+            (recover via `self update`) or succeeded but the automatic restart
+            could not happen (re-run the command). Never raised before the
+            install is attempted.
     """
     # A help request would otherwise block on the upgrade prompt before the help
     # text renders; `pc-switcher <cmd> --help` should print help immediately.
@@ -738,18 +781,24 @@ def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None
 
     console.print(f"Updating pc-switcher to {latest.version.semver_str()}...")
     try:
-        _install_and_verify(latest)
+        installed = _install_and_verify(latest)
+    except UpgradeNotStartedError as e:
+        # `uv` never ran (e.g. not on PATH): the on-disk install is untouched, so
+        # the current process is not stale — warn and let the command proceed.
+        console.print(f"[yellow]Warning:[/yellow] Could not run the upgrade: {e}. Continuing on the current version.")
+        return
     except UpdateFailedError as e:
-        console.print(f"[yellow]Warning:[/yellow] {e}")
+        # uv already modified the on-disk install but it did not end verified-good.
+        # The running process may now be stale, so we must NOT continue: exit and
+        # point the user at a clean recovery.
+        console.print(f"[bold red]Error:[/bold red] Upgrade failed: {e}")
         if e.detail:
             console.print(f"[dim]{e.detail}[/dim]")
-        return
-    except OSError as e:
-        # subprocess.run raises OSError (e.g. FileNotFoundError when `uv` is not
-        # on PATH) before any exit code. Must stay non-fatal: warn and let the
-        # user's actual command proceed on the current version.
-        console.print(f"[yellow]Warning:[/yellow] Could not run the upgrade: {e}")
-        return
+        console.print(
+            "The installation may be in an inconsistent state. Run "
+            "[cyan]pc-switcher self update[/cyan] to restore a known-good version, then retry."
+        )
+        raise typer.Exit(1) from e
 
     console.print("[green]Updated.[/green] Restarting with the new version...")
     # Set right before exec so this run's own check never saw it - it's only
@@ -762,7 +811,15 @@ def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None
     try:
         os.execvp(sys.argv[0], sys.argv)
     except OSError as e:
-        console.print(f"[yellow]Warning:[/yellow] Could not restart automatically: {e}")
+        # Exec failed, so the process image was NOT replaced - but the new version
+        # is already installed and verified on disk, making the current in-memory
+        # process stale. Do not continue it (a later lazy import could load the new,
+        # mismatched code); exit and let the user re-run under the new binary.
+        console.print(
+            f"[bold red]Error:[/bold red] Upgraded to {installed.semver_str()}, but could not restart "
+            f"automatically ({e}). Please re-run your command."
+        )
+        raise typer.Exit(1) from e
 
 
 if __name__ == "__main__":
