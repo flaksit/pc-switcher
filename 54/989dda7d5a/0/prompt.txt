@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>be3qz6113</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/be3qz6113.output</output-file>
+<status>completed</status>
+<summary>Background command "Background-poll full clean integration run to completion" completed (exit code 0)</summary>
+</task-notification>
