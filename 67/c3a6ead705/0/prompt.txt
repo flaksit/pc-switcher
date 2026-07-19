@@ -1,0 +1,3 @@
+But you said home-sync as phase and do "/gsd-mvp-phase".
+If we say home-sync is milestone, it probably gets chopped up in multiple phases.
+home-sync too small for milestone? Or too big for phase?
