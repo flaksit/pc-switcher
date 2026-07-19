@@ -1,0 +1,43 @@
+<task-notification>
+<task-id>a28b05baa634846be</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a28b05baa634846be.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 01 gap-closure redesign" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Committed as `d9949ff`. All five gap-closure plans are written, validated (frontmatter + structure clean, no discipline violations), and the ROADMAP is updated.
+
+## PLANNING COMPLETE
+
+**Phase:** 01 — Home-Sync MVP (User Data Sync)
+**Mode:** gap_closure (design pivot — replaces btrfs content-divergence detection with a topology-based safety model per new ADR-015)
+**Plans created:** 5 (01-10 … 01-14), 4 waves
+**Commit:** `d9949ff`
+
+**Plans:**
+- **01-10** (wave 1) — Decision record: write ADR-015 (topology-based sync-safety model that rejects btrfs `find-new` content-detection), index it, mark D-06/D-07/D-08 superseded in 01-CONTEXT.md.
+- **01-11** (wave 1) — Remove the content-divergence guard from `FolderSyncJob` (resolves CR-01/CR-02/IN-01), apply the WR-01 `removeprefix("~/")` fix in `config_sync.py`, and prune obsolete divergence/generation tests — the rsync mirror (byte-identity, metadata, exclusions, dry-run, deletions) is untouched.
+- **01-12** (wave 2, dep 01-11) — Simplify `sync_history` to `{last_role, last_peer}`: add `last_peer` + `get_last_sync_state`/`parse_sync_state`, remove the btrfs generation store, rework tests.
+- **01-13** (wave 3, deps 01-11, 01-12) — Consolidate CLI onto `--allow-out-of-order`; add the orchestrator out-of-order/target-state warn+confirm step after the target lock (reads local + target history over SSH; silent for the legit back-and-forth per #159); record `last_peer` on both ends; drop `allow_divergence`/`allow_consecutive` plumbing; rework orchestrator/dry-run tests.
+- **01-14** (wave 4, deps 01-11, 01-13) — Correct the README sync sequence, add a test proving `*deleting` lines persist at FULL in the JSON-lines log for dry-run and real runs, and rework the integration divergence scenarios to the topology model.
+
+**Wave structure:** W1 [01-10, 01-11 parallel — no file overlap] → W2 [01-12] → W3 [01-13] → W4 [01-14].
+
+**Requirement coverage:** all five phase IDs appear — REQ-sync-scope-user-data (10/11/14), REQ-machine-specific-exclusions (11), REQ-sync-scope-file-metadata (11/14), REQ-manual-sync-workflow (10/12/13), REQ-terminal-ux (13/14).
+
+**Phase safety story preserved (must_haves):** byte-identical mirror, metadata (`-aAXHS --numeric-ids`), exclusions (no `--delete-excluded`), and round-trip are unchanged; new backstops are snapshots + FULL dry-run deletion log + topology warn/confirm + explicit `--allow-out-of-order`. **Prohibition asserted across plans:** no `_target_diverged_since`, `DivergenceStatus`, `target_generations`, WR-03 re-check, or `--allow-divergence` may remain.
+
+**Artifacts this phase produces:** `docs/adr/adr-015-topology-based-sync-safety-model.md`; CLI `--allow-out-of-order`; orchestrator `_check_out_of_order()` step; `last_peer` in sync-history (`record_role`/`get_record_role_command`/`get_last_sync_state`/`parse_sync_state`).
+
+**Note (workflow friction, non-blocking):** the repo's `check-md-hardwrap.py` PostToolUse hook flags every plan's contiguous `@`-import context blocks and pre-existing `**Label:**` lines in ROADMAP.md as "hard-wrapped paragraphs." These are required GSD context-injection syntax / pre-existing content, not genuine wraps — noted as false positives per the hook's own guidance. Blank-separating `@`-imports was avoided since it risks breaking GSD context resolution. All plan files pass `frontmatter.validate` and `verify.plan-structure` with zero errors/warnings.
+
+Next: run `/gsd-execute-phase 01` to execute the gap-closure plans wave by wave.
+
+Plan file paths (all absolute):
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-10-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-11-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-12-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-13-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-14-PLAN.md`</result>
+<usage><subagent_tokens>236344</subagent_tokens><tool_uses>43</tool_uses><duration_ms>1190988</duration_ms></usage>
+</task-notification>
