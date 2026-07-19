@@ -1,0 +1,1 @@
+does rsync use ignore files (like an ".rsyncignore") in intermediate folders? By default? If by default, we need to protect ourselves against that. There could be .rsyncignore files hanging around that we should ignore
