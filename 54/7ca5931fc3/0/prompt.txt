@@ -1,0 +1,2 @@
+testuser@pc1:~$ pc-switcher --version
+pc-switcher: command not found
