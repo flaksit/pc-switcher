@@ -1,0 +1,1 @@
+<bash-input>git push --force-with-lease</bash-input>
