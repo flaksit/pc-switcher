@@ -1,0 +1,2 @@
+While waiting: is that GITHUB_TOKEN definitely invalid?
+Should I regenerate it? Where must I store it and what do we need to do so CI and the VMs pick it up?
