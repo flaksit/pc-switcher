@@ -1,0 +1,67 @@
+Autonomous issue-to-PR workflow using GSD. Argument: GitHub issue number.
+
+## Steps
+
+### 1. Fetch the issue
+
+```
+gh issue view 164. Choose dependabot if everything supported by it. Renovate if we need functionality only renovate supports. --json title,body,labels,assignees
+```
+
+If the issue is ambiguous or underspecified, stop and ask the user for clarification. Do not guess.
+
+### 2. Create a branch
+
+Branch name: `<issue-number>-<short-kebab-description>` (e.g., `123-fix-dbt-model`).
+
+```
+git checkout -b <branch-name> main
+```
+
+### 3. Implement via GSD
+
+Run `/gsd:quick --discuss --research --full` with the issue title and body as the task description. This handles planning, execution, and verification through GSD's workflow.
+
+Example description to pass: `"Fix #123: <issue title>. <issue body summary>"`
+
+### 4. Post-GSD verification
+
+After `/gsd:quick` completes, also run the project-specific verification from CLAUDE.md:
+
+```
+@verify
+```
+
+If any check fails, fix the issue and re-run. Repeat until all checks pass.
+
+### 5. Push and create PR
+
+```
+git push -u origin <branch-name>
+gh pr create --title "<concise title>" --body "Fixes #<issue-number>
+
+## Summary
+<what changed and why>
+
+## Test plan
+<how to verify>"
+```
+
+### 6. Post-PR verification
+
+After the PR is created:
+
+1. Run `gh pr checks <pr-number>` — wait for CI to pass
+2. If the change affects the web UI, follow the UI verification steps from CLAUDE.md
+3. If any CI check fails, fix → re-verify → commit → push
+
+### 7. Feedback loop
+
+After the PR is ready, notify the user and wait for feedback. If the user provides feedback:
+
+1. Fix the issues
+2. Re-run verification (`@verify`)
+3. Commit and push
+4. Check CI again
+
+Repeat until the user approves. Do not stop after fixing code — always push and verify the updated PR.
