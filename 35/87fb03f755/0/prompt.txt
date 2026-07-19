@@ -1,0 +1,1 @@
+And no, I can't do #2 in parallel: while integration tests are running, pc-switcher is in use in all sorts of ways. I can't just go there and install another version and run some conflicting syncs. Moreover, locking will prevent.
