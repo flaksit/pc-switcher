@@ -1,0 +1,5 @@
+Step "Record sync history" should record not only the last role of a machine (SOURCE or TARGET), but as well which machine was the other. This is useful in the new step 5 to detect the "C" and give more useful info to user.
+
+"drop detection entirely and record it via ADR now?": Y
+
+"destructive-preview confirmation": not by default. You say dry-run is available. Does dry-run show files that will be deleted and the normal run not? There shouldn't be an output difference between dry-run and normal, should there? Visualization will need to be a little smart; could be tons of files. Or just dry-run and look at the log-file (where deleted files MUST be recorded, just like any touched file)? That is actually good enough for this MVP.
