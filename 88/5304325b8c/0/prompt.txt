@@ -1,0 +1,1 @@
+no need to delete VMs for that. Just the normal reset that is done on every run of integration tests is enough
