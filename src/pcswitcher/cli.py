@@ -20,9 +20,10 @@ from rich.text import Text
 
 from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
-from pcswitcher.logger import get_latest_log_file, get_logs_directory, is_interactive
+from pcswitcher.logger import get_latest_log_file, get_logs_directory
 from pcswitcher.models import SyncAbortedByUser, SyncLockedError, SyncSession
 from pcswitcher.orchestrator import Orchestrator
+from pcswitcher.terminal import is_interactive
 from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
 
 # Create Typer app
