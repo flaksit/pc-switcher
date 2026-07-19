@@ -1,0 +1,42 @@
+<task-notification>
+<task-id>a9f6bf4cb0f3a57da</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a9f6bf4cb0f3a57da.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01-05 of phase 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 01-05
+**Tasks:** 2/2
+**SUMMARY:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-05-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"01-05","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `fea6dc1`: test(01-05): add failing tests for _build_rsync_cmd [RED Task 1]
+- `f2dc285`: feat(01-05): implement _build_rsync_cmd in FolderSyncJob [GREEN Task 1]
+- `237a84e`: test(01-05): add failing tests for execute(), _stream_rsync, and FolderSyncJob contract [RED Task 2]
+- `724148f`: feat(01-05): implement execute(), _stream_rsync, and LocalProcess chunk reader [GREEN Task 2]
+- `8de9d5d`: docs(01-05): complete execute() data-plane plan — SUMMARY, STATE, ROADMAP
+
+**Duration:** 6 minutes
+
+---
+
+**What was built:**
+
+Task 1 added `FolderSyncJob._build_rsync_cmd(folder, dry_run) -&gt; str` — an injection-safe shell command builder using `sudo -E rsync` (preserves SSH agent for root subprocess, Pitfall 1), the full `-aAXHS --numeric-ids --delete --info=progress2 --partial --mkpath` flag baseline (D-13), `--rsync-path='sudo rsync'` for remote root (D-05), per-folder filter rules without `--delete-excluded` (D-06), and `shlex.quote` on all config-derived values (T-05-01).
+
+Task 2 added:
+- `LocalProcess.read_stdout_chunks()` — async generator yielding raw bytes, avoiding the readline deadlock on `\r`-delimited progress2 output (Pitfall 2)
+- `LocalProcess.wait_result()` — reads stderr + waits for exit after stdout consumed, without re-calling `communicate()`
+- `FolderSyncJob._stream_rsync()` — parses progress2 lines into `ProgressUpdate` (D-15), logs per-file lines at FULL (D-16), counts deletions; decoupled from subprocess for unit testing
+- `FolderSyncJob.execute()` — full data plane: spawns rsync async, streams progress/logs, raises+logs CRITICAL on failure, records `set_target_generation` per folder after all succeed, skips marker in dry-run (D-12)
+- `TestFolderSyncJobContract` in the contract test suite
+
+Full suite: 479 passed, 0 regressions.</result>
+<usage><subagent_tokens>157670</subagent_tokens><tool_uses>75</tool_uses><duration_ms>1001571</duration_ms></usage>
+</task-notification>
