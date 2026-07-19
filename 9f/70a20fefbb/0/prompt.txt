@@ -1,0 +1,1 @@
+dropbox/koofr: can we sync the config? E.g. the selection of which folders to sync
