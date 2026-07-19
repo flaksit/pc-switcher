@@ -1,0 +1,28 @@
+<task-notification>
+<task-id>a18b767f8900970fd</task-id>
+<tool-use-id>toolu_01NeaV8UmZaFgGFwb6TqoGZD</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a18b767f8900970fd.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review gap-closure changes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review complete. REVIEW.md written to `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-REVIEW.md` (I did not commit — the orchestrator handles that).
+
+## Summary of findings
+
+I reviewed the six changed files at standard depth, tracing the gap-closure diff since `dd92b65`. The state-machine refactor itself is sound (`basedpyright` clean), but the empty-prefix tool-state filter that CR-01 introduced has two adversarial defects the 520-test suite does not catch. Both pull in opposite directions, which is why they slipped through.
+
+2 Critical, 1 Warning, 1 Info.
+
+### CR-01 (BLOCKER, false negative → data loss)
+`src/pcswitcher/jobs/folder_sync.py:381-397`. The tool-state exclusion uses unanchored substring matching (`any(token in line ...)` with token `"/.config/pc-switcher/"`). Because `btrfs find-new` paths are relative to the subvolume root, a real user file at *any* depth — e.g. `janfr/dotfiles/.config/pc-switcher/config.yaml` from a dotfile manager (chezmoi/yadm/stow), which the power-user target audience commonly runs — is silently classified `CLEAN`. The guard then lets `rsync --delete` overwrite genuinely-diverged target data. Tests only cover the depth-1 case.
+
+### CR-02 (BLOCKER, false positive → breaks upgrade workflow, pushes to unsafe `--allow-divergence`)
+The new WR-03 pre-transfer re-check (`folder_sync.py:577-586`) runs in Phase 9, *after* Phase 7 `install_on_target`. I verified via `install_on_target.py:70-75` and `install.sh:111-114,190-200` that an upgrade writes `~/.local/bin/pc-switcher`, `~/.local/bin/uv`, and `~/.local/share/uv/…` under the synced `@home` subvolume. The tool-state filter masks only the two `pc-switcher` state dirs, so `find-new` since the prior baseline reports these install artifacts as changes → `DIVERGED` → the sync aborts before rsync. This falsely blocks every sync that also upgrades the target (frequent during development where the source dev-version changes each run). It's a regression the old Phase-4-only check never exposed.
+
+### WR-01
+`lstrip("~/")` (folder_sync.py:381-382, config_sync.py:317) is character-set removal, not prefix removal — currently correct for the constants but a silent landmine feeding the security-relevant filter tokens. Recommend `removeprefix("~/")`.
+
+### IN-01
+Duplicated per-line scaffold in the two branches of `_target_diverged_since` (folder_sync.py:385-409) — the duplication is precisely what let the tool-state and prefix filters diverge and hid CR-01/CR-02.</result>
+<usage><subagent_tokens>130525</subagent_tokens><tool_uses>25</tool_uses><duration_ms>533183</duration_ms></usage>
+</task-notification>
