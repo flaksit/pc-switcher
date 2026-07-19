@@ -1,0 +1,4 @@
+Good to ensure we don't process the standard .rsync-filter files. Do not write/test anything about .rsyncignore - that was my invention out of ignorance.
+Can we define our own filename for per-directory filter files? Would be nice to have .pcswitcher-filter instead of each time putting everything in config.yaml.
+
+Other question: should we put the (main) rsync filter as literal string in config.yaml, or better have a second, separate file that contains just the rsync filters?
