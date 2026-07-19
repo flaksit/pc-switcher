@@ -1,0 +1,5 @@
+"rsync-over-SSH transport choice still not captured in an ADR (ADR-002 mandates SSH channel but not the file-sync protocol). Worth formalizing before it drifts further." Correct? If so, do it
+
+---
+
+fix your mem
