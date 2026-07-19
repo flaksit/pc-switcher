@@ -1,0 +1,56 @@
+<task-notification>
+<task-id>afb0330d32cac1fba</task-id>
+<tool-use-id>toolu_01AruS1YzrnnkHfPKr8c2gr7</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/837453ef-0782-46f4-8c3a-1320c669779c/tasks/afb0330d32cac1fba.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan gap fixes for Phase 01" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. All four gap-closure plans are created, validated, ROADMAP updated, and committed (`a192f56`).
+
+## PLANNING COMPLETE — UAT Gap Closure (Phase 01)
+
+Created 4 plans (`01-15` … `01-18`) closing all 5 diagnosed UAT gaps.
+
+### Gap → Plan coverage
+
+| Gap | Concern | Plan | Wave |
+|-----|---------|------|------|
+| 1 | Orchestrator hardcodes folder_sync config-shape + "(rsync --delete)" in first-sync messaging | `01-15` | 1 |
+| 2 | User-declined confirmations logged CRITICAL + printed twice | `01-16` | 2 |
+| 3 | `TerminalUI.start()` rebuilds a new `Live()` on every confirm resume | `01-17` | 1 |
+| 5 | Config-sync prompts interactively even under `--dry-run` | `01-17` | 1 |
+| 4 | `setup_logging()` stderr `StreamHandler` corrupts `Live` → progress flooding | `01-18` | 3 |
+
+### Wave structure (parallelism maximized within file-ownership constraints)
+
+- **Wave 1 (parallel):** `01-15` (orchestrator/jobs/models) and `01-17` (ui/confirmer/config_sync) — zero file overlap.
+- **Wave 2:** `01-16` (orchestrator/cli/models) — serialized after `01-15` (shares `orchestrator.py` + `models.py`).
+- **Wave 3:** `01-18` (logger/orchestrator) — after `01-15`+`01-16` (shares `orchestrator.py`) and logically after `01-17`'s single-`Live` lifecycle.
+
+### Grouping rationale
+- Gaps 3 and 5 share `config_sync.py` (and are both confirmation-flow UX) → merged into `01-17`.
+- Gap 4 is the biggest change (log-output routing architecture) → its own plan, `01-18`, sequenced last so it builds on a clean `Live` lifecycle and a settled `orchestrator.py`.
+- Each plan is 3 tasks (impl → impl/wire → tests), targeting ~50% context.
+
+### Key design decisions baked into the plans
+- **`01-15`:** new `FirstSyncScope` dataclass + `SyncJob.describe_first_sync_scope()` classmethod (called before job discovery, so it takes the job's config dict); `FolderSyncJob` overrides it; orchestrator composes the warning generically and names no job/transport.
+- **`01-16`:** new `SyncAbortedByUser` exception + `SessionStatus.ABORTED`; caught before the generic `except Exception` in both `run()` (WARNING once) and the CLI (one calm "aborted" line, non-zero exit).
+- **`01-17`:** single persistent `Live` with `pause()`/`resume()` (guards switch to `Live.is_started`); confirmer + config_sync switch from `stop()/start()` to `pause()/resume()`; config_sync skips prompting under `--dry-run`.
+- **`01-18`:** a `UILogHandler` routes records into the existing `add_log_message` panel via `loop.call_soon_threadsafe` (keeps every `Live.update` on the event-loop thread — sidesteps the `asyncio.Queue`/thread-safety trap in `EventBus.publish`); `setup_logging` picks the UI sink vs. `stderr` `StreamHandler` by `console.is_terminal`; orchestrator creates the UI before `setup_logging`.
+
+### Validation
+All four pass `frontmatter.validate` (schema `plan`) and `verify.plan-structure` (3 tasks each, 0 errors, 0 warnings). Committed as `a192f56` (docs + ROADMAP only; unrelated working-tree changes left untouched).
+
+### Notes
+- The `check-md-hardwrap.py` PostToolUse hook fired on every write: on the PLAN files it flagged the `@file` context-include lines, and on ROADMAP.md it flagged pre-existing `**Goal**:`/`**Depends on**:` phase-detail lines. Both are false positives — the `@`-include-per-line format is required by the downstream `execute-phase` consumer (matches `01-14-PLAN.md`), and I did not touch the flagged ROADMAP lines. Files are written correctly.
+
+### Next step
+Run `/gsd-execute-phase 01` — it will execute Wave 1 (`01-15`, `01-17`) in parallel, then `01-16`, then `01-18`.
+
+Plan files (absolute paths):
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-15-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-16-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-17-PLAN.md`
+- `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-18-PLAN.md`</result>
+<usage><subagent_tokens>236136</subagent_tokens><tool_uses>37</tool_uses><duration_ms>1102956</duration_ms></usage>
+</task-notification>
