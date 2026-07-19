@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>b35o1vq3t</task-id>
+<summary>Monitor event: "integration run 28618603596 final result"</summary>
+<event>DONE completed/success | 59 passed, 531 deselected in 676.15s (0:11:16) ================ | failures: none</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
