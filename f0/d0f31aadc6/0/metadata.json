@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f0d0f31aadc6",
+  "session_id": "46d8e094-85d0-4b99-8a85-903558c82334",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-19T16:02:37.721322503Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/debug/pc1-pc2-ssh-permission-denied.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ed6b74c821ad",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 4303,
+    "cache_creation_tokens": 131841,
+    "cache_read_tokens": 1017003,
+    "output_tokens": 11667,
+    "api_call_count": 18
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-19T16:02:37.706949773Z",
+    "agent_lines": 4,
+    "agent_removed": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "total_lines_changed": 7,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 14,
+      "user_lines_removed": 0,
+      "agent_lines_added": 4,
+      "agent_lines_removed": 3,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/config.json": 5
+      }
+    }
+  ]
+}

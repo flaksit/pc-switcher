@@ -1,0 +1,15 @@
+/gsd-progress
+
+---
+
+any gsd-quick or gsd-debug session that is not yet formally closed and/or for which the final bookkeeping has not yet been done?
+
+---
+
+a: e2e passes
+b not necessary
+do c
+
+---
+
+commit to main

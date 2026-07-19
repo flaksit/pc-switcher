@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f0d0f31aadc6",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/debug/pc1-pc2-ssh-permission-denied.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f0/d0f31aadc6/0/metadata.json",
+      "transcript": "/f0/d0f31aadc6/0/full.jsonl",
+      "compact_transcript": "/f0/d0f31aadc6/0/transcript.jsonl",
+      "content_hash": "/f0/d0f31aadc6/0/content_hash.txt",
+      "prompt": "/f0/d0f31aadc6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4303,
+    "cache_creation_tokens": 131841,
+    "cache_read_tokens": 1017003,
+    "output_tokens": 11667,
+    "api_call_count": 18
+  }
+}
