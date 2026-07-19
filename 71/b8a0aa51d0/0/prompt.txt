@@ -1,0 +1,19 @@
+1:
+- Apparently, currently "--dry-run" doesn't need to have pc-switcher on the target? And a full run, does that use pc-switcher on the target?
+- Does this mean the following happened?
+  - pc1 had pc-switcher installed with an older version of uv and/or python deps
+  - pc-switcher sync installs the same pc-swticher version on the target, but with current uv and python deps, apparently a newer version of one of them
+  - this newer version (in cache, but could possibly be the uv version) gets deleted / overwritten by old version
+- This is specific for the pc-switcher install and it is just about ~/.cache, so not really a problem
+- It only touches files that our "pc-switcher sync" install-on-target job touches. So doesn't touch any user files that wouldn't be touched anyway.
+- Conclusion: not a real problem, but a bit confusing. Or am I wrong?
+
+2: Or just show nothing, only come with info when relevant (warning and then stop)
+
+3: Ok that it is per folder (but then this should be clear to the user and it should show the folder somehow). At least it should end at 100% when done.
+
+4: That warning should not be there. Should not be a warning: this is the normal situation: tags are in semver format, while apparently the code tries first to find a tag with the literal 0.1.0a14 "python" version format. Only warn (or fail) on unexpected situation.
+
+So they are all minor except if my take on 1 is wrong.
+
+Do you propose to fix all now, or wait for all my feedback and bundle everything in a big bugfix-round?
