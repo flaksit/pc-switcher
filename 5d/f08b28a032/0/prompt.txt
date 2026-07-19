@@ -1,0 +1,4 @@
+Again: I don't want to download 10GB over cellular when I start claude desktop on laptop.
+Isn't the vm stopped when I'm logged out of gnome (and claude desktop closed, of course)?
+Is the VM updating disk constantly, or is the disk reset after every session? Do I loose important state if I don't have the state from the source laptop? Can I continue work?
+Only used for cowork? I don't use that yet, so if only for cowork, we can safely leave this out.
