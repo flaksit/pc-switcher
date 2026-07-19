@@ -1,0 +1,72 @@
+I disagree. My local authorized_keys contains the keys of this machine. Ensure doc in configuration.md and @src/pcswitcher/default-config.yaml explains that user should either exclude authorized_keys, or add the keys of the local machine (and how)
+
+---
+
+simplify .cache: exclude everything except the few ones that we want
+
+---
+
+pre-commit: useful? doesn't contain stale cache (never?)?
+
+---
+
+ms-playwright: what is? useful to sync the cache? used?
+
+---
+
+uv has "uv cache purge" to garbage collect. does ms-playwright have a similar mechanism?
+
+---
+
+what is node-gyp?
+
+---
+
+I see node-gyp has 250mb now, but across 4 versions. Is there a gc/clean/purge command that removed old/unused ones?
+
+---
+
+doesn't node/npm/npx have a cache somewhere?
+
+---
+
+_npx: if I run npx with that command again, it needs to redownload? npx is not necessarily one-off, is it? mcp-servers are often started with npx, no?
+bun: used by claude code. gc?
+
+---
+
+apply
+
+---
+
+some parts of some /.* folders are in home.filter now. Very all other .* folders if they are relevant to sync or should be excluded
+
+---
+
+if fixed that one
+
+---
+
+.local/share/claude/versions: we at least want to keep the latest version, no? Otherwise, claude code doesn't start or will auto-update on first reload? We said we wanted to avoid too much redownloading. Faster to sync 3 versions than to re-download on travel-laptop while on the road.
+
+same for IBKR
+
+.config/Claude/claude-code: that only contains an OLD version, not used. Maybe this folder was previously used as cache? Can just remove it, then. So no special handling needed in home.filter
+.config/Claude/claude-code-vm: same old version. To delete?
+
+.config/Claude/claude-code-sessions: old, dates from Dec 2025, 7 months ago. Seems claude code saves to other folder now. To delete?
+.config/Claude-3p: probably something old as well, to delete?
+
+.arkade/bin: Should sync! Are in use, no? This is not cache. Arkade doesn't automatically reinstall. Not syncing this would mean I don't have these commands anymore on my system (I think)!
+
+.sane: rather sync it? If I connect the scanner to the target laptop, everything still works
+
+.vscode: sync
+.local/share/uv: sync, same like the uv cache!
+.var/app/org.mozilla.firefox/.mozilla/.../storage: not sure this is all regenerable: could contain storage of webapps that keep settings and/or data that are used in them, no? So would sync.
+.config/google-chrome: profile, like firefox profile. sync
+.antigravity/extensions, .config/Antigravity: sync, like vscode
+
+Electron flatpak app caches buried under config/<App>/: agree
+
+Machine identity: agree except .sane

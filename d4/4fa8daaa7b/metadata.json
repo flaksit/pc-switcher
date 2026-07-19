@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "d44fa8daaa7b",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 12,
+  "files_touched": [
+    "docs/configuration.md",
+    "src/pcswitcher/default-config.yaml",
+    "src/pcswitcher/home.filter",
+    "src/pcswitcher/root.filter"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d4/4fa8daaa7b/0/metadata.json",
+      "transcript": "/d4/4fa8daaa7b/0/full.jsonl",
+      "compact_transcript": "/d4/4fa8daaa7b/0/transcript.jsonl",
+      "content_hash": "/d4/4fa8daaa7b/0/content_hash.txt",
+      "prompt": "/d4/4fa8daaa7b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 150,
+    "cache_creation_tokens": 358565,
+    "cache_read_tokens": 9355396,
+    "output_tokens": 109362,
+    "api_call_count": 81
+  }
+}
