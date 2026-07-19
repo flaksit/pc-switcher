@@ -1,0 +1,37 @@
+<task-notification>
+<task-id>aad668d3a661dd5eb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/aad668d3a661dd5eb.output</output-file>
+<status>completed</status>
+<summary>Agent "Pattern map Phase 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PATTERN MAPPING COMPLETE
+
+**Phase:** 1 - Home-Sync MVP (User Data Sync)
+**Files classified:** 7
+**Analogs found:** 7 / 7
+
+### Coverage
+
+- Files with exact analog: 1 (`folder_sync.py` — `BtrfsSnapshotJob` + `InstallOnTargetJob`)
+- Files with self-extension analog: 4 (`sync_history.py`, `config.py`, `config-schema.yaml`, `default-config.yaml`)
+- Files with role-match analog: 2 (unit test, integration test)
+- Files with no analog: 0
+
+### Key Patterns Identified
+
+- All SyncJobs extend `jobs/base.py:SyncJob`, implement `validate()`/`execute()` with `CONFIG_SCHEMA`, use `self._validation_error()` to accumulate errors, and gate all mutations behind `if not self.context.dry_run`.
+- Remote commands use `executor.run_command(cmd, login_shell=False)` for system tools (`sudo`, `btrfs`, `rsync`) and `login_shell=True` only for user-installed tools.
+- `sync_history.py` uses temp-file atomic writes; the divergence marker extension adds a `target_generations` top-level key to the existing JSON without breaking old readers.
+- `config-schema.yaml` has `additionalProperties: false` at the top level (line 200) and inside `sync_jobs` (line 82) — both must be updated when adding `folder_sync`.
+- Integration tests always use `reset_pcswitcher_state` (pre/post cleanup) and `pc1_with_pcswitcher_mod` (current-branch install) from `tests/integration/conftest.py`.
+
+### File Created
+
+`/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-PATTERNS.md`
+
+### Ready for Planning
+
+Pattern mapping complete. Planner can now reference analog patterns in PLAN.md files.</result>
+<usage><subagent_tokens>93630</subagent_tokens><tool_uses>25</tool_uses><duration_ms>261847</duration_ms></usage>
+</task-notification>
