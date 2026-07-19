@@ -1,0 +1,1 @@
+I disagree. My local authorized_keys contains the keys of this machine. Ensure doc in configuration.md and @src/pcswitcher/default-config.yaml explains that user should either exclude authorized_keys, or add the keys of the local machine (and how)
