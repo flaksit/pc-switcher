@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>ba9r5lu65</task-id>
+<tool-use-id>toolu_016LHMQC1Uf4oXhGkG34vGmc</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/36be3e07-d2e8-49be-8547-a6192fc1fee8/tasks/ba9r5lu65.output</output-file>
+<status>completed</status>
+<summary>Background command "Block until PR 172 checks terminal, then print final" completed (exit code 0)</summary>
+</task-notification>
