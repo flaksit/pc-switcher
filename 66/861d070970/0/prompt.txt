@@ -1,0 +1,1 @@
+we are on branch main. create feat branch; create pr; tear down the VMs; commit to pr (so CI runs, provisions VMs and runs integration tests). Check token correctly injected and works.
