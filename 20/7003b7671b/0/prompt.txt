@@ -1,0 +1,2 @@
+testuser@pc1:~$ pc-switcher --version
+pc-switcher 0.1.0-alpha.17+post.1.dev.0.f7d6279
