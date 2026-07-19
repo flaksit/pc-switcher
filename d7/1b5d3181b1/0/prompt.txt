@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b9pxuij8l</task-id>
+<tool-use-id>toolu_01HeWs5H4EWyMVcVouEMgnsD</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/3e7dcbc5-d17f-473b-ab02-fa471b6b61a8/tasks/b9pxuij8l.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch Test 8 re-run to completion" completed (exit code 0)</summary>
+</task-notification>
