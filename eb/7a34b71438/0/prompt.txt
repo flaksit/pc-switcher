@@ -1,0 +1,35 @@
+<task-notification>
+<task-id>a36976b53bb774538</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/a36976b53bb774538.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01-08" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 01-08
+**Tasks:** 2/2
+**SUMMARY:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-08-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"01-08","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `89743a4`: fix(01-08): remove dead SIGINT wait_for/shield/sleep(0) and truthful messaging (IN-01)
+- `de79791`: feat(01-08): add set_total_steps and fix progress-bar 100% under default config (IN-02)
+- `239a065`: style(01-08): apply ruff format to cli.py after SIGINT cleanup
+- `87e055c`: docs(01-08): complete terminal-ux correctness plan (IN-01 SIGINT + IN-02 progress bar)
+- `18d680b`: docs(01-08): update STATE.md and ROADMAP.md after plan completion
+
+**Duration:** 3 min
+
+---
+
+Both correctness findings are closed:
+
+**IN-01** — The `asyncio.wait_for(asyncio.shield(asyncio.sleep(0)), timeout=CLEANUP_TIMEOUT_SECONDS)` construct in `cli._async_run_sync` returned immediately (sleep(0) completes in the same event-loop tick), so its `TimeoutError` branch was dead code and cleanup time was actually zero. The whole construct and `CLEANUP_TIMEOUT_SECONDS` constant are removed. The first-SIGINT message now says "Press Ctrl+C again to force quit immediately" — no longer falsely claiming a numeric grace period the code never enforced.
+
+**IN-02** — `TerminalUI.set_total_steps(total: int)` was added (mirroring `set_current_step` exactly: assigns `_total_steps` and refreshes the live render when `_live` is active). The orchestrator's initial estimate now counts only enabled jobs (`sum(1 for enabled in ... if enabled)`), and immediately after Phase 4 discovery it calls `set_total_steps(8 + len(jobs) + 1)` so the denominator exactly matches the final `set_current_step` value — the bar reaches 100% under the default config.</result>
+<usage><subagent_tokens>118501</subagent_tokens><tool_uses>68</tool_uses><duration_ms>504102</duration_ms></usage>
+</task-notification>
