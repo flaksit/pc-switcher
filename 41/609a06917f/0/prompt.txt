@@ -1,0 +1,35 @@
+<task-notification>
+<task-id>a8257b1a15bcb0cfb</task-id>
+<tool-use-id>toolu_01P58PhXo4sarDQng5ep5e7U</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/837453ef-0782-46f4-8c3a-1320c669779c/tasks/a8257b1a15bcb0cfb.output</output-file>
+<status>completed</status>
+<summary>Agent "Diagnose TUI live-render flooding bug" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## ROOT CAUSE FOUND
+
+**Debug Session:** `.planning/debug/tui-live-progress-flooding.md`
+
+**Root Cause:** `setup_logging()` in `src/pcswitcher/logger.py` (lines 268-271) installs a `logging.StreamHandler(sys.stderr)` formatted with `RichFormatter`, per ADR-010's "custom logging.Formatter using Rich for TUI output" decision. This handler writes formatted log records **directly to the terminal** on an independent background thread (the `QueueListener`), completely uncoordinated with `TerminalUI`'s `rich.live.Live` instance in `src/pcswitcher/ui.py`, which renders to the same physical terminal via `console` (bound to stdout). Since `LogConfig.tui` defaults to `INFO`, any INFO+ log record emitted while Live is active — routine orchestrator phase-transition logs (`self._logger.info("Acquiring source lock", ...)`, etc.) as well as `DummySuccessJob`'s every-2-second progress logs — gets printed as a raw line into the terminal region Live believes it exclusively owns. Live tracks "how many lines did I render last time" to move the cursor up and erase-and-redraw; an externally-inserted line desyncs that counter permanently, so the next redraw erases/overwrites the wrong lines, leaving part of the previous frame behind as a visible duplicate while a new frame gets printed below it. This compounds on every subsequent refresh (both the 10Hz auto-refresh thread and every explicit `self._live.update(self._render())` call from `update_job_progress()`/`set_connection_status()`/`set_current_step()`/`add_log_message()`), producing the reported growing stack of duplicate frames.
+
+**Evidence Summary (direct reproduction, not inference):**
+- Reproduced live on the actual test VM (pc1, `91.99.178.190`) over a real interactive pty via `ssh -tt ... script -qc 'pc-switcher sync pc2 --dry-run --yes --allow-first-sync --allow-out-of-order'`, capturing 1,374,540 raw bytes (9,186 lines) of the actual terminal stream, folder_sync disabled so only dummy_success + disk_space_monitor ran.
+- Byte-level inspection of the raw capture: the `"Recent Logs"` panel header (part of the single Live-managed `Group`) appears **761 separate times** in one run — it should print exactly once and then only be overwritten in place.
+- The `dummy_success` progress bar at `"0%"` alone appears **326 times** — proof Live is repeatedly printing fresh full frames rather than updating one in place.
+- At byte offset 206 (before the Live's very first frame is even drawn), six orchestrator `INFO` log lines print as raw `\r\n`-terminated lines directly to the stream, ahead of Live's own first render — confirming these come from the independent `stream_handler`, not from `TerminalUI`.
+- At byte offset 51151 (dummy_success's first "Source phase: 2s elapsed" log), raw bytes show: the log line printed via plain `\r\n`, immediately followed by Live's own erase sequence (`\r\x1b[2K\x1b[1A` × 13) and a fresh frame print — with 3 log lines having been appended to the terminal between Live's previous frame and this refresh, meaning Live's assumed cursor position no longer matched the terminal's actual state at the moment it issued its erase.
+- `docs/adr/adr-010-logging-infrastructure.md` confirms the direct-stderr "TUI output" handler was mandated by ADR-010, but the ADR never reconciled this with the pre-existing `TerminalUI`/`Live` display; `ui.py`'s own `consume_events()` comment notes the TUI log panel (`add_log_message()`) was deliberately left unpopulated by this path ("See ADR-010").
+
+**Files Involved:**
+- `src/pcswitcher/logger.py:268-271` — `setup_logging()`: the actual defect — `stream_handler = logging.StreamHandler(sys.stderr)` writes directly to the terminal instead of routing through `TerminalUI`'s Live-managed render.
+- `src/pcswitcher/ui.py` — `TerminalUI` class (`start()`, `_render()`, `add_log_message()`, all `self._live.update(...)` call sites) — the victim whose cursor bookkeeping gets corrupted; already has an unused `add_log_message()`/log-panel mechanism designed for exactly this purpose.
+- `src/pcswitcher/config.py` (`LogConfig`, `tui: int = 20`) — default INFO floor is what makes the corruption trigger routinely (any orchestrator phase log, not just dummy_success).
+- `src/pcswitcher/jobs/dummy_success.py` — its every-2s INFO logging makes the bug highly visible/reproducible in this UAT scenario, though it is not the root cause (orchestrator's own phase logs alone already trigger it, confirmed before dummy_success starts).
+- `docs/adr/adr-010-logging-infrastructure.md` — documents the decision that introduced the unreconciled dual-output-path design.
+
+**Suggested Fix Direction:** Route TUI-destined log output exclusively through `TerminalUI`'s existing `add_log_message()`/log-panel mechanism (already part of the single `Live`-managed `Group`) instead of a separate `logging.StreamHandler(sys.stderr)`. That likely means replacing the stderr `StreamHandler` with a custom `logging.Handler` whose `emit()` calls into `TerminalUI.add_log_message()` (or posts a `LogEvent` back onto the UI's event queue), so all terminal output funnels through one `Live.update()` path. A stderr fallback should only be used when no `TerminalUI`/`Live` is active (e.g., non-interactive or non-TTY runs).
+
+**Specialist Hint:** python
+
+Sources reviewed: `src/pcswitcher/ui.py`, `src/pcswitcher/logger.py`, `src/pcswitcher/orchestrator.py`, `src/pcswitcher/confirmer.py`, `src/pcswitcher/config.py`, `src/pcswitcher/jobs/dummy_success.py`, `docs/adr/adr-010-logging-infrastructure.md`, plus a live raw-byte capture from the test VM at `.planning/debug/tui-live-progress-flooding.md` (full evidence trail recorded there; reproduction artifacts on pc1/scratchpad were cleaned up, and pc1's config.yaml was restored to its original state).</result>
+<usage><subagent_tokens>117876</subagent_tokens><tool_uses>53</tool_uses><duration_ms>544876</duration_ms></usage>
+</task-notification>
