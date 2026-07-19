@@ -1,0 +1,35 @@
+Continue Phase-01 folder-sync verification on the VMs — read .planning/phases/01-home-sync-mvp-user-data-sync/01-VERIFICATION-HANDOFF.md for state.
+
+For verification, I want to go through the following scenarios: 
+- Install pc-switcher on A myself (to go through that step once again; it's been 6 months)
+- First run: A>B (should warn - I abort)
+- First run: A>B (should warn - I confirm)
+- Work on A
+- A>B again
+- Work on B
+- B>A
+- Work on A
+- B>A (should warn - I wait) 
+- Launch another B>A, concurrently (should block and tell me how to unblock)
+- I confirm the waiting B>A
+
+How can I test the locking mechanism in the following scenario?
+- A>B is running
+- Start B>A (should block because B is locked as target of the running A>B
+The rsync is so short that the time window where B is locked is probably too short to trigger the lock failure.
+Or is already tested by integration test (point me at it)?
+
+Data is in the real /home/myuser folder of the user that is present on the VMs.
+For the first A>B and the first B>A, I want 
+- a file/folder creation, modif, and deletion
+- with a set of files owned by the user, with different permissions
+- with a set of folders owned by the user, with different permissions
+- with a set of files&folders owned by root to which the user doesn't even have access
+- with a set of files&folders owned by another user (can be system user) to which the user doesn't even have access
+For the other runs, justa single file change is enough. 
+- with a set of files owned by the user, with backdated mtime
+
+And then you run the same scenario but non-interactive with cli flags for confirmation.
+
+Is this scenario covered by integration tests? 
+If not, do that first before I do.
