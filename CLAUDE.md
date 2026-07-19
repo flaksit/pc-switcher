@@ -46,13 +46,11 @@ tests/run-integration-tests.sh tests/integration/test_end_to_end_sync.py::TestIn
 ```
 
 ## REMEMBER
-- You MUST ALWAYS use `uv run` for running Python or python packages: `uv run python`, `uv run ruff`, `uv run basedpyright`, etc.
-- You MUST NEVER use the system Python directly. So DO NOT run `python3`, `python`, `pip`, etc. directly.
 - When creating a PR on GitHub, ALWAYS set it as draft so that the integration tests don't run prematurely.
 
 ## Python Standards
 
-This project uses Python 3.14 via uv. NEVER use system Python directly.
+This project uses Python 3.14 via uv. (The `uv run` / no-system-Python rule lives in the user global `~/.claude/CLAUDE.md`.)
 
 ### Critical Rules
 - `from __future__ import annotations` in all files
