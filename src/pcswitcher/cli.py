@@ -96,7 +96,9 @@ def _version_callback(value: bool) -> None:
 @app.callback()
 def main(
     ctx: typer.Context,
-    version_flag: Annotated[
+    # Only registers the eager --version callback; never read in the body, hence the
+    # leading underscore (Typer takes the flag names from the Option, not the param name).
+    _version_flag: Annotated[
         bool,
         typer.Option("--version", "-v", callback=_version_callback, is_eager=True, help="Show version and exit"),
     ] = False,
