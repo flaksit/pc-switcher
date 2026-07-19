@@ -1,0 +1,1 @@
+proposed config is very wieldy to write. In option C (raw strings), do we need quotes or can we just write valid yaml without quotes?
