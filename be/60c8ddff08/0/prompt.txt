@@ -1,0 +1,27 @@
+<task-notification>
+<task-id>ac1244f78012baec8</task-id>
+<tool-use-id>toolu_01XhLBvAoex8K2kHheNKRANU</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/ac1244f78012baec8.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01-02 of phase 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 01-02
+**Tasks:** 2/2
+**SUMMARY:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-02-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"01-02","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `5d3380a`: feat(01-02): register folder_sync in config-schema.yaml
+- `efc07d3`: feat(01-02): ship folder_sync defaults in default-config.yaml
+- `4337a8e`: docs(01-02): complete folder-sync config schema and defaults plan
+
+**Duration:** 2 minutes
+
+**What shipped:** Both YAML edits needed to make the `folder_sync` job discoverable by the orchestrator. The `additionalProperties: false` guards in the schema now accept `folder_sync` at both the `sync_jobs` flag level and as a top-level job-config object. The default config ships enabled with `/home` and `/root` folder entries and the D-11 exclusion list (SSH keys, Tailscale, GPU caches, VS Code cache dirs) — without excluding dev-tool caches or VS Code user state. All 410 existing tests remain green.</result>
+<usage><subagent_tokens>79394</subagent_tokens><tool_uses>36</tool_uses><duration_ms>371588</duration_ms></usage>
+</task-notification>
