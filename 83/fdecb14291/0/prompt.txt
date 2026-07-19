@@ -1,0 +1,44 @@
+<task-notification>
+<task-id>acd6e2e738ad04f88</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/acd6e2e738ad04f88.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 1 goal achievement" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification Complete
+
+**Status:** gaps_found
+
+**Score:** 8/14 must-haves verified (5 present but behavior-unverified; 1 FAILED BLOCKER)
+
+**Report:** `/home/janfr/dev/pc-switcher/.planning/phases/01-home-sync-mvp-user-data-sync/01-VERIFICATION.md`
+
+### Gaps Found
+
+1 gap blocks the phase goal:
+
+**T6 — D-07: validate() allows unchanged-target sync without false divergence — FAILED (BLOCKER)**
+
+Root cause is a sequencing bug: `FolderSyncJob.execute()` captures the target's @home btrfs generation for the divergence baseline (`folder_sync.py:521`) before the orchestrator's `_update_sync_history()` writes `sync-history.json` to the target's `/home/&lt;user&gt;/.local/share/pc-switcher/sync-history.json` (`orchestrator.py:284`). That write bumps @home's generation after the baseline was recorded. On the next sync, `btrfs find-new /home &lt;baseline&gt;` surfaces `sync-history.json` as changed; since `prefix=""` for the `/home` entry, any changed file triggers divergence (`folder_sync.py:341`). The default `/home` config is therefore unusable for repeated syncs without `--allow-divergence`.
+
+The integration test does not catch this because it uses `/home/&lt;user&gt;/pcswitcher-folder-sync-test` (non-empty prefix); tool writes under `~/.local/share/pc-switcher/` fall outside that prefix and are correctly ignored.
+
+Fix options:
+- Move baseline recording to after `_update_sync_history()` completes
+- Filter pc-switcher's own state directory from `find-new` output when deciding divergence for empty-prefix syncs
+- Add a unit test simulating the second sync with `/home` as root (empty prefix), `find-new` returning only `sync-history.json`, asserting validate() does NOT error
+- Add an integration test scenario using the default `/home`-root config with two consecutive A→B syncs
+
+Structured gaps in VERIFICATION.md frontmatter for `/gsd-plan-phase --gaps`.
+
+### 5 Present-But-Behavior-Unverified Truths (human_needed items)
+
+All five ROADMAP success criteria are PRESENT_BEHAVIOR_UNVERIFIED — code is wired and mechanism is correct, but proof requires live Hetzner VM execution:
+
+1. **A→B byte-identical content** (SC1) — requires real rsync-as-root over SSH
+2. **File metadata preservation** (SC2) — requires live VMs with cross-owner files and `--numeric-ids` in action
+3. **Machine-specific exclusions** (SC3) — requires VM execution to verify `--filter` rules actually suppress/pass the right files
+4. **B→A round-trip with deletions** (SC4) — requires bidirectional VM execution
+5. **VM integration test suite** (SC5) — tests exist and collect cleanly; all 7 coverage items carry `status: unknown` / `human_judgment: true`; tests have never been run against live VMs</result>
+<usage><subagent_tokens>57494</subagent_tokens><tool_uses>58</tool_uses><duration_ms>936754</duration_ms></usage>
+</task-notification>
