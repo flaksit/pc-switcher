@@ -1,0 +1,1 @@
+can't the two vm's be reset at the same time? Lock is global, but isn't there a script that resets both? This is a common scenario, no? If not available as functionality yet, there was probably a reason.
