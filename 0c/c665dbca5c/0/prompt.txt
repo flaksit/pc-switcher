@@ -1,0 +1,138 @@
+<task-notification>
+<task-id>a8f3a4a6511513d91</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/5023206f-3c90-47ef-8cce-0f88d3a9c8ab/tasks/a8f3a4a6511513d91.output</output-file>
+<status>completed</status>
+<summary>Agent "Summarize requirements and MVP scope" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Based on my review of the planning docs and system specifications, here's what I found:
+
+## 1. MVP Scope: Core Workflow &amp; Scope
+
+**High Level Requirements (6510 bytes, "## Workflow" section):**
+
+&gt; "Simple workflow: 1) Work on source machine, 2) Startup/awaken target machine if not started yet, 3) Manual trigger sync from source to target, 4) Wait for sync to complete, 5) Resume work"
+
+From **Feature Breakdown**, the MVP consists of:
+- **Items 1-4 (Core/Infrastructure — P1 priorities)**:
+  1. Basic CLI &amp; Infrastructure
+  2. Safety Infrastructure (btrfs snapshot management)
+  3. Installation &amp; Setup
+  4. Rollback Capability
+  
+- **Items 5-6 (User Features — the actual sync jobs)**:
+  5. **User Data Sync** — `/home` and `/root` with metadata, selective caches, exclusions, conflict detection
+  6. **Package Management Sync** — apt/snap/flatpak/PPAs/manual installs, detect conflicts/version mismatches
+
+**Key user story constraint**: "Only one machine is actively used at a time" — no bi-directional sync in MVP.
+
+---
+
+## 2. Sync Home Directory: Technical Design
+
+**Requirements (High Level Requirements, "What Must Sync"):**
+
+&gt; "User data (`/home`, `/root`)
+&gt; - All documents, code, configs, application data
+&gt; - Selective caches: dev tool caches (`uv`, `pip`, `cargo`, `npm`) synced; browser/IDE caches excluded
+&gt; - Specific mention for VS Code"
+
+**Critical constraint (Environment section):**
+
+&gt; "All machines have a single btrfs filesystem with a flat layout (all synced data on one filesystem)"
+
+**Technical approach NOT yet specified.** The detailed job spec for User Data Sync doesn't exist in the docs yet. The architecture allows for task-specific implementations (bash scripts via Python orchestration per ADR-003), but no decision on rsync vs. btrfs snapshots vs. custom sync method is documented.
+
+---
+
+## 3. Sync Packages: Technical Design
+
+**Requirements (High Level Requirements):**
+
+&gt; "Installed packages: apt, snap, flatpak, manual .debs, custom PPAs, packages installed through install scripts"
+&gt; 
+&gt; "Each includes sync logic, conflict detection, and validation."
+
+**Technical approach: NOT yet detailed.** No job implementation or spec exists. The Feature Breakdown says packages must "detect package conflicts or version mismatches," but the actual mechanism (list comparison, dpkg/rpm query, etc.) is unspecified.
+
+---
+
+## 4. Locked-In Architectural Constraints
+
+**ADR-002 (SSH Communication Channel)**:
+- Single persistent SSH connection with multiplexing (`ControlMaster`), not per-operation
+- Target-side scripts produce **line-buffered stdout** for progress (no polling)
+- Exit codes for success/failure; stdout/stderr separated
+- "Forbidden": custom protocols, daemons on target, per-operation SSH connections
+
+**ADR-003 (Python + Task-Specific Languages)**:
+- Python orchestrator (Python 3.14, `uv` for dependency management, `asyncssh` library)
+- Task-specific bash scripts for individual sync operations (bundled in `scripts/`)
+- All orchestration logic in Python; delegation to bash where appropriate
+
+**ADR-005 (Asyncio for Concurrency)**:
+- **All Job methods MUST be `async def`** (`validate()`, `execute()`)
+- Use `asyncssh` for remote operations (cancellable)
+- Use `asyncio.TaskGroup` for structured concurrency
+- Signal handlers trigger `asyncio.Task.cancel()` for immediate abort
+
+**ADR-010 (Logging Infrastructure)**:
+- stdlib `logging` module with custom Handler
+- File logging (JSON), TUI logging (Rich-formatted)
+- Configurable log levels separately for file and TUI
+
+---
+
+## 5. Job Abstraction
+
+**From `/src/pcswitcher/jobs/base.py`:**
+
+```python
+class Job(ABC):
+    name: ClassVar[str]
+    required: ClassVar[bool]
+    CONFIG_SCHEMA: ClassVar[dict] = {}
+    
+    # Async interface
+    async def validate(self) -&gt; list[ValidationError]: ...
+    async def execute(self) -&gt; None: ...
+    
+    # Helpers provided to jobs
+    @property
+    def source(self) -&gt; LocalExecutor: ...  # For local operations
+    @property
+    def target(self) -&gt; RemoteExecutor: ...  # For remote SSH operations
+    
+    def _log(host: Host, level: LogLevel, message: str, **extra) -&gt; None
+    def _report_progress(update: ProgressUpdate) -&gt; None
+    def _validation_error(host: Host, message: str) -&gt; ValidationError
+```
+
+**Subclasses:**
+- `SystemJob(Job)` — infrastructure (btrfs snapshots, installation); `required=True`, not in config
+- `SyncJob(Job)` — user-facing features; `required=False`, configurable via `sync_jobs` in config.yaml
+- `BackgroundJob(Job)` — parallel execution (disk monitoring); runs throughout sync
+
+**Every sync job gets**:
+- Configuration validation via JSON Schema (declared in `CONFIG_SCHEMA`)
+- Logging at 6 levels (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL)
+- Progress reporting with percent/current/total/item
+- SSH executors for both source and target
+- Graceful cancellation via `asyncio.CancelledError`
+
+---
+
+## Summary for MVP Sprint
+
+To reach "sync home dir + sync packages fast":
+
+1. ✅ **Infrastructure (already implemented)**: Core orchestrator, SSH layer, asyncio concurrency, btrfs snapshot jobs, logging
+2. ❌ **Blocking issues (3 of them per Issue Triage 2025-12-31)**:
+   - #103: Integrate stdlib logging (diagnostics for third-party libs)
+   - #37: Add `--dry-run` flag (safety before sync)
+   - #47: Warn on consecutive same-source syncs (prevent overwrite)
+3. ⏳ **Then implement the two sync jobs** as `SyncJob` subclasses following the abstraction above
+
+The technical *how* for each sync job (rsync? btrfs send? apt-mark? dpkg query?) is **not yet specified in the docs** — this is executor-level detail left to the job implementer to design.</result>
+<usage><subagent_tokens>41779</subagent_tokens><tool_uses>24</tool_uses><duration_ms>91013</duration_ms></usage>
+</task-notification>
