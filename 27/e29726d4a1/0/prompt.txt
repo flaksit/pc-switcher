@@ -1,0 +1,42 @@
+Merge the base branch into the current branch, resolving conflicts locally (including smart 3-way merge of GSD `.planning/`). Base = PR's target branch if a PR exists, else `main`. Argument: optional PR number (overrides auto-detected PR; also gates the CI-wait step).
+
+## Steps
+
+1. **Identify branch + optional PR.** On `main` (`git rev-parse --abbrev-ref HEAD` = `main`) → stop, ask. Else detect PR best-effort:
+
+   - `` given → `gh pr view  --json number,headRefName,baseRefName`.
+   - Else `gh pr view --json number,headRefName,baseRefName` (current branch).
+   - No PR found → `PR_NUMBER=""`, continue (not an error).
+
+2. **Clean tree.** `git status --porcelain` must be empty.
+
+3. **Fetch + find merge-base.** Resolve `BASE_REF`:
+
+   - PR found → `BASE_REF=origin/<pr.baseRefName>`.
+   - No PR → `BASE_REF=origin/main`.
+
+   ```bash
+   git fetch origin <baseRefName-or-main>
+   MERGE_BASE=$(git merge-base HEAD $BASE_REF)
+   ```
+
+4. **Logical merge of GSD's `.planning/` folder.** Do not trust git's conflict detection — these files are additive (tables, append logs, parallel rows) and git misses semantic conflicts.
+
+   For every `.planning/` file in `git diff --name-only $MERGE_BASE $BASE_REF` ∪ `git diff --name-only $MERGE_BASE HEAD`, do a 3-way logical merge from base/$BASE_REF/branch versions (`git show $REF:<path>`):
+
+   - **Renumber on collision first.** If the base branch introduced an id (milestone/phase/wave/task/ADR) the branch also added for a different artifact → **branch** renumbers (base canonical). Lowest free slot, rename files/dirs, rewrite every ref (`git grep` old id → empty), resolve in dependency order (milestone → phase → wave → task). Branch id already referenced from a merged base PR → stop, ask.
+   - **STATE.md** — union tables, latest timestamp wins for scalars, sum counters then recompute averages, prefer branch for `Current Position` unless base advanced past it.
+   - **ROADMAP.md** — union phases, take most-advanced status; both sides reordered → ask.
+   - **Phase dirs / SPEC / PLAN / VERIFICATION** — only-one-side modified → take it; both → merge by section, union new sections, take most-advanced checkbox state.
+   - **Append-only logs** (quick tasks, learnings, decisions) — union entries, sort by timestamp.
+   - **Ambiguous** → stop, ask.
+
+   `git add` each merged file so the index already holds the resolution.
+
+5. **Merge code.** `git merge $BASE_REF --no-ff --no-edit`. Code conflicts: resolve; unclear → ask. `.planning/` files re-conflict here → step 4 missed something, redo.
+
+6. **Verify.** `@verify`. Failures → fix, redo.
+
+7. **Push (conditional).** Upstream set (`git rev-parse --abbrev-ref --symbolic-full-name @{upstream}` succeeds) → `git push`. No upstream → skip, tell user "no upstream set, skipping push".
+
+8. **CI (conditional).** `PR_NUMBER` empty → skip. Else delegate `gh pr checks` wait to a background haiku subagent (per global CLAUDE.md — no busy-wait). Report final status only. Failures → fix → verify → push.
