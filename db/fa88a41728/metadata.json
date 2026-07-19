@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "dbfa88a41728",
+  "strategy": "import",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/db/fa88a41728/0/metadata.json",
+      "transcript": "/db/fa88a41728/0/full.jsonl",
+      "compact_transcript": "/db/fa88a41728/0/transcript.jsonl",
+      "content_hash": "/db/fa88a41728/0/content_hash.txt",
+      "prompt": "/db/fa88a41728/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 6301,
+    "cache_read_tokens": 1168590,
+    "output_tokens": 5005,
+    "api_call_count": 9
+  },
+  "imported": true
+}
