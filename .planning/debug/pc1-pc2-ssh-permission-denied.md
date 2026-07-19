@@ -3,7 +3,8 @@ slug: pc1-pc2-ssh-permission-denied
 status: resolved
 trigger: "Integration tests fail: pc1->pc2 sync connection fails with 'Permission denied for user testuser on host pc2'. User suspects a transient / CI-concurrency cause, not a real code bug. Rejects the earlier 'sync clobbers ~/.ssh' hypothesis."
 created: 2026-07-18
-updated: 2026-07-18T22:00:00+02:00
+updated: 2026-07-19
+resolution: "Root cause: folder_sync mirrored ~/.ssh/authorized_keys, so the Second A->B sync overwrote pc2's copy and deleted its trust entry for pc1, breaking the next SSH auth. Fixed by excluding .ssh/authorized_keys from /home and /root (commit 8f625d3, merged in PR #172); previously-failing E2E tests confirmed passing on fresh-provision CI."
 ---
 
 # Debug: pc1 -> pc2 sync SSH "Permission denied" in integration tests
@@ -121,8 +122,8 @@ fix: |
 verification: |
   Static: YAML parses and both blocks now list `.ssh/authorized_keys`; `ruff check` clean on the test
   file; `basedpyright` 0 errors/0 warnings; 140 config unit tests pass (test_config_system.py).
-  End-to-end: pending a full fresh-provision CI run on PR #172 (delete VMs + push) to confirm the
-  previously-failing E2E sync tests now pass.
+  End-to-end: CONFIRMED. The fix merged in PR #172 (2026-07-18) and the previously-failing E2E sync
+  tests now pass on a full fresh-provision CI run.
 
 files_changed:
   - src/pcswitcher/default-config.yaml
