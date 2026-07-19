@@ -1,0 +1,1 @@
+The reused-VM path does not take the lock? That is absolutely a very gross violation of the entire test-VM infrastructure philosophy. That is a real, big and important bug. You sure?
