@@ -1,0 +1,49 @@
+<task-notification>
+<task-id>a7e43a0d84c69a51c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a682436b-65e6-45a8-9535-3dac71f4ad7b/tasks/a7e43a0d84c69a51c.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix inter-VM host-key drift" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>My change is confined to `reset-vm.sh` (+53 lines). The other modified/deleted `test_*.py` files are the concurrent agent's work — I did not touch them. I left everything unstaged as instructed (no commit). Task complete.
+
+## Report
+
+### (a) Confirmed root cause of the drift
+
+Inter-VM SSH host-key trust is seeded exactly **once**, at provisioning time, by `internal/configure-hosts.sh` (`ssh-keygen -R &lt;peer&gt;; ssh-keyscan -H &lt;peer&gt; &gt;&gt; known_hosts`, lines 154-157), and then **frozen** into each VM's `@home` baseline snapshot by `internal/create-baseline-snapshots.sh`. Every `reset-vm.sh` run restores that frozen `@home` (and its `known_hosts`) verbatim and reboots.
+
+The problem is that a VM's trust of its peer lives in *its own* `@home` baseline, while the peer's host key lives in the *peer's* `@` baseline — two independent, per-VM snapshots that can desync. Concretely they drift apart because:
+
+- `upgrade-vms.sh` resets both VMs, runs `apt-get full-upgrade`, and **recreates both baselines via `create-baseline-snapshots.sh` without ever re-running `configure-hosts.sh`**. If an upgrade regenerates a VM's SSH host keys, the new `@` baseline holds the new key but the peer's `@home` baseline still pins the old one.
+- A single-VM reprovision (`create-vm.sh` → `installimage` generates fresh host keys → new `@` baseline) without re-running `configure-hosts.sh` + recreating the peer's `@home` baseline produces the same desync.
+
+Because reset restores the stale `@home` baseline on **every** run, the mismatch is **persistent**, which is why reverse-direction sync (pc2→pc1) and `TestConsecutiveSyncWarning::test_back_sync_clears_warning` kept failing. This is environmental (snapshot/provisioning coupling), not application code.
+
+I verified on the live VMs that host keys themselves are stable and self-consistent: pc1's running `/etc/ssh/ssh_host_ed25519_key.pub` (`SHA256:49QM…`) equals pc1's `@` baseline, and pc2's running key (`SHA256:rphz…`) equals pc2's `@` baseline. So reset restores each VM's *own* keys consistently; the fragility is purely in the frozen cross-VM `known_hosts` not tracking the peer.
+
+### (b) Script changed and how
+
+Only `tests/integration/scripts/reset-vm.sh` (+53 lines). Added **Step 6.5** immediately after the VM comes back online (after `wait_for_ssh`, before the subvolume-rotation Step 7). It:
+
+- Determines the VM's own identity via `hostname` (`pc1`/`pc2`) and derives the peer (the other one).
+- Re-scans the peer with a bounded retry loop (`ssh-keyscan -T 5 -t rsa,ecdsa,ed25519 -H &lt;peer&gt;`, up to 120s) that waits for the peer's ed25519 key to be offered — this tolerates the peer being briefly mid-reboot, since `reset-vm.sh` runs in parallel for both VMs (confirmed in `run-integration-tests.sh:231-234` and `upgrade-vms.sh:258-261`). Peer host keys are stable across reboot, so a retry always converges to the correct key.
+- Removes any prior entry (`ssh-keygen -R &lt;peer&gt;`) then appends the freshly-scanned keys — idempotent, no accumulation.
+- Runs as `testuser` (not sudo), since `known_hosts` is in testuser's home, matching the file it restores. Fails loudly if the peer's ed25519 key can't be obtained.
+
+This matches existing style (`ssh_vm 'bash -s'` heredocs, `log_step_prefixed`, sourced `common.sh`) and directly overrides whatever possibly-stale peer entry the baseline restored. It runs for **both** directions because reset-vm.sh is invoked once per VM.
+
+### (c) Live-VM verification (both directions)
+
+Refreshed both live VMs by running the exact new Step-6.5 logic on each. Afterwards:
+- `strict pc1 → pc2`: `OK hostname=pc2`
+- `strict pc2 → pc1`: `OK hostname=pc1`
+- Idempotency: pc1 has exactly 1 ed25519 entry for pc2, pc2 has exactly 1 for pc1.
+
+The VMs are immediately usable for local test runs. (`bash -n` passes; shellcheck is not installed on this host, so I validated the inner heredoc body's syntax separately — it passes.)
+
+### (d) Survives a reset-vm.sh cycle?
+
+Yes, by construction (reasoned, not run — per your constraint). Step 6.5 executes at the **end of every reset**, writing to the freshly-restored **running** `@home`, and it does **not** depend on the baseline `known_hosts` being correct — it actively removes and re-scans. So each reset self-heals regardless of baseline drift. Note it deliberately does **not** rewrite the `@home` baseline snapshot; it doesn't need to, since it re-runs on every reset. The residual coupling in `upgrade-vms.sh`/`create-baseline-snapshots.sh` (baselines still frozen with a possibly-stale peer key) becomes harmless because the per-run refresh always supersedes it before tests use the VMs.</result>
+<usage><subagent_tokens>96441</subagent_tokens><tool_uses>26</tool_uses><duration_ms>339489</duration_ms></usage>
+</task-notification>
