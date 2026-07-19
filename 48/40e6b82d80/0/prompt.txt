@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b7h7hdgmi</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6a95d2b5-c397-4c12-b645-5cd1a9d5fa2d/tasks/b7h7hdgmi.output</output-file>
+<status>completed</status>
+<summary>Background command "Background-monitor the re-run CI + integration after the fix" completed (exit code 0)</summary>
+</task-notification>
