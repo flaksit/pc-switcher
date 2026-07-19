@@ -106,7 +106,7 @@ def get_last_role_with_error() -> tuple[SyncRole | None, bool]:
         else:
             return None, True
 
-    except (json.JSONDecodeError, OSError, KeyError):
+    except json.JSONDecodeError, OSError, KeyError:
         return None, True
 
 
@@ -130,7 +130,7 @@ def record_role(role: SyncRole, peer: str | None = None) -> None:
     try:
         raw = json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else {}
         existing: dict[str, object] = raw if isinstance(raw, dict) else {}
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError, OSError:
         existing = {}
 
     data = {**existing, "last_role": role.value}
