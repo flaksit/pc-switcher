@@ -1,0 +1,13 @@
+I haven't been working on this project for months. I remember we were stuck on tests and I felt completely overwhelmed by my efforts to get tests to be well structured, complete, efficient and useful. Way to much effort has gone into that. The project scope is not that big, but after weeks of work, we are still stuck on the framework (which should be more or less ok now) and the tests for it.
+
+We followed github speckit as dev workflow.
+Haven't used this anymore since: switched to more lightweight superpowers and now GSD.
+So I'd rather continue the GSD way, but keep the ADR, I think that is a good thing.
+
+Most of all, I want to take a step back and see
+- what is the status?
+- how do we get as fast as possible to first useful functionality (sync home dir and sync packages), at good quality
+
+So I want you to take a critical look at where we are and how this project is organized and propose a way forward that is more efficient than the weeks we spent without delivering any useful functionality.
+So give a concise status report and proposal. Of course, spar with me where you deem that useful.
+Don't ask me about the status; I don't remember; look at codebase.
