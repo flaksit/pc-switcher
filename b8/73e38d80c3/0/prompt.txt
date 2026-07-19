@@ -1,0 +1,3 @@
+drop/root and put with /etc as you suggest.
+
+plan immediately or should I first run discuss?
