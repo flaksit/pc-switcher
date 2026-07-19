@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b6tt3u3qm</task-id>
+<tool-use-id>toolu_01QbkTD3n8Pea1uJJeszRGMo</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/36eacdec-e876-4673-b358-4a4291fb449f/tasks/b6tt3u3qm.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR checks until complete" completed (exit code 0)</summary>
+</task-notification>
