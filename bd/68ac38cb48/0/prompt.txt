@@ -1,0 +1,1 @@
+use hcloud to delete the 2 stuck hetzner vms
