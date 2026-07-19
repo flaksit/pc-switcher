@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bjptjp823</task-id>
+<tool-use-id>toolu_01CvBscvLGzBDY1UjN1sN9X5</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/bjptjp823.output</output-file>
+<status>completed</status>
+<summary>Background command "Background-poll integration retry to terminal state" completed (exit code 0)</summary>
+</task-notification>
