@@ -1,0 +1,41 @@
+<task-notification>
+<task-id>adde47a0609c8b605</task-id>
+<tool-use-id>toolu_01P7uMk8sUWZSLu9SffKPqEh</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/5023206f-3c90-47ef-8cce-0f88d3a9c8ab/tasks/adde47a0609c8b605.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit open issues for MVP blockers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Triage: Open issues vs. home-sync MVP
+
+I listed all 31 open issues and read every core/pipeline-relevant one in detail (79, 82, 78, 126, 30, 28, 62, 87, 48, 117, 118, 119, 31, 29, 24, 23, 26). I verified two load-bearing claims against the source.
+
+### Verified facts
+- `InstallOnTargetJob` does hit the GitHub API on a real sync (`install_on_target.py:106` → `get_release_floor()` → `version.py:get_releases()`), but the code already "minimize[s] github lookups" (`install_on_target.py:97`). One real sync makes ~1-2 calls — well under the 60/hr unauthenticated limit. The rate-limit pain is test-volume only.
+- The "1 module = 1 Job class" constraint (#30): adding a single new `HomeSyncJob` in its own module is exactly the supported case. Existing jobs (`dummy_success.py`, `dummy_fail.py`, `btrfs.py`, `install_on_target.py`) are already one-class-per-module.
+
+### Result: no 🔴 BLOCKERS, no 🟠 URGENT-BUGs for the MVP path
+
+| # | What | Bucket | Why |
+|---|------|--------|-----|
+| 117 | Feature 5: Home Sync | n/a | This *is* the MVP target, not a blocker. |
+| 79 | GITHUB_TOKEN not passed → rate limit | 🟡 PARK | Mechanism is real, but bites only at test volume; one real sync stays under 60/hr. Latest comment: "scope of this ticket is only testing." |
+| 82 | Remove GitHub API dep from core | 🟡 PARK | Cleanup refactor; a single real sync's couple of API calls are harmless. |
+| 126 | Unify source/target execution | 🟡 PARK | Current dual Python/bash impl works end-to-end; pure maintenance refactor. |
+| 30 | Remove 1-module=1-class constraint | 🟡 PARK | Does NOT block adding a job — one new module/class fits the existing rule. Only matters if you want 2 classes in 1 file. |
+| 28 | DAG for Jobs | 🟡 PARK | Jobs already run in a defined sequence; home-sync is just one more job in that sequence. |
+| 62 | Missing real integration tests (P0) | 🟡 PARK (test) | Real concern that home-sync's real behavior would be unverified, but it's test coverage — and you said the test framework is explicitly out of scope now. |
+| 48 | CLI flags for interactive prompts | 🟡 PARK | Only bites non-interactive/automated runs. A human running `pc-switcher sync` interactively can answer prompts. |
+| 31 | Rollback CLI command | 🟡 PARK | Pipeline already takes a pre-snapshot on the target before jobs run; rollback CLI is convenience, not a safety prerequisite. btrfs rollback can be done manually if needed. |
+| 78 | Lock not cleared on cancelled CI run | ⚪ test-only | Body is specifically about the integration-tests.yml workflow lock fixture being killed by GitHub's `cancel`, not the orchestrator's machine lock. See note below. |
+| 87 | Stricter SSH host checking in run-integration-tests.sh | ⚪ test-only | Lives in test harness script, not product. |
+| 118, 119 | Package / System-config sync | 🟡 PARK | Different features, not home-sync. |
+| 29, 24, 23, 26 | Forever-jobs, optional DiskSpaceMonitor, drop-btrfs, drop-Ubuntu-24.04 | 🟡 PARK | MVP targets the existing btrfs/Ubuntu-24.04 happy path; none are on the home-sync path. |
+| 156,153,150,132,88,85,76,69,68,65,64,46,40 | (test-framework, docs, VM mgmt, VSCode-sync) | ⚪ | Not on the core sync path. |
+
+### One thing worth a 5-minute check (not an issue, no ticket)
+#78 is about the *CI workflow* lock, but it raises an adjacent real-sync question: does the orchestrator release the *machine* lock if a real destructive home-sync is `Ctrl-C`'d mid-run? That's product behavior, not covered by #78. If it isn't already handled, a stale lock would block re-running — a nuisance, not data-loss (snapshots protect data). Worth confirming the orchestrator's lock cleanup is in a `finally`/signal handler before running destructive syncs, but it does not block *building* the job.
+
+### Bottom line
+Before building home-sync: nothing — proceed. None of the open issues block adding a `HomeSyncJob` to the existing pipeline or running it for real. The frequently-cited ones (#79/#82 GitHub API, #30 job constraint, #28 DAG, #126 unification, #62 tests) are either test-volume-only, refactors, or explicitly out of scope; the destructive-sync safety net (target pre-snapshot) already exists in the pipeline. Just confirm the orchestrator releases its machine lock on interrupt before your first real destructive run.</result>
+<usage><subagent_tokens>38239</subagent_tokens><tool_uses>6</tool_uses><duration_ms>99043</duration_ms></usage>
+</task-notification>
