@@ -44,8 +44,9 @@ If no relevant files changed, the `CI Status` check reports success with "skippe
 
 **Jobs**:
 1. **check-changes**: Determines if integration tests should run based on changed files
-2. **integration**: Runs actual tests (conditional on check-changes + non-draft PR)
-3. **status**: Always runs and reports final status (this is the required check)
+2. **wait-for-ci**: Blocks on CI's `CI Status` check (lint + unit tests) for the PR head commit, so integration never starts on a red build. Uses `lewagon/wait-on-check-action`; there is no native cross-workflow `needs:` because lint/unit run in `ci.yml` on `push`.
+3. **integration**: Runs actual tests (conditional on check-changes + non-draft PR; needs `wait-for-ci`)
+4. **status**: Always runs and reports final status (this is the required check)
 
 **Conditions for running tests**:
 - PR must not be a draft (`if: github.event.pull_request.draft == false`)
@@ -102,8 +103,8 @@ flowchart TD
         c2["Unit Tests: ✓ runs"]
         c3["Integration: ✓ runs<br/>(if not draft)"]
 
-        %% Layout constraint only (made invisible via `linkStyle` below).
-        c1 --> c2
+        %% Integration gates on lint + unit passing (visible dependency).
+        c1 --> c3
         c2 --> c3
     end
     subgraph docs_change["Docs-Only PR"]
@@ -121,8 +122,8 @@ flowchart TD
     code_change -->|"Checks pass"| merge
     docs_change -->|"Skipped = pass"| merge
 
-    %% Hide the internal layout-only links (the first 4 links in this diagram).
-    linkStyle 0,1,2,3 stroke:transparent,stroke-width:0
+    %% Hide only the docs-subgraph layout-only links (links 2 and 3).
+    linkStyle 2,3 stroke:transparent,stroke-width:0
 ```
 
 **Benefits**:

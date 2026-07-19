@@ -32,9 +32,29 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
 
+  wait-for-ci:
+    name: Wait for lint and unit tests
+    needs: check-changes
+    if: github.event.pull_request.draft == false && needs.check-changes.outputs.should-run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # No native cross-workflow `needs:`. CI (lint + unit) runs in ci.yml on the
+      # push event; block on its aggregate "CI Status" check for this commit so
+      # the long-running integration job never starts on a red build.
+      # Must use the PR head SHA, not github.sha (the merge commit) — ci.yml's
+      # checks attach to the head commit. "CI Status" always runs (even when
+      # lint/unit are path-filtered out), so it is safe to wait on by name.
+      - name: Wait for CI Status
+        uses: lewagon/wait-on-check-action@v1.8.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          check-name: CI Status
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 15
+
   integration:
     name: Integration Tests
-    needs: check-changes
+    needs: [check-changes, wait-for-ci]
     if: github.event.pull_request.draft == false && needs.check-changes.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     concurrency:
@@ -134,7 +154,7 @@ jobs:
   status:
     name: Integration Tests Status
     runs-on: ubuntu-latest
-    needs: [check-changes, integration]
+    needs: [check-changes, wait-for-ci, integration]
     if: always()
     steps:
       - name: Report status
@@ -145,6 +165,9 @@ jobs:
           elif [[ "${{ needs.check-changes.outputs.should-run }}" != "true" ]]; then
             echo "✓ Integration tests skipped (no relevant changes)"
             exit 0
+          elif [[ "${{ needs.wait-for-ci.result }}" != "success" ]]; then
+            echo "✗ Integration tests blocked: lint/unit tests did not pass"
+            exit 1
           elif [[ "${{ needs.integration.result }}" == "success" ]]; then
             echo "✓ Integration tests passed"
             exit 0

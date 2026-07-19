@@ -304,6 +304,16 @@ Integration tests are expensive (they use cloud VMs), so they don't run on every
 | New commits to ready PR | **Runs** |
 | Manual trigger | **Runs** (via `workflow_dispatch`) |
 
+### Gating on Lint and Unit Tests
+
+Integration tests are the most expensive checks, so they must not start until the fast checks pass. Lint and unit tests run in `ci.yml` on the `push` event, while integration tests run in `integration-tests.yml` on `pull_request`; GitHub Actions has no cross-workflow `needs:`, so on a PR push both workflows would otherwise start in parallel.
+
+To gate them, `integration-tests.yml` has a `wait-for-ci` job that blocks on CI's aggregate `CI Status` check for the PR head commit (using [`lewagon/wait-on-check-action`](https://github.com/lewagon/wait-on-check-action)), and the `integration` job depends on it. If `CI Status` fails, `wait-for-ci` fails and the integration job is skipped — no VM infrastructure is provisioned on a red build.
+
+Notes:
+- It waits on the PR head SHA, not `github.sha` (the merge commit) — `ci.yml`'s checks attach to the head commit.
+- It waits on `CI Status` (the aggregate job) rather than `Lint`/`Unit Tests` individually, because those are skipped by path filtering on some changes and would not exist as checks to wait on, whereas `CI Status` always reports.
+
 ### Concurrency Control
 
 Integration tests use GitHub Actions `concurrency.group` to prevent parallel runs:

@@ -26,7 +26,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from pcswitcher.logger import is_interactive
+from pcswitcher.terminal import is_interactive
 
 __all__ = ["Confirmer", "PausableUI", "TerminalUIConfirmer"]
 
