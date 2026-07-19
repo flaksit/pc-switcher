@@ -1,0 +1,2 @@
+Why would this probably be not a valid token anymore? It worked until now, no?
+And god damnit why do you still try to "just overwrite" stuff on the VMs. Don't you know these are provisioned and that there are btrfs snapshots taken and that on reset these snapshots are restored so "just overwrite" is futile. RTFM!
