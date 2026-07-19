@@ -1,0 +1,2 @@
+config.yaml on this pc excludes a few big folders.
+I ran "pc-switcher sync fleksi --dry-run" (see single log file if you need it). Still 80GB. Really? Verify that exclude filter works well. Log file is >300MB. Is this because this is first-time sync, or will log file always be that big?
