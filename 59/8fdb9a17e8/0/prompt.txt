@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bz2ybklcy</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/eebf8232-0dc0-48a6-a064-08a64fa3cdb1/tasks/bz2ybklcy.output</output-file>
+<status>killed</status>
+<summary>Background command "Poll integration run to completion (uninterrupted)" was stopped</summary>
+</task-notification>
