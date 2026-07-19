@@ -1,0 +1,12 @@
+1: I want to compare two options for speed, correctness and SSD-wear (any other criteria?):
+  - rsync (does the ADR say really only asyncssh or is that only the package choice for python code - anyway, decisions can be changed if they are not good) 
+  - btrfs send/receive WITH exception support: send new subvol version to remote, on remote, overwrite the excepted folders/files with their versions from the snapshot that was taken right before by the harness. 
+2: home folder (even without /root) is good MVP.
+
+You suggest "park framework issues". Do you mean issues with como:core or testing-framework issues?
+The latter can be parked (nothing to do for it). The future should be checked if there are no blockers for our MVP scope (2).
+
+So first
+- give your take on 1
+- check for urgent/blocking issues to fix before working on 2
+Do this in parallel. Subagents. Keep your context clear
