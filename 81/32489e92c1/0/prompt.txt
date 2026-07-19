@@ -1,0 +1,1 @@
+update the config.yaml on my system to the new way of configuring filters for folder sync
