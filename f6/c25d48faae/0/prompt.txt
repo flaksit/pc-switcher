@@ -1,0 +1,2 @@
+I asked FUNCTIONALLY equivalent. precedence reversal can't be a problem: just reverse before giving to rsync. Equivalent.
+What I mean with FUNCTIONALLY: can we express the same things and can we easily convert from gitignore to rsync syntax. Evaluate again.
