@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, override
 
+from pcswitcher.disk import format_bytes
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
 
@@ -615,14 +616,20 @@ class FolderSyncJob(SyncJob):
             files_transferred = seed_files + mirror_files
             bytes_transferred = seed_bytes + mirror_bytes
 
-            # Per-folder summary (D-16)
+            # Per-folder summary (D-16). Human-readable size at INFO; exact byte
+            # count kept at DEBUG for precise diagnostics (#189).
             self._log(
                 Host.SOURCE,
                 LogLevel.INFO,
                 f"{prefix}Completed sync of {folder.path!r}: "
                 f"{files_transferred} files transferred, "
-                f"{bytes_transferred} bytes, "
+                f"{format_bytes(bytes_transferred)}, "
                 f"{files_deleted} deletions",
+            )
+            self._log(
+                Host.SOURCE,
+                LogLevel.DEBUG,
+                f"{prefix}Transferred {bytes_transferred} bytes for {folder.path!r}",
             )
 
         # Progress is reported per folder, so the bar resets for each one and would

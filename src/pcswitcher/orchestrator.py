@@ -19,7 +19,7 @@ from pcswitcher.config import Configuration
 from pcswitcher.config_sync import sync_config_to_target
 from pcswitcher.confirmer import Confirmer, TerminalUIConfirmer
 from pcswitcher.connection import Connection
-from pcswitcher.disk import DiskSpace, check_disk_space, parse_threshold
+from pcswitcher.disk import DiskSpace, check_disk_space, format_bytes, parse_threshold
 from pcswitcher.events import EventBus
 from pcswitcher.executor import LocalExecutor, RemoteExecutor, RemoteProcess
 from pcswitcher.jobs.base import Job, SyncJob
@@ -215,7 +215,7 @@ class Orchestrator:
     def _create_job_context(self, config: dict[str, Any]) -> JobContext:
         """Create JobContext with current orchestrator state.
 
-        Must only be called after SSH connection is established (Phase 2+).
+        Must only be called after SSH connection is established (step 2+).
         """
         assert self._local_executor is not None
         assert self._remote_executor is not None
@@ -232,7 +232,7 @@ class Orchestrator:
             allow_first_sync=self._allow_first_sync,
             confirmer=self._confirmer,
             # Connection is always set when _create_job_context is called in
-            # production (Phase 2+), but unit tests mock executors without a
+            # production (step 2+), but unit tests mock executors without a
             # real connection, so fall back to None (JobContext accepts it).
             target_username=self._connection.username if self._connection is not None else None,
         )
@@ -269,10 +269,10 @@ class Orchestrator:
         # TerminalUI does not start the Live (start() is still called below),
         # so creating it early is safe.
         #
-        # Calculate total steps: 8 system phases + sync jobs + 1 post-snapshot
-        # System phases: 1=source lock, 2=SSH, 3=target lock, 4=validation,
+        # Calculate total steps: 8 system steps + sync jobs + 1 post-snapshot
+        # System steps: 1=source lock, 2=SSH, 3=target lock, 4=validation,
         # 5=disk check, 6=pre-snapshots, 7=install on target, 8=config sync
-        # Count only enabled jobs for the initial estimate; Phase 4 discovery may
+        # Count only enabled jobs for the initial estimate; step 4 discovery may
         # reduce this further (e.g. module not found), so we correct via
         # set_total_steps() after _discover_and_validate_jobs() returns.
         total_steps = 8 + sum(1 for enabled in self._config.sync_jobs.values() if enabled) + 1
@@ -323,28 +323,29 @@ class Orchestrator:
             )
 
         try:
-            # Phase 1: Acquire source lock
+            # Step 1: Acquire source lock
             self._logger.info("Acquiring source lock", extra={"job": "orchestrator", "host": "source"})
             await self._acquire_source_lock()
             self._ui.set_current_step(1, "Source lock")
 
-            # Phase 2: Establish SSH connection
+            # Step 2: Establish SSH connection
             self._logger.info("Connecting to target", extra={"job": "orchestrator", "host": "source"})
             await self._establish_connection()
             assert self._remote_executor is not None
             self._ui.set_current_step(2, "Connect to target")
 
-            # Phase 3: Acquire target lock
+            # Step 3: Acquire target lock
             self._logger.info("Acquiring target lock", extra={"job": "orchestrator", "host": "target"})
             await self._acquire_target_lock()
             self._ui.set_current_step(3, "Target lock")
 
-            # Topology out-of-order / target-state check (between Phase 3 and 4):
-            # runs after the target lock so we can read the target's sync-history over SSH.
+            # Topology out-of-order / target-state check (between steps 3 and 4, no
+            # progress step of its own): runs after the target lock so we can read
+            # the target's sync-history over SSH.
             if not await self._check_out_of_order():
                 raise SyncAbortedByUser("Sync aborted at the out-of-order / target-state check")
 
-            # Phase 4: Job discovery and validation
+            # Step 4: Job discovery and validation
             self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator", "host": "source"})
             jobs = await self._discover_and_validate_jobs()
             # Correct the total now that we know the exact jobs that will run.
@@ -353,16 +354,16 @@ class Orchestrator:
             self._ui.set_total_steps(8 + len(jobs) + 1)
             self._ui.set_current_step(4, "Discover jobs")
 
-            # Phase 5: Disk space preflight check
+            # Step 5: Disk space preflight check
             await self._check_disk_space_preflight()
             self._ui.set_current_step(5, "Disk check")
 
-            # Phase 6: Pre-sync snapshots
+            # Step 6: Pre-sync snapshots
             self._logger.info("Creating pre-sync snapshots", extra={"job": "orchestrator", "host": "source"})
             await self._create_snapshots(SnapshotPhase.PRE)
             self._ui.set_current_step(6, "Pre-sync snapshots")
 
-            # Phase 7: Install/upgrade pc-switcher on target (after snapshots for rollback safety)
+            # Step 7: Install/upgrade pc-switcher on target (after snapshots for rollback safety)
             self._logger.info(
                 "Ensuring pc-switcher is installed on target",
                 extra={"job": "orchestrator", "host": "target"},
@@ -370,17 +371,17 @@ class Orchestrator:
             await self._install_on_target_job()
             self._ui.set_current_step(7, "Install on target")
 
-            # Phase 8: Sync config from source to target
+            # Step 8: Sync config from source to target
             self._logger.info("Syncing configuration to target", extra={"job": "orchestrator", "host": "target"})
             await self._sync_config_to_target()
             self._ui.set_current_step(8, "Sync config")
 
-            # Phase 9: Execute sync jobs with background monitoring
+            # Step 9: Execute sync jobs with background monitoring
             self._logger.info("Starting sync operations", extra={"job": "orchestrator", "host": "source"})
             job_results = await self._execute_jobs(jobs)
             session.job_results = job_results
 
-            # Phase 10: Post-sync snapshots
+            # Step 10: Post-sync snapshots
             self._logger.info("Creating post-sync snapshots", extra={"job": "orchestrator", "host": "source"})
             await self._create_snapshots(SnapshotPhase.POST)
             self._ui.set_current_step(8 + len(jobs) + 1, "Post-sync snapshots")
@@ -567,8 +568,8 @@ class Orchestrator:
 
         Convention: job_name == module_name (e.g., "dummy_success" → pcswitcher.jobs.dummy_success).
         Dynamically imports the module and scans its attributes for a SyncJob subclass whose
-        `name` ClassVar matches. Shared by `_discover_and_validate_jobs` (Phase 4 job discovery)
-        and `_first_sync_scopes` (pre-Phase-4 first-sync messaging) so the import/scan logic
+        `name` ClassVar matches. Shared by `_discover_and_validate_jobs` (step 4 job discovery)
+        and `_first_sync_scopes` (pre-step-4 first-sync messaging) so the import/scan logic
         lives in exactly one place.
 
         Returns:
@@ -608,7 +609,7 @@ class Orchestrator:
 
         Resolves every enabled job in `self._config.sync_jobs` (config order) to its SyncJob
         class via `_resolve_sync_job_class`, then calls `describe_first_sync_scope()` on each —
-        this runs before Phase 4 job discovery, so classes (not instances) are used. Jobs that
+        this runs before step 4 job discovery, so classes (not instances) are used. Jobs that
         return None (no overwrite scope, or nothing in scope for their config) contribute
         nothing; the orchestrator's warning falls back to generic phrasing when this is empty.
         """
@@ -918,15 +919,6 @@ class Orchestrator:
         source_task = check_disk_space(self._local_executor, "/")
         target_task = check_disk_space(self._remote_executor, "/")
         source_disk, target_disk = await asyncio.gather(source_task, target_task)
-
-        # Helper to format bytes in human-readable form
-        def format_bytes(bytes_value: int) -> str:
-            value = float(bytes_value)
-            for unit in ["B", "KiB", "MiB", "GiB", "TiB"]:
-                if value < 1024:
-                    return f"{value:.1f}{unit}"
-                value /= 1024
-            return f"{value:.1f}PiB"
 
         # Helper to check if disk space is sufficient
         def is_sufficient(disk_space: DiskSpace, threshold_type: str, threshold_value: int) -> bool:
