@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from pcswitcher.disk import check_disk_space, parse_threshold
+from pcswitcher.disk import check_disk_space, format_bytes, parse_threshold
 from pcswitcher.models import (
     ConfigError,
     DiskSpaceCriticalError,
@@ -169,7 +169,7 @@ class DiskSpaceMonitorJob(BackgroundJob):
                         free_space_str = f"{free_percent:.1f}%"
                 elif disk_space.available_bytes < critical_value:
                     is_critical = True
-                    free_space_str = self._format_bytes(disk_space.available_bytes)
+                    free_space_str = format_bytes(disk_space.available_bytes)
 
                 if is_critical:
                     self._log(
@@ -203,7 +203,7 @@ class DiskSpaceMonitorJob(BackgroundJob):
                         f"Disk space getting low on {hostname}",
                         mount_point=self.mount_point,
                         available_bytes=disk_space.available_bytes,
-                        available_formatted=self._format_bytes(disk_space.available_bytes),
+                        available_formatted=format_bytes(disk_space.available_bytes),
                         warning_threshold=self.context.config["warning_threshold"],
                     )
 
@@ -217,20 +217,3 @@ class DiskSpaceMonitorJob(BackgroundJob):
                 f"Disk space monitoring cancelled for {self.mount_point}",
             )
             raise
-
-    def _format_bytes(self, bytes_value: int) -> str:
-        """Format bytes as human-readable string.
-
-        Args:
-            bytes_value: Number of bytes
-
-        Returns:
-            Formatted string like "45.2 GiB"
-        """
-        if bytes_value >= 2**30:
-            return f"{bytes_value / 2**30:.1f} GiB"
-        if bytes_value >= 2**20:
-            return f"{bytes_value / 2**20:.1f} MiB"
-        if bytes_value >= 2**10:
-            return f"{bytes_value / 2**10:.1f} KiB"
-        return f"{bytes_value} B"
