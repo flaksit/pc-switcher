@@ -3,44 +3,46 @@
   "checkpoint_id": "7774aee1725c",
   "session_id": "7027bd19-f09c-4dc9-94e5-ce327e11d536",
   "strategy": "manual-commit",
-  "created_at": "2026-07-20T07:28:50.035497379Z",
+  "created_at": "2026-07-20T07:30:00.277674001Z",
   "branch": "main",
   "checkpoints_count": 1,
-  "save_step_count": 1,
-  "files_touched": [],
+  "save_step_count": 2,
+  "files_touched": [
+    "src/pcswitcher/jobs/folder_sync.py"
+  ],
   "agent": "Claude Code",
   "model": "",
   "turn_id": "e198c6e36925",
-  "checkpoint_transcript_start": 194,
-  "transcript_lines_at_start": 194,
-  "compact_transcript_start": 38,
+  "compact_transcript_start": 0,
   "token_usage": {
-    "input_tokens": 3,
-    "cache_creation_tokens": 3720,
-    "cache_read_tokens": 232515,
-    "output_tokens": 1575,
-    "api_call_count": 2
+    "input_tokens": 58,
+    "cache_creation_tokens": 215833,
+    "cache_read_tokens": 2553346,
+    "output_tokens": 51259,
+    "api_call_count": 32
   },
   "session_metrics": {
-    "turn_count": 3
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-20T07:30:00.25029361Z",
+    "agent_lines": 1,
+    "agent_removed": 0,
+    "human_added": 59,
+    "human_modified": 25,
+    "human_removed": 0,
+    "total_committed": 85,
+    "total_lines_changed": 86,
+    "agent_percentage": 1.1627906976744187,
+    "metric_version": 2
   },
   "prompt_attributions": [
     {
-      "checkpoint_number": 1,
+      "checkpoint_number": 2,
       "user_lines_added": 0,
       "user_lines_removed": 0,
       "agent_lines_added": 0,
       "agent_lines_removed": 0
-    },
-    {
-      "checkpoint_number": 2,
-      "user_lines_added": 9,
-      "user_lines_removed": 0,
-      "agent_lines_added": 203,
-      "agent_lines_removed": 14,
-      "user_added_per_file": {
-        ".claude/settings.local.json": 9
-      }
     }
   ]
 }
