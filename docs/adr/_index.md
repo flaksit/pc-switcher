@@ -17,7 +17,8 @@
 - [ADR-013](adr-013-rsync-over-ssh-user-data-transport.md): rsync-over-SSH as user-data transport, running as root via sudo
 - [ADR-014](adr-014-unified-dry-run-contract.md): Unified dry-run contract for all SyncJobs
 - [ADR-015](adr-015-topology-based-sync-safety-model.md): Topology-based sync-safety model (btrfs find-new content-detection removed)
-- [ADR-017](adr-017-mirror-pcswitcher-install.md): Mirror pc-switcher's own install; hardcode-exclude only its runtime state
+- [ADR-017](adr-017-mirror-pcswitcher-install.md): Mirror pc-switcher's own install; hardcode-exclude only its runtime state (amended by [ADR-018](adr-018-selective-vscode-state-sync.md))
+- [ADR-018](adr-018-selective-vscode-state-sync.md): SQLite-aware selective sync of VS Code editor state.vscdb (amends [ADR-017](adr-017-mirror-pcswitcher-install.md))
 
 ### Instructions for AI agents
 Load specific ADRs only when relevant to current task: search workspace files to find relevant ADRs

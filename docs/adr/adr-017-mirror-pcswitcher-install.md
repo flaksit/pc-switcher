@@ -6,6 +6,8 @@ Date: 2026-07-20
 
 Supersedes: ADR-016
 
+Amended by: ADR-018 (hardcoded-exclude set extended to the editor state DBs)
+
 ## TL;DR
 Folder sync mirrors pc-switcher's own install (uv tool venv + `~/.local/bin` shim) like any other file; only its runtime *state* directory stays hardcoded-excluded, so the install and the interpreter it depends on always travel together.
 

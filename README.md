@@ -77,7 +77,7 @@ After sync completes, power off the source machine and resume work on target.
 
 The sequence stops at the first failure (raising an exception), and the `finally` cleanup always runs (release locks, kill remote processes, close the connection).
 
-Before the numbered steps, the CLI (outside the orchestrator) reads `~/.config/pc-switcher/config.yaml`, starts the asyncio loop, and installs the SIGINT handler that triggers graceful cleanup. The orchestrator then runs the ten steps below, which the live UI shows as `Step N/total` and the code marks with matching `# Step N` comments in `Orchestrator.run()`:
+Before the numbered steps, the CLI (outside the orchestrator) reads `~/.config/pc-switcher/config.yaml`, starts the asyncio loop, and installs the SIGINT handler that triggers graceful cleanup. The orchestrator then runs the ten logical phases below, which the code marks with matching `# Step N` comments in `Orchestrator.run()`. The live UI's `Step N/total` numbering is dynamic rather than a fixed ten: the sync-jobs phase (logical Step 9) expands to **one UI step per enabled sync job**, so the total is `8 + <enabled sync jobs> + 1`. With the default two enabled jobs (`folder_sync` then `vscode_state_sync`) that is 11, and post-sync snapshots become the last UI step.
 
 1. **Acquire source lock.** Local lock file; this machine cannot join any other sync (as source or target) while this one runs.
 2. **Establish SSH connection.** Creates the local and remote executors every later step uses. Nothing touches the target before this point.
@@ -91,8 +91,8 @@ Before the numbered steps, the CLI (outside the orchestrator) reads `~/.config/p
 6. **Pre-sync snapshots.** Create btrfs snapshots on both hosts. This is the rollback point; every mutating step below happens after it.
 7. **Install/upgrade pc-switcher on target.** Ensures the target has a compatible version to run its side of later jobs. After snapshots, so a bad install is recoverable.
 8. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs with identical settings.
-9. **Run sync jobs sequentially.** The actual data movement (e.g. `folder_sync` via rsync-over-SSH as root on both ends). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
-10. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state.
+9. **Run sync jobs sequentially.** The actual data movement, one UI step per enabled job. By default `folder_sync` (rsync-over-SSH as root on both ends) runs first, then `vscode_state_sync` (a selective, SQLite-aware merge of each editor's `state.vscdb` that keeps the target's machine-bound `secret://` keys). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
+10. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state. (This logical phase is the last UI step — Step 11 with the default job set.)
 
 On success, after step 10 (not a progress step), the workflow records sync history: it writes `last_role` and `last_peer` on both machines to enable the out-of-order / target-state check next time. Skipped in `--dry-run`.
 
@@ -109,6 +109,7 @@ Top-level sections:
 - `disk_space_monitor` — free-space thresholds checked before and during a sync
 - `btrfs_snapshots` — subvolumes to snapshot and retention policy
 - `folder_sync` — folders to mirror via rsync, filtered by a per-folder filter file (native rsync `+`/`-` rules) plus optional per-directory `.pcswitcher-filter` files. Filter rules can exclude a subtree and re-include selected children (e.g. drop `~/.cache` but keep `~/.cache/uv`)
+- `vscode_state_sync` — SQLite-aware selective sync of each editor's `state.vscdb`, preserving the target's machine-bound `secret://` keys (`preserve_key_globs`)
 
 See the **[Configuration Reference](docs/configuration.md)** for every option, defaults, the folder-sync filter-rule syntax, and a "coming from `.gitignore`" guide.
 
