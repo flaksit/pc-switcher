@@ -247,6 +247,15 @@ class VscodeStateSyncJob(SyncJob):
                 self._raise(Host.SOURCE, editor, "source-strip", strip.stderr)
 
             # Step B — transfer the neutral DB into the target live DB's directory.
+            # Ensure that directory exists first: folder_sync normally creates it, but
+            # jobs are independently toggleable, so `folder_sync: false` + this job on a
+            # target that never ran the editor would otherwise leave the SFTP put with no
+            # parent directory. mkdir -p is a no-op when it already exists.
+            mkdir = await self.target.run_command(
+                f"mkdir -p {shlex.quote(Path(target_db).parent.as_posix())}", login_shell=False
+            )
+            if not mkdir.success:
+                self._raise(Host.TARGET, editor, "mkdir target dir", mkdir.stderr)
             await self.target.send_file(local_tmp, remote_tmp)
 
             # Step C — target-inject the target's own preserved rows, only when it has a live DB.

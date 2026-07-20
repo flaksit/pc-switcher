@@ -260,6 +260,21 @@ class TestExecuteOrchestration:
         # The mv atomically replaces the live DB from the temp path.
         assert any("mv -f" in c and target_db in c and ".pcswitcher-tmp" in c for c in cmds)
 
+    async def test_creates_target_dir_before_transfer(self, tmp_path: Path) -> None:
+        """The target globalStorage dir is created (mkdir -p) before the SFTP put.
+
+        Guards the folder_sync-disabled path: with jobs toggled independently the
+        parent dir may not exist, so send_file would otherwise fail.
+        """
+        home = _setup_home(tmp_path, editors=[_CODE_DB])
+        ctx = _make_context(target_db_present=False)
+        job = VscodeStateSyncJob(ctx)
+        with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=home):
+            await job.execute()
+
+        cmds = _target_cmds(ctx)
+        assert any("mkdir -p" in c and "globalStorage" in c for c in cmds)
+
     async def test_first_sync_skips_inject_but_places_db(self, tmp_path: Path) -> None:
         """Absent target DB: skip the ATTACH inject, still transfer and mv the neutral DB."""
         home = _setup_home(tmp_path, editors=[_CODE_DB])
