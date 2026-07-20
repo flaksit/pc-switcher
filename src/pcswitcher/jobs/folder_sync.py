@@ -37,17 +37,18 @@ from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, Va
 # Group 2: percent complete.  Group 3: files transferred so far.  Group 4: total-to-check.
 _PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*to-chk=\d+/(\d+)\)")
 
-# pc-switcher's own runtime state and installation live under the invoking
-# user's home directory. Mirroring them between machines is unsafe:
-# sync-history.json is the topology-safety state (ADR-015) and a --delete mirror
-# would clobber the target's copy mid-sync; the lock file, logs, and the running
-# install must stay machine-local. These paths are ALWAYS excluded from folder
-# sync regardless of user config, and are the ONLY hardcoded excludes — every
-# other exclusion is user-configurable (ADR-016).
+# pc-switcher's own runtime STATE lives under the invoking user's home and must
+# stay machine-local: sync-history.json is the topology-safety state (ADR-015) that
+# a --delete mirror would clobber mid-sync; the lock file and logs are per-machine.
+# This is the ONLY hardcoded exclude — every other exclusion is user-configurable.
+#
+# The install itself (uv tool venv + ~/.local/bin shim) is deliberately NOT
+# excluded: it mirrors from source like any other uv tool, so the venv and the
+# interpreter it references travel together and stay consistent. Excluding the venv
+# while --delete-mirroring the uv interpreter tree it depends on deleted the in-use
+# interpreter and broke pc-switcher on the target. See ADR-017 (supersedes ADR-016).
 _RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
     ".local/share/pc-switcher",  # lock, sync-history.json, logs/
-    ".local/share/uv/tools/pcswitcher",  # uv tool install (virtualenv)
-    ".local/bin/pc-switcher",  # entry-point shim
 )
 
 
@@ -193,10 +194,31 @@ class FolderSyncJob(SyncJob):
            `filter_file`, its (expanded) path must also exist on the source, else
            a configured-but-absent filter file could silently degrade to a full
            `--delete` mirror with no filter rules applied.
+        4. Source and target share the same CPU architecture (`uname -m`): the
+           pc-switcher install mirrors as arch-specific binaries (ADR-017), so a
+           heterogeneous fleet is unsupported.
 
         Returns the list of validation errors (empty on success).
         """
         errors: list[ValidationError] = []
+
+        # --- Step 0: source/target CPU architecture match ---
+        # The pc-switcher install (uv tool venv + interpreter) mirrors to the target
+        # as arch-specific binaries (ADR-017). A heterogeneous fleet would ship a
+        # wrong-arch interpreter that dies at exec time with a cryptic
+        # "cannot execute: required file not found"; refuse it up front. Fail open if
+        # either `uname -m` cannot be read (never determined arch → nothing to compare).
+        src_arch = await self.source.run_command("uname -m")
+        tgt_arch = await self.target.run_command("uname -m", login_shell=False)
+        if src_arch.success and tgt_arch.success and src_arch.stdout.strip() != tgt_arch.stdout.strip():
+            errors.append(
+                self._validation_error(
+                    Host.TARGET,
+                    f"source/target CPU architecture mismatch "
+                    f"({src_arch.stdout.strip()} vs {tgt_arch.stdout.strip()}): pc-switcher mirrors "
+                    f"arch-specific binaries and does not support a heterogeneous fleet",
+                )
+            )
 
         # --- Step 1: sudo rsync availability ---
         result = await self.source.run_command("sudo rsync --version")

@@ -37,6 +37,17 @@ def fail_when(substring: str, stderr: str) -> Callable[..., CommandResult]:
     return _side_effect
 
 
+def arch_reports(machine: str) -> Callable[..., CommandResult]:
+    """Return a run_command side_effect that reports `machine` for `uname -m`, success otherwise."""
+
+    def _side_effect(cmd: str, **_: object) -> CommandResult:
+        if "uname -m" in cmd:
+            return CommandResult(exit_code=0, stdout=machine, stderr="")
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    return _side_effect
+
+
 def make_context(
     config: dict[str, Any] | None = None,
     dry_run: bool = False,
@@ -185,12 +196,30 @@ class TestDescribeFirstSyncScope:
 
 @pytest.mark.asyncio
 class TestValidatePreflight:
-    """validate() enforces sudo rsync availability, acl package, and folder existence."""
+    """validate() enforces CPU-arch match, sudo rsync availability, acl package, and folder existence."""
 
     async def test_all_preflight_checks_pass(self) -> None:
         """When all preflight commands succeed, validate() returns no errors."""
         ctx = make_context(config={"folders": [{"path": "/home"}]})
         # source and target run_command already return success by default
+        job = FolderSyncJob(ctx)
+        errors = await job.validate()
+        assert errors == []
+
+    async def test_arch_mismatch_between_source_and_target(self) -> None:
+        """Differing CPU architecture on source vs target is a validation error."""
+        ctx = make_context(config={"folders": [{"path": "/home"}]})
+        ctx.source.run_command = AsyncMock(side_effect=arch_reports("x86_64"))
+        ctx.target.run_command = AsyncMock(side_effect=arch_reports("aarch64"))
+        job = FolderSyncJob(ctx)
+        errors = await job.validate()
+        assert any(e.host == Host.TARGET and "architecture" in e.message.lower() for e in errors)
+
+    async def test_matching_arch_yields_no_error(self) -> None:
+        """Identical CPU architecture on both hosts yields no validation error."""
+        ctx = make_context(config={"folders": [{"path": "/home"}]})
+        ctx.source.run_command = AsyncMock(side_effect=arch_reports("x86_64"))
+        ctx.target.run_command = AsyncMock(side_effect=arch_reports("x86_64"))
         job = FolderSyncJob(ctx)
         errors = await job.validate()
         assert errors == []
@@ -507,11 +536,7 @@ class TestRuntimeExcludeFilters:
     home and only apply when that home is inside the synced folder.
     """
 
-    _RELPATHS = (
-        ".local/share/pc-switcher",
-        ".local/share/uv/tools/pcswitcher",
-        ".local/bin/pc-switcher",
-    )
+    _RELPATHS = (".local/share/pc-switcher",)
 
     def _filters(self, folder_path: str, home: str) -> list[str]:
         with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path(home)):
