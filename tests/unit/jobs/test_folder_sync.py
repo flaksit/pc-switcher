@@ -744,6 +744,24 @@ class TestStreamRsync:
         assert update.percent == 21
         assert update.current == 83
 
+    async def test_ir_chk_progress_line_emits_report_progress(self) -> None:
+        """An ir-chk (incremental-recursion) progress2 line also triggers _report_progress.
+
+        Regression for #191: rsync emits `ir-chk=` while still building the file
+        list, and only switches to `to-chk=` once the list is complete. For a large
+        tree this dominates the run, so a regex matching only `to-chk=` left the
+        progress bar hidden for most of a big first sync.
+        """
+        progress_line = b"20.000   0%    0,00kB/s    0:00:00 (xfr#1, ir-chk=1039/1101)\r"
+        _, _, progress_calls = await self._run_stream([progress_line])
+
+        assert len(progress_calls) >= 1, "ir-chk progress2 line must produce a _report_progress call"
+        update = progress_calls[0]
+
+        assert isinstance(update, ProgressUpdate)
+        assert update.percent == 0
+        assert update.current == 1
+
     async def test_per_file_line_logged_at_full(self) -> None:
         """An --out-format per-file line is logged at LogLevel.FULL."""
         file_line = b">f+++++++++ path/to/file.txt\n"
