@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "cf79870df4bb",
+  "strategy": "manual-commit",
+  "branch": "195-selective-vscode-db-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/quick/260720-vhr-fix-195-selective-sqlite-aware-sync-of-v/CONTEXT.md",
+    ".planning/quick/260720-vhr-fix-195-selective-sqlite-aware-sync-of-v/PLAN.md",
+    ".planning/quick/260720-vhr-fix-195-selective-sqlite-aware-sync-of-v/RESEARCH.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cf/79870df4bb/0/metadata.json",
+      "transcript": "/cf/79870df4bb/0/full.jsonl",
+      "compact_transcript": "/cf/79870df4bb/0/transcript.jsonl",
+      "content_hash": "/cf/79870df4bb/0/content_hash.txt",
+      "prompt": "/cf/79870df4bb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 90,
+    "cache_creation_tokens": 216082,
+    "cache_read_tokens": 6933808,
+    "output_tokens": 76902,
+    "api_call_count": 50
+  }
+}
