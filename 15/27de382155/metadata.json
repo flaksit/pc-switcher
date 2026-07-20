@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "1527de382155",
+  "strategy": "manual-commit",
+  "branch": "fix/hostname-case-insensitive-topology",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/adr/adr-015-topology-based-sync-safety-model.md",
+    "docs/system/architecture.md",
+    "src/pcswitcher/lock.py",
+    "src/pcswitcher/orchestrator.py",
+    "src/pcswitcher/sync_history.py",
+    "tests/unit/orchestrator/test_consecutive_sync.py",
+    "tests/unit/test_sync_history.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/15/27de382155/0/metadata.json",
+      "transcript": "/15/27de382155/0/full.jsonl",
+      "compact_transcript": "/15/27de382155/0/transcript.jsonl",
+      "content_hash": "/15/27de382155/0/content_hash.txt",
+      "prompt": "/15/27de382155/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 106,
+    "cache_creation_tokens": 94917,
+    "cache_read_tokens": 4641724,
+    "output_tokens": 36864,
+    "api_call_count": 57
+  }
+}

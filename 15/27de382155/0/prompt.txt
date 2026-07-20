@@ -1,0 +1,61 @@
+On p17, I ran a first "pc-switcher sync fleksi".
+Now, here on fleksi:
+
+janfr@Fleksi:~$ pc-switcher sync p17 --dry-run
+A new stable version of pc-switcher is available: 0.3.0 -> 0.3.1
+Upgrade now? [y/n] (n): y
+Updating pc-switcher to 0.3.1...
+Updated. Restarting with the new version...
+Target config matches source, skipping config sync.
+Connection: disconnected   ⚠ 1  Step 10/10 — Post-sync snapshots
+folder_sync                  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                         100%     
+╭──────────────────────────────────────────────────────────── Recent Logs ────────────────────────────────────────────────────────────╮
+│ 15:50:46 [INFO] [orchestrator] (target) Syncing configuration to target                                                             │
+│ 15:50:46 [INFO] [orchestrator] (target) Configuration sync completed                                                                │
+│ 15:50:46 [INFO] [orchestrator] (source) Starting sync operations                                                                    │
+│ 15:50:46 [INFO] [folder_sync] (source) [dry-run] Syncing '/home/janfr' → 'p17'                                                      │
+│ 15:51:19 [INFO] [folder_sync] (source) [dry-run] Completed sync of '/home/janfr': 6244 files transferred, 557587395 bytes, 2225     │
+│ deletions                                                                                                                           │
+│ 15:51:19 [INFO] [orchestrator] (source) Job folder_sync completed successfully                                                      │
+│ 15:51:19 [INFO] [orchestrator] (source) Creating post-sync snapshots                                                                │
+│ 15:51:19 [INFO] [btrfs_snapshots] (source) Creating post-sync snapshots                                                             │
+│ 15:51:19 [INFO] [btrfs_snapshots] (source) Completed post-sync snapshots                                                            │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+⚠ 1 warning(s) this run:
+  15:50:46 [WARNING] [orchestrator] (source) Target Last Synced with a Different Machine — skipping confirmation in dry-run mode
+Run pc-switcher logs for the full log.
+
+---
+
+On p17, I ran a first "pc-switcher sync fleksi".
+Now, here on fleksi syncing back. Why warning?
+
+janfr@Fleksi:~$ pc-switcher sync p17 --dry-run
+A new stable version of pc-switcher is available: 0.3.0 -> 0.3.1
+Upgrade now? [y/n] (n): y
+Updating pc-switcher to 0.3.1...
+Updated. Restarting with the new version...
+Target config matches source, skipping config sync.
+Connection: disconnected   ⚠ 1  Step 10/10 — Post-sync snapshots
+folder_sync                  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                         100%     
+╭──────────────────────────────────────────────────────────── Recent Logs ────────────────────────────────────────────────────────────╮
+│ 15:50:46 [INFO] [orchestrator] (target) Syncing configuration to target                                                             │
+│ 15:50:46 [INFO] [orchestrator] (target) Configuration sync completed                                                                │
+│ 15:50:46 [INFO] [orchestrator] (source) Starting sync operations                                                                    │
+│ 15:50:46 [INFO] [folder_sync] (source) [dry-run] Syncing '/home/janfr' → 'p17'                                                      │
+│ 15:51:19 [INFO] [folder_sync] (source) [dry-run] Completed sync of '/home/janfr': 6244 files transferred, 557587395 bytes, 2225     │
+│ deletions                                                                                                                           │
+│ 15:51:19 [INFO] [orchestrator] (source) Job folder_sync completed successfully                                                      │
+│ 15:51:19 [INFO] [orchestrator] (source) Creating post-sync snapshots                                                                │
+│ 15:51:19 [INFO] [btrfs_snapshots] (source) Creating post-sync snapshots                                                             │
+│ 15:51:19 [INFO] [btrfs_snapshots] (source) Completed post-sync snapshots                                                            │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+⚠ 1 warning(s) this run:
+  15:50:46 [WARNING] [orchestrator] (source) Target Last Synced with a Different Machine — skipping confirmation in dry-run mode
+Run pc-switcher logs for the full log.
+
+---
+
+yes, both. Should have exactly the same way for getting the source hsotname and the target hostname. New branch and pr
