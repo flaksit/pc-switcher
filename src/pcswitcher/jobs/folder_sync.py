@@ -28,6 +28,7 @@ from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, Va
 # Matches rsync --info=progress2 output, e.g.:
 #   "9.53G 21% 317.26MB/s 0:00:28 (xfr#83063, to-chk=443926/538653)"
 #   "29,958,458  99%   27.90GB/s    0:00:00 (xfr#298201, to-chk=1200/300501)"
+#   "20.000   0%    0,00kB/s    0:00:00 (xfr#1, ir-chk=1039/1101)"
 # Group 1: size token (e.g. "9.53G" or "29,958,458") — used to compute
 # bytes_transferred (WR-01).  rsync thousands-groups the plain byte counter with
 # a locale-dependent separator (',' on C/en_US, '.' on nl_BE-style), so the size
@@ -36,7 +37,14 @@ from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, Va
 # bytes_transferred by orders of magnitude while files-transferred (ungrouped)
 # stayed correct.
 # Group 2: percent complete.  Group 3: files transferred so far.  Group 4: total-to-check.
-_PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*to-chk=\d+/(\d+)\)")
+# The trailing counter is `ir-chk=` (incremental-recursion, file list still being
+# built) or `to-chk=` (total known) — rsync only switches to to-chk once the full
+# file list is discovered.  For a large tree, incremental recursion dominates the
+# whole run, so matching only to-chk left the progress bar hidden for most of a
+# big first sync (#191): no match meant no `_report_progress` call, so the Rich
+# task was never lazily created (ui.py:224).  Both prefixes carry the same
+# percent/byte-based progress, so matching either is safe.
+_PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*(?:ir|to)-chk=\d+/(\d+)\)")
 
 # pc-switcher's own runtime STATE lives under the invoking user's home and must
 # stay machine-local: sync-history.json is the topology-safety state (ADR-015) that
