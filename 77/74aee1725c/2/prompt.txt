@@ -47,3 +47,15 @@ Once you confirm, I'll continue the loop (archive the session, and the two uncom
 ---
 
 I don't find commit 608c138
+
+---
+
+split that commit. I allow you to change commit history this time
+
+---
+
+ensure to put the docs commit first, and then this comma commit
+
+---
+
+only commit the docs-part (how to read the logs). Leave the accidentally commited part of this comma-fix uncommitted
