@@ -26,9 +26,16 @@ from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, Va
 
 # Matches rsync --info=progress2 output, e.g.:
 #   "9.53G 21% 317.26MB/s 0:00:28 (xfr#83063, to-chk=443926/538653)"
-# Group 1: size token (e.g. "9.53G") — used to compute bytes_transferred (WR-01).
+#   "29,958,458  99%   27.90GB/s    0:00:00 (xfr#298201, to-chk=1200/300501)"
+# Group 1: size token (e.g. "9.53G" or "29,958,458") — used to compute
+# bytes_transferred (WR-01).  rsync thousands-groups the plain byte counter with
+# a locale-dependent separator (',' on C/en_US, '.' on nl_BE-style), so the size
+# class must accept both: dropping ',' made re.search() stop at the first comma
+# and capture only the last 1-3 digits (e.g. "29,958,458" -> "458"), skewing
+# bytes_transferred by orders of magnitude while files-transferred (ungrouped)
+# stayed correct.
 # Group 2: percent complete.  Group 3: files transferred so far.  Group 4: total-to-check.
-_PROGRESS2_RE = re.compile(r"(\d+[\d.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*to-chk=\d+/(\d+)\)")
+_PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*to-chk=\d+/(\d+)\)")
 
 # pc-switcher's own runtime state and installation live under the invoking
 # user's home directory. Mirroring them between machines is unsafe:
@@ -118,18 +125,17 @@ class FolderSyncJob(SyncJob):
 
     @staticmethod
     def _parse_size_to_bytes(value: str) -> int:
-        """Convert an rsync progress figure (e.g. '9.53G', '317K', '80.153.795.479') to bytes.
+        """Convert an rsync progress figure (e.g. '9.53G', '317K', '80,153,795') to bytes.
 
         Two shapes occur in --info=progress2 output:
-        - the plain byte counter, which rsync groups with the locale thousands
-          separator ('.' under nl_BE, ',' under en_US), e.g. '80.153.795.479';
+        - the plain byte counter, which rsync thousands-groups with a
+          locale-dependent separator (',' on C/en_US, '.' on nl_BE-style),
+          e.g. '80,153,795';
         - a human-readable figure with a K/M/G/T suffix (only when rsync runs
           with -h), e.g. '9.53G', where the '.' is a decimal point.
 
-        rsync is forced to the C locale in `_build_rsync_cmd` so the counter is
-        ungrouped in practice, but this parser stays tolerant of grouping so a
-        stray locale-formatted figure can never abort the sync: the byte count
-        is best-effort progress metadata (WR-01), not sync-critical.
+        The parser strips both grouping separators so any locale's counter parses:
+        the byte count is best-effort progress metadata (WR-01), not sync-critical.
 
         Multipliers: K=1024, M=1024**2, G=1024**3, T=1024**4.
         """
@@ -382,15 +388,6 @@ class FolderSyncJob(SyncJob):
         parts = [
             "sudo",
             "-E",
-            # Force the C locale so rsync's --info=progress2 byte counter is
-            # printed ungrouped.  Under a grouping locale (e.g. LC_NUMERIC=nl_BE)
-            # rsync prints "80.153.795.479"; the progress2 regex captures the
-            # whole token and float() then rejects the thousands separators,
-            # aborting the sync over a purely cosmetic figure (WR-01).  `env`
-            # runs after sudo so it sets the locale for rsync as root regardless
-            # of sudo's own env policy.
-            "env",
-            "LC_ALL=C",
             "rsync",
             "-aAXHS",
             "--numeric-ids",
