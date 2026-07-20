@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8f57717d2835",
+  "session_id": "b8eba051-1e4b-4b11-906f-a23332595399",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-20T21:06:43.40129898Z",
+  "branch": "195-selective-vscode-db-sync",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "354def21c3a7",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 53,
+    "cache_creation_tokens": 174056,
+    "cache_read_tokens": 2800054,
+    "output_tokens": 58053,
+    "api_call_count": 30
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01TisBb6Rdtsc8BxC6GkrHjT",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-quick"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "354def21c3a7",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 149,
+        "end": 150,
+        "entry_ids": [
+          "c5a743ff-b3aa-416f-8d02-f519cb8a33d4"
+        ],
+        "tool_use_id": "toolu_01TisBb6Rdtsc8BxC6GkrHjT"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01TisBb6Rdtsc8BxC6GkrHjT"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-quick",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
