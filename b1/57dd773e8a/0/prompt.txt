@@ -75,3 +75,16 @@ keep code as simple as possible
 ---
 
 create pr for this, commit, push
+
+---
+
+why did'nt you commit the debug .md file?
+
+---
+
+code is still awaiting human verify as well, and still you committed. Always commit docs together with code
+
+---
+
+"just typically onto main": that is because I discover AFTERWARDS that you didn't commit it yet.
+Code is still awaiting human verify as well, and still you committed. Always commit docs together with code.
