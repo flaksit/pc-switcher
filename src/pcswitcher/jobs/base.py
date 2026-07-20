@@ -182,7 +182,7 @@ class SyncJob(Job):
         for future non-rsync jobs without any orchestrator change.
 
         Called as a classmethod before job instances exist — the first-sync check
-        runs before Phase 4 job discovery.
+        runs before step 4 job discovery.
 
         Args:
             config: This job's configuration dict from config.yaml.
