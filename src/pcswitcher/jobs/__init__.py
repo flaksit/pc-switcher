@@ -10,6 +10,7 @@ from .dummy_fail import DummyFailJob
 from .dummy_success import DummySuccessJob
 from .folder_sync import FolderEntry, FolderSyncJob
 from .install_on_target import InstallOnTargetJob
+from .vscode_state_sync import VscodeStateSyncJob
 
 __all__ = [
     "BackgroundJob",
@@ -24,4 +25,5 @@ __all__ = [
     "JobContext",
     "SyncJob",
     "SystemJob",
+    "VscodeStateSyncJob",
 ]
