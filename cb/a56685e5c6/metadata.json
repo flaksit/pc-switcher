@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "cba56685e5c6",
+  "strategy": "manual-commit",
+  "branch": "fix-191-foldersync-progressbar",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/debug/foldersync-progressbar-hidden.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cb/a56685e5c6/0/metadata.json",
+      "transcript": "/cb/a56685e5c6/0/full.jsonl",
+      "compact_transcript": "/cb/a56685e5c6/0/transcript.jsonl",
+      "content_hash": "/cb/a56685e5c6/0/content_hash.txt",
+      "prompt": "/cb/a56685e5c6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 88512,
+    "cache_read_tokens": 1226047,
+    "output_tokens": 20644,
+    "api_call_count": 17
+  }
+}

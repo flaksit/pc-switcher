@@ -1,0 +1,5 @@
+/gsd-debug
+
+---
+
+/gsd-debug gh #191. If you need the photos (they are unclear photos of the screen, not screenshots), tell me, but they will be possibly be difficult to analyze/interpret.
