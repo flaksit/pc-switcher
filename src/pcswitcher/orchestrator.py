@@ -19,7 +19,7 @@ from pcswitcher.config import Configuration
 from pcswitcher.config_sync import sync_config_to_target
 from pcswitcher.confirmer import Confirmer, TerminalUIConfirmer
 from pcswitcher.connection import Connection
-from pcswitcher.disk import DiskSpace, check_disk_space, parse_threshold
+from pcswitcher.disk import DiskSpace, check_disk_space, format_bytes, parse_threshold
 from pcswitcher.events import EventBus
 from pcswitcher.executor import LocalExecutor, RemoteExecutor, RemoteProcess
 from pcswitcher.jobs.base import Job, SyncJob
@@ -919,15 +919,6 @@ class Orchestrator:
         source_task = check_disk_space(self._local_executor, "/")
         target_task = check_disk_space(self._remote_executor, "/")
         source_disk, target_disk = await asyncio.gather(source_task, target_task)
-
-        # Helper to format bytes in human-readable form
-        def format_bytes(bytes_value: int) -> str:
-            value = float(bytes_value)
-            for unit in ["B", "KiB", "MiB", "GiB", "TiB"]:
-                if value < 1024:
-                    return f"{value:.1f}{unit}"
-                value /= 1024
-            return f"{value:.1f}PiB"
 
         # Helper to check if disk space is sufficient
         def is_sufficient(disk_space: DiskSpace, threshold_type: str, threshold_value: int) -> bool:

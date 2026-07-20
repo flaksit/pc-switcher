@@ -11,9 +11,25 @@ from pcswitcher.models import CommandResult
 __all__ = [
     "DiskSpace",
     "check_disk_space",
+    "format_bytes",
     "parse_df_output",
     "parse_threshold",
 ]
+
+
+def format_bytes(num_bytes: int) -> str:
+    """Format a byte count as a human-readable string using binary (IEC) units.
+
+    Example: ``557587395`` → ``"531.8 MiB"``. Use for human-facing summaries;
+    keep exact byte counts for DEBUG-level diagnostics.
+    """
+    value = float(num_bytes)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            precision = 0 if unit == "B" else 1
+            return f"{value:.{precision}f} {unit}"
+        value /= 1024
+    raise AssertionError("unreachable: TiB branch returns")
 
 
 @dataclass(frozen=True)
