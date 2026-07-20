@@ -1,0 +1,69 @@
+I ran "pc-switcher sync fleksi" successfully on P17. We are on fleksi now.
+
+janfr@Fleksi:~$ pc-switcher sync p17 --dry-run
+bash: /home/janfr/.local/bin/pc-switcher: cannot execute: required file not found
+
+---
+
+don't fix yet. You are hacking your way around it, just fixing the symptom.
+
+We synced /home/janfr. Why didn't this sync "matching interpreter build"?
+
+The "pc-switcher sync fleksi" installed pc-switcher here on fleksi (with uv tool install, run on fleksi I suppose; not by copying files). I don't understand how this install can succeed and still the pc-switcher not run here.
+
+---
+
+actually, maybe install_on_target was not a good idea. If we would just let foldersync sync .local/share/uv/tools/pcswitcher, there wouldn't have been any problem at all. (But still need to install uv if that isn't present on the target - even though to following "sync packages" feature will take care of that, too.)
+What do you think?
+
+---
+
+I like the simplification.
+However, I see two complications:
+- There is issue 126 that would need pc-switcher (or separate cli) to be on target DURING pc-switcher run. We didn't evaluate if that issue is really a good way to go. (Ask a subagent if we need to know now.) Simplifying now to bring it back later is not good.
+- If I would have a machine with other architecture (mac?), we are screwed. That is totally not on the planning now. So best consider YAGNI for this one?
+
+---
+
+"uv interpreters are re-downloaded on demand": if that is the case, we would not have had this problem: launching pc-switcher would automatically have downloaded the needed python version.
+If we leave out .local/share/uv/, lots of tools that we just sync (e.g. ~./local/bin) won't be on the target anymore. Not acceptable.
+
+Other ideas:
+- leave install_on_target, but install differently: sync the relevant files and folders, so we fully have everything needed: uv, the uv python, the uv python packages it depends on, ... Oops, this is becoming a lot to manage, or am I exagerating and is the scope feasible?
+- keep install_on_target mechanism, but somehow sync back the interpreter, which seems the only thing missing, no? We already hard-coded exclude of .local/share/uv/tools/pc-switcher, didn't we? Is this fully self-contained (packages as normal files there, not symlinks)?
+- If interpreter is the only thing missing, we could have FolderSync sync .local/share/uv/python/ WITHOUT --delete. Downside: this folder will become ever-growing. And then we need a mechanism to configure folders to be run without "--delete". Feasible.
+
+What do you think?
+
+---
+
+Idea D:
+- Keep install_on_target as is. pc-switcher works up until FolderSync. So we are good for #126.
+- We remove the hardcoded exclusion from FolderSync: just sync over the pc-switcher uv folder from source to target and let FolderSync prune the possibly newly installed python interpreter that it installed during install_on_target: that interpreter is not needed anymore now we synced pc-switcher tool.
+- After FolderSync, we still have a correctly working pc-switcher on target, so still good for #126.
+
+---
+
+Actually, as long as we don't do #126, no need for install_on_target at all. FolderSync takes care of it. Good idea to disable it? Or rather document in #126 that, if we decide NOT to do it, we should prune install_on_target for simplification?
+
+File new issue with bug anyway.
+
+---
+
+I did gh auth login. But it only asked for and got read-only access! Need to give rw access. How?
+
+---
+
+you said it worked for subagent and install code notes GITHUB_TOKEN is available. Check that.
+
+---
+
+don't talk about phase numbers in the issue (if you did): talk about phase names. Numbering will change.
+
+Yes, put CLEARLY AND LOUDLY in #126 that install_on_target should be removed if decided to drop #126.
+
+"It repointed the venv at cpython-3.14": eh? Who did that?
+
+---
+
+do 185 now in new branch+pr. Or do you want new session for this? I thought it's a small thing and you have everything fresh in your context

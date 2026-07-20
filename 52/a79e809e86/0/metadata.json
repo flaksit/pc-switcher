@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "52a79e809e86",
+  "session_id": "1ee60a5e-e963-4ffe-b1e0-11b78557ff9b",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-20T10:15:48.013801572Z",
+  "branch": "fix/foldersync-mirror-uv-venv",
+  "checkpoints_count": 8,
+  "files_touched": [
+    "src/pcswitcher/jobs/folder_sync.py",
+    "tests/unit/jobs/test_folder_sync.py",
+    "docs/adr/adr-017-mirror-pcswitcher-install.md",
+    "docs/adr/adr-016-hardcoded-runtime-file-excludes.md",
+    "docs/adr/_index.md",
+    "docs/configuration.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "5d7e69a652ea",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 121,
+    "cache_creation_tokens": 197691,
+    "cache_read_tokens": 8605150,
+    "output_tokens": 119746,
+    "api_call_count": 65
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-20T10:15:47.950069562Z",
+    "agent_lines": 134,
+    "agent_removed": 59,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 134,
+    "total_lines_changed": 193,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}

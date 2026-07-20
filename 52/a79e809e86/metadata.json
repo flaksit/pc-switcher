@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "52a79e809e86",
+  "strategy": "manual-commit",
+  "branch": "fix/foldersync-mirror-uv-venv",
+  "checkpoints_count": 8,
+  "files_touched": [
+    "docs/adr/_index.md",
+    "docs/adr/adr-016-hardcoded-runtime-file-excludes.md",
+    "docs/adr/adr-017-mirror-pcswitcher-install.md",
+    "docs/configuration.md",
+    "src/pcswitcher/jobs/folder_sync.py",
+    "tests/unit/jobs/test_folder_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/52/a79e809e86/0/metadata.json",
+      "transcript": "/52/a79e809e86/0/full.jsonl",
+      "compact_transcript": "/52/a79e809e86/0/transcript.jsonl",
+      "content_hash": "/52/a79e809e86/0/content_hash.txt",
+      "prompt": "/52/a79e809e86/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 121,
+    "cache_creation_tokens": 197691,
+    "cache_read_tokens": 8605150,
+    "output_tokens": 119746,
+    "api_call_count": 65
+  }
+}
