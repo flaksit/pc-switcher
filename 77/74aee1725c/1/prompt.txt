@@ -1,0 +1,1 @@
+running "pc-switcher sync fleksi". This is first sync. Is in step "Config Sync". Proposes to write config.yaml. Will it automatically sync the configured central filter file as well? Should, because that is integral part of config. But tui doesn't say anything about that.

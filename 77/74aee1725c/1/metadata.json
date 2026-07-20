@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "7774aee1725c",
+  "session_id": "2cafe8c2-1c86-49d9-9114-299de4fce9a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-20T07:26:44.967654578Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/folder_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "10fc743a2b4f",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 13,
+    "cache_creation_tokens": 54791,
+    "cache_read_tokens": 298321,
+    "output_tokens": 3437,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-20T07:26:44.955456039Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 48,
+    "human_modified": 36,
+    "human_removed": 0,
+    "total_committed": 48,
+    "total_lines_changed": 85,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 201,
+      "user_lines_removed": 12,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/debug/folder-sync-dry-run-7-bytes.md": 156,
+        "src/pcswitcher/jobs/folder_sync.py": 14,
+        "tests/unit/jobs/test_folder_sync.py": 22
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/folder_sync.py": 11,
+        "tests/unit/jobs/test_folder_sync.py": 1
+      }
+    }
+  ]
+}
