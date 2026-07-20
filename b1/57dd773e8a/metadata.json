@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b157dd773e8a",
+  "strategy": "manual-commit",
+  "branch": "fix/folder-sync-byte-counter",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/pcswitcher/jobs/folder_sync.py",
+    "tests/unit/jobs/test_folder_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b1/57dd773e8a/0/metadata.json",
+      "transcript": "/b1/57dd773e8a/0/full.jsonl",
+      "compact_transcript": "/b1/57dd773e8a/0/transcript.jsonl",
+      "content_hash": "/b1/57dd773e8a/0/content_hash.txt",
+      "prompt": "/b1/57dd773e8a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 102,
+    "cache_creation_tokens": 288432,
+    "cache_read_tokens": 6213309,
+    "output_tokens": 102774,
+    "api_call_count": 56
+  }
+}
