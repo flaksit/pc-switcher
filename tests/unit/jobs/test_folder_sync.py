@@ -373,10 +373,11 @@ class TestBuildRsyncCmd:
         assert "--partial" in cmd
         assert "--mkpath" in cmd
 
-    def test_rsync_forced_to_c_locale(self) -> None:
-        """rsync runs under `env LC_ALL=C` so its progress2 byte counter is ungrouped."""
+    def test_no_locale_forcing(self) -> None:
+        """No locale is forced on rsync — the progress2 parser tolerates any locale's
+        thousands separator, so the counter's grouping does not need pinning (WR-01)."""
         cmd = self._build()
-        assert "env LC_ALL=C rsync" in cmd
+        assert "LC_ALL" not in cmd
 
     def test_root_via_sudo_and_ssh_transport(self) -> None:
         """Command uses --rsync-path='sudo rsync' for remote root and an -e ssh option with -T and -l."""
@@ -777,6 +778,22 @@ class TestStreamRsync:
         assert bytes_transferred > 0, "bytes_transferred must be non-zero when rsync reports progress"
         assert bytes_transferred == expected
 
+    async def test_comma_grouped_progress_line_reports_full_bytes(self) -> None:
+        """A comma-grouped size token is captured in full, not truncated at the last comma (WR-01).
+
+        rsync thousands-groups its progress2 byte counter with a locale-dependent
+        separator (',' on C/en_US, confirmed against a real rsync binary). Regression
+        for a bug where `_PROGRESS2_RE`'s size group excluded ',', so
+        `re.search` matched only the last 1-3 digits after the final comma
+        (e.g. "29,958,458" -> "458"), producing a bytes_transferred wrong by
+        orders of magnitude while files_transferred (comma-free) stayed correct.
+        """
+        progress_line = b"     29,958,458  99%   27.90GB/s    0:00:00 (xfr#298201, to-chk=1200/300501)\r"
+        (files_transferred, bytes_transferred, _), _, _ = await self._run_stream([progress_line])
+
+        assert files_transferred == 298201
+        assert bytes_transferred == 29_958_458
+
     async def test_parse_size_to_bytes_units(self) -> None:
         """_parse_size_to_bytes converts K/M/G/T suffixes and bare integers correctly (WR-01)."""
         assert FolderSyncJob._parse_size_to_bytes("1.00K") == 1024
@@ -790,7 +807,7 @@ class TestStreamRsync:
 
         Under a grouping locale (e.g. LC_NUMERIC=nl_BE) rsync's progress2 counter
         is printed with thousands separators, e.g. '80.153.795.479'.  The parser
-        must strip the grouping rather than raise on float().
+        must strip the grouping rather than truncating or failing to parse.
         """
         assert FolderSyncJob._parse_size_to_bytes("80.153.795.479") == 80153795479
         assert FolderSyncJob._parse_size_to_bytes("80,153,795,479") == 80153795479
