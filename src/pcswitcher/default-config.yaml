@@ -44,6 +44,7 @@ sync_jobs:
   dummy_fail: false      # Test job that fails at configurable progress
 
   folder_sync: true          # Sync /home and /root directories (Phase 1)
+  vscode_state_sync: true    # SQLite-aware selective sync of VS Code state.vscdb (runs after folder_sync)
 
   # Future jobs (uncomment when available):
   # packages: true        # Sync apt, snap, flatpak packages
@@ -127,7 +128,8 @@ dummy_fail:
 #     while dropping the rest of ~/.cache).
 # GLOBAL-FIRST precedence: the central filter_file is evaluated before any
 # .pcswitcher-filter, so central policy always wins. pc-switcher's own runtime
-# files (ADR-016) are excluded first of all and can never be re-exposed by
+# files (ADR-017) and the VS Code editor state DBs (ADR-018, handed to
+# vscode_state_sync) are excluded first of all and can never be re-exposed by
 # either surface.
 #
 # ~/.ssh/authorized_keys: the shipped home.filter/root.filter EXCLUDE it, so
@@ -151,5 +153,19 @@ folder_sync:
     - path: /root
       enabled: true
       filter_file: ~/.config/pc-switcher/root.filter
+
+# =============================================================================
+# VS Code State Sync Configuration
+# =============================================================================
+# Selectively syncs each editor's global state.vscdb (Code, Antigravity, Cursor,
+# VSCodium) — mirrors every key EXCEPT those matching preserve_key_globs, whose
+# TARGET value is kept. Default preserves secret:// keys: VS Code SecretStorage
+# blobs are encrypted with a per-machine OS-keyring key, so keeping the target's
+# own value avoids re-login after every sync. Runs after folder_sync, as the
+# normal user (no sudo). folder_sync hardcode-excludes these DBs from its mirror.
+
+vscode_state_sync:
+  preserve_key_globs:
+    - "secret://%"     # SQLite LIKE pattern; matched keys keep the target's own value
 
 # Future job configurations will be added here when features are implemented:

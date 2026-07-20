@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+import pcswitcher
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.models import LogLevel
 
@@ -690,3 +691,28 @@ disk_space_monitor:
             Configuration.from_yaml(config_file)
 
         assert len(exc_info.value.errors) > 0
+
+
+class TestShippedDefaultConfig:
+    """The shipped default-config.yaml validates against the shipped schema (#195)."""
+
+    def _default_config_path(self) -> Path:
+        """Path to the shipped default-config.yaml inside the installed package."""
+        return Path(pcswitcher.__file__).parent / "default-config.yaml"
+
+    def test_shipped_default_config_loads(self) -> None:
+        """`pc-switcher init` ships this file; it must load without a schema error."""
+        config = Configuration.from_yaml(self._default_config_path())
+        assert config.sync_jobs["folder_sync"] is True
+        assert config.sync_jobs["vscode_state_sync"] is True
+
+    def test_vscode_state_sync_runs_after_folder_sync(self) -> None:
+        """Job execution follows sync_jobs insertion order; vscode_state_sync must follow folder_sync."""
+        config = Configuration.from_yaml(self._default_config_path())
+        order = list(config.sync_jobs)
+        assert order.index("folder_sync") < order.index("vscode_state_sync")
+
+    def test_vscode_state_sync_preserve_globs_default(self) -> None:
+        """The shipped job config preserves secret:// keys by default."""
+        config = Configuration.from_yaml(self._default_config_path())
+        assert config.job_configs["vscode_state_sync"]["preserve_key_globs"] == ["secret://%"]
