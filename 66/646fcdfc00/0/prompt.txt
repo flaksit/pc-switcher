@@ -1,0 +1,22 @@
+rebase on fix-191-foldersync-progressbar
+
+---
+
+/do-issue 195
+
+---
+
+"snapshot idea is technically feasible" but then this simple feature depends on btrfs. For me, that's fine (my systems use btrfs until now). But maybe other users in the future (or me wanting to quit btrfs) don't have btrfs and we shouldn't depend on it more than necessary (=safety net). There is #23 for this.
+
+---
+
+okay with not using btrfs. you right.
+
+I can live with your proposal.
+
+Simple idea to uncouple: we could say that vscode_state_sync MUST run before folder_sync and it adds a .pcswitcher-filter file to the vscode/forks-folders with exclude filter. What do you think?
+
+---
+
+ok, continue the gsd workflow
+Each "sync"-job must be togglable.
