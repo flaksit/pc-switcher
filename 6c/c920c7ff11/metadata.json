@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6cc920c7ff11",
+  "strategy": "manual-commit",
+  "branch": "189-human-transfer-size",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/disk.py",
+    "src/pcswitcher/jobs/disk_space_monitor.py",
+    "src/pcswitcher/jobs/folder_sync.py",
+    "src/pcswitcher/orchestrator.py",
+    "tests/unit/test_disk_format.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6c/c920c7ff11/0/metadata.json",
+      "transcript": "/6c/c920c7ff11/0/full.jsonl",
+      "compact_transcript": "/6c/c920c7ff11/0/transcript.jsonl",
+      "content_hash": "/6c/c920c7ff11/0/content_hash.txt",
+      "prompt": "/6c/c920c7ff11/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 67,
+    "cache_creation_tokens": 68153,
+    "cache_read_tokens": 1949634,
+    "output_tokens": 10711,
+    "api_call_count": 36
+  }
+}
