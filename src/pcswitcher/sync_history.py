@@ -34,6 +34,7 @@ __all__ = [
     "get_last_role_with_error",
     "get_last_sync_state",
     "get_record_role_command",
+    "hostnames_equal",
     "parse_sync_state",
     "record_role",
 ]
@@ -209,6 +210,23 @@ def get_record_role_command(role: SyncRole, peer: str | None = None) -> str:
     )
     script = "\n".join(lines)
     return f'mkdir -p {HISTORY_DIR} && python3 -c "{script}"'
+
+
+def hostnames_equal(a: str | None, b: str | None) -> bool:
+    """Compare two hostnames case-insensitively for the topology safety checks.
+
+    DNS hostnames are case-insensitive, so `P17` and `p17` denote the same machine.
+    History recorded before hostnames were acquired uniformly (or a target reached
+    via a differently-cased SSH alias) can hold either casing; matching case-folded
+    prevents a spurious "synced with a different machine" warning on a clean
+    back-sync.
+
+    A ``None`` peer never matches — including another ``None`` — because an absent
+    peer is not evidence that the topology is clean.
+    """
+    if a is None or b is None:
+        return False
+    return a.casefold() == b.casefold()
 
 
 def parse_sync_state(content: str) -> tuple[SyncRole | None, str | None]:

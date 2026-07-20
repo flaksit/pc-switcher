@@ -27,8 +27,9 @@ This document describes the architecture for the pc-switcher system, covering th
 | **hostname** | `str` | e.g., `"laptop-work"` | The actual machine name |
 
 **Resolution:**
-- Source hostname: obtained from local machine (e.g., `socket.gethostname()`)
-- Target hostname: provided via CLI argument `sync <target>`, resolved from SSH config if alias
+- Source hostname: obtained from local machine (`socket.gethostname()`)
+- Target connection address: the CLI argument `sync <target>` (hostname, SSH alias, or IP), used as the SSH/rsync destination
+- Target hostname for sync-history and the topology check: the target's own `socket.gethostname()`, queried over SSH so both ends are acquired the same way. Peers are compared case-insensitively, so a differently-cased or aliased target still matches a clean back-sync (ADR-015)
 
 ---
 

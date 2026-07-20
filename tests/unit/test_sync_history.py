@@ -18,6 +18,7 @@ from pcswitcher.sync_history import (
     get_last_role_with_error,
     get_last_sync_state,
     get_record_role_command,
+    hostnames_equal,
     parse_sync_state,
     record_role,
 )
@@ -367,3 +368,23 @@ class TestGetRecordRoleCommand:
         assert history_file.exists()
         actual = json.loads(history_file.read_text())
         assert actual["last_role"] == "source"
+
+
+class TestHostnamesEqual:
+    """hostnames_equal compares case-insensitively and treats None as no-match."""
+
+    @pytest.mark.parametrize(
+        ("a", "b", "expected"),
+        [
+            ("P17", "p17", True),
+            ("Fleksi", "fleksi", True),
+            ("host", "host", True),
+            ("host-a", "host-b", False),
+            ("P17", None, False),
+            (None, "p17", False),
+            (None, None, False),
+            ("", "", True),
+        ],
+    )
+    def test_hostnames_equal(self, a: str | None, b: str | None, expected: bool) -> None:
+        assert hostnames_equal(a, b) is expected

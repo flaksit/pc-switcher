@@ -29,6 +29,7 @@ from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.lock import (
     SyncLock,
+    get_hostname_command,
     get_local_hostname,
     get_lock_path,
     release_remote_lock,
@@ -57,6 +58,7 @@ from pcswitcher.sync_history import (
     SyncRole,
     get_last_sync_state,
     get_record_role_command,
+    hostnames_equal,
     parse_sync_state,
     record_role,
 )
@@ -179,7 +181,14 @@ class Orchestrator:
         self._session_id = secrets.token_hex(4)
         self._session_folder = session_folder_name(self._session_id)
         self._source_hostname = get_local_hostname()
+        # SSH-connectable target: the raw CLI argument (hostname, SSH alias, or IP).
+        # Load-bearing as the rsync/SSH destination — never overwrite with a resolved name.
         self._target_hostname = target
+        # Target's own hostname, resolved over SSH the same way the source resolves its
+        # own (socket.gethostname()), so sync-history peers and the topology check compare
+        # like-for-like instead of matching a real hostname against a typed CLI argument.
+        # Falls back to the CLI argument until _establish_connection resolves it.
+        self._target_canonical_hostname = target
 
         # Core components
         self._event_bus = EventBus()
@@ -458,6 +467,36 @@ class Orchestrator:
 
         self._logger.info("Connected to target", extra={"job": "orchestrator", "host": "target"})
 
+        await self._resolve_target_canonical_hostname()
+
+    async def _resolve_target_canonical_hostname(self) -> None:
+        """Resolve the target's own hostname over SSH (source-symmetric acquisition).
+
+        The source records its peer using `get_local_hostname()`; without this the
+        target would be recorded under the user-typed CLI argument instead, so the
+        two ends store the same machine under different names (e.g. `p17` vs `P17`)
+        and the topology check misreads a clean back-sync as a foreign one. On any
+        failure (non-zero exit, empty output) the CLI-argument fallback set in
+        __init__ is kept — a resolved hostname is a refinement, not a hard gate.
+        """
+        assert self._remote_executor is not None
+
+        result = await self._remote_executor.run_command(get_hostname_command())
+        resolved = result.stdout.strip() if result.success else ""
+        if resolved:
+            self._target_canonical_hostname = resolved
+            self._logger.debug(
+                "Resolved target hostname: %s",
+                resolved,
+                extra={"job": "orchestrator", "host": "target"},
+            )
+        else:
+            self._logger.debug(
+                "Could not resolve target hostname; using CLI argument %r",
+                self._target_hostname,
+                extra={"job": "orchestrator", "host": "target"},
+            )
+
     async def _acquire_target_lock(self) -> None:
         """Acquire exclusive lock on target machine via SSH.
 
@@ -680,7 +719,9 @@ class Orchestrator:
         assert self._confirmer is not None
 
         src = self._source_hostname
-        tgt = self._target_hostname
+        # Compare against the target's resolved own hostname, not the CLI argument, so
+        # a differently-cased or aliased target still matches recorded peers.
+        tgt = self._target_canonical_hostname
 
         # Read local sync state (role + peer from this machine's sync-history.json)
         local_role, local_peer = get_last_sync_state()
@@ -705,15 +746,15 @@ class Orchestrator:
             return True
 
         # Consecutive push: this source most recently synced TO this same target
-        consecutive_push = local_role == SyncRole.SOURCE and local_peer == tgt
+        consecutive_push = local_role == SyncRole.SOURCE and hostnames_equal(local_peer, tgt)
 
         # Suppress (clean case): target last synced with this source, and this is
         # not a repeat push from the same source without a back-sync.
-        if target_peer == src and not consecutive_push:
+        if hostnames_equal(target_peer, src) and not consecutive_push:
             return True
 
         # Determine warning type and compose message
-        if target_peer is not None and target_peer != src:
+        if target_peer is not None and not hostnames_equal(target_peer, src):
             # W2: machine-C — target last synced with a third machine
             direction = "received a sync from" if target_role == SyncRole.TARGET else "sent a sync to"
             warn_title = "Target Last Synced with a Different Machine"
@@ -759,15 +800,17 @@ class Orchestrator:
         - Source machine's history: last_role = SOURCE, last_peer = target hostname
         - Target machine's history: last_role = TARGET, last_peer = source hostname
 
-        Recording `last_peer` on both ends enables the topology out-of-order check
-        to distinguish the clean A→B / B→A pattern from the machine-C and
-        consecutive-push cases on the next sync.
+        Both peers are the machines' own resolved hostnames (target via SSH, source
+        via `get_local_hostname()`), never the user-typed CLI argument, so the next
+        sync's topology check compares like-for-like. Recording `last_peer` on both
+        ends lets that check distinguish the clean A→B / B→A pattern from the
+        machine-C and consecutive-push cases.
 
         Raises:
             RuntimeError: If history update fails on either machine.
         """
         # Update local (source) history
-        record_role(SyncRole.SOURCE, peer=self._target_hostname)
+        record_role(SyncRole.SOURCE, peer=self._target_canonical_hostname)
         self._logger.debug("Updated sync history: role=source", extra={"job": "orchestrator", "host": "source"})
 
         # Update remote (target) history via SSH

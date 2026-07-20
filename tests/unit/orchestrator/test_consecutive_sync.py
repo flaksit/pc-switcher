@@ -659,6 +659,125 @@ class TestCheckOutOfOrderDryRun:
 # ---------------------------------------------------------------------------
 
 
+class TestCheckOutOfOrderHostnameCasing:
+    """A clean back-sync must be recognised regardless of hostname casing.
+
+    Regression for the spurious "Target Last Synced with a Different Machine"
+    warning: the target recorded this machine's peer under a differently-cased
+    name (e.g. the user typed `sync fleksi` on the target, so it stored `fleksi`,
+    while this machine's own hostname is `Fleksi`). The topology comparison is
+    case-insensitive, so the clean A→B / B→A pattern still proceeds silently.
+    """
+
+    @pytest.mark.asyncio
+    async def test_case_mismatched_back_sync_is_clean(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """target_peer differs from source only in case → suppressed, no prompt."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        # This machine's real hostname (capitalised).
+        source_name = "Fleksi"
+        target_name = "p17"
+
+        # Local: this machine last synced as TARGET, peer recorded as the target's
+        # own hostname "P17" (capitalised) — differs in case from the CLI arg "p17".
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text(_history_json("target", "P17"))
+
+        # Target (p17): last synced as SOURCE, peer recorded as "fleksi" (lowercase,
+        # the CLI arg the user typed on p17) — differs in case from "Fleksi".
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target=target_name,
+            remote_stdout=_history_json("source", "fleksi"),
+        )
+        orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        # No warning, no prompt: the case-only difference is a clean back-sync.
+        cast(MagicMock, orchestrator._logger).warning.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_consecutive_push_detected_across_casing(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Consecutive push (W3) is still detected when the resolved target hostname
+        differs in case from the local peer record — case-insensitive match must not
+        let a genuine repeat push slip through as clean."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        source_name = "source-host"
+
+        # Local: this machine was SOURCE, peer recorded as "P17".
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text(_history_json("source", "P17"))
+
+        # Target resolves its own hostname as "p17" (lowercase); target history shows
+        # it last synced with this source (clean-looking), but we are pushing again.
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="p17",
+            remote_stdout=_history_json("target", source_name),
+        )
+        orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
+        orchestrator._target_canonical_hostname = "p17"  # pyright: ignore[reportPrivateUsage]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        # W3 fires → non-interactive → False, warning shown.
+        assert result is False
+        cast(MagicMock, orchestrator._console).print.assert_called()  # pyright: ignore[reportPrivateUsage]
+
+
+class TestResolveTargetCanonicalHostname:
+    """_resolve_target_canonical_hostname queries the target the same way the source
+    resolves its own hostname, and falls back to the CLI argument on failure."""
+
+    @pytest.mark.asyncio
+    async def test_resolves_hostname_over_ssh(self, mock_config: MagicMock) -> None:
+        """A successful query overwrites the CLI-argument fallback with the real hostname."""
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="p17",
+            remote_stdout="P17\n",
+        )
+        assert orchestrator._target_canonical_hostname == "p17"  # pyright: ignore[reportPrivateUsage]
+
+        await orchestrator._resolve_target_canonical_hostname()  # pyright: ignore[reportPrivateUsage]
+
+        assert orchestrator._target_canonical_hostname == "P17"  # pyright: ignore[reportPrivateUsage]
+        # The SSH-connectable name is untouched (rsync/SSH destination).
+        assert orchestrator._target_hostname == "p17"  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_cli_arg_on_failure(self, mock_config: MagicMock) -> None:
+        """A failed/empty query keeps the CLI-argument fallback."""
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="p17",
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+
+        await orchestrator._resolve_target_canonical_hostname()  # pyright: ignore[reportPrivateUsage]
+
+        assert orchestrator._target_canonical_hostname == "p17"  # pyright: ignore[reportPrivateUsage]
+
+
 class TestUpdateSyncHistoryWithPeer:
     """_update_sync_history records last_peer on both source and target."""
 
@@ -683,6 +802,26 @@ class TestUpdateSyncHistoryWithPeer:
         data = json.loads(history_path.read_text())
         assert data["last_role"] == "source"
         assert data["last_peer"] == "target-host"
+
+    @pytest.mark.asyncio
+    async def test_local_history_records_resolved_hostname_not_cli_arg(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """last_peer is the target's resolved hostname, not the (possibly aliased) CLI arg."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = Orchestrator(target="p17.lan", config=mock_config)
+        orchestrator._target_canonical_hostname = "P17"  # pyright: ignore[reportPrivateUsage]
+        orchestrator._remote_executor = None  # pyright: ignore[reportPrivateUsage]
+        orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
+
+        await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]
+
+        data = json.loads((tmp_path / ".local/share/pc-switcher/sync-history.json").read_text())
+        assert data["last_peer"] == "P17"
 
     @pytest.mark.asyncio
     async def test_remote_history_command_includes_peer(

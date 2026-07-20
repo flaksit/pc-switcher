@@ -180,3 +180,17 @@ def get_local_hostname() -> str:
         Hostname string
     """
     return socket.gethostname()
+
+
+def get_hostname_command() -> str:
+    """Shell command that prints the executing machine's hostname.
+
+    Yields the same value `get_local_hostname()` produces locally — both derive
+    from ``socket.gethostname()`` — so a machine's hostname is obtained identically
+    whether it is the source (local call) or the target (this command over SSH).
+    That symmetry is what lets the topology check compare like-for-like instead of
+    matching a real hostname against a user-typed CLI argument (see ADR-015).
+
+    Requires python3 on the remote (guaranteed on Ubuntu 24.04 targets).
+    """
+    return 'python3 -c "import socket; print(socket.gethostname())"'
