@@ -23,6 +23,7 @@ from typing import Any, ClassVar, override
 
 from pcswitcher.disk import format_bytes
 from pcswitcher.jobs.base import SyncJob
+from pcswitcher.jobs.vscode_state_sync import EDITOR_STATE_EXCLUDE_RELPATHS
 from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
 
 # Matches rsync --info=progress2 output, e.g.:
@@ -49,13 +50,19 @@ _PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\
 # pc-switcher's own runtime STATE lives under the invoking user's home and must
 # stay machine-local: sync-history.json is the topology-safety state (ADR-015) that
 # a --delete mirror would clobber mid-sync; the lock file and logs are per-machine.
-# This is the ONLY hardcoded exclude — every other exclusion is user-configurable.
+# See ADR-017 (supersedes ADR-016).
 #
 # The install itself (uv tool venv + ~/.local/bin shim) is deliberately NOT
 # excluded: it mirrors from source like any other uv tool, so the venv and the
 # interpreter it references travel together and stay consistent. Excluding the venv
 # while --delete-mirroring the uv interpreter tree it depends on deleted the in-use
-# interpreter and broke pc-switcher on the target. See ADR-017 (supersedes ADR-016).
+# interpreter and broke pc-switcher on the target.
+#
+# This is not the only hardcoded exclude: the editor state DBs
+# (EDITOR_STATE_EXCLUDE_RELPATHS, owned by vscode_state_sync) join this same
+# global-first, non-overridable tier — vscode_state_sync merges them selectively so
+# machine-bound secret:// rows are never clobbered by the file-granular mirror
+# (ADR-018). Every OTHER exclusion is user-configurable.
 _RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
     ".local/share/pc-switcher",  # lock, sync-history.json, logs/
 )
@@ -299,14 +306,16 @@ class FolderSyncJob(SyncJob):
 
     @staticmethod
     def _runtime_exclude_filters(folder_path: str) -> list[str]:
-        """rsync `--filter` args protecting pc-switcher's own runtime files.
+        """rsync `--filter` args for the global-first, non-overridable exclude tier.
 
-        The runtime files (`_RUNTIME_EXCLUDE_RELPATHS`) live under the invoking
-        user's home directory. When `folder_path` contains that home (e.g. syncing
-        `/home`), each protected path is emitted as a root-anchored rsync pattern
-        relative to the transfer root, so it matches exactly one location and can
-        never be re-exposed by a user include rule. When home is outside
-        `folder_path` (e.g. `/root` synced by a normal user) there is nothing to
+        Two relpath groups, both under the invoking user's home, are emitted here:
+        `_RUNTIME_EXCLUDE_RELPATHS` (pc-switcher's own runtime state) first, then
+        `EDITOR_STATE_EXCLUDE_RELPATHS` (the editor `state.vscdb`/`.backup` DBs owned by
+        `vscode_state_sync`, which merges them selectively — ADR-018). When `folder_path`
+        contains that home (e.g. syncing `/home`), each protected path is emitted as a
+        root-anchored rsync pattern relative to the transfer root, so it matches exactly
+        one location and can never be re-exposed by a user include rule. When home is
+        outside `folder_path` (e.g. `/root` synced by a normal user) there is nothing to
         protect and the list is empty.
         """
         try:
@@ -314,7 +323,10 @@ class FolderSyncJob(SyncJob):
         except ValueError:
             return []
         prefix = "/" if str(rel) == "." else f"/{rel}/"
-        return [f"--filter={shlex.quote(f'- {prefix}{sub}')}" for sub in _RUNTIME_EXCLUDE_RELPATHS]
+        return [
+            f"--filter={shlex.quote(f'- {prefix}{sub}')}"
+            for sub in (*_RUNTIME_EXCLUDE_RELPATHS, *EDITOR_STATE_EXCLUDE_RELPATHS)
+        ]
 
     def _transport_args(self) -> list[str]:
         """Build the rsync `-e <ssh>` transport and `--rsync-path='sudo rsync'` args.
@@ -437,8 +449,9 @@ class FolderSyncJob(SyncJob):
         # SSH transport + target-side sudo elevation (shared with the pre-seed pass).
         parts.extend(self._transport_args())
 
-        # GLOBAL-FIRST filter precedence: runtime excludes (un-overridable, ADR-016)
-        # come first; the folder's central `merge` filter (when configured) comes
+        # GLOBAL-FIRST filter precedence: the un-overridable excludes come first —
+        # pc-switcher's runtime state (ADR-017) followed by the editor state DBs
+        # (ADR-018); the folder's central `merge` filter (when configured) comes
         # next so its rules win over any per-directory file under first-match-wins;
         # the tree-wide `dir-merge /.pcswitcher-filter` is always last and gives
         # users a per-directory (gitignore-like) authoring surface. DO NOT add

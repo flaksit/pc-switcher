@@ -19,6 +19,7 @@ import pytest
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.folder_sync import FolderEntry, FolderSyncJob
+from pcswitcher.jobs.vscode_state_sync import EDITOR_STATE_EXCLUDE_RELPATHS
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ProgressUpdate
 
 # ---------------------------------------------------------------------------
@@ -525,18 +526,20 @@ class TestBuildRsyncCmdDeleteToggle:
 
 
 # ---------------------------------------------------------------------------
-# Hardcoded runtime-file excludes (ADR-016)
+# Hardcoded global-first excludes: runtime state (ADR-017) + editor DBs (ADR-018)
 # ---------------------------------------------------------------------------
 
 
 class TestRuntimeExcludeFilters:
-    """pc-switcher's own runtime files are always excluded from folder sync.
+    """The global-first, non-overridable exclude tier is always applied to folder sync.
 
-    These are the ONLY hardcoded excludes; they anchor to the invoking user's
-    home and only apply when that home is inside the synced folder.
+    It contains pc-switcher's own runtime state (ADR-017) followed by the editor
+    `state.vscdb`/`.backup` DBs owned by `vscode_state_sync` (ADR-018). All entries
+    anchor to the invoking user's home and only apply when that home is inside the
+    synced folder. Runtime state comes first, then the editor DBs.
     """
 
-    _RELPATHS = (".local/share/pc-switcher",)
+    _RELPATHS = (".local/share/pc-switcher", *EDITOR_STATE_EXCLUDE_RELPATHS)
 
     def _filters(self, folder_path: str, home: str) -> list[str]:
         with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path(home)):
@@ -568,6 +571,27 @@ class TestRuntimeExcludeFilters:
         with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path("/home/alice")):
             cmd = job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
         assert cmd.index("/alice/.local/share/pc-switcher") < cmd.index("merge /abs/home.filter")
+
+    def test_runtime_state_precedes_editor_dbs(self) -> None:
+        """Runtime state excludes are emitted before the editor-DB excludes."""
+        filters = self._filters("/home", "/home/alice")
+        assert ".local/share/pc-switcher" in filters[0]
+        assert filters[1:] == [f"--filter={shlex.quote(f'- /alice/{rel}')}" for rel in EDITOR_STATE_EXCLUDE_RELPATHS]
+
+    def test_each_editor_db_and_backup_excluded_before_merge(self) -> None:
+        """Both state.vscdb and its .backup are excluded for each editor, before the merge filter."""
+        ctx = make_context(config={"folders": [{"path": "/home"}]}, target_username="testuser")
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path="/home", filter_file="/abs/home.filter")
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path("/home/alice")):
+            cmd = job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
+        for editor in ("Code", "Antigravity", "Cursor", "VSCodium"):
+            main = f"/alice/.config/{editor}/User/globalStorage/state.vscdb"
+            backup = main + ".backup"
+            assert main in cmd
+            assert backup in cmd
+            assert cmd.index(main) < cmd.index("merge /abs/home.filter")
+            assert cmd.index(backup) < cmd.index("merge /abs/home.filter")
 
 
 # ---------------------------------------------------------------------------
