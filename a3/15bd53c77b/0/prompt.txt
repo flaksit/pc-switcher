@@ -40,3 +40,65 @@ Reply **"confirmed fixed"** once you've run a real sync, or describe what's stil
 ---
 
 Analysis about A is not correct: I worked in ~/dev/pc-switcher on fleksi. That folder was trusted on fleksi. Then sync back to p17. Open vscode on p17 and ~/dev/pc-switcher was NOT trusted on p17. If state.vscdb is really holding the info about trusted folders, the sync back should have made it trusted on p17 as well.
+
+---
+
+nothing was open during sync. That's a hard rule for running "pc-switcher sync".
+My hypothesis: there is something inside or outside of state.vscdb that links some entries of state.vscdb to machine.
+Other possibility: p17 and fleksi were running different versions of vscode: p17 was on 1.110.0, fleksi on 1.129.1.
+
+---
+
+Nothing was open during sync except a single console tty. That's a hard rule for running "pc-switcher sync". So your hypothesis doesn't hold.
+
+Two other hypetheses for A:
+1. There is something inside or outside of state.vscdb that links some entries of state.vscdb to machine and invalidates these entries if not on same machine. A hash or key somewhere?
+2. vscode version incompatibility: p17 and fleksi were running different versions of vscode: p17 was on 1.110.0, fleksi on 1.129.1.
+   - sync p17>fleksi = sync from older to newer vscode. The newer vscode converted the 1.110 state.vscdb structure to the 1.129 structure. As I told in the issue, I did NOT have to trust the folder on fleksi. Fleksi accepted the trusted folders that came in the 1.110-structured state.vscdb.
+   - sync fleksi>p17 sent back a 1.129-structured state.vscdb
+   - open on p17 in vscode-1.110: vscode couldn't find or didn't understand the trusted folder list and started from scratch. So I had to trust again.
+   - after that, I upgraded vscode on p17 to 1.129.1 as well, so now both have same structure. So problem is solved.
+
+The fix does NOT what I asked for: I don't want to loose all other important configuration/state that is in state.vscdb.
+
+---
+
+<task-notification>
+<task-id>a78c58040dc526e4c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/3266df6c-ed07-4655-a42c-fe041f94549f/tasks/a78c58040dc526e4c.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify vscode version-skew via snapshots" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdict: Root cause of issue #190
+
+**Direction confirmed via sync logs** (not guessed from snapshot names): p17's log `sync-20260720T100307-cccdb8fb.log` shows `source_hostname: P17, target_hostname: fleksi` (step 1, 10:03→10:15). Fleksi's log `sync-20260720T194107-0db84f9f.log` shows `source_hostname: Fleksi, target_hostname: p17` (step 3, 19:41→19:42). Both hosts share identical top-level snapshot-group names/hashes per sync session (shared session ID), each containing `pre-@home-*` / `post-@home-*` pairs.
+
+### DBs compared
+
+| DB | Snapshot | `content.trust.model.key` | Row count |
+|---|---|---|---|
+| (a) p17 PRE (own, untouched, written by VS Code 1.110) | p17 `pre-@home-20260720T194108` | **PRESENT**, 777 bytes, 5 `uriTrustInfo` entries incl. `fsPath:"/home/janfr"` | 263 |
+| (d) fleksi, immediately after step 1 (= p17's file, unmodified) | fleksi `post-@home-20260720T101509` | **PRESENT**, 777 bytes, byte-identical to (a) | 263 |
+| (c) fleksi PRE-send, after hours of live use (VS Code 1.129) | fleksi `pre-@home-20260720T194108` | **ABSENT** — row deleted | 268 |
+| (b) p17 POST sync-back (= what p17 actually received) | p17 `post-@home-20260720T194156` | **ABSENT**, identical key set to (c) | 268 |
+
+Diffing (d) vs (b) shows the delta is `-content.trust.model.key`, `-history.recentlyOpenedPathsList`, plus 7 unrelated VS Code 1.129 bookkeeping additions (`chat.*`, `abstractUpdateService/lastKnownVersion`, `postUpdateWidget/lastKnownVersion`, `workbench.newDefaultThemeNotification`) — exactly accounting for 263→268. Broad `LIKE '%trust%'` search and a filesystem scan of `~/.config/Code/User` (maxdepth 2, both fleksi snapshots) found no replacement trust key or file anywhere.
+
+### Conclusions
+
+1. **Trust data was ABSENT on arrival at p17**, not present-but-unparseable. It was already gone from the file fleksi sent — confirmed identical between fleksi's pre-send DB (c) and what p17 received (b). The sync mechanism (rsync file mirror) worked correctly and faithfully; this is **not** a sync-transport bug.
+2. **The deletion happened on fleksi, during normal VS Code 1.129 usage** (step 2), between receiving p17's file intact (d, 777 bytes) and sending it back (c, key gone). VS Code 1.129 read the legacy key fine at receive time (consistent with no trust prompt — /home/janfr was already trusted, covering pc-switcher recursively) but then dropped it outright with no discoverable replacement.
+3. **H1 (machine-binding): refuted.** The trust JSON's only fields are `authority`, `external`, `fsPath`, `path`, `scheme`, `trusted`, `uriTrustInfo` — no machine/host/id field, on top of the pre-existing symmetric-behavior argument.
+4. **H2 as literally stated (read-time parse failure of present-but-differently-structured data on the older binary): refuted.** Data wasn't present on p17 at all.
+5. **Refined H2 (version-skew, but write-time): supported, high confidence.** VS Code 1.129 performs some migration/cleanup on `content.trust.model.key` during a live session (opened from an older-format file) and doesn't persist an equivalent record back into this DB/location — a genuine data loss caused by version skew, just occurring at write-time on the newer binary rather than read-time on the older one. Sync then faithfully mirrors that now-empty state back to p17, where 1.110 correctly reports nothing trusted given genuinely empty input.
+
+### Notes / gaps
+- Where VS Code 1.129 now stores trust (if anywhere) is unresolved — only ruled out `ItemTable` and `~/.config/Code/User` at depth 2, not deeper/alternate stores. Doesn't affect the p17-side verdict.
+- "Hundreds of folders" reconciled: raw entry count is 5 (stable across p17's 10:03 and 19:41 PRE snapshots, i.e., predates this incident), but one entry trusts `/home/janfr` itself, recursively covering essentially everything underneath — consistent with "hundreds" being experienced coverage, not JSON array length.
+- Unrelated but notable: the 19:41 sync self-upgraded pc-switcher on p17 from 0.3.0→0.3.2 mid-operation.
+- SSH to fleksi worked throughout; all needed snapshots existed. The 2026-07-19 19:19 pre-only snapshot (no matching post) wasn't needed and wasn't investigated further.
+
+Scratch files used (temporary, safe to discard): `/tmp/claude-1000/-home-janfr-dev-pc-switcher/3266df6c-ed07-4655-a42c-fe041f94549f/scratchpad/{a_p17_pre,b_p17_post,c_fleksi_pre,d_fleksi_post_step1,e_p17_pre_step1}.vscdb`</result>
+<usage><subagent_tokens>72872</subagent_tokens><tool_uses>20</tool_uses><duration_ms>277860</duration_ms></usage>
+</task-notification>
