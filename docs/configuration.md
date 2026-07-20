@@ -209,4 +209,4 @@ Otherwise it matches gitignore (basenames, a trailing `/` for directories, `*`/`
 
 ### Always excluded
 
-pc-switcher's own files are always excluded and cannot be re-included, so a sync never disturbs the target's sync state or the running install: `~/.local/share/pc-switcher/`, `~/.local/share/uv/tools/pcswitcher`, and `~/.local/bin/pc-switcher`.
+pc-switcher's own runtime state — `~/.local/share/pc-switcher/` (lock file, sync history, logs) — is always excluded and cannot be re-included, so a sync never disturbs the target's sync state or per-machine logs. This is the only hardcoded exclude; pc-switcher's install itself (its uv tool venv and `~/.local/bin` shim) mirrors like any other file, so it stays consistent with the interpreter it depends on (ADR-017).

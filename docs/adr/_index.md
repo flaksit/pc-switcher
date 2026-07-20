@@ -1,4 +1,4 @@
-# Architecture Decisions Summary (Last updated: 2026-07-03)
+# Architecture Decisions Summary (Last updated: 2026-07-20)
 
 ## Active Decisions
 
@@ -17,14 +17,11 @@
 - [ADR-013](adr-013-rsync-over-ssh-user-data-transport.md): rsync-over-SSH as user-data transport, running as root via sudo
 - [ADR-014](adr-014-unified-dry-run-contract.md): Unified dry-run contract for all SyncJobs
 - [ADR-015](adr-015-topology-based-sync-safety-model.md): Topology-based sync-safety model (btrfs find-new content-detection removed)
-- [ADR-016](adr-016-hardcoded-runtime-file-excludes.md): Hardcoded exclusion of pc-switcher's own runtime files from folder sync
+- [ADR-017](adr-017-mirror-pcswitcher-install.md): Mirror pc-switcher's own install; hardcode-exclude only its runtime state
 
 ### Instructions for AI agents
 Load specific ADRs only when relevant to current task: search workspace files to find relevant ADRs
 
 ## Superseded
 
-(None)
-
-Example:
-- ADR-005: Direct IBKR Gateway → Superseded by ADR-017
+- [ADR-016](adr-016-hardcoded-runtime-file-excludes.md): Hardcoded exclusion of pc-switcher's own runtime files → Superseded by [ADR-017](adr-017-mirror-pcswitcher-install.md)

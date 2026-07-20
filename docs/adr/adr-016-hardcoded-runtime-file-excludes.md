@@ -1,8 +1,10 @@
 # ADR-016: Hardcoded exclusion of pc-switcher's own runtime files from folder sync
 
-Status: Accepted
+Status: Superseded by ADR-017
 
 Date: 2026-07-03
+
+Superseded by: [ADR-017](adr-017-mirror-pcswitcher-install.md) — the install (uv tool venv + shim) is no longer excluded; only the runtime-state directory stays hardcoded-excluded. Excluding the venv while `--delete`-mirroring its interpreter tree deleted the in-use interpreter and broke pc-switcher on the target (#185).
 
 ## TL;DR
 Folder sync always excludes pc-switcher's own runtime state, install, and logs; these are the only hardcoded excludes — every other exclusion stays user-configurable.
