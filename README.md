@@ -77,24 +77,26 @@ After sync completes, power off the source machine and resume work on target.
 
 The sequence stops at the first failure (raising an exception), and the `finally` cleanup always runs (release locks, kill remote processes, close the connection).
 
-1. **Load config & arm interrupt handling** (CLI, before the orchestrator). Read `~/.config/pc-switcher/config.yaml`, start the asyncio loop, install the SIGINT handler that triggers graceful cleanup.
-2. **Acquire source lock.** Local lock file; this machine cannot join any other sync (as source or target) while this one runs.
-3. **Establish SSH connection.** Creates the local and remote executors every later step uses. Nothing touches the target before this point.
-4. **Acquire target lock.** A persistent remote process holds the same unified lock on the target; released during cleanup.
-5. **Out-of-order / target-state check.** Reads `last_role` and `last_peer` from the local and target sync history to detect situations where the target may hold independent state — for example, no prior sync history exists (W1), the target last synced with a different machine (W2 — machine-C scenario), or this source is pushing again without receiving a back-sync first (W3). Shows a warning and asks for confirmation; the sync is never hard-aborted for any of these cases since the A→B / work-on-A / A→B again workflow is legitimate (GitHub #159). Skipped with `--allow-out-of-order`. In `--dry-run` mode the warning is logged and the sync continues.
-6. **Discover & validate jobs.**
+Before the numbered steps, the CLI (outside the orchestrator) reads `~/.config/pc-switcher/config.yaml`, starts the asyncio loop, and installs the SIGINT handler that triggers graceful cleanup. The orchestrator then runs the ten steps below, which the live UI shows as `Step N/total` and the code marks with matching `# Step N` comments in `Orchestrator.run()`:
+
+1. **Acquire source lock.** Local lock file; this machine cannot join any other sync (as source or target) while this one runs.
+2. **Establish SSH connection.** Creates the local and remote executors every later step uses. Nothing touches the target before this point.
+3. **Acquire target lock.** A persistent remote process holds the same unified lock on the target; released during cleanup.
+   - *Between steps 3 and 4 (not a progress step): out-of-order / target-state check.* Reads `last_role` and `last_peer` from the local and target sync history to detect situations where the target may hold independent state — for example, no prior sync history exists (W1), the target last synced with a different machine (W2 — machine-C scenario), or this source is pushing again without receiving a back-sync first (W3). Shows a warning and asks for confirmation; the sync is never hard-aborted for any of these cases since the A→B / work-on-A / A→B again workflow is legitimate (GitHub #159). Skipped with `--allow-out-of-order`. In `--dry-run` mode the warning is logged and the sync continues.
+4. **Discover & validate jobs.**
    - Load enabled jobs from config
    - Validate their config
    - Run each job's `validate()` against live system state: checks `sudo rsync` availability, `acl` package installation, and source folder existence. Nothing has been mutated yet.
-7. **Disk-space preflight.** Check free space on both hosts in parallel against `preflight_minimum`; abort if either is short — so snapshots and rsync don't run a disk into ENOSPC.
-8. **Pre-sync snapshots.** Create btrfs snapshots on both hosts. This is the rollback point; every mutating step below happens after it.
-9. **Install/upgrade pc-switcher on target.** Ensures the target has a compatible version to run its side of later jobs. After snapshots, so a bad install is recoverable.
-10. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs with identical settings.
-11. **Run sync jobs sequentially.** The actual data movement (e.g. `folder_sync` via rsync-over-SSH as root on both ends). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
-12. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state.
-13. **Record sync history.** On success, write `last_role` and `last_peer` on both machines to enable the step 5 topology check next time. Skipped in `--dry-run`.
+5. **Disk-space preflight.** Check free space on both hosts in parallel against `preflight_minimum`; abort if either is short — so snapshots and rsync don't run a disk into ENOSPC.
+6. **Pre-sync snapshots.** Create btrfs snapshots on both hosts. This is the rollback point; every mutating step below happens after it.
+7. **Install/upgrade pc-switcher on target.** Ensures the target has a compatible version to run its side of later jobs. After snapshots, so a bad install is recoverable.
+8. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs with identical settings.
+9. **Run sync jobs sequentially.** The actual data movement (e.g. `folder_sync` via rsync-over-SSH as root on both ends). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
+10. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state.
 
-With `--dry-run`, the workflow previews without writing state (no history update, no snapshots, no mutations). rsync `--dry-run` lists the exact files and deletions that would occur; deletions are recorded in the FULL-level log so you can audit what would be destroyed before committing to a live sync. `--allow-out-of-order` skips the step 5 target-state confirmation.
+On success, after step 10 (not a progress step), the workflow records sync history: it writes `last_role` and `last_peer` on both machines to enable the out-of-order / target-state check next time. Skipped in `--dry-run`.
+
+With `--dry-run`, the workflow previews without writing state (no history update, no snapshots, no mutations). rsync `--dry-run` lists the exact files and deletions that would occur; deletions are recorded in the FULL-level log so you can audit what would be destroyed before committing to a live sync. `--allow-out-of-order` skips the out-of-order / target-state confirmation.
 
 ## Configuration
 
