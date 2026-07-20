@@ -3,8 +3,13 @@
   "checkpoint_id": "a315bd53c77b",
   "strategy": "manual-commit",
   "branch": "fix/186-reconcile-phase-numbering",
-  "checkpoints_count": 4,
-  "files_touched": null,
+  "checkpoints_count": 5,
+  "files_touched": [
+    "README.md",
+    "src/pcswitcher/jobs/base.py",
+    "src/pcswitcher/orchestrator.py",
+    "src/pcswitcher/ui.py"
+  ],
   "sessions": [
     {
       "metadata": "/a3/15bd53c77b/0/metadata.json",
@@ -12,13 +17,20 @@
       "compact_transcript": "/a3/15bd53c77b/0/transcript.jsonl",
       "content_hash": "/a3/15bd53c77b/0/content_hash.txt",
       "prompt": "/a3/15bd53c77b/0/prompt.txt"
+    },
+    {
+      "metadata": "/a3/15bd53c77b/1/metadata.json",
+      "transcript": "/a3/15bd53c77b/1/full.jsonl",
+      "compact_transcript": "/a3/15bd53c77b/1/transcript.jsonl",
+      "content_hash": "/a3/15bd53c77b/1/content_hash.txt",
+      "prompt": "/a3/15bd53c77b/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 30,
-    "cache_creation_tokens": 103140,
-    "cache_read_tokens": 1043197,
-    "output_tokens": 51775,
-    "api_call_count": 16
+    "input_tokens": 67,
+    "cache_creation_tokens": 178351,
+    "cache_read_tokens": 2268173,
+    "output_tokens": 72668,
+    "api_call_count": 37
   }
 }
