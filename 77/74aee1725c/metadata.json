@@ -3,7 +3,7 @@
   "checkpoint_id": "7774aee1725c",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 8,
+  "checkpoints_count": 7,
   "files_touched": [
     "docs/README.md",
     "docs/reading-sync-logs.md",
@@ -33,11 +33,11 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 120,
-    "cache_creation_tokens": 340671,
-    "cache_read_tokens": 3964691,
-    "output_tokens": 69599,
-    "api_call_count": 65
+    "input_tokens": 74,
+    "cache_creation_tokens": 136515,
+    "cache_read_tokens": 2237100,
+    "output_tokens": 23770,
+    "api_call_count": 40
   },
   "combined_attribution": {
     "calculated_at": "2026-07-20T07:26:48.243079561Z",
