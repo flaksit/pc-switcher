@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "5be7e0c6a543",
+  "strategy": "manual-commit",
+  "branch": "195-selective-vscode-db-sync",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/5b/e7e0c6a543/0/metadata.json",
+      "transcript": "/5b/e7e0c6a543/0/full.jsonl",
+      "compact_transcript": "/5b/e7e0c6a543/0/transcript.jsonl",
+      "content_hash": "/5b/e7e0c6a543/0/content_hash.txt",
+      "prompt": "/5b/e7e0c6a543/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 70,
+    "cache_creation_tokens": 202397,
+    "cache_read_tokens": 4563153,
+    "output_tokens": 68684,
+    "api_call_count": 39
+  }
+}
