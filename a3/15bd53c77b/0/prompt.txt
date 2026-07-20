@@ -1,0 +1,42 @@
+/gsd-debug gh #190
+
+---
+
+<task-notification>
+<task-id>a5d930089551e3d0c</task-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/3266df6c-ed07-4655-a42c-fe041f94549f/tasks/a5d930089551e3d0c.output</output-file>
+<status>completed</status>
+<summary>Agent "Debug session vscode-state-lost-on-sync" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed independently: 9/9 filter tests pass, including the new `TestVSCodeStateVscdbExclude`.
+
+## Debug checkpoint reached
+
+**Type:** human-verify — the agent applied and self-tested a fix but cannot exercise the actual reported workflow (a real p17 ↔ fleksi sync).
+
+**Root cause:** `~/.config/Code/User/globalStorage/state.vscdb` (a single opaque SQLite file) was inside the synced `Code/User` tree with no exclude. It mixes two machine-bound things into one blob:
+- **Trust list** (Symptom A) — `content.trust.model.key` holds the *entire* trusted-folders array as one JSON value. Confirmed on this machine: post-sync it contained exactly one entry — the folder just re-trusted — matching the report.
+- **Extension auth** (Symptom B) — GitHub-authentication's session (and other extensions') live under `secret://...` keys as ciphertext (1230 bytes for `github.auth`). VS Code's own docs confirm the Linux decryption key is a password held in gnome-libsecret, generated independently per machine and never synced — so ciphertext copied from another machine is permanently undecryptable there, forcing re-login. This is VS Code's documented-by-design behavior; full-tree sync just exposes it.
+
+**Fix applied** (diff shown above):
+- `src/pcswitcher/home.filter` — excludes `state.vscdb*` (covers `.backup`, `-wal`, `-shm`, `-journal`) with an explanatory comment.
+- `docs/configuration.md` — new subsection explaining both failure modes and the tradeoff (some harmless cross-machine state like terminal history also stops syncing).
+- `tests/local_rsync/test_folder_sync_filters.py` — new `TestVSCodeStateVscdbExclude`.
+
+**Self-verified:** full `pytest` suite (643 passed), `ruff check`/`format --check`, `basedpyright` all clean. I independently re-ran the filter test suite — 9/9 pass.
+
+**Not verified:** an actual p17 ↔ fleksi sync round trip (requires the real two-machine setup).
+
+To confirm this really fixes the issue on your machines:
+1. Run a real sync in either direction and confirm `~/.config/Code/User/globalStorage/state.vscdb` no longer transfers (check the sync log for the path, or compare mtimes).
+2. Trust a new folder on one machine, sync, then check the other machine's existing trusted-folders list is untouched (VS Code → Command Palette → "Workspace Trust: Manage Trusted Folders").
+
+Files touched: `/home/janfr/dev/pc-switcher/src/pcswitcher/home.filter`, `/home/janfr/dev/pc-switcher/docs/configuration.md`, `/home/janfr/dev/pc-switcher/tests/local_rsync/test_folder_sync_filters.py`, `/home/janfr/dev/pc-switcher/.planning/debug/vscode-state-lost-on-sync.md`
+
+Reply **"confirmed fixed"** once you've run a real sync, or describe what's still failing — I'll continue the debug loop from there (or, if you'd rather skip the live verification and move on, say so and I'll close this out).</result>
+<usage><subagent_tokens>44607</subagent_tokens><tool_uses>6</tool_uses><duration_ms>440428</duration_ms></usage>
+</task-notification>
+
+---
+
+Analysis about A is not correct: I worked in ~/dev/pc-switcher on fleksi. That folder was trusted on fleksi. Then sync back to p17. Open vscode on p17 and ~/dev/pc-switcher was NOT trusted on p17. If state.vscdb is really holding the info about trusted folders, the sync back should have made it trusted on p17 as well.
