@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.vscode_state_sync import (
     EDITOR_STATE_DB_RELPATHS,
+    EDITOR_STATE_HANDLED_RELPATHS,
     VscodeStateSyncJob,
     editor_state_exclude_paths,
     source_strip_sql,
@@ -97,6 +98,13 @@ class TestExcludePaths:
         joined = "\n".join(EDITOR_STATE_DB_RELPATHS)
         for editor in ("Code", "Antigravity", "Cursor", "VSCodium"):
             assert f".config/{editor}/User/globalStorage/state.vscdb" in joined
+
+    def test_exclude_set_equals_handled_set(self) -> None:
+        """Invariant: the excluded paths are exactly the merge-handled set (no exclude
+        without merge). Both derive from EDITOR_STATE_HANDLED_RELPATHS."""
+        with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/home/alice")):
+            paths = editor_state_exclude_paths()
+        assert paths == [str(Path("/home/alice") / rel) for rel in EDITOR_STATE_HANDLED_RELPATHS]
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +328,20 @@ class TestExecuteOrchestration:
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=home):
             await job.execute()
         assert ctx.target.send_file.await_count == 2  # type: ignore[union-attr]
+
+    async def test_backup_sidecar_is_also_merged(self, tmp_path: Path) -> None:
+        """A present `.backup` is merged too, not just excluded — one transfer per file
+        (main + backup), enforcing the exclude-set == merge-set invariant."""
+        home = _setup_home(tmp_path, editors=[_CODE_DB])
+        (home / (_CODE_DB + ".backup")).write_bytes(b"")  # backup present on source
+        ctx = _make_context(target_db_present=True)
+        job = VscodeStateSyncJob(ctx)
+        with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=home):
+            await job.execute()
+        assert ctx.target.send_file.await_count == 2  # type: ignore[union-attr]
+        remotes = [call.args[1] for call in ctx.target.send_file.call_args_list]  # type: ignore[union-attr]
+        assert any(r.endswith("state.vscdb.pcswitcher-tmp") for r in remotes)
+        assert any(r.endswith("state.vscdb.backup.pcswitcher-tmp") for r in remotes)
 
     async def test_dry_run_performs_no_writes(self, tmp_path: Path) -> None:
         """Dry-run: no send_file, no target inject, no mv, and the source DB is untouched."""

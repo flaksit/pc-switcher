@@ -24,6 +24,12 @@ the target's own value:
    the neutral DB, then atomically ``mv`` it over the live DB. When the target DB is
    absent (first sync) the inject is skipped and the neutral DB becomes the target DB.
 
+Each editor has TWO state DB files handled identically: the main ``state.vscdb`` and its
+``state.vscdb.backup`` sidecar (both SQLite DBs with the same schema). INVARIANT: the set
+of files ``folder_sync`` excludes is exactly the set this job merges — no file is hidden
+from the mirror without being handled, and vice versa. Both sides iterate the single
+``EDITOR_STATE_HANDLED_RELPATHS`` tuple.
+
 ``folder_sync`` hardcode-excludes the editor DBs so the mirror never touches them and
 the target's secrets are still in place at job time. This module OWNS which absolute
 paths to exclude and exposes them via ``editor_state_exclude_paths()`` (a function, not
@@ -59,23 +65,35 @@ EDITOR_STATE_DB_RELPATHS: tuple[str, ...] = (
 )
 
 
+# The full set of state-DB files handled per editor: the main ``state.vscdb`` and its
+# ``.backup`` sidecar (both are SQLite DBs with the same ItemTable schema). This is the
+# SINGLE source of truth enforcing the invariant that the folder_sync exclude set and the
+# merge set are IDENTICAL — every excluded file is merged and every merged file is
+# excluded, so nothing is ever hidden from the mirror without being handled. Both
+# `editor_state_exclude_paths()` (the exclude side) and `execute()` (the merge side)
+# iterate exactly this tuple.
+EDITOR_STATE_HANDLED_RELPATHS: tuple[str, ...] = tuple(
+    relpath + suffix for relpath in EDITOR_STATE_DB_RELPATHS for suffix in ("", ".backup")
+)
+
+
 def editor_state_exclude_paths() -> list[str]:
     """Absolute paths of the INVOKING user's editor state DBs to exclude from the mirror.
 
-    Each covered editor's ``state.vscdb`` plus its ``.backup`` sidecar (eight entries,
-    main-then-backup order), resolved against ``Path.home()`` at call time — hence a
-    function, not a constant: the paths depend on whoever runs ``pc-switcher``.
+    Every file this job merges (``EDITOR_STATE_HANDLED_RELPATHS`` — each editor's
+    ``state.vscdb`` and its ``.backup``), resolved against ``Path.home()`` at call time —
+    hence a function, not a constant: the paths depend on whoever runs ``pc-switcher``.
 
     This is the seam ``folder_sync`` consumes: this module owns WHICH absolute paths are
-    the editor DBs (single source of truth with the merge set — both derive from
-    ``EDITOR_STATE_DB_RELPATHS``), and ``folder_sync`` only translates each into a
-    root-anchored rsync filter for the folder it is syncing. Scope is the invoking user
-    only (see module docstring); paths are returned whether or not the file exists (an
-    absent path is a harmless no-op filter, and excluding it still protects a DB created
-    later).
+    the editor DBs, and ``folder_sync`` only translates each into a root-anchored rsync
+    filter for the folder it is syncing. The set is identical to the merge set (both
+    iterate ``EDITOR_STATE_HANDLED_RELPATHS``), so no file is excluded without being
+    merged. Scope is the invoking user only (see module docstring); paths are returned
+    whether or not the file exists (an absent path is a harmless no-op filter, and
+    excluding it still protects a DB created later).
     """
     home = Path.home()
-    return [str(home / (relpath + suffix)) for relpath in EDITOR_STATE_DB_RELPATHS for suffix in ("", ".backup")]
+    return [str(home / relpath) for relpath in EDITOR_STATE_HANDLED_RELPATHS]
 
 
 def _sql_string_literal(value: str) -> str:
@@ -202,29 +220,32 @@ class VscodeStateSyncJob(SyncJob):
         return source_home, target_home
 
     async def execute(self) -> None:
-        """Selectively merge each present editor's ``state.vscdb`` onto the target.
+        """Selectively merge each present editor state DB (main + ``.backup``) onto the target.
 
-        Iterates the covered editors, skips those whose DB is absent on the source, and
-        for each present editor runs source-strip -> transfer -> target-inject -> atomic
-        ``mv`` (Step C skipped when the target DB is absent — first sync). In dry-run the
-        job only detects source/target DB presence and logs the intended actions,
-        performing no ``send_file``, no target inject, and no ``mv`` (ADR-014).
+        Iterates ``EDITOR_STATE_HANDLED_RELPATHS`` — every file folder_sync excludes, so
+        the exclude set and the merge set are identical (no exclude without merge). Skips
+        files absent on the source, and for each present one runs source-strip -> transfer
+        -> target-inject -> atomic ``mv`` (Step C skipped when the target file is absent —
+        first sync). In dry-run the job only detects source/target presence and logs the
+        intended actions, performing no ``send_file``, no target inject, and no ``mv``
+        (ADR-014).
         """
         source_home, target_home = self._resolve_homes()
         prefix = "[dry-run] " if self.context.dry_run else ""
         globs = self.preserve_key_globs
 
-        editors = [rel for rel in EDITOR_STATE_DB_RELPATHS if (source_home / rel).exists()]
-        if not editors:
-            self._log(Host.SOURCE, LogLevel.INFO, f"{prefix}No VS Code state.vscdb found on source; nothing to sync")
+        present = [rel for rel in EDITOR_STATE_HANDLED_RELPATHS if (source_home / rel).exists()]
+        if not present:
+            self._log(Host.SOURCE, LogLevel.INFO, f"{prefix}No VS Code state DBs found on source; nothing to sync")
             self._report_progress(ProgressUpdate(percent=100))
             return
 
-        total = len(editors)
-        for index, relpath in enumerate(editors):
+        total = len(present)
+        for index, relpath in enumerate(present):
             source_db = source_home / relpath
             target_db = (target_home / relpath).as_posix()
-            editor = Path(relpath).parts[1]  # ".config/<Editor>/..." -> <Editor>
+            # Label the DB precisely, e.g. "Code state.vscdb" / "Code state.vscdb.backup".
+            label = f"{Path(relpath).parts[1]} {Path(relpath).name}"
 
             target_exists = (
                 await self.target.run_command(f"test -f {shlex.quote(target_db)}", login_shell=False)
@@ -235,12 +256,12 @@ class VscodeStateSyncJob(SyncJob):
                 self._log(
                     Host.TARGET,
                     LogLevel.INFO,
-                    f"{prefix}Would sync {editor} state.vscdb ({mode}); preserving keys matching {globs}",
+                    f"{prefix}Would sync {label} ({mode}); preserving keys matching {globs}",
                 )
                 self._report_progress(ProgressUpdate(percent=int((index + 1) / total * 100)))
                 continue
 
-            await self._sync_editor(source_db, target_db, target_exists, globs, editor)
+            await self._sync_editor(source_db, target_db, target_exists, globs, label)
             self._report_progress(ProgressUpdate(percent=int((index + 1) / total * 100)))
 
         self._report_progress(ProgressUpdate(percent=100))
@@ -251,12 +272,14 @@ class VscodeStateSyncJob(SyncJob):
         target_db: str,
         target_exists: bool,
         globs: Sequence[str],
-        editor: str,
+        label: str,
     ) -> None:
-        """Run the source-strip -> transfer -> inject -> atomic-mv sequence for one editor.
+        """Run the source-strip -> transfer -> inject -> atomic-mv sequence for one DB file.
 
-        The neutral DB is transferred to ``<target_db>.pcswitcher-tmp`` — same directory
-        as the live DB — so the final ``mv -f`` is atomic and preserves ownership/perms.
+        Handles either a main ``state.vscdb`` or its ``.backup`` sidecar (same schema);
+        ``label`` names which. The neutral DB is transferred to
+        ``<target_db>.pcswitcher-tmp`` — same directory as the live file — so the final
+        ``mv -f`` is atomic and preserves ownership/perms.
         """
         remote_tmp = target_db + ".pcswitcher-tmp"
         tmp_dir = Path(tempfile.mkdtemp(prefix="pcswitcher-vscode-"))
@@ -268,7 +291,7 @@ class VscodeStateSyncJob(SyncJob):
                 f"sqlite3 {shlex.quote(str(local_tmp))} {shlex.quote(source_strip_sql(globs))}"
             )
             if not strip.success:
-                self._raise(Host.SOURCE, editor, "source-strip", strip.stderr)
+                self._raise(Host.SOURCE, label, "source-strip", strip.stderr)
 
             # Step B — transfer the neutral DB into the target live DB's directory.
             # Ensure that directory exists first: folder_sync normally creates it, but
@@ -279,7 +302,7 @@ class VscodeStateSyncJob(SyncJob):
                 f"mkdir -p {shlex.quote(Path(target_db).parent.as_posix())}", login_shell=False
             )
             if not mkdir.success:
-                self._raise(Host.TARGET, editor, "mkdir target dir", mkdir.stderr)
+                self._raise(Host.TARGET, label, "mkdir target dir", mkdir.stderr)
             await self.target.send_file(local_tmp, remote_tmp)
 
             # Step C — target-inject the target's own preserved rows, only when it has a live DB.
@@ -289,25 +312,25 @@ class VscodeStateSyncJob(SyncJob):
                     login_shell=False,
                 )
                 if not inject.success:
-                    self._raise(Host.TARGET, editor, "target-inject", inject.stderr)
+                    self._raise(Host.TARGET, label, "target-inject", inject.stderr)
 
             # Atomic replace within the same directory.
             move = await self.target.run_command(
                 f"mv -f {shlex.quote(remote_tmp)} {shlex.quote(target_db)}", login_shell=False
             )
             if not move.success:
-                self._raise(Host.TARGET, editor, "atomic mv", move.stderr)
+                self._raise(Host.TARGET, label, "atomic mv", move.stderr)
 
             self._log(
                 Host.TARGET,
                 LogLevel.INFO,
-                f"Synced {editor} state.vscdb ({'merge' if target_exists else 'first-sync'})",
+                f"Synced {label} ({'merge' if target_exists else 'first-sync'})",
             )
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    def _raise(self, host: Host, editor: str, step: str, stderr: str) -> None:
+    def _raise(self, host: Host, label: str, step: str, stderr: str) -> None:
         """Log CRITICAL and raise; any exception halts the sync (orchestrator contract)."""
-        message = f"{editor} state.vscdb {step} failed: {stderr.strip()}"
+        message = f"{label} {step} failed: {stderr.strip()}"
         self._log(host, LogLevel.CRITICAL, message)
         raise RuntimeError(message)

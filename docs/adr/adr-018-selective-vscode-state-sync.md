@@ -13,6 +13,8 @@ Sync each editor's global `state.vscdb` by mirroring every key except machine-bo
 
 This feature covers ONLY the invoking user (whoever runs `pc-switcher`), on both the exclude side and the merge side. Other users' editor DBs under a synced `/home` are deliberately not handled: a multi-user selective merge would need root on both ends (like `folder_sync`) to read/write files it does not own, which is out of scope (YAGNI). This is a property of this job, not a system-wide single-user assumption (see ADR-017 "Scope of the invoking user").
 
+INVARIANT: the set of files `folder_sync` excludes from the mirror is EXACTLY the set this job merges — for the invoking user, each covered editor's `state.vscdb` AND its `state.vscdb.backup` (both are SQLite DBs with the same schema and are merged identically). No file is excluded without being merged, and no handled file is left to the wholesale mirror. Both sides derive from one tuple (`EDITOR_STATE_HANDLED_RELPATHS`), so they cannot drift.
+
 ## Implementation Rules
 - `folder_sync` MUST hardcode-exclude the invoking user's covered editors' `state.vscdb` and `state.vscdb.backup`, folding them into the same global-first, non-overridable exclude tier as the runtime state, emitted before both filter surfaces so no user `+` rule can re-expose them.
 - `vscode_state_sync` OWNS which absolute paths are the editor DBs and exposes them via `editor_state_exclude_paths()` — a function (the paths are dynamic, resolved against the invoking user's home at call time), not a constant. `folder_sync` imports it one-way (`vscode_state_sync` MUST NOT import from `folder_sync` — avoids an import cycle) and only translates each absolute path into a root-anchored rsync filter for the folder being synced (skipping paths outside that folder). `folder_sync` MUST hold no knowledge of editors or home layout. The exclude set and the merge set share one source of truth (`EDITOR_STATE_DB_RELPATHS`) so they cannot drift.
@@ -40,7 +42,7 @@ This feature covers ONLY the invoking user (whoever runs `pc-switcher`), on both
 - A first sync (target DB absent) still causes a one-time re-login, since the neutral DB carries no secret rows.
 - Correctness depends on the DB staying quiescent during a sync (the operating rule); a live writer during the merge is unsupported.
 - The covered-editor list and their `~/.config/<Editor>/` directory casing are fixed in code; a new editor or a non-standard layout needs a code change.
-- Only the invoking user's editor DBs are covered; a second human user's `state.vscdb` under a synced `/home` is excluded from the mirror but not merged, so their editor global state does not sync (acceptable per Scope — revisit if multi-user is needed).
+- Only the invoking user's editor DBs are covered. A second human user's `state.vscdb` under a synced `/home` is NEITHER excluded NOR merged — it falls through to `folder_sync`'s normal wholesale mirror (its secrets are clobbered, as before this feature); this preserves the exclude-set == merge-set invariant for every user (acceptable per Scope — revisit if multi-user is needed).
 
 ## References
 - ADR-017: Mirror pc-switcher's own install; hardcode-exclude only its runtime state (amended by this ADR)
