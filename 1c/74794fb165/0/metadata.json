@@ -1,0 +1,73 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "1c74794fb165",
+  "session_id": "408431d0-0757-46f6-9cd2-6e72fee0a5c9",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-21T09:44:57.687540575Z",
+  "branch": "195-selective-vscode-db-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "README.md",
+    "src/pcswitcher/jobs/vscode_state_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "fcb44e96aad3",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 42780,
+    "cache_read_tokens": 125886,
+    "output_tokens": 889,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-21T09:44:57.682376448Z",
+    "agent_lines": 0,
+    "agent_removed": 5,
+    "human_added": 7,
+    "human_modified": 35,
+    "human_removed": 0,
+    "total_committed": 7,
+    "total_lines_changed": 49,
+    "agent_percentage": 10.204081632653061,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 46,
+      "user_lines_removed": 29,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "src/pcswitcher/jobs/vscode_state_sync.py": 46
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/vscode_state_sync.py": 29
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 34,
+      "user_lines_removed": 4,
+      "agent_lines_added": 51,
+      "agent_lines_removed": 36,
+      "user_added_per_file": {
+        "docs/adr/adr-018-selective-vscode-state-sync.md": 3,
+        "docs/configuration.md": 1,
+        "src/pcswitcher/jobs/vscode_state_sync.py": 8,
+        "tests/unit/jobs/test_vscode_state_sync.py": 22
+      },
+      "user_removed_per_file": {
+        "docs/adr/adr-018-selective-vscode-state-sync.md": 1,
+        "docs/configuration.md": 1,
+        "src/pcswitcher/jobs/vscode_state_sync.py": 2
+      }
+    }
+  ]
+}
