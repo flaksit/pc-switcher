@@ -3,9 +3,10 @@
   "checkpoint_id": "a12ab6fbb089",
   "strategy": "manual-commit",
   "branch": "195-selective-vscode-db-sync",
-  "checkpoints_count": 2,
+  "checkpoints_count": 4,
   "files_touched": [
-    "docs/adr/_index.md"
+    "docs/adr/_index.md",
+    "docs/adr/adr-019-homogeneous-fleet.md"
   ],
   "sessions": [
     {
@@ -14,13 +15,20 @@
       "compact_transcript": "/a1/2ab6fbb089/0/transcript.jsonl",
       "content_hash": "/a1/2ab6fbb089/0/content_hash.txt",
       "prompt": "/a1/2ab6fbb089/0/prompt.txt"
+    },
+    {
+      "metadata": "/a1/2ab6fbb089/1/metadata.json",
+      "transcript": "/a1/2ab6fbb089/1/full.jsonl",
+      "compact_transcript": "/a1/2ab6fbb089/1/transcript.jsonl",
+      "content_hash": "/a1/2ab6fbb089/1/content_hash.txt",
+      "prompt": "/a1/2ab6fbb089/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 13,
-    "cache_creation_tokens": 62982,
-    "cache_read_tokens": 339480,
-    "output_tokens": 4060,
-    "api_call_count": 7
+    "input_tokens": 432,
+    "cache_creation_tokens": 1321774,
+    "cache_read_tokens": 69090302,
+    "output_tokens": 303039,
+    "api_call_count": 222
   }
 }
