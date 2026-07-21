@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "991584ea4455",
+  "session_id": "dfb7bed2-c211-436f-bbb0-83934cc1857e",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-21T13:27:57.726208357Z",
+  "branch": "195-selective-vscode-db-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/quick/260720-vhr-fix-195-selective-sqlite-aware-sync-of-v/SUMMARY.md",
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "e63a818ea94d",
+  "checkpoint_transcript_start": 308,
+  "transcript_lines_at_start": 308,
+  "compact_transcript_start": 67,
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 128261,
+    "cache_read_tokens": 1689362,
+    "output_tokens": 12895,
+    "api_call_count": 16
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-21T13:27:57.678206227Z",
+    "agent_lines": 25,
+    "agent_removed": 6,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 25,
+    "total_lines_changed": 31,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
