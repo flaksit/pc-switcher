@@ -19,6 +19,7 @@
 - [ADR-015](adr-015-topology-based-sync-safety-model.md): Topology-based sync-safety model (btrfs find-new content-detection removed)
 - [ADR-017](adr-017-mirror-pcswitcher-install.md): Mirror pc-switcher's own install; hardcode-exclude only its runtime state
 - [ADR-018](adr-018-selective-vscode-state-sync.md): SQLite-aware selective sync of VS Code editor state.vscdb
+- [ADR-019](adr-019-homogeneous-fleet.md): Homogeneous fleet — matching real users (uid/gid >= 1000) and paths across machines (no user/id/path mapping)
 
 ### Instructions for AI agents
 Load specific ADRs only when relevant to current task: search workspace files to find relevant ADRs
