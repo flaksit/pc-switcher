@@ -1,0 +1,1 @@
+selected text is not entirely correct: folder_sync runs rsync over their own ssh connection. Simply "over SSH"? That orchestrator uses a single ssh connection is an implementation detail for performance.
