@@ -1,0 +1,13 @@
+We made preserve_key_globs configurable but not VSCODE_BASED_EDITORS or VSCODE_STATE_DB_RELPATHS. This is not consistent. The module decides hardcoded on where the db-files are and which editors we support. Then it would be better to hardcode the key as well. Module decides everything; easy off-the-shelf use for the user.
+
+---
+
+We made preserve_key_globs configurable but not VSCODE_BASED_EDITORS or VSCODE_STATE_DB_RELPATHS. This is not consistent. The module decides hardcoded on where the db-files are and which editors we support. Then it would be better to hardcode the key as well. Module decides everything; easy off-the-shelf use for the user.
+
+---
+
+just not fix the key in the ADR, so we are free to update when vscode would change that. Implementation detail, not "architecture decision"
+
+---
+
+Implementation rules are RULES. OBLIGATIONS. Don't put "implementation-level choices" afterwards as hard "architecture decision" in an ADR. ADR is about the HARD essentials that should not or very rarely change.
