@@ -1,0 +1,1 @@
+You make it an absolute filter that only matches the home dir of the user that runs the sync. But this could be anyone, including root. And we want to match vscode of ALL users. Why not a completely relative match, applied to each foldersync-folder? It seems specific enough to not match anything else.
