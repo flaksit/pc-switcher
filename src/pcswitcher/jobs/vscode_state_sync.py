@@ -1,13 +1,14 @@
-"""SQLite-aware selective sync of VS Code editor ``state.vscdb`` (ADR-018, #195).
+"""SQLite-aware selective sync of the VS Code family's ``state.vscdb`` (ADR-018, #195).
 
-Each editor's global ``state.vscdb`` mixes wanted global state (settings-adjacent,
-MRU) with machine-bound SecretStorage blobs under ``secret://`` keys — ciphertext
-encrypted with a per-machine OS-keyring key that is never synced. A file-granular
-rsync mirror would clobber the target's own keyring-decryptable secrets and force
-auth-backed extensions to re-login after every sync.
+Covers VS Code and its forks (Code, Antigravity, Cursor, VSCodium — ``VSCODE_BASED_EDITORS``);
+"editor" below always means one of those, never a generic editor. Each such editor's global
+``state.vscdb`` mixes wanted global state (settings-adjacent, MRU) with machine-bound
+SecretStorage blobs under ``secret://`` keys — ciphertext encrypted with a per-machine
+OS-keyring key that is never synced. A file-granular rsync mirror would clobber the target's
+own keyring-decryptable secrets and force auth-backed extensions to re-login after every sync.
 
 SCOPE: this job covers ONLY the invoking user (whoever runs ``pc-switcher``) — the
-one whose ``Path.home()`` this process resolves. Other users' editor DBs under a
+one whose ``Path.home()`` this process resolves. Other users' VS Code state DBs under a
 synced ``/home`` are deliberately NOT handled (YAGNI; multi-user selective merge would
 need root on both ends, like ``folder_sync``, and is out of scope). This is a property
 of THIS job, not a system-wide single-user assumption — user-data sync itself spans all
@@ -28,12 +29,12 @@ Each editor has TWO state DB files handled identically: the main ``state.vscdb``
 ``state.vscdb.backup`` sidecar (both SQLite DBs with the same schema). INVARIANT: the set
 of files ``folder_sync`` excludes is exactly the set this job merges — no file is hidden
 from the mirror without being handled, and vice versa. Both sides iterate the single
-``EDITOR_STATE_HANDLED_RELPATHS`` tuple.
+``VSCODE_STATE_HANDLED_RELPATHS`` tuple.
 
 ``folder_sync`` excludes the editor DBs from its mirror non-overridably (global-first, so
 no user rule can re-expose them) so the mirror never touches them and the target's secrets
 are still in place at job time. This module OWNS which absolute paths those are and exposes
-them via ``editor_state_exclude_paths()`` (a function, not a constant — the paths are
+them via ``vscode_state_exclude_paths()`` (a function, not a constant — the paths are
 dynamic, resolved against the invoking user's home at call time); ``folder_sync`` imports it
 one-way (avoiding an import cycle) and only translates each absolute path into an rsync
 filter for the folder being synced. folder_sync holds no knowledge of editors or home
@@ -42,7 +43,6 @@ layout, and does not hardcode these paths (unlike its own runtime-state exclude,
 
 from __future__ import annotations
 
-import getpass
 import shlex
 import shutil
 import tempfile
@@ -59,7 +59,7 @@ from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, Va
 # standard ~/.config/<Editor>/User/globalStorage/ layout (RESEARCH §5 / Assumption A1).
 # The job skips editors whose DB is absent on the source, so an unused entry is harmless.
 VSCODE_BASED_EDITORS: tuple[str, ...] = ("Code", "Antigravity", "Cursor", "VSCodium")
-EDITOR_STATE_DB_RELPATHS: tuple[str, ...] = tuple(
+VSCODE_STATE_DB_RELPATHS: tuple[str, ...] = tuple(
     f".config/{editor}/User/globalStorage/state.vscdb" for editor in VSCODE_BASED_EDITORS
 )
 
@@ -69,30 +69,30 @@ EDITOR_STATE_DB_RELPATHS: tuple[str, ...] = tuple(
 # SINGLE source of truth enforcing the invariant that the folder_sync exclude set and the
 # merge set are IDENTICAL — every excluded file is merged and every merged file is
 # excluded, so nothing is ever hidden from the mirror without being handled. Both
-# `editor_state_exclude_paths()` (the exclude side) and `execute()` (the merge side)
+# `vscode_state_exclude_paths()` (the exclude side) and `execute()` (the merge side)
 # iterate exactly this tuple.
-EDITOR_STATE_HANDLED_RELPATHS: tuple[str, ...] = tuple(
-    relpath + suffix for relpath in EDITOR_STATE_DB_RELPATHS for suffix in ("", ".backup")
+VSCODE_STATE_HANDLED_RELPATHS: tuple[str, ...] = tuple(
+    relpath + suffix for relpath in VSCODE_STATE_DB_RELPATHS for suffix in ("", ".backup")
 )
 
 
-def editor_state_exclude_paths() -> list[Path]:
+def vscode_state_exclude_paths() -> list[Path]:
     """Absolute paths of the INVOKING user's editor state DBs to exclude from the mirror.
 
-    Every file this job merges (``EDITOR_STATE_HANDLED_RELPATHS`` — each editor's
+    Every file this job merges (``VSCODE_STATE_HANDLED_RELPATHS`` — each editor's
     ``state.vscdb`` and its ``.backup``), resolved against ``Path.home()`` at call time —
     hence a function, not a constant: the paths depend on whoever runs ``pc-switcher``.
 
     This is the seam ``folder_sync`` consumes: this module owns WHICH absolute paths are
     the editor DBs, and ``folder_sync`` only translates each into a root-anchored rsync
     filter for the folder it is syncing. The set is identical to the merge set (both
-    iterate ``EDITOR_STATE_HANDLED_RELPATHS``), so no file is excluded without being
+    iterate ``VSCODE_STATE_HANDLED_RELPATHS``), so no file is excluded without being
     merged. Scope is the invoking user only (see module docstring); paths are returned
     whether or not the file exists (an absent path is a harmless no-op filter, and
     excluding it still protects a DB created later).
     """
     home = Path.home()
-    return [home / relpath for relpath in EDITOR_STATE_HANDLED_RELPATHS]
+    return [home / relpath for relpath in VSCODE_STATE_HANDLED_RELPATHS]
 
 
 def _sql_string_literal(value: str) -> str:
@@ -170,7 +170,7 @@ class VscodeStateSyncJob(SyncJob):
         """
         return FirstSyncScope(
             job_name=cls.name,
-            scope_items=list(EDITOR_STATE_DB_RELPATHS),
+            scope_items=list(VSCODE_STATE_DB_RELPATHS),
             mechanism="sqlite merge + atomic mv",
         )
 
@@ -202,26 +202,10 @@ class VscodeStateSyncJob(SyncJob):
 
         return errors
 
-    def _resolve_homes(self) -> tuple[Path, Path]:
-        """Return ``(source_home, target_home)`` for the INVOKING user only.
-
-        The source is local, so its home is ``Path.home()`` — the invoking user's home
-        (this job covers only that user; see module docstring). The target home is
-        derived from the resolved SSH username (``target_username`` with a
-        ``getpass.getuser()`` fallback, as ``folder_sync`` resolves it) against the local
-        home's parent. The fleet is homogeneous in layout (matching arch per ADR-017), so
-        the two users' homes share a path shape; this avoids hardcoding a literal
-        ``/home/<user>``.
-        """
-        source_home = Path.home()
-        target_user = self.context.target_username or getpass.getuser()
-        target_home = source_home.parent / target_user
-        return source_home, target_home
-
     async def execute(self) -> None:
         """Selectively merge each present editor state DB (main + ``.backup``) onto the target.
 
-        Iterates ``EDITOR_STATE_HANDLED_RELPATHS`` — every file folder_sync excludes, so
+        Iterates ``VSCODE_STATE_HANDLED_RELPATHS`` — every file folder_sync excludes, so
         the exclude set and the merge set are identical (no exclude without merge). Skips
         files absent on the source, and for each present one runs source-strip -> transfer
         -> target-inject -> atomic ``mv`` (Step C skipped when the target file is absent —
@@ -229,11 +213,14 @@ class VscodeStateSyncJob(SyncJob):
         intended actions, performing no ``send_file``, no target inject, and no ``mv``
         (ADR-014).
         """
-        source_home, target_home = self._resolve_homes()
+        # A DB's absolute path is identical on source and target: the invoking (real)
+        # user has the same uid and home path on every machine, and pc-switcher does no
+        # user/path mapping (ADR-019). So no target-home remapping here.
+        home = Path.home()
         prefix = "[dry-run] " if self.context.dry_run else ""
         globs = self.preserve_key_globs
 
-        present = [rel for rel in EDITOR_STATE_HANDLED_RELPATHS if (source_home / rel).exists()]
+        present = [rel for rel in VSCODE_STATE_HANDLED_RELPATHS if (home / rel).exists()]
         if not present:
             self._log(Host.SOURCE, LogLevel.INFO, f"{prefix}No VS Code state DBs found on source; nothing to sync")
             self._report_progress(ProgressUpdate(percent=100))
@@ -241,8 +228,8 @@ class VscodeStateSyncJob(SyncJob):
 
         total = len(present)
         for index, relpath in enumerate(present):
-            source_db = source_home / relpath
-            target_db = (target_home / relpath).as_posix()
+            source_db = home / relpath
+            target_db = (home / relpath).as_posix()
             # Label the DB precisely, e.g. "Code state.vscdb" / "Code state.vscdb.backup".
             label = f"{Path(relpath).parts[1]} {Path(relpath).name}"
 

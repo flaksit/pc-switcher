@@ -19,12 +19,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.vscode_state_sync import (
-    EDITOR_STATE_DB_RELPATHS,
-    EDITOR_STATE_HANDLED_RELPATHS,
+    VSCODE_STATE_DB_RELPATHS,
+    VSCODE_STATE_HANDLED_RELPATHS,
     VscodeStateSyncJob,
-    editor_state_exclude_paths,
     source_strip_sql,
     target_inject_sql,
+    vscode_state_exclude_paths,
 )
 from pcswitcher.models import CommandResult
 
@@ -69,42 +69,42 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 class TestExcludePaths:
-    """`editor_state_exclude_paths()` is the seam folder_sync consumes: absolute paths
+    """`vscode_state_exclude_paths()` is the seam folder_sync consumes: absolute paths
     for the invoking user, single source of truth with the merge set."""
 
     def test_absolute_paths_under_invoking_home_main_and_backup(self) -> None:
         """Eight absolute Paths under the invoking user's home: main + `.backup` per editor."""
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/home/alice")):
-            paths = editor_state_exclude_paths()
-        assert len(paths) == 2 * len(EDITOR_STATE_DB_RELPATHS) == 8
+            paths = vscode_state_exclude_paths()
+        assert len(paths) == 2 * len(VSCODE_STATE_DB_RELPATHS) == 8
         assert all(isinstance(p, Path) and p.is_relative_to(Path("/home/alice")) for p in paths)
 
     def test_main_then_backup_order(self) -> None:
         """Each main DB is immediately followed by its `.backup` sidecar."""
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/home/alice")):
-            paths = editor_state_exclude_paths()
-        for rel in EDITOR_STATE_DB_RELPATHS:
+            paths = vscode_state_exclude_paths()
+        for rel in VSCODE_STATE_DB_RELPATHS:
             main = Path("/home/alice") / rel
             assert paths[paths.index(main) + 1] == Path(f"/home/alice/{rel}.backup")
 
     def test_resolves_against_the_invoking_user(self) -> None:
         """Paths track whoever runs the tool — root invoker resolves under /root."""
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/root")):
-            paths = editor_state_exclude_paths()
+            paths = vscode_state_exclude_paths()
         assert all(p.is_relative_to(Path("/root/.config")) for p in paths)
 
     def test_covers_the_four_editors(self) -> None:
         """Code, Antigravity, Cursor, VSCodium are all covered."""
-        joined = "\n".join(EDITOR_STATE_DB_RELPATHS)
+        joined = "\n".join(VSCODE_STATE_DB_RELPATHS)
         for editor in ("Code", "Antigravity", "Cursor", "VSCodium"):
             assert f".config/{editor}/User/globalStorage/state.vscdb" in joined
 
     def test_exclude_set_equals_handled_set(self) -> None:
         """Invariant: the excluded paths are exactly the merge-handled set (no exclude
-        without merge). Both derive from EDITOR_STATE_HANDLED_RELPATHS."""
+        without merge). Both derive from VSCODE_STATE_HANDLED_RELPATHS."""
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/home/alice")):
-            paths = editor_state_exclude_paths()
-        assert paths == [Path("/home/alice") / rel for rel in EDITOR_STATE_HANDLED_RELPATHS]
+            paths = vscode_state_exclude_paths()
+        assert paths == [Path("/home/alice") / rel for rel in VSCODE_STATE_HANDLED_RELPATHS]
 
 
 # ---------------------------------------------------------------------------

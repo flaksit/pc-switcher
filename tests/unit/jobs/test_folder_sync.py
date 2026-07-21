@@ -19,12 +19,12 @@ import pytest
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.folder_sync import FolderEntry, FolderSyncJob
-from pcswitcher.jobs.vscode_state_sync import EDITOR_STATE_DB_RELPATHS
+from pcswitcher.jobs.vscode_state_sync import VSCODE_STATE_DB_RELPATHS
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ProgressUpdate
 
-# Editor exclude relpaths (main + .backup) as folder_sync emits them, derived the same
-# way vscode_state_sync's editor_state_exclude_paths() does — single source of truth.
-_EDITOR_EXCLUDE_RELPATHS = tuple(rel + suffix for rel in EDITOR_STATE_DB_RELPATHS for suffix in ("", ".backup"))
+# VS Code state-DB exclude relpaths (main + .backup) as folder_sync emits them, derived the
+# same way vscode_state_sync's vscode_state_exclude_paths() does — single source of truth.
+_VSCODE_EXCLUDE_RELPATHS = tuple(rel + suffix for rel in VSCODE_STATE_DB_RELPATHS for suffix in ("", ".backup"))
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -530,7 +530,7 @@ class TestBuildRsyncCmdDeleteToggle:
 
 
 # ---------------------------------------------------------------------------
-# Hardcoded global-first excludes: runtime state (ADR-017) + editor DBs (ADR-018)
+# Hardcoded global-first excludes: runtime state (ADR-017) + VS Code state DBs (ADR-018)
 # ---------------------------------------------------------------------------
 
 
@@ -538,8 +538,8 @@ class TestRuntimeExcludeFilters:
     """pc-switcher's own runtime state is a global-first, non-overridable exclude.
 
     It anchors to the invoking user's home and only applies when that home is inside the
-    synced folder (ADR-017). The editor state DBs are a SEPARATE exclude group owned by
-    `vscode_state_sync` (see `TestEditorStateExcludeFilters`).
+    synced folder (ADR-017). The VS Code state DBs are a SEPARATE exclude group owned by
+    `vscode_state_sync` (see `TestVscodeStateExcludeFilters`).
     """
 
     def _filters(self, folder_path: str, home: str) -> list[str]:
@@ -576,22 +576,22 @@ class TestRuntimeExcludeFilters:
         assert cmd.index("/alice/.local/share/pc-switcher") < cmd.index("merge /abs/home.filter")
 
 
-class TestEditorStateExcludeFilters:
-    """The editor state DBs are excluded from the mirror via absolute paths that
+class TestVscodeStateExcludeFilters:
+    """The VS Code state DBs are excluded from the mirror via absolute paths that
     `vscode_state_sync` owns; folder_sync only translates each into a root-anchored,
     first-match filter for the folder being synced (ADR-018). Scope: the invoking user.
     """
 
     def _filters(self, folder_path: str, home: str) -> list[str]:
-        # editor_state_exclude_paths() reads Path.home() in the vscode module; patching
+        # vscode_state_exclude_paths() reads Path.home() in the vscode module; patching
         # the shared pathlib.Path.home covers it (same class object).
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path(home)):
-            return FolderSyncJob._editor_state_exclude_filters(folder_path)  # pyright: ignore[reportPrivateUsage]
+            return FolderSyncJob._vscode_state_exclude_filters(folder_path)  # pyright: ignore[reportPrivateUsage]
 
     def test_home_under_synced_folder_anchors_each_db_under_user_subdir(self) -> None:
-        """Syncing /home anchors every editor DB (main + .backup) under the user's subdir."""
+        """Syncing /home anchors every VS Code state DB (main + .backup) under the user's subdir."""
         assert self._filters("/home", "/home/alice") == [
-            f"--filter={shlex.quote(f'- /alice/{rel}')}" for rel in _EDITOR_EXCLUDE_RELPATHS
+            f"--filter={shlex.quote(f'- /alice/{rel}')}" for rel in _VSCODE_EXCLUDE_RELPATHS
         ]
 
     def test_db_outside_synced_folder_is_skipped(self) -> None:
@@ -599,9 +599,9 @@ class TestEditorStateExcludeFilters:
         assert self._filters("/root", "/home/alice") == []
 
     def test_root_invoker_excludes_under_root(self) -> None:
-        """Invoked as root (home /root): the /root sync excludes root's own editor DBs."""
+        """Invoked as root (home /root): the /root sync excludes root's own VS Code state DBs."""
         assert self._filters("/root", "/root") == [
-            f"--filter={shlex.quote(f'- /{rel}')}" for rel in _EDITOR_EXCLUDE_RELPATHS
+            f"--filter={shlex.quote(f'- /{rel}')}" for rel in _VSCODE_EXCLUDE_RELPATHS
         ]
 
     def test_each_editor_db_and_backup_excluded_before_merge(self) -> None:
