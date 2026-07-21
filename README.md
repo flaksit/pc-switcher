@@ -77,24 +77,23 @@ After sync completes, power off the source machine and resume work on target.
 
 The sequence stops at the first failure, and cleanup always runs: release locks, kill remote processes, close the connection.
 
-The ten logical phases are listed below. The live UI numbers steps dynamically, because the run-jobs phase expands to one step per enabled sync job. With the default two jobs (`folder_sync`, then `vscode_state_sync`), a sync runs as 11 steps, ending with the post-sync snapshots.
+The twelve steps are listed below. The live UI expands step 10 (run jobs) to one entry per enabled sync job, so the on-screen "Step X/Y" count runs higher than twelve. With the default two jobs (`folder_sync`, then `vscode_state_sync`), a sync runs as 13 UI steps, ending by recording sync history.
 
 1. **Acquire source lock.** Local lock file; this machine cannot join any other sync (as source or target) while this one runs.
 2. **Establish SSH connection.** Creates the local and remote executors every later step uses. Nothing touches the target before this point.
 3. **Acquire target lock.** A persistent remote process holds the same unified lock on the target; released during cleanup.
-   - *Between steps 3 and 4 (not a progress step): out-of-order check.* Detects cases where the target may hold independent state — no prior sync history, the target last synced with a different machine, or this machine pushing again without a back-sync first. Warns and asks for confirmation (never a hard abort, since re-syncing the same direction is a legitimate workflow). Skip with `--allow-out-of-order`; in `--dry-run` the warning is logged and the sync continues.
-4. **Discover & validate jobs.**
+4. **Out-of-order / target-state check.** Runs after the target lock so it can read the target's sync-history over SSH. Detects cases where the target may hold independent state — no prior sync history, the target last synced with a different machine, or this machine pushing again without a back-sync first. Warns and asks for confirmation (never a hard abort, since re-syncing the same direction is a legitimate workflow). Skip with `--allow-out-of-order`; in `--dry-run` the warning is logged and the sync continues.
+5. **Discover & validate jobs.**
    - Load enabled jobs from config
    - Validate their config
    - Run each job's `validate()` against live system state: checks `sudo rsync` availability, `acl` package installation, and source folder existence. Nothing has been mutated yet.
-5. **Disk-space preflight.** Check free space on both hosts in parallel against `preflight_minimum`; abort if either is short — so snapshots and rsync don't run a disk into ENOSPC.
-6. **Pre-sync snapshots.** Create btrfs snapshots on both hosts. This is the rollback point; every mutating step below happens after it.
-7. **Install/upgrade pc-switcher on target.** Ensures the target has a compatible version to run its side of later jobs. After snapshots, so a bad install is recoverable.
-8. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs with identical settings.
-9. **Run sync jobs sequentially.** The actual data movement, one UI step per enabled job. By default `folder_sync` (rsync-over-SSH as root on both ends) runs first, then `vscode_state_sync` (a selective, SQLite-aware merge of each editor's `state.vscdb` that keeps the target's machine-bound `secret://` keys). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
-10. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state. (This logical phase is the last UI step — Step 11 with the default job set.)
-
-On success, the workflow records sync history on both machines, enabling the out-of-order check next time. Skipped in `--dry-run`.
+6. **Disk-space preflight.** Check free space on both hosts in parallel against `preflight_minimum`; abort if either is short — so snapshots and rsync don't run a disk into ENOSPC.
+7. **Pre-sync snapshots.** Create btrfs snapshots on both hosts. This is the rollback point; every mutating step below happens after it.
+8. **Install/upgrade pc-switcher on target.** Ensures the target has a compatible version to run its side of later jobs. After snapshots, so a bad install is recoverable.
+9. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs with identical settings.
+10. **Run sync jobs sequentially.** The actual data movement, one UI step per enabled job. By default `folder_sync` (rsync-over-SSH as root on both ends) runs first, then `vscode_state_sync` (a selective, SQLite-aware merge of each editor's `state.vscdb` that keeps the target's machine-bound `secret://` keys). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
+11. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state.
+12. **Record sync history.** Write the sync-history record on both machines (source: `last_role=SOURCE`, target: `last_role=TARGET`), enabling step 4's out-of-order check next time. The write is skipped in `--dry-run`, but the step still runs. This is the last step — Step 13 in the UI with the default job set.
 
 With `--dry-run`, the workflow previews without writing state (no history update, no snapshots, no mutations). rsync `--dry-run` lists the exact files and deletions that would occur; deletions are recorded in the FULL-level log so you can audit what would be destroyed before committing to a live sync. `--allow-out-of-order` skips the out-of-order / target-state confirmation.
 
