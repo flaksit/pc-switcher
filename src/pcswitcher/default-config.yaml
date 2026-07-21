@@ -162,7 +162,8 @@ folder_sync:
 # TARGET value is kept. Default preserves secret:// keys: VS Code SecretStorage
 # blobs are encrypted with a per-machine OS-keyring key, so keeping the target's
 # own value avoids re-login after every sync. Runs after folder_sync, as the
-# normal user (no sudo). folder_sync hardcode-excludes these DBs from its mirror.
+# normal user (no sudo). folder_sync excludes these DBs from its mirror
+# (non-overridably) so this job can merge them instead.
 # Scope: only the invoking user (whoever runs pc-switcher). Other users' editor DBs
 # under a synced /home are excluded from the mirror but not merged (no multi-user).
 

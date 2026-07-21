@@ -30,13 +30,14 @@ of files ``folder_sync`` excludes is exactly the set this job merges — no file
 from the mirror without being handled, and vice versa. Both sides iterate the single
 ``EDITOR_STATE_HANDLED_RELPATHS`` tuple.
 
-``folder_sync`` hardcode-excludes the editor DBs so the mirror never touches them and
-the target's secrets are still in place at job time. This module OWNS which absolute
-paths to exclude and exposes them via ``editor_state_exclude_paths()`` (a function, not
-a constant — the paths are dynamic, resolved against the invoking user's home at call
-time); ``folder_sync`` imports it one-way (avoiding an import cycle) and only translates
-each absolute path into an rsync filter for the folder being synced. folder_sync holds
-no knowledge of editors or home layout.
+``folder_sync`` excludes the editor DBs from its mirror non-overridably (global-first, so
+no user rule can re-expose them) so the mirror never touches them and the target's secrets
+are still in place at job time. This module OWNS which absolute paths those are and exposes
+them via ``editor_state_exclude_paths()`` (a function, not a constant — the paths are
+dynamic, resolved against the invoking user's home at call time); ``folder_sync`` imports it
+one-way (avoiding an import cycle) and only translates each absolute path into an rsync
+filter for the folder being synced. folder_sync holds no knowledge of editors or home
+layout, and does not hardcode these paths (unlike its own runtime-state exclude, ADR-017).
 """
 
 from __future__ import annotations
@@ -57,11 +58,9 @@ from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, Va
 # are confirmed on-disk; Cursor and VSCodium directory casing is [ASSUMED] from the
 # standard ~/.config/<Editor>/User/globalStorage/ layout (RESEARCH §5 / Assumption A1).
 # The job skips editors whose DB is absent on the source, so an unused entry is harmless.
-EDITOR_STATE_DB_RELPATHS: tuple[str, ...] = (
-    ".config/Code/User/globalStorage/state.vscdb",
-    ".config/Antigravity/User/globalStorage/state.vscdb",
-    ".config/Cursor/User/globalStorage/state.vscdb",
-    ".config/VSCodium/User/globalStorage/state.vscdb",
+VSCODE_BASED_EDITORS: tuple[str, ...] = ("Code", "Antigravity", "Cursor", "VSCodium")
+EDITOR_STATE_DB_RELPATHS: tuple[str, ...] = tuple(
+    f".config/{editor}/User/globalStorage/state.vscdb" for editor in VSCODE_BASED_EDITORS
 )
 
 
@@ -77,7 +76,7 @@ EDITOR_STATE_HANDLED_RELPATHS: tuple[str, ...] = tuple(
 )
 
 
-def editor_state_exclude_paths() -> list[str]:
+def editor_state_exclude_paths() -> list[Path]:
     """Absolute paths of the INVOKING user's editor state DBs to exclude from the mirror.
 
     Every file this job merges (``EDITOR_STATE_HANDLED_RELPATHS`` — each editor's
@@ -93,7 +92,7 @@ def editor_state_exclude_paths() -> list[str]:
     excluding it still protects a DB created later).
     """
     home = Path.home()
-    return [str(home / relpath) for relpath in EDITOR_STATE_HANDLED_RELPATHS]
+    return [home / relpath for relpath in EDITOR_STATE_HANDLED_RELPATHS]
 
 
 def _sql_string_literal(value: str) -> str:

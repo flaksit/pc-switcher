@@ -73,25 +73,25 @@ class TestExcludePaths:
     for the invoking user, single source of truth with the merge set."""
 
     def test_absolute_paths_under_invoking_home_main_and_backup(self) -> None:
-        """Eight absolute paths under the invoking user's home: main + `.backup` per editor."""
+        """Eight absolute Paths under the invoking user's home: main + `.backup` per editor."""
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/home/alice")):
             paths = editor_state_exclude_paths()
         assert len(paths) == 2 * len(EDITOR_STATE_DB_RELPATHS) == 8
-        assert all(p.startswith("/home/alice/") for p in paths)
+        assert all(isinstance(p, Path) and p.is_relative_to(Path("/home/alice")) for p in paths)
 
     def test_main_then_backup_order(self) -> None:
         """Each main DB is immediately followed by its `.backup` sidecar."""
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/home/alice")):
             paths = editor_state_exclude_paths()
         for rel in EDITOR_STATE_DB_RELPATHS:
-            main = f"/home/alice/{rel}"
-            assert paths[paths.index(main) + 1] == main + ".backup"
+            main = Path("/home/alice") / rel
+            assert paths[paths.index(main) + 1] == Path(f"/home/alice/{rel}.backup")
 
     def test_resolves_against_the_invoking_user(self) -> None:
         """Paths track whoever runs the tool — root invoker resolves under /root."""
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/root")):
             paths = editor_state_exclude_paths()
-        assert all(p.startswith("/root/.config/") for p in paths)
+        assert all(p.is_relative_to(Path("/root/.config")) for p in paths)
 
     def test_covers_the_four_editors(self) -> None:
         """Code, Antigravity, Cursor, VSCodium are all covered."""
@@ -104,7 +104,7 @@ class TestExcludePaths:
         without merge). Both derive from EDITOR_STATE_HANDLED_RELPATHS."""
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/home/alice")):
             paths = editor_state_exclude_paths()
-        assert paths == [str(Path("/home/alice") / rel) for rel in EDITOR_STATE_HANDLED_RELPATHS]
+        assert paths == [Path("/home/alice") / rel for rel in EDITOR_STATE_HANDLED_RELPATHS]
 
 
 # ---------------------------------------------------------------------------

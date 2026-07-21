@@ -210,11 +210,13 @@ Otherwise it matches gitignore (basenames, a trailing `/` for directories, `*`/`
 
 ### Always excluded
 
-Two groups are always excluded from the mirror and cannot be re-included by any filter rule. pc-switcher's own runtime state — `~/.local/share/pc-switcher/` (lock file, sync history, logs) — so a sync never disturbs the target's sync state or per-machine logs (ADR-017); its install itself (uv tool venv and `~/.local/bin` shim) mirrors like any other file, so it stays consistent with the interpreter it depends on. And the VS Code editor state DBs (`state.vscdb` and `state.vscdb.backup` for Code, Antigravity, Cursor, VSCodium) — these are handed to `vscode_state_sync`, which merges them selectively so machine-bound `secret://` rows are never clobbered (ADR-018; see [`vscode_state_sync`](#vscode_state_sync) below).
+Two groups are always excluded from the mirror and cannot be re-included by any filter rule:
+- pc-switcher's own runtime state — `~/.local/share/pc-switcher/` (lock file, sync history, logs) — so a sync never disturbs the target's sync state or per-machine logs (ADR-017); its install itself (uv tool venv and `~/.local/bin` shim) mirrors like any other file, so it stays consistent with the interpreter it depends on.
+- If `vscode_state_sync` is enabled, the VS Code editor state DBs (`state.vscdb` and `state.vscdb.backup` for Code, Antigravity, Cursor, VSCodium) — these are handed to `vscode_state_sync`, which merges them selectively so machine-bound `secret://` rows are never clobbered (ADR-018; see [`vscode_state_sync`](#vscode_state_sync) below).
 
 ## `vscode_state_sync`
 
-Selectively syncs each editor's global `state.vscdb` — the SQLite database under `~/.config/<Editor>/User/globalStorage/` that mixes wanted global state (settings-adjacent values, MRU lists) with VS Code SecretStorage session blobs. The secret blobs live under `secret://` keys and are encrypted with a per-machine OS-keyring key that is never synced, so a plain file mirror would clobber the target's own decryptable secrets and force auth-backed extensions (GitHub, database extensions) to re-login after every sync. `folder_sync` hardcode-excludes these DBs; this job rebuilds each one instead.
+Selectively syncs each editor's global `state.vscdb` — the SQLite database under `~/.config/<Editor>/User/globalStorage/` that mixes wanted global state (settings-adjacent values, MRU lists) with VS Code SecretStorage session blobs. The secret blobs live under `secret://` keys and are encrypted with a per-machine OS-keyring key that is never synced, so a plain file mirror would clobber the target's own decryptable secrets and force auth-backed extensions (GitHub, database extensions) to re-login after every sync. `folder_sync` excludes these DBs from its mirror (non-overridably); this job rebuilds each one instead.
 
 ```yaml
 vscode_state_sync: true          # enable in sync_jobs (default true)

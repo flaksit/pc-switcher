@@ -345,7 +345,7 @@ class FolderSyncJob(SyncJob):
         filters: list[str] = []
         for abs_path in editor_state_exclude_paths():
             try:
-                rel = Path(abs_path).relative_to(root)
+                rel = abs_path.relative_to(root)
             except ValueError:
                 continue  # DB not under this folder — nothing to exclude here.
             filters.append(f"--filter={shlex.quote(f'- /{rel}')}")
