@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "a12ab6fbb089",
+  "session_id": "769c37e6-76e9-4460-b02f-167afb26fb4f",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-21T10:49:27.504077467Z",
+  "branch": "195-selective-vscode-db-sync",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [
+    "docs/adr/_index.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "38951738b758",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 13,
+    "cache_creation_tokens": 62982,
+    "cache_read_tokens": 339480,
+    "output_tokens": 4060,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-21T10:49:27.491209639Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 2,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 2,
+    "total_lines_changed": 3,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 102,
+      "user_lines_removed": 75,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "docs/adr/_index.md": 1,
+        "docs/adr/adr-018-selective-vscode-state-sync.md": 2,
+        "docs/adr/adr-019-homogeneous-fleet.md": 39,
+        "src/pcswitcher/jobs/folder_sync.py": 13,
+        "src/pcswitcher/jobs/vscode_state_sync.py": 27,
+        "tests/unit/jobs/test_folder_sync.py": 7,
+        "tests/unit/jobs/test_vscode_state_sync.py": 13
+      },
+      "user_removed_per_file": {
+        "docs/adr/adr-018-selective-vscode-state-sync.md": 2,
+        "src/pcswitcher/jobs/folder_sync.py": 13,
+        "src/pcswitcher/jobs/vscode_state_sync.py": 40,
+        "tests/unit/jobs/test_folder_sync.py": 7,
+        "tests/unit/jobs/test_vscode_state_sync.py": 13
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 26,
+      "user_lines_removed": 22,
+      "agent_lines_added": 103,
+      "agent_lines_removed": 76,
+      "user_added_per_file": {
+        "docs/adr/adr-018-selective-vscode-state-sync.md": 10,
+        "docs/adr/adr-019-homogeneous-fleet.md": 3,
+        "docs/configuration.md": 3,
+        "src/pcswitcher/default-config.yaml": 4,
+        "tests/unit/jobs/test_folder_sync.py": 6
+      },
+      "user_removed_per_file": {
+        "docs/adr/adr-018-selective-vscode-state-sync.md": 8,
+        "docs/adr/adr-019-homogeneous-fleet.md": 1,
+        "docs/configuration.md": 3,
+        "src/pcswitcher/default-config.yaml": 4,
+        "tests/unit/jobs/test_folder_sync.py": 6
+      }
+    }
+  ]
+}
