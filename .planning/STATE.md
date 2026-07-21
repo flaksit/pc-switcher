@@ -6,9 +6,9 @@ current_phase: 2
 current_phase_name: Package Management Sync
 status: executing
 stopped_at: Completed 01-18-PLAN.md
-last_updated: "2026-07-13T12:19:36.228Z"
-last_activity: 2026-07-19
-last_activity_desc: "Completed quick task 260719-g13: Check for new versions at startup (#176)"
+last_updated: "2026-07-21T13:26:41.000Z"
+last_activity: 2026-07-21
+last_activity_desc: "Finalized quick task 260720-vhr: Selective SQLite-aware sync of VS Code state.vscdb (#195)"
 progress:
   total_phases: 7
   completed_phases: 1
@@ -132,7 +132,7 @@ None yet.
 |---|-------------|------|--------|--------|-----------|
 | 260718-np8 | folder_sync include-override filter rules (#166) | 2026-07-18 | 2a2c003 | Verified | [260718-np8-folder-sync-include-override-filter-rule](./quick/260718-np8-folder-sync-include-override-filter-rule/) |
 | 260719-g13 | Check for new versions at startup (#176) | 2026-07-19 | cd765bf | Verified | [260719-g13-check-for-new-versions-at-startup-176](./quick/260719-g13-check-for-new-versions-at-startup-176/) |
-| 260720-vhr | Selective SQLite-aware sync of VS Code state.vscdb (#195) | 2026-07-20 | ed7751b | Verified | [260720-vhr-fix-195-selective-sqlite-aware-sync-of-v](./quick/260720-vhr-fix-195-selective-sqlite-aware-sync-of-v/) |
+| 260720-vhr | Selective SQLite-aware sync of VS Code state.vscdb (#195) | 2026-07-20 | d9c6478 | Verified | [260720-vhr-fix-195-selective-sqlite-aware-sync-of-v](./quick/260720-vhr-fix-195-selective-sqlite-aware-sync-of-v/) |
 
 ## Deferred Items
 
