@@ -6,6 +6,13 @@ encrypted with a per-machine OS-keyring key that is never synced. A file-granula
 rsync mirror would clobber the target's own keyring-decryptable secrets and force
 auth-backed extensions to re-login after every sync.
 
+SCOPE: this job covers ONLY the invoking user (whoever runs ``pc-switcher``) — the
+one whose ``Path.home()`` this process resolves. Other users' editor DBs under a
+synced ``/home`` are deliberately NOT handled (YAGNI; multi-user selective merge would
+need root on both ends, like ``folder_sync``, and is out of scope). This is a property
+of THIS job, not a system-wide single-user assumption — user-data sync itself spans all
+users.
+
 This job (a normal-user ``SyncJob``, no sudo) rebuilds each target DB by mirroring
 every key EXCEPT ``preserve_key_globs`` matches (default ``secret://%``), which keep
 the target's own value:
@@ -17,9 +24,13 @@ the target's own value:
    the neutral DB, then atomically ``mv`` it over the live DB. When the target DB is
    absent (first sync) the inject is skipped and the neutral DB becomes the target DB.
 
-``folder_sync`` hardcode-excludes the editor DBs (``EDITOR_STATE_EXCLUDE_RELPATHS``,
-owned here and imported one-way by ``folder_sync`` to avoid an import cycle) so the
-mirror never touches them and the target's secrets are still in place at job time.
+``folder_sync`` hardcode-excludes the editor DBs so the mirror never touches them and
+the target's secrets are still in place at job time. This module OWNS which absolute
+paths to exclude and exposes them via ``editor_state_exclude_paths()`` (a function, not
+a constant — the paths are dynamic, resolved against the invoking user's home at call
+time); ``folder_sync`` imports it one-way (avoiding an import cycle) and only translates
+each absolute path into an rsync filter for the folder being synced. folder_sync holds
+no knowledge of editors or home layout.
 """
 
 from __future__ import annotations
@@ -47,13 +58,24 @@ EDITOR_STATE_DB_RELPATHS: tuple[str, ...] = (
     ".config/VSCodium/User/globalStorage/state.vscdb",
 )
 
-# Each main DB plus its `.backup` sidecar (eight entries, main-then-backup order).
-# This is the constant `folder_sync` imports and folds into its GLOBAL-FIRST,
-# non-overridable exclude tier (ADR-018). Deriving it from EDITOR_STATE_DB_RELPATHS
-# keeps a single source of truth so the exclude set and the merge set cannot drift.
-EDITOR_STATE_EXCLUDE_RELPATHS: tuple[str, ...] = tuple(
-    relpath + suffix for relpath in EDITOR_STATE_DB_RELPATHS for suffix in ("", ".backup")
-)
+
+def editor_state_exclude_paths() -> list[str]:
+    """Absolute paths of the INVOKING user's editor state DBs to exclude from the mirror.
+
+    Each covered editor's ``state.vscdb`` plus its ``.backup`` sidecar (eight entries,
+    main-then-backup order), resolved against ``Path.home()`` at call time — hence a
+    function, not a constant: the paths depend on whoever runs ``pc-switcher``.
+
+    This is the seam ``folder_sync`` consumes: this module owns WHICH absolute paths are
+    the editor DBs (single source of truth with the merge set — both derive from
+    ``EDITOR_STATE_DB_RELPATHS``), and ``folder_sync`` only translates each into a
+    root-anchored rsync filter for the folder it is syncing. Scope is the invoking user
+    only (see module docstring); paths are returned whether or not the file exists (an
+    absent path is a harmless no-op filter, and excluding it still protects a DB created
+    later).
+    """
+    home = Path.home()
+    return [str(home / (relpath + suffix)) for relpath in EDITOR_STATE_DB_RELPATHS for suffix in ("", ".backup")]
 
 
 def _sql_string_literal(value: str) -> str:
@@ -164,13 +186,15 @@ class VscodeStateSyncJob(SyncJob):
         return errors
 
     def _resolve_homes(self) -> tuple[Path, Path]:
-        """Return ``(source_home, target_home)``.
+        """Return ``(source_home, target_home)`` for the INVOKING user only.
 
-        The source is local, so its home is ``Path.home()``. The target home is derived
-        from the resolved SSH username (``target_username`` with a ``getpass.getuser()``
-        fallback, as ``folder_sync`` resolves it) against the local home's parent — the
-        fleet is single-user and homogeneous (ADR-017), so the two homes share a layout
-        and this avoids hardcoding a literal ``/home/<user>``.
+        The source is local, so its home is ``Path.home()`` — the invoking user's home
+        (this job covers only that user; see module docstring). The target home is
+        derived from the resolved SSH username (``target_username`` with a
+        ``getpass.getuser()`` fallback, as ``folder_sync`` resolves it) against the local
+        home's parent. The fleet is homogeneous in layout (matching arch per ADR-017), so
+        the two users' homes share a path shape; this avoids hardcoding a literal
+        ``/home/<user>``.
         """
         source_home = Path.home()
         target_user = self.context.target_username or getpass.getuser()

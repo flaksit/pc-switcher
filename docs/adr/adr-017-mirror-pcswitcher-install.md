@@ -17,6 +17,10 @@ Folder sync mirrors pc-switcher's own install (uv tool venv + `~/.local/bin` shi
 - The hardcoded exclude MUST anchor relative to the invoking user's home and only apply when that home is inside the synced folder; it MUST precede user filter rules so no `+` rule can re-expose it (unchanged from ADR-016).
 - `validate()` MUST abort the sync on a source/target CPU-architecture mismatch (`uname -m`), since the mirrored venv and interpreter are arch-specific binaries.
 
+## Scope of "the invoking user"
+
+The anchoring to "the invoking user's home" above scopes pc-switcher's OWN install and runtime state, which inherently live under whichever user runs the tool — one install, one runtime-state directory, per invoking user. This is NOT a statement that pc-switcher syncs only a single user's data: user-data sync (e.g. all of `/home`) can span many users. Do not generalize this per-invoking-user anchoring into a system-wide single-user assumption. The "single-**architecture** fleet" constraint below is about CPU arch (the mirrored binaries), also unrelated to how many users are synced.
+
 ## Context
 ADR-016 hardcode-excluded the pc-switcher install (venv + shim) from the `/home` mirror to keep the "running install" machine-local. But the uv *interpreter* tree (`.local/share/uv/python/`) was not excluded, so it was `--delete`-mirrored to match the source. uv interpreters diverge per machine by patch version, so the frozen venv referenced an interpreter that existed only on the target — and the mirror deleted it, leaving a dangling shebang and a pc-switcher that could not execute on the target (#185). Nothing runs pc-switcher on the target during a sync except the install-on-target step, so the install does not need to be pinned machine-local; it only needs to stay internally consistent with its interpreter.
 

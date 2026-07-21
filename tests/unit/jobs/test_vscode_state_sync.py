@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.vscode_state_sync import (
     EDITOR_STATE_DB_RELPATHS,
-    EDITOR_STATE_EXCLUDE_RELPATHS,
     VscodeStateSyncJob,
+    editor_state_exclude_paths,
     source_strip_sql,
     target_inject_sql,
 )
@@ -67,19 +67,30 @@ def _read(path: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-class TestConstants:
-    """The editor relpath constants are the single source of truth for the exclude set."""
+class TestExcludePaths:
+    """`editor_state_exclude_paths()` is the seam folder_sync consumes: absolute paths
+    for the invoking user, single source of truth with the merge set."""
 
-    def test_exclude_relpaths_has_main_and_backup_for_each_editor(self) -> None:
-        """Eight entries: main DB + `.backup` sidecar for each of the four editors."""
-        assert len(EDITOR_STATE_EXCLUDE_RELPATHS) == 2 * len(EDITOR_STATE_DB_RELPATHS)
-        assert len(EDITOR_STATE_EXCLUDE_RELPATHS) == 8
+    def test_absolute_paths_under_invoking_home_main_and_backup(self) -> None:
+        """Eight absolute paths under the invoking user's home: main + `.backup` per editor."""
+        with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/home/alice")):
+            paths = editor_state_exclude_paths()
+        assert len(paths) == 2 * len(EDITOR_STATE_DB_RELPATHS) == 8
+        assert all(p.startswith("/home/alice/") for p in paths)
 
     def test_main_then_backup_order(self) -> None:
         """Each main DB is immediately followed by its `.backup` sidecar."""
-        for main in EDITOR_STATE_DB_RELPATHS:
-            idx = EDITOR_STATE_EXCLUDE_RELPATHS.index(main)
-            assert EDITOR_STATE_EXCLUDE_RELPATHS[idx + 1] == main + ".backup"
+        with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/home/alice")):
+            paths = editor_state_exclude_paths()
+        for rel in EDITOR_STATE_DB_RELPATHS:
+            main = f"/home/alice/{rel}"
+            assert paths[paths.index(main) + 1] == main + ".backup"
+
+    def test_resolves_against_the_invoking_user(self) -> None:
+        """Paths track whoever runs the tool — root invoker resolves under /root."""
+        with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/root")):
+            paths = editor_state_exclude_paths()
+        assert all(p.startswith("/root/.config/") for p in paths)
 
     def test_covers_the_four_editors(self) -> None:
         """Code, Antigravity, Cursor, VSCodium are all covered."""

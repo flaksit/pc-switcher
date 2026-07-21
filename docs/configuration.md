@@ -228,3 +228,5 @@ The job mirrors every key from the source **except** those matching `preserve_ke
 
 Covered editors: Code, Antigravity, Cursor, VSCodium. An editor whose `state.vscdb` does not exist on the source is skipped. On a first sync (the target has no such DB yet) the target simply receives the secret-stripped database, causing a one-time re-login. The job runs after `folder_sync`, as the invoking normal user (no `sudo`), and needs `sqlite3` on both machines.
 
+Scope: this covers **only the invoking user** — whoever runs `pc-switcher`. If a synced `/home` contains other users, their editor DBs are excluded from the mirror (so their secrets are never clobbered) but are not merged, so their editor global state does not sync. Multi-user coverage would require running the merge as root and is not currently supported.
+
