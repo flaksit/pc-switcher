@@ -1,0 +1,1 @@
+commit .planning/debug/vscode-state-lost-on-sync.md separately. This is the bug analysis that led to this PR
