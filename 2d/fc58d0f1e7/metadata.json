@@ -3,7 +3,7 @@
   "checkpoint_id": "2dfc58d0f1e7",
   "strategy": "manual-commit",
   "branch": "195-selective-vscode-db-sync",
-  "checkpoints_count": 2,
+  "checkpoints_count": 4,
   "files_touched": [
     "docs/adr/adr-018-selective-vscode-state-sync.md",
     "docs/configuration.md",
@@ -16,6 +16,13 @@
       "compact_transcript": "/2d/fc58d0f1e7/0/transcript.jsonl",
       "content_hash": "/2d/fc58d0f1e7/0/content_hash.txt",
       "prompt": "/2d/fc58d0f1e7/0/prompt.txt"
+    },
+    {
+      "metadata": "/2d/fc58d0f1e7/1/metadata.json",
+      "transcript": "/2d/fc58d0f1e7/1/full.jsonl",
+      "compact_transcript": "/2d/fc58d0f1e7/1/transcript.jsonl",
+      "content_hash": "/2d/fc58d0f1e7/1/content_hash.txt",
+      "prompt": "/2d/fc58d0f1e7/1/prompt.txt"
     }
   ],
   "token_usage": {

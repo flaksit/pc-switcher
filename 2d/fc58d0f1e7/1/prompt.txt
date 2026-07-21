@@ -1,0 +1,13 @@
+why do you speak of EDITOR in some places in code? VSCODE is much more specific and clear, no? It is vscode or vscode-based, not any editor (not emacs, pycharm, ...). Same issue in docs?
+
+---
+
+continue
+
+---
+
+not all uid/gid are currently the same. Important (until now, at least) are the real users ("human", >= 1000)
+
+---
+
+commit. There's a lot. Can you separate in multiple commits per topic?
