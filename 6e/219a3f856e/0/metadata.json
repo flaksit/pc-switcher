@@ -1,0 +1,124 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6e219a3f856e",
+  "session_id": "b8eba051-1e4b-4b11-906f-a23332595399",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-21T10:23:15.595678538Z",
+  "branch": "195-selective-vscode-db-sync",
+  "checkpoints_count": 3,
+  "save_step_count": 3,
+  "files_touched": [
+    "docs/adr/_index.md",
+    "docs/adr/adr-017-mirror-pcswitcher-install.md",
+    "docs/adr/adr-018-selective-vscode-state-sync.md",
+    "docs/configuration.md",
+    "src/pcswitcher/default-config.yaml",
+    "src/pcswitcher/jobs/folder_sync.py",
+    "src/pcswitcher/jobs/vscode_state_sync.py",
+    "tests/unit/jobs/test_vscode_state_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "bc2fb1314c39",
+  "checkpoint_transcript_start": 735,
+  "transcript_lines_at_start": 735,
+  "compact_transcript_start": 141,
+  "token_usage": {
+    "input_tokens": 54,
+    "cache_creation_tokens": 60014,
+    "cache_read_tokens": 10619754,
+    "output_tokens": 49873,
+    "api_call_count": 27
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01TisBb6Rdtsc8BxC6GkrHjT",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-quick"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bc2fb1314c39",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 149,
+        "end": 150,
+        "entry_ids": [
+          "c5a743ff-b3aa-416f-8d02-f519cb8a33d4"
+        ],
+        "tool_use_id": "toolu_01TisBb6Rdtsc8BxC6GkrHjT"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01TisBb6Rdtsc8BxC6GkrHjT"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-quick",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-21T10:23:15.476398709Z",
+    "agent_lines": 25,
+    "agent_removed": 38,
+    "human_added": 0,
+    "human_modified": 7,
+    "human_removed": 4,
+    "total_committed": 29,
+    "total_lines_changed": 74,
+    "agent_percentage": 85.13513513513513,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 1,
+      "agent_lines_added": 31,
+      "agent_lines_removed": 40,
+      "user_added_per_file": {
+        "docs/adr/_index.md": 1
+      },
+      "user_removed_per_file": {
+        "docs/adr/_index.md": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 28,
+      "agent_lines_removed": 35
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 3,
+      "user_lines_removed": 5,
+      "agent_lines_added": 37,
+      "agent_lines_removed": 44,
+      "user_added_per_file": {
+        "src/pcswitcher/jobs/vscode_state_sync.py": 3
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/vscode_state_sync.py": 5
+      }
+    }
+  ]
+}

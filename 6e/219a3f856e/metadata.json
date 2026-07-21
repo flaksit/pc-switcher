@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6e219a3f856e",
+  "strategy": "manual-commit",
+  "branch": "195-selective-vscode-db-sync",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "docs/adr/_index.md",
+    "docs/adr/adr-017-mirror-pcswitcher-install.md",
+    "docs/adr/adr-018-selective-vscode-state-sync.md",
+    "docs/configuration.md",
+    "src/pcswitcher/default-config.yaml",
+    "src/pcswitcher/jobs/folder_sync.py",
+    "src/pcswitcher/jobs/vscode_state_sync.py",
+    "tests/unit/jobs/test_vscode_state_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6e/219a3f856e/0/metadata.json",
+      "transcript": "/6e/219a3f856e/0/full.jsonl",
+      "compact_transcript": "/6e/219a3f856e/0/transcript.jsonl",
+      "content_hash": "/6e/219a3f856e/0/content_hash.txt",
+      "prompt": "/6e/219a3f856e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 54,
+    "cache_creation_tokens": 60014,
+    "cache_read_tokens": 10619754,
+    "output_tokens": 49873,
+    "api_call_count": 27
+  }
+}

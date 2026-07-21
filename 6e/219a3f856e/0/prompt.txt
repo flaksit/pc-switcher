@@ -1,0 +1,15 @@
+ADR-018 says "`folder_sync` MUST hardcode-exclude". It's not hardcoded, only global-first.
+
+---
+
+ADR-018:Context: you talk about #190 and that this is only about the 2nd half. Just mention #195 and don't tell anything about "first/second half".
+
+---
+
+ADR-018:
+- Context: you talk about #190 and that this is only about the 2nd half. Just mention #195 and don't tell anything about "first/second half".
+- Scope: you left this out completely. Reason? "This feature covers ONLY the invoking user (whoever runs `pc-switcher`)" is an important scope definition. The INVARIANT is important as well. I would leave the entire Scope section as it was: valueable and at the right level for an ADR.
+
+---
+
+let editor_state_exclude_paths() return Path, not str. Much nicer interface
