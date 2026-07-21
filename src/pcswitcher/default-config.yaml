@@ -157,15 +157,15 @@ folder_sync:
 # =============================================================================
 # VS Code State Sync Configuration
 # =============================================================================
-# Selectively syncs each editor's global state.vscdb (Code, Antigravity, Cursor,
-# VSCodium) — mirrors every key EXCEPT those matching preserve_key_globs, whose
+# Selectively syncs each VS Code-based editor's global state.vscdb (Code, Antigravity,
+# Cursor, VSCodium) — mirrors every key EXCEPT those matching preserve_key_globs, whose
 # TARGET value is kept. Default preserves secret:// keys: VS Code SecretStorage
 # blobs are encrypted with a per-machine OS-keyring key, so keeping the target's
 # own value avoids re-login after every sync. Runs after folder_sync, as the
 # normal user (no sudo). folder_sync excludes these DBs from its mirror
 # (non-overridably) so this job can merge them instead.
-# Scope: only the invoking user (whoever runs pc-switcher). Other users' editor DBs
-# under a synced /home are excluded from the mirror but not merged (no multi-user).
+# Scope: only the invoking user (whoever runs pc-switcher). Other users' VS Code state
+# DBs under a synced /home are excluded from the mirror but not merged (no multi-user).
 
 vscode_state_sync:
   preserve_key_globs:
