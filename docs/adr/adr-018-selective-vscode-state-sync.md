@@ -31,7 +31,6 @@ INVARIANT: the set of files `folder_sync` excludes from the mirror is EXACTLY th
 - VS Code specifics stay out of the generic `folder_sync` mirror, which just translates provided paths to filters.
 
 **Negative**:
-- A first sync (target DB absent) still causes a one-time re-login, since the transferred DB carries no secret rows.
 - Correctness depends on the DB staying quiescent during a sync (the operating rule); a live writer during the merge is unsupported.
 - The covered-editor list and their `~/.config/<Editor>/` directory casing are fixed in code; a new editor or a non-standard layout needs a code change.
 
