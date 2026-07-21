@@ -1,0 +1,16 @@
+<task-notification>
+<task-id>b94t891dz</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-195/b8eba051-1e4b-4b11-906f-a23332595399/tasks/b94t891dz.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR 196 CI" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+I read in ADR-018: "a second human user's `state.vscdb` under a synced `/home` is excluded from the mirror".
+
+---
+
+I read in ADR-018: "a second human user's `state.vscdb` under a synced `/home` is excluded from the mirror".
+NOT acceptable. The exclude and the merge must act on exactly the same files. No exclude without merge!

@@ -3,10 +3,13 @@
   "checkpoint_id": "1c74794fb165",
   "strategy": "manual-commit",
   "branch": "195-selective-vscode-db-sync",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     "README.md",
-    "src/pcswitcher/jobs/vscode_state_sync.py"
+    "docs/adr/adr-018-selective-vscode-state-sync.md",
+    "docs/configuration.md",
+    "src/pcswitcher/jobs/vscode_state_sync.py",
+    "tests/unit/jobs/test_vscode_state_sync.py"
   ],
   "sessions": [
     {
@@ -15,13 +18,20 @@
       "compact_transcript": "/1c/74794fb165/0/transcript.jsonl",
       "content_hash": "/1c/74794fb165/0/content_hash.txt",
       "prompt": "/1c/74794fb165/0/prompt.txt"
+    },
+    {
+      "metadata": "/1c/74794fb165/1/metadata.json",
+      "transcript": "/1c/74794fb165/1/full.jsonl",
+      "compact_transcript": "/1c/74794fb165/1/transcript.jsonl",
+      "content_hash": "/1c/74794fb165/1/content_hash.txt",
+      "prompt": "/1c/74794fb165/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 8,
-    "cache_creation_tokens": 42780,
-    "cache_read_tokens": 125886,
-    "output_tokens": 889,
-    "api_call_count": 4
+    "input_tokens": 58,
+    "cache_creation_tokens": 385131,
+    "cache_read_tokens": 8005357,
+    "output_tokens": 30347,
+    "api_call_count": 29
   }
 }
