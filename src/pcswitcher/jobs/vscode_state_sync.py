@@ -15,8 +15,8 @@ of THIS job, not a system-wide single-user assumption — user-data sync itself 
 users.
 
 This job (a normal-user ``SyncJob``, no sudo) rebuilds each target DB by mirroring
-every key EXCEPT ``preserve_key_globs`` matches (default ``secret://%``), which keep
-the target's own value:
+every key EXCEPT ``PRESERVE_KEY_GLOBS`` matches (``secret://%``), which keep the
+target's own value:
 
 1. Source-strip: copy the source DB to a source-local temp, ``DELETE`` preserved
    rows -> a "neutral" DB carrying no secrets.
@@ -51,7 +51,6 @@ from pathlib import Path
 from typing import Any, ClassVar, override
 
 from pcswitcher.jobs.base import SyncJob
-from pcswitcher.jobs.context import JobContext
 from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
 
 # Home-relative paths of each covered editor's global state.vscdb. Code and Antigravity
@@ -62,6 +61,14 @@ VSCODE_BASED_EDITORS: tuple[str, ...] = ("Code", "Antigravity", "Cursor", "VSCod
 VSCODE_STATE_DB_RELPATHS: tuple[str, ...] = tuple(
     f".config/{editor}/User/globalStorage/state.vscdb" for editor in VSCODE_BASED_EDITORS
 )
+
+# Keys whose TARGET value is kept instead of mirrored, as SQLite LIKE patterns. Hardcoded,
+# not configurable: ``secret://`` is the VS Code SecretStorage namespace — a VS Code
+# internal on the same footing as VSCODE_BASED_EDITORS and the DB layout above. The module
+# owns every VS-Code-specific fact so the job is off-the-shelf with nothing to tune; a user
+# has no basis to widen this without knowing VS Code's key scheme, and widening it wrongly
+# would leak machine-bound secrets across the fleet.
+PRESERVE_KEY_GLOBS: tuple[str, ...] = ("secret://%",)
 
 
 # The full set of state-DB files handled per editor: the main ``state.vscdb`` and its
@@ -130,34 +137,13 @@ def target_inject_sql(target_live: str, globs: Sequence[str]) -> str:
 class VscodeStateSyncJob(SyncJob):
     """Selective, SQLite-aware sync of VS Code editor ``state.vscdb`` (ADR-018).
 
-    Mirrors each editor's global state DB except machine-bound ``secret://`` rows,
-    which keep the target's own value. Runs as the invoking normal user (no sudo).
-
-    Config shape (mirrors config-schema.yaml ``vscode_state_sync`` section)::
-
-        vscode_state_sync:
-          preserve_key_globs: ["secret://%"]   # SQLite LIKE patterns; matches keep the target's value
+    Mirrors each editor's global state DB except machine-bound ``secret://`` rows
+    (``PRESERVE_KEY_GLOBS``), which keep the target's own value. Runs as the invoking
+    normal user (no sudo). The module owns every VS-Code-specific fact (editor list, DB
+    layout, preserved-key namespace), so the job takes no configuration.
     """
 
     name: ClassVar[str] = "vscode_state_sync"
-
-    CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {
-        "type": "object",
-        "properties": {
-            "preserve_key_globs": {
-                "type": "array",
-                "items": {"type": "string"},
-                "default": ["secret://%"],
-                "description": "SQLite LIKE patterns for keys whose TARGET value is preserved",
-            },
-        },
-        "additionalProperties": False,
-    }
-
-    def __init__(self, context: JobContext) -> None:
-        """Initialize the job, reading ``preserve_key_globs`` (default ``["secret://%"]``)."""
-        super().__init__(context)
-        self.preserve_key_globs: list[str] = context.config.get("preserve_key_globs", ["secret://%"])
 
     @classmethod
     @override
@@ -218,7 +204,7 @@ class VscodeStateSyncJob(SyncJob):
         # user/path mapping (ADR-019). So no target-home remapping here.
         home = Path.home()
         prefix = "[dry-run] " if self.context.dry_run else ""
-        globs = self.preserve_key_globs
+        globs = PRESERVE_KEY_GLOBS
 
         present = [rel for rel in VSCODE_STATE_HANDLED_RELPATHS if (home / rel).exists()]
         if not present:

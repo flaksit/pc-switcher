@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.vscode_state_sync import (
+    PRESERVE_KEY_GLOBS,
     VSCODE_STATE_DB_RELPATHS,
     VSCODE_STATE_HANDLED_RELPATHS,
     VscodeStateSyncJob,
@@ -279,6 +280,16 @@ class TestExecuteOrchestration:
         # The mv atomically replaces the live DB from the temp path.
         assert any("mv -f" in c and target_db in c and ".pcswitcher-tmp" in c for c in cmds)
 
+    async def test_execute_preserves_secret_keys_by_default(self, tmp_path: Path) -> None:
+        """The job hardcodes secret:// preservation: no config, the inject SQL keeps those keys."""
+        assert PRESERVE_KEY_GLOBS == ("secret://%",)
+        home = _setup_home(tmp_path, editors=[_CODE_DB])
+        ctx = _make_context(target_db_present=True)
+        job = VscodeStateSyncJob(ctx)
+        with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=home):
+            await job.execute()
+        assert any("secret://%" in c for c in _target_cmds(ctx))
+
     async def test_creates_target_dir_before_transfer(self, tmp_path: Path) -> None:
         """The target globalStorage dir is created (mkdir -p) before the SFTP put.
 
@@ -412,24 +423,3 @@ class TestValidate:
         errors = await VscodeStateSyncJob(ctx).validate()
         assert len(errors) == 1
         assert errors[0].host.value == "target"
-
-
-# ---------------------------------------------------------------------------
-# Config guard (CONFIG_SCHEMA)
-# ---------------------------------------------------------------------------
-
-
-class TestConfigSchema:
-    """The job's own CONFIG_SCHEMA guards preserve_key_globs shape."""
-
-    def test_valid_config(self) -> None:
-        assert VscodeStateSyncJob.validate_config({"preserve_key_globs": ["secret://%"]}) == []
-
-    def test_wrong_typed_preserve_globs_is_rejected(self) -> None:
-        errors = VscodeStateSyncJob.validate_config({"preserve_key_globs": "secret://%"})
-        assert len(errors) == 1
-        assert errors[0].job == "vscode_state_sync"
-
-    def test_unknown_key_rejected(self) -> None:
-        errors = VscodeStateSyncJob.validate_config({"unknown": True})
-        assert len(errors) == 1

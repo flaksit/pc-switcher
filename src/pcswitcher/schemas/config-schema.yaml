@@ -210,18 +210,8 @@ properties:
     required: [folders]
     additionalProperties: false
 
-  # VS Code state sync job configuration (VscodeStateSyncJob)
-  # NOTE: Config key matches job name ("vscode_state_sync") per naming convention below
-  vscode_state_sync:
-    type: object
-    description: "Configuration for VscodeStateSyncJob"
-    properties:
-      preserve_key_globs:
-        type: array
-        items: {type: string}
-        default: ["secret://%"]
-        description: "SQLite LIKE patterns for keys whose TARGET value is preserved"
-    additionalProperties: false
+  # VscodeStateSyncJob has no configuration: the module hardcodes the editor list, DB
+  # layout, and the preserved-key namespace (secret://). Enable/disable via sync_jobs.
 
 # =============================================================================
 # DEVELOPER NOTE: Config Key Naming Convention

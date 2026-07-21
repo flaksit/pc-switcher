@@ -711,8 +711,3 @@ class TestShippedDefaultConfig:
         config = Configuration.from_yaml(self._default_config_path())
         order = list(config.sync_jobs)
         assert order.index("folder_sync") < order.index("vscode_state_sync")
-
-    def test_vscode_state_sync_preserve_globs_default(self) -> None:
-        """The shipped job config preserves secret:// keys by default."""
-        config = Configuration.from_yaml(self._default_config_path())
-        assert config.job_configs["vscode_state_sync"]["preserve_key_globs"] == ["secret://%"]

@@ -16,7 +16,7 @@ INVARIANT: the set of files `folder_sync` excludes from the mirror is EXACTLY th
 
 ## Implementation Rules
 - The covered VS Code state DB files (each editor's `state.vscdb` and its `state.vscdb.backup`) are handled outside the `folder_sync` mirror: excluded from it non-overridably (global-first — emitted before the user filter surfaces, so no user `+` rule can re-expose them) and merged by `vscode_state_sync`.
-- The merge preserves keys matching the configurable `preserve_key_globs` (default `secret://%`) by keeping the TARGET's value; every other key mirrors the source (target-only non-preserved keys dropped, matching the `--delete` fidelity).
+- The merge preserves the machine-bound SecretStorage keys by keeping the TARGET's value; every other key mirrors the source (target-only non-preserved keys dropped, matching the `--delete` fidelity).
 - `vscode_state_sync` owns the VS Code state-DB path set; `folder_sync` receives those paths and only translates them into rsync filters, holding no VS Code/home knowledge of its own.
 
 ## Context
@@ -34,7 +34,7 @@ INVARIANT: the set of files `folder_sync` excludes from the mirror is EXACTLY th
 
 **Negative**:
 - Correctness depends on the DB staying quiescent during a sync (the operating rule); a live writer during the merge is unsupported.
-- The covered VS Code-based editor list and their `~/.config/<Editor>/` directory casing are fixed in code; a new such editor or a non-standard layout needs a code change.
+- The covered VS Code-based editor list, their `~/.config/<Editor>/` directory casing, and the preserved-key pattern are fixed in code; a new such editor, a non-standard layout, or a change in VS Code's key scheme needs a code change. Deliberate: these are VS Code internals, not user-facing tunables, so the job is off-the-shelf with nothing to configure.
 
 ## References
 - ADR-017: Mirror pc-switcher's own install; hardcode-exclude only its runtime state (related — this ADR adds a separate, non-overridable exclude for the VS Code state DBs)

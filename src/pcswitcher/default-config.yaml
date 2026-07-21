@@ -155,20 +155,18 @@ folder_sync:
       filter_file: ~/.config/pc-switcher/root.filter
 
 # =============================================================================
-# VS Code State Sync Configuration
+# VS Code State Sync
 # =============================================================================
 # Selectively syncs each VS Code-based editor's global state.vscdb (Code, Antigravity,
-# Cursor, VSCodium) — mirrors every key EXCEPT those matching preserve_key_globs, whose
-# TARGET value is kept. Default preserves secret:// keys: VS Code SecretStorage
-# blobs are encrypted with a per-machine OS-keyring key, so keeping the target's
-# own value avoids re-login after every sync. Runs after folder_sync, as the
-# normal user (no sudo). folder_sync excludes these DBs from its mirror
-# (non-overridably) so this job can merge them instead.
+# Cursor, VSCodium) — mirrors every key EXCEPT the machine-bound secret:// keys, whose
+# TARGET value is kept. VS Code SecretStorage blobs are encrypted with a per-machine
+# OS-keyring key, so keeping the target's own value avoids re-login after every sync.
+# Runs after folder_sync, as the normal user (no sudo). folder_sync excludes these DBs
+# from its mirror (non-overridably) so this job can merge them instead.
 # Scope: only the invoking user (whoever runs pc-switcher). Other users' VS Code state
 # DBs under a synced /home are excluded from the mirror but not merged (no multi-user).
-
-vscode_state_sync:
-  preserve_key_globs:
-    - "secret://%"     # SQLite LIKE pattern; matched keys keep the target's own value
+#
+# This job has no settings — the editor list, DB layout, and preserved-key namespace are
+# all VS Code internals owned by the module. Enable/disable via sync_jobs above.
 
 # Future job configurations will be added here when features are implemented:

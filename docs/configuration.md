@@ -220,13 +220,11 @@ Selectively syncs each VS Code-based editor's (VS Code and its forks) global `st
 
 ```yaml
 vscode_state_sync: true          # enable in sync_jobs (default true)
-
-vscode_state_sync:
-  preserve_key_globs:
-    - "secret://%"                # SQLite LIKE patterns; matched keys keep the target's value
 ```
 
-The job mirrors every key from the source **except** those matching `preserve_key_globs`, whose value the **target keeps** — so machine-bound secrets stay local. Non-matched keys take the source's value; keys present only on the target and not matched are dropped (the same fidelity as the `folder_sync` `--delete` mirror). `preserve_key_globs` is a list of SQLite `LIKE` patterns (default `["secret://%"]`; `%` matches any run of characters); add patterns to preserve more key families (for example `"vscode.auth://%"`).
+The job mirrors every key from the source **except** the machine-bound `secret://` keys, whose value the **target keeps** — so machine-bound secrets stay local. Non-matched keys take the source's value; keys present only on the target and not matched are dropped (the same fidelity as the `folder_sync` `--delete` mirror).
+
+The job has no settings: the editor list, DB layout, and the preserved-key namespace (`secret://`, VS Code's SecretStorage prefix) are VS Code internals owned by the module, not things a user configures. Enable or disable it via `sync_jobs` like any other job.
 
 Covered VS Code-based editors: Code, Antigravity, Cursor, VSCodium. For each, both the main `state.vscdb` and its `state.vscdb.backup` sidecar are handled identically — the exact set `folder_sync` excludes is the exact set this job merges, so no file is hidden from the mirror without being merged. A file absent on the source is skipped. On a first sync (the target has no such DB yet) the target simply receives the secret-stripped database, causing a one-time re-login. The job runs after `folder_sync`, as the invoking normal user (no `sudo`), and needs `sqlite3` on both machines.
 

@@ -109,7 +109,7 @@ Top-level sections:
 - `disk_space_monitor` — free-space thresholds checked before and during a sync
 - `btrfs_snapshots` — subvolumes to snapshot and retention policy
 - `folder_sync` — folders to mirror via rsync, filtered by a per-folder filter file (native rsync `+`/`-` rules) plus optional per-directory `.pcswitcher-filter` files. Filter rules can exclude a subtree and re-include selected children (e.g. drop `~/.cache` but keep `~/.cache/uv`)
-- `vscode_state_sync` — SQLite-aware selective sync of each editor's `state.vscdb`, preserving the target's machine-bound `secret://` keys (`preserve_key_globs`)
+- `vscode_state_sync` — SQLite-aware selective sync of each editor's `state.vscdb`, preserving the target's machine-bound `secret://` keys (no settings; enable/disable only)
 
 See the **[Configuration Reference](docs/configuration.md)** for every option, defaults, the folder-sync filter-rule syntax, and a "coming from `.gitignore`" guide.
 
