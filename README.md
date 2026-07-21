@@ -73,16 +73,16 @@ After sync completes, power off the source machine and resume work on target.
 
 ## What Happens During a Sync
 
-`pc-switcher sync <target>` runs a fixed sequence of steps, orchestrated by `Orchestrator.run()` (`src/pcswitcher/orchestrator.py`). The order matters: each step sets up the environment the next one depends on. All steps run on the **source** machine, acting on the **target** over a single SSH connection.
+`pc-switcher sync <target>` runs a fixed sequence of steps. The order matters: each step sets up the environment the next one depends on. All steps run on the **source** machine, acting on the **target** over SSH.
 
-The sequence stops at the first failure (raising an exception), and the `finally` cleanup always runs (release locks, kill remote processes, close the connection).
+The sequence stops at the first failure, and cleanup always runs: release locks, kill remote processes, close the connection.
 
-Before the numbered steps, the CLI (outside the orchestrator) reads `~/.config/pc-switcher/config.yaml`, starts the asyncio loop, and installs the SIGINT handler that triggers graceful cleanup. The orchestrator then runs the ten logical phases below, which the code marks with matching `# Step N` comments in `Orchestrator.run()`. The live UI's `Step N/total` numbering is dynamic rather than a fixed ten: the sync-jobs phase (logical Step 9) expands to **one UI step per enabled sync job**, so the total is `8 + <enabled sync jobs> + 1`. With the default two enabled jobs (`folder_sync` then `vscode_state_sync`) that is 11, and post-sync snapshots become the last UI step.
+The ten logical phases are listed below. The live UI numbers steps dynamically, because the run-jobs phase expands to one step per enabled sync job. With the default two jobs (`folder_sync`, then `vscode_state_sync`), a sync runs as 11 steps, ending with the post-sync snapshots.
 
 1. **Acquire source lock.** Local lock file; this machine cannot join any other sync (as source or target) while this one runs.
 2. **Establish SSH connection.** Creates the local and remote executors every later step uses. Nothing touches the target before this point.
 3. **Acquire target lock.** A persistent remote process holds the same unified lock on the target; released during cleanup.
-   - *Between steps 3 and 4 (not a progress step): out-of-order / target-state check.* Reads `last_role` and `last_peer` from the local and target sync history to detect situations where the target may hold independent state — for example, no prior sync history exists (W1), the target last synced with a different machine (W2 — machine-C scenario), or this source is pushing again without receiving a back-sync first (W3). Shows a warning and asks for confirmation; the sync is never hard-aborted for any of these cases since the A→B / work-on-A / A→B again workflow is legitimate (GitHub #159). Skipped with `--allow-out-of-order`. In `--dry-run` mode the warning is logged and the sync continues.
+   - *Between steps 3 and 4 (not a progress step): out-of-order check.* Detects cases where the target may hold independent state — no prior sync history, the target last synced with a different machine, or this machine pushing again without a back-sync first. Warns and asks for confirmation (never a hard abort, since re-syncing the same direction is a legitimate workflow). Skip with `--allow-out-of-order`; in `--dry-run` the warning is logged and the sync continues.
 4. **Discover & validate jobs.**
    - Load enabled jobs from config
    - Validate their config
@@ -94,7 +94,7 @@ Before the numbered steps, the CLI (outside the orchestrator) reads `~/.config/p
 9. **Run sync jobs sequentially.** The actual data movement, one UI step per enabled job. By default `folder_sync` (rsync-over-SSH as root on both ends) runs first, then `vscode_state_sync` (a selective, SQLite-aware merge of each editor's `state.vscdb` that keeps the target's machine-bound `secret://` keys). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
 10. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state. (This logical phase is the last UI step — Step 11 with the default job set.)
 
-On success, after step 10 (not a progress step), the workflow records sync history: it writes `last_role` and `last_peer` on both machines to enable the out-of-order / target-state check next time. Skipped in `--dry-run`.
+On success, the workflow records sync history on both machines, enabling the out-of-order check next time. Skipped in `--dry-run`.
 
 With `--dry-run`, the workflow previews without writing state (no history update, no snapshots, no mutations). rsync `--dry-run` lists the exact files and deletions that would occur; deletions are recorded in the FULL-level log so you can audit what would be destroyed before committing to a live sync. `--allow-out-of-order` skips the out-of-order / target-state confirmation.
 
@@ -138,9 +138,7 @@ pc-switcher --no-version-check <command>
 
 ### Startup version check
 
-On every command (except `self`), in an interactive terminal, pc-switcher checks GitHub for a newer stable release and offers to upgrade and restart in place. It never runs for non-interactive/scripted invocations (stdin or stdout not a TTY), and can be disabled with `--no-version-check` or by setting `PCSWITCHER_SKIP_VERSION_CHECK`.
-
-The check never blocks your command *before* it touches the installation: if the check fails (offline, rate-limited), you decline, or `uv` cannot be launched, pc-switcher just warns and continues. Once you accept and the upgrade actually runs, it does not keep running the old process (which would be stale against the freshly installed files): on success it restarts into the new version, and if the upgrade fails or the restart cannot happen it stops and tells you how to recover (`pc-switcher self update`) or to re-run your command.
+In an interactive terminal, pc-switcher checks for a newer release and offers to upgrade before running your command. Disable with `--no-version-check` or `PCSWITCHER_SKIP_VERSION_CHECK`.
 
 ## Requirements
 
