@@ -2,7 +2,7 @@
 
 Complete reference for `~/.config/pc-switcher/config.yaml`. Run `pc-switcher init` to write the annotated default file (`src/pcswitcher/default-config.yaml`), then edit it.
 
-The config is validated against a JSON Schema on load (`src/pcswitcher/schemas/config-schema.yaml`). Unknown top-level keys and unknown job names are rejected. Both source and target run with the same config: it is copied to the target during sync (step 10 of the sync sequence).
+The config is validated against a JSON Schema on load (`src/pcswitcher/schemas/config-schema.yaml`). Unknown top-level keys and unknown job names are rejected. Both source and target run with the same config: it is copied to the target during sync (step 8 of the sync sequence).
 
 ## `logging`
 
@@ -54,9 +54,10 @@ Enables or disables optional sync jobs. Only job names listed here are discovere
 
 ```yaml
 sync_jobs:
-  dummy_success: true   # test job that completes successfully
-  dummy_fail: false     # test job that fails at a configurable time
-  folder_sync: true     # sync /home and /root via rsync
+  dummy_success: true       # test job that completes successfully
+  dummy_fail: false         # test job that fails at a configurable time
+  folder_sync: true         # sync /home and /root via rsync
+  vscode_state_sync: true   # selective, SQLite-aware sync of VS Code state.vscdb
 ```
 
 Future jobs (`packages`, `docker`, `vms`, `k3s`) are added here as they are implemented.
@@ -209,4 +210,23 @@ Otherwise it matches gitignore (basenames, a trailing `/` for directories, `*`/`
 
 ### Always excluded
 
-pc-switcher's own runtime state — `~/.local/share/pc-switcher/` (lock file, sync history, logs) — is always excluded and cannot be re-included, so a sync never disturbs the target's sync state or per-machine logs. This is the only hardcoded exclude; pc-switcher's install itself (its uv tool venv and `~/.local/bin` shim) mirrors like any other file, so it stays consistent with the interpreter it depends on (ADR-017).
+Two groups are always excluded from the mirror and cannot be re-included by any filter rule:
+- pc-switcher's own runtime state — `~/.local/share/pc-switcher/` (lock file, sync history, logs) — so a sync never disturbs the target's sync state or per-machine logs (ADR-017); its install itself (uv tool venv and `~/.local/bin` shim) mirrors like any other file, so it stays consistent with the interpreter it depends on.
+- If `vscode_state_sync` is enabled, the VS Code editor state DBs (`state.vscdb` and `state.vscdb.backup` for Code, Antigravity, Cursor, VSCodium) — these are handed to `vscode_state_sync`, which merges them selectively so machine-bound `secret://` rows are never clobbered (ADR-018; see [`vscode_state_sync`](#vscode_state_sync) below).
+
+## `vscode_state_sync`
+
+Selectively syncs each VS Code-based editor's (VS Code and its forks) global `state.vscdb` — the SQLite database under `~/.config/<Editor>/User/globalStorage/` that mixes wanted global state (settings-adjacent values, MRU lists) with VS Code SecretStorage session blobs. The secret blobs live under `secret://` keys and are encrypted with a per-machine OS-keyring key that is never synced, so a plain file mirror would clobber the target's own decryptable secrets and force auth-backed extensions (GitHub, database extensions) to re-login after every sync. `folder_sync` excludes these DBs from its mirror (non-overridably); this job rebuilds each one instead.
+
+```yaml
+vscode_state_sync: true          # enable in sync_jobs (default true)
+```
+
+The job mirrors every key from the source **except** the machine-bound `secret://` keys, whose value the **target keeps** — so machine-bound secrets stay local. Non-matched keys take the source's value; keys present only on the target and not matched are dropped (the same fidelity as the `folder_sync` `--delete` mirror).
+
+The job has no settings: the editor list, DB layout, and the preserved-key namespace (`secret://`, VS Code's SecretStorage prefix) are VS Code internals owned by the module, not things a user configures. Enable or disable it via `sync_jobs` like any other job.
+
+Covered VS Code-based editors: Code, Antigravity, Cursor, VSCodium. For each, both the main `state.vscdb` and its `state.vscdb.backup` sidecar are handled identically — the exact set `folder_sync` excludes is the exact set this job merges, so no file is hidden from the mirror without being merged. A file absent on the source is skipped. On a first sync (the target has no such DB yet) the target simply receives the secret-stripped database, causing a one-time re-login. The job runs after `folder_sync`, as the invoking normal user (no `sudo`), and needs `sqlite3` on both machines.
+
+Scope: this covers **only the invoking user** — whoever runs `pc-switcher`. If a synced `/home` contains other users, their VS Code state DBs are excluded from the mirror (so their secrets are never clobbered) but are not merged, so their VS Code global state does not sync. Multi-user coverage would require running the merge as root and is not currently supported.
+

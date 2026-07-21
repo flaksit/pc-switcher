@@ -23,6 +23,7 @@ from typing import Any, ClassVar, override
 
 from pcswitcher.disk import format_bytes
 from pcswitcher.jobs.base import SyncJob
+from pcswitcher.jobs.vscode_state_sync import vscode_state_exclude_paths
 from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
 
 # Matches rsync --info=progress2 output, e.g.:
@@ -49,13 +50,23 @@ _PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\
 # pc-switcher's own runtime STATE lives under the invoking user's home and must
 # stay machine-local: sync-history.json is the topology-safety state (ADR-015) that
 # a --delete mirror would clobber mid-sync; the lock file and logs are per-machine.
-# This is the ONLY hardcoded exclude — every other exclusion is user-configurable.
+# See ADR-017 (supersedes ADR-016).
 #
 # The install itself (uv tool venv + ~/.local/bin shim) is deliberately NOT
 # excluded: it mirrors from source like any other uv tool, so the venv and the
 # interpreter it references travel together and stay consistent. Excluding the venv
 # while --delete-mirroring the uv interpreter tree it depends on deleted the in-use
-# interpreter and broke pc-switcher on the target. See ADR-017 (supersedes ADR-016).
+# interpreter and broke pc-switcher on the target.
+#
+# Two GLOBAL-FIRST, non-overridable exclude groups exist, both owned elsewhere or here
+# and both emitted before the user filter surfaces so no `+` rule can re-expose them:
+#   1. this runtime-state relpath (below), home-relative and folder_sync's own concern;
+#   2. the VS Code state DBs (VS Code and its forks), whose ABSOLUTE paths are owned and
+#      computed by vscode_state_sync (which merges them selectively so machine-bound
+#      secret:// rows are never clobbered, ADR-018). folder_sync knows nothing about VS Code
+#      or home layout — it just translates each absolute path from vscode_state_exclude_paths()
+#      into an rsync filter for the folder being synced (see _vscode_state_exclude_filters).
+# Every OTHER exclusion is user-configurable.
 _RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
     ".local/share/pc-switcher",  # lock, sync-history.json, logs/
 )
@@ -299,15 +310,17 @@ class FolderSyncJob(SyncJob):
 
     @staticmethod
     def _runtime_exclude_filters(folder_path: str) -> list[str]:
-        """rsync `--filter` args protecting pc-switcher's own runtime files.
+        """rsync `--filter` args protecting pc-switcher's own runtime state.
 
-        The runtime files (`_RUNTIME_EXCLUDE_RELPATHS`) live under the invoking
-        user's home directory. When `folder_path` contains that home (e.g. syncing
-        `/home`), each protected path is emitted as a root-anchored rsync pattern
-        relative to the transfer root, so it matches exactly one location and can
-        never be re-exposed by a user include rule. When home is outside
-        `folder_path` (e.g. `/root` synced by a normal user) there is nothing to
-        protect and the list is empty.
+        The runtime files (`_RUNTIME_EXCLUDE_RELPATHS`) live under the invoking user's
+        home directory. When `folder_path` contains that home (e.g. syncing `/home`), each
+        protected path is emitted as a root-anchored rsync pattern relative to the transfer
+        root, so it matches exactly one location and can never be re-exposed by a user
+        include rule. When home is outside `folder_path` (e.g. `/root` synced by a normal
+        user) there is nothing to protect and the list is empty.
+
+        The editor state DBs are excluded separately (`_vscode_state_exclude_filters`);
+        they are owned by `vscode_state_sync`, not folder_sync.
         """
         try:
             rel = Path.home().relative_to(folder_path.rstrip("/") or "/")
@@ -315,6 +328,28 @@ class FolderSyncJob(SyncJob):
             return []
         prefix = "/" if str(rel) == "." else f"/{rel}/"
         return [f"--filter={shlex.quote(f'- {prefix}{sub}')}" for sub in _RUNTIME_EXCLUDE_RELPATHS]
+
+    @staticmethod
+    def _vscode_state_exclude_filters(folder_path: str) -> list[str]:
+        """rsync `--filter` args excluding the VS Code state DBs that fall under `folder_path`.
+
+        The absolute paths come from `vscode_state_exclude_paths()` — `vscode_state_sync`
+        owns which DBs to exclude (the invoking user's, resolved at call time); folder_sync
+        only translates each absolute path into a root-anchored, first-match exclude
+        relative to the transfer root. A path outside `folder_path` (e.g. the invoking
+        user's `/home/<user>/…` DB when syncing `/root`) is skipped. Emitted GLOBAL-FIRST,
+        before the user filter surfaces, so no `+` rule can re-expose the DBs. Scope is the
+        invoking user only (ADR-018); folder_sync holds no VS Code/home knowledge itself.
+        """
+        root = Path(folder_path.rstrip("/") or "/")
+        filters: list[str] = []
+        for abs_path in vscode_state_exclude_paths():
+            try:
+                rel = abs_path.relative_to(root)
+            except ValueError:
+                continue  # DB not under this folder — nothing to exclude here.
+            filters.append(f"--filter={shlex.quote(f'- /{rel}')}")
+        return filters
 
     def _transport_args(self) -> list[str]:
         """Build the rsync `-e <ssh>` transport and `--rsync-path='sudo rsync'` args.
@@ -437,14 +472,16 @@ class FolderSyncJob(SyncJob):
         # SSH transport + target-side sudo elevation (shared with the pre-seed pass).
         parts.extend(self._transport_args())
 
-        # GLOBAL-FIRST filter precedence: runtime excludes (un-overridable, ADR-016)
-        # come first; the folder's central `merge` filter (when configured) comes
+        # GLOBAL-FIRST filter precedence: the un-overridable excludes come first —
+        # pc-switcher's runtime state (ADR-017) followed by the VS Code state DBs
+        # (ADR-018); the folder's central `merge` filter (when configured) comes
         # next so its rules win over any per-directory file under first-match-wins;
         # the tree-wide `dir-merge /.pcswitcher-filter` is always last and gives
         # users a per-directory (gitignore-like) authoring surface. DO NOT add
         # --delete-excluded — excluded files (e.g. .ssh/id_*, .config/tailscale)
         # must survive on the target (D-06).
         parts.extend(self._runtime_exclude_filters(folder.path))
+        parts.extend(self._vscode_state_exclude_filters(folder.path))
 
         expanded_filter_file = folder.expanded_filter_file()
         if expanded_filter_file is not None:

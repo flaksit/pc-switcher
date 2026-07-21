@@ -68,6 +68,10 @@ properties:
         type: boolean
         default: true
         description: "Generic folder sync job (syncs /home and /root by default)"
+      vscode_state_sync:
+        type: boolean
+        default: true
+        description: "SQLite-aware selective sync of VS Code editor state.vscdb"
       # Future jobs (add when features 5-10 are implemented):
       # user_data:
       #   type: boolean
@@ -205,6 +209,9 @@ properties:
         description: "List of folder entries to sync"
     required: [folders]
     additionalProperties: false
+
+  # VscodeStateSyncJob has no configuration: the module hardcodes the editor list, DB
+  # layout, and the preserved-key namespace (secret://). Enable/disable via sync_jobs.
 
 # =============================================================================
 # DEVELOPER NOTE: Config Key Naming Convention

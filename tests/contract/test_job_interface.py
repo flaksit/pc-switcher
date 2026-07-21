@@ -10,6 +10,7 @@ import pytest
 
 from pcswitcher.jobs import BackgroundJob, JobContext, SyncJob, SystemJob
 from pcswitcher.jobs.folder_sync import FolderSyncJob
+from pcswitcher.jobs.vscode_state_sync import VscodeStateSyncJob
 from pcswitcher.models import CommandResult, ConfigError, Host, LogLevel, ProgressUpdate, ValidationError
 
 
@@ -294,6 +295,50 @@ class TestFolderSyncJobContract:
     async def test_folder_sync_validate_returns_list(self, folder_sync_context: JobContext) -> None:
         """FolderSyncJob.validate() must return a list (of ValidationError)."""
         job = FolderSyncJob(folder_sync_context)
+        errors = await job.validate()
+        assert isinstance(errors, list)
+
+
+class TestVscodeStateSyncJobContract:
+    """Verify VscodeStateSyncJob satisfies the standard job interface contract.
+
+    Checks that VscodeStateSyncJob: has a `name` ClassVar equal to "vscode_state_sync"
+    (so `_resolve_sync_job_class` resolves it against the module name), has a
+    `CONFIG_SCHEMA` dict, and that `validate()` returns a list. The full execute() unit
+    tests live in tests/unit/jobs/test_vscode_state_sync.py.
+    """
+
+    @pytest.fixture
+    def vscode_context(self) -> JobContext:
+        """Minimal JobContext for VscodeStateSyncJob contract tests."""
+        source = MagicMock()
+        source.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        target = MagicMock()
+        target.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        return JobContext(
+            config={},
+            source=source,
+            target=target,
+            event_bus=MagicMock(),
+            session_id="test1234",
+            source_hostname="source-host",
+            target_hostname="target-host",
+        )
+
+    def test_vscode_state_sync_has_name(self) -> None:
+        """VscodeStateSyncJob.name must be the string 'vscode_state_sync'."""
+        assert hasattr(VscodeStateSyncJob, "name")
+        assert VscodeStateSyncJob.name == "vscode_state_sync"
+
+    def test_vscode_state_sync_has_config_schema(self) -> None:
+        """VscodeStateSyncJob.CONFIG_SCHEMA must be a dict."""
+        assert hasattr(VscodeStateSyncJob, "CONFIG_SCHEMA")
+        assert isinstance(VscodeStateSyncJob.CONFIG_SCHEMA, dict)
+
+    @pytest.mark.asyncio
+    async def test_vscode_state_sync_validate_returns_list(self, vscode_context: JobContext) -> None:
+        """VscodeStateSyncJob.validate() must return a list (of ValidationError)."""
+        job = VscodeStateSyncJob(vscode_context)
         errors = await job.validate()
         assert isinstance(errors, list)
 
