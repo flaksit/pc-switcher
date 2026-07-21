@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8f56ba449683",
+  "session_id": "769c37e6-76e9-4460-b02f-167afb26fb4f",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-21T10:51:21.937070202Z",
+  "branch": "195-selective-vscode-db-sync",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/folder_sync.py",
+    "src/pcswitcher/jobs/vscode_state_sync.py",
+    "tests/unit/jobs/test_folder_sync.py",
+    "tests/unit/jobs/test_vscode_state_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "38951738b758",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 13,
+    "cache_creation_tokens": 62982,
+    "cache_read_tokens": 339480,
+    "output_tokens": 4060,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-21T10:51:21.927018494Z",
+    "agent_lines": 69,
+    "agent_removed": 82,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 69,
+    "total_lines_changed": 151,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

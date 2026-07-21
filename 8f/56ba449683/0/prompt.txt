@@ -1,0 +1,5 @@
+ADR-018 refers to ADR-015 but I don't see why. Refers to ADR-013, but is this relevant? Does the implementation use rsync?
+
+---
+
+y
