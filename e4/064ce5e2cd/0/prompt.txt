@@ -1,0 +1,1 @@
+why do you speak of EDITOR in some places in code? VSCODE is much more specific and clear, no? It is vscode or vscode-based, not any editor (not emacs, pycharm, ...). Same issue in docs?
