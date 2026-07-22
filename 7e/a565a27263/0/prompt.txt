@@ -1,0 +1,1 @@
+"read as strings to most people": it is only python reading them as booleans?
