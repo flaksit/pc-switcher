@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "7ec7983c95d9",
+  "strategy": "manual-commit",
+  "branch": "refactor/198-folder-sync-pass-naming",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/adr/adr-018-selective-vscode-state-sync.md",
+    "src/pcswitcher/jobs/folder_sync.py",
+    "tests/unit/ui/test_terminal_ui.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7e/c7983c95d9/0/metadata.json",
+      "transcript": "/7e/c7983c95d9/0/full.jsonl",
+      "compact_transcript": "/7e/c7983c95d9/0/transcript.jsonl",
+      "content_hash": "/7e/c7983c95d9/0/content_hash.txt",
+      "prompt": "/7e/c7983c95d9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 55,
+    "cache_creation_tokens": 92067,
+    "cache_read_tokens": 2085103,
+    "output_tokens": 15658,
+    "api_call_count": 28
+  }
+}

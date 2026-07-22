@@ -1,0 +1,13 @@
+Ran "pc-switcher sync fleksi" from p17. We are on fleksi now.
+It seemed the sync part of the first pass was taking long time and it showed multiple GB. First pass should only sync .pcswitcher-filter files, no?
+Sync part of seconds pass as done in a blitz.
+Were ALL files synchronized in first pass? Is that the intent?
+
+---
+
+Currently, we show "(prep)" for the first pass and nothing for the second pass. This naming is wrong. The first pass is the full no-delete pass, the second pass is the delete-pass.
+Than naming should be better in code and in tui. What do you propose? Wait for my approval
+
+---
+
+go
