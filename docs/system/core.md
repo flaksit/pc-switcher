@@ -307,9 +307,9 @@ The terminal displays real-time sync progress including current job, operation p
 
 **Acceptance Scenarios**:
 
-1. **Given** sync is running, **When** a job reports progress, **Then** terminal displays progress bar, percentage, current job name, and current operation (e.g., "Docker Sync: 45% - Copying image nginx:latest")
+1. **Given** sync is running, **When** a job reports progress, **Then** terminal displays progress bar, percentage, current job name, and current operation (e.g., "folder_sync: 45% - copying files via rsync")
 
-2. **Given** multiple jobs execute sequentially, **When** each completes, **Then** terminal shows overall progress (e.g., "Step 3/7: Package Sync") and individual job progress
+2. **Given** multiple jobs execute sequentially, **When** each completes, **Then** terminal shows overall progress (e.g., "Step 10a/12: folder_sync", the first job sub-step; the denominator is fixed regardless of job count) and individual job progress
 
 3. **Given** a job emits log at INFO level or higher, **When** log reaches terminal UI, **Then** it's displayed below progress indicators with appropriate formatting (color-coded by level if terminal supports colors)
 

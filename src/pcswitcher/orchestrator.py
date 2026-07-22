@@ -8,6 +8,7 @@ import logging
 import os
 import secrets
 from datetime import UTC, datetime
+from enum import IntEnum
 from logging.handlers import QueueListener
 from typing import Any
 
@@ -65,6 +66,36 @@ from pcswitcher.sync_history import (
 from pcswitcher.ui import TerminalUI
 
 __all__ = ["Orchestrator"]
+
+
+class SyncStep(IntEnum):
+    """The fixed, ordered sequence of top-level steps in a sync (see run()).
+
+    Distinct from the smaller, local "step N" numbering inside individual jobs and
+    functions (config loading, folder_sync validation): those are private to their
+    routine, this is the one sequence the TUI counts and the docs refer to.
+
+    Values are assigned explicitly (1..N) so the numbers are stable, referenceable
+    anchors in the user-facing docs and UI ("Step 4", "Step 12/12"); when inserting
+    a step, renumber the following members to match. `len(SyncStep)` is the total,
+    which the orchestrator hands to the TUI — no separate magic number.
+
+    `RUN_JOBS` is a single step; the TUI expands it into sub-steps (10a, 10b, …),
+    one per enabled job, without inflating the total.
+    """
+
+    SOURCE_LOCK = 1
+    CONNECT = 2
+    TARGET_LOCK = 3
+    OUT_OF_ORDER_CHECK = 4
+    DISCOVER_JOBS = 5
+    DISK_CHECK = 6
+    PRE_SNAPSHOT = 7
+    INSTALL_ON_TARGET = 8
+    SYNC_CONFIG = 9
+    RUN_JOBS = 10
+    POST_SNAPSHOT = 11
+    RECORD_HISTORY = 12
 
 
 def _stuck_lock_hint(machine: str, lock_path: str) -> str:
@@ -215,7 +246,7 @@ class Orchestrator:
     def _create_job_context(self, config: dict[str, Any]) -> JobContext:
         """Create JobContext with current orchestrator state.
 
-        Must only be called after SSH connection is established (step 2+).
+        Must only be called after SSH connection is established (SyncStep.CONNECT onward).
         """
         assert self._local_executor is not None
         assert self._remote_executor is not None
@@ -232,8 +263,8 @@ class Orchestrator:
             allow_first_sync=self._allow_first_sync,
             confirmer=self._confirmer,
             # Connection is always set when _create_job_context is called in
-            # production (step 2+), but unit tests mock executors without a
-            # real connection, so fall back to None (JobContext accepts it).
+            # production (SyncStep.CONNECT onward), but unit tests mock executors
+            # without a real connection, so fall back to None (JobContext accepts it).
             target_username=self._connection.username if self._connection is not None else None,
         )
 
@@ -269,18 +300,11 @@ class Orchestrator:
         # TerminalUI does not start the Live (start() is still called below),
         # so creating it early is safe.
         #
-        # Calculate total steps: 8 system steps + sync jobs + 1 post-snapshot
-        # System steps: 1=source lock, 2=SSH, 3=target lock, 4=validation,
-        # 5=disk check, 6=pre-snapshots, 7=install on target, 8=config sync
-        # Count only enabled jobs for the initial estimate; step 4 discovery may
-        # reduce this further (e.g. module not found), so we correct via
-        # set_total_steps() after _discover_and_validate_jobs() returns.
-        total_steps = 8 + sum(1 for enabled in self._config.sync_jobs.values() if enabled) + 1
         self._console = Console()
-        self._ui = TerminalUI(
-            console=self._console,
-            total_steps=total_steps,
-        )
+        self._ui = TerminalUI(console=self._console)
+        # The orchestrator owns the step sequence, so it tells the UI the total.
+        # Derived from the enum (not a literal), and fixed regardless of job count.
+        self._ui.set_total_steps(len(SyncStep))
         # Shared interactive confirmation gate for the orchestrator's out-of-order check
         # and any job-level prompt (e.g. FolderSyncJob first-sync overwrite, ADR-015).
         self._confirmer = TerminalUIConfirmer(self._console, self._ui, logger=self._logger)
@@ -323,78 +347,76 @@ class Orchestrator:
             )
 
         try:
-            # Step 1: Acquire source lock
+            # SyncStep 1: Acquire source lock
             self._logger.info("Acquiring source lock", extra={"job": "orchestrator", "host": "source"})
             await self._acquire_source_lock()
-            self._ui.set_current_step(1, "Source lock")
+            self._ui.set_current_step(SyncStep.SOURCE_LOCK, "Source lock")
 
-            # Step 2: Establish SSH connection
+            # SyncStep 2: Establish SSH connection
             self._logger.info("Connecting to target", extra={"job": "orchestrator", "host": "source"})
             await self._establish_connection()
             assert self._remote_executor is not None
-            self._ui.set_current_step(2, "Connect to target")
+            self._ui.set_current_step(SyncStep.CONNECT, "Connect to target")
 
-            # Step 3: Acquire target lock
+            # SyncStep 3: Acquire target lock
             self._logger.info("Acquiring target lock", extra={"job": "orchestrator", "host": "target"})
             await self._acquire_target_lock()
-            self._ui.set_current_step(3, "Target lock")
+            self._ui.set_current_step(SyncStep.TARGET_LOCK, "Target lock")
 
-            # Topology out-of-order / target-state check (between steps 3 and 4, no
-            # progress step of its own): runs after the target lock so we can read
-            # the target's sync-history over SSH.
+            # SyncStep 4: Out-of-order / target-state check. Runs after the target lock
+            # so we can read the target's sync-history over SSH. Always executes;
+            # --allow-out-of-order only bypasses the W2/W3 confirmation, not the read.
             if not await self._check_out_of_order():
                 raise SyncAbortedByUser("Sync aborted at the out-of-order / target-state check")
+            self._ui.set_current_step(SyncStep.OUT_OF_ORDER_CHECK, "Out-of-order check")
 
-            # Step 4: Job discovery and validation
+            # SyncStep 5: Discover and validate jobs
             self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator", "host": "source"})
             jobs = await self._discover_and_validate_jobs()
-            # Correct the total now that we know the exact jobs that will run.
-            # Disabled jobs and undiscoverable jobs must not inflate the denominator,
-            # so the final set_current_step(8 + len(jobs) + 1) reaches exactly 100%.
-            self._ui.set_total_steps(8 + len(jobs) + 1)
-            self._ui.set_current_step(4, "Discover jobs")
+            self._ui.set_current_step(SyncStep.DISCOVER_JOBS, "Discover jobs")
 
-            # Step 5: Disk space preflight check
+            # SyncStep 6: Disk-space preflight check
             await self._check_disk_space_preflight()
-            self._ui.set_current_step(5, "Disk check")
+            self._ui.set_current_step(SyncStep.DISK_CHECK, "Disk check")
 
-            # Step 6: Pre-sync snapshots
+            # SyncStep 7: Pre-sync snapshots
             self._logger.info("Creating pre-sync snapshots", extra={"job": "orchestrator", "host": "source"})
             await self._create_snapshots(SnapshotPhase.PRE)
-            self._ui.set_current_step(6, "Pre-sync snapshots")
+            self._ui.set_current_step(SyncStep.PRE_SNAPSHOT, "Pre-sync snapshots")
 
-            # Step 7: Install/upgrade pc-switcher on target (after snapshots for rollback safety)
+            # SyncStep 8: Install/upgrade pc-switcher on target — after snapshots so a bad install is recoverable
             self._logger.info(
                 "Ensuring pc-switcher is installed on target",
                 extra={"job": "orchestrator", "host": "target"},
             )
             await self._install_on_target_job()
-            self._ui.set_current_step(7, "Install on target")
+            self._ui.set_current_step(SyncStep.INSTALL_ON_TARGET, "Install on target")
 
-            # Step 8: Sync config from source to target
+            # SyncStep 9: Sync config from source to target
             self._logger.info("Syncing configuration to target", extra={"job": "orchestrator", "host": "target"})
             await self._sync_config_to_target()
-            self._ui.set_current_step(8, "Sync config")
+            self._ui.set_current_step(SyncStep.SYNC_CONFIG, "Sync config")
 
-            # Step 9: Execute sync jobs with background monitoring
+            # SyncStep 10: Run sync jobs — _execute_jobs sets the 10a/10b sub-steps per job
             self._logger.info("Starting sync operations", extra={"job": "orchestrator", "host": "source"})
             job_results = await self._execute_jobs(jobs)
             session.job_results = job_results
 
-            # Step 10: Post-sync snapshots
+            # SyncStep 11: Post-sync snapshots
             self._logger.info("Creating post-sync snapshots", extra={"job": "orchestrator", "host": "source"})
             await self._create_snapshots(SnapshotPhase.POST)
-            self._ui.set_current_step(8 + len(jobs) + 1, "Post-sync snapshots")
+            self._ui.set_current_step(SyncStep.POST_SNAPSHOT, "Post-sync snapshots")
 
-            # Success - update sync history on both machines
+            # SyncStep 12: Record sync history on both machines (this machine was SOURCE,
+            # target was TARGET). The write is skipped in dry-run mode (D-12: dry-run must
+            # not write any state), but the counter still advances so it reaches 100% on
+            # both real and dry-run paths — matching the snapshot steps.
             session.status = SessionStatus.COMPLETED
             session.ended_at = datetime.now(UTC)
             self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
-
-            # Update sync history: this machine was SOURCE, target was TARGET.
-            # Skipped in dry-run mode (D-12: dry-run must not write any state).
             if not self._dry_run:
                 await self._update_sync_history()
+            self._ui.set_current_step(SyncStep.RECORD_HISTORY, "Record sync history")
 
             return session
 
@@ -568,7 +590,7 @@ class Orchestrator:
 
         Convention: job_name == module_name (e.g., "dummy_success" → pcswitcher.jobs.dummy_success).
         Dynamically imports the module and scans its attributes for a SyncJob subclass whose
-        `name` ClassVar matches. Shared by `_discover_and_validate_jobs` (step 4 job discovery)
+        `name` ClassVar matches. Shared by `_discover_and_validate_jobs` (job discovery)
         and `_first_sync_scopes` (pre-step-4 first-sync messaging) so the import/scan logic
         lives in exactly one place.
 
@@ -609,7 +631,7 @@ class Orchestrator:
 
         Resolves every enabled job in `self._config.sync_jobs` (config order) to its SyncJob
         class via `_resolve_sync_job_class`, then calls `describe_first_sync_scope()` on each —
-        this runs before step 4 job discovery, so classes (not instances) are used. Jobs that
+        this runs before job discovery, so classes (not instances) are used. Jobs that
         return None (no overwrite scope, or nothing in scope for their config) contribute
         nothing; the orchestrator's warning falls back to generic phrasing when this is empty.
         """
@@ -1047,9 +1069,12 @@ class Orchestrator:
             try:
                 # Execute sync jobs sequentially
                 for job_index, job in enumerate(jobs):
-                    # Update step counter (base 8 system steps + current job index),
-                    # labelled with the job name so the TUI shows what is running.
-                    self._ui.set_current_step(8 + job_index + 1, job.name)
+                    # Jobs are sub-steps of SyncStep.RUN_JOBS, sub-labelled 10a, 10b, …
+                    # (letters suffice for any realistic job count; fall back to a
+                    # numeric suffix past 'z'), labelled with the job name so the TUI
+                    # shows what is running.
+                    substep = chr(ord("a") + job_index) if job_index < 26 else str(job_index + 1)
+                    self._ui.set_current_step(SyncStep.RUN_JOBS, job.name, substep=substep)
                     started_at = datetime.now(UTC)
                     try:
                         await job.execute()
