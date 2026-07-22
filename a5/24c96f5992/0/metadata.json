@@ -1,0 +1,62 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "a524c96f5992",
+  "session_id": "6d1b40da-e5d6-4c1b-9850-89c64e38522e",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-22T20:53:21.751137648Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "345dc69a0676",
+  "checkpoint_transcript_start": 261,
+  "transcript_lines_at_start": 261,
+  "compact_transcript_start": 51,
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 348,
+    "cache_read_tokens": 163429,
+    "output_tokens": 217,
+    "api_call_count": 1
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-discuss-phase-2026-07-22T17:42:21.283320962Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-discuss-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "345dc69a0676",
+      "timestamp": "2026-07-22T17:42:21.283320962Z",
+      "native": {
+        "command": "/gsd-discuss-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-discuss-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "initial_attribution": {
+    "calculated_at": "2026-07-22T20:53:21.707694022Z",
+    "agent_lines": 7,
+    "agent_removed": 8,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 7,
+    "total_lines_changed": 15,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
