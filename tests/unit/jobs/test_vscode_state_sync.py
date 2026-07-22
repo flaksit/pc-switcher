@@ -27,6 +27,7 @@ from pcswitcher.jobs.vscode_state_sync import (
     VSCODE_STATE_DB_RELPATHS,
     VSCODE_STATE_HANDLED_RELPATHS,
     VscodeStateSyncJob,
+    db_label,
     source_strip_sql,
     target_inject_sql,
     target_sql_command,
@@ -79,10 +80,10 @@ class TestExcludePaths:
     for the invoking user, single source of truth with the merge set."""
 
     def test_absolute_paths_under_invoking_home_main_and_backup(self) -> None:
-        """Eight absolute Paths under the invoking user's home: main + `.backup` per editor."""
+        """Ten absolute Paths under the invoking user's home: main + `.backup` per covered DB."""
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/home/alice")):
             paths = vscode_state_exclude_paths()
-        assert len(paths) == 2 * len(VSCODE_STATE_DB_RELPATHS) == 8
+        assert len(paths) == 2 * len(VSCODE_STATE_DB_RELPATHS) == 10
         assert all(isinstance(p, Path) and p.is_relative_to(Path("/home/alice")) for p in paths)
 
     def test_main_then_backup_order(self) -> None:
@@ -97,13 +98,27 @@ class TestExcludePaths:
         """Paths track whoever runs the tool — root invoker resolves under /root."""
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/root")):
             paths = vscode_state_exclude_paths()
-        assert all(p.is_relative_to(Path("/root/.config")) for p in paths)
+        assert all(p.is_relative_to(Path("/root")) for p in paths)
 
     def test_covers_the_four_editors(self) -> None:
         """Code, Antigravity, Cursor, VSCodium are all covered."""
         joined = "\n".join(VSCODE_STATE_DB_RELPATHS)
         for editor in ("Code", "Antigravity", "Cursor", "VSCodium"):
             assert f".config/{editor}/User/globalStorage/state.vscdb" in joined
+
+    def test_covers_the_shared_storage_db(self) -> None:
+        """The install-shared DB lives outside any editor's config dir and is covered too."""
+        assert ".vscode-shared/sharedStorage/state.vscdb" in VSCODE_STATE_DB_RELPATHS
+        with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=Path("/home/alice")):
+            paths = vscode_state_exclude_paths()
+        assert Path("/home/alice/.vscode-shared/sharedStorage/state.vscdb") in paths
+        assert Path("/home/alice/.vscode-shared/sharedStorage/state.vscdb.backup") in paths
+
+    def test_db_label_names_owner_and_file(self) -> None:
+        """Per-editor DBs are labelled by editor dir; the shared DB by `shared`."""
+        assert db_label(".config/Code/User/globalStorage/state.vscdb") == "Code state.vscdb"
+        assert db_label(".config/Cursor/User/globalStorage/state.vscdb.backup") == "Cursor state.vscdb.backup"
+        assert db_label(".vscode-shared/sharedStorage/state.vscdb") == "shared state.vscdb"
 
     def test_exclude_set_equals_handled_set(self) -> None:
         """Invariant: the excluded paths are exactly the merge-handled set (no exclude
