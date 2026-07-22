@@ -71,6 +71,11 @@ class ProgressUpdate:
     - current + total set → "45/100 items"
     - current only → "45 items processed"
     - heartbeat=True → spinner/activity indicator
+
+    A job owns one progress bar by default. Setting `track` splits it into several
+    bars, one per distinct value, all staying on screen — so a job with sequential
+    units of work (folder_sync's per-folder, per-pass rsync runs) leaves the finished
+    ones visible at 100% instead of overwriting them.
     """
 
     percent: int | None = None  # 0-100 if known
@@ -78,6 +83,7 @@ class ProgressUpdate:
     total: int | None = None  # Total items if known
     item: str | None = None  # Current item description
     heartbeat: bool = False  # True for activity indication only
+    track: str | None = None  # Stable sub-bar id within the job; None = one bar per job
 
     def __post_init__(self) -> None:
         if self.percent is not None and not 0 <= self.percent <= 100:

@@ -229,20 +229,26 @@ class TerminalUI:
     ) -> None:
         """Update progress for a specific job.
 
+        A job normally owns one bar. `update.track` splits it into one bar per distinct
+        value, each kept for the rest of the run, so sequential units of work stay
+        visible at their final state instead of being overwritten (see ProgressUpdate).
+
         Args:
             job: Job name
             update: Progress information to display
         """
+        key = job if update.track is None else f"{job}\x00{update.track}"
+
         # Create task if it doesn't exist
-        if job not in self._job_tasks:
+        if key not in self._job_tasks:
             # Determine total based on update type
             total = 100 if update.percent is not None else (update.total or 100)
-            self._job_tasks[job] = self._progress.add_task(
+            self._job_tasks[key] = self._progress.add_task(
                 f"[cyan]{job}[/cyan]",
                 total=total,
             )
 
-        task_id = self._job_tasks[job]
+        task_id = self._job_tasks[key]
 
         # Update task based on ProgressUpdate type
         if update.percent is not None:

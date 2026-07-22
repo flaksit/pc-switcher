@@ -37,22 +37,30 @@ from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, Va
 # and capture only the last 1-3 digits (e.g. "29,958,458" -> "458"), skewing
 # bytes_transferred by orders of magnitude while files-transferred (ungrouped)
 # stayed correct.
-# Group 2: percent complete.  Group 3: files transferred so far.
+# Group 2: rsync's own percentage — captured but NEVER shown.  It is bytes-sent over
+# the total size of the whole tree, not of the files needing transfer, so an
+# incremental sync reads 0% from first line to last (measured: 200 of 154,022 files
+# re-sent, 14.4 MB against a 14.6 GB tree, 0% on all 206 lines).  The bar is driven by
+# the checked-file counter instead, which spans 0-100% in every case.
+# Group 3: files transferred so far.
 # Group 4: chk prefix (`ir` or `to`).  Group 5: files still to check.  Group 6: total.
 # The trailing counter is `ir-chk=` (incremental-recursion, file list still being
-# built) or `to-chk=` (total known) — rsync only switches to to-chk once the full
-# file list is discovered.  For a large tree, incremental recursion dominates the
-# whole run, so matching only to-chk left the progress bar hidden for most of a
-# big first sync (#191): no match meant no `_report_progress` call, so the Rich
-# task was never lazily created (ui.py:224).
+# built) or `to-chk=` (full list known).  Both must match: matching only to-chk left
+# the bar hidden for most of a big first sync (#191), since no match means no
+# `_report_progress` call and the Rich task is never lazily created.
 #
-# The prefix is captured because the two phases carry very different signal quality:
-# under ir-chk the percentage is bytes-done over bytes-*known so far*, and the
-# denominator keeps growing as the scan discovers more of the tree, so the figure
-# walks backwards (observed: 5% → 3% → 2%) and the totals grow with it.  Only
-# to-chk percentages are meaningful, so the scan phase is rendered as indeterminate
-# progress instead (see `_stream_rsync`).
+# The prefix is captured because the two phases differ in signal quality: under ir-chk
+# group 6 is the entry count discovered *so far*, not a total, so neither it nor any
+# percentage derived from it may reach the bar.  `--no-inc-recursive` (see
+# `_build_rsync_cmd`) means ir-chk should never appear at all; `_stream_rsync` keeps a
+# degraded scanned-count path for it regardless.
 _PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*(ir|to)-chk=(\d+)/(\d+)\)")
+
+# TUI names for the two rsync passes a folder can run (see `execute`): the no-delete
+# pass that ships per-directory filter files, and the deleting mirror.  Each pass gets
+# its own progress bar, so both names stay on screen for the rest of the run.
+PASS_PREP = "prep"
+PASS_FULL = "full"
 
 # pc-switcher's own runtime STATE lives under the invoking user's home and must
 # stay machine-local: sync-history.json is the topology-safety state (ADR-015) that
@@ -74,11 +82,6 @@ _PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\
 #      or home layout — it just translates each absolute path from vscode_state_exclude_paths()
 #      into an rsync filter for the folder being synced (see _vscode_state_exclude_filters).
 # Every OTHER exclusion is user-configurable.
-# TUI names for the two rsync passes a folder can run (see `execute`): the no-delete
-# pass that ships per-directory filter files, and the deleting mirror.
-PASS_PREP = "prep"
-PASS_FULL = "full"
-
 _RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
     ".local/share/pc-switcher",  # lock, sync-history.json, logs/
 )
@@ -560,7 +563,7 @@ class FolderSyncJob(SyncJob):
         buf = b""
 
         where = f"{folder.path} ({label})"
-        self._report_progress(ProgressUpdate(heartbeat=True, item=f"{where} — building file list"))
+        self._report_progress(ProgressUpdate(heartbeat=True, item=f"{where} — building file list", track=where))
 
         async for chunk in chunks:
             buf += chunk
@@ -596,6 +599,7 @@ class FolderSyncJob(SyncJob):
                             ProgressUpdate(
                                 current=files_scanned,
                                 item=f"{where} — scanning {files_scanned:,} files ({format_bytes(bytes_xfr)})",
+                                track=where,
                             )
                         )
                     else:
@@ -613,6 +617,7 @@ class FolderSyncJob(SyncJob):
                             ProgressUpdate(
                                 percent=100 if listed == 0 else min(100, checked * 100 // listed),
                                 item=f"{where} — {checked:,}/{listed:,} files, {format_bytes(bytes_xfr)}",
+                                track=where,
                             )
                         )
                 elif line[0] in (">", "<", "*", ".", "c", "h"):
@@ -661,7 +666,8 @@ class FolderSyncJob(SyncJob):
         # A pass with nothing to transfer (steady state, or any dry-run) races through
         # its progress output, so close the bar explicitly rather than leaving it wherever
         # the last line landed — or pulsing, if no line ever arrived.
-        self._report_progress(ProgressUpdate(percent=100, item=f"{folder.path} ({label})"))
+        where = f"{folder.path} ({label})"
+        self._report_progress(ProgressUpdate(percent=100, item=where, track=where))
         return files_transferred, bytes_transferred, files_deleted
 
     async def execute(self) -> None:
