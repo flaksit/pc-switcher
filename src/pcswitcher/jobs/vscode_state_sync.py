@@ -2,10 +2,11 @@
 
 Covers VS Code and its forks (Code, Antigravity, Cursor, VSCodium — ``VSCODE_BASED_EDITORS``);
 "editor" below always means one of those, never a generic editor. Each such editor's global
-``state.vscdb`` mixes wanted global state (settings-adjacent, MRU) with machine-bound
-SecretStorage blobs under ``secret://`` keys — ciphertext encrypted with a per-machine
-OS-keyring key that is never synced. A file-granular rsync mirror would clobber the target's
-own keyring-decryptable secrets and force auth-backed extensions to re-login after every sync.
+``state.vscdb`` mixes wanted global state (settings-adjacent, MRU) with machine-bound account
+state — SecretStorage blobs under ``secret://`` keys (ciphertext encrypted with a per-machine
+OS-keyring key that is never synced) and the auth session preferences that point into them.
+A file-granular rsync mirror would clobber the target's own keyring-decryptable secrets and
+force auth-backed extensions to re-login after every sync.
 
 Alongside the per-editor DBs, the install-shared ``~/.vscode-shared/sharedStorage/state.vscdb``
 (``VSCODE_SHARED_STORAGE_DB_RELPATH``) is covered too: same schema, same handling. Whether
@@ -20,8 +21,7 @@ of THIS job, not a system-wide single-user assumption — user-data sync itself 
 users.
 
 This job (a normal-user ``SyncJob``, no sudo) rebuilds each target DB by mirroring
-every key EXCEPT ``PRESERVE_KEY_GLOBS`` matches (``secret://%``), which keep the
-target's own value:
+every key EXCEPT ``PRESERVE_KEY_GLOBS`` matches, which keep the target's own value:
 
 1. Source-strip: copy the source DB to a source-local temp, ``DELETE`` preserved
    rows -> a "neutral" DB carrying no secrets.
@@ -78,12 +78,42 @@ VSCODE_STATE_DB_RELPATHS: tuple[str, ...] = (
 )
 
 # Keys whose TARGET value is kept instead of mirrored, as SQLite LIKE patterns. Hardcoded,
-# not configurable: ``secret://`` is the VS Code SecretStorage namespace — a VS Code
-# internal on the same footing as VSCODE_BASED_EDITORS and the DB layout above. The module
-# owns every VS-Code-specific fact so the job is off-the-shelf with nothing to tune; a user
-# has no basis to widen this without knowing VS Code's key scheme, and widening it wrongly
-# would leak machine-bound secrets across the fleet.
-PRESERVE_KEY_GLOBS: tuple[str, ...] = ("secret://%",)
+# not configurable: these are VS Code internals on the same footing as VSCODE_BASED_EDITORS
+# and the DB layout above. The module owns every VS-Code-specific fact so the job is
+# off-the-shelf with nothing to tune; a user has no basis to widen this without knowing VS
+# Code's key scheme, and widening it wrongly would leak machine-bound secrets across the fleet.
+#
+# Two kinds of key are preserved, and BOTH are needed (#204):
+#
+#  * ``secret://%`` — the SecretStorage namespace, ciphertext only the local keyring decrypts.
+#  * The auth SESSION PREFERENCES that point INTO those blobs. Their value is a session id
+#    naming which session inside the secret store to use, and it is regenerated on every
+#    sign-in, so it is as machine-bound as the ciphertext it references. Preserving the blob
+#    while mirroring the pointer hands the target a session it does not have: VS Code cannot
+#    resolve an account and prompts to sign in again, which then propagates the new foreign
+#    pointer back on the next sync in the opposite direction.
+#
+# The preference patterns are anchored on the full ``<extensionId>-<providerId>`` prefix, with
+# ``%`` covering ONLY the trailing scope list — scopes are baked into the key name and change
+# when an extension requests a new one, so wildcarding just that part keeps the match exact
+# without pinning a string that rots. Deliberately NOT a broad ``%-github%``: that would also
+# preserve the sibling account-NAME keys (``vscode.github-github`` = the GitHub login), which
+# hold the same value on every machine and should keep syncing, plus any unrelated future key
+# containing ``-github-``. No ``-microsoft`` patterns: no Microsoft-provider preference key
+# was observed on any fleet machine, and speculative patterns can only over-preserve.
+#
+# Fail-open by design: a newly authenticated extension's preference key does not match and is
+# not preserved, so that extension asks for sign-in on the target once — the pre-#204
+# behaviour, no regression. Nothing that should sync stops syncing. Add a pattern when it
+# happens. NOTE ``LIKE`` treats ``_`` as a single-character wildcard; none of these contain
+# one, but an extension id that did would need ESCAPE handling.
+PRESERVE_KEY_GLOBS: tuple[str, ...] = (
+    "secret://%",
+    "userDataSyncAccountPreference",
+    "vscode.github-github-%",
+    "github.vscode-pull-request-github-github-%",
+    "github.vscode-github-actions-github-%",
+)
 
 
 # The full set of handled state-DB files: for each covered DB, the main ``state.vscdb`` and its
@@ -198,10 +228,11 @@ def target_sql_command(db_path: str, sql: str) -> str:
 class VscodeStateSyncJob(SyncJob):
     """Selective, SQLite-aware sync of VS Code editor ``state.vscdb`` (ADR-018).
 
-    Mirrors each editor's global state DB except machine-bound ``secret://`` rows
-    (``PRESERVE_KEY_GLOBS``), which keep the target's own value. Runs as the invoking
-    normal user (no sudo). The module owns every VS-Code-specific fact (editor list, DB
-    layout, preserved-key namespace), so the job takes no configuration.
+    Mirrors each editor's global state DB except machine-bound account rows
+    (``PRESERVE_KEY_GLOBS`` — ``secret://`` blobs and the auth session preferences pointing
+    into them), which keep the target's own value. Runs as the invoking normal user (no
+    sudo). The module owns every VS-Code-specific fact (editor list, DB layout,
+    preserved-key patterns), so the job takes no configuration.
     """
 
     name: ClassVar[str] = "vscode_state_sync"

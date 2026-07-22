@@ -212,7 +212,7 @@ Otherwise it matches gitignore (basenames, a trailing `/` for directories, `*`/`
 
 Two groups are always excluded from the mirror and cannot be re-included by any filter rule:
 - pc-switcher's own runtime state — `~/.local/share/pc-switcher/` (lock file, sync history, logs) — so a sync never disturbs the target's sync state or per-machine logs (ADR-017); its install itself (uv tool venv and `~/.local/bin` shim) mirrors like any other file, so it stays consistent with the interpreter it depends on.
-- If `vscode_state_sync` is enabled, the VS Code state DBs (`state.vscdb` and `state.vscdb.backup` for Code, Antigravity, Cursor, VSCodium, plus the install-shared `~/.vscode-shared/sharedStorage/`) — these are handed to `vscode_state_sync`, which merges them selectively so machine-bound `secret://` rows are never clobbered (ADR-018; see [`vscode_state_sync`](#vscode_state_sync) below).
+- If `vscode_state_sync` is enabled, the VS Code state DBs (`state.vscdb` and `state.vscdb.backup` for Code, Antigravity, Cursor, VSCodium, plus the install-shared `~/.vscode-shared/sharedStorage/`) — these are handed to `vscode_state_sync`, which merges them selectively so machine-bound account rows are never clobbered (ADR-018; see [`vscode_state_sync`](#vscode_state_sync) below).
 
 ## `vscode_state_sync`
 
@@ -222,9 +222,13 @@ Selectively syncs each VS Code-based editor's (VS Code and its forks) global `st
 vscode_state_sync: true          # enable in sync_jobs (default true)
 ```
 
-The job mirrors every key from the source **except** the machine-bound `secret://` keys, whose value the **target keeps** — so machine-bound secrets stay local. Non-matched keys take the source's value; keys present only on the target and not matched are dropped (the same fidelity as the `folder_sync` `--delete` mirror).
+The job mirrors every key from the source **except** the machine-bound account keys, whose value the **target keeps**. Two kinds are preserved: the `secret://` SecretStorage blobs, and the auth session preferences that point into them (`userDataSyncAccountPreference` and the per-extension `<extensionId>-<providerId>-<scopes>` keys). The pointers matter as much as the blobs — their value is a session id regenerated on every sign-in, so mirroring one hands the target a session it does not hold, and VS Code asks you to sign in again. Non-matched keys take the source's value; keys present only on the target and not matched are dropped (the same fidelity as the `folder_sync` `--delete` mirror).
 
-The job has no settings: the editor list, DB layout, and the preserved-key namespace (`secret://`, VS Code's SecretStorage prefix) are VS Code internals owned by the module, not things a user configures. Enable or disable it via `sync_jobs` like any other job.
+The preserved set is deliberately narrow: sibling keys holding the account *name* keep syncing (they are the same on every machine), and an extension you authenticate for the first time will not be covered until its key is added — it then asks for sign-in on the target once, rather than something you wanted synced silently going stale.
+
+`~/.config/Code/machineid` is **not** carved out. pc-switcher already mirrors Settings Sync's own bookkeeping, so keeping the machine id common makes the fleet one logical Settings Sync machine, which is self-consistent; splitting it would leave two identities sharing one machine's sync state. Consequence: the Settings Sync machine list shows a single entry for the fleet.
+
+The job has no settings: the editor list, DB layout, and the preserved-key patterns are VS Code internals owned by the module, not things a user configures. Enable or disable it via `sync_jobs` like any other job.
 
 Covered VS Code-based editors: Code, Antigravity, Cursor, VSCodium. Also covered is `~/.vscode-shared/sharedStorage/state.vscdb`, an install-shared state DB outside any editor's config directory (recent VS Code versions) holding cross-install state such as the workspace-trust list and recently-opened paths; it has the same schema and is merged the same way. For each covered DB, both the main `state.vscdb` and its `state.vscdb.backup` sidecar are handled identically — the exact set `folder_sync` excludes is the exact set this job merges, so no file is hidden from the mirror without being merged. A file absent on the source is skipped. On a first sync (the target has no such DB yet) the target simply receives the secret-stripped database, causing a one-time re-login. The job runs after `folder_sync`, as the invoking normal user (no `sudo`), and needs `sqlite3` on both machines.
 

@@ -208,6 +208,42 @@ class TestMergeSemantics:
         assert result["vscode.auth://b"] == b"TA"
         assert result["keep"] == "src"
 
+    def test_shipped_globs_preserve_auth_pointers_and_nothing_more(self, tmp_path: Path) -> None:
+        """Regression for #204, with the real key names observed on the fleet.
+
+        The auth session preferences point INTO the preserved ``secret://`` blobs: their
+        value is a session id regenerated on every sign-in, so mirroring them hands the
+        target a session it does not hold and VS Code prompts to sign in again. Their
+        sibling account-NAME keys (same prefix, no scope suffix) and same-prefix mementos
+        must keep syncing — the globs are anchored to avoid over-preserving those.
+        """
+        preserved = [
+            "userDataSyncAccountPreference",
+            "vscode.github-github-read:user user:email repo workflow",
+            "github.vscode-pull-request-github-github-read:user user:email repo workflow",
+            "github.vscode-github-actions-github-repo workflow",
+        ]
+        mirrored = [
+            "vscode.github-github",  # account name — same on every machine
+            "github.vscode-pull-request-github-github",
+            "GitHub.vscode-pull-request-github",  # extension memento, not an auth pointer
+            "github-janfrederik-usages",
+            "settings.lastSyncUserData",
+        ]
+        source = tmp_path / "source.vscdb"
+        target = tmp_path / "target.vscdb"
+        neutral = tmp_path / "neutral.vscdb"
+        _make_db(source, [("secret://a", b"S"), *((k, "src") for k in preserved + mirrored)])
+        _make_db(target, [("secret://a", b"T"), *((k, "tgt") for k in preserved + mirrored)])
+        shutil.copyfile(source, neutral)
+        _run_script(neutral, source_strip_sql(PRESERVE_KEY_GLOBS))
+        _run_script(neutral, target_inject_sql(str(target), PRESERVE_KEY_GLOBS))
+
+        result = _read(neutral)
+        assert result["secret://a"] == b"T"
+        assert [result[k] for k in preserved] == ["tgt"] * len(preserved)
+        assert [result[k] for k in mirrored] == ["src"] * len(mirrored)
+
     def test_single_quote_in_glob_is_escaped(self, tmp_path: Path) -> None:
         """A glob containing a single quote is doubled, so the SQL runs (no injection/crash)."""
         db = tmp_path / "neutral.vscdb"
@@ -341,7 +377,7 @@ class TestExecuteOrchestration:
 
     async def test_execute_preserves_secret_keys_by_default(self, tmp_path: Path) -> None:
         """The job hardcodes secret:// preservation: no config, the inject SQL keeps those keys."""
-        assert PRESERVE_KEY_GLOBS == ("secret://%",)
+        assert PRESERVE_KEY_GLOBS[0] == "secret://%"
         home = _setup_home(tmp_path, editors=[_CODE_DB])
         ctx = _make_context(target_db_present=True)
         job = VscodeStateSyncJob(ctx)
