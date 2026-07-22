@@ -95,7 +95,41 @@ Plans:
   2. Manually-installed .debs, custom PPAs, and install-script-sourced packages are reproduced on the target.
   3. Package conflicts and version mismatches between source and target are detected and reported before any destructive change; machine-specific packages are not forced onto the target.
 
-**Plans**: TBD
+**Plans**: 12 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 02-01-PLAN.md — ADR-020 (declarative package convergence) + `/etc/apt` scope boundary move into Phase 2
+- [ ] 02-02-PLAN.md — `questionary` legitimacy checkpoint + batched-review primitive composed with the paused Live display
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 02-03-PLAN.md — TRACER: end-to-end apt-package install slice (capture → diff → review → converge) + VM integration proof
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 02-04-PLAN.md — machine-local decision files, skip-always in both roles, non-overridable folder_sync exclusion
+- [ ] 02-05-PLAN.md — full diff-class taxonomy (removals, version mismatch, held/pinned, repo-unavailable) + `dpkg --compare-versions`
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 02-06-PLAN.md — apt repository state as items: sources, keyrings, legacy trust keys, pins, apt config, in apt's required order
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [ ] 02-07-PLAN.md — unreproducible-item detection + snippet registry + on-the-fly snippet capture in the review
+- [ ] 02-08-PLAN.md — `snap_sync`: header-based capture, revision convergence without a hold, path export
+- [ ] 02-09-PLAN.md — `flatpak_sync`: scoped refs, per-scope remotes provisioned first, path export
+
+**Wave 6** *(blocked on Wave 5)*
+
+- [ ] 02-10-PLAN.md — config registration, package-jobs-before-folder_sync ordering, automatic mirror exclusions
+
+**Wave 7** *(blocked on Wave 6)*
+
+- [ ] 02-11-PLAN.md — VM integration tests for the whole-run contracts + validation record
+- [ ] 02-12-PLAN.md — user + living-spec documentation and end-to-end human verification
 
 ### Phase 3: System & Application Configuration Sync
 
@@ -170,7 +204,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Folder Sync MVP (User Data Sync) | 18/18 | Complete    | 2026-07-03 |
-| 2. Package Management Sync | 0/TBD | Not started | - |
+| 2. Package Management Sync | 0/12 | Planned | - |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
 | 5. VM State Sync | 0/TBD | Not started | - |
