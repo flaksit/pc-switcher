@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "7d168c6c1a65",
+  "session_id": "66b3d836-7b8f-417f-a7ce-9a681b81c292",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-22T22:11:14.882301994Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-PATTERNS.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "59baf64b1e9f",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1773,
+    "cache_creation_tokens": 185350,
+    "cache_read_tokens": 5225712,
+    "output_tokens": 50221,
+    "api_call_count": 40
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-22T21:12:13.849468052Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "59baf64b1e9f",
+      "timestamp": "2026-07-22T21:12:13.849468052Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "initial_attribution": {
+    "calculated_at": "2026-07-22T22:11:14.838046279Z",
+    "agent_lines": 250,
+    "agent_removed": 0,
+    "human_added": 12,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 262,
+    "total_lines_changed": 274,
+    "agent_percentage": 91.24087591240875,
+    "metric_version": 2
+  }
+}
