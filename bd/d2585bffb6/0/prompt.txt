@@ -1,0 +1,6 @@
+Do I understand well that step numbers are now only still in user facing doc?
+
+---
+
+Fixed step numbers are more easy to refer to in docs. Set step numbers explicitly in the enum and leave them in comments that split up the code (where you removed them).
+You renamed "Phase" to "Steps" a few sessions ago. I don't know why. Now we see confusion with smaller steps-within-single-job/task/function/module. Then Phase (used for only a single thing) was better.
