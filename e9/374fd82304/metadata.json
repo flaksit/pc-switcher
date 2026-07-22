@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e9374fd82304",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-VALIDATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e9/374fd82304/0/metadata.json",
+      "transcript": "/e9/374fd82304/0/full.jsonl",
+      "compact_transcript": "/e9/374fd82304/0/transcript.jsonl",
+      "content_hash": "/e9/374fd82304/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 16225,
+    "cache_read_tokens": 837835,
+    "output_tokens": 7852,
+    "api_call_count": 7
+  }
+}
