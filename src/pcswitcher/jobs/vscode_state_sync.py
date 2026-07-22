@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import shlex
 import shutil
+import sqlite3
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -134,6 +135,40 @@ def target_inject_sql(target_live: str, globs: Sequence[str]) -> str:
     )
 
 
+def _run_sql(db_path: Path | str, sql: str) -> None:
+    """Execute ``sql`` against ``db_path`` with the stdlib ``sqlite3`` module.
+
+    ``isolation_level=None`` (autocommit) so ``ATTACH`` — which SQLite rejects inside a
+    transaction — is never wrapped in the module's implicit DML transaction.
+    """
+    connection = sqlite3.connect(db_path, isolation_level=None)
+    try:
+        connection.executescript(sql)
+    finally:
+        connection.close()
+
+
+def target_sql_command(db_path: str, sql: str) -> str:
+    """Shell command running ``sql`` against ``db_path`` on the target via ``python3``.
+
+    Uses the target's system Python rather than the ``sqlite3`` CLI: on Ubuntu the CLI is
+    a separate, not-installed-by-default package, while ``python3`` is priority-important
+    and its ``libpython3.x-stdlib`` dependency carries the ``sqlite3`` module. ``uv`` is
+    deliberately not used as a fallback — it is not on ``PATH`` for the non-login shells
+    this job runs, and ``uv run`` can reach for the network to provision an interpreter.
+
+    The DB path and SQL travel as ``argv`` entries, so only the fixed driver script is
+    ever interpolated into the code Python parses.
+    """
+    script = (
+        "import sqlite3,sys\n"
+        "con=sqlite3.connect(sys.argv[1],isolation_level=None)\n"
+        "con.executescript(sys.argv[2])\n"
+        "con.close()\n"
+    )
+    return f"python3 -c {shlex.quote(script)} {shlex.quote(db_path)} {shlex.quote(sql)}"
+
+
 class VscodeStateSyncJob(SyncJob):
     """Selective, SQLite-aware sync of VS Code editor ``state.vscdb`` (ADR-018).
 
@@ -161,32 +196,26 @@ class VscodeStateSyncJob(SyncJob):
         )
 
     async def validate(self) -> list[ValidationError]:
-        """Require ``sqlite3`` on both hosts; the merge drives the CLI on each end.
+        """Require a ``python3`` with the ``sqlite3`` module on the target.
+
+        Only the target is checked: the source-side merge runs in this process, whose own
+        ``sqlite3`` import would have failed at module load. One probe covers interpreter
+        and module together, since a ``python3`` without ``sqlite3`` is as unusable as none.
 
         No btrfs dependency (CONTEXT decision 7): the job operates on the invoking
         user's own files and does not couple to the snapshot subsystem.
         """
-        errors: list[ValidationError] = []
-
-        src = await self.source.run_command("command -v sqlite3")
-        if not src.success:
-            errors.append(
-                self._validation_error(
-                    Host.SOURCE,
-                    "sqlite3 is not available on source (required for state.vscdb selective merge)",
-                )
-            )
-
-        tgt = await self.target.run_command("command -v sqlite3", login_shell=False)
-        if not tgt.success:
-            errors.append(
+        probe = await self.target.run_command('python3 -c "import sqlite3"', login_shell=False)
+        if not probe.success:
+            return [
                 self._validation_error(
                     Host.TARGET,
-                    "sqlite3 is not available on target (required for state.vscdb selective merge)",
+                    "python3 with the sqlite3 module is not available on target "
+                    "(required for state.vscdb selective merge)",
                 )
-            )
+            ]
 
-        return errors
+        return []
 
     async def execute(self) -> None:
         """Selectively merge each present editor state DB (main + ``.backup``) onto the target.
@@ -258,12 +287,12 @@ class VscodeStateSyncJob(SyncJob):
         local_tmp = tmp_dir / "state.vscdb"
         try:
             # Step A — source-strip: copy the live source DB, then delete preserved rows.
+            # In-process: the copy is source-local, so no subprocess or shell is involved.
             shutil.copyfile(source_db, local_tmp)
-            strip = await self.source.run_command(
-                f"sqlite3 {shlex.quote(str(local_tmp))} {shlex.quote(source_strip_sql(globs))}"
-            )
-            if not strip.success:
-                self._raise(Host.SOURCE, label, "source-strip", strip.stderr)
+            try:
+                _run_sql(local_tmp, source_strip_sql(globs))
+            except sqlite3.Error as error:
+                self._raise(Host.SOURCE, label, "source-strip", str(error))
 
             # Step B — transfer the neutral DB into the target live DB's directory.
             # Ensure that directory exists first: folder_sync normally creates it, but
@@ -280,7 +309,7 @@ class VscodeStateSyncJob(SyncJob):
             # Step C — target-inject the target's own preserved rows, only when it has a live DB.
             if target_exists:
                 inject = await self.target.run_command(
-                    f"sqlite3 {shlex.quote(remote_tmp)} {shlex.quote(target_inject_sql(target_db, globs))}",
+                    target_sql_command(remote_tmp, target_inject_sql(target_db, globs)),
                     login_shell=False,
                 )
                 if not inject.success:
