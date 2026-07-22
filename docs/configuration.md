@@ -60,8 +60,6 @@ sync_jobs:
   vscode_state_sync: true   # selective, SQLite-aware sync of VS Code state.vscdb
 ```
 
-Future jobs (`packages`, `docker`, `vms`, `k3s`) are added here as they are implemented.
-
 ## `disk_space_monitor`
 
 Disk-space checks before and during a sync. Thresholds are either a percentage (`"20%"`) or an absolute size (`"50GiB"`, `"500MiB"`, `"50GB"`, `"500MB"`).
@@ -120,6 +118,8 @@ folder_sync:
       enabled: true
       filter_file: ~/.config/pc-switcher/root.filter
 ```
+
+`path` must be absolute: it is handed to rsync verbatim, with no `~` or environment-variable expansion (unlike `filter_file`), so a relative path would resolve against each side's working directory. A relative or `~`-prefixed path aborts the sync during config validation.
 
 Each folder is mirrored to the target, minus the paths its filter rules exclude. Set `enabled: false` to skip a folder. A filtered-out file is left untouched on the target if it already exists there, so machine-specific files (SSH keys, Tailscale config) can stay independent on each machine.
 
@@ -229,4 +229,3 @@ The job has no settings: the editor list, DB layout, and the preserved-key names
 Covered VS Code-based editors: Code, Antigravity, Cursor, VSCodium. For each, both the main `state.vscdb` and its `state.vscdb.backup` sidecar are handled identically — the exact set `folder_sync` excludes is the exact set this job merges, so no file is hidden from the mirror without being merged. A file absent on the source is skipped. On a first sync (the target has no such DB yet) the target simply receives the secret-stripped database, causing a one-time re-login. The job runs after `folder_sync`, as the invoking normal user (no `sudo`), and needs `sqlite3` on both machines.
 
 Scope: this covers **only the invoking user** — whoever runs `pc-switcher`. If a synced `/home` contains other users, their VS Code state DBs are excluded from the mirror (so their secrets are never clobbered) but are not merged, so their VS Code global state does not sync. Multi-user coverage would require running the merge as root and is not currently supported.
-

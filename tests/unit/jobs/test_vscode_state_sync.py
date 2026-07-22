@@ -10,12 +10,16 @@ Two layers:
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import sqlite3
+import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.vscode_state_sync import (
@@ -25,6 +29,7 @@ from pcswitcher.jobs.vscode_state_sync import (
     VscodeStateSyncJob,
     source_strip_sql,
     target_inject_sql,
+    target_sql_command,
     vscode_state_exclude_paths,
 )
 from pcswitcher.models import CommandResult
@@ -205,6 +210,41 @@ class TestMergeSemantics:
         assert _read(neutral)["secret://x"] == b"zz"
 
 
+class TestTargetSqlCommand:
+    """The target-side driver is a `python3 -c` script, not the sqlite3 CLI (not installed
+    by default on Ubuntu). These run the emitted command through a real shell."""
+
+    @pytest.mark.skipif(shutil.which("python3") is None, reason="needs a system python3")
+    def test_emitted_command_performs_the_inject(self, tmp_path: Path) -> None:
+        """Running the emitted shell command injects the live DB's preserved rows."""
+        live = tmp_path / "live.vscdb"
+        neutral = tmp_path / "neutral.vscdb"
+        _make_db(live, [("secret://a", b"TS"), ("keep", "tgt")])
+        _make_db(neutral, [("keep", "src")])
+
+        cmd = target_sql_command(str(neutral), target_inject_sql(str(live), ["secret://%"]))
+        assert subprocess.run(cmd, shell=True, check=False).returncode == 0
+
+        result = _read(neutral)
+        assert result["secret://a"] == b"TS"  # target's secret preserved
+        assert result["keep"] == "src"  # everything else mirrors the source
+
+    @pytest.mark.skipif(shutil.which("python3") is None, reason="needs a system python3")
+    def test_emitted_command_fails_loudly_on_bad_sql(self, tmp_path: Path) -> None:
+        """A SQL error exits non-zero, so the job's stderr check catches it."""
+        db = tmp_path / "db.vscdb"
+        _make_db(db, [("keep", "v")])
+        assert subprocess.run(target_sql_command(str(db), "SELECT nope;"), shell=True, check=False).returncode != 0
+
+    def test_path_and_sql_travel_as_argv(self) -> None:
+        """Only the fixed driver script is interpolated into the code python parses; the
+        DB path and SQL are shell-quoted argv entries."""
+        cmd = target_sql_command("/tmp/a b.vscdb", "SELECT 1;")
+        assert cmd.startswith("python3 -c ")
+        assert shlex.quote("/tmp/a b.vscdb") in cmd
+        assert shlex.split(cmd)[-2:] == ["/tmp/a b.vscdb", "SELECT 1;"]
+
+
 # ---------------------------------------------------------------------------
 # execute() orchestration
 # ---------------------------------------------------------------------------
@@ -214,12 +254,16 @@ _ANTIGRAVITY_DB = ".config/Antigravity/User/globalStorage/state.vscdb"
 
 
 def _setup_home(tmp_path: Path, editors: Sequence[str] = (_CODE_DB,)) -> Path:
-    """Create a home tree with an (empty) live DB file for each named editor."""
+    """Create a home tree with a real live state DB for each named editor.
+
+    Real DBs, not empty files: the source-strip runs in-process against the source-local
+    copy, so a file without the ItemTable schema is a genuine failure, not a stand-in.
+    """
     home = tmp_path / "home" / "alice"
     for rel in editors:
         db = home / rel
         db.parent.mkdir(parents=True, exist_ok=True)
-        db.write_bytes(b"")
+        _make_db(db, [("keep", "v"), ("secret://a", b"x")])
     return home
 
 
@@ -344,7 +388,7 @@ class TestExecuteOrchestration:
         """A present `.backup` is merged too, not just excluded — one transfer per file
         (main + backup), enforcing the exclude-set == merge-set invariant."""
         home = _setup_home(tmp_path, editors=[_CODE_DB])
-        (home / (_CODE_DB + ".backup")).write_bytes(b"")  # backup present on source
+        _make_db(home / (_CODE_DB + ".backup"), [("keep", "v")])  # backup present on source
         ctx = _make_context(target_db_present=True)
         job = VscodeStateSyncJob(ctx)
         with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=home):
@@ -372,9 +416,6 @@ class TestExecuteOrchestration:
         assert not any("ATTACH" in c or "INSERT" in c or "mv -f" in c for c in cmds)
         # Source live DB is unchanged (source-strip never ran against it).
         assert set(_read(source_db)) == {"secret://a", "keep"}
-        # No sqlite3 command ran on the source in dry-run.
-        source_cmds = [call.args[0] for call in ctx.source.run_command.call_args_list]  # type: ignore[union-attr]
-        assert not any("sqlite3" in c for c in source_cmds)
 
     async def test_no_editors_present_is_a_noop(self, tmp_path: Path) -> None:
         """A home with no editor DBs performs no transfers."""
@@ -393,29 +434,24 @@ class TestExecuteOrchestration:
 
 
 class TestValidate:
-    """validate() requires sqlite3 on both hosts and has no btrfs dependency."""
+    """validate() requires only a target python3 with sqlite3, and has no btrfs dependency."""
 
-    async def test_both_hosts_have_sqlite3(self) -> None:
+    async def test_target_python_with_sqlite3_passes(self) -> None:
         ctx = _make_context()
         errors = await VscodeStateSyncJob(ctx).validate()
         assert errors == []
 
-    async def test_missing_sqlite3_on_source(self) -> None:
+    async def test_source_is_not_probed(self) -> None:
+        """The source-side merge runs in this process, so no source command is needed."""
+        ctx = _make_context()
+        await VscodeStateSyncJob(ctx).validate()
+        ctx.source.run_command.assert_not_awaited()  # type: ignore[union-attr]
+
+    async def test_missing_target_python_sqlite3(self) -> None:
         ctx = _make_context()
 
         def _side(cmd: str, **_: object) -> CommandResult:
-            return CommandResult(exit_code=1, stdout="", stderr="")
-
-        ctx.source.run_command = AsyncMock(side_effect=_side)  # type: ignore[union-attr]
-        errors = await VscodeStateSyncJob(ctx).validate()
-        assert len(errors) == 1
-        assert errors[0].host.value == "source"
-
-    async def test_missing_sqlite3_on_target(self) -> None:
-        ctx = _make_context()
-
-        def _side(cmd: str, **_: object) -> CommandResult:
-            if "command -v sqlite3" in cmd:
+            if "import sqlite3" in cmd:
                 return CommandResult(exit_code=1, stdout="", stderr="")
             return CommandResult(exit_code=0, stdout="", stderr="")
 

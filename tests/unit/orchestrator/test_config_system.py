@@ -464,6 +464,44 @@ btrfs_snapshots:
         # Should include line reference
         assert "line" in error_msg.lower() or "column" in error_msg.lower()
 
+    def test_duplicate_key_rejected(self, tmp_path: Path) -> None:
+        """Duplicate mapping keys must abort instead of silently keeping the last one."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            """
+folder_sync:
+  folders:
+    - path: /home/user
+  folders:
+    - path: /root
+"""
+        )
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            Configuration.from_yaml(config_file)
+
+        error_msg = str(exc_info.value)
+        assert "duplicate key 'folders'" in error_msg
+        assert "line 5" in error_msg
+
+    def test_duplicate_key_nested_in_sequence_rejected(self, tmp_path: Path) -> None:
+        """Duplicates below the top level are caught too."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            """
+folder_sync:
+  folders:
+    - path: /home/user
+      enabled: true
+      enabled: false
+"""
+        )
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            Configuration.from_yaml(config_file)
+
+        assert "duplicate key 'enabled'" in str(exc_info.value)
+
     def test_core_fr_config_load_missing(self, tmp_path: Path) -> None:
         """CORE-FR-CONFIG-LOAD: Clear error when config file doesn't exist.
 

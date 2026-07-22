@@ -111,6 +111,70 @@ async def test_core_us_tui_as1_progress_display() -> None:
         ui.stop()
 
 
+def test_heartbeat_and_count_updates_pulse_bar_then_percent_restores_scale() -> None:
+    """Heartbeat and count-only updates pulse the bar; a percent update makes it determinate.
+
+    folder_sync's pass lifecycle walks all three states: a heartbeat while rsync builds
+    the file list silently, then percentages once transfer starts (#198).
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=None)
+
+    job = "folder_sync"
+    ui.update_job_progress(job, ProgressUpdate(heartbeat=True, item="/home (full) — building file list"))
+    task = ui._progress._tasks[ui._job_tasks[job]]
+    assert task.total is None, "heartbeat must leave the bar indeterminate"
+    assert "building file list" in task.description
+
+    ui.update_job_progress(job, ProgressUpdate(current=1200, item="/home (full) — scanning 1200 files"))
+    task = ui._progress._tasks[ui._job_tasks[job]]
+    assert task.total is None, "count-only update must leave the bar indeterminate"
+    assert task.completed == 1200
+    # `item` replaces the generic "N items" wording so the job owns its status line.
+    assert task.description.endswith("/home (full) — scanning 1200 files")
+
+    ui.update_job_progress(job, ProgressUpdate(percent=42, item="/home (full) — 94/538 files"))
+    task = ui._progress._tasks[ui._job_tasks[job]]
+    assert task.total == 100
+    assert task.completed == 42
+
+
+def test_track_gives_each_unit_of_work_its_own_persistent_bar() -> None:
+    """Distinct `track` values create separate bars; finished ones keep their state.
+
+    folder_sync tracks by folder, so a finished folder stays visible at 100% while the
+    next one syncs. Reusing a track (its second rsync pass) renames and restarts that
+    same bar instead of adding one.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=None)
+
+    job = "folder_sync"
+    ui.update_job_progress(job, ProgressUpdate(percent=100, item="/home (prep)", track="/home"))
+    ui.update_job_progress(job, ProgressUpdate(percent=100, item="/home (full)", track="/home"))
+    ui.update_job_progress(job, ProgressUpdate(percent=30, item="/root (full)", track="/root"))
+
+    assert len(ui._job_tasks) == 2, "one bar per folder, shared by that folder's passes"
+    home, root = (ui._progress._tasks[t] for t in ui._job_tasks.values())
+    assert home.completed == 100, "a finished folder must stay at its final value"
+    assert home.description.endswith("/home (full)")
+    assert root.completed == 30
+
+
+def test_untracked_updates_share_one_bar_per_job() -> None:
+    """Without `track`, a job keeps a single bar — unchanged behaviour for other jobs."""
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=None)
+
+    ui.update_job_progress("docker_sync", ProgressUpdate(percent=10))
+    ui.update_job_progress("docker_sync", ProgressUpdate(percent=90))
+
+    assert len(ui._job_tasks) == 1
+
+
 async def test_core_us_tui_as2_multi_job_progress() -> None:
     """Test CORE-US-TUI-AS2: Overall and individual job progress display.
 

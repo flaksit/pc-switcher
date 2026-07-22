@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import jsonschema
 import yaml
@@ -18,6 +19,36 @@ __all__ = [
     "DiskConfig",
     "LogConfig",
 ]
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that rejects duplicate mapping keys.
+
+    PyYAML follows the permissive reading of the spec: a repeated key silently
+    overrides the earlier one, so a config with two `folders:` blocks loads fine
+    and only the last one takes effect. In a config file that is always a user
+    mistake, so report it as a parse error.
+
+    Subclassing keeps the change local; registering it on `SafeLoader` would
+    apply to every `yaml.safe_load` in the process.
+    """
+
+    @override
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        seen: set[Any] = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, Hashable):
+                continue  # super() reports unhashable keys
+            if key in seen:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    f"found duplicate key {key!r}",
+                    key_node.start_mark,
+                )
+            seen.add(key)
+        return super().construct_mapping(node, deep)
 
 
 @dataclass
@@ -82,7 +113,7 @@ class Configuration:
         # Step 1: Load YAML with error handling for syntax
         try:
             with path.open() as f:
-                data = yaml.safe_load(f)
+                data = yaml.load(f, Loader=_StrictLoader)  # _StrictLoader derives from SafeLoader
         except FileNotFoundError:
             errors.append(
                 ConfigError(

@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.folder_sync import FolderEntry, FolderSyncJob
+from pcswitcher.jobs.folder_sync import PASS_FULL, PASS_PREP, FolderEntry, FolderSyncJob
 from pcswitcher.jobs.vscode_state_sync import VSCODE_STATE_DB_RELPATHS
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ProgressUpdate
 
@@ -150,6 +150,33 @@ class TestActiveFolderSelection:
         ctx = make_context(config={"folders": [{"path": "/home", "enabled": True}]})
         job = FolderSyncJob(ctx)
         assert len(job._active_folders()) == 1
+
+
+class TestValidateConfig:
+    """validate_config() rejects folder paths rsync would resolve against the cwd."""
+
+    def test_absolute_paths_accepted(self) -> None:
+        config = {"folders": [{"path": "/home"}, {"path": "/root", "enabled": False}]}
+        assert FolderSyncJob.validate_config(config) == []
+
+    def test_relative_path_rejected(self) -> None:
+        config = {"folders": [{"path": "/home"}, {"path": "home/janfr"}]}
+        errors = FolderSyncJob.validate_config(config)
+        assert len(errors) == 1
+        assert errors[0].path == "folders.1.path"
+        assert "must be absolute" in errors[0].message
+
+    def test_unexpanded_tilde_rejected(self) -> None:
+        """`path` is passed to rsync verbatim, so a leading ~ is not a valid path."""
+        errors = FolderSyncJob.validate_config({"folders": [{"path": "~/dev"}]})
+        assert len(errors) == 1
+        assert "~/dev" in errors[0].message
+
+    def test_schema_errors_short_circuit(self) -> None:
+        """A path of the wrong type is reported by the schema, not the absolute check."""
+        errors = FolderSyncJob.validate_config({"folders": [{"path": 12345}]})
+        assert len(errors) == 1
+        assert "must be absolute" not in errors[0].message
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +433,16 @@ class TestBuildRsyncCmd:
         assert "--info=progress2" in cmd
         assert "--partial" in cmd
         assert "--mkpath" in cmd
+
+    def test_no_inc_recursive_present(self) -> None:
+        """The file list is built up front so progress2 reports against the real total.
+
+        Without it rsync interleaves the walk with the transfer, `to-chk` appears only
+        for the last handful of files, and the percentage before that is computed
+        against a growing denominator (#198).
+        """
+        assert "--no-inc-recursive" in self._build()
+        assert "--no-inc-recursive" in self._build(dry_run=True)
 
     def test_no_locale_forcing(self) -> None:
         """No locale is forced on rsync — the progress2 parser tolerates any locale's
@@ -779,38 +816,116 @@ class TestStreamRsync:
             for chunk in chunks:
                 yield chunk
 
-        result = await job._stream_rsync(gen_chunks(), folder)
+        result = await job._stream_rsync(gen_chunks(), folder, PASS_FULL)
         return result, log_calls, progress_calls
 
-    async def test_progress_line_emits_report_progress(self) -> None:
-        """A progress2 line triggers a _report_progress call with parsed percent."""
+    async def test_pass_opens_with_file_list_heartbeat(self) -> None:
+        """A pass reports a heartbeat before any rsync output.
+
+        With --no-inc-recursive rsync prints nothing while it builds the file list
+        (measured on a 1.59M-entry /home: first output after 5.8s), so the bar must be
+        put into its pulsing state up front instead of sitting at 0%.
+        """
+        _, _, progress_calls = await self._run_stream([])
+
+        assert len(progress_calls) == 1
+        update = progress_calls[0]
+        assert isinstance(update, ProgressUpdate)
+        assert update.heartbeat is True
+        assert update.percent is None
+        assert update.item == "/home — building file list"  # the mirror pass is unqualified
+        assert update.track == "/home"
+
+    async def test_every_update_tracks_the_folder_not_the_pass(self) -> None:
+        """Updates track the folder path, so both passes share that folder's one bar."""
+        data = (
+            b"20.000   0%  0,00kB/s 0:00:00 (xfr#1, ir-chk=1039/1101)\r"
+            b"9.53G   21%  317.26MB/s 0:00:28 (xfr#83, to-chk=444/538)\r"
+        )
+        _, _, progress_calls = await self._run_stream([data], folder_path="/root")
+
+        tracks = {u.track for u in progress_calls if isinstance(u, ProgressUpdate)}
+        assert tracks == {"/root"}
+
+    async def test_to_chk_line_drives_bar_from_file_counts_not_rsync_percent(self) -> None:
+        """The bar follows checked/total files; rsync's own percent is ignored.
+
+        rsync's figure is bytes-sent over the size of the whole tree, so an incremental
+        sync reads ~0% throughout (measured: 200 of 154,022 files re-sent → 0% on every
+        line).  Here the line claims 21% while 94 of 538 files are checked — the bar
+        must show 17%, not 21% (#198).
+        """
         progress_line = b"9.53G 21% 317.26MB/s 0:00:28 (xfr#83, to-chk=444/538)\r"
         _, _, progress_calls = await self._run_stream([progress_line])
 
-        assert len(progress_calls) >= 1
-        update = progress_calls[0]
-
+        update = progress_calls[-1]
         assert isinstance(update, ProgressUpdate)
-        assert update.percent == 21
-        assert update.current == 83
+        assert update.percent == 17  # 94/538 files, not rsync's byte-based 21%
+        assert update.item == "/home — 94/538 files, 9.5 GiB"
 
-    async def test_ir_chk_progress_line_emits_report_progress(self) -> None:
-        """An ir-chk (incremental-recursion) progress2 line also triggers _report_progress.
+    async def test_incremental_run_bar_advances_though_rsync_reports_zero_percent(self) -> None:
+        """Real incremental-run lines (rsync stuck at 0%) still drive the bar 0→100%."""
+        data = (
+            b"7.631            0%    0,00kB/s 0:00:00 (xfr#1, to-chk=153943/154022)\r"
+            b"13.621.297       0%   23,65MB/s 0:00:00 (xfr#102, to-chk=39397/154022)\r"
+            b"14.432.278       0%   18,56MB/s 0:00:00 (xfr#202, to-chk=0/154022)\r"
+        )
+        _, _, progress_calls = await self._run_stream([data])
 
-        Regression for #191: rsync emits `ir-chk=` while still building the file
-        list, and only switches to `to-chk=` once the list is complete. For a large
-        tree this dominates the run, so a regex matching only `to-chk=` left the
-        progress bar hidden for most of a big first sync.
+        updates = [u for u in progress_calls if isinstance(u, ProgressUpdate)]
+        assert [u.percent for u in updates if u.percent is not None] == [0, 74, 100]
+
+    async def test_ir_chk_fallback_reports_scanned_count_without_percent(self) -> None:
+        """An ir-chk line reports the scanned count only — no percent, no denominator.
+
+        --no-inc-recursive should stop rsync emitting these at all; if one appears, its
+        percentage is bytes-done over bytes-known-*so far* (denominator grows, so the
+        figure walks backwards) and its total is "entries discovered so far", not a
+        total.  Neither may reach the bar (#198).
         """
         progress_line = b"20.000   0%    0,00kB/s    0:00:00 (xfr#1, ir-chk=1039/1101)\r"
         _, _, progress_calls = await self._run_stream([progress_line])
 
-        assert len(progress_calls) >= 1, "ir-chk progress2 line must produce a _report_progress call"
-        update = progress_calls[0]
-
+        update = progress_calls[-1]
         assert isinstance(update, ProgressUpdate)
-        assert update.percent == 0
-        assert update.current == 1
+        assert update.percent is None
+        assert update.total is None
+        assert update.current == 62  # 1101 listed - 1039 still to check
+        assert update.item is not None and "scanning 62 files" in update.item
+
+    async def test_ir_chk_scanned_count_never_decreases(self) -> None:
+        """The scanned count is clamped monotonic as rsync's discovered total grows."""
+        data = (
+            b"171.667.736  18%  159,88GB/s 0:00:00 (xfr#1, ir-chk=54/1054)\r"
+            b"20.000        5%    0,00kB/s 0:00:00 (xfr#2, ir-chk=1600/1683)\r"
+            b"20.000        2%    0,00kB/s 0:00:00 (xfr#3, ir-chk=3900/4000)\r"
+        )
+        _, _, progress_calls = await self._run_stream([data])
+
+        updates = [u for u in progress_calls if isinstance(u, ProgressUpdate) and u.current is not None]
+        assert [u.current for u in updates] == [1000, 1000, 1000]
+        assert all(u.percent is None for u in updates)
+
+    async def test_percent_restarts_per_pass(self) -> None:
+        """Each pass drives the bar 0-100% on its own — no job-wide slicing."""
+        ctx = make_context()
+        job = FolderSyncJob(ctx)
+        progress_calls: list[ProgressUpdate] = []
+        job._report_progress = progress_calls.append  # type: ignore[method-assign]
+
+        async def gen_chunks():  # type: ignore[no-untyped-def]
+            yield b"9.53G 40% 300.00MB/s 0:00:10 (xfr#10, to-chk=60/100)\r"
+            yield b"9.53G 80% 300.00MB/s 0:00:05 (xfr#80, to-chk=20/100)\r"
+
+        await job._stream_rsync(gen_chunks(), FolderEntry(path="/home"), PASS_PREP)
+        await job._stream_rsync(gen_chunks(), FolderEntry(path="/home"), PASS_FULL)
+
+        percents = [u.percent for u in progress_calls if u.percent is not None]
+        assert percents == [40, 80, 40, 80], "second pass must restart the bar, not continue the first"
+        # Each pass opens with its own heartbeat, so the first three updates are the prep pass.
+        # The seeding pass is qualified; the mirror shows the bare folder path.
+        assert all(u.item is not None and u.item.startswith(f"/home ({PASS_PREP})") for u in progress_calls[:3])
+        assert all(u.item is not None and u.item.startswith("/home —") for u in progress_calls[3:])
 
     async def test_per_file_line_logged_at_full(self) -> None:
         """An --out-format per-file line is logged at LogLevel.FULL."""

@@ -214,6 +214,14 @@ class TerminalUI:
             self._live.stop()
             self._live = None
 
+    def _set_indeterminate(self, task_id: TaskID) -> None:
+        """Clear a task's total so Rich pulses the bar instead of drawing a fraction.
+
+        `Progress.update(total=None)` means "leave total unchanged", so clearing it
+        requires setting the Task field directly — Rich exposes no public API for it.
+        """
+        self._progress._tasks[task_id].total = None  # pyright: ignore[reportPrivateUsage]
+
     def update_job_progress(
         self,
         job: str,
@@ -221,20 +229,26 @@ class TerminalUI:
     ) -> None:
         """Update progress for a specific job.
 
+        A job normally owns one bar. `update.track` splits it into one bar per distinct
+        value, each kept for the rest of the run, so sequential units of work stay
+        visible at their final state instead of being overwritten (see ProgressUpdate).
+
         Args:
             job: Job name
             update: Progress information to display
         """
+        key = job if update.track is None else f"{job}\x00{update.track}"
+
         # Create task if it doesn't exist
-        if job not in self._job_tasks:
+        if key not in self._job_tasks:
             # Determine total based on update type
             total = 100 if update.percent is not None else (update.total or 100)
-            self._job_tasks[job] = self._progress.add_task(
+            self._job_tasks[key] = self._progress.add_task(
                 f"[cyan]{job}[/cyan]",
                 total=total,
             )
 
-        task_id = self._job_tasks[job]
+        task_id = self._job_tasks[key]
 
         # Update task based on ProgressUpdate type
         if update.percent is not None:
@@ -245,6 +259,9 @@ class TerminalUI:
             self._progress.update(
                 task_id,
                 completed=update.percent,
+                # Restores a determinate bar after an indeterminate (total=None) phase,
+                # e.g. folder_sync switching from tree scan to transfer.
+                total=100,
                 description=description,
             )
         elif update.current is not None and update.total is not None:
@@ -259,21 +276,26 @@ class TerminalUI:
                 description=description,
             )
         elif update.current is not None:
-            # Current only (no total)
-            description = f"[cyan]{job}[/cyan]: {update.current} items"
-            if update.item:
-                description += f" - {update.item}"
+            # Current only: the job is making countable progress towards an unknown
+            # end. `item`, when given, replaces the generic count so the job can word
+            # its own status line.
+            description = f"[cyan]{job}[/cyan]: {update.item or f'{update.current} items'}"
+            self._set_indeterminate(task_id)
             self._progress.update(
                 task_id,
+                completed=update.current,
                 description=description,
             )
         elif update.heartbeat:
-            # Heartbeat/activity indicator
+            # Activity only, no countable unit yet (e.g. rsync building its file list
+            # emits nothing at all): pulse the bar rather than leave it parked at 0%.
             description = f"[cyan]{job}[/cyan]"
             if update.item:
                 description += f": {update.item}"
+            self._set_indeterminate(task_id)
             self._progress.update(
                 task_id,
+                completed=0,
                 description=description,
             )
 
