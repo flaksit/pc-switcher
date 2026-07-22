@@ -1,0 +1,34 @@
+(pcswitcher) janfr@P17:~/dev/pc-switcher$ pc-switcher sync fleksi --dry-run
+Connection: disconnected   ⚠ 1  Step 4/12 — Out-of-order check
+╭──────────────────────────────────────────────────── Recent Logs ─────────────────────────────────────────────────────╮
+│ 12:38:29 [INFO] [orchestrator] (source) Starting sync session                                                        │
+│ 12:38:29 [INFO] [orchestrator] (source) [DRY-RUN] Preview mode - no changes will be made                             │
+│ 12:38:29 [INFO] [orchestrator] (source) Acquiring source lock                                                        │
+│ 12:38:29 [INFO] [orchestrator] (source) Connecting to target                                                         │
+│ 12:38:29 [INFO] [orchestrator] (target) Connected to target                                                          │
+│ 12:38:30 [INFO] [orchestrator] (target) Acquiring target lock                                                        │
+│ 12:38:30 [INFO] [orchestrator] (source) Discovering and validating jobs                                              │
+│ 12:38:30 [CRITICAL] [orchestrator] (source) Sync failed: System state validation failed:                             │
+│   - vscode_state_sync (target): sqlite3 is not available on target (required for state.vscdb selective merge)        │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+⚠ 1 warning(s) this run:
+  12:38:30 [CRITICAL] [orchestrator] (source) Sync failed: System state validation failed:
+  - vscode_state_sync (target): sqlite3 is not available on target (required for state.vscdb selective merge)
+Run pc-switcher logs for the full log.
+
+Sync failed: System state validation failed:
+  - vscode_state_sync (target): sqlite3 is not available on target (required for state.vscdb selective merge)
+
+
+What should we do? Automatically install sqlite on the target? But in which way? Best the same way as on source. We'll have the package-sync job for that. But this error is already raised during validation phase. package-sync will be too late anyway. Bundle (binary?) with pc-switcher? Let pc-switcher copy the source binary temporarily to target, just for the vscode-job?
+
+---
+
+Ok, drive via the standard ubuntu 24.04 python. This is always installed, isn't it?
+
+---
+
+Ok, drive via the standard ubuntu 24.04 python. This is always installed, isn't it?
+So the validation should only check if python available. We could even fallback to "uv run python -c <script>" because we know for sure that uv is installed on target, no?

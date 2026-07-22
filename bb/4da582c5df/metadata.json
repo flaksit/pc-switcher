@@ -3,7 +3,7 @@
   "checkpoint_id": "bb4da582c5df",
   "strategy": "manual-commit",
   "branch": "fix/vscode-state-sync-target-sqlite",
-  "checkpoints_count": 5,
+  "checkpoints_count": 7,
   "files_touched": [
     "docs/adr/adr-018-selective-vscode-state-sync.md",
     "src/pcswitcher/jobs/vscode_state_sync.py",
@@ -16,13 +16,20 @@
       "compact_transcript": "/bb/4da582c5df/0/transcript.jsonl",
       "content_hash": "/bb/4da582c5df/0/content_hash.txt",
       "prompt": "/bb/4da582c5df/0/prompt.txt"
+    },
+    {
+      "metadata": "/bb/4da582c5df/1/metadata.json",
+      "transcript": "/bb/4da582c5df/1/full.jsonl",
+      "compact_transcript": "/bb/4da582c5df/1/transcript.jsonl",
+      "content_hash": "/bb/4da582c5df/1/content_hash.txt",
+      "prompt": "/bb/4da582c5df/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 44,
-    "cache_creation_tokens": 60239,
-    "cache_read_tokens": 1102229,
-    "output_tokens": 8443,
-    "api_call_count": 22
+    "input_tokens": 123,
+    "cache_creation_tokens": 153049,
+    "cache_read_tokens": 3980506,
+    "output_tokens": 30530,
+    "api_call_count": 62
   }
 }
