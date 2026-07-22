@@ -1,0 +1,36 @@
+vscode_state_sync does not work well yet. After each sync, I need to sign in again. This is the "main" vscode login. Not about extensions. Apparently we miss this currently. Should stay machine-local and not be transfered to target.
+[Image #1]
+
+---
+
+why blocked from reading. Read it
+
+---
+
+And what do you propose? I want everything that is possible to sync, to be synced (user settings etc). We carve-out very only the things we can't sync between machines anyway.
+
+Is your list the smallest, complete set?
+What would be the impact of NOT syncing machineId? For the moment it is synced and apart from the main-sync-signin, I didn't encounter problems yet. (But maybe I didn't see them.)
+
+---
+
+I see you compare with 20260722T161621. That was absolutely NOT the first sync p17>fleksi that overwrote vscode stuff. Just so you are aware. Pick the snapshot that is relevant for what you need to know.
+
+---
+
+I just signed in here on p17. Verify your theory holds.
+
+If machineid is used for settings sync (only), we should keep it common (synced). Because otherwise the sync functionality will get confused by our own pc-switcher syncing, no?
+
+---
+
+show what the job is carving out now and what should be done instead, so I can see the concrete, exact difference
+
+---
+
+Carve out exact. Why do you have -microsoft?
+And why such a wide -github that matches more than needed? We only need to match the 4 real keys, not the account name. And not other state/config that might be stored there in the future
+
+---
+
+rewrite #204; implement in new pr

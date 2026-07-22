@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "0eb55e3a7229",
+  "strategy": "manual-commit",
+  "branch": "fix/204-vscode-auth-session-preference",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "docs/configuration.md",
+    "src/pcswitcher/jobs/vscode_state_sync.py",
+    "tests/unit/jobs/test_vscode_state_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0e/b55e3a7229/0/metadata.json",
+      "transcript": "/0e/b55e3a7229/0/full.jsonl",
+      "compact_transcript": "/0e/b55e3a7229/0/transcript.jsonl",
+      "content_hash": "/0e/b55e3a7229/0/content_hash.txt",
+      "prompt": "/0e/b55e3a7229/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 139,
+    "cache_creation_tokens": 126071,
+    "cache_read_tokens": 6559716,
+    "output_tokens": 59038,
+    "api_call_count": 70
+  }
+}
