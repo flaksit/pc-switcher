@@ -1,0 +1,1 @@
+so the tui still shows different step numbers dependent on the configured jobs. not nice. why not "Step 10a / 12" for Folder Sync and "Step 10b / 12" for Package Sync?

@@ -1,0 +1,56 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "3684e2046f2d",
+  "session_id": "4c2f05c7-b159-4c20-8d1a-f12e082b9da7",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-22T06:41:30.360649461Z",
+  "branch": "fix/186-number-implicit-sync-steps",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/ui.py",
+    "src/pcswitcher/orchestrator.py",
+    "README.md",
+    "docs/system/core.md",
+    "tests/unit/ui/test_terminal_ui.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "90bc66aa01c1",
+  "checkpoint_transcript_start": 168,
+  "transcript_lines_at_start": 168,
+  "compact_transcript_start": 34,
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 17447,
+    "cache_read_tokens": 2402953,
+    "output_tokens": 12777,
+    "api_call_count": 24
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-22T06:41:30.332080382Z",
+    "agent_lines": 64,
+    "agent_removed": 28,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 64,
+    "total_lines_changed": 92,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}

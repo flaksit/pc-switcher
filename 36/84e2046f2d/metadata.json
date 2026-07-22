@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "3684e2046f2d",
+  "strategy": "manual-commit",
+  "branch": "fix/186-number-implicit-sync-steps",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "docs/system/core.md",
+    "src/pcswitcher/orchestrator.py",
+    "src/pcswitcher/ui.py",
+    "tests/unit/ui/test_terminal_ui.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/36/84e2046f2d/0/metadata.json",
+      "transcript": "/36/84e2046f2d/0/full.jsonl",
+      "compact_transcript": "/36/84e2046f2d/0/transcript.jsonl",
+      "content_hash": "/36/84e2046f2d/0/content_hash.txt",
+      "prompt": "/36/84e2046f2d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 17447,
+    "cache_read_tokens": 2402953,
+    "output_tokens": 12777,
+    "api_call_count": 24
+  }
+}
