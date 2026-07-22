@@ -32,3 +32,11 @@ Ok, drive via the standard ubuntu 24.04 python. This is always installed, isn't 
 
 Ok, drive via the standard ubuntu 24.04 python. This is always installed, isn't it?
 So the validation should only check if python available. We could even fallback to "uv run python -c <script>" because we know for sure that uv is installed on target, no?
+
+---
+
+put your changes in new branch (from main), create non-draft pr, push, follow ci-run
+
+---
+
+put your changes in new branch (from main), create draft pr, push, bring workspace back to current branch
