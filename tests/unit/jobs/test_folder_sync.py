@@ -808,15 +808,33 @@ class TestStreamRsync:
         assert update.percent is None
         assert update.item == f"/home ({PASS_FULL}) — building file list"
 
-    async def test_to_chk_line_reports_percent_and_file_counts(self) -> None:
-        """A to-chk line reports rsync's percent plus done/total files, labelled by pass."""
+    async def test_to_chk_line_drives_bar_from_file_counts_not_rsync_percent(self) -> None:
+        """The bar follows checked/total files; rsync's own percent is ignored.
+
+        rsync's figure is bytes-sent over the size of the whole tree, so an incremental
+        sync reads ~0% throughout (measured: 200 of 154,022 files re-sent → 0% on every
+        line).  Here the line claims 21% while 94 of 538 files are checked — the bar
+        must show 17%, not 21% (#198).
+        """
         progress_line = b"9.53G 21% 317.26MB/s 0:00:28 (xfr#83, to-chk=444/538)\r"
         _, _, progress_calls = await self._run_stream([progress_line])
 
         update = progress_calls[-1]
         assert isinstance(update, ProgressUpdate)
-        assert update.percent == 21
-        assert update.item == f"/home ({PASS_FULL}) — 94/538 files"
+        assert update.percent == 17  # 94/538 files, not rsync's byte-based 21%
+        assert update.item == f"/home ({PASS_FULL}) — 94/538 files, 9.5 GiB"
+
+    async def test_incremental_run_bar_advances_though_rsync_reports_zero_percent(self) -> None:
+        """Real incremental-run lines (rsync stuck at 0%) still drive the bar 0→100%."""
+        data = (
+            b"7.631            0%    0,00kB/s 0:00:00 (xfr#1, to-chk=153943/154022)\r"
+            b"13.621.297       0%   23,65MB/s 0:00:00 (xfr#102, to-chk=39397/154022)\r"
+            b"14.432.278       0%   18,56MB/s 0:00:00 (xfr#202, to-chk=0/154022)\r"
+        )
+        _, _, progress_calls = await self._run_stream([data])
+
+        updates = [u for u in progress_calls if isinstance(u, ProgressUpdate)]
+        assert [u.percent for u in updates if u.percent is not None] == [0, 74, 100]
 
     async def test_ir_chk_fallback_reports_scanned_count_without_percent(self) -> None:
         """An ir-chk line reports the scanned count only — no percent, no denominator.

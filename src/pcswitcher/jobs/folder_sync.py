@@ -575,11 +575,11 @@ class FolderSyncJob(SyncJob):
                 m = _PROGRESS2_RE.search(line)
                 if m:
                     # Progress2 line: update TUI (D-15) and capture transferred bytes (WR-01).
-                    # Groups: 1=size 2=percent 3=files_xfr 4=chk prefix 5=to-check 6=total
+                    # Groups: 1=size 2=percent (unused, see below) 3=files_xfr
+                    #         4=chk prefix 5=to-check 6=total
                     # Last progress line wins — rsync emits these as running totals so the
                     # final line is the best approximation of the cumulative byte count.
                     bytes_xfr = self._parse_size_to_bytes(m.group(1))
-                    pct = int(m.group(2))
                     files_xfr = int(m.group(3))
                     scanning = m.group(4) == "ir"
                     remaining = int(m.group(5))
@@ -599,12 +599,20 @@ class FolderSyncJob(SyncJob):
                             )
                         )
                     else:
-                        # Full file list known: `listed` is the real total, so both the
-                        # percentage and the file counts are meaningful and monotonic.
+                        # Full file list known, so `listed` is the real total and the
+                        # checked-file count drives the bar.  rsync's own percentage
+                        # (group 2) is deliberately ignored: it is bytes-sent over the
+                        # total size of the whole tree, so an incremental sync — the
+                        # common case — reads 0% from start to finish (measured: 200 of
+                        # 154,022 files re-sent, 14.4 MB of 14.6 GB, 0% on every line).
+                        # Counting files instead spans 0-100% in both cases; the cost is
+                        # that one huge file advances the bar as little as one tiny one,
+                        # so the byte figure stays in the label.
+                        checked = listed - remaining
                         self._report_progress(
                             ProgressUpdate(
-                                percent=min(pct, 100),
-                                item=f"{where} — {listed - remaining:,}/{listed:,} files",
+                                percent=100 if listed == 0 else min(100, checked * 100 // listed),
+                                item=f"{where} — {checked:,}/{listed:,} files, {format_bytes(bytes_xfr)}",
                             )
                         )
                 elif line[0] in (">", "<", "*", ".", "c", "h"):
