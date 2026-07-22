@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "84757555b16f",
+  "strategy": "manual-commit",
+  "branch": "fix/186-number-implicit-sync-steps",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/system/core.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/84/757555b16f/0/metadata.json",
+      "transcript": "/84/757555b16f/0/full.jsonl",
+      "compact_transcript": "/84/757555b16f/0/transcript.jsonl",
+      "content_hash": "/84/757555b16f/0/content_hash.txt",
+      "prompt": "/84/757555b16f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 89275,
+    "cache_read_tokens": 175358,
+    "output_tokens": 1714,
+    "api_call_count": 3
+  }
+}
