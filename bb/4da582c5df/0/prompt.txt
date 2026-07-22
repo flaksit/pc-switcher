@@ -1,0 +1,20 @@
+defulat-config.yaml says "vscode_state_sync (runs after folder_sync)". Is "after folder sync" still relevant? Do they depend chronologically on each other?
+
+---
+
+I updated the description for vscode_state_sync. Correct and good wording? Fix layout if needed
+
+---
+
+Not necessarily "each machine keeps its own secrets". This is not necessarily about ALL secrets. This is only about secrets that are encrypted with a machine-based key. Fix that wording.
+
+Add "only the invoking user" in the comment where vscode_state_sync is selected.
+
+---
+
+I didn't want all that tech doc in user-oriented comments
+
+---
+
+You sure there are no other logins, that are stored elsewhere? Because your sentence is really broad.
+If I remember well, my main vscode-login was preserved. It was only two github-extensions that needed re-auth. But I didn't check all other extensions.

@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "bb4da582c5df",
+  "session_id": "d9eb5a05-2721-468a-b121-14fc7fd79f3c",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-22T11:06:36.180215053Z",
+  "branch": "fix/vscode-state-sync-target-sqlite",
+  "checkpoints_count": 5,
+  "save_step_count": 5,
+  "files_touched": [
+    "docs/adr/adr-018-selective-vscode-state-sync.md",
+    "src/pcswitcher/jobs/vscode_state_sync.py",
+    "tests/unit/jobs/test_vscode_state_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "3ab8c4ec8e01",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 60239,
+    "cache_read_tokens": 1102229,
+    "output_tokens": 8443,
+    "api_call_count": 22
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-22T11:06:36.168090824Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 66,
+    "human_modified": 43,
+    "human_removed": 0,
+    "total_committed": 66,
+    "total_lines_changed": 109,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 10,
+      "user_lines_removed": 18,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "src/pcswitcher/default-config.yaml": 1
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/default-config.yaml": 18
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 12,
+      "user_lines_removed": 1,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 18,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "src/pcswitcher/default-config.yaml": 3
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/default-config.yaml": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 117,
+      "user_lines_removed": 43,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 18,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "src/pcswitcher/jobs/vscode_state_sync.py": 53,
+        "tests/unit/jobs/test_vscode_state_sync.py": 55
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/vscode_state_sync.py": 24,
+        "tests/unit/jobs/test_vscode_state_sync.py": 19
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 10,
+      "user_lines_removed": 0,
+      "agent_lines_added": 112,
+      "agent_lines_removed": 61,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/adr/adr-018-selective-vscode-state-sync.md": 1
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 110,
+      "agent_lines_removed": 61,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}
