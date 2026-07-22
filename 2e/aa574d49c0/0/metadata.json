@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "2eaa574d49c0",
+  "session_id": "f223bb2d-7b2b-4882-b45c-c01f169d7fd6",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-22T13:42:57.258567116Z",
+  "branch": "fix/198-folder-sync-progress-monotonic",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "docs/configuration.md",
+    "src/pcswitcher/config.py",
+    "src/pcswitcher/jobs/folder_sync.py",
+    "tests/unit/jobs/test_folder_sync.py",
+    "tests/unit/orchestrator/test_config_system.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "cb9c858f2ab6",
+  "checkpoint_transcript_start": 212,
+  "transcript_lines_at_start": 212,
+  "compact_transcript_start": 51,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 2876,
+    "cache_read_tokens": 271099,
+    "output_tokens": 1581,
+    "api_call_count": 3
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-22T13:42:57.234053555Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 0,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
