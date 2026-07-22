@@ -1,0 +1,1 @@
+Machine-specific packages: is it clear that "apply" can mean "delete" (in case not in source but in target) and "create/apply/install" (in case in surfer but not in target)?
