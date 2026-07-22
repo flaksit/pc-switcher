@@ -3,7 +3,7 @@
   "checkpoint_id": "4b1d18550434",
   "strategy": "manual-commit",
   "branch": "fix/vscode-state-sync-log-levels",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "src/pcswitcher/jobs/vscode_state_sync.py"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/4b/1d18550434/0/transcript.jsonl",
       "content_hash": "/4b/1d18550434/0/content_hash.txt",
       "prompt": "/4b/1d18550434/0/prompt.txt"
+    },
+    {
+      "metadata": "/4b/1d18550434/1/metadata.json",
+      "transcript": "/4b/1d18550434/1/full.jsonl",
+      "compact_transcript": "/4b/1d18550434/1/transcript.jsonl",
+      "content_hash": "/4b/1d18550434/1/content_hash.txt",
+      "prompt": "/4b/1d18550434/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 111,
-    "cache_creation_tokens": 93989,
-    "cache_read_tokens": 4001764,
-    "output_tokens": 19994,
-    "api_call_count": 56
+    "input_tokens": 136,
+    "cache_creation_tokens": 144927,
+    "cache_read_tokens": 4569943,
+    "output_tokens": 23171,
+    "api_call_count": 69
   }
 }

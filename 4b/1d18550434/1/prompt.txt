@@ -1,0 +1,1 @@
+vscode_state_sync outputs each and every file to INFO. that is not in line with convention that file-level info is sent to FULL. Probably just a "syncing vscode state db's" and "<n> files synced" is enough on INFO.
