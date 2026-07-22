@@ -3,7 +3,7 @@
   "checkpoint_id": "fe6018efc792",
   "strategy": "manual-commit",
   "branch": "fix/198-folder-sync-progress-monotonic",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "src/pcswitcher/default-config.yaml"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/fe/6018efc792/0/transcript.jsonl",
       "content_hash": "/fe/6018efc792/0/content_hash.txt",
       "prompt": "/fe/6018efc792/0/prompt.txt"
+    },
+    {
+      "metadata": "/fe/6018efc792/1/metadata.json",
+      "transcript": "/fe/6018efc792/1/full.jsonl",
+      "compact_transcript": "/fe/6018efc792/1/transcript.jsonl",
+      "content_hash": "/fe/6018efc792/1/content_hash.txt",
+      "prompt": "/fe/6018efc792/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 12,
-    "cache_creation_tokens": 47061,
-    "cache_read_tokens": 221007,
-    "output_tokens": 3206,
-    "api_call_count": 6
+    "input_tokens": 20,
+    "cache_creation_tokens": 58504,
+    "cache_read_tokens": 599883,
+    "output_tokens": 4648,
+    "api_call_count": 10
   }
 }

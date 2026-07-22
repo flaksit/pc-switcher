@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "fe6018efc792",
+  "session_id": "e813039f-453a-4ee7-80d4-efcb9e812210",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-22T11:09:34.066446075Z",
+  "branch": "fix/198-folder-sync-progress-monotonic",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "src/pcswitcher/default-config.yaml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "31fb8a6f1325",
+  "checkpoint_transcript_start": 214,
+  "transcript_lines_at_start": 214,
+  "compact_transcript_start": 52,
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 11443,
+    "cache_read_tokens": 378876,
+    "output_tokens": 1442,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-22T11:09:34.038183869Z",
+    "agent_lines": 0,
+    "agent_removed": 18,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 1,
+    "total_lines_changed": 19,
+    "agent_percentage": 94.73684210526315,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
