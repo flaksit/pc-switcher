@@ -56,12 +56,23 @@ from pcswitcher.models import ConfigError, FirstSyncScope, Host, LogLevel, Progr
 # degraded scanned-count path for it regardless.
 _PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*(ir|to)-chk=(\d+)/(\d+)\)")
 
-# TUI names for the two rsync passes a folder can run (see `execute`): the no-delete
-# pass that ships per-directory filter files, and the deleting mirror.  Both passes of
-# a folder share that folder's progress bar (tracked by path) and only rename it, so
-# the run shows one bar per configured folder — finished folders stay at 100%.
+# The two rsync passes a folder can run (see `execute`): the no-delete pass that ships
+# per-directory filter files, and the deleting mirror.  Both share that folder's
+# progress bar (tracked by path) and only rename it, so the run shows one bar per
+# configured folder — finished folders stay at 100%.
 PASS_PREP = "prep"
 PASS_FULL = "full"
+
+
+def _pass_display(path: str, label: str) -> str:
+    """Name a pass for the TUI.
+
+    The deleting mirror is the pass that always runs, so it shows the bare folder path;
+    only the optional seeding pass is qualified, so its bar cannot be mistaken for the
+    real sync of that folder.
+    """
+    return path if label == PASS_FULL else f"{path} ({label})"
+
 
 # pc-switcher's own runtime STATE lives under the invoking user's home and must
 # stay machine-local: sync-history.json is the topology-safety state (ADR-015) that
@@ -589,7 +600,7 @@ class FolderSyncJob(SyncJob):
         files_scanned = 0
         buf = b""
 
-        where = f"{folder.path} ({label})"
+        where = _pass_display(folder.path, label)
         self._report_progress(ProgressUpdate(heartbeat=True, item=f"{where} — building file list", track=folder.path))
 
         async for chunk in chunks:
@@ -693,7 +704,7 @@ class FolderSyncJob(SyncJob):
         # A pass with nothing to transfer (steady state, or any dry-run) races through
         # its progress output, so close the bar explicitly rather than leaving it wherever
         # the last line landed — or pulsing, if no line ever arrived.
-        where = f"{folder.path} ({label})"
+        where = _pass_display(folder.path, label)
         self._report_progress(ProgressUpdate(percent=100, item=where, track=folder.path))
         return files_transferred, bytes_transferred, files_deleted
 

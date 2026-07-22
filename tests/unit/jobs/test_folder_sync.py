@@ -833,7 +833,7 @@ class TestStreamRsync:
         assert isinstance(update, ProgressUpdate)
         assert update.heartbeat is True
         assert update.percent is None
-        assert update.item == f"/home ({PASS_FULL}) — building file list"
+        assert update.item == "/home — building file list"  # the mirror pass is unqualified
         assert update.track == "/home"
 
     async def test_every_update_tracks_the_folder_not_the_pass(self) -> None:
@@ -861,7 +861,7 @@ class TestStreamRsync:
         update = progress_calls[-1]
         assert isinstance(update, ProgressUpdate)
         assert update.percent == 17  # 94/538 files, not rsync's byte-based 21%
-        assert update.item == f"/home ({PASS_FULL}) — 94/538 files, 9.5 GiB"
+        assert update.item == "/home — 94/538 files, 9.5 GiB"
 
     async def test_incremental_run_bar_advances_though_rsync_reports_zero_percent(self) -> None:
         """Real incremental-run lines (rsync stuck at 0%) still drive the bar 0→100%."""
@@ -923,8 +923,9 @@ class TestStreamRsync:
         percents = [u.percent for u in progress_calls if u.percent is not None]
         assert percents == [40, 80, 40, 80], "second pass must restart the bar, not continue the first"
         # Each pass opens with its own heartbeat, so the first three updates are the prep pass.
-        assert all(u.item is not None and f"({PASS_PREP})" in u.item for u in progress_calls[:3])
-        assert all(u.item is not None and f"({PASS_FULL})" in u.item for u in progress_calls[3:])
+        # The seeding pass is qualified; the mirror shows the bare folder path.
+        assert all(u.item is not None and u.item.startswith(f"/home ({PASS_PREP})") for u in progress_calls[:3])
+        assert all(u.item is not None and u.item.startswith("/home —") for u in progress_calls[3:])
 
     async def test_per_file_line_logged_at_full(self) -> None:
         """An --out-format per-file line is logged at LogLevel.FULL."""
