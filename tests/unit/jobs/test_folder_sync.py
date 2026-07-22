@@ -152,6 +152,33 @@ class TestActiveFolderSelection:
         assert len(job._active_folders()) == 1
 
 
+class TestValidateConfig:
+    """validate_config() rejects folder paths rsync would resolve against the cwd."""
+
+    def test_absolute_paths_accepted(self) -> None:
+        config = {"folders": [{"path": "/home"}, {"path": "/root", "enabled": False}]}
+        assert FolderSyncJob.validate_config(config) == []
+
+    def test_relative_path_rejected(self) -> None:
+        config = {"folders": [{"path": "/home"}, {"path": "home/janfr"}]}
+        errors = FolderSyncJob.validate_config(config)
+        assert len(errors) == 1
+        assert errors[0].path == "folders.1.path"
+        assert "must be absolute" in errors[0].message
+
+    def test_unexpanded_tilde_rejected(self) -> None:
+        """`path` is passed to rsync verbatim, so a leading ~ is not a valid path."""
+        errors = FolderSyncJob.validate_config({"folders": [{"path": "~/dev"}]})
+        assert len(errors) == 1
+        assert "~/dev" in errors[0].message
+
+    def test_schema_errors_short_circuit(self) -> None:
+        """A path of the wrong type is reported by the schema, not the absolute check."""
+        errors = FolderSyncJob.validate_config({"folders": [{"path": 12345}]})
+        assert len(errors) == 1
+        assert "must be absolute" not in errors[0].message
+
+
 # ---------------------------------------------------------------------------
 # describe_first_sync_scope (ADR-015, gap-closure 01-15)
 # ---------------------------------------------------------------------------

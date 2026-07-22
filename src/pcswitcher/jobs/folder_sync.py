@@ -18,13 +18,13 @@ import re
 import shlex
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, override
 
 from pcswitcher.disk import format_bytes
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.vscode_state_sync import vscode_state_exclude_paths
-from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.models import ConfigError, FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
 
 # Matches rsync --info=progress2 output, e.g.:
 #   "9.53G 21% 317.26MB/s 0:00:28 (xfr#83063, to-chk=443926/538653)"
@@ -158,6 +158,31 @@ class FolderSyncJob(SyncJob):
         "required": ["folders"],
         "additionalProperties": False,
     }
+
+    @classmethod
+    @override
+    def validate_config(cls, config: dict[str, Any]) -> list[ConfigError]:
+        """Validate config schema, then that every folder path is absolute.
+
+        `path` is handed to rsync verbatim — no `~`/env expansion, unlike
+        `filter_file` — so a relative path silently resolves against the working
+        directory of each side and mirrors the wrong tree.
+        """
+        errors = super().validate_config(config)
+        if errors:
+            return errors  # Don't continue if schema is invalid
+
+        for index, folder in enumerate(config["folders"]):
+            if not PurePosixPath(folder["path"]).is_absolute():
+                errors.append(
+                    ConfigError(
+                        job=cls.name,
+                        path=f"folders.{index}.path",
+                        message=f"Folder path must be absolute: {folder['path']!r}",
+                    )
+                )
+
+        return errors
 
     @staticmethod
     def _parse_size_to_bytes(value: str) -> int:
