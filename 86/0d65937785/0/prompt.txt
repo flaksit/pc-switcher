@@ -1,0 +1,1 @@
+About progress indicator of folder-sync: I ran "pc-switcher sync fleksi --dry-run". I saw the progress meter DECREASE: 5%, 3%, 2% and then suddenly 100%. So still not reliable at all
