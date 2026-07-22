@@ -253,6 +253,9 @@ class VscodeStateSyncJob(SyncJob):
         first sync). In dry-run the job only detects source/target presence and logs the
         intended actions, performing no ``send_file``, no target inject, and no ``mv``
         (ADR-014).
+
+        Logging follows the project convention: per-file detail at FULL, only the
+        start line and the final count at INFO.
         """
         # A DB's absolute path is identical on source and target: the invoking (real)
         # user has the same uid and home path on every machine, and pc-switcher does no
@@ -268,6 +271,8 @@ class VscodeStateSyncJob(SyncJob):
             return
 
         total = len(present)
+        self._log(Host.SOURCE, LogLevel.INFO, f"{prefix}Syncing VS Code state DBs")
+
         for index, relpath in enumerate(present):
             source_db = home / relpath
             target_db = (home / relpath).as_posix()
@@ -281,7 +286,7 @@ class VscodeStateSyncJob(SyncJob):
             if self.context.dry_run:
                 self._log(
                     Host.TARGET,
-                    LogLevel.INFO,
+                    LogLevel.FULL,
                     f"{prefix}Would sync {label} ({mode}); preserving keys matching {globs}",
                 )
                 self._report_progress(ProgressUpdate(percent=int((index + 1) / total * 100)))
@@ -290,6 +295,7 @@ class VscodeStateSyncJob(SyncJob):
             await self._sync_editor(source_db, target_db, target_exists, globs, label)
             self._report_progress(ProgressUpdate(percent=int((index + 1) / total * 100)))
 
+        self._log(Host.TARGET, LogLevel.INFO, f"{prefix}{total} VS Code state DB file(s) synced")
         self._report_progress(ProgressUpdate(percent=100))
 
     async def _sync_editor(
@@ -349,7 +355,7 @@ class VscodeStateSyncJob(SyncJob):
 
             self._log(
                 Host.TARGET,
-                LogLevel.INFO,
+                LogLevel.FULL,
                 f"Synced {label} ({'merge' if target_exists else 'first-sync'})",
             )
         finally:
