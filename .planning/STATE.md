@@ -87,36 +87,13 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 
 - Foundation: 11 Accepted ADRs are locked (SSH channel, Python+uv, asyncio, three-tier testing, TDD, draft-aware CI, stdlib logging, living specs, doc structure, dynamic versioning, ADR process).
 - Foundation: ADR-009 (AI-readiness issue labels) is Proposed, not locked.
-- Phase 1: User-data transport is rsync-over-SSH (chosen over btrfs send/receive), locked in ADR-013.
-- [Phase ?]: rsync-over-SSH chosen as user-data transport (D-04); rsync runs as root on both ends via sudo, root SSH login forbidden (D-05)
-- [Phase ?]: dry-run is tool-wide contract binding all SyncJobs (D-12): no file writes, no snapshots, no history updates in dry-run mode
-- [Phase ?]: folder_sync job name (not user_data) is canonical per D-01; default excludes live in YAML not Python per D-11
-- [Phase ?]: Remote role-record command now uses python3 -c merge-preserving script instead of echo-overwrite, so target_generations in sync-history.json survive a role switch
-- [Phase ?]: sudo -E rsync preserves SSH_AUTH_SOCK and HOME for root rsync subprocess to access ~/.ssh/config (Pitfall 1 fix)
-- [Phase ?]: test decision
-- [Phase ?]: Integration test: dedicated /home/<user>/pcswitcher-folder-sync-test dir on @home btrfs subvolume for divergence tracking without mirroring real /home
-- [Phase ?]: D-07 no-false-divergence: sync-history writes after rsync fall outside test_dir prefix so btrfs find-new prefix scoping ignores them
-- [Phase ?]: D-12 dry-run verification: compare target_generations in sync-history.json before/after --dry-run to confirm no marker write
-- [Phase 01]: IN-01: Remove asyncio.wait_for(asyncio.shield(asyncio.sleep(0))) from SIGINT path — returned immediately so cleanup time was zero; first-SIGINT message no longer claims a numeric grace period
-- [Phase 01]: IN-02: Two-phase total_steps — enabled-job estimate upfront, set_total_steps correction after Phase 4 discovery so denominator matches executed steps exactly
-- [Phase 01]: WR-01/IN-03: last-progress-line-wins for bytes_transferred (best-effort cumulative); change-type set extended to c/h with inline comments
-- [Phase 01]: WR-03: execute() raises RuntimeError (not ValidationError) for pre-transfer divergence abort — consistent with existing rsync-failure handling; delegated to _check_divergence for all override semantics
-- [Phase ?]: ADR-015: topology-based sync-safety model replaces btrfs find-new
-- [Phase ?]: ADR-014 not superseded by ADR-015: its divergence-detection step is now realized by the topology check, not btrfs find-new
-- [Phase ?]: D-06/D-07/D-08 in 01-CONTEXT.md marked superseded by ADR-015; original text preserved for audit history
-- [Phase ?]: CR-01/CR-02: removed btrfs divergence guard; safety via ADR-015 (snapshots + dry-run deletion log + topology check)
-- [Phase ?]: WR-01: config_sync removeprefix fix — lstrip stripped any leading ~ and / chars, removeprefix strips only exact leading ~/
-- [Phase ?]: sync_history simplified to {last_role, last_peer} per ADR-015; generation store removed; parse_sync_state/get_last_sync_state added for topology check (plan 01-13)
-- [Phase 01]: Single --allow-out-of-order flag replaces --allow-consecutive + --allow-divergence (ADR-015 topology model; plan 01-13)
-- [Phase 01]: _check_out_of_order() inserted between Phase 3 and 4 with no new step counter — 8-phase formula unchanged; W1/W2/W3 warn+confirm never hard-aborts (#159); last_peer recorded on both ends (plan 01-13)
-- [Phase ?]: Phase 01 (01-15): first-sync warning mechanism phrase for FolderSyncJob stays literal 'rsync --delete', now owned by the job via describe_first_sync_scope() instead of the orchestrator
-- [Phase ?]: Phase 01 (01-15): _resolve_sync_job_class() factored out of _discover_and_validate_jobs, shared with the new _first_sync_scopes(), to avoid duplicating dynamic-import/class-scan logic
-- [Phase ?]: [Phase 01] (01-17): sync_config_to_target computes should_pause once and pairs the finally-resume with it, so an auto_accept run (which never paused) no longer resumes an idle Live
-- [Phase ?]: [Phase 01] (01-17): PausableUI now exposes pause()/resume() instead of start()/stop(); TerminalUI.start()/stop() remain the orchestrator's create/teardown lifecycle only
-- [Phase ?]: Phase 01 (01-16): SyncAbortedByUser is a plain Exception (not RuntimeError subclass) carrying a human-readable reason, distinguishing a user decline from every other failure path
-- [Phase ?]: Phase 01 (01-16): CLI abort message reuses exit code 1 (same as generic failure); the distinction is calm wording, not exit code
-- [Phase 01]: 01-18: UILogHandler routes log records into TerminalUI's Recent Logs panel via loop.call_soon_threadsafe, replacing the stderr StreamHandler that desynced Live's cursor bookkeeping — Fixes UAT-diagnosed live-progress flooding (761 duplicate panel headers / 326 duplicate 0% frames in one run); setup_logging is TTY-aware, falling back to stderr when non-interactive
-- [Phase 01]: 01-18: Orchestrator now constructs Console/TerminalUI/TerminalUIConfirmer before calling setup_logging, passing ui+console in — TUI-floor handler selection requires the UI/console to exist first; setup_logging's ui/console params are keyword-only with None defaults so existing callers stay unaffected
+- ADR-013: user-data transport is rsync-over-SSH (over btrfs send/receive). rsync runs as root on both ends via sudo; root SSH login stays forbidden. `sudo -E` preserves SSH_AUTH_SOCK and HOME so the root subprocess can still read `~/.ssh/config`.
+- ADR-014: dry-run is a tool-wide contract binding every SyncJob — full read-only preview, no file writes, no snapshots, no history or marker updates.
+- ADR-015: sync safety is topology-based; btrfs find-new content detection is gone. sync-history is reduced to `{last_role, last_peer}`, recorded on both ends. ADR-014's divergence-detection step is now realized by the topology check.
+- One `--allow-out-of-order` CLI flag overrides the topology warnings; those warnings always warn-and-confirm, never hard-abort (#159).
+- Job conventions: default excludes live in YAML, not Python. Each SyncJob describes its own destructive first-sync scope via `describe_first_sync_scope()` rather than the orchestrator hardcoding it.
+- `SyncAbortedByUser` is a plain Exception carrying a human-readable reason, distinguishing a user decline from every other failure path; the CLI still exits 1 either way.
+- Logging under the TUI: `setup_logging` is TTY-aware and routes records into TerminalUI's Recent Logs panel. Anything writing to stderr while Live is active desyncs its cursor bookkeeping and floods the display.
 
 ### Pending Todos
 
