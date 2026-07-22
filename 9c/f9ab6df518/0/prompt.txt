@@ -1,0 +1,11 @@
+<task-notification>
+<task-id>bqu9lkk3m</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/826fb49a-a288-4c8f-8ea7-0d9036dce50f/tasks/bqu9lkk3m.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR 199 CI" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+"rsync's own figure stops at 99% (it's bytes over a total that includes skipped files)": what about incremental runs in large folders like /home/janfr where only a few files are modified? Will it be completed at 5123/total files? Or will the "total" be the total number of files-to-transfer?
