@@ -8,6 +8,7 @@ import logging
 import os
 import secrets
 from datetime import UTC, datetime
+from enum import IntEnum, auto
 from logging.handlers import QueueListener
 from typing import Any
 
@@ -66,11 +67,31 @@ from pcswitcher.ui import TerminalUI
 
 __all__ = ["Orchestrator"]
 
-# Fixed number of logical steps in the sync sequence (see run()). The denominator
-# shown in the TUI ("Step N/12") is constant regardless of how many sync jobs are
-# enabled: the run-jobs step (10) expands into sub-steps 10a, 10b, … instead of
-# inflating the total.
-TOTAL_SYNC_STEPS = 12
+
+class SyncStep(IntEnum):
+    """The fixed, ordered sequence of logical steps in a sync (see run()).
+
+    Members are `auto()`-numbered from 1, so a member's value is its position and
+    `len(SyncStep)` is the total — the orchestrator owns both and hands the total
+    to the TUI, with no magic number to keep in sync. Insert a member and every
+    following step renumbers and the denominator updates automatically.
+
+    `RUN_JOBS` is a single logical step; the TUI expands it into sub-steps
+    (10a, 10b, …), one per enabled job, without inflating the total.
+    """
+
+    SOURCE_LOCK = auto()
+    CONNECT = auto()
+    TARGET_LOCK = auto()
+    OUT_OF_ORDER_CHECK = auto()
+    DISCOVER_JOBS = auto()
+    DISK_CHECK = auto()
+    PRE_SNAPSHOT = auto()
+    INSTALL_ON_TARGET = auto()
+    SYNC_CONFIG = auto()
+    RUN_JOBS = auto()
+    POST_SNAPSHOT = auto()
+    RECORD_HISTORY = auto()
 
 
 def _stuck_lock_hint(machine: str, lock_path: str) -> str:
@@ -276,10 +297,10 @@ class Orchestrator:
         # so creating it early is safe.
         #
         self._console = Console()
-        self._ui = TerminalUI(
-            console=self._console,
-            total_steps=TOTAL_SYNC_STEPS,
-        )
+        self._ui = TerminalUI(console=self._console)
+        # The orchestrator owns the step sequence, so it tells the UI the total.
+        # Derived from the enum (not a literal), and fixed regardless of job count.
+        self._ui.set_total_steps(len(SyncStep))
         # Shared interactive confirmation gate for the orchestrator's out-of-order check
         # and any job-level prompt (e.g. FolderSyncJob first-sync overwrite, ADR-015).
         self._confirmer = TerminalUIConfirmer(self._console, self._ui, logger=self._logger)
@@ -322,76 +343,68 @@ class Orchestrator:
             )
 
         try:
-            # Step 1: Acquire source lock
             self._logger.info("Acquiring source lock", extra={"job": "orchestrator", "host": "source"})
             await self._acquire_source_lock()
-            self._ui.set_current_step(1, "Source lock")
+            self._ui.set_current_step(SyncStep.SOURCE_LOCK, "Source lock")
 
-            # Step 2: Establish SSH connection
             self._logger.info("Connecting to target", extra={"job": "orchestrator", "host": "source"})
             await self._establish_connection()
             assert self._remote_executor is not None
-            self._ui.set_current_step(2, "Connect to target")
+            self._ui.set_current_step(SyncStep.CONNECT, "Connect to target")
 
-            # Step 3: Acquire target lock
             self._logger.info("Acquiring target lock", extra={"job": "orchestrator", "host": "target"})
             await self._acquire_target_lock()
-            self._ui.set_current_step(3, "Target lock")
+            self._ui.set_current_step(SyncStep.TARGET_LOCK, "Target lock")
 
-            # Step 4: Out-of-order / target-state check. Runs after the target lock
-            # so we can read the target's sync-history over SSH. Always executes;
-            # --allow-out-of-order only bypasses the W2/W3 confirmation, not the read.
+            # Out-of-order / target-state check runs after the target lock so we can
+            # read the target's sync-history over SSH. Always executes; --allow-out-of-order
+            # only bypasses the W2/W3 confirmation, not the read.
             if not await self._check_out_of_order():
                 raise SyncAbortedByUser("Sync aborted at the out-of-order / target-state check")
-            self._ui.set_current_step(4, "Out-of-order check")
+            self._ui.set_current_step(SyncStep.OUT_OF_ORDER_CHECK, "Out-of-order check")
 
-            # Step 5: Job discovery and validation
             self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator", "host": "source"})
             jobs = await self._discover_and_validate_jobs()
-            self._ui.set_current_step(5, "Discover jobs")
+            self._ui.set_current_step(SyncStep.DISCOVER_JOBS, "Discover jobs")
 
-            # Step 6: Disk space preflight check
             await self._check_disk_space_preflight()
-            self._ui.set_current_step(6, "Disk check")
+            self._ui.set_current_step(SyncStep.DISK_CHECK, "Disk check")
 
-            # Step 7: Pre-sync snapshots
             self._logger.info("Creating pre-sync snapshots", extra={"job": "orchestrator", "host": "source"})
             await self._create_snapshots(SnapshotPhase.PRE)
-            self._ui.set_current_step(7, "Pre-sync snapshots")
+            self._ui.set_current_step(SyncStep.PRE_SNAPSHOT, "Pre-sync snapshots")
 
-            # Step 8: Install/upgrade pc-switcher on target (after snapshots for rollback safety)
+            # Install after snapshots so a bad install is recoverable.
             self._logger.info(
                 "Ensuring pc-switcher is installed on target",
                 extra={"job": "orchestrator", "host": "target"},
             )
             await self._install_on_target_job()
-            self._ui.set_current_step(8, "Install on target")
+            self._ui.set_current_step(SyncStep.INSTALL_ON_TARGET, "Install on target")
 
-            # Step 9: Sync config from source to target
             self._logger.info("Syncing configuration to target", extra={"job": "orchestrator", "host": "target"})
             await self._sync_config_to_target()
-            self._ui.set_current_step(9, "Sync config")
+            self._ui.set_current_step(SyncStep.SYNC_CONFIG, "Sync config")
 
-            # Step 10: Execute sync jobs with background monitoring
+            # Run the sync jobs (SyncStep.RUN_JOBS); _execute_jobs sets the 10a/10b sub-steps.
             self._logger.info("Starting sync operations", extra={"job": "orchestrator", "host": "source"})
             job_results = await self._execute_jobs(jobs)
             session.job_results = job_results
 
-            # Step 11: Post-sync snapshots
             self._logger.info("Creating post-sync snapshots", extra={"job": "orchestrator", "host": "source"})
             await self._create_snapshots(SnapshotPhase.POST)
-            self._ui.set_current_step(11, "Post-sync snapshots")
+            self._ui.set_current_step(SyncStep.POST_SNAPSHOT, "Post-sync snapshots")
 
-            # Step 12: Record sync history on both machines (this machine was SOURCE,
-            # target was TARGET). The write is skipped in dry-run mode (D-12: dry-run
-            # must not write any state), but the step still advances so the counter
-            # reaches 100% on both real and dry-run paths — matching the snapshot steps.
+            # Record sync history on both machines (this machine was SOURCE, target was
+            # TARGET). The write is skipped in dry-run mode (D-12: dry-run must not write
+            # any state), but the step still advances so the counter reaches 100% on both
+            # real and dry-run paths — matching the snapshot steps.
             session.status = SessionStatus.COMPLETED
             session.ended_at = datetime.now(UTC)
             self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
             if not self._dry_run:
                 await self._update_sync_history()
-            self._ui.set_current_step(12, "Record sync history")
+            self._ui.set_current_step(SyncStep.RECORD_HISTORY, "Record sync history")
 
             return session
 
@@ -565,7 +578,7 @@ class Orchestrator:
 
         Convention: job_name == module_name (e.g., "dummy_success" → pcswitcher.jobs.dummy_success).
         Dynamically imports the module and scans its attributes for a SyncJob subclass whose
-        `name` ClassVar matches. Shared by `_discover_and_validate_jobs` (step 5 job discovery)
+        `name` ClassVar matches. Shared by `_discover_and_validate_jobs` (job discovery)
         and `_first_sync_scopes` (pre-step-4 first-sync messaging) so the import/scan logic
         lives in exactly one place.
 
@@ -606,7 +619,7 @@ class Orchestrator:
 
         Resolves every enabled job in `self._config.sync_jobs` (config order) to its SyncJob
         class via `_resolve_sync_job_class`, then calls `describe_first_sync_scope()` on each —
-        this runs before step 5 job discovery, so classes (not instances) are used. Jobs that
+        this runs before job discovery, so classes (not instances) are used. Jobs that
         return None (no overwrite scope, or nothing in scope for their config) contribute
         nothing; the orchestrator's warning falls back to generic phrasing when this is empty.
         """
@@ -1044,12 +1057,12 @@ class Orchestrator:
             try:
                 # Execute sync jobs sequentially
                 for job_index, job in enumerate(jobs):
-                    # Jobs are sub-steps of logical step 10, sub-labelled 10a, 10b, …
+                    # Jobs are sub-steps of SyncStep.RUN_JOBS, sub-labelled 10a, 10b, …
                     # (letters suffice for any realistic job count; fall back to a
                     # numeric suffix past 'z'), labelled with the job name so the TUI
                     # shows what is running.
                     substep = chr(ord("a") + job_index) if job_index < 26 else str(job_index + 1)
-                    self._ui.set_current_step(10, job.name, substep=substep)
+                    self._ui.set_current_step(SyncStep.RUN_JOBS, job.name, substep=substep)
                     started_at = datetime.now(UTC)
                     try:
                         await job.execute()
