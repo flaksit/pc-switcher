@@ -49,6 +49,9 @@ class TerminalUI:
         self._total_steps = total_steps
         self._current_step = 0
         self._current_step_name: str | None = None
+        # Optional letter suffix (e.g. "a") shown as "Step 10a/12" when one logical
+        # step expands into several sub-steps (the run-jobs step, one per job).
+        self._current_substep: str | None = None
 
         # Progress tracking
         self._progress = Progress(
@@ -120,7 +123,9 @@ class TerminalUI:
         # Overall progress
         step_text = Text()
         if self._total_steps is not None:
-            step_text.append(f"Step {self._current_step}/{self._total_steps}", style="cyan")
+            step_text.append(
+                f"Step {self._current_step}{self._current_substep or ''}/{self._total_steps}", style="cyan"
+            )
             if self._current_step_name:
                 step_text.append(f" — {self._current_step_name}", style="cyan")
 
@@ -340,28 +345,32 @@ class TerminalUI:
         if self._live is not None and self._live.is_started:
             self._live.update(self._render())
 
-    def set_current_step(self, step: int, name: str | None = None) -> None:
+    def set_current_step(self, step: int, name: str | None = None, substep: str | None = None) -> None:
         """Update current step number (and optional label) for overall progress.
 
         Args:
             step: Current step number (1-indexed)
             name: Short human-readable name of the step, shown next to the number
                 (e.g. "Install on target"). None clears any previous label.
+            substep: Optional letter suffix rendered directly after the number
+                (e.g. "a" → "Step 10a/12"), used when one logical step expands into
+                several sub-steps. None renders the bare number.
         """
         self._current_step = step
         self._current_step_name = name
+        self._current_substep = substep
         if self._live is not None and self._live.is_started:
             self._live.update(self._render())
 
     def set_total_steps(self, total: int) -> None:
-        """Correct the total step count once the actual number of jobs is known.
+        """Update the total step count and refresh the live render immediately.
 
-        Called by the orchestrator after step 5 job discovery to replace the
-        initial estimate with the exact count of enabled, discoverable jobs.
-        Refreshes the live render immediately so the display reflects the correction.
+        The sync sequence has a fixed step count, so the orchestrator sets this
+        once at construction; this setter exists for callers that need to adjust
+        the denominator after the fact.
 
         Args:
-            total: Corrected total step count
+            total: Total step count
         """
         self._total_steps = total
         if self._live is not None and self._live.is_started:

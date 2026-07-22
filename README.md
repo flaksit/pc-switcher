@@ -77,7 +77,7 @@ After sync completes, power off the source machine and resume work on target.
 
 The sequence stops at the first failure, and cleanup always runs: release locks, kill remote processes, close the connection.
 
-The twelve steps are listed below. The live UI expands step 10 (run jobs) to one entry per enabled sync job, so the on-screen "Step X/Y" count runs higher than twelve. With the default two jobs (`folder_sync`, then `vscode_state_sync`), a sync runs as 13 UI steps, ending by recording sync history.
+The twelve steps are listed below. Every sync shows a fixed count of twelve — the on-screen "Step N/12" denominator never depends on how many jobs are enabled. Step 10 (run jobs) is a single logical step; when several jobs run, the UI sub-labels them `10a`, `10b`, … (e.g. `Step 10a/12 — folder_sync`, then `Step 10b/12 — vscode_state_sync`) rather than inflating the total.
 
 1. **Acquire source lock.** Local lock file; this machine cannot join any other sync (as source or target) while this one runs.
 2. **Establish SSH connection.** Creates the local and remote executors every later step uses. Nothing touches the target before this point.
@@ -93,7 +93,7 @@ The twelve steps are listed below. The live UI expands step 10 (run jobs) to one
 9. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs with identical settings.
 10. **Run sync jobs sequentially.** The actual data movement, one UI step per enabled job. By default `folder_sync` (rsync-over-SSH as root on both ends) runs first, then `vscode_state_sync` (a selective, SQLite-aware merge of each editor's `state.vscdb` that keeps the target's machine-bound `secret://` keys). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
 11. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state.
-12. **Record sync history.** Write the sync-history record on both machines (source: `last_role=SOURCE`, target: `last_role=TARGET`), enabling step 4's out-of-order check next time. The write is skipped in `--dry-run`, but the step still runs. This is the last step — Step 13 in the UI with the default job set.
+12. **Record sync history.** Write the sync-history record on both machines (source: `last_role=SOURCE`, target: `last_role=TARGET`), enabling step 4's out-of-order check next time. The write is skipped in `--dry-run`, but the step still runs. This is the last step — `Step 12/12`.
 
 With `--dry-run`, the workflow previews without writing state (no history update, no snapshots, no mutations). rsync `--dry-run` lists the exact files and deletions that would occur; deletions are recorded in the FULL-level log so you can audit what would be destroyed before committing to a live sync. `--allow-out-of-order` skips the out-of-order / target-state confirmation.
 

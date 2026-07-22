@@ -245,6 +245,36 @@ async def test_set_current_step_renders_name() -> None:
         ui.stop()
 
 
+async def test_set_current_step_renders_substep_letter() -> None:
+    """A substep letter renders as "Step 10a/12" and clears when omitted.
+
+    The run-jobs step expands to one sub-step per job while the denominator stays
+    fixed, so the number carries a trailing letter (10a, 10b, …) that must be
+    dropped again on the next plain step.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=12)
+
+    ui.start()
+    try:
+        ui.set_current_step(10, "folder_sync", substep="a")
+        rendered = await _wait_for_render(output, "Step 10a/12")
+        assert "Step 10a/12" in rendered
+        assert "folder_sync" in rendered
+
+        # The next plain step drops the letter — no "10b" bleed-through.
+        output.truncate(0)
+        output.seek(0)
+        ui.set_current_step(11, "Post-sync snapshots")
+        rendered = await _wait_for_render(output, "Step 11/12")
+        assert "Step 11/12" in rendered
+        assert "11a" not in rendered and "11b" not in rendered, "substep letter must clear when omitted"
+    finally:
+        ui.stop()
+
+
 async def test_pause_resume_rebuilds_fresh_live_instance() -> None:
     """resume() must rebuild a fresh Live, not restart the pre-pause instance.
 

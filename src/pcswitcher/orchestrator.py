@@ -66,6 +66,12 @@ from pcswitcher.ui import TerminalUI
 
 __all__ = ["Orchestrator"]
 
+# Fixed number of logical steps in the sync sequence (see run()). The denominator
+# shown in the TUI ("Step N/12") is constant regardless of how many sync jobs are
+# enabled: the run-jobs step (10) expands into sub-steps 10a, 10b, … instead of
+# inflating the total.
+TOTAL_SYNC_STEPS = 12
+
 
 def _stuck_lock_hint(machine: str, lock_path: str) -> str:
     """How-to-unblock guidance appended to lock-conflict errors.
@@ -269,18 +275,10 @@ class Orchestrator:
         # TerminalUI does not start the Live (start() is still called below),
         # so creating it early is safe.
         #
-        # Calculate total steps: 9 pre-job steps + sync jobs + 2 (post-snapshot,
-        # record history). Pre-job steps: 1=source lock, 2=SSH, 3=target lock,
-        # 4=out-of-order check, 5=validation, 6=disk check, 7=pre-snapshots,
-        # 8=install on target, 9=config sync.
-        # Count only enabled jobs for the initial estimate; step 5 discovery may
-        # reduce this further (e.g. module not found), so we correct via
-        # set_total_steps() after _discover_and_validate_jobs() returns.
-        total_steps = 9 + sum(1 for enabled in self._config.sync_jobs.values() if enabled) + 2
         self._console = Console()
         self._ui = TerminalUI(
             console=self._console,
-            total_steps=total_steps,
+            total_steps=TOTAL_SYNC_STEPS,
         )
         # Shared interactive confirmation gate for the orchestrator's out-of-order check
         # and any job-level prompt (e.g. FolderSyncJob first-sync overwrite, ADR-015).
@@ -350,10 +348,6 @@ class Orchestrator:
             # Step 5: Job discovery and validation
             self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator", "host": "source"})
             jobs = await self._discover_and_validate_jobs()
-            # Correct the total now that we know the exact jobs that will run.
-            # Disabled jobs and undiscoverable jobs must not inflate the denominator,
-            # so the final set_current_step(9 + len(jobs) + 2) reaches exactly 100%.
-            self._ui.set_total_steps(9 + len(jobs) + 2)
             self._ui.set_current_step(5, "Discover jobs")
 
             # Step 6: Disk space preflight check
@@ -386,7 +380,7 @@ class Orchestrator:
             # Step 11: Post-sync snapshots
             self._logger.info("Creating post-sync snapshots", extra={"job": "orchestrator", "host": "source"})
             await self._create_snapshots(SnapshotPhase.POST)
-            self._ui.set_current_step(9 + len(jobs) + 1, "Post-sync snapshots")
+            self._ui.set_current_step(11, "Post-sync snapshots")
 
             # Step 12: Record sync history on both machines (this machine was SOURCE,
             # target was TARGET). The write is skipped in dry-run mode (D-12: dry-run
@@ -397,7 +391,7 @@ class Orchestrator:
             self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
             if not self._dry_run:
                 await self._update_sync_history()
-            self._ui.set_current_step(9 + len(jobs) + 2, "Record sync history")
+            self._ui.set_current_step(12, "Record sync history")
 
             return session
 
@@ -1050,9 +1044,12 @@ class Orchestrator:
             try:
                 # Execute sync jobs sequentially
                 for job_index, job in enumerate(jobs):
-                    # Update step counter (base 9 pre-job steps + current job index),
-                    # labelled with the job name so the TUI shows what is running.
-                    self._ui.set_current_step(9 + job_index + 1, job.name)
+                    # Jobs are sub-steps of logical step 10, sub-labelled 10a, 10b, …
+                    # (letters suffice for any realistic job count; fall back to a
+                    # numeric suffix past 'z'), labelled with the job name so the TUI
+                    # shows what is running.
+                    substep = chr(ord("a") + job_index) if job_index < 26 else str(job_index + 1)
+                    self._ui.set_current_step(10, job.name, substep=substep)
                     started_at = datetime.now(UTC)
                     try:
                         await job.execute()
