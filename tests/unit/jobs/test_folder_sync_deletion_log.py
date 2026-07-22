@@ -24,7 +24,7 @@ import pytest
 
 from pcswitcher.config import LogConfig
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.folder_sync import PASS_FULL, FolderEntry, FolderSyncJob
+from pcswitcher.jobs.folder_sync import PASS_MIRROR, FolderEntry, FolderSyncJob
 from pcswitcher.logger import setup_logging
 from pcswitcher.models import LogLevel
 
@@ -79,7 +79,7 @@ async def _drive_stream_rsync_to_log(log_file: Path, *, dry_run: bool) -> None:
         ctx = _make_context(dry_run=dry_run)
         job = FolderSyncJob(ctx)
         folder = FolderEntry(path="/home")
-        await job._stream_rsync(_deletion_chunks(), folder, PASS_FULL)
+        await job._stream_rsync(_deletion_chunks(), folder, PASS_MIRROR)
     finally:
         # Stop listener first so the QueueListener drains and FileHandler flushes.
         listener.stop()

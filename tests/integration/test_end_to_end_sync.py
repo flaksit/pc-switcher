@@ -325,9 +325,9 @@ _FILTER_SRC_PERDIR: dict[str, str] = {
 # first sync. A dir-merge rule is read per-side, so a per-directory exclude protects a
 # pre-existing target file from --delete only once the filter file is on the receiver
 # (verified against rsync 3.2.7). folder_sync closes that gap: because the source filter
-# files are not yet on the target (_needs_seeding_pass detects the mismatch), execute()
-# runs the mirror WITHOUT --delete first to seed them, then the deleting mirror — so the
-# per-dir survivors below are protected on this first sync. That seeding pass is exactly
+# files are not yet on the target (_needs_copy_pass detects the mismatch), execute()
+# runs the mirror WITHOUT --delete first to place them, then the deleting mirror — so the
+# per-dir survivors below are protected on this first sync. That copy pass is exactly
 # what this scenario exercises end-to-end.
 _FILTER_TGT: dict[str, str] = {
     f"{_FILTER_TREE}/synced/overwrite_me.txt": "old",  # included, differing size → overwritten by source

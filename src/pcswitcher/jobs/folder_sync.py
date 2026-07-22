@@ -56,22 +56,26 @@ from pcswitcher.models import ConfigError, FirstSyncScope, Host, LogLevel, Progr
 # degraded scanned-count path for it regardless.
 _PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*(ir|to)-chk=(\d+)/(\d+)\)")
 
-# The two rsync passes a folder can run (see `execute`): the no-delete pass that ships
-# per-directory filter files, and the deleting mirror.  Both share that folder's
-# progress bar (tracked by path) and only rename it, so the run shows one bar per
-# configured folder — finished folders stay at 100%.
-PASS_PREP = "prep"
-PASS_FULL = "full"
+# How a folder's rsync work is split (see `execute`).  In the steady state one pass
+# both transfers and deletes (PASS_MIRROR).  When per-directory filter files must reach
+# the target first, the work splits in two: a full no-delete copy (PASS_COPY) followed by
+# the deleting mirror (PASS_DELETE), which by then has only deletions left to do.
+# All passes of a folder share that folder's progress bar (tracked by path) and only
+# rename it, so the run shows one bar per configured folder — finished folders stay
+# at 100%.
+PASS_COPY = "copy"
+PASS_DELETE = "delete"
+PASS_MIRROR = "mirror"
 
 
 def _pass_display(path: str, label: str) -> str:
     """Name a pass for the TUI.
 
-    The deleting mirror is the pass that always runs, so it shows the bare folder path;
-    only the optional seeding pass is qualified, so its bar cannot be mistaken for the
-    real sync of that folder.
+    A lone pass does the folder's whole job, so it needs no qualifier and shows the bare
+    path.  When the work is split across two passes each half is named, so neither bar
+    can be mistaken for the complete sync of that folder.
     """
-    return path if label == PASS_FULL else f"{path} ({label})"
+    return path if label == PASS_MIRROR else f"{path} ({label})"
 
 
 # pc-switcher's own runtime STATE lives under the invoking user's home and must
@@ -406,9 +410,8 @@ class FolderSyncJob(SyncJob):
     def _transport_args(self) -> list[str]:
         """Build the rsync `-e <ssh>` transport and `--rsync-path='sudo rsync'` args.
 
-        Shared by the main mirror (`_build_rsync_cmd`) and the filter pre-seed pass
-        (`_build_preseed_cmd`) so both use identical SSH credentials and target-side
-        sudo elevation.
+        Used by every pass `_build_rsync_cmd` produces, so all of them use identical SSH
+        credentials and target-side sudo elevation.
 
         SSH transport note: `sudo -E rsync` runs rsync as root, and the ssh it spawns
         also runs as root.  OpenSSH resolves `~/.ssh` from the running uid's passwd
@@ -446,15 +449,15 @@ class FolderSyncJob(SyncJob):
         # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
         return [f"-e {shlex.quote(ssh_cmd)}", f"--rsync-path={shlex.quote('sudo rsync')}"]
 
-    async def _needs_seeding_pass(self, folder: FolderEntry) -> bool:
-        """Whether a no-delete seeding pass must run before the deleting mirror.
+    async def _needs_copy_pass(self, folder: FolderEntry) -> bool:
+        """Whether a no-delete copy pass must run before the deleting mirror.
 
         A dir-merge rule is read from the *receiver* during the delete scan, so the
         deleting mirror protects the target correctly only when every source
         `.pcswitcher-filter` is already present and byte-identical on the target.  In
         the steady state that already holds — filter files sync like any other file —
-        so a single pass is safe and the whole tree is walked only once.  A seeding
-        pass is needed only when a per-directory filter was added or changed on the
+        so a single pass is safe and the whole tree is walked only once.  The split into
+        two passes is needed only when a per-directory filter was added or changed on the
         source (or on a first sync): then the source's filter files are not yet
         reflected on the target and the mirror must align them first.
 
@@ -464,7 +467,7 @@ class FolderSyncJob(SyncJob):
         default config uses only the central `filter_file`), skipping the target
         round-trip.  Runs as root, like the mirror, so filter files under directories
         the invoking user cannot read are still seen and hashed.  Target-only extra
-        filter files do not force a seeding pass (they only ever add protection).
+        filter files do not force a copy pass (they only ever add protection).
         """
         path = shlex.quote(folder.path.rstrip("/") or "/")
         manifest_cmd = f"sudo find {path} -name .pcswitcher-filter -exec sha256sum {{}} +"
@@ -487,7 +490,7 @@ class FolderSyncJob(SyncJob):
           normal-user SSH connection (D-05); root SSH login stays disabled.
         - Uses the D-13 flag baseline: -aAXHS + --numeric-ids + --delete.
         - Adds --dry-run only when `dry_run` is True (D-12).
-        - Omits --delete when `delete` is False: `execute` runs a no-delete seeding
+        - Omits --delete when `delete` is False: `execute` runs a no-delete copy
           pass first (when the tree has per-directory filters) so every source
           `.pcswitcher-filter` reaches the target before the deleting mirror — a
           dir-merge rule only protects the target once the filter file is on the
@@ -587,7 +590,8 @@ class FolderSyncJob(SyncJob):
         Args:
             chunks: Async byte-chunk source (e.g. `proc.read_stdout_chunks()`).
             folder: The folder being synced (used for log context).
-            label: Pass name shown next to the folder in the TUI (`prep` / `full`).
+            label: Pass name shown next to the folder in the TUI (`copy` / `delete` /
+                `mirror`; see `_pass_display`).
 
         Returns:
             Tuple of (files_transferred, bytes_transferred, files_deleted).
@@ -684,9 +688,8 @@ class FolderSyncJob(SyncJob):
         Spawns rsync as an async subprocess (ADR-005 — no blocking calls), streams
         stdout through `_stream_rsync` for TUI progress (D-15) and per-file FULL logs
         (D-16), then checks the exit code.  Returns the pass's
-        (files_transferred, bytes_transferred, files_deleted).  Shared by the no-delete
-        seeding pass and the deleting mirror in `execute`, which name themselves via
-        `label` (`prep` / `full`).
+        (files_transferred, bytes_transferred, files_deleted).  Shared by every pass
+        `execute` runs, which name themselves via `label` (`copy` / `delete` / `mirror`).
         """
         proc = await self.source.start_process(cmd)
         files_transferred, bytes_transferred, files_deleted = await self._stream_rsync(
@@ -713,18 +716,22 @@ class FolderSyncJob(SyncJob):
 
         For each active folder (D-10):
         1. When this is a real sync and the source's per-directory `.pcswitcher-filter`
-           files are not already reflected on the target (`_needs_seeding_pass`), runs
-           a seeding pass first — the same mirror WITHOUT `--delete` — so every source
+           files are not already reflected on the target (`_needs_copy_pass`), runs a
+           copy pass first — the same mirror WITHOUT `--delete` — so every source
            `.pcswitcher-filter` reaches the target before the deleting mirror.  A
            dir-merge rule only protects the target once the filter file is on the
            receiver, so without this the deleting mirror would remove (not protect)
-           the files a per-dir rule names.  Both passes apply the identical filter
-           chain, so the central `filter_file` and per-directory rules are respected
-           exactly.  Skipped in dry-run (must not write to the target, D-12), which
-           makes the dry-run deletion preview pessimistic for per-dir-protected paths
-           (the safe direction), and skipped when the per-directory filters already
-           match on both ends (the steady state — no seeding is needed).
+           the files a per-dir rule names.  This pass is not limited to filter files:
+           it is the full transfer, so on a split run it moves all the data and the
+           mirror that follows is left with only deletions.  Both passes apply the
+           identical filter chain, so the central `filter_file` and per-directory rules
+           are respected exactly.  Skipped in dry-run (must not write to the target,
+           D-12), which makes the dry-run deletion preview pessimistic for
+           per-dir-protected paths (the safe direction), and skipped when the
+           per-directory filters already match on both ends (the steady state).
         2. Runs the deleting mirror (D-13 baseline, D-11 filters, D-12 dry-run toggle).
+           Named `delete` when a copy pass preceded it and `mirror` when it ran alone
+           and therefore did both halves of the job.
         3. On non-zero exit from either pass, logs CRITICAL and raises RuntimeError.
         """
         folders = self._active_folders()
@@ -738,27 +745,30 @@ class FolderSyncJob(SyncJob):
                 session_id=self.context.session_id,
             )
 
-            seed_files = 0
-            seed_bytes = 0
-            if not self.context.dry_run and await self._needs_seeding_pass(folder):
+            copy_files = 0
+            copy_bytes = 0
+            split = not self.context.dry_run and await self._needs_copy_pass(folder)
+            if split:
                 self._log(
                     Host.SOURCE,
                     LogLevel.FULL,
-                    f"Seeding per-directory filter files for {folder.path!r} (no-delete pass)",
+                    f"Copy pass for {folder.path!r} (no-delete), to place per-directory filter files",
                 )
-                seed_files, seed_bytes, _ = await self._run_rsync_pass(
-                    self._build_rsync_cmd(folder, dry_run=False, delete=False), folder, PASS_PREP
+                copy_files, copy_bytes, _ = await self._run_rsync_pass(
+                    self._build_rsync_cmd(folder, dry_run=False, delete=False), folder, PASS_COPY
                 )
 
             # Deleting mirror (or, in dry-run, the read-only preview).
             mirror_files, mirror_bytes, files_deleted = await self._run_rsync_pass(
-                self._build_rsync_cmd(folder, self.context.dry_run, delete=True), folder, PASS_FULL
+                self._build_rsync_cmd(folder, self.context.dry_run, delete=True),
+                folder,
+                PASS_DELETE if split else PASS_MIRROR,
             )
 
-            # On a seeding run the bulk transfer happened in the first pass and the
-            # mirror transfers ~nothing; sum so the summary reflects the real work.
-            files_transferred = seed_files + mirror_files
-            bytes_transferred = seed_bytes + mirror_bytes
+            # On a split run the bulk transfer happened in the copy pass and the mirror
+            # transfers ~nothing; sum so the summary reflects the real work.
+            files_transferred = copy_files + mirror_files
+            bytes_transferred = copy_bytes + mirror_bytes
 
             # Per-folder summary (D-16). Human-readable size at INFO; exact byte
             # count kept at DEBUG for precise diagnostics (#189).
