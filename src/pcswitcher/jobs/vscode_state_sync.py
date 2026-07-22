@@ -7,6 +7,11 @@ SecretStorage blobs under ``secret://`` keys — ciphertext encrypted with a per
 OS-keyring key that is never synced. A file-granular rsync mirror would clobber the target's
 own keyring-decryptable secrets and force auth-backed extensions to re-login after every sync.
 
+Alongside the per-editor DBs, the install-shared ``~/.vscode-shared/sharedStorage/state.vscdb``
+(``VSCODE_SHARED_STORAGE_DB_RELPATH``) is covered too: same schema, same handling. Whether
+VS Code ever writes ``secret://`` keys there is unverified, so it is merged rather than
+mirrored — one job owns every editor state DB, and folder_sync owns none of them.
+
 SCOPE: this job covers ONLY the invoking user (whoever runs ``pc-switcher``) — the
 one whose ``Path.home()`` this process resolves. Other users' VS Code state DBs under a
 synced ``/home`` are deliberately NOT handled (YAGNI; multi-user selective merge would
@@ -25,7 +30,7 @@ target's own value:
    the neutral DB, then atomically ``mv`` it over the live DB. When the target DB is
    absent (first sync) the inject is skipped and the neutral DB becomes the target DB.
 
-Each editor has TWO state DB files handled identically: the main ``state.vscdb`` and its
+Every covered DB comes as TWO files handled identically: the main ``state.vscdb`` and its
 ``state.vscdb.backup`` sidecar (both SQLite DBs with the same schema). INVARIANT: the set
 of files ``folder_sync`` excludes is exactly the set this job merges — no file is hidden
 from the mirror without being handled, and vice versa. Both sides iterate the single
@@ -59,8 +64,17 @@ from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, Va
 # standard ~/.config/<Editor>/User/globalStorage/ layout (RESEARCH §5 / Assumption A1).
 # The job skips editors whose DB is absent on the source, so an unused entry is harmless.
 VSCODE_BASED_EDITORS: tuple[str, ...] = ("Code", "Antigravity", "Cursor", "VSCodium")
-VSCODE_STATE_DB_RELPATHS: tuple[str, ...] = tuple(
-    f".config/{editor}/User/globalStorage/state.vscdb" for editor in VSCODE_BASED_EDITORS
+
+# A second, install-shared state DB outside any editor's config dir (confirmed on-disk
+# with VS Code 1.129). Same ItemTable schema, so it merges identically; it is covered for
+# the same reason as the per-editor DBs, not because secrets were observed in it — it
+# holds cross-install state (workspace trust, recently-opened) that must not be left to
+# the wholesale mirror while the sibling DBs are merged.
+VSCODE_SHARED_STORAGE_DB_RELPATH: str = ".vscode-shared/sharedStorage/state.vscdb"
+
+VSCODE_STATE_DB_RELPATHS: tuple[str, ...] = (
+    *(f".config/{editor}/User/globalStorage/state.vscdb" for editor in VSCODE_BASED_EDITORS),
+    VSCODE_SHARED_STORAGE_DB_RELPATH,
 )
 
 # Keys whose TARGET value is kept instead of mirrored, as SQLite LIKE patterns. Hardcoded,
@@ -72,7 +86,7 @@ VSCODE_STATE_DB_RELPATHS: tuple[str, ...] = tuple(
 PRESERVE_KEY_GLOBS: tuple[str, ...] = ("secret://%",)
 
 
-# The full set of state-DB files handled per editor: the main ``state.vscdb`` and its
+# The full set of handled state-DB files: for each covered DB, the main ``state.vscdb`` and its
 # ``.backup`` sidecar (both are SQLite DBs with the same ItemTable schema). This is the
 # SINGLE source of truth enforcing the invariant that the folder_sync exclude set and the
 # merge set are IDENTICAL — every excluded file is merged and every merged file is
@@ -87,8 +101,8 @@ VSCODE_STATE_HANDLED_RELPATHS: tuple[str, ...] = tuple(
 def vscode_state_exclude_paths() -> list[Path]:
     """Absolute paths of the INVOKING user's editor state DBs to exclude from the mirror.
 
-    Every file this job merges (``VSCODE_STATE_HANDLED_RELPATHS`` — each editor's
-    ``state.vscdb`` and its ``.backup``), resolved against ``Path.home()`` at call time —
+    Every file this job merges (``VSCODE_STATE_HANDLED_RELPATHS`` — each per-editor and
+    shared ``state.vscdb`` plus its ``.backup``), resolved against ``Path.home()`` at call time —
     hence a function, not a constant: the paths depend on whoever runs ``pc-switcher``.
 
     This is the seam ``folder_sync`` consumes: this module owns WHICH absolute paths are
@@ -101,6 +115,18 @@ def vscode_state_exclude_paths() -> list[Path]:
     """
     home = Path.home()
     return [home / relpath for relpath in VSCODE_STATE_HANDLED_RELPATHS]
+
+
+def db_label(relpath: str) -> str:
+    """Human-readable name of a handled DB, e.g. ``Code state.vscdb.backup``.
+
+    Names the DB by its owner plus its file name: the editor directory for a per-editor DB
+    under ``.config/<Editor>/``, and ``shared`` for the install-shared storage, which
+    belongs to no single editor.
+    """
+    path = Path(relpath)
+    owner = path.parts[1] if path.parts[0] == ".config" else "shared"
+    return f"{owner} {path.name}"
 
 
 def _sql_string_literal(value: str) -> str:
@@ -185,7 +211,7 @@ class VscodeStateSyncJob(SyncJob):
     def describe_first_sync_scope(cls, config: dict[str, Any]) -> FirstSyncScope | None:
         """Name the editor state DBs this job destructively replaces on a first sync (ADR-015).
 
-        Enumerates the covered editor DBs (home-relative). The job only touches the
+        Enumerates the covered DBs (home-relative). The job only touches the
         subset present on the source at run time, but the first-sync warning is composed
         before job discovery, so it lists the full covered set.
         """
@@ -245,8 +271,7 @@ class VscodeStateSyncJob(SyncJob):
         for index, relpath in enumerate(present):
             source_db = home / relpath
             target_db = (home / relpath).as_posix()
-            # Label the DB precisely, e.g. "Code state.vscdb" / "Code state.vscdb.backup".
-            label = f"{Path(relpath).parts[1]} {Path(relpath).name}"
+            label = db_label(relpath)
 
             target_exists = (
                 await self.target.run_command(f"test -f {shlex.quote(target_db)}", login_shell=False)
