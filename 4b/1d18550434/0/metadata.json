@@ -1,0 +1,89 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "4b1d18550434",
+  "session_id": "748e1c6a-af73-4436-8c0f-dc18fadb7e6f",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-22T15:22:12.475055698Z",
+  "branch": "fix/vscode-state-sync-log-levels",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/vscode_state_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ceaa961ae1fc",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 111,
+    "cache_creation_tokens": 93989,
+    "cache_read_tokens": 4001764,
+    "output_tokens": 19994,
+    "api_call_count": 56
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_0125UUPsWZGkZFaHMWQ2ikYF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "dynamic-version-release"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ceaa961ae1fc",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 297,
+        "end": 298,
+        "entry_ids": [
+          "ff321a08-4da9-46b8-98ae-343237098366"
+        ],
+        "tool_use_id": "toolu_0125UUPsWZGkZFaHMWQ2ikYF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0125UUPsWZGkZFaHMWQ2ikYF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: dynamic-version-release",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-22T15:22:12.443705345Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 2,
+    "total_committed": 0,
+    "total_lines_changed": 2,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 17,
+      "user_lines_removed": 2,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "src/pcswitcher/jobs/vscode_state_sync.py": 8
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/vscode_state_sync.py": 2
+      }
+    }
+  ]
+}
