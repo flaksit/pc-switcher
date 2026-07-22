@@ -110,7 +110,7 @@ Plans:
 **Wave 3** *(blocked on Wave 2)*
 
 - [ ] 02-04-PLAN.md — machine-local decision files, skip-always in both roles, non-overridable folder_sync exclusion
-- [ ] 02-05-PLAN.md — full diff-class taxonomy (removals, version mismatch, held/pinned, repo-unavailable) + `dpkg --compare-versions`
+- [ ] 02-05-PLAN.md — full diff-class taxonomy (removals, version mismatch, held/pinned, repo-unavailable) + `dpkg --compare-versions` + the shared snap/flatpak/unreproducible item shapes
 
 **Wave 4** *(blocked on Wave 3)*
 
