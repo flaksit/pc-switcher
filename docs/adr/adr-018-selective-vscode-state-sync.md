@@ -26,7 +26,7 @@ INVARIANT: the set of files `folder_sync` excludes from the mirror is EXACTLY th
 ## Decision
 - Add a toggleable `vscode_state_sync` `SyncJob` (default on) that runs after `folder_sync` and performs the selective SQLite merge above.
 - Handle these VS Code state DBs outside the `folder_sync` mirror (exclude them non-overridably; merge them in the dedicated job), so the target's live DB still holds its own secrets at merge time and no pre-step is needed. Keeping the VS Code specifics out of the generic mirror was a deliberate goal — `folder_sync` only translates the paths it is handed.
-- Rejected: injecting a filter file into the user's config tree (invasive; collides with the user's `.pcswitcher-filter` surface and trips the seeding-pass detection); a btrfs-snapshot dependency (couples a functional feature to the rollback subsystem).
+- Rejected: injecting a filter file into the user's config tree (invasive; collides with the user's `.pcswitcher-filter` surface and trips the copy-pass detection); a btrfs-snapshot dependency (couples a functional feature to the rollback subsystem).
 
 ## Consequences
 **Positive**:

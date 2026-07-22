@@ -144,14 +144,14 @@ class TestGlobalFirstEnforcement:
         assert "proj/secret.env" not in transferred
 
 
-class TestSeedingPassProtectsTargetOnFirstSync:
+class TestCopyPassProtectsTargetOnFirstSync:
     """A per-directory exclude protects a pre-existing target file on the FIRST sync — when the
-    target does not yet have the `.pcswitcher-filter` — via folder_sync's no-delete seeding pass.
+    target does not yet have the `.pcswitcher-filter` — via folder_sync's no-delete copy pass.
 
     A dir-merge rule is read per-side, so without the filter file on the receiver the `--delete`
     mirror deletes (not protects) the target file the rule names, and an excluded-on-source file
     is never sent, so an update collapses into a deletion too. folder_sync runs the same mirror
-    WITHOUT `--delete` first (execute() -> _build_rsync_cmd(delete=False)), which seeds every
+    WITHOUT `--delete` first (execute() -> _build_rsync_cmd(delete=False)), which places every
     `.pcswitcher-filter` onto the target while respecting the full filter chain; the deleting pass
     then protects correctly. These tests reproduce both passes with real rsync (no --dry-run) and
     pin the single-pass bug plus the two-pass fix for the delete AND update cases.
@@ -159,7 +159,7 @@ class TestSeedingPassProtectsTargetOnFirstSync:
 
     @staticmethod
     def _no_delete_pass(src: Path, dst: Path) -> None:
-        # Mirrors _build_rsync_cmd(delete=False): full filter chain, no --delete (seeds filter files).
+        # Mirrors _build_rsync_cmd(delete=False): full filter chain, no --delete (places filter files).
         subprocess.run(
             ["rsync", "-a", "--filter=dir-merge /.pcswitcher-filter", f"{src}/", f"{dst}/"],
             check=True,
@@ -178,7 +178,7 @@ class TestSeedingPassProtectsTargetOnFirstSync:
         )
 
     def test_single_pass_deletes_the_excluded_target_file(self, tmp_path: Path) -> None:
-        """Without the seeding pass, the deleting mirror DELETES the rule-excluded target file (the bug)."""
+        """Without the copy pass, the deleting mirror DELETES the rule-excluded target file (the bug)."""
         src = tmp_path / "src"
         dst = tmp_path / "dst"
         _write(src / "proj/.pcswitcher-filter", "- secret.env\n")
@@ -189,7 +189,7 @@ class TestSeedingPassProtectsTargetOnFirstSync:
     def test_single_pass_protects_when_filter_already_on_target(self, tmp_path: Path) -> None:
         """Steady state: with the .pcswitcher-filter already on the target, ONE deleting pass protects it.
 
-        This is exactly what _needs_seeding_pass relies on to skip the seeding pass when the source
+        This is exactly what _needs_copy_pass relies on to skip the copy pass when the source
         and target filter files already match — the common case after a first successful sync.
         """
         src = tmp_path / "src"
@@ -197,11 +197,11 @@ class TestSeedingPassProtectsTargetOnFirstSync:
         _write(src / "proj/.pcswitcher-filter", "- secret.env\n")
         _write(dst / "proj/.pcswitcher-filter", "- secret.env\n")  # already present on the target
         _write(dst / "proj/secret.env", "tgt-only-secret")
-        self._mirror(src, dst)  # single --delete pass, no seeding
+        self._mirror(src, dst)  # single --delete pass, no preceding copy pass
         assert (dst / "proj/secret.env").read_text() == "tgt-only-secret"
 
     def test_two_pass_protects_a_target_only_excluded_file(self, tmp_path: Path) -> None:
-        """delete case: seeding pass then mirror keeps a target-only rule-excluded file."""
+        """delete case: copy pass then mirror keeps a target-only rule-excluded file."""
         src = tmp_path / "src"
         dst = tmp_path / "dst"
         _write(src / "proj/.pcswitcher-filter", "- secret.env\n")
@@ -216,7 +216,7 @@ class TestSeedingPassProtectsTargetOnFirstSync:
     def test_two_pass_does_not_overwrite_or_delete_an_excluded_update(self, tmp_path: Path) -> None:
         """update case: source has a rule-excluded file with NEW content, target has OLD; target keeps OLD.
 
-        This is the case that fails in a single pass (the target file is deleted). The seeding pass
+        This is the case that fails in a single pass (the target file is deleted). The copy pass
         puts the filter onto the target first, so the deleting mirror neither overwrites nor deletes it.
         """
         src = tmp_path / "src"

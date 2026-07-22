@@ -152,14 +152,14 @@ def test_track_gives_each_unit_of_work_its_own_persistent_bar() -> None:
     ui = TerminalUI(console=console, max_log_lines=5, total_steps=None)
 
     job = "folder_sync"
-    ui.update_job_progress(job, ProgressUpdate(percent=100, item="/home (prep)", track="/home"))
-    ui.update_job_progress(job, ProgressUpdate(percent=100, item="/home (full)", track="/home"))
-    ui.update_job_progress(job, ProgressUpdate(percent=30, item="/root (full)", track="/root"))
+    ui.update_job_progress(job, ProgressUpdate(percent=100, item="/home (copy)", track="/home"))
+    ui.update_job_progress(job, ProgressUpdate(percent=100, item="/home (delete)", track="/home"))
+    ui.update_job_progress(job, ProgressUpdate(percent=30, item="/root", track="/root"))
 
     assert len(ui._job_tasks) == 2, "one bar per folder, shared by that folder's passes"
     home, root = (ui._progress._tasks[t] for t in ui._job_tasks.values())
     assert home.completed == 100, "a finished folder must stay at its final value"
-    assert home.description.endswith("/home (full)")
+    assert home.description.endswith("/home (delete)")
     assert root.completed == 30
 
 
