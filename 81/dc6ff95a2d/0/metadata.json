@@ -1,0 +1,89 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "81dc6ff95a2d",
+  "session_id": "5bbcfcb1-02cb-464e-a323-fed214417307",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-22T17:30:21.439431987Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/debug/folder-sync-dry-run-7-bytes.md",
+    ".planning/debug/foldersync-progressbar-hidden.md",
+    ".planning/debug/vscode-state-lost-on-sync.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "be31aad72ded",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 4074,
+    "cache_creation_tokens": 195768,
+    "cache_read_tokens": 1121926,
+    "output_tokens": 9489,
+    "api_call_count": 20
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-progress-2026-07-22T17:22:45.077689059Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-progress"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "b56cd27213a9",
+      "timestamp": "2026-07-22T17:22:45.077689059Z",
+      "native": {
+        "command": "/gsd-progress"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-progress",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-22T17:30:21.423472751Z",
+    "agent_lines": 23,
+    "agent_removed": 20,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 23,
+    "total_lines_changed": 43,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 23,
+      "agent_lines_removed": 20,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}

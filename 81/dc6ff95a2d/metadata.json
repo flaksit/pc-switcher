@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "81dc6ff95a2d",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/debug/folder-sync-dry-run-7-bytes.md",
+    ".planning/debug/foldersync-progressbar-hidden.md",
+    ".planning/debug/vscode-state-lost-on-sync.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/81/dc6ff95a2d/0/metadata.json",
+      "transcript": "/81/dc6ff95a2d/0/full.jsonl",
+      "compact_transcript": "/81/dc6ff95a2d/0/transcript.jsonl",
+      "content_hash": "/81/dc6ff95a2d/0/content_hash.txt",
+      "prompt": "/81/dc6ff95a2d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4074,
+    "cache_creation_tokens": 195768,
+    "cache_read_tokens": 1121926,
+    "output_tokens": 9489,
+    "api_call_count": 20
+  }
+}

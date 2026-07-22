@@ -1,0 +1,5 @@
+/gsd-progress
+
+---
+
+"Stale blocker rsync transport not captured in an ADR." "ADR-015": it is ADR-013 that decides for rsync, no? Fix bookkeeping debt
