@@ -46,12 +46,6 @@ sync_jobs:
   folder_sync: true          # Sync /home and /root directories (Phase 1)
   vscode_state_sync: true    # Sync VS Code editor state (your user only), except its per-machine secret store
 
-  # Future jobs (uncomment when available):
-  # packages: true        # Sync apt, snap, flatpak packages
-  # docker: false         # Sync Docker images, containers, volumes
-  # vms: false            # Sync KVM/virt-manager VMs
-  # k3s: false            # Sync k3s cluster state
-
 # =============================================================================
 # Disk Space Monitoring
 # =============================================================================

@@ -60,8 +60,6 @@ sync_jobs:
   vscode_state_sync: true   # selective, SQLite-aware sync of VS Code state.vscdb
 ```
 
-Future jobs (`packages`, `docker`, `vms`, `k3s`) are added here as they are implemented.
-
 ## `disk_space_monitor`
 
 Disk-space checks before and during a sync. Thresholds are either a percentage (`"20%"`) or an absolute size (`"50GiB"`, `"500MiB"`, `"50GB"`, `"500MB"`).
