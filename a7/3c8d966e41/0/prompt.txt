@@ -1,0 +1,11 @@
+<task-notification>
+<task-id>bmzzg1mgx</task-id>
+<tool-use-id>toolu_01NSmd5px1d3tm434cZL4Aap</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/826fb49a-a288-4c8f-8ea7-0d9036dce50f/tasks/bmzzg1mgx.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR 199 CI" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Is there only a single progress-line per job? So in case of multiple folders, folder_sync each time overwrites the progress of the previous folder with the folder it is currently syncing? So user can't see which folders already processed? Would be nice if new line per folder, so we keep seeing thep processed folders at 100%

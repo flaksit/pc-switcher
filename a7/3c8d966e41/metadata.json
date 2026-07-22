@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "a73c8d966e41",
+  "strategy": "manual-commit",
+  "branch": "fix/198-folder-sync-progress-monotonic",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "src/pcswitcher/jobs/folder_sync.py",
+    "src/pcswitcher/models.py",
+    "src/pcswitcher/ui.py",
+    "tests/unit/jobs/test_folder_sync.py",
+    "tests/unit/ui/test_terminal_ui.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a7/3c8d966e41/0/metadata.json",
+      "transcript": "/a7/3c8d966e41/0/full.jsonl",
+      "compact_transcript": "/a7/3c8d966e41/0/transcript.jsonl",
+      "content_hash": "/a7/3c8d966e41/0/content_hash.txt",
+      "prompt": "/a7/3c8d966e41/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 16920,
+    "cache_read_tokens": 3331546,
+    "output_tokens": 8774,
+    "api_call_count": 17
+  }
+}
