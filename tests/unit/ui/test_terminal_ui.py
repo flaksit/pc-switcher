@@ -111,6 +111,28 @@ async def test_core_us_tui_as1_progress_display() -> None:
         ui.stop()
 
 
+def test_count_only_update_switches_bar_to_indeterminate_and_back() -> None:
+    """A count-only update pulses the bar; a later percent update restores the scale.
+
+    folder_sync reports counts while rsync is still building its file list (no
+    trustworthy percentage exists yet, #198), then switches to percentages.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=None)
+
+    job = "folder_sync"
+    ui.update_job_progress(job, ProgressUpdate(current=1200, item="scanning /home"))
+    task = ui._progress._tasks[ui._job_tasks[job]]
+    assert task.total is None, "count-only update must leave the bar indeterminate"
+    assert task.completed == 1200
+
+    ui.update_job_progress(job, ProgressUpdate(percent=42, item="/home"))
+    task = ui._progress._tasks[ui._job_tasks[job]]
+    assert task.total == 100
+    assert task.completed == 42
+
+
 async def test_core_us_tui_as2_multi_job_progress() -> None:
     """Test CORE-US-TUI-AS2: Overall and individual job progress display.
 

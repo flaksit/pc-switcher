@@ -783,7 +783,7 @@ class TestStreamRsync:
         return result, log_calls, progress_calls
 
     async def test_progress_line_emits_report_progress(self) -> None:
-        """A progress2 line triggers a _report_progress call with parsed percent."""
+        """A to-chk progress2 line triggers a _report_progress call with parsed percent."""
         progress_line = b"9.53G 21% 317.26MB/s 0:00:28 (xfr#83, to-chk=444/538)\r"
         _, _, progress_calls = await self._run_stream([progress_line])
 
@@ -792,15 +792,16 @@ class TestStreamRsync:
 
         assert isinstance(update, ProgressUpdate)
         assert update.percent == 21
-        assert update.current == 83
 
-    async def test_ir_chk_progress_line_emits_report_progress(self) -> None:
-        """An ir-chk (incremental-recursion) progress2 line also triggers _report_progress.
+    async def test_ir_chk_progress_line_reports_indeterminate_progress(self) -> None:
+        """An ir-chk (incremental-recursion) line reports counts, never a percent.
 
-        Regression for #191: rsync emits `ir-chk=` while still building the file
-        list, and only switches to `to-chk=` once the list is complete. For a large
-        tree this dominates the run, so a regex matching only `to-chk=` left the
-        progress bar hidden for most of a big first sync.
+        rsync emits `ir-chk=` while still building the file list, and only switches to
+        `to-chk=` once the list is complete.  For a large tree this dominates the run,
+        so the line must still produce an update (#191) — but its percentage is
+        bytes-done over bytes-known-so-far with a growing denominator, so it walks
+        backwards (#198).  Only counts are reported, which renders as an indeterminate
+        bar rather than a decreasing percentage.
         """
         progress_line = b"20.000   0%    0,00kB/s    0:00:00 (xfr#1, ir-chk=1039/1101)\r"
         _, _, progress_calls = await self._run_stream([progress_line])
@@ -809,8 +810,50 @@ class TestStreamRsync:
         update = progress_calls[0]
 
         assert isinstance(update, ProgressUpdate)
-        assert update.percent == 0
+        assert update.percent is None
+        assert update.total is None
         assert update.current == 1
+        assert update.item is not None and "scanning" in update.item
+
+    async def test_ir_chk_percent_regression_never_decreases(self) -> None:
+        """The real-world decreasing ir-chk sequence emits no percent at all (#198)."""
+        data = (
+            b"171.667.736  18%  159,88GB/s 0:00:00 (xfr#1, ir-chk=1004/1054)\r"
+            b"20.000        5%    0,00kB/s 0:00:00 (xfr#2, ir-chk=1003/1683)\r"
+            b"20.000        2%    0,00kB/s 0:00:00 (xfr#3, ir-chk=1500/4000)\r"
+        )
+        _, _, progress_calls = await self._run_stream([data])
+
+        percents = [u.percent for u in progress_calls if isinstance(u, ProgressUpdate)]
+        assert percents == [None, None, None]
+
+    async def test_pass_slice_maps_percent_onto_job_bar(self) -> None:
+        """A pass confined to the second half of the job reports 50-100%, not 0-100%."""
+        ctx = make_context()
+        job = FolderSyncJob(ctx)
+        progress_calls: list[ProgressUpdate] = []
+        job._report_progress = progress_calls.append  # type: ignore[method-assign]
+        job._begin_pass(0.5, 0.5)
+
+        async def gen_chunks():  # type: ignore[no-untyped-def]
+            yield b"9.53G 40% 300.00MB/s 0:00:10 (xfr#10, to-chk=60/100)\r"
+            yield b"9.53G 80% 300.00MB/s 0:00:05 (xfr#80, to-chk=20/100)\r"
+
+        await job._stream_rsync(gen_chunks(), FolderEntry(path="/home"))
+
+        assert [u.percent for u in progress_calls] == [70, 90]
+
+    async def test_job_percent_never_decreases_across_passes(self) -> None:
+        """A later pass reporting a low pass-local percent cannot move the bar back."""
+        ctx = make_context()
+        job = FolderSyncJob(ctx)
+        job._begin_pass(0.0, 0.5)
+        assert job._job_percent(80) == 40
+        job._finish_pass()
+        job._begin_pass(0.5, 0.5)
+        # Second pass restarts at 0% locally — the job bar must hold at the floor.
+        assert job._job_percent(0) == 50
+        assert job._job_percent(100) == 100
 
     async def test_per_file_line_logged_at_full(self) -> None:
         """An --out-format per-file line is logged at LogLevel.FULL."""

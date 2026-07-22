@@ -245,6 +245,9 @@ class TerminalUI:
             self._progress.update(
                 task_id,
                 completed=update.percent,
+                # Restores a determinate bar after an indeterminate (total=None) phase,
+                # e.g. folder_sync switching from tree scan to transfer.
+                total=100,
                 description=description,
             )
         elif update.current is not None and update.total is not None:
@@ -259,12 +262,18 @@ class TerminalUI:
                 description=description,
             )
         elif update.current is not None:
-            # Current only (no total)
+            # Current only: the job is making countable progress towards an unknown
+            # end (e.g. rsync still building its file list). `total=None` makes Rich
+            # pulse the bar instead of showing a fraction that would be a guess.
             description = f"[cyan]{job}[/cyan]: {update.current} items"
             if update.item:
                 description += f" - {update.item}"
+            # `Progress.update(total=None)` means "leave total unchanged" — clearing it
+            # requires setting the Task field directly (no public API exists).
+            self._progress._tasks[task_id].total = None  # pyright: ignore[reportPrivateUsage]
             self._progress.update(
                 task_id,
+                completed=update.current,
                 description=description,
             )
         elif update.heartbeat:
