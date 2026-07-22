@@ -1,0 +1,5 @@
+I see ".vscode-shared/sharedStorage/state.vscdb" as transfered file in the last dry-run log. Shouldn't this be part of the scope of vscode_state_sync job?
+
+---
+
+implement in new pr (we are on main now)

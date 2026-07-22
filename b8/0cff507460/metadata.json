@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b80cff507460",
+  "strategy": "manual-commit",
+  "branch": "feat/vscode-shared-storage-state-db",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/configuration.md",
+    "src/pcswitcher/jobs/vscode_state_sync.py",
+    "tests/unit/jobs/test_vscode_state_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b8/0cff507460/0/metadata.json",
+      "transcript": "/b8/0cff507460/0/full.jsonl",
+      "compact_transcript": "/b8/0cff507460/0/transcript.jsonl",
+      "content_hash": "/b8/0cff507460/0/content_hash.txt",
+      "prompt": "/b8/0cff507460/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 75,
+    "cache_creation_tokens": 83156,
+    "cache_read_tokens": 2393217,
+    "output_tokens": 14383,
+    "api_call_count": 38
+  }
+}
