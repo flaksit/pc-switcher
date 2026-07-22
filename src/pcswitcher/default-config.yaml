@@ -122,9 +122,8 @@ dummy_fail:
 #     while dropping the rest of ~/.cache).
 # GLOBAL-FIRST precedence: the central filter_file is evaluated before any
 # .pcswitcher-filter, so central policy always wins. pc-switcher's own runtime
-# files (ADR-017) and the VS Code editor state DBs (ADR-018, handed to
-# vscode_state_sync) are excluded first of all and can never be re-exposed by
-# either surface.
+# files and, if vscode_state_sync is enabled, the VS Code editor state DBs are
+# excluded first of all and can never be re-exposed by either surface.
 #
 # ~/.ssh/authorized_keys: the shipped home.filter/root.filter EXCLUDE it, so
 # each machine keeps its own SSH access list. pc-switcher connects as the normal
