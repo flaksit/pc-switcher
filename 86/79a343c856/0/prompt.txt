@@ -1,0 +1,15 @@
+<task-notification>
+<task-id>b2jiy79km</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/826fb49a-a288-4c8f-8ea7-0d9036dce50f/tasks/b2jiy79km.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR 199 CI" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+I added a second folder (/root) to my config.yaml. Dry run shows only "/root". In the logs, I only see /root, nothing about /home/janfr. Due to this branch's changes?
+
+---
+
+not different bars for prep and full, only for different folders
