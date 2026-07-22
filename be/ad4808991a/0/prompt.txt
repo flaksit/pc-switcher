@@ -1,0 +1,16 @@
+I added a second folder (/root) to my config.yaml with invalid yaml: two times the "folders:" entry.
+pc-switcher accepted the file as-is, but only worked with the second ("/root") entry.
+pc-switcher should bail out on yaml-error.
+
+---
+
+why you make class _StrictLoader and not use yaml.SafeLoader directly?
+
+---
+
+ok, I see now there are two private functions that alter _StrictLoader. Not possible to put this inside the class itself? Now it looks a lot like hacking something in.
+Do we really need to roll our own duplicate-key check? No built-in loader that verifies the yaml is correct? That seems a standard requirement, no? We already check if it consistent with the template, which is a built-in functionality.
+
+---
+
+Ere there more yaml errors that we might miss? This one had nasty consequences.

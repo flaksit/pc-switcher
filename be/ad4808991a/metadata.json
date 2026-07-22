@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "bead4808991a",
+  "strategy": "manual-commit",
+  "branch": "fix/198-folder-sync-progress-monotonic",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "docs/configuration.md",
+    "src/pcswitcher/config.py",
+    "tests/unit/orchestrator/test_config_system.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/be/ad4808991a/0/metadata.json",
+      "transcript": "/be/ad4808991a/0/full.jsonl",
+      "compact_transcript": "/be/ad4808991a/0/transcript.jsonl",
+      "content_hash": "/be/ad4808991a/0/content_hash.txt",
+      "prompt": "/be/ad4808991a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 81,
+    "cache_creation_tokens": 89790,
+    "cache_read_tokens": 2721755,
+    "output_tokens": 16689,
+    "api_call_count": 41
+  }
+}
