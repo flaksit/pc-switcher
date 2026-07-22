@@ -1,0 +1,41 @@
+<task-notification>
+<task-id>b2zy3j4b8</task-id>
+<tool-use-id>toolu_014rxbibhz2rhcG5suBtjrpd</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/826fb49a-a288-4c8f-8ea7-0d9036dce50f/tasks/b2zy3j4b8.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR 199 CI" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+The dry-run now only shows the scanning-phase, without progress. Normal?
+
+"folders weighted equally": show 0-100% for each folder (configured in config.yaml) separately: when starting new folder, restart the progress meter: first scanning, then 0-100%.
+The first pass (for .pc-switcher-filter files): same: first scanning, then 0-100%; show "<folder name> (prep)" and "<folder name> (full)".
+During ir, you could even show the current number of scanned folders/files.
+
+Show what you will create first, so I can approve before you start coding.
+
+---
+
+You say ir-chk lines show "scanning 12,345/45,678 files". Do we have the total nb of files during scanning?
+
+Now, with dry-run, I see only ir phase and than it flashed to 100%. Does rsync do the transfer-work during ir? Or does rsync start the transfer-work during ir, but in parallel? Or is ir purely inventory and is real transfer done after, during to?
+Possibly (large home), ir takes much longer than the transfer itself (except on the first sync).
+All that to know if the to-chk phase is consistent enough for the progress bar to show anything useful. 0->100% in a single flash is not useful
+
+---
+
+Do I see well that the extra time needed with --no-i-r is tiny? Is this logical?
+I don't think over-ssh will give much extra time: file-list must be transfered back from target to source machine. But that's not enormeous. And that's needed anyway.
+
+---
+
+I don't think "max(walk, transfer)" is correct: walk and transfer are both disk-i/o bound. On top of that, transfer is network-i/o bound. So I think it will always be walk + transfer, not max().
+
+No split real/dry-run needed. Just --no-i-r for all:
+- during the walk phase, we just show the pulsing bar
+- during transfer, progress-bar 0-100%
+Real run: 5s pulse, the rest progress
+Dry run: 5s pulse, directly 100%
+Your proposed "depend on the run" would give exactly the same output for the user.
