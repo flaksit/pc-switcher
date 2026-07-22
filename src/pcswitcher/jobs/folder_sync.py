@@ -23,7 +23,6 @@ from typing import Any, ClassVar, override
 
 from pcswitcher.disk import format_bytes
 from pcswitcher.jobs.base import SyncJob
-from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.vscode_state_sync import vscode_state_exclude_paths
 from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
 
@@ -75,6 +74,11 @@ _PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\
 #      or home layout — it just translates each absolute path from vscode_state_exclude_paths()
 #      into an rsync filter for the folder being synced (see _vscode_state_exclude_filters).
 # Every OTHER exclusion is user-configurable.
+# TUI names for the two rsync passes a folder can run (see `execute`): the no-delete
+# pass that ships per-directory filter files, and the deleting mirror.
+PASS_PREP = "prep"
+PASS_FULL = "full"
+
 _RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
     ".local/share/pc-switcher",  # lock, sync-history.json, logs/
 )
@@ -123,36 +127,6 @@ class FolderSyncJob(SyncJob):
     """
 
     name: ClassVar[str] = "folder_sync"
-
-    def __init__(self, context: JobContext) -> None:
-        super().__init__(context)
-        # Job-level progress accounting (#198).  One rsync pass only knows its own
-        # 0→100%, and a job runs one or two passes per folder, so reporting a pass
-        # percentage straight to the TUI made the bar reset on every pass.  Each pass
-        # instead owns the slice [_pass_base, _pass_base + _pass_span] of the job, and
-        # `_percent_floor` keeps the reported figure monotonic.
-        self._pass_base: float = 0.0
-        self._pass_span: float = 1.0
-        self._percent_floor: int = 0
-
-    def _begin_pass(self, base: float, span: float) -> None:
-        """Assign the next rsync pass the job-progress slice [`base`, `base` + `span`]."""
-        self._pass_base = base
-        self._pass_span = span
-
-    def _finish_pass(self) -> None:
-        """Advance the monotonic floor to the end of the current pass's slice.
-
-        Ensures a pass that emitted no usable percentage (a no-op mirror, or one that
-        never left incremental recursion) still moves the bar forward.
-        """
-        self._percent_floor = min(100, max(self._percent_floor, int((self._pass_base + self._pass_span) * 100)))
-
-    def _job_percent(self, pass_percent: int) -> int:
-        """Map a pass-local 0-100 figure onto the job bar, never going backwards."""
-        overall = int((self._pass_base + self._pass_span * pass_percent / 100) * 100)
-        self._percent_floor = min(100, max(self._percent_floor, overall))
-        return self._percent_floor
 
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {
         "type": "object",
@@ -495,6 +469,17 @@ class FolderSyncJob(SyncJob):
             "rsync",
             "-aAXHS",
             "--numeric-ids",
+            # Build the whole file list before transferring anything, so
+            # --info=progress2 reports against the real total from its first line.
+            # Under rsync's default incremental recursion the walk and the transfer
+            # interleave: the percentage is bytes-done over bytes-known-*so far* and
+            # walks backwards as the walk discovers more tree, and `to-chk` only
+            # appears for the handful of files still queued when the walk ends
+            # (measured on a 14.6 GB / 154k-file tree: 138,535 ir-chk lines carrying
+            # 99.9% of the bytes, then 1,159 to-chk lines in the final second).
+            # Cost is bounded by the walk: measured on a 1.59M-entry /home, +0.5s wall
+            # and +80 MB RSS, with no progress output at all until the walk finishes.
+            "--no-inc-recursive",
             "--info=progress2",
             f"--out-format={shlex.quote('%i %n%L')}",
             "--partial",
@@ -542,6 +527,7 @@ class FolderSyncJob(SyncJob):
         self,
         chunks: AsyncIterator[bytes],
         folder: FolderEntry,
+        label: str,
     ) -> tuple[int, int, int]:
         """Stream rsync stdout, updating TUI progress and logging per-file events.
 
@@ -552,9 +538,15 @@ class FolderSyncJob(SyncJob):
         Decoupled from the subprocess: consumes any `AsyncIterator[bytes]` so
         it can be unit-tested with a fake async generator.
 
+        Progress is reported per pass, not per job: the bar restarts at 0% for every
+        folder and every pass, identified by `label`.  rsync is silent while it builds
+        the file list (`--no-inc-recursive`, see `_build_rsync_cmd`), so the pass opens
+        with a heartbeat and the bar only becomes determinate once transfer starts.
+
         Args:
             chunks: Async byte-chunk source (e.g. `proc.read_stdout_chunks()`).
             folder: The folder being synced (used for log context).
+            label: Pass name shown next to the folder in the TUI (`prep` / `full`).
 
         Returns:
             Tuple of (files_transferred, bytes_transferred, files_deleted).
@@ -564,7 +556,11 @@ class FolderSyncJob(SyncJob):
         files_xfr = 0
         bytes_xfr = 0
         files_deleted = 0
+        files_scanned = 0
         buf = b""
+
+        where = f"{folder.path} ({label})"
+        self._report_progress(ProgressUpdate(heartbeat=True, item=f"{where} — building file list"))
 
         async for chunk in chunks:
             buf += chunk
@@ -586,21 +582,29 @@ class FolderSyncJob(SyncJob):
                     pct = int(m.group(2))
                     files_xfr = int(m.group(3))
                     scanning = m.group(4) == "ir"
+                    remaining = int(m.group(5))
+                    listed = int(m.group(6))
                     if scanning:
-                        # File list still being built: neither rsync's percentage nor its
-                        # totals are monotonic (see _PROGRESS2_RE), so report countable
-                        # facts only and let the TUI render an indeterminate bar.
+                        # Fallback path only: --no-inc-recursive means rsync should never
+                        # emit ir-chk.  If it does anyway, `listed` is the entry count
+                        # discovered *so far* rather than a total, so neither it nor the
+                        # percentage may be shown — report the scanned count alone and let
+                        # the TUI render an indeterminate bar.  The count is clamped
+                        # monotonic because `listed` grows under the walk.
+                        files_scanned = max(files_scanned, listed - remaining)
                         self._report_progress(
                             ProgressUpdate(
-                                current=files_xfr,
-                                item=f"scanning {folder.path} ({format_bytes(bytes_xfr)})",
+                                current=files_scanned,
+                                item=f"{where} — scanning {files_scanned:,} files ({format_bytes(bytes_xfr)})",
                             )
                         )
                     else:
+                        # Full file list known: `listed` is the real total, so both the
+                        # percentage and the file counts are meaningful and monotonic.
                         self._report_progress(
                             ProgressUpdate(
-                                percent=self._job_percent(min(pct, 100)),
-                                item=str(folder.path),
+                                percent=min(pct, 100),
+                                item=f"{where} — {listed - remaining:,}/{listed:,} files",
                             )
                         )
                 elif line[0] in (">", "<", "*", ".", "c", "h"):
@@ -623,21 +627,21 @@ class FolderSyncJob(SyncJob):
 
         return files_xfr, bytes_xfr, files_deleted
 
-    async def _run_rsync_pass(self, cmd: str, folder: FolderEntry) -> tuple[int, int, int]:
+    async def _run_rsync_pass(self, cmd: str, folder: FolderEntry, label: str) -> tuple[int, int, int]:
         """Run one rsync pass: spawn, stream progress/logs, and raise on non-zero exit.
 
         Spawns rsync as an async subprocess (ADR-005 — no blocking calls), streams
         stdout through `_stream_rsync` for TUI progress (D-15) and per-file FULL logs
         (D-16), then checks the exit code.  Returns the pass's
         (files_transferred, bytes_transferred, files_deleted).  Shared by the no-delete
-        seeding pass and the deleting mirror in `execute`.
+        seeding pass and the deleting mirror in `execute`, which name themselves via
+        `label` (`prep` / `full`).
         """
         proc = await self.source.start_process(cmd)
         files_transferred, bytes_transferred, files_deleted = await self._stream_rsync(
-            proc.read_stdout_chunks(), folder
+            proc.read_stdout_chunks(), folder, label
         )
         result = await proc.wait_result()
-        self._finish_pass()
         if result.exit_code != 0:
             self._log(
                 Host.SOURCE,
@@ -646,9 +650,10 @@ class FolderSyncJob(SyncJob):
                 exit_code=result.exit_code,
             )
             raise RuntimeError(f"rsync failed for {folder.path!r} with exit code {result.exit_code}")
-        # A pass whose whole transfer stayed in incremental recursion never reported a
-        # percentage, leaving the bar pulsing; settle it on the slice it just completed.
-        self._report_progress(ProgressUpdate(percent=self._percent_floor, item=str(folder.path)))
+        # A pass with nothing to transfer (steady state, or any dry-run) races through
+        # its progress output, so close the bar explicitly rather than leaving it wherever
+        # the last line landed — or pulsing, if no line ever arrived.
+        self._report_progress(ProgressUpdate(percent=100, item=f"{folder.path} ({label})"))
         return files_transferred, bytes_transferred, files_deleted
 
     async def execute(self) -> None:
@@ -671,13 +676,8 @@ class FolderSyncJob(SyncJob):
         3. On non-zero exit from either pass, logs CRITICAL and raises RuntimeError.
         """
         folders = self._active_folders()
-        # Every folder gets an equal slice of the job bar; the folder's slice is split
-        # evenly again across its rsync passes.  Sizes are unknown before the scan, so
-        # equal weighting is the only estimate available up front (#198).
-        folder_span = 1 / len(folders) if folders else 1.0
 
-        for index, folder in enumerate(folders):
-            folder_base = index * folder_span
+        for folder in folders:
             prefix = "[dry-run] " if self.context.dry_run else ""
             self._log(
                 Host.SOURCE,
@@ -688,23 +688,19 @@ class FolderSyncJob(SyncJob):
 
             seed_files = 0
             seed_bytes = 0
-            seeding = not self.context.dry_run and await self._needs_seeding_pass(folder)
-            pass_span = folder_span / 2 if seeding else folder_span
-            if seeding:
+            if not self.context.dry_run and await self._needs_seeding_pass(folder):
                 self._log(
                     Host.SOURCE,
                     LogLevel.FULL,
                     f"Seeding per-directory filter files for {folder.path!r} (no-delete pass)",
                 )
-                self._begin_pass(folder_base, pass_span)
                 seed_files, seed_bytes, _ = await self._run_rsync_pass(
-                    self._build_rsync_cmd(folder, dry_run=False, delete=False), folder
+                    self._build_rsync_cmd(folder, dry_run=False, delete=False), folder, PASS_PREP
                 )
 
             # Deleting mirror (or, in dry-run, the read-only preview).
-            self._begin_pass(folder_base + (pass_span if seeding else 0.0), pass_span)
             mirror_files, mirror_bytes, files_deleted = await self._run_rsync_pass(
-                self._build_rsync_cmd(folder, self.context.dry_run, delete=True), folder
+                self._build_rsync_cmd(folder, self.context.dry_run, delete=True), folder, PASS_FULL
             )
 
             # On a seeding run the bulk transfer happened in the first pass and the
@@ -728,8 +724,6 @@ class FolderSyncJob(SyncJob):
                 f"{prefix}Transferred {bytes_transferred} bytes for {folder.path!r}",
             )
 
-        # Progress is reported per folder, so the bar resets for each one and would
-        # otherwise freeze at the last folder's final percentage (often <100% for a
-        # small folder). Mark the whole job complete so the bar reads 100% when done.
-        if folders:
-            self._report_progress(ProgressUpdate(percent=100))
+        # No job-level completion update: every pass already closes its own bar at 100%
+        # (`_run_rsync_pass`), and an unlabelled one here would only strip the folder
+        # and pass name off the finished bar.

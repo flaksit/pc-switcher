@@ -214,6 +214,14 @@ class TerminalUI:
             self._live.stop()
             self._live = None
 
+    def _set_indeterminate(self, task_id: TaskID) -> None:
+        """Clear a task's total so Rich pulses the bar instead of drawing a fraction.
+
+        `Progress.update(total=None)` means "leave total unchanged", so clearing it
+        requires setting the Task field directly — Rich exposes no public API for it.
+        """
+        self._progress._tasks[task_id].total = None  # pyright: ignore[reportPrivateUsage]
+
     def update_job_progress(
         self,
         job: str,
@@ -263,26 +271,25 @@ class TerminalUI:
             )
         elif update.current is not None:
             # Current only: the job is making countable progress towards an unknown
-            # end (e.g. rsync still building its file list). `total=None` makes Rich
-            # pulse the bar instead of showing a fraction that would be a guess.
-            description = f"[cyan]{job}[/cyan]: {update.current} items"
-            if update.item:
-                description += f" - {update.item}"
-            # `Progress.update(total=None)` means "leave total unchanged" — clearing it
-            # requires setting the Task field directly (no public API exists).
-            self._progress._tasks[task_id].total = None  # pyright: ignore[reportPrivateUsage]
+            # end. `item`, when given, replaces the generic count so the job can word
+            # its own status line.
+            description = f"[cyan]{job}[/cyan]: {update.item or f'{update.current} items'}"
+            self._set_indeterminate(task_id)
             self._progress.update(
                 task_id,
                 completed=update.current,
                 description=description,
             )
         elif update.heartbeat:
-            # Heartbeat/activity indicator
+            # Activity only, no countable unit yet (e.g. rsync building its file list
+            # emits nothing at all): pulse the bar rather than leave it parked at 0%.
             description = f"[cyan]{job}[/cyan]"
             if update.item:
                 description += f": {update.item}"
+            self._set_indeterminate(task_id)
             self._progress.update(
                 task_id,
+                completed=0,
                 description=description,
             )
 

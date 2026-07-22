@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.folder_sync import FolderEntry, FolderSyncJob
+from pcswitcher.jobs.folder_sync import PASS_FULL, PASS_PREP, FolderEntry, FolderSyncJob
 from pcswitcher.jobs.vscode_state_sync import VSCODE_STATE_DB_RELPATHS
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ProgressUpdate
 
@@ -407,6 +407,16 @@ class TestBuildRsyncCmd:
         assert "--partial" in cmd
         assert "--mkpath" in cmd
 
+    def test_no_inc_recursive_present(self) -> None:
+        """The file list is built up front so progress2 reports against the real total.
+
+        Without it rsync interleaves the walk with the transfer, `to-chk` appears only
+        for the last handful of files, and the percentage before that is computed
+        against a growing denominator (#198).
+        """
+        assert "--no-inc-recursive" in self._build()
+        assert "--no-inc-recursive" in self._build(dry_run=True)
+
     def test_no_locale_forcing(self) -> None:
         """No locale is forced on rsync — the progress2 parser tolerates any locale's
         thousands separator, so the counter's grouping does not need pinning (WR-01)."""
@@ -779,81 +789,85 @@ class TestStreamRsync:
             for chunk in chunks:
                 yield chunk
 
-        result = await job._stream_rsync(gen_chunks(), folder)
+        result = await job._stream_rsync(gen_chunks(), folder, PASS_FULL)
         return result, log_calls, progress_calls
 
-    async def test_progress_line_emits_report_progress(self) -> None:
-        """A to-chk progress2 line triggers a _report_progress call with parsed percent."""
+    async def test_pass_opens_with_file_list_heartbeat(self) -> None:
+        """A pass reports a heartbeat before any rsync output.
+
+        With --no-inc-recursive rsync prints nothing while it builds the file list
+        (measured on a 1.59M-entry /home: first output after 5.8s), so the bar must be
+        put into its pulsing state up front instead of sitting at 0%.
+        """
+        _, _, progress_calls = await self._run_stream([])
+
+        assert len(progress_calls) == 1
+        update = progress_calls[0]
+        assert isinstance(update, ProgressUpdate)
+        assert update.heartbeat is True
+        assert update.percent is None
+        assert update.item == f"/home ({PASS_FULL}) — building file list"
+
+    async def test_to_chk_line_reports_percent_and_file_counts(self) -> None:
+        """A to-chk line reports rsync's percent plus done/total files, labelled by pass."""
         progress_line = b"9.53G 21% 317.26MB/s 0:00:28 (xfr#83, to-chk=444/538)\r"
         _, _, progress_calls = await self._run_stream([progress_line])
 
-        assert len(progress_calls) >= 1
-        update = progress_calls[0]
-
+        update = progress_calls[-1]
         assert isinstance(update, ProgressUpdate)
         assert update.percent == 21
+        assert update.item == f"/home ({PASS_FULL}) — 94/538 files"
 
-    async def test_ir_chk_progress_line_reports_indeterminate_progress(self) -> None:
-        """An ir-chk (incremental-recursion) line reports counts, never a percent.
+    async def test_ir_chk_fallback_reports_scanned_count_without_percent(self) -> None:
+        """An ir-chk line reports the scanned count only — no percent, no denominator.
 
-        rsync emits `ir-chk=` while still building the file list, and only switches to
-        `to-chk=` once the list is complete.  For a large tree this dominates the run,
-        so the line must still produce an update (#191) — but its percentage is
-        bytes-done over bytes-known-so-far with a growing denominator, so it walks
-        backwards (#198).  Only counts are reported, which renders as an indeterminate
-        bar rather than a decreasing percentage.
+        --no-inc-recursive should stop rsync emitting these at all; if one appears, its
+        percentage is bytes-done over bytes-known-*so far* (denominator grows, so the
+        figure walks backwards) and its total is "entries discovered so far", not a
+        total.  Neither may reach the bar (#198).
         """
         progress_line = b"20.000   0%    0,00kB/s    0:00:00 (xfr#1, ir-chk=1039/1101)\r"
         _, _, progress_calls = await self._run_stream([progress_line])
 
-        assert len(progress_calls) >= 1, "ir-chk progress2 line must produce a _report_progress call"
-        update = progress_calls[0]
-
+        update = progress_calls[-1]
         assert isinstance(update, ProgressUpdate)
         assert update.percent is None
         assert update.total is None
-        assert update.current == 1
-        assert update.item is not None and "scanning" in update.item
+        assert update.current == 62  # 1101 listed - 1039 still to check
+        assert update.item is not None and "scanning 62 files" in update.item
 
-    async def test_ir_chk_percent_regression_never_decreases(self) -> None:
-        """The real-world decreasing ir-chk sequence emits no percent at all (#198)."""
+    async def test_ir_chk_scanned_count_never_decreases(self) -> None:
+        """The scanned count is clamped monotonic as rsync's discovered total grows."""
         data = (
-            b"171.667.736  18%  159,88GB/s 0:00:00 (xfr#1, ir-chk=1004/1054)\r"
-            b"20.000        5%    0,00kB/s 0:00:00 (xfr#2, ir-chk=1003/1683)\r"
-            b"20.000        2%    0,00kB/s 0:00:00 (xfr#3, ir-chk=1500/4000)\r"
+            b"171.667.736  18%  159,88GB/s 0:00:00 (xfr#1, ir-chk=54/1054)\r"
+            b"20.000        5%    0,00kB/s 0:00:00 (xfr#2, ir-chk=1600/1683)\r"
+            b"20.000        2%    0,00kB/s 0:00:00 (xfr#3, ir-chk=3900/4000)\r"
         )
         _, _, progress_calls = await self._run_stream([data])
 
-        percents = [u.percent for u in progress_calls if isinstance(u, ProgressUpdate)]
-        assert percents == [None, None, None]
+        updates = [u for u in progress_calls if isinstance(u, ProgressUpdate) and u.current is not None]
+        assert [u.current for u in updates] == [1000, 1000, 1000]
+        assert all(u.percent is None for u in updates)
 
-    async def test_pass_slice_maps_percent_onto_job_bar(self) -> None:
-        """A pass confined to the second half of the job reports 50-100%, not 0-100%."""
+    async def test_percent_restarts_per_pass(self) -> None:
+        """Each pass drives the bar 0-100% on its own — no job-wide slicing."""
         ctx = make_context()
         job = FolderSyncJob(ctx)
         progress_calls: list[ProgressUpdate] = []
         job._report_progress = progress_calls.append  # type: ignore[method-assign]
-        job._begin_pass(0.5, 0.5)
 
         async def gen_chunks():  # type: ignore[no-untyped-def]
             yield b"9.53G 40% 300.00MB/s 0:00:10 (xfr#10, to-chk=60/100)\r"
             yield b"9.53G 80% 300.00MB/s 0:00:05 (xfr#80, to-chk=20/100)\r"
 
-        await job._stream_rsync(gen_chunks(), FolderEntry(path="/home"))
+        await job._stream_rsync(gen_chunks(), FolderEntry(path="/home"), PASS_PREP)
+        await job._stream_rsync(gen_chunks(), FolderEntry(path="/home"), PASS_FULL)
 
-        assert [u.percent for u in progress_calls] == [70, 90]
-
-    async def test_job_percent_never_decreases_across_passes(self) -> None:
-        """A later pass reporting a low pass-local percent cannot move the bar back."""
-        ctx = make_context()
-        job = FolderSyncJob(ctx)
-        job._begin_pass(0.0, 0.5)
-        assert job._job_percent(80) == 40
-        job._finish_pass()
-        job._begin_pass(0.5, 0.5)
-        # Second pass restarts at 0% locally — the job bar must hold at the floor.
-        assert job._job_percent(0) == 50
-        assert job._job_percent(100) == 100
+        percents = [u.percent for u in progress_calls if u.percent is not None]
+        assert percents == [40, 80, 40, 80], "second pass must restart the bar, not continue the first"
+        # Each pass opens with its own heartbeat, so the first three updates are the prep pass.
+        assert all(u.item is not None and f"({PASS_PREP})" in u.item for u in progress_calls[:3])
+        assert all(u.item is not None and f"({PASS_FULL})" in u.item for u in progress_calls[3:])
 
     async def test_per_file_line_logged_at_full(self) -> None:
         """An --out-format per-file line is logged at LogLevel.FULL."""

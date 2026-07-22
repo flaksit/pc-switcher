@@ -111,23 +111,30 @@ async def test_core_us_tui_as1_progress_display() -> None:
         ui.stop()
 
 
-def test_count_only_update_switches_bar_to_indeterminate_and_back() -> None:
-    """A count-only update pulses the bar; a later percent update restores the scale.
+def test_heartbeat_and_count_updates_pulse_bar_then_percent_restores_scale() -> None:
+    """Heartbeat and count-only updates pulse the bar; a percent update makes it determinate.
 
-    folder_sync reports counts while rsync is still building its file list (no
-    trustworthy percentage exists yet, #198), then switches to percentages.
+    folder_sync's pass lifecycle walks all three states: a heartbeat while rsync builds
+    the file list silently, then percentages once transfer starts (#198).
     """
     output = StringIO()
     console = Console(file=output, force_terminal=True, width=120)
     ui = TerminalUI(console=console, max_log_lines=5, total_steps=None)
 
     job = "folder_sync"
-    ui.update_job_progress(job, ProgressUpdate(current=1200, item="scanning /home"))
+    ui.update_job_progress(job, ProgressUpdate(heartbeat=True, item="/home (full) — building file list"))
+    task = ui._progress._tasks[ui._job_tasks[job]]
+    assert task.total is None, "heartbeat must leave the bar indeterminate"
+    assert "building file list" in task.description
+
+    ui.update_job_progress(job, ProgressUpdate(current=1200, item="/home (full) — scanning 1200 files"))
     task = ui._progress._tasks[ui._job_tasks[job]]
     assert task.total is None, "count-only update must leave the bar indeterminate"
     assert task.completed == 1200
+    # `item` replaces the generic "N items" wording so the job owns its status line.
+    assert task.description.endswith("/home (full) — scanning 1200 files")
 
-    ui.update_job_progress(job, ProgressUpdate(percent=42, item="/home"))
+    ui.update_job_progress(job, ProgressUpdate(percent=42, item="/home (full) — 94/538 files"))
     task = ui._progress._tasks[ui._job_tasks[job]]
     assert task.total == 100
     assert task.completed == 42
