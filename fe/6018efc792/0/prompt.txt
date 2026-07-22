@@ -1,0 +1,11 @@
+when I run pc-switcher here in this folder, that doesn't seem to run the current code version.
+
+(pcswitcher) janfr@P17:~/dev/pc-switcher$ pc-switcher --version
+pc-switcher 0.3.2
+(pcswitcher) janfr@P17:~/dev/pc-switcher$ pc-switcher sync fleksi --dry-run
+A new stable version of pc-switcher is available: 0.3.2 -> 0.4.1
+Upgrade now? [y/n] (n): y
+Updating pc-switcher to 0.4.1...
+Error: Upgrade failed: Version mismatch after update. Expected 0.4.1, got 0.3.2
+The installation may be in an inconsistent state. Run pc-switcher self update to restore a known-good version, then 
+retry.

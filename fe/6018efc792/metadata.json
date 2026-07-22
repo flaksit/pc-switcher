@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "fe6018efc792",
+  "strategy": "manual-commit",
+  "branch": "fix/198-folder-sync-progress-monotonic",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/default-config.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fe/6018efc792/0/metadata.json",
+      "transcript": "/fe/6018efc792/0/full.jsonl",
+      "compact_transcript": "/fe/6018efc792/0/transcript.jsonl",
+      "content_hash": "/fe/6018efc792/0/content_hash.txt",
+      "prompt": "/fe/6018efc792/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 47061,
+    "cache_read_tokens": 221007,
+    "output_tokens": 3206,
+    "api_call_count": 6
+  }
+}
