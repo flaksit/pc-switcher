@@ -1,5 +1,5 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: |
   gh #191 "Folder sync progress bar not showing until done".
   When syncing, even a very long first sync (>10 min), the progress bar doesn't
@@ -8,7 +8,8 @@ trigger: |
   photos of the screen attached to the issue; not needed — root cause verified
   from code + rsync behavior.
 created: 2026-07-20
-updated: 2026-07-20
+updated: 2026-07-22
+resolution: "Root cause: `_PROGRESS2_RE` matched only `to-chk=`, while rsync's default incremental recursion emits `ir-chk=` for nearly the whole run of a large first sync, so no progress frame ever matched and the bar was never created. Fixed by widening the regex to `(ir|to)-chk=`, then by running rsync with `--no-inc-recursive` and driving the bar from checked files rather than rsync's percent (commits 2965ccc/16ba5ec/b35afc5, merged in #199). Issue #191 closed."
 ---
 
 # Debug: folder-sync progress bar hidden until done (#191)
@@ -23,8 +24,8 @@ updated: 2026-07-20
 
 ## Current Focus
 
-status: FIXED + VERIFIED. Awaiting human verification before archiving.
-next_action: none — checkpoint request pending user confirmation.
+status: RESOLVED. Fix merged in #199; issue #191 closed.
+next_action: none.
 
 reasoning_checkpoint:
   hypothesis: >

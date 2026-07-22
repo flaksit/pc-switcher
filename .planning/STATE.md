@@ -4,11 +4,11 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 2
 current_phase_name: Package Management Sync
-status: executing
-stopped_at: Completed 01-18-PLAN.md
-last_updated: "2026-07-13T12:19:36.228Z"
-last_activity: 2026-07-19
-last_activity_desc: "Completed quick task 260719-g13: Check for new versions at startup (#176)"
+status: ready_to_plan
+stopped_at: Phase 01 complete; Phase 02 not yet planned
+last_updated: "2026-07-22T00:00:00.000Z"
+last_activity: 2026-07-22
+last_activity_desc: "Bookkeeping: closed out 5 debug sessions and stale Phase 1 ADR blocker"
 progress:
   total_phases: 7
   completed_phases: 1
@@ -33,11 +33,11 @@ Phase: 2 — Package Management Sync
 
 Plan: Not started
 
-Status: Ready to execute
+Status: Not planned — no phase directory, no CONTEXT, no plans
 
-Last activity: 2026-07-13 — Phase 01 complete, transitioned to Phase 2
+Last activity: 2026-07-22 — Phase 02 planning not yet started; post-Phase-01 work continued as quick tasks
 
-Progress: [█████████░] 94%
+Progress: 1 of 7 phases complete
 
 ## Performance Metrics
 
@@ -87,7 +87,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 
 - Foundation: 11 Accepted ADRs are locked (SSH channel, Python+uv, asyncio, three-tier testing, TDD, draft-aware CI, stdlib logging, living specs, doc structure, dynamic versioning, ADR process).
 - Foundation: ADR-009 (AI-readiness issue labels) is Proposed, not locked.
-- Phase 1: User-data transport is rsync-over-SSH (chosen over btrfs send/receive) — direction set but not yet captured in an ADR.
+- Phase 1: User-data transport is rsync-over-SSH (chosen over btrfs send/receive), locked in ADR-013.
 - [Phase ?]: rsync-over-SSH chosen as user-data transport (D-04); rsync runs as root on both ends via sudo, root SSH login forbidden (D-05)
 - [Phase ?]: dry-run is tool-wide contract binding all SyncJobs (D-12): no file writes, no snapshots, no history updates in dry-run mode
 - [Phase ?]: folder_sync job name (not user_data) is canonical per D-01; default excludes live in YAML not Python per D-11
@@ -124,7 +124,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 1: The rsync-over-SSH transport choice is not yet captured in an ADR. ADR-002 mandates SSH as the channel but does not fix the file-sync protocol. Formalize this as a new ADR before or during Phase 1 planning so the decision has a locked source.
+None.
 
 ### Quick Tasks Completed
 

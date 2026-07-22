@@ -1,8 +1,9 @@
 ---
-status: root_cause_confirmed
+status: resolved
 trigger: "gh #190 — After sync back, need to trust folders again and login to github"
 created: 2026-07-20
-updated: 2026-07-20
+updated: 2026-07-22
+resolution: "Root cause: state.vscdb holds both the trusted-folders list (overwritten wholesale by the mirror) and the GitHub auth session (ciphertext keyed per-machine in the OS keyring, unsyncable). Fixed by ADR-018 selective SQLite-aware state.vscdb sync — quick task 260720-vhr, commit ed7751b, with follow-ups for the install-shared db (#202) and auth session pointers (#205). Issue #190 closed."
 ---
 
 # Debug: VSCode trusted-folders list and GitHub extension auth lost after sync
