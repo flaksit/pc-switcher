@@ -143,21 +143,24 @@ def test_heartbeat_and_count_updates_pulse_bar_then_percent_restores_scale() -> 
 def test_track_gives_each_unit_of_work_its_own_persistent_bar() -> None:
     """Distinct `track` values create separate bars; finished ones keep their state.
 
-    folder_sync runs one rsync pass per folder and per pass type; without this they
-    would all overwrite a single bar and completed folders would vanish.
+    folder_sync tracks by folder, so a finished folder stays visible at 100% while the
+    next one syncs. Reusing a track (its second rsync pass) renames and restarts that
+    same bar instead of adding one.
     """
     output = StringIO()
     console = Console(file=output, force_terminal=True, width=120)
     ui = TerminalUI(console=console, max_log_lines=5, total_steps=None)
 
     job = "folder_sync"
-    ui.update_job_progress(job, ProgressUpdate(percent=100, item="/home (prep)", track="/home (prep)"))
-    ui.update_job_progress(job, ProgressUpdate(percent=100, item="/home (full)", track="/home (full)"))
-    ui.update_job_progress(job, ProgressUpdate(percent=30, item="/root (full)", track="/root (full)"))
+    ui.update_job_progress(job, ProgressUpdate(percent=100, item="/home (prep)", track="/home"))
+    ui.update_job_progress(job, ProgressUpdate(percent=100, item="/home (full)", track="/home"))
+    ui.update_job_progress(job, ProgressUpdate(percent=30, item="/root (full)", track="/root"))
 
-    assert len(ui._job_tasks) == 3, "each track must own a bar"
-    completed = [ui._progress._tasks[t].completed for t in ui._job_tasks.values()]
-    assert completed == [100, 100, 30], "finished tracks must stay at their final value"
+    assert len(ui._job_tasks) == 2, "one bar per folder, shared by that folder's passes"
+    home, root = (ui._progress._tasks[t] for t in ui._job_tasks.values())
+    assert home.completed == 100, "a finished folder must stay at its final value"
+    assert home.description.endswith("/home (full)")
+    assert root.completed == 30
 
 
 def test_untracked_updates_share_one_bar_per_job() -> None:

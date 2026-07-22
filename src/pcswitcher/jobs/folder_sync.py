@@ -57,8 +57,9 @@ from pcswitcher.models import ConfigError, FirstSyncScope, Host, LogLevel, Progr
 _PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*(ir|to)-chk=(\d+)/(\d+)\)")
 
 # TUI names for the two rsync passes a folder can run (see `execute`): the no-delete
-# pass that ships per-directory filter files, and the deleting mirror.  Each pass gets
-# its own progress bar, so both names stay on screen for the rest of the run.
+# pass that ships per-directory filter files, and the deleting mirror.  Both passes of
+# a folder share that folder's progress bar (tracked by path) and only rename it, so
+# the run shows one bar per configured folder — finished folders stay at 100%.
 PASS_PREP = "prep"
 PASS_FULL = "full"
 
@@ -566,10 +567,11 @@ class FolderSyncJob(SyncJob):
         Decoupled from the subprocess: consumes any `AsyncIterator[bytes]` so
         it can be unit-tested with a fake async generator.
 
-        Progress is reported per pass, not per job: the bar restarts at 0% for every
-        folder and every pass, identified by `label`.  rsync is silent while it builds
-        the file list (`--no-inc-recursive`, see `_build_rsync_cmd`), so the pass opens
-        with a heartbeat and the bar only becomes determinate once transfer starts.
+        Progress is reported per folder: each folder owns one bar for the whole run
+        (tracked by path), and a pass restarts it at 0% and renames it with `label`
+        rather than adding a bar of its own.  rsync is silent while it builds the file
+        list (`--no-inc-recursive`, see `_build_rsync_cmd`), so the pass opens with a
+        heartbeat and the bar only becomes determinate once transfer starts.
 
         Args:
             chunks: Async byte-chunk source (e.g. `proc.read_stdout_chunks()`).
@@ -588,7 +590,7 @@ class FolderSyncJob(SyncJob):
         buf = b""
 
         where = f"{folder.path} ({label})"
-        self._report_progress(ProgressUpdate(heartbeat=True, item=f"{where} — building file list", track=where))
+        self._report_progress(ProgressUpdate(heartbeat=True, item=f"{where} — building file list", track=folder.path))
 
         async for chunk in chunks:
             buf += chunk
@@ -624,7 +626,7 @@ class FolderSyncJob(SyncJob):
                             ProgressUpdate(
                                 current=files_scanned,
                                 item=f"{where} — scanning {files_scanned:,} files ({format_bytes(bytes_xfr)})",
-                                track=where,
+                                track=folder.path,
                             )
                         )
                     else:
@@ -642,7 +644,7 @@ class FolderSyncJob(SyncJob):
                             ProgressUpdate(
                                 percent=100 if listed == 0 else min(100, checked * 100 // listed),
                                 item=f"{where} — {checked:,}/{listed:,} files, {format_bytes(bytes_xfr)}",
-                                track=where,
+                                track=folder.path,
                             )
                         )
                 elif line[0] in (">", "<", "*", ".", "c", "h"):
@@ -692,7 +694,7 @@ class FolderSyncJob(SyncJob):
         # its progress output, so close the bar explicitly rather than leaving it wherever
         # the last line landed — or pulsing, if no line ever arrived.
         where = f"{folder.path} ({label})"
-        self._report_progress(ProgressUpdate(percent=100, item=where, track=where))
+        self._report_progress(ProgressUpdate(percent=100, item=where, track=folder.path))
         return files_transferred, bytes_transferred, files_deleted
 
     async def execute(self) -> None:

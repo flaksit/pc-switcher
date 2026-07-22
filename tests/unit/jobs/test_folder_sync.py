@@ -834,10 +834,10 @@ class TestStreamRsync:
         assert update.heartbeat is True
         assert update.percent is None
         assert update.item == f"/home ({PASS_FULL}) — building file list"
-        assert update.track == f"/home ({PASS_FULL})"
+        assert update.track == "/home"
 
-    async def test_every_update_carries_the_pass_track(self) -> None:
-        """All of a pass's updates share one track, so they drive one persistent bar."""
+    async def test_every_update_tracks_the_folder_not_the_pass(self) -> None:
+        """Updates track the folder path, so both passes share that folder's one bar."""
         data = (
             b"20.000   0%  0,00kB/s 0:00:00 (xfr#1, ir-chk=1039/1101)\r"
             b"9.53G   21%  317.26MB/s 0:00:28 (xfr#83, to-chk=444/538)\r"
@@ -845,7 +845,7 @@ class TestStreamRsync:
         _, _, progress_calls = await self._run_stream([data], folder_path="/root")
 
         tracks = {u.track for u in progress_calls if isinstance(u, ProgressUpdate)}
-        assert tracks == {f"/root ({PASS_FULL})"}
+        assert tracks == {"/root"}
 
     async def test_to_chk_line_drives_bar_from_file_counts_not_rsync_percent(self) -> None:
         """The bar follows checked/total files; rsync's own percent is ignored.
