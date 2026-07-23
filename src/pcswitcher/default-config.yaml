@@ -44,9 +44,14 @@ sync_jobs:
   dummy_fail: false      # Test job that fails at configurable progress
 
   # Package management jobs run BEFORE folder_sync (D-17): apps are provisioned first,
-  # then their data lands on top of them. The orchestrator resolves sync_jobs in the
-  # order they appear in this file, so apt_sync is listed above folder_sync here.
+  # then their data lands on top of them (decisive for flatpak, where flatpak install
+  # creates ~/.local/share/flatpak before folder_sync would otherwise land ~/.var/app on
+  # top). The orchestrator resolves sync_jobs in the order keys appear in this file, so
+  # apt_sync, snap_sync and flatpak_sync are listed above folder_sync here — reordering
+  # these entries changes execution order.
   apt_sync: false             # Install missing apt packages on target, after a batched review (destructive; opt-in)
+  snap_sync: false            # Converge snap revisions/channels on target, after a batched review (destructive; opt-in)
+  flatpak_sync: false         # Converge flatpak refs/remotes on target, after a batched review (destructive; opt-in)
 
   folder_sync: true          # Sync /home and /root directories (Phase 1)
   vscode_state_sync: true    # Sync VS Code editor state (your user only), except its per-machine secret store
@@ -119,6 +124,24 @@ dummy_fail:
 # No configuration keys yet — enable/disable only via sync_jobs.apt_sync above.
 
 apt_sync: {}
+
+# =============================================================================
+# Snap Sync Configuration (Phase 2, plan 02-08)
+# =============================================================================
+# SnapSyncJob converges installed snaps to the source's exact revision and tracking
+# channel (D-06), after a batched review shared with apt_sync/flatpak_sync.
+# No configuration keys yet — enable/disable only via sync_jobs.snap_sync above.
+
+snap_sync: {}
+
+# =============================================================================
+# Flatpak Sync Configuration (Phase 2, plan 02-09)
+# =============================================================================
+# FlatpakSyncJob converges installed flatpak refs and remotes per user/system scope
+# (D-06, D-14), after a batched review shared with apt_sync/snap_sync.
+# No configuration keys yet — enable/disable only via sync_jobs.flatpak_sync above.
+
+flatpak_sync: {}
 
 # =============================================================================
 # Folder Sync Configuration

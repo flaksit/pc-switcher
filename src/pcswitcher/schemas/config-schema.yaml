@@ -69,6 +69,14 @@ properties:
         type: boolean
         default: false
         description: "Install apt packages missing on the target, after a batched review (destructive; opt-in)"
+      snap_sync:
+        type: boolean
+        default: false
+        description: "Converge installed snaps to the source's revision/channel, after a batched review (destructive; opt-in)"
+      flatpak_sync:
+        type: boolean
+        default: false
+        description: "Converge installed flatpak refs and remotes, after a batched review (destructive; opt-in)"
       # Jobs implemented in Phase 1:
       folder_sync:
         type: boolean
@@ -226,6 +234,22 @@ properties:
   apt_sync:
     type: object
     description: "Configuration for AptSyncJob (apt package sync via a batched review)"
+    properties: {}
+    additionalProperties: false
+
+  # SnapSyncJob configuration (D-15). Empty on purpose, mirroring apt_sync: only the
+  # sync_jobs.snap_sync enable flag is needed today (plan 02-08).
+  snap_sync:
+    type: object
+    description: "Configuration for SnapSyncJob (snap revision/channel convergence via a batched review)"
+    properties: {}
+    additionalProperties: false
+
+  # FlatpakSyncJob configuration (D-15). Empty on purpose, mirroring apt_sync: only the
+  # sync_jobs.flatpak_sync enable flag is needed today (plan 02-09).
+  flatpak_sync:
+    type: object
+    description: "Configuration for FlatpakSyncJob (flatpak ref/remote convergence via a batched review)"
     properties: {}
     additionalProperties: false
 
