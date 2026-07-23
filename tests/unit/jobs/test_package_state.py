@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pcswitcher.config_sync import CONFIG_REMOTE_PATH, _copy_config_to_target  # pyright: ignore[reportPrivateUsage]
-from pcswitcher.jobs.packages import state as package_state
 from pcswitcher.jobs.context import JobContext
+from pcswitcher.jobs.packages import state as package_state
 from pcswitcher.jobs.packages.items import (
     AptPackageItem,
     DiffAction,

@@ -788,6 +788,36 @@ class TestShippedDefaultConfig:
         for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
             assert order.index(job_name) < folder_sync_index
 
+    def test_shipped_config_omits_empty_package_sections(self) -> None:
+        """D-32: no top-level apt_sync/snap_sync/flatpak_sync/manual_installs_sync section
+        ships; a job earns a section only when it has a real key, and its resolved config
+        defaults to an empty mapping."""
+        config = Configuration.from_yaml(self._default_config_path())
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
+            assert config.get_job_config(job_name) == {}
+
+    def test_config_omitting_package_sections_validates(self, tmp_path: Path) -> None:
+        """D-32: a config that enables every package job via sync_jobs but ships no
+        top-level section for them still validates (root additionalProperties: false
+        rejects unknown keys, but an absent section is not one), and each job's resolved
+        config is an empty mapping."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            """
+sync_jobs:
+  apt_sync: true
+  snap_sync: true
+  flatpak_sync: true
+  manual_installs_sync: true
+  folder_sync: true
+"""
+        )
+
+        config = Configuration.from_yaml(config_file)
+
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
+            assert config.get_job_config(job_name) == {}
+
 
 class TestPackageJobsBeforeFolderSyncStructuralCheck:
     """WR-02 regression: D-17 ordering must be a structural `ConfigError`, not just a

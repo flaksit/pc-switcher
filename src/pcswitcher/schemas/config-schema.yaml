@@ -231,31 +231,10 @@ properties:
   # VscodeStateSyncJob has no configuration: the module hardcodes the editor list, DB
   # layout, and the preserved-key namespace (secret://). Enable/disable via sync_jobs.
 
-  # AptSyncJob configuration (D-15: independent config per package manager job). Empty
-  # on purpose: this tracer slice (plan 02-03) needs nothing beyond the sync_jobs enable
-  # flag — no `enabled_item_classes`-style filtering key exists yet since only the
-  # APT_PACKAGE item class is implemented so far.
-  apt_sync:
-    type: object
-    description: "Configuration for AptSyncJob (apt package sync via a batched review)"
-    properties: {}
-    additionalProperties: false
-
-  # SnapSyncJob configuration (D-15). Empty on purpose, mirroring apt_sync: only the
-  # sync_jobs.snap_sync enable flag is needed today (plan 02-08).
-  snap_sync:
-    type: object
-    description: "Configuration for SnapSyncJob (snap revision/channel convergence via a batched review)"
-    properties: {}
-    additionalProperties: false
-
-  # FlatpakSyncJob configuration (D-15). Empty on purpose, mirroring apt_sync: only the
-  # sync_jobs.flatpak_sync enable flag is needed today (plan 02-09).
-  flatpak_sync:
-    type: object
-    description: "Configuration for FlatpakSyncJob (flatpak ref/remote convergence via a batched review)"
-    properties: {}
-    additionalProperties: false
+  # The apt_sync/snap_sync/flatpak_sync/manual_installs_sync jobs have no config section:
+  # they earn one only when they gain a real key (D-32). A config omitting them still
+  # validates, and config.py's get_job_config returns {} for an absent section, which each
+  # job's empty CONFIG_SCHEMA accepts. Enable/disable via sync_jobs only.
 
 # =============================================================================
 # DEVELOPER NOTE: Config Key Naming Convention

@@ -118,33 +118,6 @@ dummy_fail:
   fail_at: 12            # Elapsed seconds at which to fail
 
 # =============================================================================
-# Apt Sync Configuration (Phase 2, plan 02-03)
-# =============================================================================
-# AptSyncJob installs apt packages missing on the target (the manually-installed set,
-# `apt-mark showmanual`), after a batched review shared with snap_sync/flatpak_sync.
-# No configuration keys yet — enable/disable only via sync_jobs.apt_sync above.
-
-apt_sync: {}
-
-# =============================================================================
-# Snap Sync Configuration (Phase 2, plan 02-08)
-# =============================================================================
-# SnapSyncJob converges installed snaps to the source's exact revision and tracking
-# channel (D-06), after a batched review shared with apt_sync/flatpak_sync.
-# No configuration keys yet — enable/disable only via sync_jobs.snap_sync above.
-
-snap_sync: {}
-
-# =============================================================================
-# Flatpak Sync Configuration (Phase 2, plan 02-09)
-# =============================================================================
-# FlatpakSyncJob converges installed flatpak refs and remotes per user/system scope
-# (D-06, D-14), after a batched review shared with apt_sync/snap_sync.
-# No configuration keys yet — enable/disable only via sync_jobs.flatpak_sync above.
-
-flatpak_sync: {}
-
-# =============================================================================
 # Folder Sync Configuration
 # =============================================================================
 # Defines folders to sync via rsync. Each entry mirrors `path` (rsync --delete)
