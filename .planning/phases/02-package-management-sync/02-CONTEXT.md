@@ -63,22 +63,22 @@ Phase 2 replicates *what is installed* from source to target across apt, snap an
 
 ### Job structure
 
-- **D-15:** **Three separate jobs** — `apt_sync`, `snap_sync`, `flatpak_sync` — rather than one `package_sync`. Cleaner scope for both development and the user (independent enable flags, independent config, independent failure isolation, independent progress).
+- **D-15:** **Four separate jobs** — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` — rather than one `package_sync`. Cleaner scope for both development and the user (independent enable flags, independent config, independent failure isolation, independent progress). `manual_installs_sync` owns everything no package manager can reproduce (D-18) and the snippet registry (D-23); it must NOT ride on `apt_sync`'s enable flag, because disabling apt would then silently disable manual-install detection with nothing telling the user.
 - **D-16:** The shared core (item model, diff, three-way decision flow, batched TUI review, machine-local file I/O, snippet registry) is **extracted while designing and building**, not deferred to a post-hoc refactor and not written three times.
 - **D-17:** **Package jobs run before folder_sync.** Apps are provisioned first, then their data lands on top — decisive for flatpak, where `~/.local/share/flatpak` must be created by `flatpak install` while `~/.var/app` comes from folder_sync, and it keeps package postinst defaults from overwriting real synced config.
 
 ### Unreproducible and manual installs
 
-- **D-18:** Items no package manager can reproduce are detected: apt packages with no repo candidate (4 on P17: `brscan3`, `brother-udev-rule-type1`, `cnpg`, `falco-app`) plus unowned installs under `/usr/local` and `/opt` (`flux`, `talosctl`, `yq`, `batteryhealthchargingctl-janfr`, `/opt/containerd`). Note `/opt` is otherwise dpkg-owned (az→azure-cli, brother→brother-udev-rule-type1, Falco→falco-app, google→google-chrome-stable) and `/usr/local/bin/kubectl-cnpg` belongs to `cnpg`.
+- **D-18:** Unreproducible items are owned by `manual_installs_sync`, not by `apt_sync`. Half of them are not apt's business at all (unowned files under `/usr/local` and `/opt`), and the other half — packages dpkg knows but no repo offers — are still resolved by a manual install, not by apt. The job does its own `dpkg-query`/`apt-cache policy` queries rather than sharing `apt_sync`'s, so ownership stays clean. Items no package manager can reproduce are detected: apt packages with no repo candidate (4 on P17: `brscan3`, `brother-udev-rule-type1`, `cnpg`, `falco-app`) plus unowned installs under `/usr/local` and `/opt` (`flux`, `talosctl`, `yq`, `batteryhealthchargingctl-janfr`, `/opt/containerd`). Note `/opt` is otherwise dpkg-owned (az→azure-cli, brother→brother-udev-rule-type1, Falco→falco-app, google→google-chrome-stable) and `/usr/local/bin/kubectl-cnpg` belongs to `cnpg`.
 - **D-19:** Scanning for unowned installs is acceptable **because decisions are recorded** — a scanned finding produces noise exactly once, then never again. Every finding must end in a recorded decision or a snippet.
 - **D-20:** An **install-snippet registry** ships in Phase 2 as part of the shared core. A snippet is an **opaque text blob**: the tool records it and replays it non-interactively on the target through the existing executor, and the exit code decides success. The tool never parses, versions, diffs or reasons about snippet content.
-- **D-21:** Registration is **mandatory**: an unreproducible item must end up either with a snippet or recorded as machine-specific — there is no third, unresolved state that survives a sync. pc-switcher must offer to **add a snippet on the fly**, during the review, so resolving an item never requires leaving the sync.
+- **D-21:** An unreproducible item ends a run in one of **three** valid resolutions: it has a snippet, it is recorded as machine-specific (skip-always), or the user skipped it **once**. Skip-once is a real decision, not an unresolved state — the user may be declining something temporary, and a run where they made that choice is clean. Only an item nobody decided on — a non-interactive run, where nothing is recorded (D-26) — leaves the run visibly unclean. pc-switcher must offer to **add a snippet on the fly**, during the review, so resolving an item never requires leaving the sync.
 - **D-22:** Snippets cover **bare `.deb`s and manual installs only**. Snap and flatpak items do not carry snippets (YAGNI — every current one comes from a reachable remote).
-- **D-23:** Snippets live in the **shared, synced config**, not the machine-local decision file: how to install something is knowledge about the package, not about the machine.
+- **D-23:** Snippets live in the **shared, synced config**, not the machine-local decision file: how to install something is knowledge about the package, not about the machine. `manual_installs_sync` pushes `package-snippets.yaml` to the target **itself**, with `send_file()`, immediately after its own review — so snippets added on the fly during that review (D-21) are included. It must NOT travel via `config_sync`: that runs at SyncStep 9, before any review, so it cannot carry a snippet the user has not authored yet. It must also NOT rely on `folder_sync`: user sync jobs are in the user's hands and can be disabled or filtered, so no job's correctness may depend on another one running.
 
 ### Review UX, conflicts and failures
 
-- **D-24:** All differences are presented in **one batched review before any change is applied**, grouped by manager and action. The user wants a real TUI element — a checkable list to tick items off — rather than a sequence of prompts. Grouping by action matters precisely because "apply" is direction-dependent (D-07): installs and removals must be visibly separate groups, with removals labelled as removals, so a bulk tick can never silently delete. This must compose with the single persistent Live panel and its pause/resume-around-prompts behavior established in Phase 1 (plan 01-17/01-18).
+- **D-24:** Each job presents **its own batched review before it applies anything**, grouped by action. The batching is per manager, NOT across managers: the jobs are independent (D-15), and a cross-manager coordinator that reviews every enabled manager at once contradicts that independence. There is no shared review phase and no coordinator; each job runs plan → review → apply within its own `execute()`. The user wants a real TUI element — a checkable list to tick items off — rather than a sequence of prompts. Grouping by action matters precisely because "apply" is direction-dependent (D-07): installs and removals must be visibly separate groups, with removals labelled as removals, so a bulk tick can never silently delete. This must compose with the single persistent Live panel and its pause/resume-around-prompts behavior established in Phase 1 (plan 01-17/01-18).
 - **D-25:** "Conflicts and version mismatches" are a **diff class inside that same review**, not a second reporting mechanism: missing-on-target, extra-on-target, version-mismatch (both versions shown), held/pinned, repo-unavailable, unreproducible. Success criterion 3's "reported before any destructive change" is satisfied because the whole review precedes every change.
 - **D-26:** **No TTY / non-interactive run: skip all, once.** Nothing is applied that needed a decision, nothing is recorded permanently, everything unresolved is reported. Any special non-interactive behavior needed for integration testing must be **hidden** — undocumented, absent from `--help`, and active only when a specific testing environment variable is set.
 - **D-27:** A failing item does not stop the job: **continue, collect, report at the end.** Each failure is logged with its stderr and listed in the job summary, and the job result is a failure so the sync is visibly not clean. Snapshots remain the backstop.
@@ -87,6 +87,16 @@ Phase 2 replicates *what is installed* from source to target across apt, snap an
 ### folder_sync overlap
 
 - **D-29:** The package jobs **export their excluded paths to folder_sync**, following the ADR-018 precedent set by `vscode_state_sync`: `flatpak_sync` owns `~/.local/share/flatpak`, `snap_sync` owns the `~/snap/<app>/<rev>` revision dirs, and folder_sync translates the supplied absolute paths into non-overridable filters without knowing anything about either ecosystem. Enabling a package job therefore automatically stops folder_sync from fighting it, and the corresponding hand-written lines can leave the user filter files. — **Reversibility:** reversible — it is the same export mechanism folder_sync already implements for VS Code state.
+
+### apt transaction fidelity
+
+- **D-30:** `apt-get -s` simulation runs at **plan time**, and collateral effects are classified before anything is refused. A package the simulation would remove or downgrade that is **auto-installed** (a dependency apt pulled in, `apt-mark showauto`) is apt doing its job — proceed without asking. A package that is **manually installed** (`apt-mark showmanual`) is something the user chose to have, so it becomes its own reviewable item offering install-anyway / skip / abort. Blanket refusal is wrong: it blocks legitimate installs whose only collateral is a dependency nobody chose. The question belongs in the review, never mid-apply — a prompt during apply reintroduces the prompt-flooding the batched review exists to prevent, and violates review-before-any-change.
+
+### Code and documentation layout
+
+- **D-31:** `jobs/` contains job modules only, plus `base.py` and `context.py` as the job infrastructure both sides share. The package-sync helpers live in a `jobs/packages/` python package with the `package_` prefix stripped: `items.py`, `review.py`, `state.py`, `sync_core.py`. Job modules stay directly in `jobs/` because job discovery resolves a `sync_jobs` key to `jobs/<name>.py`.
+- **D-32:** No empty configuration sections. A job gets a config section when it has a real key, never as a placeholder for a possible future one — an empty `apt_sync: {}` with a banner comment explaining that it has no keys is worse than its absence. `default-config.yaml` and `config-schema.yaml` follow this together.
+- **D-33:** `configuration.md` and `default-config.yaml` explain **configuration**. What a job does belongs in its own document, not in the configuration reference — including for the jobs that predate this phase, whose explanations move out too. The package jobs share enough of the item → diff → review → converge model to be documented together. In `default-config.yaml`, a job's enable flag gets one brief line, with rationale living in the job document.
 
 ### Claude's Discretion
 
@@ -193,6 +203,27 @@ Phase 2 replicates *what is installed* from source to target across apt, snap an
 - **Relaxing one-module-one-Job (issue #30) and job DAG ordering (issue #28)** — D-17's ordering is explicit and documented for now; a real dependency graph is separate work.
 
 </deferred>
+
+
+<shipped>
+## Already Delivered — Do Not Undo
+
+Phase 2 executed 13 plans before these corrections. The corrections above change the review scope, the job split, the snippet transport and two policies; everything below is independent of them, was verified, and must survive replanning.
+
+- Privileged `/etc/apt` writes stage under the target user's `~/.cache` and are promoted with `sudo install -o root -g root -m 0644`. `send_file()` is plain SFTP as the SSH user and can never target `/etc`.
+- `sudo install` is preceded by `sudo mkdir -p -m 0755` on the destination directory: `/etc/apt/keyrings` does not exist on a fresh Ubuntu 24.04 install, and `install` without `-D` fails outright when it is absent.
+- Repository/key/pin/config convergence is one transaction: back up every destination, write, run a single `apt-get update`, and restore on failure — including deleting files that did not previously exist.
+- A backup failure records a per-item failure for the whole group rather than leaving the outcome map unpopulated, which previously produced an uncaught `KeyError` that aborted the run.
+- The session status and CLI exit code derive from `job_results`, not from whether an exception propagated. A run whose items all failed must not exit 0.
+- `validate()` checks passwordless sudo on the **source** as well as the target: capturing `/etc/apt` state runs `sudo find` there, and without it the capture degrades to empty digest maps and the sync reports success having replicated nothing.
+- Every environmental assumption is checked in `validate()` with copy-paste remediation via `sudoers.passwordless_sudo_hint`, never discovered mid-execute. This rule is recorded in the `SyncJob.validate()` contract in `jobs/base.py`.
+- `simulate_apt_transaction` fails closed when the simulation command itself fails, rather than reading a failed `apt-get -s` as a clean preview. D-30 changes what is done with a *successful* simulation's result, not this.
+- Debian version ordering is decided by `dpkg --compare-versions`, never string comparison.
+- `snap list --all` is parsed by header column name, never fixed offsets. No command in `snap_sync` sets a hold.
+- Machine-local `*.decisions.yaml` files are excluded from `folder_sync` non-overridably, emitted before any user filter surface.
+- The full VM integration suite passes in CI (60 passed, 5 skipped). Tests assert against the target's own package manager, never against pc-switcher's log text.
+
+</shipped>
 
 ---
 
