@@ -171,6 +171,23 @@ def _failure_already_logged(exc: BaseException) -> bool:
     return getattr(exc, _FAILURE_LOGGED_ATTR, False)
 
 
+def _summarize_job_outcomes(job_results: list[JobResult]) -> tuple[SessionStatus, str | None]:
+    """Derive the session outcome from the collected job results.
+
+    Reaching the end of the job loop without an exception is not the same as success:
+    per-item package failures are collected and recorded as FAILED ``JobResult``s rather
+    than raised, so that one manager's item failures cannot cancel another manager's
+    already-approved work (D-27). The outcome therefore has to come from the results
+    themselves, or a sync where every item failed would still exit 0.
+
+    ``SKIPPED`` is a normal outcome for a disabled or not-applicable job, not a failure.
+    """
+    failed_jobs = [r.job_name for r in job_results if r.status is JobStatus.FAILED]
+    if not failed_jobs:
+        return SessionStatus.COMPLETED, None
+    return SessionStatus.FAILED, f"Jobs reported failures: {', '.join(failed_jobs)}"
+
+
 class Orchestrator:
     """Main orchestrator coordinating the complete sync workflow.
 
@@ -272,6 +289,17 @@ class Orchestrator:
             # JobContext.enabled_sync_jobs docstring.
             enabled_sync_jobs=dict(self._config.sync_jobs),
         )
+
+    def _log_sync_outcome(self, session: SyncSession) -> None:
+        """Log the end-of-run outcome at the severity the session status warrants."""
+        if session.status is SessionStatus.FAILED:
+            self._logger.warning(
+                "Sync finished with job failures: %s",
+                session.error_message,
+                extra={"job": "orchestrator", "host": "source"},
+            )
+        else:
+            self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
 
     async def run(self) -> SyncSession:  # noqa: PLR0915
         """Execute the complete sync workflow.
@@ -412,13 +440,16 @@ class Orchestrator:
             await self._create_snapshots(SnapshotPhase.POST)
             self._ui.set_current_step(SyncStep.POST_SNAPSHOT, "Post-sync snapshots")
 
+            # Reaching here only means nothing propagated, which is weaker than success —
+            # see _summarize_job_outcomes for why the outcome comes from job_results.
+            session.status, session.error_message = _summarize_job_outcomes(job_results)
+
             # SyncStep 12: Record sync history on both machines (this machine was SOURCE,
             # target was TARGET). The write is skipped in dry-run mode (D-12: dry-run must
             # not write any state), but the counter still advances so it reaches 100% on
             # both real and dry-run paths — matching the snapshot steps.
-            session.status = SessionStatus.COMPLETED
             session.ended_at = datetime.now(UTC)
-            self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
+            self._log_sync_outcome(session)
             if not self._dry_run:
                 await self._update_sync_history()
             self._ui.set_current_step(SyncStep.RECORD_HISTORY, "Record sync history")
