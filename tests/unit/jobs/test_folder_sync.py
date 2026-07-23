@@ -657,6 +657,60 @@ class TestVscodeStateExcludeFilters:
             assert cmd.index(backup) < cmd.index("merge /abs/home.filter")
 
 
+class TestDecisionFileExcludeFilters:
+    """Every manager's machine-local decision file (`~/.config/pc-switcher/*.decisions.yaml`)
+    is excluded from the mirror via a home-relative GLOB that `package_state` owns;
+    folder_sync only translates it into a root-anchored, first-match filter for the
+    folder being synced (D-08, D-09). Unconditional — not gated on any package job.
+    """
+
+    def _filters(self, folder_path: str, home: str) -> list[str]:
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path(home)):
+            return FolderSyncJob._decision_file_exclude_filters(folder_path)  # pyright: ignore[reportPrivateUsage]
+
+    def test_home_under_synced_folder_anchors_the_glob_under_user_subdir(self) -> None:
+        assert self._filters("/home", "/home/alice") == [
+            f"--filter={shlex.quote('- /alice/.config/pc-switcher/*.decisions.yaml')}"
+        ]
+
+    def test_glob_outside_synced_folder_is_skipped(self) -> None:
+        """Syncing /root while the invoking user's home is /home/alice excludes nothing."""
+        assert self._filters("/root", "/home/alice") == []
+
+    def test_root_invoker_excludes_under_root(self) -> None:
+        assert self._filters("/root", "/root") == [
+            f"--filter={shlex.quote('- /.config/pc-switcher/*.decisions.yaml')}"
+        ]
+
+    def test_decision_file_exclude_precedes_merge_filter(self) -> None:
+        """Emitted GLOBAL-FIRST, before the folder's central merge filter (first-match-wins)."""
+        ctx = make_context(config={"folders": [{"path": "/home"}]}, target_username="testuser")
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path="/home", filter_file="/abs/home.filter")
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path("/home/alice")):
+            cmd = job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
+        assert cmd.index(".config/pc-switcher/*.decisions.yaml") < cmd.index("merge /abs/home.filter")
+
+    def test_user_plus_rule_for_decision_file_does_not_change_command_ordering(self) -> None:
+        """A `+` rule in the user's filter_file cannot re-expose the decision file: the
+        GLOBAL-FIRST exclude is already emitted before that filter file is ever merged,
+        so rsync's first-match-wins semantics keep it excluded regardless of the
+        filter_file's own contents (which this unit test does not need to read)."""
+        ctx = make_context(config={"folders": [{"path": "/home"}]}, target_username="testuser")
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path="/home", filter_file="/abs/home-with-plus-rule.filter")
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path("/home/alice")):
+            cmd = job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
+        decision_exclude = f"--filter={shlex.quote('- /alice/.config/pc-switcher/*.decisions.yaml')}"
+        assert decision_exclude in cmd
+        assert cmd.index(decision_exclude) < cmd.index("merge /abs/home-with-plus-rule.filter")
+
+    def test_unconditional_regardless_of_which_folder_is_synced(self) -> None:
+        """Not gated on any package job's enable flag — present for /root too when the
+        invoking user's home is under it."""
+        assert self._filters("/root", "/root") != []
+
+
 # ---------------------------------------------------------------------------
 # SSH transport credential tests
 # ---------------------------------------------------------------------------

@@ -1,22 +1,29 @@
-"""Unit tests for `package_state.py`'s machine-local decision store (plan 02-04, task 1).
+"""Unit tests for `package_state.py`'s machine-local decision store (plan 02-04).
 
-Covers `DecisionFile`/`DecisionEntry`/`filter_inert` as standalone units, using
-stub/fake `Executor`s — no real shell/SSH. Task 2 extends this file with
-pipeline-level assertions (inert items absent from `PackageSyncJob.plan()`'s diffs,
-skip-always recorded on the correct end of the connection in `apply()`).
+Task 1 covers `DecisionFile`/`DecisionEntry`/`filter_inert` as standalone units, using
+stub/fake `Executor`s — no real shell/SSH. Task 2 (`TestPipelineWiring` and
+`TestConfigSyncScope` below) extends this file with pipeline-level assertions: inert
+items absent from `PackageSyncJob.plan()`'s diffs, skip-always recorded on the correct
+end of the connection in `apply()`, nothing recorded in dry-run or non-interactive runs,
+and confirmation that `config_sync` never transfers a decision file.
 """
 
 from __future__ import annotations
 
 import logging
 import shlex
+from collections.abc import Callable
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from pcswitcher.config_sync import CONFIG_REMOTE_PATH, _copy_config_to_target  # pyright: ignore[reportPrivateUsage]
 from pcswitcher.jobs import package_state
-from pcswitcher.jobs.package_items import AptPackageItem, ItemClass
+from pcswitcher.jobs.context import JobContext
+from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
+from pcswitcher.jobs.package_review import Decision, ReviewOutcome
 from pcswitcher.jobs.package_state import (
     DECISION_FILE_GLOB_RELPATH,
     DECISION_FILE_RELPATH_TEMPLATE,
@@ -24,11 +31,29 @@ from pcswitcher.jobs.package_state import (
     DecisionFile,
     filter_inert,
 )
-from pcswitcher.models import CommandResult
+from pcswitcher.jobs.package_sync_core import PackagePlan, PackageSyncJob
+from pcswitcher.models import CommandResult, ValidationError
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def make_context(*, dry_run: bool = False) -> JobContext:
+    source = MagicMock()
+    source.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
+    target = MagicMock()
+    target.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
+    return JobContext(
+        config={},
+        source=source,
+        target=target,
+        event_bus=MagicMock(),
+        session_id="test-1234",
+        source_hostname="source-host",
+        target_hostname="target-host",
+        dry_run=dry_run,
+    )
 
 
 class FakeShellExecutor:
@@ -71,6 +96,36 @@ def _entry(item_id: str = "apt:package:brscan3", reason: str | None = "printer d
         reason=reason,
         recorded_at="2026-07-22T09:14:03+00:00",
     )
+
+
+def _decision_file_contents(item_id: str) -> str:
+    return (
+        f"machine_specific:\n  {item_id}:\n    item_class: apt_package\n"
+        f"    label: {item_id}\n    reason: null\n    recorded_at: '2026-07-22T09:14:03+00:00'\n"
+    )
+
+
+def _respond_cat_with(content: str) -> Callable[..., CommandResult]:
+    """A `run_command` side_effect returning `content` for any `cat ...` decision-file
+    read and an empty success for everything else."""
+
+    def _side_effect(cmd: str, **_: object) -> CommandResult:
+        if cmd.startswith("cat "):
+            return CommandResult(0, content, "")
+        return CommandResult(0, "", "")
+
+    return _side_effect
+
+
+def _respond_echo_home(home: str) -> Callable[..., CommandResult]:
+    """A `run_command` side_effect answering `echo $HOME` and succeeding empty otherwise."""
+
+    def _side_effect(cmd: str, **_: object) -> CommandResult:
+        if cmd == "echo $HOME":
+            return CommandResult(0, home, "")
+        return CommandResult(0, "", "")
+
+    return _side_effect
 
 
 # ---------------------------------------------------------------------------
@@ -282,3 +337,204 @@ class TestRelpathConstants:
         content = Path(source).read_text(encoding="utf-8")
         assert "brscan3" not in content
         assert "brother-udev" not in content
+
+
+# ---------------------------------------------------------------------------
+# Task 2: pipeline wiring — inert items never reach the review, skip-always is
+# recorded on the correct end, never in dry-run or a non-interactive outcome.
+# ---------------------------------------------------------------------------
+
+
+class _FakePackageJob(PackageSyncJob):
+    """Minimal concrete `PackageSyncJob` with configurable source/target items and a
+    recording `converge()`, matching the shape `test_package_sync_core.py`'s
+    `FakeSyncJob` uses — isolates the shared plan()/apply() pipeline from any
+    apt-specific machinery.
+    """
+
+    name: ClassVar[str] = "fake_pkg"
+    manager_id: ClassVar[str] = "fake"
+
+    def __init__(
+        self,
+        context: JobContext,
+        *,
+        source_items: list[AptPackageItem] = [],  # noqa: B006 (test-only, never mutated)
+        target_items: list[AptPackageItem] = [],  # noqa: B006
+    ) -> None:
+        super().__init__(context)
+        self._source_items = source_items
+        self._target_items = target_items
+        self.converge_calls: list[ItemDiff] = []
+
+    async def capture_source_items(self) -> list[AptPackageItem]:
+        return self._source_items
+
+    async def query_target_items(self) -> list[AptPackageItem]:
+        return self._target_items
+
+    async def validate(self) -> list[ValidationError]:
+        return []
+
+    async def converge(self, diff: ItemDiff) -> CommandResult:
+        self.converge_calls.append(diff)
+        return CommandResult(0, "", "")
+
+
+def _remove_diff(item_id: str) -> ItemDiff:
+    return ItemDiff(
+        item_class=ItemClass.APT_PACKAGE,
+        diff_class=DiffClass.EXTRA_ON_TARGET,
+        action=DiffAction.REMOVE,
+        item_id=item_id,
+        label=item_id,
+        detail=None,
+    )
+
+
+def _install_diff(item_id: str) -> ItemDiff:
+    return ItemDiff(
+        item_class=ItemClass.APT_PACKAGE,
+        diff_class=DiffClass.MISSING_ON_TARGET,
+        action=DiffAction.INSTALL,
+        item_id=item_id,
+        label=item_id,
+        detail=None,
+    )
+
+
+class TestPipelineWiring:
+    @pytest.mark.asyncio
+    async def test_source_held_inert_item_absent_from_the_plans_diffs(self) -> None:
+        context = make_context()
+        source = context.source
+        source.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_decision_file_contents("apt:package:brscan3"))
+        )
+        job = _FakePackageJob(
+            context,
+            source_items=[AptPackageItem(name="brscan3", version="1.0"), AptPackageItem(name="vim", version="9.0")],
+        )
+
+        plan = await job.plan()
+
+        assert {d.item_id for d in plan.diffs} == {"apt:package:vim"}
+        all_group_item_ids = {entry.item_id for group in plan.groups for entry in group.entries}
+        assert "apt:package:brscan3" not in all_group_item_ids
+
+    @pytest.mark.asyncio
+    async def test_target_held_inert_item_absent_even_though_source_also_differs(self) -> None:
+        context = make_context()
+        target = context.target
+        target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_decision_file_contents("apt:package:legacy-tool"))
+        )
+        job = _FakePackageJob(context, target_items=[AptPackageItem(name="legacy-tool", version="1.0")])
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+
+    @pytest.mark.asyncio
+    async def test_plan_issues_no_decision_file_write(self) -> None:
+        context = make_context()
+        job = _FakePackageJob(context, source_items=[AptPackageItem(name="vim", version="9.0")])
+
+        await job.plan()
+
+        for cmd in [call.args[0] for call in context.source.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
+            assert "mv -f" not in cmd
+        for cmd in [call.args[0] for call in context.target.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
+            assert "mv -f" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_every_record_call_originates_from_apply_not_plan(self) -> None:
+        context = make_context()
+        job = _FakePackageJob(context, source_items=[AptPackageItem(name="vim", version="9.0")])
+        plan = await job.plan()
+        job.accept_review(plan, ReviewOutcome(decisions={"apt:package:vim": Decision.APPLY}, was_interactive=True))
+
+        with patch.object(DecisionFile, "record", new=AsyncMock()) as record_mock:
+            await job.apply()
+
+        record_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_skip_always_on_remove_writes_to_target_not_source(self) -> None:
+        context = make_context()
+        job = _FakePackageJob(context)
+        diff = _remove_diff("apt:package:legacy-tool")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
+
+        await job.apply()
+
+        target_cmds = [call.args[0] for call in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        source_cmds = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        assert any("mv -f" in cmd for cmd in target_cmds)
+        assert not any("mv -f" in cmd for cmd in source_cmds)
+
+    @pytest.mark.asyncio
+    async def test_skip_always_on_install_writes_to_source_not_target(self) -> None:
+        context = make_context()
+        job = _FakePackageJob(context)
+        diff = _install_diff("apt:package:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
+
+        await job.apply()
+
+        target_cmds = [call.args[0] for call in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        source_cmds = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        assert any("mv -f" in cmd for cmd in source_cmds)
+        assert not any("mv -f" in cmd for cmd in target_cmds)
+
+    @pytest.mark.asyncio
+    async def test_no_record_call_when_dry_run(self) -> None:
+        context = make_context(dry_run=True)
+        job = _FakePackageJob(context)
+        diff = _remove_diff("apt:package:legacy-tool")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
+
+        await job.apply()
+
+        for cmd in [call.args[0] for call in context.target.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
+            assert "mv -f" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_no_record_call_when_outcome_was_not_interactive(self) -> None:
+        context = make_context()
+        job = _FakePackageJob(context)
+        diff = _remove_diff("apt:package:legacy-tool")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=False))
+
+        await job.apply()
+
+        for cmd in [call.args[0] for call in context.target.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
+            assert "mv -f" not in cmd
+
+
+# ---------------------------------------------------------------------------
+# config_sync never transfers a decision file (D-09) — verified, not assumed.
+# ---------------------------------------------------------------------------
+
+
+class TestConfigSyncScope:
+    @pytest.mark.asyncio
+    async def test_copy_config_to_target_sends_only_config_yaml(self, tmp_path: Path) -> None:
+        source_path = tmp_path / "config.yaml"
+        source_path.write_text("logging: {}\n")
+
+        target = MagicMock()
+        target.run_command = AsyncMock(side_effect=_respond_echo_home("/home/alice"))
+        target.send_file = AsyncMock()
+
+        await _copy_config_to_target(target, source_path)
+
+        assert target.send_file.await_count == 1
+        remote_path = target.send_file.call_args.args[1]
+        assert remote_path.endswith("config.yaml")
+        assert "decisions" not in remote_path
+        assert CONFIG_REMOTE_PATH.endswith("/config.yaml")
