@@ -197,6 +197,37 @@
         "label": "Skill: gsd-code-review",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01QdgGwtmzGmP3svw8GCXsqF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-pause-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c4817dd6ac42",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1113,
+        "end": 1114,
+        "entry_ids": [
+          "cf59507e-6a7c-4ffa-9573-99b0ee2eaf30"
+        ],
+        "tool_use_id": "toolu_01QdgGwtmzGmP3svw8GCXsqF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01QdgGwtmzGmP3svw8GCXsqF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-pause-work",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {

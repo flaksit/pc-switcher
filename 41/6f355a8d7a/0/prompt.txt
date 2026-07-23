@@ -21,3 +21,40 @@ I still don't understand a thing about sync_config_to_target. What did that do b
 Don't rely on FolderSync to sync anything. The user could choose to disable foldersync or exclude the pc-switcher folder. UserSyncJobs are in users hands.
 So we NEED to sync package-snippets.yaml to target. However, if I understand well, SyncStep 9 is too early, because the snippets still can change during the job that handles manual .debs and other manual installs. Which job is that anyway? I don't see a job file nor a enable/disable flag for it. You mention "design choice inside apt_sync" - apt has nothing to do with this. What are the snippets used for, then? Only relevant for manual installs, no?
 Well, IF the snippets are relevant and there IS a job that handles manual installs, then I would propose to just sync the snippets to target in that job, right after the review/edit/add phase where they could still be changed. send_file() is there for that reason.
+
+---
+
+I want to add two more changes:
+
+Refactor modules in jobs/:
+- jobs/ directly should only contain job modules, not helper modules (except for base.py).
+- put the package_*.py modules into a new package/ subdir, and strip the package_ from their names.
+
+Remove the empty config sections from config.yaml and configuration.md:
+- Never add empty config sections for maybe sometime in the future. YAGNI. Don't bother the user with that.
+- If doc is needed about the package managers in the config, it should be very brief and just above their true/false enable flags.
+- configuration.md and config.yaml are about configuration. Need to explain the configuration.  
+  The explanation of what each job does should be in different doc. Maybe even doc per job? Nice and tidy. Maybe all package jobs together if they share a lot of commonality to explain.
+
+---
+
+naming: subfolder (python package) "packages" instead of "package" and "manual_installs_sync" (both plural)
+
+Keep context.py, like base.py. I don't even understand why two different modules.
+
+Migrate ALL job doc out of configuration.md.
+
+ADR-020:
+- I read "the sync is visibly not clean until every unreproducible item is snippet-backed or recorded machine-specific": not true. skip_once is a completely valid choice. User can e.g. skip this because it was a temporary thing.
+- I read "`apt-get -s` ... MUST be refused and reported as a per-item failure": not true. There is legitimate case that we shouldn't refuse: when the package-to-downgrade-or-remove is NOT a package installed by the user but is a dependency that was automatically installed. If the package-to-downgrade-or-remove IS installed by the user, ask the user what to do (install-anyway, skip, abort).
+
+Ok.
+First, propose how to organize the implementation of these 7 tasks. Sub-agent per task? Do not do this yourself in your own session; you are orchestrator. It would even be good to start a fresh session instead of continuing this one here.
+
+---
+
+What is the gsd-way to tackle review feedback after/during a gsd-execute phase? Wouldn't we do it following the gsd book?
+
+---
+
+y. And give me a prompt that I will give with "/gsd-plan-phase 2": short summary of the points that we changed and that need additional planning; not replanning the whole.
