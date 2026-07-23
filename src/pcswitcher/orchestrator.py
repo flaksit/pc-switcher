@@ -938,6 +938,8 @@ class Orchestrator:
                 context = self._create_job_context(job_config)
                 jobs.append(job_class(context))
 
+        config_errors.extend(self._check_package_jobs_precede_folder_sync())
+
         # Check for config errors
         if config_errors:
             error_msgs = [f"  - {e.job}: {e.path} - {e.message}" for e in config_errors]
@@ -955,6 +957,37 @@ class Orchestrator:
             raise RuntimeError("System state validation failed:\n" + "\n".join(error_msgs))
 
         return jobs
+
+    def _check_package_jobs_precede_folder_sync(self) -> list[ConfigError]:
+        """D-17: apt_sync/snap_sync/flatpak_sync must run before folder_sync — apps are
+        provisioned first, then their data lands on top (decisive for flatpak, where
+        `flatpak install` must create `~/.local/share/flatpak` before folder_sync would
+        otherwise land `~/.var/app` on top).
+
+        The shipped `default-config.yaml` encodes this ordering only by key order
+        (jobs run in `self._config.sync_jobs.items()` order) — a user who hand-edits
+        their own `config.yaml`, e.g. appending a newly-enabled `flatpak_sync: true`
+        after an existing `folder_sync: true` line, silently inverts it with no error.
+        This validates the RESOLVED, enabled order and turns that silent inversion into
+        a loud `ConfigError` instead (WR-02) — every other ordering (jobs disabled,
+        jobs absent, folder_sync disabled) is unaffected.
+        """
+        enabled_order = [job_name for job_name, enabled in self._config.sync_jobs.items() if enabled]
+        if "folder_sync" not in enabled_order:
+            return []
+        folder_sync_index = enabled_order.index("folder_sync")
+        return [
+            ConfigError(
+                job=job_name,
+                path="sync_jobs",
+                message=(
+                    f"{job_name} must be listed before folder_sync in sync_jobs (D-17): package jobs "
+                    "provision apps before folder_sync lands their data on top. Move it above folder_sync."
+                ),
+            )
+            for job_name in ("apt_sync", "snap_sync", "flatpak_sync")
+            if job_name in enabled_order and enabled_order.index(job_name) > folder_sync_index
+        ]
 
     async def _check_disk_space_preflight(self) -> None:
         """Check disk space on both source and target before creating snapshots.
