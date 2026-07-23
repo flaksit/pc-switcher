@@ -320,7 +320,7 @@ sequenceDiagram
 6. **Pre-sync snapshots** — btrfs pre-snapshots on both machines (the rollback point).
 7. **Install/upgrade on target** — install the matching pc-switcher version on the target (after snapshots, so a bad install is recoverable).
 8. **Config sync** — copy the source config to the target.
-9. **Job execution** — run each enabled sync job, with a background disk-space monitor. If any package job (`apt_sync`, `snap_sync`, `flatpak_sync`) is enabled, the `PackagePhaseCoordinator` runs first, ahead of the per-job execution loop — see [Package Sync Subsystem](#package-sync-subsystem) below.
+9. **Job execution** — run each enabled sync job, with a background disk-space monitor. Each enabled package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) runs in this job loop like any other job and reviews itself, running plan then review then apply inside its own `execute()` — see [Package Sync Subsystem](#package-sync-subsystem) below.
 10. **Post-sync snapshots** — btrfs post-snapshots on both machines.
 
 On success, the orchestrator then records the source/target roles in each machine's sync-history (the topology-safety state read by the phase-3 gate on the next run). A `finally` block always runs cleanup: it terminates the remote lock process (releasing the target lock) and disconnects. Locks are fcntl advisory locks, so they are released automatically if a process exits or the SSH connection drops — a leftover lock *file* never blocks a future sync.
@@ -355,56 +355,34 @@ sequenceDiagram
 
 ## Package Sync Subsystem
 
-Three sync jobs — `apt_sync`, `snap_sync`, `flatpak_sync` — replicate *what is installed* (apt packages plus the `/etc/apt` repository state they depend on, snaps, flatpaks) rather than user data. They sit in the orchestrator's job-execution phase (phase 9 above), **ahead of `folder_sync`**: this ordering is load-bearing, not cosmetic — apps must exist before their data lands on top of them. This is decisive for `flatpak_sync`, where `flatpak install` must create `~/.local/share/flatpak` before `folder_sync` would otherwise place `~/.var/app` content there, and it keeps package postinst defaults from overwriting real synced config for every package job.
+Four sync jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` — replicate *what is installed* (apt packages plus the `/etc/apt` repository state they depend on, snaps, flatpaks, and the things no package manager can reproduce) rather than user data. The three package-manager jobs sit in the orchestrator's job-execution phase (phase 9 above), **ahead of `folder_sync`**: this ordering is load-bearing, not cosmetic — apps must exist before their data lands on top of them. This is decisive for `flatpak_sync`, where `flatpak install` must create `~/.local/share/flatpak` before `folder_sync` would otherwise place `~/.var/app` content there, and it keeps package postinst defaults from overwriting real synced config for every package job. `manual_installs_sync` owns the apt-no-candidate set and the unowned installs under `/usr/local` and `/opt`, plus the install-snippet registry; it pushes that registry to the target itself with `send_file()` right after its own review, so a snippet authored on the fly reaches the target the same run.
 
-### Plan → review → apply, and why a coordinator owns the middle step
+### Plan, review and apply inside each job's own execute()
 
-Each package job splits its work into two phases instead of one:
+Each package job runs plan then review then apply inside its own `execute()`, and applies nothing until its own review returns:
 
-- **`plan()`** — capture the source's manifest, query the target's own state, diff the two, build this job's own review groups. Read-only: nothing here may mutate either machine.
-- **`apply()`** — converge only the diffs the user approved, one item at a time, collecting per-item failures rather than stopping at the first one.
+- **plan** — capture the source's manifest, query the target's own state, diff the two, build this job's own review groups. Read-only: nothing here may mutate either machine.
+- **review** — present this job's own batched review, grouped by action, batched per manager and never across managers. Installs and removals show as separate groups with removals labelled as removals, so a bulk tick can never silently delete.
+- **apply** — converge only the diffs the user approved, one item at a time, collecting per-item failures rather than stopping at the first one.
 
-A `PackagePhaseCoordinator` owns the step between them: it runs every enabled package job's `plan()` first, concatenates their review groups into **one** batched review (grouped by manager and by action), presents it exactly once, and hands each job back only its own slice of the outcome before any job's `apply()` runs. A package job's `execute()` refuses to run without a coordinator-supplied accepted plan — this is a structural guarantee, not a convention a future job author has to remember.
-
-The coordinator exists because three independently-executing jobs plus one cross-manager review do not compose safely without it: the orchestrator's job loop runs jobs sequentially, so a job that reviewed and converged inside its own `execute()` would let `apt_sync` finish mutating the target before `snap_sync` had even diffed its own state — defeating the "one batched review before any change" guarantee. Splitting `plan()` from `apply()` and inserting the coordinator between them is what makes that guarantee hold across three jobs that otherwise know nothing about each other.
+There is no cross-manager review owner and no coordinator between the jobs. The jobs are deliberately independent — separate enable flags, config, validation, failure isolation and progress — so a single owner reviewing every enabled manager at once would contradict that independence, and the intended UX is one batched review per manager rather than one review for the whole fleet of managers. Each job owning its own review between its own plan and its own apply achieves review-before-any-change without coupling one job's ordering or failure surface to another's. The orchestrator's job loop runs the jobs sequentially, and each job's review-before-apply is self-contained, so `apt_sync` reviewing and converging before `snap_sync` even starts is correct behaviour, not a violation: each job's own review still precedes every change that job makes.
 
 ### Source/target split
 
-Capture and every decision (what to install, what to mark machine-specific, how to resolve an unreproducible item) happen on the **source**. The target only answers read-only state queries during `plan()` and executes converge commands during `apply()` — it never decides anything on its own. This matches ADR-002's stateless-target model: the target exposes discrete, stateless operations that the source orchestrates over SSH, never a persistent daemon holding its own decision state.
+Capture and every decision (what to install, what to mark machine-specific, how to resolve an unreproducible item) happen on the **source**. The target only answers read-only state queries during plan and executes converge commands during apply — it never decides anything on its own. This matches ADR-002's stateless-target model: the target exposes discrete, stateless operations that the source orchestrates over SSH, never a persistent daemon holding its own decision state.
 
 ### Pipeline diagram
 
 ```mermaid
 flowchart LR
-    subgraph Plan["Plan (read-only, per job)"]
-        A["apt_sync.plan()"]
-        S["snap_sync.plan()"]
-        F["flatpak_sync.plan()"]
+    subgraph Job["One package job's execute()"]
+        P["plan()<br/>capture source, query target,<br/>diff, build review groups"]
+        R["review<br/>this job's own batched review<br/>(per manager, by action)"]
+        A["apply()<br/>converge approved diffs,<br/>collect per-item failures"]
+        P --> R --> A
     end
 
-    subgraph Coordinator["PackagePhaseCoordinator"]
-        M["Merge review groups\n(by manager, by action)"]
-        R["review_items()\none batched review"]
-        D["Distribute outcome\nper job, by item id"]
-    end
-
-    subgraph Apply["Apply (converge, per job)"]
-        AA["apt_sync.apply()"]
-        SA["snap_sync.apply()"]
-        FA["flatpak_sync.apply()"]
-    end
-
-    A --> M
-    S --> M
-    F --> M
-    M --> R --> D
-    D --> AA
-    D --> SA
-    D --> FA
-
-    style Coordinator fill:#fff3e0
-    style Plan fill:#e8f5e9
-    style Apply fill:#e1f5ff
+    style Job fill:#e8f5e9
 ```
 
 ---

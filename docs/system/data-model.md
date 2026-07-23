@@ -162,7 +162,7 @@ class Snapshot:
 
 ## Package Sync Entities
 
-Phase 2's package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`) adds its own item model and two on-disk data shapes. See [Package Sync Subsystem](architecture.md#package-sync-subsystem) for the pipeline these flow through.
+Phase 2's package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) adds its own item model and two on-disk data shapes. See [Package Sync Subsystem](architecture.md#package-sync-subsystem) for the pipeline these flow through.
 
 ### Item identity
 
@@ -214,7 +214,7 @@ On disk, entries are keyed by `item_id` under a `machine_specific:` mapping.
 
 ### Install-snippet registry (synced)
 
-One shared YAML file at `~/.config/pc-switcher/package-snippets.yaml`, holding an opaque, replayable shell command for each item no package manager can reproduce (a bare `.deb`, a manual install). **Synced** — it travels alongside `config.yaml` via `config_sync`'s `SYNCED_CONFIG_FILENAMES`, since how to install something is knowledge about the package, not the machine (contrast with the decision file above).
+One shared YAML file at `~/.config/pc-switcher/package-snippets.yaml`, holding an opaque, replayable shell command for each item no package manager can reproduce (a bare `.deb`, a manual install). **Reaches the target** — `manual_installs_sync` pushes it to the target itself with `send_file()` immediately after its own review, so a snippet authored on the fly during that review is included in the same run. It does **not** travel via `config_sync`, which carries `config.yaml` only and runs before any review, so it could not carry a snippet the user has not authored yet. How to install something is knowledge about the package, not the machine, so unlike the machine-local decision file above the registry does reach the target — but by the job's own push, never as a synced config file.
 
 ```python
 @dataclass(frozen=True)

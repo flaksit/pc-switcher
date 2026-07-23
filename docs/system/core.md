@@ -679,7 +679,7 @@ Lineage: 001-core Key Entities, 003-core-tests Key Entities
 
 **Domain Code**: `PKG` (Package Management Sync, Phase 2)
 
-Three `SyncJob`s — `apt_sync`, `snap_sync`, `flatpak_sync` — replicate installed software rather than user data (see [Package Sync Subsystem](architecture.md#package-sync-subsystem) in the architecture doc for the plan/review/apply pipeline and the `PackagePhaseCoordinator`). All three subclass `PackageSyncJob` (`src/pcswitcher/jobs/package_sync_core.py`), the shared core described below.
+Four `SyncJob`s — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` — replicate installed software rather than user data (see [Package Sync Subsystem](architecture.md#package-sync-subsystem) in the architecture doc for the per-job plan/review/apply pipeline). They subclass `PackageSyncJob` (`src/pcswitcher/jobs/packages/sync_core.py`), the shared core described below; the four job modules stay directly in `jobs/` because job discovery resolves a `sync_jobs` key to `jobs/<name>.py`, while the shared helpers live in the `jobs/packages/` package (`items.py`, `review.py`, `state.py`, `sync_core.py`).
 
 ### Shared core contract (`PackageSyncJob`)
 
@@ -692,7 +692,7 @@ Three `SyncJob`s — `apt_sync`, `snap_sync`, `flatpak_sync` — replicate insta
 In return, the base class guarantees:
 
 - **Planning is read-only.** `plan()` issues only read commands on both machines; nothing may mutate either machine until a review has been accepted.
-- **The review precedes every manager's changes.** A job's `execute()` refuses to run without a coordinator-supplied accepted plan (see the architecture doc's coordinator section) — a structural property, not a convention.
+- **Each job's review precedes its own changes.** A job's `execute()` runs its own plan, review and apply in order and applies nothing before its own review returns — a structural property of the single `execute()`, not a convention, and not owned by any outside component.
 - **Per-item continue-on-failure.** `apply()` attempts every approved diff, collects failures rather than stopping at the first one, and raises once at the end (`PackageItemFailures`) naming every item that failed, so one bad item never blocks the rest of the same job's approved work.
 - **Dry-run.** `--dry-run` produces the same plan and review as a real run but issues zero mutating commands (ADR-014).
 - **FULL/INFO logging split.** Per-item convergence detail logs at `FULL`; per-job summaries (counts, overall result) log at `INFO` — the same split `folder_sync` already follows.
@@ -722,6 +722,13 @@ A job whose convergence semantics don't fit the shared `plan()` (apt-package-sha
 - **Item classes**: `FLATPAK_REF`, `FLATPAK_REMOTE`.
 - **Convergence verbs**: `flatpak remote-add --if-not-exists`/`flatpak remote-delete` for remotes, always before the ref installs that depend on them; `flatpak install -y`/`flatpak uninstall -y` for refs, each prefixed with `sudo` if and only if the item's own scope is `system`. A ref whose origin remote is neither already on the target nor among this run's own successfully-added remotes is refused with a per-item failure naming the missing remote, rather than issuing an install flatpak would reject.
 - **First-sync scope**: "installed flatpak refs (per user/system scope)" and "configured flatpak remotes (per scope)", via `flatpak install/uninstall/remote-add per item, after review`.
+
+### `manual_installs_sync`
+
+- **Responsibilities**: everything no package manager can reproduce — apt packages with no repository candidate and unowned installs under `/usr/local`/`/opt` — plus the install-snippet registry. It runs its own `dpkg-query` and `apt-cache policy` queries rather than sharing `apt_sync`'s, so ownership stays clean, and it carries its own `sync_jobs` enable flag so disabling `apt_sync` never silently disables manual-install detection.
+- **Item classes**: `UNREPRODUCIBLE` for the detected items.
+- **Resolution**: an unreproducible item ends a run resolved by a snippet, a machine-specific mark, or a deliberate skip-once — skip-once is a valid resolution, not an unresolved state. A non-interactive run records nothing and does not fail on undecided items alone (D-21/D-26).
+- **Snippet transport**: after its own review, the job pushes the registry (`~/.config/pc-switcher/package-snippets.yaml`) to the target itself with `send_file()`, so a snippet authored on the fly during that review reaches the target in the same run. The registry never travels via `config_sync` (which runs before any review) or `folder_sync` (a user-controlled job).
 
 ## Assumptions
 
