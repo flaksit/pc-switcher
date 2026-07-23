@@ -1,0 +1,137 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "64b2800c8491",
+  "session_id": "f398cfb1-6dbb-4a20-aeeb-007baeacc760",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-23T17:26:48.841537419Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 4,
+  "save_step_count": 4,
+  "files_touched": [
+    ".planning/codebase/ARCHITECTURE.md",
+    ".planning/codebase/CONCERNS.md",
+    ".planning/codebase/CONVENTIONS.md",
+    ".planning/codebase/INTEGRATIONS.md",
+    ".planning/codebase/STACK.md",
+    ".planning/codebase/STRUCTURE.md",
+    ".planning/codebase/TESTING.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "a6f86d9b9b3f",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 63703,
+    "cache_read_tokens": 580519,
+    "output_tokens": 3967,
+    "api_call_count": 11
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-map-codebase-2026-07-23T17:22:06.762938918Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-map-codebase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "5aa954c064d5",
+      "timestamp": "2026-07-23T17:22:06.762938918Z",
+      "native": {
+        "command": "/gsd-map-codebase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-map-codebase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-23T17:26:48.829913871Z",
+    "agent_lines": 0,
+    "agent_removed": 1127,
+    "human_added": 1386,
+    "human_modified": 18,
+    "human_removed": 0,
+    "total_committed": 1386,
+    "total_lines_changed": 2531,
+    "agent_percentage": 44.527854602923746,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 12,
+      "user_lines_removed": 3,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/STATE.md": 3
+      },
+      "user_removed_per_file": {
+        ".planning/STATE.md": 3
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 571,
+      "user_lines_removed": 0,
+      "agent_lines_added": 3,
+      "agent_lines_removed": 1494,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/codebase/ARCHITECTURE.md": 242,
+        ".planning/codebase/CONVENTIONS.md": 118,
+        ".planning/codebase/INTEGRATIONS.md": 108,
+        ".planning/codebase/STACK.md": 94
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 224,
+      "user_lines_removed": 18,
+      "agent_lines_added": 385,
+      "agent_lines_removed": 1314,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/codebase/ARCHITECTURE.md": 18,
+        ".planning/codebase/TESTING.md": 197
+      },
+      "user_removed_per_file": {
+        ".planning/codebase/ARCHITECTURE.md": 18
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 158,
+      "user_lines_removed": 0,
+      "agent_lines_added": 509,
+      "agent_lines_removed": 1241,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/codebase/STRUCTURE.md": 149
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 248,
+      "user_lines_removed": 0,
+      "agent_lines_added": 613,
+      "agent_lines_removed": 1196,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/codebase/CONCERNS.md": 239
+      }
+    }
+  ]
+}
