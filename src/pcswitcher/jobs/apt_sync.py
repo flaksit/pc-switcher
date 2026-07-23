@@ -45,11 +45,19 @@ from pcswitcher.jobs.package_items import (
     HoldPinFact,
     ItemClass,
     ItemDiff,
+    UnreproducibleItem,
     build_dangling_keyring_detail,
     build_version_mismatch_detail,
     compare_deb_versions,
 )
-from pcswitcher.jobs.package_review import Decision, ReviewOutcome
+from pcswitcher.jobs.package_review import (
+    UNREPRODUCIBLE_REVIEW_ACTION,
+    Decision,
+    ReviewEntry,
+    ReviewGroup,
+    ReviewOutcome,
+)
+from pcswitcher.jobs.package_state import DecisionFile, SnippetRegistry, filter_inert
 from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
@@ -81,6 +89,20 @@ _APT_KEYRINGS_DIR = "/etc/apt/keyrings"
 _APT_TRUSTED_GPG_DIR = "/etc/apt/trusted.gpg.d"
 _APT_PREFERENCES_DIR = "/etc/apt/preferences.d"
 _APT_CONF_DIR = "/etc/apt/apt.conf.d"
+
+# D-19's bounded unowned-install scan: top-level entries of `/usr/local` and `/opt`,
+# plus the immediate children of `/usr/local/bin` and `/usr/local/lib` — one batched
+# `find <dir...> -mindepth 1 -maxdepth 1` covers all four, since `find` applies the
+# same depth options to every starting path it is given. Enough to NAME a finding
+# (D-18), never enough to walk an entire tree — the item is decided on, not replicated
+# (deferred ideas, CONTEXT.md).
+_UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")
+
+# Matches one `dpkg -S` "owned" line: `<package>[,<package>...]: <path>`. A path dpkg
+# does not own produces no such line at all (its "no path found" diagnostic goes to
+# stderr, which this scan never inspects) — absence from stdout is the only signal
+# `_owned_paths_from_dpkg_s` needs.
+_DPKG_S_OWNED_RE = re.compile(r"^[^:]+:\s+(?P<path>/\S.*)$")
 
 # The four repository-adjacent item classes that converge in a single ordered,
 # transactional group ahead of packages (Task 2) — kept as one constant so the trigger
@@ -148,6 +170,21 @@ def _packages_with_no_candidate(policy_output: str) -> set[str]:
                 no_candidate.add(current)
             current = None
     return no_candidate
+
+
+def _owned_paths_from_dpkg_s(output: str) -> frozenset[str]:
+    """Every path `dpkg -S` reports as owned, parsed from its stdout alone (D-19's
+    unowned-install scan). A queried path that dpkg does NOT own is simply absent from
+    this set — its "no path found matching pattern" diagnostic is a stderr message this
+    scan never reads, so a batched multi-path `dpkg -S` degrades cleanly even when some
+    of the paths are unowned and others are not.
+    """
+    owned: set[str] = set()
+    for line in output.splitlines():
+        match = _DPKG_S_OWNED_RE.match(line)
+        if match:
+            owned.add(match.group("path"))
+    return frozenset(owned)
 
 
 # -- Repository/key/pin/config capture and diff (D-11, D-12, D-13) ---------------------
@@ -571,10 +608,108 @@ class AptSyncJob(PackageSyncJob):
         no_candidate = _packages_with_no_candidate(result.stdout)
         return frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in names if name in no_candidate)
 
+    async def _scan_no_candidate_apt_packages(self, manual_names: Sequence[str]) -> list[UnreproducibleItem]:
+        """D-18: manually-installed packages whose SOURCE's own `apt-cache` has no
+        candidate at all — installed via `dpkg -i` of a bare `.deb`, never registered
+        with any configured repository.
+
+        Distinct from `collect_unavailable_item_ids` above (D-25's `REPO_UNAVAILABLE`),
+        which asks whether the TARGET's repos can install something the source already
+        has and is missing on the target; this asks whether the SOURCE's OWN repos can
+        reproduce something it itself installed, independent of whether the target
+        happens to already have it too — an item present on both machines still belongs
+        here if the source can no longer reinstall it itself.
+        """
+        if not manual_names:
+            return []
+
+        quoted = " ".join(shlex.quote(name) for name in manual_names)
+        result = await self.source.run_command(f"apt-cache policy {quoted}")
+        no_candidate = _packages_with_no_candidate(result.stdout)
+        return [
+            UnreproducibleItem(origin="apt-no-candidate", identifier=name, label=f"{name} (no apt candidate)")
+            for name in sorted(no_candidate)
+        ]
+
+    async def scan_unowned_installs(self) -> list[UnreproducibleItem]:
+        """D-18/D-19: paths under `/usr/local` and `/opt` that no dpkg package owns —
+        software an install script dropped there directly, bypassing apt entirely.
+
+        One batched `find` over `_UNOWNED_SCAN_ROOTS` names every candidate path, then
+        one batched `dpkg -S` over those candidates decides ownership; a path absent
+        from the `dpkg -S` output is unowned (`_owned_paths_from_dpkg_s`). Both steps
+        run on the SOURCE — this is a fact about what the source machine has installed,
+        not about the target.
+        """
+        quoted_roots = " ".join(shlex.quote(root) for root in _UNOWNED_SCAN_ROOTS)
+        listing = await self.source.run_command(f"find {quoted_roots} -mindepth 1 -maxdepth 1 2>/dev/null")
+        candidates = _lines(listing.stdout)
+        if not candidates:
+            return []
+
+        quoted_paths = " ".join(shlex.quote(path) for path in candidates)
+        ownership = await self.source.run_command(f"dpkg -S {quoted_paths}")
+        owned = _owned_paths_from_dpkg_s(ownership.stdout)
+
+        return [
+            UnreproducibleItem(origin="unowned-path", identifier=path, label=path)
+            for path in sorted(set(candidates) - owned)
+        ]
+
+    async def _plan_unreproducible_diffs(self) -> list[ItemDiff]:
+        """D-18/D-19/D-21: apt-no-candidate packages plus unowned `/usr/local`/`/opt`
+        installs, routed through the normal diff pipeline as `DiffClass.UNREPRODUCIBLE`.
+
+        An item already recorded machine-specific on the SOURCE is filtered out here,
+        before it ever becomes a diff — exactly like every other `filter_inert` use in
+        `PackageSyncJob.plan()` — which is what makes D-19's "a finding produces noise
+        exactly once, then never again" true for these two detectors too. Unreproducible
+        items are always source-held (they describe what the source machine has
+        installed), so the source's own decision file is the only one consulted; see
+        `PackageSyncJob._finalize_unreproducible` for the write side of that same rule.
+
+        An item with a registry snippet already on the target converges this run
+        (`action=INSTALL` — a snippet makes an item reproducible, which is the whole
+        point of the registry); one without still needs resolving (`action=REPORT_ONLY`)
+        and surfaces in its own review group (Task 2, `_build_review_groups` below).
+        """
+        manual = await self.source.run_command("apt-mark showmanual")
+        manual_names = _lines(manual.stdout)
+
+        items: list[UnreproducibleItem] = [
+            *await self._scan_no_candidate_apt_packages(manual_names),
+            *await self.scan_unowned_installs(),
+        ]
+        if not items:
+            return []
+
+        source_decisions = await DecisionFile(self.manager_id, self.source).load()
+        items = await filter_inert(items, source_decisions)
+        if not items:
+            return []
+
+        registry = SnippetRegistry(self.target)
+        diffs: list[ItemDiff] = []
+        for item in items:
+            snippet = await registry.get(item.item_id)
+            action = DiffAction.INSTALL if snippet is not None else DiffAction.REPORT_ONLY
+            diffs.append(
+                ItemDiff(
+                    item_class=ItemClass.UNREPRODUCIBLE,
+                    diff_class=DiffClass.UNREPRODUCIBLE,
+                    action=action,
+                    item_id=item.item_id,
+                    label=item.label,
+                    detail=None,
+                )
+            )
+        return diffs
+
     @override
     async def plan(self) -> PackagePlan:
         """Extends the base diff (missing/extra/mismatch/held/unavailable) with
-        plan-time apt transaction-collateral simulation (D-24, D-25, T-02-32).
+        plan-time apt transaction-collateral simulation (D-24, D-25, T-02-32) and D-18's
+        unreproducible-item detection.
 
         Runs AFTER the base diff and BEFORE review groups are (re)built, so collateral
         effects apt-get -s reveals appear as their own REPORT_ONLY facts in the SAME
@@ -584,24 +719,58 @@ class AptSyncJob(PackageSyncJob):
         base_plan = await super().plan()
         collateral_diffs = await self._collect_plan_time_collateral(base_plan.diffs)
         repo_diffs = await self._plan_repo_diffs()
+        unreproducible_diffs = await self._plan_unreproducible_diffs()
 
-        if not collateral_diffs and not repo_diffs:
+        if not collateral_diffs and not repo_diffs and not unreproducible_diffs:
             return base_plan
 
         # Ordering is an apt FACT (key before source before packages, T-02-16), not a
         # general one: the base loop stays a plain item-by-item iterator, and THIS job
         # sorts its own diffs before they reach it. `sorted` is stable, so within one
         # rank (e.g. every APT_PACKAGE diff, or every APT_PIN/APT_CONFIG diff) the
-        # original relative order — base diff, then collateral, then repo diffs — is
-        # preserved.
+        # original relative order — base diff, then collateral, then repo diffs, then
+        # unreproducible diffs — is preserved.
         all_diffs = tuple(
             sorted(
-                (*base_plan.diffs, *collateral_diffs, *repo_diffs),
+                (*base_plan.diffs, *collateral_diffs, *repo_diffs, *unreproducible_diffs),
                 key=lambda diff: _ITEM_CLASS_ORDER.get(diff.item_class, 3),
             )
         )
         groups = self._build_review_groups(all_diffs)
         return PackagePlan(manager=self.manager_id, diffs=all_diffs, groups=groups)
+
+    @override
+    def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
+        """Carves any still-unresolved `UNREPRODUCIBLE` diff (`action=REPORT_ONLY`) out
+        into its own group, presented after the base groups (installs/changes/removals)
+        so the user has already seen the bulk of the diff before being asked to resolve
+        anything (Task 2, D-21). An `UNREPRODUCIBLE` diff that already has a snippet
+        (`action=INSTALL`) is NOT pulled out here — it is already resolved, so it flows
+        through the base grouping like any other install-direction item, letting the
+        user simply approve or skip replaying it this run.
+        """
+        needs_resolution = [
+            diff
+            for diff in diffs
+            if diff.item_class == ItemClass.UNREPRODUCIBLE and diff.action == DiffAction.REPORT_ONLY
+        ]
+        if not needs_resolution:
+            return super()._build_review_groups(diffs)
+
+        needs_resolution_ids = {diff.item_id for diff in needs_resolution}
+        rest = [diff for diff in diffs if diff.item_id not in needs_resolution_ids]
+        groups = super()._build_review_groups(rest)
+
+        resolution_group = ReviewGroup(
+            manager=self.manager_id,
+            action=UNREPRODUCIBLE_REVIEW_ACTION,
+            title=f"Resolve {self.manager_id} items with no reproducible install",
+            entries=tuple(
+                ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="resolve", detail=diff.detail)
+                for diff in needs_resolution
+            ),
+        )
+        return (*groups, resolution_group)
 
     async def _plan_repo_diffs(self) -> list[ItemDiff]:
         """Capture + diff the four `/etc/apt/*` item classes (D-11/D-12/D-13), by
@@ -843,6 +1012,10 @@ class AptSyncJob(PackageSyncJob):
             outcome = ReviewOutcome(
                 decisions={**outcome.decisions, marker.item_id: Decision.APPLY},
                 was_interactive=outcome.was_interactive,
+                # Carried through verbatim — rebuilding `decisions` above must not drop
+                # this run's authored snippets/unresolved items (Task 2).
+                snippets=outcome.snippets,
+                unresolved=outcome.unresolved,
             )
         super().accept_review(plan, outcome)
 
@@ -851,7 +1024,11 @@ class AptSyncJob(PackageSyncJob):
         """Simulate the exact apt transaction, guard it, then run the real command —
         for apt packages. Repository-group items (keys, pins, apt config, sources) and
         the synthetic metadata-refresh marker converge as one ordered, transactional
-        unit via `_converge_repo_group_item` instead (Task 2).
+        unit via `_converge_repo_group_item` instead (Task 2); an `UNREPRODUCIBLE` item
+        converges by replaying its registered snippet (`_converge_unreproducible`) — the
+        only action it can have here is `INSTALL`, since `plan()` only sets that once a
+        snippet exists, and a `REPORT_ONLY` diff never reaches `converge()` at all
+        (`apply()`'s filter).
 
         One package per invocation (D-27) so a single bad package cannot fail the
         whole batch, and so each package's simulation corresponds exactly to the
@@ -860,6 +1037,8 @@ class AptSyncJob(PackageSyncJob):
         """
         if diff.item_class in _REPO_GROUP_CLASSES or diff.item_id == _METADATA_REFRESH_ITEM_ID:
             return await self._converge_repo_group_item(diff)
+        if diff.item_class == ItemClass.UNREPRODUCIBLE:
+            return await self._converge_unreproducible(diff)
         if diff.action == DiffAction.INSTALL:
             return await self._converge_install(diff)
         if diff.action == DiffAction.REMOVE:
@@ -868,6 +1047,14 @@ class AptSyncJob(PackageSyncJob):
             f"AptSyncJob.converge: unsupported action {diff.action.value!r} for {diff.label} "
             "(only 'install' and 'remove' exist for apt packages)"
         )
+
+    async def _converge_unreproducible(self, diff: ItemDiff) -> CommandResult:
+        """Replay this item's registered snippet against the target, verbatim (D-20).
+        `SnippetRegistry.replay` never raises for "no snippet registered" — it returns a
+        failed `CommandResult` instead, so a plan/apply-time race (the registry changed
+        underneath this run) is a per-item failure like any other (D-27), not a crash.
+        """
+        return await SnippetRegistry(self.target).replay(diff.item_id, self.target)
 
     async def _converge_install(self, diff: ItemDiff) -> CommandResult:
         name = _package_name(diff.item_id)
