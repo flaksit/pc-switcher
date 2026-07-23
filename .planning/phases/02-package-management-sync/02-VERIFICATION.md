@@ -157,3 +157,16 @@ The phase is NOT fully closed, however: two of the three roadmap success criteri
 ---
 
 *Verified: 2026-07-23T12:52:10Z — Verifier: Claude (gsd-verifier)*
+
+## Post-Verification Update: VM Suite Executed
+
+The two success criteria recorded above as `PRESENT_BEHAVIOR_UNVERIFIED` were unverifiable at verification time only because this environment has no VM access. They have since been executed in CI on PR #206.
+
+Result: **60 passed, 5 skipped** in 20m47s against real Hetzner VMs (`Integration Tests` job 89232547304), including all 8 package-sync integration tests. Both criteria are now verified against real apt/snap/flatpak state.
+
+Two defects surfaced only by that run, both fixed with regression tests:
+
+- `sync_config_to_target` read `<parent>/config.yaml` instead of the path its caller passed, breaking every caller whose config is not literally named `config.yaml` (7 pre-existing tests). Introduced when config sync was generalised to carry the snippet registry; invisible to the unit suite because every unit fixture happens to be named `config.yaml`.
+- `_find_removable_candidates` probed reverse dependencies for the whole shared-package set, one `apt-cache rdepends` process each, exceeding its command timeout and failing all 6 package-sync tests in setup.
+
+Remaining unverified: the two deferred human checkpoints (02-02 questionary/Live TUI rendering, 02-12 documentation walkthrough). Neither is machine-checkable.
