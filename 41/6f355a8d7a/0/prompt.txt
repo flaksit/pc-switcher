@@ -1,0 +1,23 @@
+"ADR-013 already specifies": it is formulated too specific: it should read "require passwordless sudoers entry that gives at least access to the rsync binary path". Fix that directly in the file.
+
+And I want to broaden the remark: anything a job assumes about the environment that is not already an explicit convention (like same arch, OS, userids), should be checked in validation phase instead of erroring while the job is executing.
+
+Continue
+
+---
+
+There is no locked "one batched review before any change" decision. Who wrote that? Where? I didn't. Not my intention. Batched review per package manager, not across all package managers. Treat each of them as individual jobs.
+
+defect about sync_config_to_target: You found a defect totally out of scope? Explain the defect and the solution.
+
+What is pcswitcher-review-spike.py? What does it do?
+
+---
+
+I still don't understand a thing about sync_config_to_target. What did that do before? And what do you want it to do now? It seems you want it to do more than what it did before, right? Why more than the current config.yaml?
+
+---
+
+Don't rely on FolderSync to sync anything. The user could choose to disable foldersync or exclude the pc-switcher folder. UserSyncJobs are in users hands.
+So we NEED to sync package-snippets.yaml to target. However, if I understand well, SyncStep 9 is too early, because the snippets still can change during the job that handles manual .debs and other manual installs. Which job is that anyway? I don't see a job file nor a enable/disable flag for it. You mention "design choice inside apt_sync" - apt has nothing to do with this. What are the snippets used for, then? Only relevant for manual installs, no?
+Well, IF the snippets are relevant and there IS a job that handles manual installs, then I would propose to just sync the snippets to target in that job, right after the review/edit/add phase where they could still be changed. send_file() is there for that reason.
