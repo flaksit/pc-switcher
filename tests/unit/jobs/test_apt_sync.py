@@ -1309,3 +1309,51 @@ class TestRepoGroupTransaction:
 
         commands = all_calls(target)
         assert any("sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-a" in c for c in commands)
+
+
+class TestRepoGroupBackupFailure:
+    """CR-01 regression: a `_backup_destination` failure must fail every repository-
+    group item through the normal per-item `PackageItemFailures` path, never escape
+    as a bare `KeyError` (which would crash the whole job and cancel every other
+    already-approved job's `apply()`, violating D-27).
+    """
+
+    @pytest.mark.asyncio
+    async def test_backup_failure_fails_every_group_item_without_crashing(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/preferences.d": CommandResult(
+                    0, sha256_line("p1-new", "pin-a") + sha256_line("p2-new", "pin-b"), ""
+                ),
+                "cat /etc/apt/preferences.d/pin-a": CommandResult(0, "Package: pin-a\n", ""),
+                "cat /etc/apt/preferences.d/pin-b": CommandResult(0, "Package: pin-b\n", ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/preferences.d": CommandResult(
+                    0, sha256_line("p1-old", "pin-a") + sha256_line("p2-old", "pin-b"), ""
+                ),
+                "test -f /etc/apt/preferences.d/pin-a": CommandResult(0, "", ""),
+                "test -f /etc/apt/preferences.d/pin-b": CommandResult(0, "", ""),
+                "sudo cp -a": CommandResult(1, "", "disk full"),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(job, plan, {"apt:pin:pin-a": Decision.APPLY, "apt:pin:pin-b": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        # Both group items (plus the auto-injected metadata-refresh marker) are
+        # reported as failures — not just the one whose backup was actually
+        # attempted before the loop aborted — and no KeyError escapes.
+        failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
+        assert {"apt:pin:pin-a", "apt:pin:pin-b"} <= failed_ids
+
+        commands = all_calls(target)
+        # Neither pin file was ever written: the group aborts before any write once
+        # backing up fails.
+        assert not any("sudo install -o root -g root -m 0644" in c and "preferences.d/pin-" in c for c in commands)
+

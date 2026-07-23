@@ -1183,9 +1183,21 @@ class AptSyncJob(PackageSyncJob):
         await self.target.run_command(f"mkdir -p {shlex.quote(staging_dir)}", login_shell=False)
 
         existed_before: dict[str, bool] = {}
-        for diff in group_diffs:
-            dest = _repo_item_destination(diff)
-            existed_before[dest] = await self._backup_destination(dest, backup_dir)
+        try:
+            for diff in group_diffs:
+                dest = _repo_item_destination(diff)
+                existed_before[dest] = await self._backup_destination(dest, backup_dir)
+        except ConvergeItemFailed as exc:
+            # A backup failure aborts the whole group before any write happens (T-02-34
+            # never partially applies), but `self._repo_group_outcome` must still end up
+            # populated for every group item (D-27) — otherwise the idempotency guard at
+            # the top of this method treats the group as "already handled" on the next
+            # `converge()` call, and `_converge_repo_group_item`'s
+            # `self._repo_group_outcome[diff.item_id]` raises a bare `KeyError` for every
+            # item after the first, escaping the per-item `ConvergeItemFailed` handler and
+            # crashing the whole job instead of failing one item.
+            self._record_group_failure(group_diffs, marker_present, f"repository group backup failed: {exc}")
+            return
 
         for diff in group_diffs:
             try:
@@ -1231,13 +1243,24 @@ class AptSyncJob(PackageSyncJob):
         # Every group item is recorded as a failure (D-27) — even ones whose own write
         # just succeeded above — because the rollback undid it: what actually landed on
         # the target is the pre-run state, not what this run intended.
-        failure_message = (
-            f"repository group rolled back after apt-get update failure ({recovery}): {update_result.stderr.strip()}"
+        self._record_group_failure(
+            group_diffs,
+            marker_present,
+            f"repository group rolled back after apt-get update failure ({recovery}): {update_result.stderr.strip()}",
         )
+
+    def _record_group_failure(self, group_diffs: list[ItemDiff], marker_present: bool, message: str) -> None:
+        """Mark every `group_diffs` item (and the metadata-refresh marker, if present)
+        as failed with `message`. Shared by the backup-failure short-circuit and the
+        post-rollback failure path so `self._repo_group_outcome` always ends up fully
+        populated (D-27) — a partially-populated map makes a later `converge()` call
+        for an un-recorded item raise `KeyError` instead of `ConvergeItemFailed`.
+        """
+        assert self._repo_group_outcome is not None
         for diff in group_diffs:
-            self._repo_group_outcome[diff.item_id] = (False, failure_message)
+            self._repo_group_outcome[diff.item_id] = (False, message)
         if marker_present:
-            self._repo_group_outcome[_METADATA_REFRESH_ITEM_ID] = (False, failure_message)
+            self._repo_group_outcome[_METADATA_REFRESH_ITEM_ID] = (False, message)
 
     async def _backup_destination(self, dest: str, backup_dir: str) -> bool:
         """Back up `dest` into `backup_dir` if it currently exists on the target;
