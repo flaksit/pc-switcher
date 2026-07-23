@@ -96,7 +96,7 @@ Plans:
   2. Manually-installed .debs, custom PPAs, and install-script-sourced packages are reproduced on the target.
   3. Package conflicts and version mismatches between source and target are detected and reported before any destructive change; machine-specific packages are not forced onto the target.
 
-**Plans**: 19/21 plans executed
+**Plans**: 20/21 plans executed
 
 Plans:
 **Wave 1**
@@ -141,7 +141,7 @@ Plans:
 - [x] 02-17-PLAN.md — new manual_installs_sync job owning unreproducible detection + snippet registry; skip-once is a valid resolution (D-15/D-18/D-21) [wave 3]
 - [x] 02-18-PLAN.md — manual_installs_sync pushes package-snippets.yaml itself via send_file(); config_sync reverts to config.yaml only (D-23) [wave 4]
 - [x] 02-19-PLAN.md — move jobs/package_*.py into jobs/packages/; delete empty apt/snap/flatpak config sections (D-31/D-32) [wave 5]
-- [ ] 02-20-PLAN.md — migrate job behaviour docs out of configuration.md; correct docs/system living specs (D-33) [wave 6]
+- [x] 02-20-PLAN.md — migrate job behaviour docs out of configuration.md; correct docs/system living specs (D-33) [wave 6]
 - [ ] 02-21-PLAN.md — rework VM integration for the new job/review shape; add apt-repository-state coverage closing broken-window #2 [wave 6]
 
 ### Phase 3: System & Application Configuration Sync
@@ -218,7 +218,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 | ----- | -------------- | ------ | --------- |
 | 1. Folder Sync MVP (User Data Sync) | 18/18 | Complete    | 2026-07-03 |
-| 2. Package Management Sync | 19/21 | In Progress|  |
+| 2. Package Management Sync | 20/21 | In Progress|  |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
 | 5. VM State Sync | 0/TBD | Not started | - |
