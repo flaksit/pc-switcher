@@ -37,8 +37,11 @@ import re
 import shlex
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, ClassVar, override
 
+from pcswitcher.config_sync import CONFIG_REMOTE_DIR
+from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.package_items import (
     DiffAction,
     DiffClass,
@@ -53,7 +56,14 @@ from pcswitcher.jobs.package_review import (
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.package_state import DecisionEntry, DecisionFile, Snippet, SnippetRegistry, filter_inert
+from pcswitcher.jobs.package_state import (
+    SNIPPET_REGISTRY_RELPATH,
+    DecisionEntry,
+    DecisionFile,
+    Snippet,
+    SnippetRegistry,
+    filter_inert,
+)
 from pcswitcher.jobs.package_sync_core import PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 
@@ -143,6 +153,62 @@ class ManualInstallsSyncJob(PackageSyncJob):
         "properties": {},
         "additionalProperties": False,
     }
+
+    def __init__(self, context: JobContext) -> None:
+        super().__init__(context)
+        # Guards `_finalize_unreproducible` to run at most once per run. `after_review()`
+        # calls it (so the pushed registry includes on-the-fly snippets), then the base
+        # `apply()` calls it again; the second call is a no-op so a snippet's `authored_at`
+        # is stamped exactly once and the source and pushed target registries stay identical.
+        self._unreproducible_finalized = False
+
+    # -- after-review snippet push (D-23) -----------------------------------------------
+
+    @override
+    async def after_review(self) -> None:
+        """Push the install-snippet registry to the target after this job's review and
+        before `apply()` replays any snippet (D-23), so a snippet authored on the fly in
+        the just-finished review reaches the target THIS run rather than the next one.
+
+        Finalize-then-push: `_finalize_unreproducible` persists this run's authored
+        snippets into the SOURCE registry first (idempotent — `apply()` calls it again as
+        a no-op), then `_push_snippet_registry` copies that file to the target. The push
+        depends on no other job: it moves the file itself and reads neither `config_sync`
+        nor `folder_sync` state, so disabling either cannot break snippet delivery.
+        """
+        assert self._accepted_plan is not None
+        assert self._accepted_outcome is not None
+        await self._finalize_unreproducible(self._accepted_plan, self._accepted_outcome)
+        await self._push_snippet_registry()
+
+    async def _push_snippet_registry(self) -> None:
+        """Copy the source's `~/.config/pc-switcher/package-snippets.yaml` to the target's
+        own copy under the SSH user's home, mirroring `config_sync._copy_config_to_target`'s
+        `mkdir -p` -> `echo $HOME` -> `send_file` shape.
+
+        `send_file` writes plain SFTP as the SSH user, always under that user's home
+        (`~/.config/pc-switcher`) — never `/etc` — which is exactly where the registry
+        belongs, so no `sudo install` staging is needed. A no-op if the source has no
+        registry file yet (a user who has never authored a snippet) and under dry-run
+        (ADR-014: a rehearsal transfers nothing).
+        """
+        if self.context.dry_run:
+            return
+
+        source_path = Path.home() / SNIPPET_REGISTRY_RELPATH
+        if not source_path.exists():
+            return
+
+        mkdir = await self.target.run_command(f"mkdir -p {CONFIG_REMOTE_DIR}")
+        if not mkdir.success:
+            raise RuntimeError(f"Failed to create config directory on target: {mkdir.stderr}")
+
+        # send_file needs an absolute remote path, so expand the target's ~ once.
+        home = await self.target.run_command("echo $HOME")
+        if not home.success:
+            raise RuntimeError("Failed to get home directory on target")
+        absolute_remote_path = f"{home.stdout.strip()}/{SNIPPET_REGISTRY_RELPATH}"
+        await self.target.send_file(source_path, absolute_remote_path)
 
     # -- Detection (D-18/D-19), all on the source ---------------------------------------
 
@@ -300,17 +366,26 @@ class ManualInstallsSyncJob(PackageSyncJob):
         decisions (D-20/D-21/D-23). Overrides the base no-op hook (D-18: only this job
         produces unreproducible items).
 
-        Snippets are written to `self.source` — never `self.target` — because D-23's
-        "shared, synced config" travels source-to-target via `config_sync`, which already
-        ran earlier this same sync; a snippet authored during THIS run's review reaches
-        the target on its NEXT sync, not this one. Skip-always decisions are also recorded
-        on `self.source`: unreproducible items are always source-held (they describe what
-        is installed on the machine currently acting as source), so there is no
-        target-held case to route to `self.target`.
+        Snippets are written to `self.source` — never `self.target` — because the source
+        registry is this job's own source of truth; `after_review()` then pushes that file
+        to the target (D-23) so a snippet authored during THIS run's review reaches the
+        target THIS run, before `apply()` replays it. Skip-always decisions are also
+        recorded on `self.source`: unreproducible items are always source-held (they
+        describe what is installed on the machine currently acting as source), so there is
+        no target-held case to route to `self.target`.
+
+        Idempotent per run: `after_review()` calls this before its push and the base
+        `apply()` calls it again; a `self._unreproducible_finalized` guard makes the second
+        call a no-op so each snippet's `authored_at` is stamped once and the source and
+        pushed target registries stay byte-identical.
 
         Never during dry-run (ADR-014) and never for a non-interactive outcome (D-26):
         nothing is recorded permanently when nothing was actually decided by a human.
         """
+        if self._unreproducible_finalized:
+            return
+        self._unreproducible_finalized = True
+
         if self.context.dry_run or not outcome.was_interactive:
             return
 

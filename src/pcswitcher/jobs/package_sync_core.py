@@ -381,6 +381,20 @@ class PackageSyncJob(SyncJob):
         self._accepted_plan = plan
         self._accepted_outcome = outcome
 
+    async def after_review(self) -> None:
+        """Hook: work that must run AFTER this job's review returns but BEFORE any
+        mutation on the target (`apply()`).
+
+        No-op on the base — the three managers that produce no unreproducible items (apt,
+        snap, flatpak) need nothing between review and converge. Only `manual_installs_sync`
+        overrides it (D-23): it pushes the freshly reconciled install-snippet registry to
+        the target here, so a snippet the user authored during THIS run's review is on the
+        target before `apply()` replays it. Keeping the hook on the base leaves `execute()`
+        the single source of the plan/review/apply order rather than each manager
+        re-deriving it.
+        """
+        return
+
     async def apply(self) -> None:
         """Converge every APPLY-decided diff from the accepted plan, one item at a time.
 
@@ -548,10 +562,11 @@ class PackageSyncJob(SyncJob):
         """The `SyncJob` entry point the orchestrator's sequential job loop calls.
 
         Self-contained (D-24): plan this job's diffs, review its own groups through the
-        injected `JobContext.reviewer`, accept the outcome, then apply. No component
-        outside the job owns its review, and no fallback applies diffs that never came
-        back from one — a missing reviewer fails loudly here rather than silently skipping
-        the review and converging unreviewed diffs (T-02-38).
+        injected `JobContext.reviewer`, accept the outcome, run the `after_review()` hook
+        (the seam where `manual_installs_sync` pushes its snippet registry, D-23), then
+        apply. No component outside the job owns its review, and no fallback applies diffs
+        that never came back from one — a missing reviewer fails loudly here rather than
+        silently skipping the review and converging unreviewed diffs (T-02-38).
 
         A `plan()` failure propagates unchanged, so the orchestrator's per-job exception
         handling attributes it to this job's own `JobResult`.
@@ -563,4 +578,5 @@ class PackageSyncJob(SyncJob):
         plan = await self.plan()
         outcome = await self.context.reviewer.review(plan.groups)
         self.accept_review(plan, outcome)
+        await self.after_review()
         await self.apply()

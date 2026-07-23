@@ -556,6 +556,10 @@ class _OrderRecordingJob(FakeSyncJob):
         self._events.append("accept_review")
         super().accept_review(plan, outcome)
 
+    async def after_review(self) -> None:
+        self._events.append("after_review")
+        await super().after_review()
+
     async def apply(self) -> None:
         self._events.append("apply")
         await super().apply()
@@ -597,9 +601,13 @@ class TestExecuteSelfContained:
 
         await job.execute()
 
-        assert events == ["plan", "review", "accept_review", "apply"]
+        # after_review is the seam between accept_review and apply (D-23: where
+        # manual_installs_sync pushes its snippet registry before any converge).
+        assert events == ["plan", "review", "accept_review", "after_review", "apply"]
         # apply must never precede review returning.
         assert events.index("apply") > events.index("review")
+        assert events.index("after_review") > events.index("accept_review")
+        assert events.index("after_review") < events.index("apply")
 
     @pytest.mark.asyncio
     async def test_zero_diff_run_still_calls_review_once(self) -> None:

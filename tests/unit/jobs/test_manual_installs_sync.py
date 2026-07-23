@@ -10,6 +10,7 @@ and snippet-replay coverage that previously lived against `AptSyncJob` in
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -24,7 +25,8 @@ from pcswitcher.jobs.package_review import (
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.package_sync_core import PackageItemFailures
+from pcswitcher.jobs.package_state import SNIPPET_REGISTRY_RELPATH
+from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan
 from pcswitcher.models import CommandResult, Host, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
@@ -506,6 +508,145 @@ class TestValidate:
         errors: list[ValidationError] = await job.validate()
 
         assert errors == []
+
+
+class TestSnippetPush:
+    """D-23: `manual_installs_sync` pushes `package-snippets.yaml` to the target itself,
+    after its own review and before any replay, depending on no other job. The source
+    registry lives at `~/.config/pc-switcher/package-snippets.yaml`; the source is the
+    local machine, so its on-disk path resolves against `Path.home()`."""
+
+    def _write_source_registry(self, tmp_path: Path, content: str = BRSCAN3_REGISTRY_YAML) -> Path:
+        registry = tmp_path / SNIPPET_REGISTRY_RELPATH
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(content)
+        return registry
+
+    @pytest.mark.asyncio
+    async def test_push_sends_source_registry_under_the_user_home_never_etc(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source_registry = self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        context, _source, target = make_context(target_responses={"echo $HOME": CommandResult(0, "/home/user\n", "")})
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        target.send_file.assert_called_once()
+        local, remote = target.send_file.call_args.args
+        assert local == source_registry
+        assert remote == "/home/user/.config/pc-switcher/package-snippets.yaml"
+        assert "/etc" not in remote
+
+    @pytest.mark.asyncio
+    async def test_absent_source_registry_makes_push_a_noop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No registry file exists under tmp_path — a user who has never authored a snippet.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        context, _source, target = make_context()
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]  # must not raise
+
+        target.send_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dry_run_pushes_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        context, _source, target = make_context(dry_run=True)
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        target.send_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_snippet_authored_in_review_is_persisted_before_the_push(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """finalize-then-push: the review's authored snippet is written to the SOURCE
+        registry before the file is pushed, so the pushed copy includes it (D-23)."""
+        source_registry = self._write_source_registry(tmp_path, "snippets: {}\n")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        item_id = "unreproducible:apt-no-candidate:brscan3"
+        context, source, target = make_context(target_responses={"echo $HOME": CommandResult(0, "/home/user\n", "")})
+        job = ManualInstallsSyncJob(context)
+        diff = job_diff(item_id, DiffAction.REPORT_ONLY)
+        plan = PackagePlan(manager="manual", diffs=(diff,), groups=())
+
+        events: list[str] = []
+        base_source = source.run_command.side_effect
+
+        def _rec_source(cmd: str, **kw: object) -> CommandResult:
+            if "package-snippets" in cmd and "mv -f" in cmd:
+                events.append("persist")
+            return base_source(cmd, **kw)
+
+        source.run_command = AsyncMock(side_effect=_rec_source)
+
+        async def _rec_send(_local: Path, _remote: str) -> None:
+            events.append("push")
+
+        target.send_file = AsyncMock(side_effect=_rec_send)
+
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={item_id: Decision.SKIP_ONCE},
+                was_interactive=True,
+                snippets={item_id: "sudo dpkg -i /tmp/brscan3.deb"},
+            ),
+        )
+        await job.after_review()
+
+        assert events == ["persist", "push"]
+        assert target.send_file.call_args.args[0] == source_registry
+
+    @pytest.mark.asyncio
+    async def test_push_runs_after_review_and_before_replay_in_execute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End to end: `execute()` pushes the registry, then `apply()` replays the
+        snippet-backed item against the target — push strictly before replay."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        item_id = "unreproducible:apt-no-candidate:brscan3"
+        reviewer = FakeReviewer(decisions={item_id: Decision.APPLY})
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+            },
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+                "bash -c 'sudo dpkg -i /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
+            },
+            reviewer=reviewer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        events: list[str] = []
+        base_run = target.run_command.side_effect
+
+        def _rec_run(cmd: str, **kw: object) -> CommandResult:
+            if cmd.startswith("bash -c"):
+                events.append("replay")
+            return base_run(cmd, **kw)
+
+        target.run_command = AsyncMock(side_effect=_rec_run)
+
+        async def _rec_send(_local: Path, _remote: str) -> None:
+            events.append("push")
+
+        target.send_file = AsyncMock(side_effect=_rec_send)
+
+        await job.execute()
+
+        assert events == ["push", "replay"]
 
 
 class TestJobDiscovery:
