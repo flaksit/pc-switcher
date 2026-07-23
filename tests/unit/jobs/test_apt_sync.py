@@ -16,10 +16,10 @@ import pytest
 
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.apt_sync import AptSyncJob
+from pcswitcher.jobs.apt_sync import AptSyncJob, simulate_apt_transaction
 from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass
 from pcswitcher.jobs.package_review import Decision, ReviewOutcome
-from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan
+from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackageItemFailures, PackagePlan
 from pcswitcher.models import CommandResult, Host
 from pcswitcher.orchestrator import Orchestrator
 
@@ -379,6 +379,60 @@ class TestTransactionGuard:
 
         commands = all_calls(target)
         assert any("sudo" in cmd and "apt-get install" in cmd and "pkg-a" in cmd for cmd in commands)
+
+    @pytest.mark.asyncio
+    async def test_failed_simulation_raises_instead_of_returning_empty_preview(self) -> None:
+        """WR-01 regression: `simulate_apt_transaction` must not silently parse a
+        failed `apt-get -s` (dpkg lock contention, unmet dependencies, ...) as an
+        empty, falsely-clean preview — that would let both call sites proceed with
+        the real command as if nothing would happen.
+        """
+        target = MagicMock()
+        target.run_command = AsyncMock(
+            return_value=CommandResult(100, "", "E: dpkg was interrupted, you must manually run 'dpkg --configure -a'")
+        )
+
+        with pytest.raises(ConvergeItemFailed, match="dpkg was interrupted"):
+            await simulate_apt_transaction(target, "install -y --no-install-recommends pkg-a", login_shell=False)
+
+    @pytest.mark.asyncio
+    async def test_apply_time_simulation_failure_fails_the_item_not_silently_clean(self) -> None:
+        """A plan-time simulation can succeed (nothing wrong yet) while the same
+        command fails when re-run at apply time; the item must fail cleanly through
+        the normal per-item path rather than the real `apt-get install` running
+        against an untrustworthy preview.
+        """
+        install_cmd = "apt-get -s install -y --no-install-recommends pkg-a"
+        state = {"calls": 0}
+
+        def target_side_effect(cmd: str, **_: object) -> CommandResult:
+            if cmd == install_cmd:
+                state["calls"] += 1
+                if state["calls"] == 1:
+                    return CommandResult(0, "Inst pkg-a (1.0)\n", "")
+                return CommandResult(100, "", "E: dpkg was interrupted, you must manually run 'dpkg --configure -a'")
+            return CommandResult(0, "", "")
+
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+        )
+        target.run_command = AsyncMock(side_effect=target_side_effect)
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(job, plan, {"apt:package:pkg-a": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        assert len(exc_info.value.failures) == 1
+        _diff, message = exc_info.value.failures[0]
+        assert "dpkg was interrupted" in message
+
+        commands = all_calls(target)
+        assert not any("sudo" in cmd and "apt-get install" in cmd for cmd in commands)
 
 
 class TestHoldPinCapture:

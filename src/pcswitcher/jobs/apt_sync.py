@@ -452,9 +452,16 @@ async def simulate_apt_transaction(
 ) -> AptTransactionPreview:
     """Run `apt-get -s <apt_args>` on `executor` and parse its Inst/Remv action lines.
 
-    No `sudo` is needed: simulation is read-only.
+    No `sudo` is needed: simulation is read-only. Raises `ConvergeItemFailed` if the
+    simulation itself fails (dpkg lock contention, unmet dependencies, a transient
+    apt-cache read error): a failed `apt-get -s` typically prints no Inst/Remv lines,
+    which would otherwise parse as an indistinguishable-from-clean empty preview and
+    let both call sites proceed with a real command whose simulation was never
+    actually trustworthy (WR-01) — refuse rather than silently degrade.
     """
     result = await executor.run_command(f"apt-get -s {apt_args}", login_shell=login_shell)
+    if not result.success:
+        raise ConvergeItemFailed(f"apt-get -s {apt_args} failed: {result.stderr.strip()}")
     installs: list[str] = []
     removals: list[str] = []
     install_versions: dict[str, tuple[str | None, str]] = {}
