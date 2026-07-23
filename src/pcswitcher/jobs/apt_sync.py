@@ -8,15 +8,16 @@ contract), diffs it against the same query on the target into every D-25 class
 items via `apt-get install`/`apt-get remove`.
 
 Every approved item's transaction is simulated with `apt-get -s` before the real
-command runs, guarding against apt silently doing more than the review showed
-(T-02-32): an install refuses if the simulation would remove anything or install an
-already-present package at a lower version (a downgrade); a removal refuses if the
-simulation would remove any package beyond the item itself that was not also an
-approved removal in this run. `plan()` additionally runs two BATCHED simulations
-(the whole install candidate set, the whole removal candidate set — not one
-per-package, which would cost more than the sync itself for 150 packages) so the
-review shows collateral effects before the user decides, not only when an item is
-later converged.
+command runs, guarding against apt silently doing more than the review showed. Collateral
+effects are classified by provenance (D-30): a package the simulation would remove or
+downgrade that is auto-installed (not in the target's `apt-mark showmanual` set) is apt
+resolving its own dependencies and proceeds silently, while a manually-installed one is
+something the user chose to have and is refused unless the user approved losing it. `plan()`
+runs two BATCHED simulations (the whole install candidate set, the whole removal candidate
+set — not one per-package, which would cost more than the sync itself for 150 packages) and
+classifies their collateral against the target manual set, emitting a three-way
+install-anyway / skip / abort review item for each manual-collateral package so the decision
+is made in the batched review, never as a prompt during apply.
 
 Apt sources/keys/pins/config, and the other two managers (snap, flatpak), are later
 Phase 2 plans.
@@ -51,6 +52,7 @@ from pcswitcher.jobs.package_items import (
     compare_deb_versions,
 )
 from pcswitcher.jobs.package_review import (
+    COLLATERAL_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
     ReviewEntry,
@@ -527,6 +529,25 @@ class AptSyncJob(PackageSyncJob):
         # `config_sync._copy_config_to_target`'s pattern) and cached, since every
         # repository-group file write needs the same absolute staging path.
         self._target_home: str | None = None
+        # The target's `apt-mark showmanual` set, captured once in `plan()`: the single
+        # source of the auto-versus-manual collateral split (D-30). A collateral package
+        # the simulation would remove or downgrade is manual (the user chose it -> a
+        # review item) if it is in this set, auto (apt's own dependency -> proceed
+        # silently) if it is not. Consulted at plan time by `_classify_collateral` and
+        # at apply time by the converge guards, which must agree.
+        self._target_manual_set: frozenset[str] = frozenset()
+        # Package names of every manual-collateral item the user resolved install-anyway,
+        # computed in `accept_review` from the collateral group's decisions. The apply-time
+        # guard lets a removal/downgrade of one of these through; every other manual
+        # collateral stays refused (D-30 — the last line of defence behind plan-time
+        # classification).
+        self._approved_collateral: frozenset[str] = frozenset()
+        # Each collateral item's `item_id` -> the triggering install/remove item_ids whose
+        # transaction produced it. Used in `accept_review` to translate a `skip` decision
+        # on a collateral item into `SKIP_ONCE` on the installs it gates, so a declined
+        # collateral cleanly leaves its triggering installs unapproved rather than failing
+        # them at the apply-time guard.
+        self._collateral_trigger_ids: dict[str, frozenset[str]] = {}
 
     @override
     async def capture_source_items(self) -> Sequence[AptPackageItem]:
@@ -723,15 +744,21 @@ class AptSyncJob(PackageSyncJob):
     @override
     async def plan(self) -> PackagePlan:
         """Extends the base diff (missing/extra/mismatch/held/unavailable) with
-        plan-time apt transaction-collateral simulation (D-24, D-25, T-02-32) and D-18's
+        plan-time apt transaction-collateral classification (D-30) and D-18's
         unreproducible-item detection.
 
-        Runs AFTER the base diff and BEFORE review groups are (re)built, so collateral
-        effects apt-get -s reveals appear as their own REPORT_ONLY facts in the SAME
-        review the user approves from — visible before any decision, not discovered
-        only when an item is later converged.
+        Runs AFTER the base diff and BEFORE review groups are (re)built. The batched
+        apt-get -s simulations reveal what the pending transaction would also remove or
+        downgrade; each such package is split by provenance against the target's
+        `apt-mark showmanual` set (captured here, once). An auto-installed collateral
+        package is apt resolving its own dependencies — it proceeds silently, producing no
+        review item. A manually-installed collateral package is something the user chose to
+        have, so it becomes its own three-way review item (install-anyway / skip / abort)
+        decided at plan time, in the SAME review the user approves from — never a prompt
+        during apply.
         """
         base_plan = await super().plan()
+        self._target_manual_set = await self._capture_target_manual_set()
         collateral_diffs = await self._collect_plan_time_collateral(base_plan.diffs)
         repo_diffs = await self._plan_repo_diffs()
         unreproducible_diffs = await self._plan_unreproducible_diffs()
@@ -756,36 +783,57 @@ class AptSyncJob(PackageSyncJob):
 
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
-        """Carves any still-unresolved `UNREPRODUCIBLE` diff (`action=REPORT_ONLY`) out
-        into its own group, presented after the base groups (installs/changes/removals)
-        so the user has already seen the bulk of the diff before being asked to resolve
-        anything (Task 2, D-21). An `UNREPRODUCIBLE` diff that already has a snippet
-        (`action=INSTALL`) is NOT pulled out here — it is already resolved, so it flows
-        through the base grouping like any other install-direction item, letting the
-        user simply approve or skip replaying it this run.
+        """Carves the two special-interaction diff kinds out of the checkbox groups,
+        presented after the base groups (installs/changes/removals) so the user sees the
+        bulk of the diff before being asked to resolve anything:
+
+        - manual-collateral items (D-30) into a `COLLATERAL_REVIEW_ACTION` group whose
+          entries take the three-way install-anyway / skip / abort resolution;
+        - still-unresolved `UNREPRODUCIBLE` items (`action=REPORT_ONLY`, D-21) into an
+          `UNREPRODUCIBLE_REVIEW_ACTION` group, presented last.
+
+        An `UNREPRODUCIBLE` diff that already has a snippet (`action=INSTALL`) is NOT
+        pulled out — it is already resolved and flows through the base grouping like any
+        other install-direction item.
         """
+        collateral = [diff for diff in diffs if _is_collateral_diff(diff)]
         needs_resolution = [
             diff
             for diff in diffs
             if diff.item_class == ItemClass.UNREPRODUCIBLE and diff.action == DiffAction.REPORT_ONLY
         ]
-        if not needs_resolution:
+        if not collateral and not needs_resolution:
             return super()._build_review_groups(diffs)
 
-        needs_resolution_ids = {diff.item_id for diff in needs_resolution}
-        rest = [diff for diff in diffs if diff.item_id not in needs_resolution_ids]
-        groups = super()._build_review_groups(rest)
+        carved_ids = {diff.item_id for diff in collateral} | {diff.item_id for diff in needs_resolution}
+        rest = [diff for diff in diffs if diff.item_id not in carved_ids]
+        groups = list(super()._build_review_groups(rest))
 
-        resolution_group = ReviewGroup(
-            manager=self.manager_id,
-            action=UNREPRODUCIBLE_REVIEW_ACTION,
-            title=f"Resolve {self.manager_id} items with no reproducible install",
-            entries=tuple(
-                ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="resolve", detail=diff.detail)
-                for diff in needs_resolution
-            ),
-        )
-        return (*groups, resolution_group)
+        if collateral:
+            groups.append(
+                ReviewGroup(
+                    manager=self.manager_id,
+                    action=COLLATERAL_REVIEW_ACTION,
+                    title=f"Resolve {self.manager_id} manual-collateral removals",
+                    entries=tuple(
+                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="resolve", detail=diff.detail)
+                        for diff in collateral
+                    ),
+                )
+            )
+        if needs_resolution:
+            groups.append(
+                ReviewGroup(
+                    manager=self.manager_id,
+                    action=UNREPRODUCIBLE_REVIEW_ACTION,
+                    title=f"Resolve {self.manager_id} items with no reproducible install",
+                    entries=tuple(
+                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="resolve", detail=diff.detail)
+                        for diff in needs_resolution
+                    ),
+                )
+            )
+        return tuple(groups)
 
     async def _plan_repo_diffs(self) -> list[ItemDiff]:
         """Capture + diff the four `/etc/apt/*` item classes (D-11/D-12/D-13), by
@@ -946,10 +994,27 @@ class AptSyncJob(PackageSyncJob):
 
         return diffs
 
+    async def _capture_target_manual_set(self) -> frozenset[str]:
+        """The target's `apt-mark showmanual` set — one batched command, the single
+        source of the auto-versus-manual collateral split (D-30). This is the same set
+        apt itself consults to decide what it may remove, so classifying a collateral
+        package by membership here matches apt's own notion of "the user chose this".
+        """
+        result = await self.target.run_command("apt-mark showmanual", login_shell=False)
+        return frozenset(_lines(result.stdout))
+
     async def _collect_plan_time_collateral(self, diffs: Sequence[ItemDiff]) -> list[ItemDiff]:
         """Two BATCHED simulations — the whole install candidate set, the whole
         removal candidate set — not one per package: a per-package simulation over a
-        150-package manual set would cost more than the sync itself.
+        150-package manual set would cost more than the sync itself (D-30 hangs its
+        classification off these two results; no third simulation is added).
+
+        Each simulation's would-remove/would-downgrade collateral is split by
+        `_classify_collateral` against the target's manual set: auto collateral produces
+        nothing (apt's own business, D-30), manual collateral becomes a review item whose
+        `item_id` (`apt:collateral:<name>`) is mapped back to the triggering candidate set
+        in `self._collateral_trigger_ids`, so a `skip` decision can later be translated
+        into `SKIP_ONCE` on the installs it gates.
         """
         install_names = [_package_name(d.item_id) for d in diffs if d.action == DiffAction.INSTALL]
         remove_names = [_package_name(d.item_id) for d in diffs if d.action == DiffAction.REMOVE]
@@ -961,29 +1026,56 @@ class AptSyncJob(PackageSyncJob):
             preview = await simulate_apt_transaction(
                 self.target, f"install -y --no-install-recommends {quoted}", login_shell=False
             )
-            collateral.extend(await self._collateral_from_preview(preview, reviewed_names))
+            trigger_ids = frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in install_names)
+            collateral.extend(await self._classify_collateral(preview, reviewed_names, trigger_ids, verb="installing"))
         if remove_names:
             quoted = " ".join(shlex.quote(name) for name in remove_names)
             preview = await simulate_apt_transaction(self.target, f"remove -y {quoted}", login_shell=False)
-            collateral.extend(await self._collateral_from_preview(preview, reviewed_names))
+            trigger_ids = frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in remove_names)
+            collateral.extend(await self._classify_collateral(preview, reviewed_names, trigger_ids, verb="removing"))
         return collateral
 
-    async def _collateral_from_preview(
-        self, preview: AptTransactionPreview, reviewed_names: frozenset[str]
+    async def _classify_collateral(
+        self,
+        preview: AptTransactionPreview,
+        reviewed_names: frozenset[str],
+        trigger_ids: frozenset[str],
+        *,
+        verb: str,
     ) -> list[ItemDiff]:
-        """Every package the simulation would remove or downgrade that is not itself
-        one of the reviewed candidates — apt's own words for "this will also happen",
-        surfaced as a REPORT_ONLY fact rather than silently included in the batch.
+        """Partition a simulation's would-remove/would-downgrade packages by provenance
+        (D-30): a package in the target's manual set becomes a manual-collateral review
+        item; one that is not is auto-installed — apt's own dependency — and produces
+        nothing, not even a report line the user cannot act on.
+
+        A downgrade is detected exactly as before: an `install_versions` entry with a
+        non-`None` old version and `compare_deb_versions(target, new, old) < 0`. The
+        triggering candidate set is recorded against each emitted item's id so `skip`
+        can be translated to `SKIP_ONCE` on the installs it gates (`accept_review`).
         """
-        collateral: list[ItemDiff] = [
-            _collateral_diff(pkg, "would also be removed") for pkg in preview.removals if pkg not in reviewed_names
-        ]
+        collateral: list[ItemDiff] = []
+
+        for pkg in preview.removals:
+            if pkg in reviewed_names or pkg not in self._target_manual_set:
+                continue
+            collateral.append(
+                self._collateral_item(pkg, f"would be removed by {verb} the selected packages", trigger_ids)
+            )
+
         for pkg, (old_version, new_version) in preview.install_versions.items():
-            if pkg in reviewed_names or old_version is None:
+            if pkg in reviewed_names or old_version is None or pkg not in self._target_manual_set:
                 continue
             if await compare_deb_versions(self.target, new_version, old_version) < 0:
-                collateral.append(_collateral_diff(pkg, f"would be downgraded from {old_version} to {new_version}"))
+                effect = f"would be downgraded from {old_version} to {new_version} by {verb} the selected packages"
+                collateral.append(self._collateral_item(pkg, effect, trigger_ids))
+
         return collateral
+
+    def _collateral_item(self, name: str, effect: str, trigger_ids: frozenset[str]) -> ItemDiff:
+        """Build one manual-collateral `ItemDiff` and record its triggering candidate set."""
+        diff = _collateral_diff(name, effect)
+        self._collateral_trigger_ids[diff.item_id] = trigger_ids
+        return diff
 
     def _approved_removal_names(self) -> frozenset[str]:
         """Package names of every `REMOVE`-action diff this run's decisions approved.
@@ -1002,6 +1094,42 @@ class AptSyncJob(PackageSyncJob):
             if diff.action == DiffAction.REMOVE and decisions.get(diff.item_id) == Decision.APPLY
         )
 
+    def _resolve_collateral(self, plan: PackagePlan, outcome: ReviewOutcome) -> ReviewOutcome:
+        """Translate the manual-collateral group's decisions (D-30) into the guard's
+        approved set and the triggering installs' decisions.
+
+        For each collateral item (`apt:collateral:<pkg>`): an `APPLY` (install-anyway)
+        marks `<pkg>` approved, so `_converge_install`/`_converge_remove` let its removal
+        or downgrade through; a `SKIP_ONCE` (skip) is propagated to every install that
+        collateral gated (`self._collateral_trigger_ids`), so the install is cleanly left
+        unapproved rather than attempted and refused at the guard. Abort never reaches
+        here — it raised `SyncAbortedByUser` inside the review.
+
+        Returns the outcome with any triggering-install decisions overridden; leaves the
+        decisions map untouched when there is no collateral to resolve.
+        """
+        approved: set[str] = set()
+        overrides: dict[str, Decision] = {}
+        for diff in plan.diffs:
+            if not _is_collateral_diff(diff):
+                continue
+            decision = outcome.decisions.get(diff.item_id)
+            if decision == Decision.APPLY:
+                approved.add(diff.item_id.removeprefix(_COLLATERAL_ID_PREFIX))
+            elif decision == Decision.SKIP_ONCE:
+                for trigger_id in self._collateral_trigger_ids.get(diff.item_id, frozenset()):
+                    overrides[trigger_id] = Decision.SKIP_ONCE
+
+        self._approved_collateral = frozenset(approved)
+        if not overrides:
+            return outcome
+        return ReviewOutcome(
+            decisions={**outcome.decisions, **overrides},
+            was_interactive=outcome.was_interactive,
+            snippets=outcome.snippets,
+            unresolved=outcome.unresolved,
+        )
+
     @override
     def accept_review(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
         """Insert the synthetic metadata-refresh diff (Task 2) once the coordinator's
@@ -1016,7 +1144,14 @@ class AptSyncJob(PackageSyncJob):
         key-before-pin/config-before-source by `plan()`) and before every package
         diff, matching apt's own dependency order: metadata must be current before
         anything installs from it.
+
+        Manual-collateral decisions (D-30) are resolved first: an install-anyway on a
+        collateral item marks its package approved so the apply-time guard lets the
+        removal through, while a skip is translated into `SKIP_ONCE` on the installs that
+        collateral gated, so a declined collateral cleanly leaves its triggering installs
+        unapproved rather than failing them at the guard.
         """
+        outcome = self._resolve_collateral(plan, outcome)
         approved_group = any(
             diff.item_class in _REPO_GROUP_CLASSES
             and diff.item_id != _METADATA_REFRESH_ITEM_ID
@@ -1076,48 +1211,71 @@ class AptSyncJob(PackageSyncJob):
         return await SnippetRegistry(self.target).replay(diff.item_id, self.target)
 
     async def _converge_install(self, diff: ItemDiff) -> CommandResult:
+        """Simulate, then apply, one apt install — the last line of defence behind the
+        plan-time collateral classification (D-30). Auto-installed collateral (a package
+        apt pulls in that is not in the target's `apt-mark showmanual` set) proceeds
+        silently — apt resolving its own dependencies. A manually-installed collateral
+        removal or downgrade is refused unless the user approved it install-anyway in the
+        review; the decision was made at plan time, and this guard only verifies the
+        real transaction has not drifted to touch a manual package nobody saw.
+        """
         name = _package_name(diff.item_id)
         quoted = shlex.quote(name)
         install_args = f"install -y --no-install-recommends {quoted}"
 
         preview = await simulate_apt_transaction(self.target, install_args, login_shell=False)
-        if preview.removals:
-            removed = ", ".join(preview.removals)
-            # Enforcement of this plan's own prohibition that an install-direction item
-            # removes nothing as a side effect (D-24, D-25, T-02-32): without this check
-            # the prohibition is a sentence in a document no code verifies.
+
+        refused = [
+            pkg for pkg in preview.removals if pkg in self._target_manual_set and pkg not in self._approved_collateral
+        ]
+        if refused:
+            removed = ", ".join(refused)
             raise ConvergeItemFailed(
-                f"install of {name} refused: apt-get -s would also remove {removed}, "
-                "which was never reviewed (D-24/D-25)"
+                f"install of {name} refused: apt-get -s would remove manually-installed {removed}, "
+                "which was not approved as collateral in this run (D-30)"
             )
 
         for pkg, (old_version, new_version) in preview.install_versions.items():
-            if old_version is None:
+            if old_version is None or pkg not in self._target_manual_set or pkg in self._approved_collateral:
                 continue
             if await compare_deb_versions(self.target, new_version, old_version) < 0:
                 raise ConvergeItemFailed(
-                    f"install of {name} refused: apt-get -s would install {pkg} at {new_version}, "
-                    f"a downgrade from the currently installed {old_version} (D-04, T-02-32)"
+                    f"install of {name} refused: apt-get -s would downgrade manually-installed {pkg} "
+                    f"from {old_version} to {new_version}, which was not approved as collateral (D-30, D-04)"
                 )
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {install_args}"
         return await self.target.run_command(real_cmd, login_shell=False)
 
     async def _converge_remove(self, diff: ItemDiff) -> CommandResult:
+        """Simulate, then apply, one apt remove — the same last line of defence the
+        install guard is (D-30). A collateral removal of an auto-installed package (not in
+        the target's `apt-mark showmanual` set) proceeds — removing a package legitimately
+        removes the now-orphaned dependencies apt pulled in for it. A collateral removal of
+        a manually-installed package is refused unless it was itself an approved removal
+        this run or approved install-anyway as collateral; that decision was made at plan
+        time, and this guard only catches a real transaction that drifted to touch a manual
+        package nobody reviewed.
+        """
         name = _package_name(diff.item_id)
         quoted = shlex.quote(name)
         remove_args = f"remove -y {quoted}"
 
         preview = await simulate_apt_transaction(self.target, remove_args, login_shell=False)
         approved = self._approved_removal_names()
-        unapproved = [pkg for pkg in preview.removals if pkg != name and pkg not in approved]
-        if unapproved:
-            removed = ", ".join(unapproved)
-            # "removes nothing the user did not approve", not "removes nothing else":
-            # removing a package legitimately removes things that depend on it.
+        refused = [
+            pkg
+            for pkg in preview.removals
+            if pkg != name
+            and pkg not in approved
+            and pkg not in self._approved_collateral
+            and pkg in self._target_manual_set
+        ]
+        if refused:
+            removed = ", ".join(refused)
             raise ConvergeItemFailed(
-                f"removal of {name} refused: apt-get -s would also remove {removed}, "
-                "which was not itself an approved removal item in this run (D-24/D-25)"
+                f"removal of {name} refused: apt-get -s would also remove manually-installed {removed}, "
+                "which was neither an approved removal nor approved as collateral in this run (D-30)"
             )
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {remove_args}"
@@ -1481,13 +1639,25 @@ class AptSyncJob(PackageSyncJob):
         )
 
 
+_COLLATERAL_ID_PREFIX = "apt:collateral:"
+
+
+def _is_collateral_diff(diff: ItemDiff) -> bool:
+    """A manual-collateral item, identified by its stable id prefix (D-30). These carve
+    into their own `COLLATERAL_REVIEW_ACTION` group rather than a checkbox group."""
+    return diff.item_id.startswith(_COLLATERAL_ID_PREFIX)
+
+
 def _collateral_diff(name: str, effect: str) -> ItemDiff:
-    """One plan-time collateral fact — apt's own simulation, not a per-item guard."""
+    """One manual-collateral item (D-30): a manually-installed package the pending apt
+    transaction would remove or downgrade. Stays `REPORT_ONLY` so `apply()` never
+    converges it directly — its decision governs the triggering install, not itself.
+    """
     return ItemDiff(
         item_class=ItemClass.APT_PACKAGE,
         diff_class=DiffClass.EXTRA_ON_TARGET,
         action=DiffAction.REPORT_ONLY,
-        item_id=f"apt:collateral:{name}",
+        item_id=f"{_COLLATERAL_ID_PREFIX}{name}",
         label=name,
-        detail=f"apt's own simulation says this package {effect}",
+        detail=f"manually-installed package that apt's own simulation says {effect}",
     )

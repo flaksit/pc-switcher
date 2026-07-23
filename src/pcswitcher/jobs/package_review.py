@@ -32,6 +32,15 @@ question for an item no package manager can reproduce; "how does this get resolv
 `ReviewOutcome.snippets`/`unresolved` carry that group's results back to the caller
 (`PackageSyncJob.apply()`), which persists snippets/decisions and fails the job when
 anything is left unresolved after an interactive review (D-21, D-27).
+
+A `ReviewGroup` whose `action` is `COLLATERAL_REVIEW_ACTION` likewise gets its own
+interaction shape (D-30): each entry is a manually-installed package the pending apt
+transaction would remove or downgrade, resolved one at a time with a three-way choice —
+install anyway, skip, or abort. The decision is recorded against the entry's `item_id`
+(the triggering install, set by the caller), so install-anyway proceeds with that install,
+skip leaves it unapproved, and abort raises `SyncAbortedByUser` naming the collateral
+package. A non-interactive run leaves every collateral entry `SKIP_ONCE` like every other
+item, so the install it gates is simply not approved (D-26).
 """
 
 from __future__ import annotations
@@ -50,9 +59,11 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from pcswitcher.models import SyncAbortedByUser
 from pcswitcher.terminal import is_interactive
 
 __all__ = [
+    "COLLATERAL_REVIEW_ACTION",
     "PACKAGE_REVIEW_AUTOMATION_ENV",
     "UNREPRODUCIBLE_REVIEW_ACTION",
     "Decision",
@@ -82,6 +93,18 @@ _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable"})
 # `package_review`-owned interaction kind, independent of the underlying diff's own
 # `action` (which stays `REPORT_ONLY`/`INSTALL` per D-25's taxonomy).
 UNREPRODUCIBLE_REVIEW_ACTION = "unreproducible"
+
+# Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
+# of manual-collateral items (D-30) as needing the three-way per-entry resolution flow
+# below — install-anyway / skip / abort — rather than an ordinary checkbox tick. A
+# manual-collateral item is a manually-installed package the pending apt transaction would
+# remove or downgrade; whether to lose it is not a yes/no the checkbox path expresses, so
+# it gets its own prompt (sibling to `UNREPRODUCIBLE_REVIEW_ACTION`). Install-anyway records
+# `Decision.APPLY` against `ReviewEntry.item_id`, skip records `Decision.SKIP_ONCE`, and
+# abort raises `SyncAbortedByUser` naming the collateral package. The caller maps that
+# recorded decision onto the triggering install (`AptSyncJob.accept_review`): APPLY lets the
+# install proceed and allows the collateral removal, SKIP_ONCE leaves the install unapproved.
+COLLATERAL_REVIEW_ACTION = "collateral"
 
 
 class PausableUI(Protocol):
@@ -157,6 +180,10 @@ def _is_removal_direction(action: str) -> bool:
 
 def _is_unreproducible_group(action: str) -> bool:
     return action == UNREPRODUCIBLE_REVIEW_ACTION
+
+
+def _is_collateral_group(action: str) -> bool:
+    return action == COLLATERAL_REVIEW_ACTION
 
 
 # Printed once before the multi-line capture, so a user does not author a snippet that
@@ -258,6 +285,59 @@ async def _review_unreproducible_group(
         unresolved.append(entry.item_id)
 
 
+async def _review_collateral_group(
+    group: ReviewGroup,
+    *,
+    console: Console,
+    decisions: dict[str, Decision],
+) -> None:
+    """Resolve one `COLLATERAL_REVIEW_ACTION` group's entries, one at a time, with the
+    three-way choice D-30 requires for a manually-installed package the pending apt
+    transaction would remove or downgrade: install anyway, skip, or abort. Never a
+    checkbox tick — losing a package the user chose to have is not the same yes/no as
+    ticking an install off a list.
+
+    The decision is recorded against `entry.item_id`: install-anyway records
+    `Decision.APPLY`, skip records `Decision.SKIP_ONCE`. The caller (`AptSyncJob`) maps
+    that onto the triggering install — APPLY lets the install proceed and allows the
+    collateral removal, SKIP_ONCE leaves the install unapproved so the collateral is not
+    removed. Abort raises `SyncAbortedByUser` — the existing user-decline control-flow
+    exception, caught once at WARNING by both the orchestrator and the CLI — naming the
+    collateral package, so the whole run stops cleanly rather than applying a transaction
+    the user did not accept.
+
+    Every untrusted label/detail is wrapped in `Text` before it reaches the console, so a
+    package name containing bracket characters cannot trigger the Rich markup crash the
+    phase already guards against (T-02-02).
+    """
+    for entry in group.entries:
+        console.print()
+        console.print(Text(entry.label, style="bold"))
+        if entry.detail:
+            console.print(Text(entry.detail, style="dim"))
+
+        choice_prompt = questionary.select(
+            f"{entry.label} is manually installed and would be removed or downgraded. Proceed?",
+            choices=[
+                questionary.Choice(title="Install anyway (allow the collateral removal)", value="install_anyway"),
+                questionary.Choice(title="Skip (leave the triggering install unapproved)", value="skip"),
+                questionary.Choice(title="Abort the sync", value="abort"),
+            ],
+        )
+        selected = await asyncio.to_thread(choice_prompt.ask)
+
+        if selected == "install_anyway":
+            decisions[entry.item_id] = Decision.APPLY
+        elif selected == "abort":
+            raise SyncAbortedByUser(
+                f"collateral removal of manually-installed {entry.label} declined (abort chosen in review)"
+            )
+        else:
+            # "skip", None (the select was cancelled): leave the triggering install
+            # unapproved for this run, so the collateral is not removed.
+            decisions[entry.item_id] = Decision.SKIP_ONCE
+
+
 async def review_items(
     groups: Sequence[ReviewGroup],
     *,
@@ -305,6 +385,10 @@ async def review_items(
                 await _review_unreproducible_group(
                     group, console=console, decisions=decisions, snippets=snippets, unresolved=unresolved
                 )
+                continue
+
+            if _is_collateral_group(group.action):
+                await _review_collateral_group(group, console=console, decisions=decisions)
                 continue
 
             removal = _is_removal_direction(group.action)
