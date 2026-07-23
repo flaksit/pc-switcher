@@ -1,0 +1,1 @@
+/gsd-autonomous Do phase 2. Start by doing "/gsd-review --phase 2" with codex. Then continue with the GSD commands to integrate the feedback from codex and then to implement and review the code until phase 2 totally done
