@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from pcswitcher.confirmer import Confirmer
     from pcswitcher.events import EventBus
     from pcswitcher.executor import LocalExecutor, RemoteExecutor
@@ -31,3 +33,11 @@ class JobContext:
     # Optional so existing lightweight test contexts (which don't set up a real connection)
     # keep working; jobs that need it fall back to getpass.getuser() when None.
     target_username: str | None = None
+    # Read-only enablement map for ALL sync jobs (not just this one), keyed by job name,
+    # so a job can ask whether a sibling is enabled (e.g. plan 02-10 gates folder_sync's
+    # package-path exclusions on flatpak_sync/snap_sync being enabled). `config` above
+    # stays job-specific — widening it would silently change what every existing job sees
+    # (e.g. folder_sync expects its own section at config["folders"]). Optional with a
+    # `None` default so the lightweight `JobContext(...)` constructions in existing unit
+    # tests keep working; `None` means "no siblings known", reproducing today's behavior.
+    enabled_sync_jobs: Mapping[str, bool] | None = None

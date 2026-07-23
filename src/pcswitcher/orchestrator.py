@@ -28,6 +28,8 @@ from pcswitcher.jobs.btrfs import BtrfsSnapshotJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
+from pcswitcher.jobs.package_phase import coordinate_package_review
+from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackageSyncJob
 from pcswitcher.lock import (
     SyncLock,
     get_hostname_command,
@@ -266,6 +268,9 @@ class Orchestrator:
             # production (SyncStep.CONNECT onward), but unit tests mock executors
             # without a real connection, so fall back to None (JobContext accepts it).
             target_username=self._connection.username if self._connection is not None else None,
+            # The full sync_jobs enablement map, not just this job's own section — see
+            # JobContext.enabled_sync_jobs docstring.
+            enabled_sync_jobs=dict(self._config.sync_jobs),
         )
 
     async def run(self) -> SyncSession:  # noqa: PLR0915
@@ -1020,6 +1025,13 @@ class Orchestrator:
     async def _execute_jobs(self, jobs: list[Job]) -> list[JobResult]:
         """Execute sync jobs sequentially with background disk monitoring.
 
+        Runs the package-phase coordinator first, outside the TaskGroup and before any
+        job's ``execute()`` — every enabled package job (``PackageSyncJob`` subclass)
+        gets its diff planned and reviewed in one batched prompt before any of them is
+        allowed to converge (D-24, ADR-020). It runs outside the TaskGroup because it
+        prompts, and the disk-space monitors inside the TaskGroup would otherwise be
+        painting the terminal while the prompt owns it.
+
         Args:
             jobs: List of validated jobs to execute
 
@@ -1027,6 +1039,13 @@ class Orchestrator:
             List of JobResult for each executed job
         """
         results: list[JobResult] = []
+
+        package_jobs = [job for job in jobs if isinstance(job, PackageSyncJob)]
+        if package_jobs:
+            assert self._ui is not None
+            assert self._console is not None
+            self._ui.set_current_step(SyncStep.RUN_JOBS, "Package review")
+            await coordinate_package_review(package_jobs, console=self._console, ui=self._ui, logger=self._logger)
 
         try:
             await self._run_jobs_in_task_group(jobs, results)
@@ -1101,6 +1120,29 @@ class Orchestrator:
                         # records an ABORTED session, rather than a spurious
                         # FAILED job result plus a duplicate CRITICAL log.
                         raise
+                    except PackageItemFailures as e:
+                        # The user approved changes across several package managers in
+                        # ONE batched review (D-24); letting one manager's failed items
+                        # cancel another manager's already-approved work would silently
+                        # break that promise. Record this job's FAILED result (D-27) but
+                        # deliberately do NOT re-raise, so the remaining jobs still run —
+                        # every other exception keeps today's abort-the-run behavior.
+                        ended_at = datetime.now(UTC)
+                        results.append(
+                            JobResult(
+                                job_name=job.name,
+                                status=JobStatus.FAILED,
+                                started_at=started_at,
+                                ended_at=ended_at,
+                                error_message=str(e),
+                            )
+                        )
+                        self._logger.critical(
+                            "Job %s failed: %s",
+                            job.name,
+                            e,
+                            extra={"job": "orchestrator", "host": "source"},
+                        )
                     except Exception as e:
                         ended_at = datetime.now(UTC)
                         results.append(
