@@ -47,11 +47,12 @@ sync_jobs:
   # then their data lands on top of them (decisive for flatpak, where flatpak install
   # creates ~/.local/share/flatpak before folder_sync would otherwise land ~/.var/app on
   # top). The orchestrator resolves sync_jobs in the order keys appear in this file, so
-  # apt_sync, snap_sync and flatpak_sync are listed above folder_sync here — reordering
-  # these entries changes execution order.
+  # apt_sync, snap_sync, flatpak_sync and manual_installs_sync are listed above
+  # folder_sync here — reordering these entries changes execution order.
   apt_sync: false             # Install missing apt packages on target, after a batched review (destructive; opt-in)
   snap_sync: false            # Converge snap revisions/channels on target, after a batched review (destructive; opt-in)
   flatpak_sync: false         # Converge flatpak refs/remotes on target, after a batched review (destructive; opt-in)
+  manual_installs_sync: false # Detect and reproduce installs no package manager can, via install snippets (destructive; opt-in)
 
   folder_sync: true          # Sync /home and /root directories (Phase 1)
   vscode_state_sync: true    # Sync VS Code editor state (your user only), except its per-machine secret store

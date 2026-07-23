@@ -587,6 +587,36 @@ class TestUnavailableCapture:
         assert by_id["apt:package:pkg-b"].diff_class == DiffClass.REPO_UNAVAILABLE
 
 
+class TestNoUnreproducibleDetectionInApt:
+    """D-18: apt_sync no longer detects, reviews or converges unreproducible items —
+    that ownership moved to manual_installs_sync. An input that previously produced an
+    UNREPRODUCIBLE diff (a source package with no apt candidate) now produces none.
+    """
+
+    @pytest.mark.asyncio
+    async def test_apt_plan_emits_no_unreproducible_diff(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "dpkg-query": CommandResult(0, "brscan3\t1.0\n", ""),
+                # A source with no apt candidate AND an unowned /usr/local path: both
+                # previously became UNREPRODUCIBLE diffs inside apt_sync's own plan().
+                "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+                "find /usr/local": CommandResult(0, "/usr/local/flux\n", ""),
+                "dpkg -S": CommandResult(0, "", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "dpkg-query": CommandResult(0, "brscan3\t1.0\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_class == ItemClass.UNREPRODUCIBLE for d in plan.diffs)
+
+
 class TestRemovalConverge:
     @pytest.mark.asyncio
     async def test_remove_diff_issues_real_apt_get_remove_for_that_package_alone(self) -> None:

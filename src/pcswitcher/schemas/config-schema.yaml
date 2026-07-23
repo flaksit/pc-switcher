@@ -77,6 +77,10 @@ properties:
         type: boolean
         default: false
         description: "Converge installed flatpak refs and remotes, after a batched review (destructive; opt-in)"
+      manual_installs_sync:
+        type: boolean
+        default: false
+        description: "Detect and reproduce installs no package manager can (bare .debs, unowned /usr/local, /opt), after a batched review (destructive; opt-in)"
       # Jobs implemented in Phase 1:
       folder_sync:
         type: boolean
