@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from pcswitcher.confirmer import Confirmer
     from pcswitcher.events import EventBus
     from pcswitcher.executor import LocalExecutor, RemoteExecutor
+    from pcswitcher.jobs.package_review import Reviewer
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,11 @@ class JobContext:
     # Interactive confirmation gate for destructive job actions (ADR-015 refinement).
     # Optional so lightweight test contexts can omit it; jobs that prompt assert it is set.
     confirmer: Confirmer | None = None
+    # Per-manager batched review for package jobs (D-24). Optional for the same reason
+    # `confirmer` is: lightweight unit-test contexts construct `JobContext` without one, so
+    # tests that never reach a review keep working; a `PackageSyncJob.execute()` that does
+    # reach one asserts it is set rather than silently applying unreviewed diffs.
+    reviewer: Reviewer | None = None
     # SSH username on the target, resolved from the live asyncssh connection.
     # Optional so existing lightweight test contexts (which don't set up a real connection)
     # keep working; jobs that need it fall back to getpass.getuser() when None.

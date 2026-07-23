@@ -43,7 +43,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import questionary
 from rich.console import Console
@@ -59,6 +59,8 @@ __all__ = [
     "ReviewEntry",
     "ReviewGroup",
     "ReviewOutcome",
+    "Reviewer",
+    "TerminalUIReviewer",
     "review_items",
 ]
 
@@ -139,8 +141,8 @@ class ReviewOutcome:
 
     `snippets` (item_id -> body, D-20) and `unresolved` (item ids, D-21) are populated
     only by an `UNREPRODUCIBLE_REVIEW_ACTION` group's per-entry resolution; every other
-    group leaves both at their empty defaults, so existing callers constructing a
-    `ReviewOutcome` by hand (tests, `PackagePhaseCoordinator._slice_for`) are unaffected.
+    group leaves both at their empty defaults, so callers constructing a `ReviewOutcome`
+    by hand (tests, and `PackageSyncJob.apply()`'s decision handling) are unaffected.
     """
 
     decisions: Mapping[str, Decision]
@@ -337,3 +339,42 @@ async def review_items(
         ui.resume()
 
     return ReviewOutcome(decisions=decisions, was_interactive=True, snippets=snippets, unresolved=tuple(unresolved))
+
+
+@runtime_checkable
+class Reviewer(Protocol):
+    """A package job's review seam (D-24): given the groups one job planned, return that
+    job's decisions.
+
+    Injected through `JobContext.reviewer` exactly as `Confirmer` is through
+    `JobContext.confirmer`, so a `PackageSyncJob.execute()` reaches its own review without
+    any component outside the job owning it. Each job reviews its own groups before its own
+    first mutating command; there is no cross-manager review.
+    """
+
+    async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome: ...
+
+
+class TerminalUIReviewer:
+    """`Reviewer` backed by the Rich console and the live `TerminalUI`.
+
+    A thin adapter: `review()` forwards to `review_items`, which keeps every behaviour it
+    has — the automation-environment hook, the non-interactive path, and the pause/resume
+    `finally` that lets the blocking prompt run inside the job TaskGroup. Mirrors
+    `TerminalUIConfirmer`'s shape (console + UI + optional logger), constructed once by the
+    orchestrator.
+    """
+
+    def __init__(
+        self,
+        console: Console,
+        ui: PausableUI,
+        *,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._console = console
+        self._ui = ui
+        self._logger = logger
+
+    async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
+        return await review_items(groups, console=self._console, ui=self._ui, logger=self._logger)

@@ -1,31 +1,28 @@
-"""Shared package-sync pipeline: `PackageSyncJob`'s plan()/apply() split (D-15, D-16, ADR-020).
+"""Shared package-sync pipeline: `PackageSyncJob`'s plan()/review/apply() split (D-15, D-16, D-24).
 
-D-15 wants three independent jobs (`apt_sync`, `snap_sync`, `flatpak_sync`) with their own
-config, enable flag and failure isolation. D-24 wants ONE batched review across all of them
-before any change is applied. The orchestrator runs jobs sequentially, so a job that reviews
-and converges inside its own `execute()` would let `apt_sync` finish mutating the target
-before `snap_sync` had even looked at its own diff — exactly the defect the cross-AI review
-found (see ADR-020). Those two decisions only reconcile if a job's planning is separable
-from its applying, which is what this module's `plan()`/`apply()` split provides:
+Every package job (`apt_sync`, `snap_sync`, `flatpak_sync`) is independent (D-15): its own
+config, enable flag, failure isolation and progress. D-24 requires each job to present its
+own batched review before that job's own first mutating command — the batching is per
+manager, never across managers. The split of `plan()` from `apply()` exists to make that
+review-before-any-change ordering checkable and testable per job:
 
 - `plan()` captures the source manifest, queries the target, diffs, and builds this job's
   own `ReviewGroup`s. It issues READ commands only — nothing here may mutate either
-  machine, because every enabled manager's `plan()` runs before the user has approved
-  anything. Before capturing anything, it loads both machines' machine-local decision
-  files (D-08, D-09, `package_state.py`) and filters an inert item out of the side that
-  holds it, so an item recorded "skip always" never becomes an `ItemDiff` in the first
-  place — D-08's "inert on M in both roles" made real at the diff-input boundary rather
-  than as a later filter on the review.
-- `accept_review()` is how `PackagePhaseCoordinator` (plan 02-03 task 2) hands this job
-  back its own slice of the one cross-manager review.
+  machine, because a job plans and reviews before it converges. Before capturing anything,
+  it loads both machines' machine-local decision files (D-08, D-09, `package_state.py`) and
+  filters an inert item out of the side that holds it, so an item recorded "skip always"
+  never becomes an `ItemDiff` in the first place — D-08's "inert on M in both roles" made
+  real at the diff-input boundary rather than as a later filter on the review.
+- `accept_review()` stores this job's plan plus the outcome its own review returned, so
+  `apply()` and the apt guards read a consistent pair.
 - `apply()` converges the `APPLY`-decided diffs, one item at a time, catching and
   collecting per-item failures (D-27) so one bad item never stops the rest. It also
   persists a permanent decision (D-08a) for every `SKIP_ALWAYS`-decided item, on
   whichever machine holds it.
-- `execute()` — the `SyncJob` entry point the orchestrator's existing sequential loop
-  calls — refuses to run without a coordinator-accepted plan, which makes the
-  plan-before-apply ordering a structural property of the code, not a convention the next
-  job author has to remember.
+- `execute()` — the `SyncJob` entry point the orchestrator's sequential loop calls — is
+  self-contained: it plans, reviews through the injected `JobContext.reviewer`, accepts the
+  outcome, then applies. A `plan()` failure propagates naturally out of `execute()` and
+  lands in this job's own `JobResult` through the orchestrator's per-job exception handling.
 """
 
 from __future__ import annotations
@@ -90,11 +87,11 @@ class PackageItemFailures(RuntimeError):
 
 @dataclass(frozen=True)
 class PackagePlan:
-    """The read-only product of one job's `plan()` — the only thing the coordinator needs.
+    """The read-only product of one job's `plan()`, handed to that job's own review.
 
     `groups` are pre-built `ReviewGroup`s (one per action, removals in their own group,
-    per D-07/D-24) so the coordinator only has to concatenate every job's groups, never
-    re-derive them.
+    per D-07/D-24) so `execute()` passes them straight to the reviewer without re-deriving
+    them.
     """
 
     manager: str
@@ -148,7 +145,6 @@ class PackageSyncJob(SyncJob):
         super().__init__(context)
         self._accepted_plan: PackagePlan | None = None
         self._accepted_outcome: ReviewOutcome | None = None
-        self._plan_failure: Exception | None = None
 
     # -- Abstract hooks subclasses implement -------------------------------------------
 
@@ -351,8 +347,8 @@ class PackageSyncJob(SyncJob):
     async def plan(self) -> PackagePlan:
         """Load decision files -> capture -> query -> diff -> build review groups. Read-only.
 
-        Nothing here may mutate either machine: every enabled manager's `plan()` runs
-        (via `PackagePhaseCoordinator`) before the user has approved anything. Both
+        Nothing here may mutate either machine: a job plans and reviews before it
+        converges, so `plan()` runs before the user has approved anything. Both
         machines' decision files are loaded first (a read, like everything else here)
         and each side's captured/queried items are filtered through its OWN file before
         diffing (D-08): an item recorded on the source is dropped from the source
@@ -380,17 +376,8 @@ class PackageSyncJob(SyncJob):
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
 
-    def record_plan_failure(self, exc: Exception) -> None:
-        """Record that `plan()` raised, for `execute()` to re-raise later.
-
-        Called by `PackagePhaseCoordinator` when this job's `plan()` fails; keeps the
-        failure attributed to THIS job's `JobResult` even though the coordinator collects
-        every job's `plan()` before any of them get a review outcome.
-        """
-        self._plan_failure = exc
-
     def accept_review(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
-        """Store this job's plan plus its slice of the coordinator's review outcome."""
+        """Store this job's plan plus the outcome its own review returned."""
         self._accepted_plan = plan
         self._accepted_outcome = outcome
 
@@ -622,21 +609,20 @@ class PackageSyncJob(SyncJob):
     async def execute(self) -> None:
         """The `SyncJob` entry point the orchestrator's sequential job loop calls.
 
-        Refuses to run without a coordinator-accepted plan — this is the structural
-        enforcement of the plan-before-apply ordering (ADR-020, T-02-33). NO fallback
-        exists that plans inline when no plan was accepted: a convenience path re-running
-        the review per job would silently reintroduce the exact per-job-self-contained-
-        review bug this split exists to remove, invisible until three managers ran at
-        once. If `plan()` itself failed, re-raise that stored failure so it is attributed
-        to this job's `JobResult` even though the coordinator already moved on to plan
-        the other enabled managers.
+        Self-contained (D-24): plan this job's diffs, review its own groups through the
+        injected `JobContext.reviewer`, accept the outcome, then apply. No component
+        outside the job owns its review, and no fallback applies diffs that never came
+        back from one — a missing reviewer fails loudly here rather than silently skipping
+        the review and converging unreviewed diffs (T-02-38).
+
+        A `plan()` failure propagates unchanged, so the orchestrator's per-job exception
+        handling attributes it to this job's own `JobResult`.
         """
-        if self._plan_failure is not None:
-            raise self._plan_failure
-        if self._accepted_plan is None or self._accepted_outcome is None:
-            raise RuntimeError(
-                f"{self.manager_id} sync has no coordinator-accepted plan; "
-                "PackagePhaseCoordinator must run plan()/review_items()/accept_review() "
-                "before execute()."
-            )
+        assert self.context.reviewer is not None, (
+            f"{self.manager_id} sync has no reviewer; the orchestrator must inject one "
+            "through JobContext.reviewer before execute()."
+        )
+        plan = await self.plan()
+        outcome = await self.context.reviewer.review(plan.groups)
+        self.accept_review(plan, outcome)
         await self.apply()

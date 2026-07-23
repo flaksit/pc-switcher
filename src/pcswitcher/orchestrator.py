@@ -28,8 +28,8 @@ from pcswitcher.jobs.btrfs import BtrfsSnapshotJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
-from pcswitcher.jobs.package_phase import coordinate_package_review
-from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackageSyncJob
+from pcswitcher.jobs.package_review import Reviewer, TerminalUIReviewer
+from pcswitcher.jobs.package_sync_core import PackageItemFailures
 from pcswitcher.lock import (
     SyncLock,
     get_hostname_command,
@@ -261,6 +261,7 @@ class Orchestrator:
         self._console: Console | None = None
         self._ui_task: asyncio.Task[None] | None = None
         self._confirmer: Confirmer | None = None
+        self._reviewer: Reviewer | None = None
 
     def _create_job_context(self, config: dict[str, Any]) -> JobContext:
         """Create JobContext with current orchestrator state.
@@ -281,6 +282,7 @@ class Orchestrator:
             dry_run=self._dry_run,
             allow_first_sync=self._allow_first_sync,
             confirmer=self._confirmer,
+            reviewer=self._reviewer,
             # Connection is always set when _create_job_context is called in
             # production (SyncStep.CONNECT onward), but unit tests mock executors
             # without a real connection, so fall back to None (JobContext accepts it).
@@ -341,6 +343,7 @@ class Orchestrator:
         # Shared interactive confirmation gate for the orchestrator's out-of-order check
         # and any job-level prompt (e.g. FolderSyncJob first-sync overwrite, ADR-015).
         self._confirmer = TerminalUIConfirmer(self._console, self._ui, logger=self._logger)
+        self._reviewer = TerminalUIReviewer(self._console, self._ui, logger=self._logger)
 
         # Create log file path and set up stdlib logging infrastructure.
         # Passing ui + console lets setup_logging pick the UI-routed TUI
@@ -1089,12 +1092,12 @@ class Orchestrator:
     async def _execute_jobs(self, jobs: list[Job]) -> list[JobResult]:
         """Execute sync jobs sequentially with background disk monitoring.
 
-        Runs the package-phase coordinator first, outside the TaskGroup and before any
-        job's ``execute()`` — every enabled package job (``PackageSyncJob`` subclass)
-        gets its diff planned and reviewed in one batched prompt before any of them is
-        allowed to converge (D-24, ADR-020). It runs outside the TaskGroup because it
-        prompts, and the disk-space monitors inside the TaskGroup would otherwise be
-        painting the terminal while the prompt owns it.
+        Each package job reviews its own diffs inside its own ``execute()`` (D-24): it
+        plans, prompts through the injected ``JobContext.reviewer``, then converges. The
+        review's blocking prompt runs inside the job TaskGroup alongside the disk-space
+        monitors — ``review_items`` pauses the Live display before prompting and resumes
+        it in a ``finally``, the same mechanism ``TerminalUIConfirmer`` already uses from
+        ``FolderSyncJob.execute()`` — so no coordination outside the TaskGroup is needed.
 
         Args:
             jobs: List of validated jobs to execute
@@ -1103,13 +1106,6 @@ class Orchestrator:
             List of JobResult for each executed job
         """
         results: list[JobResult] = []
-
-        package_jobs = [job for job in jobs if isinstance(job, PackageSyncJob)]
-        if package_jobs:
-            assert self._ui is not None
-            assert self._console is not None
-            self._ui.set_current_step(SyncStep.RUN_JOBS, "Package review")
-            await coordinate_package_review(package_jobs, console=self._console, ui=self._ui, logger=self._logger)
 
         try:
             await self._run_jobs_in_task_group(jobs, results)

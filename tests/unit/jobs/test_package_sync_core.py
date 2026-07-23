@@ -9,6 +9,7 @@ independent of `AptSyncJob`'s apt-specific machinery, which `test_apt_sync.py` c
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
@@ -23,12 +24,12 @@ from pcswitcher.jobs.package_items import (
     ItemClass,
     ItemDiff,
 )
-from pcswitcher.jobs.package_review import Decision, ReviewOutcome
+from pcswitcher.jobs.package_review import Decision, ReviewGroup, ReviewOutcome
 from pcswitcher.jobs.package_sync_core import PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult
 
 
-def make_context(*, dry_run: bool = False) -> JobContext:
+def make_context(*, dry_run: bool = False, reviewer: object | None = None) -> JobContext:
     source = MagicMock()
     source.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
     target = MagicMock()
@@ -42,7 +43,36 @@ def make_context(*, dry_run: bool = False) -> JobContext:
         source_hostname="source-host",
         target_hostname="target-host",
         dry_run=dry_run,
+        reviewer=reviewer,  # pyright: ignore[reportArgumentType]
     )
+
+
+class FakeReviewer:
+    """A `Reviewer` that returns a caller-supplied outcome and records the groups it saw.
+
+    Reusable across the package-sync tests wherever the subject is a whole `execute()` run
+    rather than `apply()` in isolation: a test supplies a `decisions` map keyed by item id
+    (unlisted items default to `SKIP_ONCE`) and can afterwards inspect `groups_seen` to
+    assert what the job actually presented for review.
+    """
+
+    def __init__(
+        self,
+        decisions: dict[str, Decision] | None = None,
+        *,
+        was_interactive: bool = True,
+    ) -> None:
+        self._decisions = decisions or {}
+        self._was_interactive = was_interactive
+        self.groups_seen: tuple[ReviewGroup, ...] | None = None
+        self.call_count = 0
+
+    async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
+        self.call_count += 1
+        self.groups_seen = tuple(groups)
+        item_ids = {entry.item_id for group in groups for entry in group.entries}
+        decisions = {item_id: self._decisions.get(item_id, Decision.SKIP_ONCE) for item_id in item_ids}
+        return ReviewOutcome(decisions=decisions, was_interactive=self._was_interactive)
 
 
 def _diff(
@@ -235,6 +265,23 @@ class TestReviewGroupsByAction:
         assert len(groups) == 4
         assert {g.action for g in groups} == {"install", "change", "remove", "report_only"}
 
+    def test_group_emission_order_is_install_change_remove_report(self) -> None:
+        """Fixed action order (must-have): install, then change, then remove, then report.
+        Two runs over the same diff set present the same order, regardless of diff input
+        order — so the diffs are supplied here deliberately shuffled.
+        """
+        job = FakeSyncJob(make_context())
+        diffs = [
+            _diff("p1", DiffAction.REPORT_ONLY, DiffClass.VERSION_MISMATCH),
+            _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),
+            _diff("i1", DiffAction.INSTALL),
+            _diff("c1", DiffAction.CHANGE, DiffClass.VERSION_MISMATCH),
+        ]
+
+        groups = job._build_review_groups(diffs)
+
+        assert [g.action for g in groups] == ["install", "change", "remove", "report_only"]
+
     def test_report_only_falls_back_to_report_for_a_class_with_no_vocabulary_entry(self) -> None:
         """IN-01 regression: `_ACTION_VOCABULARY` only lists an explicit REPORT_ONLY
         entry for APT_PACKAGE. Every other item class's REPORT_ONLY diff must still
@@ -426,3 +473,102 @@ class TestFinalizeUnreproducible:
 
         for cmd in [c.args[0] for c in context.source.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
             assert "mv -f" not in cmd
+
+
+class _OrderRecordingJob(FakeSyncJob):
+    """`FakeSyncJob` that records the order of plan/accept_review/apply on `events`, so a
+    test can assert `apply` is never reached before `review` returns.
+    """
+
+    def __init__(self, context: JobContext, events: list[str]) -> None:
+        super().__init__(context)
+        self._events = events
+
+    async def plan(self) -> PackagePlan:
+        self._events.append("plan")
+        return await super().plan()
+
+    def accept_review(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
+        self._events.append("accept_review")
+        super().accept_review(plan, outcome)
+
+    async def apply(self) -> None:
+        self._events.append("apply")
+        await super().apply()
+
+
+class _RecordingReviewer(FakeReviewer):
+    """`FakeReviewer` that also appends `review` to a shared event list, to pin call order."""
+
+    def __init__(self, events: list[str], decisions: dict[str, Decision] | None = None) -> None:
+        super().__init__(decisions)
+        self._events = events
+
+    async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
+        self._events.append("review")
+        return await super().review(groups)
+
+
+class _RaisingPlanJob(FakeSyncJob):
+    """A job whose `plan()` raises, to prove the failure propagates out of `execute()`."""
+
+    def __init__(self, context: JobContext, error: Exception) -> None:
+        super().__init__(context)
+        self._error = error
+
+    async def plan(self) -> PackagePlan:
+        raise self._error
+
+
+class TestExecuteSelfContained:
+    """`execute()` is self-contained (D-24): plan -> review -> accept_review -> apply,
+    with the review reached through the injected `JobContext.reviewer`.
+    """
+
+    @pytest.mark.asyncio
+    async def test_call_order_is_plan_review_accept_review_apply(self) -> None:
+        events: list[str] = []
+        reviewer = _RecordingReviewer(events)
+        job = _OrderRecordingJob(make_context(reviewer=reviewer), events)
+
+        await job.execute()
+
+        assert events == ["plan", "review", "accept_review", "apply"]
+        # apply must never precede review returning.
+        assert events.index("apply") > events.index("review")
+
+    @pytest.mark.asyncio
+    async def test_zero_diff_run_still_calls_review_once(self) -> None:
+        events: list[str] = []
+        reviewer = _RecordingReviewer(events)
+        job = _OrderRecordingJob(make_context(reviewer=reviewer), events)
+
+        await job.execute()
+
+        # FakeSyncJob has empty capture/query, so the plan carries no diffs; the reviewer
+        # is still consulted exactly once (with an empty group tuple).
+        assert reviewer.call_count == 1
+        assert reviewer.groups_seen == ()
+
+    @pytest.mark.asyncio
+    async def test_missing_reviewer_raises_and_issues_no_converge(self) -> None:
+        job = FakeSyncJob(make_context())  # reviewer defaults to None
+
+        with pytest.raises(AssertionError, match="no reviewer"):
+            await job.execute()
+
+        assert job.converge_calls == []
+        job.context.target.run_command.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]
+
+    @pytest.mark.asyncio
+    async def test_plan_failure_propagates_out_of_execute_unchanged(self) -> None:
+        failure = RuntimeError("manifest capture blew up")
+        reviewer = FakeReviewer()
+        job = _RaisingPlanJob(make_context(reviewer=reviewer), failure)
+
+        with pytest.raises(RuntimeError, match="manifest capture blew up") as exc_info:
+            await job.execute()
+
+        assert exc_info.value is failure
+        # The review is never reached when planning fails.
+        assert reviewer.call_count == 0
