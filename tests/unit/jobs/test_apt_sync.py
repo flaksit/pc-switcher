@@ -1357,3 +1357,63 @@ class TestRepoGroupBackupFailure:
         # backing up fails.
         assert not any("sudo install -o root -g root -m 0644" in c and "preferences.d/pin-" in c for c in commands)
 
+
+class TestKeyringsDirectoryEnsured:
+    """CR-02 regression: `/etc/apt/keyrings` does not ship on a fresh Ubuntu 24.04
+    target (unlike `sources.list.d`/`preferences.d`/`apt.conf.d`/`trusted.gpg.d`,
+    which are part of the `apt` package), so `sudo install` without `-D` fails with
+    "No such file or directory" promoting a per-repo key to a fresh machine — exactly
+    the "sync a fresh machine" scenario this subsystem exists for.
+    """
+
+    @pytest.mark.asyncio
+    async def test_promotion_ensures_keyrings_directory_before_install(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(job, plan, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        mkdir_idx = _index_of(commands, lambda c: c == "sudo mkdir -p -m 0755 /etc/apt/keyrings")
+        install_idx = _index_of(
+            commands, lambda c: "sudo install -o root -g root -m 0644" in c and "keyrings/foo.gpg" in c
+        )
+        assert mkdir_idx < install_idx
+
+    @pytest.mark.asyncio
+    async def test_directory_preparation_failure_fails_the_item_not_the_run(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "sudo mkdir -p -m 0755 /etc/apt/keyrings": CommandResult(1, "", "permission denied"),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(job, plan, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
+        assert "apt:key:per-repo:foo.gpg" in failed_ids
+        commands = all_calls(target)
+        assert not any("sudo install -o root -g root -m 0644" in c and "keyrings/foo.gpg" in c for c in commands)

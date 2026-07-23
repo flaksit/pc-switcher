@@ -1304,6 +1304,23 @@ class AptSyncJob(PackageSyncJob):
         if diff.item_class == ItemClass.APT_SOURCE:
             await self._require_keyrings_ready(diff)
 
+        # `sources.list.d`, `preferences.d`, `apt.conf.d` and `trusted.gpg.d` ship with
+        # the `apt` package, but `/etc/apt/keyrings` is a third-party convention that a
+        # fresh Ubuntu 24.04 target does not have — `install` (unlike `install -D`)
+        # never creates DEST's missing parent directories, so a per-repo key promotion
+        # to a fresh machine would otherwise fail every time. `mkdir -p -m` only chmods
+        # directories it actually creates (unlike `install -d`, which would also chmod
+        # the four directories that already exist), so this is a no-op everywhere except
+        # the one directory this project actually needs to create.
+        dest_dir = str(Path(dest).parent)
+        mkdir_result = await self.target.run_command(
+            f"sudo mkdir -p -m 0755 {shlex.quote(dest_dir)}", login_shell=False
+        )
+        if not mkdir_result.success:
+            raise ConvergeItemFailed(
+                f"failed to prepare directory {dest_dir} for {dest}: {mkdir_result.stderr.strip()}"
+            )
+
         local_path = Path(dest)
         staged_name = diff.item_id.replace(":", "_").replace("/", "_")
         staged_dest = f"{staging_dir}/{staged_name}"
