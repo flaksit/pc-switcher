@@ -126,9 +126,7 @@ class TestFirstSyncScopesFolderSync:
 class TestFirstSyncScopesPackageJobsOrdering:
     """D-17: package job scopes precede folder_sync's scope, one entry per enabled job."""
 
-    def test_all_package_jobs_and_folder_sync_each_contribute_one_scope_in_order(
-        self, mock_config: MagicMock
-    ) -> None:
+    def test_all_package_jobs_and_folder_sync_each_contribute_one_scope_in_order(self, mock_config: MagicMock) -> None:
         """apt_sync, snap_sync, flatpak_sync and folder_sync each resolve to a real job
         class and contribute exactly one FirstSyncScope, in sync_jobs order."""
         mock_config.sync_jobs = {
