@@ -9,6 +9,12 @@
 # See docs/configuration.md "Filter rules" and "Coming from .gitignore" for the
 # full syntax and the anchored-vs-floating distinction.
 
+# Package-store excludes (Phase 2, D-29): no snap or flatpak rule is needed or
+# shipped here. Enabling sync_jobs.snap_sync automatically and non-overridably
+# excludes ~/snap/<app>/<revision>; enabling sync_jobs.flatpak_sync does the same
+# for ~/.local/share/flatpak. A personal filter file's hand-written equivalents
+# for either path can be dropped once the corresponding job is enabled.
+
 # Machine-identity excludes — never synced between machines.
 - .ssh/id_*
 - .ssh/known_hosts
