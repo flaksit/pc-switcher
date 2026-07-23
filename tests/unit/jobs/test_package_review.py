@@ -14,18 +14,26 @@ import json
 import subprocess
 import sys
 import time
-from unittest.mock import MagicMock, patch
+from collections.abc import Sequence
+from typing import ClassVar
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from rich.console import Console
 
+from pcswitcher.jobs.context import JobContext
+from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.package_review import (
     PACKAGE_REVIEW_AUTOMATION_ENV,
+    UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
     ReviewEntry,
     ReviewGroup,
+    ReviewOutcome,
     review_items,
 )
+from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan, PackageSyncJob
+from pcswitcher.models import CommandResult, ValidationError
 
 
 def _mock_isatty(interactive: bool) -> MagicMock:
@@ -48,13 +56,24 @@ def _entry(item_id: str, label: str = "pkg", action_label: str = "install") -> R
 
 
 def _fake_prompt(*, ask_return: object = None, ask_side_effect: object = None) -> MagicMock:
-    """Build a fake `questionary.checkbox(...)` return value with a stubbed `.ask()`."""
+    """Build a fake `questionary.checkbox/select/text(...)` return value with a stubbed
+    `.ask()` — the same shape every questionary prompt type shares.
+    """
     prompt = MagicMock()
     if ask_side_effect is not None:
         prompt.ask = MagicMock(side_effect=ask_side_effect)
     else:
         prompt.ask = MagicMock(return_value=ask_return)
     return prompt
+
+
+def _unreproducible_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
+    return ReviewGroup(
+        manager="apt",
+        action=UNREPRODUCIBLE_REVIEW_ACTION,
+        title="Resolve apt items with no reproducible install",
+        entries=tuple(entries),
+    )
 
 
 @pytest.mark.asyncio
@@ -305,3 +324,230 @@ class TestAutomationEnv:
         )
         assert PACKAGE_REVIEW_AUTOMATION_ENV not in result.stdout
         assert PACKAGE_REVIEW_AUTOMATION_ENV not in result.stderr
+
+
+@pytest.mark.asyncio
+class TestUnreproducibleGroupResolution:
+    """D-21: an `UNREPRODUCIBLE_REVIEW_ACTION` group gets the three-way per-entry
+    resolution flow (add a snippet / record machine-specific / skip for now), never a
+    checkbox tick.
+    """
+
+    async def test_add_snippet_choice_captures_body_verbatim_including_whitespace(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        select_prompt = _fake_prompt(ask_return="add_snippet")
+        body = "  sudo dpkg -i /tmp/x.deb\n\nsudo apt-get install -f -y\n"
+        text_prompt = _fake_prompt(ask_return=body)
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.package_review.questionary.text", return_value=text_prompt),
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        assert outcome.snippets == {"u1": body}
+        assert "u1" not in outcome.unresolved
+
+    async def test_skip_always_choice_yields_skip_always_decision_and_no_snippet(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        select_prompt = _fake_prompt(ask_return="skip_always")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        assert outcome.decisions["u1"] == Decision.SKIP_ALWAYS
+        assert outcome.snippets == {}
+        assert "u1" not in outcome.unresolved
+
+    async def test_skip_once_choice_leaves_the_item_unresolved(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        select_prompt = _fake_prompt(ask_return="skip_once")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        assert outcome.decisions["u1"] == Decision.SKIP_ONCE
+        assert outcome.unresolved == ("u1",)
+
+    async def test_declining_an_empty_snippet_body_leaves_the_item_unresolved(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        select_prompt = _fake_prompt(ask_return="add_snippet")
+        text_prompt = _fake_prompt(ask_return=None)  # capture cancelled
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.package_review.questionary.text", return_value=text_prompt),
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        assert outcome.snippets == {}
+        assert outcome.unresolved == ("u1",)
+
+    async def test_ui_resumed_when_snippet_capture_raises(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        select_prompt = _fake_prompt(ask_return="add_snippet")
+        text_prompt = _fake_prompt(ask_side_effect=KeyboardInterrupt)
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.package_review.questionary.text", return_value=text_prompt),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            await review_items([group], console=console, ui=ui)
+
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()
+
+    async def test_non_interactive_offers_no_capture_and_marks_every_item_unresolved(self) -> None:
+        console = _non_interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3"), _entry("u2", label="cnpg")])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(False)),
+            patch("pcswitcher.jobs.package_review.questionary.select") as select_mock,
+            patch("pcswitcher.jobs.package_review.questionary.text") as text_mock,
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        select_mock.assert_not_called()
+        text_mock.assert_not_called()
+        assert outcome.snippets == {}
+        assert set(outcome.unresolved) == {"u1", "u2"}
+        assert outcome.was_interactive is False
+
+    async def test_unreproducible_group_never_offered_as_a_checkbox(self) -> None:
+        """The group's action is a sentinel `review_items` special-cases, not a normal
+        install/remove verb — asserting the checkbox path is never taken guards against
+        the sentinel silently falling through to the generic tick-list flow.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        select_prompt = _fake_prompt(ask_return="skip_once")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.package_review.questionary.checkbox") as checkbox,
+        ):
+            await review_items([group], console=console, ui=ui)
+
+        checkbox.assert_not_called()
+
+
+# ---------------------------------------------------------------------------------
+# D-21/D-27: mandatory registration terminates — an unresolved unreproducible item
+# fails the job after an interactive review; non-interactive and dry-run are exempt.
+#
+# `apply()`'s raise logic lives in `PackageSyncJob` (package_sync_core.py); tested here
+# per the plan's own file scope, using a minimal concrete subclass the same shape
+# `test_package_sync_core.py`'s `FakeSyncJob` uses.
+# ---------------------------------------------------------------------------------
+
+
+class _FakeUnreproducibleJob(PackageSyncJob):
+    name: ClassVar[str] = "fake_unrepro"
+    manager_id: ClassVar[str] = "fake"
+
+    async def capture_source_items(self) -> list[AptPackageItem]:
+        return []
+
+    async def query_target_items(self) -> list[AptPackageItem]:
+        return []
+
+    async def validate(self) -> list[ValidationError]:
+        return []
+
+    async def converge(self, diff: ItemDiff) -> CommandResult:
+        return CommandResult(0, "", "")
+
+
+def _unresolved_job_context(*, dry_run: bool = False) -> JobContext:
+    source = MagicMock()
+    source.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
+    target = MagicMock()
+    target.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
+    return JobContext(
+        config={},
+        source=source,
+        target=target,
+        event_bus=MagicMock(),
+        session_id="test-1234",
+        source_hostname="source-host",
+        target_hostname="target-host",
+        dry_run=dry_run,
+    )
+
+
+def _unreproducible_diff(item_id: str) -> ItemDiff:
+    return ItemDiff(
+        item_class=ItemClass.UNREPRODUCIBLE,
+        diff_class=DiffClass.UNREPRODUCIBLE,
+        action=DiffAction.REPORT_ONLY,
+        item_id=item_id,
+        label=item_id,
+        detail=None,
+    )
+
+
+@pytest.mark.asyncio
+class TestUnresolvedFailsTheJob:
+    async def test_interactive_unresolved_raises_naming_the_item_even_with_no_converge_failure(self) -> None:
+        context = _unresolved_job_context()
+        job = _FakeUnreproducibleJob(context)
+        diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(plan, ReviewOutcome(decisions={}, was_interactive=True, unresolved=(diff.item_id,)))
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.apply()
+
+        failed_ids = {d.item_id for d, _stderr in exc_info.value.failures}
+        assert failed_ids == {diff.item_id}
+
+    async def test_interactive_resolved_does_not_raise(self) -> None:
+        context = _unresolved_job_context()
+        job = _FakeUnreproducibleJob(context)
+        diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(plan, ReviewOutcome(decisions={}, was_interactive=True, unresolved=()))
+
+        await job.apply()  # must not raise
+
+    async def test_non_interactive_unresolved_does_not_raise_on_that_basis_alone(self) -> None:
+        context = _unresolved_job_context()
+        job = _FakeUnreproducibleJob(context)
+        diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(plan, ReviewOutcome(decisions={}, was_interactive=False, unresolved=(diff.item_id,)))
+
+        await job.apply()  # must not raise
+
+    async def test_dry_run_unresolved_does_not_raise_on_that_basis_alone(self) -> None:
+        context = _unresolved_job_context(dry_run=True)
+        job = _FakeUnreproducibleJob(context)
+        diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(plan, ReviewOutcome(decisions={}, was_interactive=True, unresolved=(diff.item_id,)))
+
+        await job.apply()  # must not raise

@@ -310,3 +310,94 @@ class TestConvergeDispatchByAction:
         await job.apply()
 
         assert job.converge_calls == []
+
+
+def _unreproducible_diff(item_id: str, action: DiffAction = DiffAction.REPORT_ONLY) -> ItemDiff:
+    return ItemDiff(
+        item_class=ItemClass.UNREPRODUCIBLE,
+        diff_class=DiffClass.UNREPRODUCIBLE,
+        action=action,
+        item_id=item_id,
+        label=item_id,
+        detail=None,
+    )
+
+
+class TestFinalizeUnreproducible:
+    """D-20/D-21/D-23 (plan 02-07): `apply()` writes this run's snippet authoring and
+    unreproducible-item skip-always decisions, both to the SOURCE — never the target,
+    and never during a dry run or a non-interactive outcome.
+    """
+
+    @pytest.mark.asyncio
+    async def test_authored_snippet_is_written_to_the_source_registry_not_target(self) -> None:
+        context = make_context()
+        job = FakeSyncJob(context)
+        diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(
+            plan,
+            ReviewOutcome(decisions={}, was_interactive=True, snippets={diff.item_id: "sudo dpkg -i /tmp/x.deb"}),
+        )
+
+        await job.apply()
+
+        source_cmds = [c.args[0] for c in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        target_cmds = [c.args[0] for c in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        assert any("mv -f" in cmd and "package-snippets" in cmd for cmd in source_cmds)
+        assert not any("package-snippets" in cmd for cmd in target_cmds)
+
+    @pytest.mark.asyncio
+    async def test_skip_always_on_unreproducible_item_records_on_source(self) -> None:
+        context = make_context()
+        job = FakeSyncJob(context)
+        diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
+
+        await job.apply()
+
+        source_cmds = [c.args[0] for c in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        target_cmds = [c.args[0] for c in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        assert any("mv -f" in cmd and "fake.decisions" in cmd for cmd in source_cmds)
+        assert not any("fake.decisions" in cmd for cmd in target_cmds)
+
+    @pytest.mark.asyncio
+    async def test_no_finalize_writes_during_dry_run(self) -> None:
+        context = make_context(dry_run=True)
+        job = FakeSyncJob(context)
+        diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={diff.item_id: Decision.SKIP_ALWAYS},
+                was_interactive=True,
+                snippets={diff.item_id: "echo x"},
+            ),
+        )
+
+        await job.apply()
+
+        for cmd in [c.args[0] for c in context.source.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
+            assert "mv -f" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_no_finalize_writes_when_outcome_not_interactive(self) -> None:
+        context = make_context()
+        job = FakeSyncJob(context)
+        diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={diff.item_id: Decision.SKIP_ALWAYS},
+                was_interactive=False,
+                snippets={diff.item_id: "echo x"},
+            ),
+        )
+
+        await job.apply()
+
+        for cmd in [c.args[0] for c in context.source.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
+            assert "mv -f" not in cmd

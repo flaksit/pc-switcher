@@ -241,6 +241,41 @@ class TestDecisionDistribution:
         assert job_b.received_outcome is not None
         assert set(job_b.received_outcome.decisions) == {"stub-snap:1"}
 
+    @pytest.mark.asyncio
+    async def test_snippets_and_unresolved_are_also_sliced_per_job(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """D-21 (plan 02-07): a snippet authored, or an item left unresolved, for one
+        manager's item id must not leak into a sibling manager's outcome.
+        """
+
+        async def _run_with_snippets_and_unresolved(
+            groups: Sequence[ReviewGroup], *, console: object, ui: object, logger: object = None
+        ) -> ReviewOutcome:
+            all_ids = {entry.item_id for group in groups for entry in group.entries}
+            return ReviewOutcome(
+                decisions=dict.fromkeys(all_ids, Decision.APPLY),
+                was_interactive=True,
+                snippets={"stub-apt:1": "echo installed"},
+                unresolved=("stub-snap:1",),
+            )
+
+        monkeypatch.setattr(
+            "pcswitcher.jobs.package_phase.review_items", AsyncMock(side_effect=_run_with_snippets_and_unresolved)
+        )
+
+        context = make_context()
+        job_a = _StubAptLikeJob(context, _CallRecorder(), plan_result=_plan("stub-apt", ["stub-apt:1"]))
+        job_b = _StubSnapLikeJob(context, _CallRecorder(), plan_result=_plan("stub-snap", ["stub-snap:1"]))
+        coordinator = PackagePhaseCoordinator(Console(file=io.StringIO()), MagicMock())
+
+        await coordinator.run([job_a, job_b])
+
+        assert job_a.received_outcome is not None
+        assert job_a.received_outcome.snippets == {"stub-apt:1": "echo installed"}
+        assert job_a.received_outcome.unresolved == ()
+        assert job_b.received_outcome is not None
+        assert job_b.received_outcome.snippets == {}
+        assert job_b.received_outcome.unresolved == ("stub-snap:1",)
+
 
 class TestPlanFailureIsolation:
     @pytest.mark.asyncio
