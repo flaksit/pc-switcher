@@ -96,7 +96,7 @@ Plans:
   2. Manually-installed .debs, custom PPAs, and install-script-sourced packages are reproduced on the target.
   3. Package conflicts and version mismatches between source and target are detected and reported before any destructive change; machine-specific packages are not forced onto the target.
 
-**Plans**: 5/13 plans executed
+**Plans**: 6/13 plans executed
 
 Plans:
 **Wave 1**
@@ -115,7 +115,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 02-04-PLAN.md — machine-local decision files, skip-always in both roles, non-overridable folder_sync exclusion
+- [x] 02-04-PLAN.md — machine-local decision files, skip-always in both roles, non-overridable folder_sync exclusion
 - [ ] 02-06-PLAN.md — apt repository state as items: sources, keyrings, legacy trust keys, pins, apt config, in apt's required order, with staged privileged writes and transactional rollback
 
 **Wave 5** *(blocked on Wave 4)*
@@ -207,7 +207,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Folder Sync MVP (User Data Sync) | 18/18 | Complete    | 2026-07-03 |
-| 2. Package Management Sync | 5/13 | In Progress|  |
+| 2. Package Management Sync | 6/13 | In Progress|  |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
 | 5. VM State Sync | 0/TBD | Not started | - |

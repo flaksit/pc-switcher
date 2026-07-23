@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 02
 current_phase_name: Package Management Sync
 status: executing
-stopped_at: Completed 02-13-PLAN.md
-last_updated: "2026-07-23T07:17:33.466Z"
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-07-23T09:57:41.023Z"
 last_activity: 2026-07-23
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 31
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # Project State
@@ -30,13 +30,13 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 02 (Package Management Sync) — EXECUTING
 
-Plan: 6 of 13
+Plan: 7 of 13
 
 Status: Ready to execute
 
 Last activity: 2026-07-23 — Phase 02 execution started
 
-Progress: [███████░░░] 74%
+Progress: [████████░░] 77%
 
 ## Performance Metrics
 
@@ -86,6 +86,7 @@ Progress: [███████░░░] 74%
 | Phase 02 P03 | 26min | 2 tasks | 10 files |
 | Phase 02 P05 | 25min | 2 tasks | 6 files |
 | Phase 02 P13 | 22min | 1 tasks | 2 files |
+| Phase 02 P04 | 135min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -111,6 +112,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: AptSyncJob.plan() overrides base plan() (not a third generic hook) for plan-time apt-get -s collateral simulation — apt-only machinery snap_sync/flatpak_sync don't need
 - [Phase ?]: HELD_OR_PINNED takes precedence over version-mismatch/removal in the diff dispatch for any target item named by a hold/pin fact — the hold/pin fact is itself the more informative review entry
 - [Phase ?]: Plan 02-13: VM-level apt_sync tracer proof (test_package_sync.py) asserts against pc2's own apt-mark showmanual, not pc-switcher logs; candidate package chosen by querying VMs + apt-cache rdepends safety filter, restored in teardown regardless of outcome. VM execution pending CI (no local VM access).
+- [Phase ?]: [Phase 2]: package_state.py's DecisionFile resolves paths via a bare ~/ shell prefix (not echo $HOME) — verified ~/ immediately followed by a shlex-quoted word still tilde-expands as one shell word, avoiding an extra executor round trip while satisfying T-02-01's shlex.quote() requirement.
+- [Phase ?]: [Phase 2]: package_review.py's interactive 'promote skip to permanent' prompt is out of plan 02-04's scope (files_modified excludes package_review.py) — apply()'s SKIP_ALWAYS handling is exercised via hand-constructed ReviewOutcome objects; the UI path that produces SKIP_ALWAYS remains future work.
 
 ### Pending Todos
 
@@ -138,8 +141,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-23T07:17:33.456Z
+Last session: 2026-07-23T09:57:31.851Z
 
-Stopped at: Completed 02-13-PLAN.md
+Stopped at: Completed 02-04-PLAN.md
 
 Resume file: None
