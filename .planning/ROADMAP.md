@@ -96,13 +96,13 @@ Plans:
   2. Manually-installed .debs, custom PPAs, and install-script-sourced packages are reproduced on the target.
   3. Package conflicts and version mismatches between source and target are detected and reported before any destructive change; machine-specific packages are not forced onto the target.
 
-**Plans**: 1/13 plans executed
+**Plans**: 2/13 plans executed
 
 Plans:
 **Wave 1**
 
 - [x] 02-01-PLAN.md — ADR-020 (declarative package convergence) + `/etc/apt` scope boundary move into Phase 2
-- [ ] 02-02-PLAN.md — `questionary` legitimacy checkpoint + batched-review primitive composed with the paused Live display
+- [x] 02-02-PLAN.md — `questionary` legitimacy checkpoint + batched-review primitive composed with the paused Live display
 
 **Wave 2** *(blocked on Wave 1)*
 
@@ -207,7 +207,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Folder Sync MVP (User Data Sync) | 18/18 | Complete    | 2026-07-03 |
-| 2. Package Management Sync | 1/13 | In Progress|  |
+| 2. Package Management Sync | 2/13 | In Progress|  |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
 | 5. VM State Sync | 0/TBD | Not started | - |
