@@ -1,0 +1,1 @@
+/gsd-autonomous --only 2
