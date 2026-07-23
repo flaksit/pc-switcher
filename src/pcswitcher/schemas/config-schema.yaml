@@ -63,6 +63,12 @@ properties:
         type: boolean
         default: false
         description: "Test job that fails at configurable time"
+      # Jobs implemented in Phase 2 (package management sync, D-17: run before folder_sync
+      # so apps are provisioned before their data lands):
+      apt_sync:
+        type: boolean
+        default: false
+        description: "Install apt packages missing on the target, after a batched review (destructive; opt-in)"
       # Jobs implemented in Phase 1:
       folder_sync:
         type: boolean
@@ -212,6 +218,16 @@ properties:
 
   # VscodeStateSyncJob has no configuration: the module hardcodes the editor list, DB
   # layout, and the preserved-key namespace (secret://). Enable/disable via sync_jobs.
+
+  # AptSyncJob configuration (D-15: independent config per package manager job). Empty
+  # on purpose: this tracer slice (plan 02-03) needs nothing beyond the sync_jobs enable
+  # flag — no `enabled_item_classes`-style filtering key exists yet since only the
+  # APT_PACKAGE item class is implemented so far.
+  apt_sync:
+    type: object
+    description: "Configuration for AptSyncJob (apt package sync via a batched review)"
+    properties: {}
+    additionalProperties: false
 
 # =============================================================================
 # DEVELOPER NOTE: Config Key Naming Convention
