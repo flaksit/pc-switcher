@@ -338,7 +338,12 @@ async def sync_config_to_target(
     # source is skipped before ever touching the target.
     pending: list[tuple[str, Path, str]] = []
     for filename in SYNCED_CONFIG_FILENAMES:
-        file_source_path = source_dir / filename
+        # The main config is read from the path the caller actually passed, whatever it
+        # is named; `source_dir` only locates the ADDITIONAL synced files, which have no
+        # caller-supplied path of their own. Deriving it as `source_dir / "config.yaml"`
+        # instead would silently ignore the caller's own filename and then fail naming a
+        # path they never mentioned.
+        file_source_path = source_config_path if filename == "config.yaml" else source_dir / filename
         if not file_source_path.exists():
             if filename == "config.yaml":
                 raise RuntimeError(f"Source config not found: {file_source_path}")
