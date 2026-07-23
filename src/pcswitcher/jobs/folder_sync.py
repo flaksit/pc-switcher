@@ -23,6 +23,7 @@ from typing import Any, ClassVar, override
 
 from pcswitcher.disk import format_bytes
 from pcswitcher.jobs.base import SyncJob
+from pcswitcher.jobs.package_state import DECISION_FILE_GLOB_RELPATH
 from pcswitcher.jobs.vscode_state_sync import vscode_state_exclude_paths
 from pcswitcher.models import ConfigError, FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
 
@@ -89,14 +90,20 @@ def _pass_display(path: str, label: str) -> str:
 # while --delete-mirroring the uv interpreter tree it depends on deleted the in-use
 # interpreter and broke pc-switcher on the target.
 #
-# Two GLOBAL-FIRST, non-overridable exclude groups exist, both owned elsewhere or here
-# and both emitted before the user filter surfaces so no `+` rule can re-expose them:
+# Three GLOBAL-FIRST, non-overridable exclude groups exist, each owned elsewhere or
+# here and all emitted before the user filter surfaces so no `+` rule can re-expose them:
 #   1. this runtime-state relpath (below), home-relative and folder_sync's own concern;
 #   2. the VS Code state DBs (VS Code and its forks), whose ABSOLUTE paths are owned and
 #      computed by vscode_state_sync (which merges them selectively so machine-bound
 #      secret:// rows are never clobbered, ADR-018). folder_sync knows nothing about VS Code
 #      or home layout — it just translates each absolute path from vscode_state_exclude_paths()
 #      into an rsync filter for the folder being synced (see _vscode_state_exclude_filters).
+#   3. every manager's machine-local decision file (`~/.config/pc-switcher/*.decisions.yaml`),
+#      whose home-relative GLOB is owned by package_state (D-08/D-09). A decision file states
+#      what ONE machine considers machine-specific; mirroring it would silently impose that
+#      machine's hardware exclusions on a peer. Unconditional — never gated on any package job
+#      being enabled, since a decision file must never travel even on a run where the package
+#      jobs happen to be off (see _decision_file_exclude_filters).
 # Every OTHER exclusion is user-configurable.
 _RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
     ".local/share/pc-switcher",  # lock, sync-history.json, logs/
@@ -407,6 +414,34 @@ class FolderSyncJob(SyncJob):
             filters.append(f"--filter={shlex.quote(f'- /{rel}')}")
         return filters
 
+    @staticmethod
+    def _decision_file_exclude_filters(folder_path: str) -> list[str]:
+        """rsync `--filter` arg excluding every manager's machine-local decision file
+        that falls under `folder_path` (D-08, D-09).
+
+        The home-relative GLOB (covers every `<manager>.decisions.yaml`, one filter
+        for all of them) comes from `package_state.DECISION_FILE_GLOB_RELPATH` —
+        `package_state` owns which files are decision files; folder_sync only resolves
+        it against `Path.home()`, takes it relative to the transfer root, and translates
+        it into a root-anchored, first-match rsync exclude — the same one-way ownership
+        `_vscode_state_exclude_filters` follows for `vscode_state_sync`. A path outside
+        `folder_path` (e.g. syncing `/root` while the invoking user's home is
+        `/home/<user>`) is skipped, matching that method's out-of-root behavior.
+
+        Deliberately unconditional: NOT gated on any package job being enabled. A
+        decision file states what this machine considers machine-specific; mirroring it
+        would silently impose that on a peer even on a run where the package jobs
+        happen to be off — toggling a job must never be what makes this exclusion
+        disappear.
+        """
+        root = Path(folder_path.rstrip("/") or "/")
+        abs_glob = Path.home() / DECISION_FILE_GLOB_RELPATH
+        try:
+            rel = abs_glob.relative_to(root)
+        except ValueError:
+            return []
+        return [f"--filter={shlex.quote(f'- /{rel}')}"]
+
     def _transport_args(self) -> list[str]:
         """Build the rsync `-e <ssh>` transport and `--rsync-path='sudo rsync'` args.
 
@@ -539,15 +574,16 @@ class FolderSyncJob(SyncJob):
         parts.extend(self._transport_args())
 
         # GLOBAL-FIRST filter precedence: the un-overridable excludes come first —
-        # pc-switcher's runtime state (ADR-017) followed by the VS Code state DBs
-        # (ADR-018); the folder's central `merge` filter (when configured) comes
-        # next so its rules win over any per-directory file under first-match-wins;
-        # the tree-wide `dir-merge /.pcswitcher-filter` is always last and gives
-        # users a per-directory (gitignore-like) authoring surface. DO NOT add
-        # --delete-excluded — excluded files (e.g. .ssh/id_*, .config/tailscale)
-        # must survive on the target (D-06).
+        # pc-switcher's runtime state (ADR-017), the VS Code state DBs (ADR-018), then
+        # every manager's machine-local decision file (D-08/D-09); the folder's central
+        # `merge` filter (when configured) comes next so its rules win over any
+        # per-directory file under first-match-wins; the tree-wide
+        # `dir-merge /.pcswitcher-filter` is always last and gives users a per-directory
+        # (gitignore-like) authoring surface. DO NOT add --delete-excluded — excluded
+        # files (e.g. .ssh/id_*, .config/tailscale) must survive on the target (D-06).
         parts.extend(self._runtime_exclude_filters(folder.path))
         parts.extend(self._vscode_state_exclude_filters(folder.path))
+        parts.extend(self._decision_file_exclude_filters(folder.path))
 
         expanded_filter_file = folder.expanded_filter_file()
         if expanded_filter_file is not None:

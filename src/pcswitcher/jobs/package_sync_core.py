@@ -11,11 +11,17 @@ from its applying, which is what this module's `plan()`/`apply()` split provides
 - `plan()` captures the source manifest, queries the target, diffs, and builds this job's
   own `ReviewGroup`s. It issues READ commands only — nothing here may mutate either
   machine, because every enabled manager's `plan()` runs before the user has approved
-  anything.
+  anything. Before capturing anything, it loads both machines' machine-local decision
+  files (D-08, D-09, `package_state.py`) and filters an inert item out of the side that
+  holds it, so an item recorded "skip always" never becomes an `ItemDiff` in the first
+  place — D-08's "inert on M in both roles" made real at the diff-input boundary rather
+  than as a later filter on the review.
 - `accept_review()` is how `PackagePhaseCoordinator` (plan 02-03 task 2) hands this job
   back its own slice of the one cross-manager review.
 - `apply()` converges the `APPLY`-decided diffs, one item at a time, catching and
-  collecting per-item failures (D-27) so one bad item never stops the rest.
+  collecting per-item failures (D-27) so one bad item never stops the rest. It also
+  persists a permanent decision (D-08a) for every `SKIP_ALWAYS`-decided item, on
+  whichever machine holds it.
 - `execute()` — the `SyncJob` entry point the orchestrator's existing sequential loop
   calls — refuses to run without a coordinator-accepted plan, which makes the
   plan-before-apply ordering a structural property of the code, not a convention the next
@@ -25,8 +31,9 @@ from its applying, which is what this module's `plan()`/`apply()` split provides
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from pcswitcher.jobs.base import SyncJob
@@ -43,6 +50,7 @@ from pcswitcher.jobs.package_items import (
     build_version_mismatch_detail,
 )
 from pcswitcher.jobs.package_review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome
+from pcswitcher.jobs.package_state import DecisionEntry, DecisionFile, filter_inert
 from pcswitcher.models import CommandResult, Host, LogLevel, ProgressUpdate
 
 __all__ = [
@@ -335,13 +343,23 @@ class PackageSyncJob(SyncJob):
     # -- plan() / accept_review() / apply() / execute() -------------------------------
 
     async def plan(self) -> PackagePlan:
-        """Capture -> query -> diff -> build review groups. Read-only.
+        """Load decision files -> capture -> query -> diff -> build review groups. Read-only.
 
         Nothing here may mutate either machine: every enabled manager's `plan()` runs
-        (via `PackagePhaseCoordinator`) before the user has approved anything.
+        (via `PackagePhaseCoordinator`) before the user has approved anything. Both
+        machines' decision files are loaded first (a read, like everything else here)
+        and each side's captured/queried items are filtered through its OWN file before
+        diffing (D-08): an item recorded on the source is dropped from the source
+        manifest so it is never pushed to a peer again; an item recorded on the target
+        is dropped from the target query so it is never proposed for
+        install/remove/change again — either way it produces no `ItemDiff` and never
+        reaches the review.
         """
-        source_items = await self.capture_source_items()
-        target_items = await self.query_target_items()
+        source_decisions = await DecisionFile(self.manager_id, self.source).load()
+        target_decisions = await DecisionFile(self.manager_id, self.target).load()
+
+        source_items = await filter_inert(await self.capture_source_items(), source_decisions)
+        target_items = await filter_inert(await self.query_target_items(), target_decisions)
         hold_pin_facts = await self.collect_hold_pin_facts()
         missing_item_ids = frozenset(item.item_id for item in source_items) - frozenset(
             item.item_id for item in target_items
@@ -386,11 +404,18 @@ class PackageSyncJob(SyncJob):
         converge verb (D-25's held/pinned, version-mismatch, repo-unavailable,
         unreproducible classes are informational), so `converge()` is never called
         for one even if something recorded `APPLY` against it.
+
+        Before converging anything, `_record_permanent_skips` persists a `DecisionEntry`
+        for every `SKIP_ALWAYS`-decided item (D-08) — independent of whether this run
+        applies anything else, so a run with zero installs but one permanently-declined
+        removal still records it.
         """
         assert self._accepted_plan is not None
         assert self._accepted_outcome is not None
         plan = self._accepted_plan
         decisions = self._accepted_outcome.decisions
+
+        await self._record_permanent_skips(plan, decisions)
 
         apply_diffs = [
             diff
@@ -430,6 +455,49 @@ class PackageSyncJob(SyncJob):
                 f"{len(failures)} {self.manager_id} item(s) failed: {summary}",
             )
             raise PackageItemFailures(self.manager_id, failures)
+
+    async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
+        """Persist a `DecisionEntry` for every `SKIP_ALWAYS`-decided, actionable diff.
+
+        D-08a decides WHICH machine's file gets the entry by which machine HOLDS the
+        item: `INSTALL`/`CHANGE` diffs are source-held (the source has the item, or the
+        version it should converge to), so they record on `self.source`; `REMOVE` diffs
+        are target-held (only the target has the item), so they record on `self.target`
+        — through the remote executor, never a local write (ADR-002).
+
+        `REPORT_ONLY` diffs are skipped: they carry no converge verb (version-mismatch,
+        held/pinned, repo-unavailable, unreproducible are informational only), so there
+        is no "holder" for D-08a to record against.
+
+        Two guards, both required before anything is ever written: never for a
+        non-interactive outcome (D-26 — nothing is recorded permanently when nothing
+        was actually decided by a human), and never during a dry run (ADR-014 — a
+        rehearsal must leave no trace).
+        """
+        if self.context.dry_run or not self._accepted_outcome_was_interactive():
+            return
+
+        recorded_at = datetime.now(UTC).isoformat()
+        for diff in plan.diffs:
+            if decisions.get(diff.item_id) != Decision.SKIP_ALWAYS:
+                continue
+            if diff.action not in (DiffAction.INSTALL, DiffAction.CHANGE, DiffAction.REMOVE):
+                continue
+
+            executor = self.source if diff.action in (DiffAction.INSTALL, DiffAction.CHANGE) else self.target
+            await DecisionFile(self.manager_id, executor).record(
+                DecisionEntry(
+                    item_id=diff.item_id,
+                    item_class=diff.item_class,
+                    label=diff.label,
+                    reason=None,
+                    recorded_at=recorded_at,
+                )
+            )
+
+    def _accepted_outcome_was_interactive(self) -> bool:
+        assert self._accepted_outcome is not None
+        return self._accepted_outcome.was_interactive
 
     async def _converge_one(self, diff: ItemDiff, failures: list[tuple[ItemDiff, str]]) -> None:
         try:
