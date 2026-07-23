@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 02
 current_phase_name: Package Management Sync
 status: executing
-stopped_at: Completed 02-06-PLAN.md
-last_updated: "2026-07-23T10:28:13.073Z"
+stopped_at: Completed 02-08-PLAN.md
+last_updated: "2026-07-23T10:49:51.622Z"
 last_activity: 2026-07-23
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 31
-  completed_plans: 25
+  completed_plans: 26
 ---
 
 # Project State
@@ -30,13 +30,13 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 02 (Package Management Sync) — EXECUTING
 
-Plan: 8 of 13
+Plan: 9 of 13
 
 Status: Ready to execute
 
 Last activity: 2026-07-23 — Phase 02 execution started
 
-Progress: [████████░░] 81%
+Progress: [████████░░] 84%
 
 ## Performance Metrics
 
@@ -88,6 +88,7 @@ Progress: [████████░░] 81%
 | Phase 02 P13 | 22min | 1 tasks | 2 files |
 | Phase 02 P04 | 135min | 2 tasks | 6 files |
 | Phase 02 P06 | 55min | 2 tasks | 3 files |
+| Phase 02 P08 | 35min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -118,6 +119,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: apt repo/key/pin/config capture, diff and dependency-ordered convergence implemented entirely within AptSyncJob (not package_sync_core.py), keeping the shared base's typed diff pipeline untouched
 - [Phase ?]: apt-get-update marker inserted in accept_review() (post-decision) rather than plan(), reusing ItemClass.APT_SOURCE with item_id-based exclusion from repo-group membership checks
 - [Phase ?]: repository-group convergence (backup/write/update/rollback) is triggered eagerly by the first repo-group diff converge() sees, caching per-item outcomes so the base apply() loop's per-diff iteration still drives it without package_sync_core.py changes
+- [Phase ?]: snap_sync: SnapSyncJob overrides plan() locally (DecisionFile/filter_inert + _build_review_groups reused) instead of inheriting PackageSyncJob.plan(), since the base diff_items()/_diff_apt_packages() is apt-package-shaped (hardcoded ItemClass.APT_PACKAGE, reads AptPackageItem.version) and crashes/mislabels on SnapItem
+- [Phase ?]: snap_sync: all snap CHANGE diffs (revision or channel-only) tagged ItemClass.SNAP, never SNAP_CHANNEL, to avoid _build_review_groups picking the wrong action_label verb when two item classes share one DiffAction
 
 ### Pending Todos
 
@@ -145,8 +148,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-23T10:28:13.062Z
+Last session: 2026-07-23T10:49:51.611Z
 
-Stopped at: Completed 02-06-PLAN.md
+Stopped at: Completed 02-08-PLAN.md
 
 Resume file: None
