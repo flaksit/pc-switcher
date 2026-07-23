@@ -19,6 +19,16 @@ module, which is what lets 02-07/02-08/02-09 run in one wave with disjoint file 
 diff directions were always addable without reopening these enums' shape; this plan
 (02-05) is where every remaining `DiffClass` member and the four remaining item
 dataclasses actually arrive.
+
+Plan 02-06 adds the four `/etc/apt/*`-adjacent item classes (`AptSourceItem`,
+`AptKeyItem`, `AptPinItem`, `AptConfigItem`) and is the last plan permitted to modify
+this module (02-05's own note). Each is identified by its FILENAME, not by any value
+parsed from its content: RESEARCH's Pitfall 3 documents that a legacy `.list` file and
+a deb822 `.sources` file can legitimately coexist in `sources.list.d` describing the
+same repository (e.g. after a partial `apt modernize-sources` run), and identifying by
+filename is what keeps that pair visible in the review as two distinct items rather
+than one merged one — the "conflicting values" failure mode apt itself raises when both
+exist stays a fact the user sees, not something this tool silently resolves for them.
 """
 
 from __future__ import annotations
@@ -32,7 +42,11 @@ if TYPE_CHECKING:
     from pcswitcher.executor import Executor
 
 __all__ = [
+    "AptConfigItem",
+    "AptKeyItem",
     "AptPackageItem",
+    "AptPinItem",
+    "AptSourceItem",
     "DiffAction",
     "DiffClass",
     "FlatpakItem",
@@ -42,6 +56,7 @@ __all__ = [
     "ItemDiff",
     "SnapItem",
     "UnreproducibleItem",
+    "build_dangling_keyring_detail",
     "build_held_or_pinned_detail",
     "build_repo_unavailable_detail",
     "build_version_mismatch_detail",
@@ -210,6 +225,132 @@ def build_repo_unavailable_detail(name: str) -> str:
     This must read as its own fact, not silently downgrade to a proposed `INSTALL`.
     """
     return f"target's repositories offer no candidate for {name}"
+
+
+def build_dangling_keyring_detail(filename: str, missing_ref: str) -> str:
+    """Detail string when a source file's `Signed-By:`/`signed-by=` reference resolves
+    to no keyring file on the SOURCE itself (a source referencing a key nobody
+    captured). Flags the source item rather than letting it be proposed for install on
+    its own (D-12): a repository written without its key is a repository apt refuses on
+    every subsequent operation, so surfacing the gap here is cheaper than discovering it
+    as an opaque apt-get failure on the target.
+    """
+    return f"{filename} references keyring {missing_ref!r}, which does not exist on the source"
+
+
+@dataclass(frozen=True)
+class AptSourceItem:
+    """One apt repository definition file under `/etc/apt/sources.list.d` (D-11).
+
+    Identity is the FILENAME (module docstring), not the parsed repository URI: a
+    legacy `.list` and a deb822 `.sources` file can coexist describing the same repo
+    (RESEARCH Pitfall 3), and filename identity is what keeps that visible as two
+    review entries rather than one silently merged one. `fmt` records which shape the
+    file had so a converged copy preserves it — this tool never normalises one format
+    into the other (that migration is explicitly deferred, see CONTEXT.md's deferred
+    ideas). `keyring_refs` holds every `Signed-By:` (deb822) / `signed-by=` (legacy)
+    path this file names, so the source item's dependency on its key(s) is a captured
+    fact, not something re-derived by re-parsing the file at convergence time.
+    """
+
+    filename: str
+    digest: str
+    fmt: Literal["deb822", "list"]
+    keyring_refs: tuple[str, ...] = ()
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_SOURCE
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `apt:source:<filename>`."""
+        return f"apt:source:{self.filename}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs, naming the file's format so
+        a reviewer can tell a `.list` repo from a `.sources` one at a glance.
+        """
+        return f"{self.filename} ({self.fmt})"
+
+
+@dataclass(frozen=True)
+class AptKeyItem:
+    """One apt signing-key file (D-12), either per-repo (`/etc/apt/keyrings`) or
+    legacy global-trust (`/etc/apt/trusted.gpg.d`).
+
+    `scope` keeps the two populations distinct even though both are "a key file":
+    a per-repo key is referenced by exactly the source item(s) whose `keyring_refs`
+    name its path, while a global-trust key is referenced by none (RESEARCH: apt-key
+    deprecated Ubuntu 20.10+, but existing `trusted.gpg.d` entries still work and are
+    copied verbatim, never migrated). Keys always travel byte-for-byte — this item
+    never re-fetches or re-derives key content, only compares/transfers the bytes the
+    source machine already has.
+    """
+
+    filename: str
+    digest: str
+    scope: Literal["per-repo", "global-trust"]
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_KEY
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `apt:key:<scope>:<filename>`."""
+        return f"apt:key:{self.scope}:{self.filename}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return f"{self.filename} ({self.scope} key)"
+
+
+@dataclass(frozen=True)
+class AptPinItem:
+    """One apt pin-preference file under `/etc/apt/preferences.d` (D-13).
+
+    Diffed by whole-file digest, not by parsed stanza (RESEARCH's alternatives table
+    recommends whole-file for v1; CONTEXT.md leaves the choice to discretion) —
+    `pinned_packages` is populated by whichever caller parses the file's content (this
+    module's diff-time capture, or `AptSyncJob.collect_hold_pin_facts`'s own read) and
+    stays empty when only the digest was needed to decide there was no diff at all.
+    """
+
+    filename: str
+    digest: str
+    pinned_packages: tuple[str, ...] = ()
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_PIN
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `apt:pin:<filename>`."""
+        return f"apt:pin:{self.filename}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return self.filename
+
+
+@dataclass(frozen=True)
+class AptConfigItem:
+    """One apt behavior-configuration file under `/etc/apt/apt.conf.d` (D-13).
+
+    Synced as an opaque item — whole-file digest only, no parsing of apt's config
+    grammar — since these files are plain, hand-authored `Acquire::.../APT::...`
+    stanzas with no sub-item this phase needs to address individually.
+    """
+
+    filename: str
+    digest: str
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_CONFIG
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `apt:config:<filename>`."""
+        return f"apt:config:{self.filename}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return self.filename
 
 
 @dataclass(frozen=True)

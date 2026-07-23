@@ -28,21 +28,30 @@ import re
 import shlex
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, override
+from pathlib import Path
+from typing import Any, ClassVar, Literal, override
+from uuid import uuid4
 
 from pcswitcher.executor import RemoteExecutor
+from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.package_items import (
+    AptConfigItem,
+    AptKeyItem,
     AptPackageItem,
+    AptPinItem,
+    AptSourceItem,
     DiffAction,
     DiffClass,
     HoldPinFact,
     ItemClass,
     ItemDiff,
+    build_dangling_keyring_detail,
+    build_version_mismatch_detail,
     compare_deb_versions,
 )
-from pcswitcher.jobs.package_review import Decision
+from pcswitcher.jobs.package_review import Decision, ReviewOutcome
 from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, FirstSyncScope, Host, ValidationError
+from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 
 __all__ = ["AptSyncJob", "AptTransactionPreview", "simulate_apt_transaction"]
 
@@ -50,6 +59,37 @@ __all__ = ["AptSyncJob", "AptTransactionPreview", "simulate_apt_transaction"]
 # Parsing the name back out of the id is a legitimate use of a stable identity string,
 # not string-matching on manager-specific content.
 _APT_PACKAGE_ID_PREFIX = "apt:package:"
+
+# The five `/etc/apt/*` directories D-11/D-13 pull into scope, each captured with one
+# batched `sha256sum` listing (never one command per file).
+_APT_SOURCES_DIR = "/etc/apt/sources.list.d"
+_APT_KEYRINGS_DIR = "/etc/apt/keyrings"
+_APT_TRUSTED_GPG_DIR = "/etc/apt/trusted.gpg.d"
+_APT_PREFERENCES_DIR = "/etc/apt/preferences.d"
+_APT_CONF_DIR = "/etc/apt/apt.conf.d"
+
+# The four repository-adjacent item classes that converge in a single ordered,
+# transactional group ahead of packages (Task 2) — kept as one constant so the trigger
+# check in `accept_review` and the group membership check in `converge` never drift.
+_REPO_GROUP_CLASSES = frozenset({ItemClass.APT_KEY, ItemClass.APT_PIN, ItemClass.APT_CONFIG, ItemClass.APT_SOURCE})
+
+# Convergence order is an apt FACT (a repo needs its key before apt will trust it; a
+# repo's metadata must be fetched before anything installs from it), not a general
+# ordering concept — which is why it lives here, in the job, rather than as a sort the
+# shared core imposes on every manager. Packages sort last (module-level default 3);
+# pins and apt config share a rank since nothing depends on their relative order.
+_ITEM_CLASS_ORDER: dict[ItemClass, int] = {
+    ItemClass.APT_KEY: 0,
+    ItemClass.APT_PIN: 1,
+    ItemClass.APT_CONFIG: 1,
+    ItemClass.APT_SOURCE: 2,
+}
+
+# Synthetic diff id for the one `apt-get update` this job issues per run when at least
+# one source/key/pin/config item was approved (Task 2). Not a real `/etc/apt` item —
+# reuses `ItemClass.APT_SOURCE` so it sorts with the repo group (see `_ITEM_CLASS_ORDER`)
+# but is excluded from `_REPO_GROUP_CLASSES` membership checks by item_id, not class.
+_METADATA_REFRESH_ITEM_ID = "apt:metadata-refresh"
 
 # Matches one `apt-get -s` transaction line: `Inst <name> [<old>] (<new> ...)` for an
 # install/upgrade (the `[<old>]` bracket only appears when a version is already
@@ -94,6 +134,245 @@ def _packages_with_no_candidate(policy_output: str) -> set[str]:
                 no_candidate.add(current)
             current = None
     return no_candidate
+
+
+# -- Repository/key/pin/config capture and diff (D-11, D-12, D-13) ---------------------
+#
+# Unlike apt packages, these five directories are diffed by whole-FILE digest (module
+# docstring, RESEARCH's alternatives table): one batched `sha256sum` listing per
+# directory tells us which filenames differ without transferring a single byte, and the
+# full content of a file is only fetched for the files a diff actually implicates
+# (missing-on-target, extra-on-target, or digest-mismatched) — never for a file that is
+# already identical on both machines.
+
+_SIGNED_BY_RE = re.compile(r"^Signed-By:\s*(?P<path>\S+)", re.IGNORECASE)
+_LEGACY_SIGNED_BY_RE = re.compile(r"signed-by=(?P<path>[^\]\s,]+)")
+_PIN_PACKAGE_RE = re.compile(r"^Package:\s*(?P<packages>.+)$", re.IGNORECASE)
+
+
+def _parse_sha256sum(output: str) -> dict[str, str]:
+    """`<digest>  <path>` lines (one per `sha256sum` invocation) -> `{basename: digest}`.
+
+    Basename, not the full path: every caller already knows which directory it asked
+    about, and item identity is the filename (module docstring), not the path.
+    """
+    digests: dict[str, str] = {}
+    for line in _lines(output):
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        digest, path = parts
+        digests[Path(path).name] = digest
+    return digests
+
+
+def _parse_source_file(filename: str, content: str) -> tuple[Literal["deb822", "list"], tuple[str, ...]]:
+    """A source file's format (by extension) and every keyring path it names.
+
+    deb822 `.sources` files name a key via a `Signed-By:` field; legacy `.list` files
+    name one inside the options bracket as `[... signed-by=<path> ...]` (RESEARCH
+    Standard Stack). Parsed just far enough to extract these — never rewritten,
+    normalised, or migrated between formats (RESEARCH Pitfall 3, deferred ideas).
+    """
+    fmt: Literal["deb822", "list"] = "deb822" if filename.endswith(".sources") else "list"
+    refs: list[str] = []
+    for line in content.splitlines():
+        match = _SIGNED_BY_RE.match(line.strip()) if fmt == "deb822" else _LEGACY_SIGNED_BY_RE.search(line)
+        if match:
+            refs.append(match.group("path"))
+    return fmt, tuple(refs)
+
+
+def _parse_pin_file(content: str) -> tuple[str, ...]:
+    """Every package name named by a `Package:` stanza line in a `preferences.d` file.
+
+    A stanza's `Package:` line may name several packages space-separated; all of them
+    are pinned packages, not just the first (unlike the existing `collect_hold_pin_facts`
+    awk one-liner, which only needs one representative name per fact).
+    """
+    packages: list[str] = []
+    for line in content.splitlines():
+        match = _PIN_PACKAGE_RE.match(line.strip())
+        if match:
+            packages.extend(match.group("packages").split())
+    return tuple(packages)
+
+
+def _dangling_keyring_ref(keyring_refs: Sequence[str], source_key_filenames: frozenset[str]) -> str | None:
+    """The first `keyring_refs` entry whose basename is absent from
+    `source_key_filenames`, or `None` if every reference resolves to a real file on the
+    source. A source file with no `Signed-By:`/`signed-by=` at all (`keyring_refs` is
+    empty) has nothing to validate — it is not itself a dangling reference.
+    """
+    for ref in keyring_refs:
+        if Path(ref).name not in source_key_filenames:
+            return ref
+    return None
+
+
+async def _capture_dir_digests(run: Callable[[str], Awaitable[CommandResult]], directory: str) -> dict[str, str]:
+    """One `sudo find <dir> -maxdepth 1 -type f -exec sha256sum {} +` per directory —
+    a single batched command, never one `sha256sum` per file. `-exec ... {} +` never
+    runs at all when the directory has no matching files, so an empty/absent directory
+    degrades to an empty digest map rather than a shell error.
+    """
+    quoted = shlex.quote(directory)
+    result = await run(f"sudo find {quoted} -maxdepth 1 -type f -exec sha256sum {{}} +")
+    return _parse_sha256sum(result.stdout)
+
+
+async def _read_file_content(run: Callable[[str], Awaitable[CommandResult]], path: str) -> str:
+    """One `cat <path>` — used only for a file a diff actually implicates."""
+    result = await run(f"cat {shlex.quote(path)}")
+    return result.stdout
+
+
+@dataclass(frozen=True)
+class _FilenameDiff:
+    """Filename-level classification of two `{filename: digest}` maps — the shared
+    basis every one of the five `/etc/apt/*` item classes diffs from.
+    """
+
+    missing: frozenset[str]
+    extra: frozenset[str]
+    changed: frozenset[str]
+
+
+def _diff_filenames(source_digests: Mapping[str, str], target_digests: Mapping[str, str]) -> _FilenameDiff:
+    source_names = frozenset(source_digests)
+    target_names = frozenset(target_digests)
+    changed = frozenset(name for name in source_names & target_names if source_digests[name] != target_digests[name])
+    return _FilenameDiff(missing=source_names - target_names, extra=target_names - source_names, changed=changed)
+
+
+def _file_diff(
+    item: AptPinItem | AptConfigItem, diff_class: DiffClass, action: DiffAction, *, detail: str | None = None
+) -> ItemDiff:
+    """One `ItemDiff` for a pin or config item — the two classes with no content-derived
+    detail beyond the shared `VERSION_MISMATCH` digest wording (`AptSourceItem`'s
+    dangling-keyring case is handled separately by `_diff_apt_sources` itself).
+    """
+    item_class = ItemClass.APT_PIN if isinstance(item, AptPinItem) else ItemClass.APT_CONFIG
+    return ItemDiff(
+        item_class=item_class,
+        diff_class=diff_class,
+        action=action,
+        item_id=item.item_id,
+        label=item.label(),
+        detail=detail,
+    )
+
+
+def _diff_apt_keys(
+    source_digests: Mapping[str, str], target_digests: Mapping[str, str], scope: Literal["per-repo", "global-trust"]
+) -> list[ItemDiff]:
+    """Key-file diffs. No content fetch is ever needed: a key's identity, label and
+    diff all derive from filename + digest alone (D-12 — keys travel byte-for-byte,
+    never parsed).
+    """
+    names = _diff_filenames(source_digests, target_digests)
+    diffs: list[ItemDiff] = []
+
+    for filename in sorted(names.missing):
+        item = AptKeyItem(filename=filename, digest=source_digests[filename], scope=scope)
+        diffs.append(
+            ItemDiff(
+                item_class=ItemClass.APT_KEY,
+                diff_class=DiffClass.MISSING_ON_TARGET,
+                action=DiffAction.INSTALL,
+                item_id=item.item_id,
+                label=item.label(),
+                detail=None,
+            )
+        )
+    for filename in sorted(names.extra):
+        item = AptKeyItem(filename=filename, digest=target_digests[filename], scope=scope)
+        diffs.append(
+            ItemDiff(
+                item_class=ItemClass.APT_KEY,
+                diff_class=DiffClass.EXTRA_ON_TARGET,
+                action=DiffAction.REMOVE,
+                item_id=item.item_id,
+                label=item.label(),
+                detail=None,
+            )
+        )
+    for filename in sorted(names.changed):
+        item = AptKeyItem(filename=filename, digest=source_digests[filename], scope=scope)
+        diffs.append(
+            ItemDiff(
+                item_class=ItemClass.APT_KEY,
+                diff_class=DiffClass.VERSION_MISMATCH,
+                action=DiffAction.CHANGE,
+                item_id=item.item_id,
+                label=item.label(),
+                detail=build_version_mismatch_detail(source_digests[filename], target_digests[filename]),
+            )
+        )
+    return diffs
+
+
+def _diff_apt_configs(source_digests: Mapping[str, str], target_digests: Mapping[str, str]) -> list[ItemDiff]:
+    """Config-file diffs — opaque, digest-only, same shape as keys."""
+    names = _diff_filenames(source_digests, target_digests)
+    diffs: list[ItemDiff] = []
+
+    for filename in sorted(names.missing):
+        item = AptConfigItem(filename=filename, digest=source_digests[filename])
+        diffs.append(_file_diff(item, DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL))
+    for filename in sorted(names.extra):
+        item = AptConfigItem(filename=filename, digest=target_digests[filename])
+        diffs.append(_file_diff(item, DiffClass.EXTRA_ON_TARGET, DiffAction.REMOVE))
+    for filename in sorted(names.changed):
+        item = AptConfigItem(filename=filename, digest=source_digests[filename])
+        detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename])
+        diffs.append(_file_diff(item, DiffClass.VERSION_MISMATCH, DiffAction.CHANGE, detail=detail))
+    return diffs
+
+
+def _metadata_refresh_diff() -> ItemDiff:
+    """The one synthetic `apt-get update` diff a run inserts (Task 2, `accept_review`)
+    when at least one repository-group item was approved. Reuses `ItemClass.APT_SOURCE`
+    so it naturally sorts with the repository group if this diff were ever re-sorted —
+    membership in `_REPO_GROUP_CLASSES` checks EXCLUDE it by item_id, never by class,
+    which is what keeps it from being treated as a real `/etc/apt` file to back up.
+    """
+    return ItemDiff(
+        item_class=ItemClass.APT_SOURCE,
+        diff_class=DiffClass.MISSING_ON_TARGET,
+        action=DiffAction.CHANGE,
+        item_id=_METADATA_REFRESH_ITEM_ID,
+        label="Refresh apt package metadata (apt-get update)",
+        detail=None,
+    )
+
+
+def _repo_item_destination(diff: ItemDiff) -> str:
+    """The absolute `/etc/apt/...` path a repository-group diff's item_id names.
+
+    Parses the item_id rather than needing the original item object at converge time
+    (the plan only carries `ItemDiff`s, not the richer dataclasses) — a legitimate use
+    of a stable identity string per the existing `_package_name` precedent.
+    """
+    if diff.item_class == ItemClass.APT_KEY:
+        _, _, scope, filename = diff.item_id.split(":", 3)
+        directory = _APT_KEYRINGS_DIR if scope == "per-repo" else _APT_TRUSTED_GPG_DIR
+        return f"{directory}/{filename}"
+    if diff.item_class == ItemClass.APT_SOURCE:
+        return f"{_APT_SOURCES_DIR}/{diff.item_id.removeprefix('apt:source:')}"
+    if diff.item_class == ItemClass.APT_PIN:
+        return f"{_APT_PREFERENCES_DIR}/{diff.item_id.removeprefix('apt:pin:')}"
+    if diff.item_class == ItemClass.APT_CONFIG:
+        return f"{_APT_CONF_DIR}/{diff.item_id.removeprefix('apt:config:')}"
+    raise AssertionError(f"not a repository-group item class: {diff.item_class!r}")
+
+
+def _backup_path_for(backup_dir: str, dest: str) -> str:
+    """A stable, unique backup filename for an absolute `dest` path, flattened into
+    `backup_dir` (`/etc/apt/sources.list.d/foo.list` -> `etc_apt_sources.list.d_foo.list`)
+    so every backed-up file lives directly under one run-scoped directory.
+    """
+    return f"{backup_dir}/{dest.lstrip('/').replace('/', '_')}"
 
 
 @dataclass(frozen=True)
@@ -162,6 +441,26 @@ class AptSyncJob(PackageSyncJob):
         "properties": {},
         "additionalProperties": False,
     }
+
+    def __init__(self, context: JobContext) -> None:
+        super().__init__(context)
+        # Populated by `_plan_repo_diffs` (Task 1) and consulted by the repository-group
+        # convergence's key-readiness check (Task 2): the source's OWN key digests (both
+        # scopes) and the target's, so "does this keyring already match on the target"
+        # is a dict lookup against plan-time facts rather than a live re-probe.
+        self._source_key_digests_by_filename: dict[str, str] = {}
+        self._target_key_digests_by_filename: dict[str, str] = {}
+        # Lazily computed the first time `converge()` sees a repository-group item
+        # (key/pin/config/source, or the synthetic metadata-refresh marker): maps each
+        # such diff's item_id to (succeeded, message). Populated all at once so the
+        # required key-before-source write order and the transactional backup/rollback
+        # happen exactly once per run, regardless of which order the base `apply()`
+        # loop's per-diff `converge()` calls visit them in.
+        self._repo_group_outcome: dict[str, tuple[bool, str]] | None = None
+        # Resolved once per run via `echo $HOME` on the target (mirrors
+        # `config_sync._copy_config_to_target`'s pattern) and cached, since every
+        # repository-group file write needs the same absolute staging path.
+        self._target_home: str | None = None
 
     @override
     async def capture_source_items(self) -> Sequence[AptPackageItem]:
@@ -270,12 +569,180 @@ class AptSyncJob(PackageSyncJob):
         """
         base_plan = await super().plan()
         collateral_diffs = await self._collect_plan_time_collateral(base_plan.diffs)
-        if not collateral_diffs:
+        repo_diffs = await self._plan_repo_diffs()
+
+        if not collateral_diffs and not repo_diffs:
             return base_plan
 
-        all_diffs = (*base_plan.diffs, *collateral_diffs)
+        # Ordering is an apt FACT (key before source before packages, T-02-16), not a
+        # general one: the base loop stays a plain item-by-item iterator, and THIS job
+        # sorts its own diffs before they reach it. `sorted` is stable, so within one
+        # rank (e.g. every APT_PACKAGE diff, or every APT_PIN/APT_CONFIG diff) the
+        # original relative order — base diff, then collateral, then repo diffs — is
+        # preserved.
+        all_diffs = tuple(
+            sorted(
+                (*base_plan.diffs, *collateral_diffs, *repo_diffs),
+                key=lambda diff: _ITEM_CLASS_ORDER.get(diff.item_class, 3),
+            )
+        )
         groups = self._build_review_groups(all_diffs)
         return PackagePlan(manager=self.manager_id, diffs=all_diffs, groups=groups)
+
+    async def _plan_repo_diffs(self) -> list[ItemDiff]:
+        """Capture + diff the four `/etc/apt/*` item classes (D-11/D-12/D-13), by
+        whole-file digest (module docstring): one batched `sha256sum` listing per
+        directory per machine, full content fetched only for a file a diff implicates.
+        """
+
+        async def source_run(cmd: str) -> CommandResult:
+            return await self.source.run_command(cmd)
+
+        async def target_run(cmd: str) -> CommandResult:
+            return await self.target.run_command(cmd, login_shell=False)
+
+        source_sources = await _capture_dir_digests(source_run, _APT_SOURCES_DIR)
+        target_sources = await _capture_dir_digests(target_run, _APT_SOURCES_DIR)
+        source_per_repo_keys = await _capture_dir_digests(source_run, _APT_KEYRINGS_DIR)
+        target_per_repo_keys = await _capture_dir_digests(target_run, _APT_KEYRINGS_DIR)
+        source_global_keys = await _capture_dir_digests(source_run, _APT_TRUSTED_GPG_DIR)
+        target_global_keys = await _capture_dir_digests(target_run, _APT_TRUSTED_GPG_DIR)
+        source_pins = await _capture_dir_digests(source_run, _APT_PREFERENCES_DIR)
+        target_pins = await _capture_dir_digests(target_run, _APT_PREFERENCES_DIR)
+        source_configs = await _capture_dir_digests(source_run, _APT_CONF_DIR)
+        target_configs = await _capture_dir_digests(target_run, _APT_CONF_DIR)
+
+        self._source_key_digests_by_filename = {**source_per_repo_keys, **source_global_keys}
+        self._target_key_digests_by_filename = {**target_per_repo_keys, **target_global_keys}
+        source_key_filenames = frozenset(self._source_key_digests_by_filename)
+
+        diffs: list[ItemDiff] = []
+        diffs.extend(
+            await self._diff_apt_sources(source_run, target_run, source_sources, target_sources, source_key_filenames)
+        )
+        diffs.extend(_diff_apt_keys(source_per_repo_keys, target_per_repo_keys, "per-repo"))
+        diffs.extend(_diff_apt_keys(source_global_keys, target_global_keys, "global-trust"))
+        diffs.extend(await self._diff_apt_pins(source_run, target_run, source_pins, target_pins))
+        diffs.extend(_diff_apt_configs(source_configs, target_configs))
+        return diffs
+
+    async def _diff_apt_sources(
+        self,
+        source_run: Callable[[str], Awaitable[CommandResult]],
+        target_run: Callable[[str], Awaitable[CommandResult]],
+        source_digests: Mapping[str, str],
+        target_digests: Mapping[str, str],
+        source_key_filenames: frozenset[str],
+    ) -> list[ItemDiff]:
+        """Source-file diffs, hydrated with format + keyring refs only for files a diff
+        implicates (missing-on-target, extra-on-target, or digest-mismatched).
+
+        A source item whose OWN keyring reference resolves to no key file on the source
+        itself carries the dangling-reference detail and is downgraded to
+        `REPORT_ONLY` instead of `INSTALL` — it is not proposed for install on its own
+        (D-12): a repo written without its key is a repo apt refuses.
+        """
+        names = _diff_filenames(source_digests, target_digests)
+        diffs: list[ItemDiff] = []
+
+        for filename in sorted(names.missing):
+            content = await _read_file_content(source_run, f"{_APT_SOURCES_DIR}/{filename}")
+            fmt, refs = _parse_source_file(filename, content)
+            item = AptSourceItem(filename=filename, digest=source_digests[filename], fmt=fmt, keyring_refs=refs)
+            dangling = _dangling_keyring_ref(refs, source_key_filenames)
+            if dangling is not None:
+                diffs.append(
+                    ItemDiff(
+                        item_class=ItemClass.APT_SOURCE,
+                        diff_class=DiffClass.MISSING_ON_TARGET,
+                        action=DiffAction.REPORT_ONLY,
+                        item_id=item.item_id,
+                        label=item.label(),
+                        detail=build_dangling_keyring_detail(filename, dangling),
+                    )
+                )
+            else:
+                diffs.append(
+                    ItemDiff(
+                        item_class=ItemClass.APT_SOURCE,
+                        diff_class=DiffClass.MISSING_ON_TARGET,
+                        action=DiffAction.INSTALL,
+                        item_id=item.item_id,
+                        label=item.label(),
+                        detail=None,
+                    )
+                )
+
+        for filename in sorted(names.extra):
+            content = await _read_file_content(target_run, f"{_APT_SOURCES_DIR}/{filename}")
+            fmt, _refs = _parse_source_file(filename, content)
+            item = AptSourceItem(filename=filename, digest=target_digests[filename], fmt=fmt)
+            diffs.append(
+                ItemDiff(
+                    item_class=ItemClass.APT_SOURCE,
+                    diff_class=DiffClass.EXTRA_ON_TARGET,
+                    action=DiffAction.REMOVE,
+                    item_id=item.item_id,
+                    label=item.label(),
+                    detail=None,
+                )
+            )
+
+        for filename in sorted(names.changed):
+            content = await _read_file_content(source_run, f"{_APT_SOURCES_DIR}/{filename}")
+            fmt, refs = _parse_source_file(filename, content)
+            item = AptSourceItem(filename=filename, digest=source_digests[filename], fmt=fmt, keyring_refs=refs)
+            dangling = _dangling_keyring_ref(refs, source_key_filenames)
+            detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename])
+            diffs.append(
+                ItemDiff(
+                    item_class=ItemClass.APT_SOURCE,
+                    diff_class=DiffClass.VERSION_MISMATCH,
+                    action=DiffAction.CHANGE,
+                    item_id=item.item_id,
+                    label=item.label(),
+                    detail=build_dangling_keyring_detail(filename, dangling) if dangling is not None else detail,
+                )
+            )
+
+        return diffs
+
+    async def _diff_apt_pins(
+        self,
+        source_run: Callable[[str], Awaitable[CommandResult]],
+        target_run: Callable[[str], Awaitable[CommandResult]],
+        source_digests: Mapping[str, str],
+        target_digests: Mapping[str, str],
+    ) -> list[ItemDiff]:
+        """Pin-file diffs; `pinned_packages` is hydrated the same way `AptSourceItem`'s
+        format/keyring_refs are — only for a file a diff actually implicates.
+        """
+        names = _diff_filenames(source_digests, target_digests)
+        diffs: list[ItemDiff] = []
+
+        for filename in sorted(names.missing):
+            content = await _read_file_content(source_run, f"{_APT_PREFERENCES_DIR}/{filename}")
+            item = AptPinItem(
+                filename=filename, digest=source_digests[filename], pinned_packages=_parse_pin_file(content)
+            )
+            diffs.append(_file_diff(item, DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL))
+
+        for filename in sorted(names.extra):
+            content = await _read_file_content(target_run, f"{_APT_PREFERENCES_DIR}/{filename}")
+            item = AptPinItem(
+                filename=filename, digest=target_digests[filename], pinned_packages=_parse_pin_file(content)
+            )
+            diffs.append(_file_diff(item, DiffClass.EXTRA_ON_TARGET, DiffAction.REMOVE))
+
+        for filename in sorted(names.changed):
+            content = await _read_file_content(source_run, f"{_APT_PREFERENCES_DIR}/{filename}")
+            item = AptPinItem(
+                filename=filename, digest=source_digests[filename], pinned_packages=_parse_pin_file(content)
+            )
+            detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename])
+            diffs.append(_file_diff(item, DiffClass.VERSION_MISMATCH, DiffAction.CHANGE, detail=detail))
+
+        return diffs
 
     async def _collect_plan_time_collateral(self, diffs: Sequence[ItemDiff]) -> list[ItemDiff]:
         """Two BATCHED simulations — the whole install candidate set, the whole
@@ -334,14 +801,51 @@ class AptSyncJob(PackageSyncJob):
         )
 
     @override
+    def accept_review(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
+        """Insert the synthetic metadata-refresh diff (Task 2) once the coordinator's
+        decisions are known, so it flows through the same per-item logging, dry-run
+        gate and failure collection as everything else (`apply()`'s existing loop)
+        instead of being a special case bolted onto the end.
+
+        Runs AFTER `plan()` (so decisions exist) and is exactly where D-24's review
+        already stopped being relevant for THIS item — the refresh is infrastructure
+        the user never ticks, not a repository or key they decided about. Positioned
+        immediately after the last non-package diff (repository group already sorted
+        key-before-pin/config-before-source by `plan()`) and before every package
+        diff, matching apt's own dependency order: metadata must be current before
+        anything installs from it.
+        """
+        approved_group = any(
+            diff.item_class in _REPO_GROUP_CLASSES
+            and diff.item_id != _METADATA_REFRESH_ITEM_ID
+            and outcome.decisions.get(diff.item_id) == Decision.APPLY
+            for diff in plan.diffs
+        )
+        if approved_group:
+            marker = _metadata_refresh_diff()
+            non_package = [diff for diff in plan.diffs if diff.item_class != ItemClass.APT_PACKAGE]
+            package = [diff for diff in plan.diffs if diff.item_class == ItemClass.APT_PACKAGE]
+            plan = PackagePlan(manager=plan.manager, diffs=(*non_package, marker, *package), groups=plan.groups)
+            outcome = ReviewOutcome(
+                decisions={**outcome.decisions, marker.item_id: Decision.APPLY},
+                was_interactive=outcome.was_interactive,
+            )
+        super().accept_review(plan, outcome)
+
+    @override
     async def converge(self, diff: ItemDiff) -> CommandResult:
-        """Simulate the exact apt transaction, guard it, then run the real command.
+        """Simulate the exact apt transaction, guard it, then run the real command —
+        for apt packages. Repository-group items (keys, pins, apt config, sources) and
+        the synthetic metadata-refresh marker converge as one ordered, transactional
+        unit via `_converge_repo_group_item` instead (Task 2).
 
         One package per invocation (D-27) so a single bad package cannot fail the
         whole batch, and so each package's simulation corresponds exactly to the
         command that follows it. The target resolves dependencies and downloads from
         its own repos (D-28) — no source cache is consulted.
         """
+        if diff.item_class in _REPO_GROUP_CLASSES or diff.item_id == _METADATA_REFRESH_ITEM_ID:
+            return await self._converge_repo_group_item(diff)
         if diff.action == DiffAction.INSTALL:
             return await self._converge_install(diff)
         if diff.action == DiffAction.REMOVE:
@@ -398,6 +902,255 @@ class AptSyncJob(PackageSyncJob):
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {remove_args}"
         return await self.target.run_command(real_cmd, login_shell=False)
+
+    # -- Repository-group convergence (Task 2: D-11, D-12, D-13, D-27, T-02-34/35) -----
+    #
+    # The base `apply()` loop calls `converge()` once per approved diff, in `plan.diffs`
+    # order (already sorted key -> pin/config -> source -> metadata-refresh -> packages
+    # by `plan()`/`accept_review`). Rather than doing each repository-group item's work
+    # in ITS OWN `converge()` call — which would make the group's transactionality
+    # (backup everything before ANY write; roll back everything if the metadata refresh
+    # fails) impossible to express without the base loop knowing about groups — the
+    # FIRST repository-group (or metadata-refresh) diff `converge()` sees triggers
+    # `_ensure_repo_group_converged`, which does the WHOLE group's work right then:
+    # every subsequent group diff's `converge()` call is then a cache lookup against the
+    # per-item outcome that eager run recorded, including — critically — outcomes for
+    # diffs `converge()` has not been called for yet, and outcomes for diffs a rollback
+    # retroactively marks as failed even though their own write succeeded.
+
+    async def _converge_repo_group_item(self, diff: ItemDiff) -> CommandResult:
+        await self._ensure_repo_group_converged()
+        assert self._repo_group_outcome is not None
+        succeeded, message = self._repo_group_outcome[diff.item_id]
+        if succeeded:
+            return CommandResult(exit_code=0, stdout=message, stderr="")
+        raise ConvergeItemFailed(message)
+
+    def _approved_repo_group_diffs(self) -> list[ItemDiff]:
+        """Every repository-group (key/pin/config/source) diff this run's decisions
+        approved, in `plan.diffs` order — already key-before-pin/config-before-source
+        (`plan()`'s sort). Excludes the synthetic metadata-refresh marker itself, which
+        is tracked separately since it names no `/etc/apt` file to back up or write.
+        """
+        assert self._accepted_plan is not None
+        assert self._accepted_outcome is not None
+        decisions = self._accepted_outcome.decisions
+        return [
+            diff
+            for diff in self._accepted_plan.diffs
+            if diff.item_class in _REPO_GROUP_CLASSES
+            and diff.item_id != _METADATA_REFRESH_ITEM_ID
+            and diff.action in (DiffAction.INSTALL, DiffAction.REMOVE, DiffAction.CHANGE)
+            and decisions.get(diff.item_id) == Decision.APPLY
+        ]
+
+    async def _ensure_repo_group_converged(self) -> None:
+        """Do the repository group's entire convergence exactly once per run: back up
+        every destination the group will touch, write/remove in the already-established
+        order, run ONE `apt-get update`, and roll back the whole group if it fails
+        (T-02-34) — never partially, since a failed metadata refresh with some files
+        written and others not would leave `/etc/apt` in a state nobody reviewed.
+
+        Idempotent: a no-op on every call after the first (`self._repo_group_outcome`
+        is `None` only until this method's first successful completion). Never called
+        under dry-run — the base `apply()` loop never calls `converge()` at all when
+        `self.context.dry_run` is set, so this method's own logic can assume real
+        commands are safe to issue.
+        """
+        if self._repo_group_outcome is not None:
+            return
+
+        assert self._accepted_outcome is not None
+        group_diffs = self._approved_repo_group_diffs()
+        marker_present = self._accepted_outcome.decisions.get(_METADATA_REFRESH_ITEM_ID) == Decision.APPLY
+
+        if not group_diffs:
+            self._repo_group_outcome = (
+                {_METADATA_REFRESH_ITEM_ID: (True, "no repository changes to refresh for")} if marker_present else {}
+            )
+            return
+
+        # Populated incrementally (not built up in a local dict and assigned at the
+        # end) so a later diff in THIS SAME group — a source item, converging after its
+        # key per the established order — can consult an earlier diff's real outcome
+        # via `_keyring_ready_on_target` while the group is still being written.
+        self._repo_group_outcome = {}
+
+        home = await self._target_home_dir()
+        staging_dir = f"{home}/.cache/pc-switcher/apt-staging"
+        backup_dir = f"{staging_dir}/backup-{uuid4().hex}"
+        await self.target.run_command(f"mkdir -p {shlex.quote(staging_dir)}", login_shell=False)
+
+        existed_before: dict[str, bool] = {}
+        for diff in group_diffs:
+            dest = _repo_item_destination(diff)
+            existed_before[dest] = await self._backup_destination(dest, backup_dir)
+
+        for diff in group_diffs:
+            try:
+                await self._write_or_remove_repo_item(diff, staging_dir)
+                self._repo_group_outcome[diff.item_id] = (True, "converged")
+            except ConvergeItemFailed as exc:
+                self._repo_group_outcome[diff.item_id] = (False, str(exc))
+
+        update_result = await self.target.run_command("sudo apt-get update", login_shell=False)
+        if update_result.success:
+            await self.target.run_command(f"rm -rf {shlex.quote(backup_dir)}", login_shell=False)
+            if marker_present:
+                self._repo_group_outcome[_METADATA_REFRESH_ITEM_ID] = (True, "apt-get update succeeded")
+            return
+
+        # Rollback (T-02-34): restore every file that existed before, delete every file
+        # the group created, discard the backup directory, then re-probe apt so the
+        # failure summary can tell the user whether the target recovered rather than
+        # leaving them to guess.
+        for dest, existed in existed_before.items():
+            if existed:
+                backup_path = _backup_path_for(backup_dir, dest)
+                await self.target.run_command(
+                    f"sudo install -o root -g root -m 0644 {shlex.quote(backup_path)} {shlex.quote(dest)}",
+                    login_shell=False,
+                )
+            else:
+                await self.target.run_command(f"sudo rm -f {shlex.quote(dest)}", login_shell=False)
+        await self.target.run_command(f"rm -rf {shlex.quote(backup_dir)}", login_shell=False)
+
+        reprobe = await self.target.run_command("sudo apt-get update", login_shell=False)
+        recovery = (
+            "target apt recovered after rollback" if reprobe.success else "target apt still broken after rollback"
+        )
+        self._log(
+            Host.TARGET,
+            LogLevel.ERROR,
+            f"apt-get update failed after repository group writes; rolled back ({recovery}): "
+            f"{update_result.stderr.strip()}",
+            stderr=update_result.stderr,
+        )
+
+        # Every group item is recorded as a failure (D-27) — even ones whose own write
+        # just succeeded above — because the rollback undid it: what actually landed on
+        # the target is the pre-run state, not what this run intended.
+        failure_message = (
+            f"repository group rolled back after apt-get update failure ({recovery}): {update_result.stderr.strip()}"
+        )
+        for diff in group_diffs:
+            self._repo_group_outcome[diff.item_id] = (False, failure_message)
+        if marker_present:
+            self._repo_group_outcome[_METADATA_REFRESH_ITEM_ID] = (False, failure_message)
+
+    async def _backup_destination(self, dest: str, backup_dir: str) -> bool:
+        """Back up `dest` into `backup_dir` if it currently exists on the target;
+        returns whether it existed (so rollback knows restore-vs-delete per file).
+        """
+        quoted_dest = shlex.quote(dest)
+        exists = await self.target.run_command(f"test -f {quoted_dest}", login_shell=False)
+        if not exists.success:
+            return False
+
+        await self.target.run_command(f"mkdir -p {shlex.quote(backup_dir)}", login_shell=False)
+        backup_path = _backup_path_for(backup_dir, dest)
+        result = await self.target.run_command(
+            f"sudo cp -a {quoted_dest} {shlex.quote(backup_path)}", login_shell=False
+        )
+        if not result.success:
+            raise ConvergeItemFailed(
+                f"failed to back up {dest} before converging the repository group: {result.stderr.strip()}"
+            )
+        return True
+
+    async def _write_or_remove_repo_item(self, diff: ItemDiff, staging_dir: str) -> None:
+        """Converge one repository-group diff: `sudo rm -f` for a REMOVE, or
+        stage-then-promote for an INSTALL/CHANGE (T-02-35). `RemoteExecutor.send_file`
+        is plain SFTP as the ordinary SSH user with no sudo path (`executor.py` around
+        line 362) and cannot write into `/etc/apt` directly — bytes land under the
+        target user's own `~/.cache` staging directory first, then `sudo install`
+        promotes them with the right ownership/mode in one atomic step (no window where
+        the file exists under `/etc/apt` owned by the wrong user, unlike a `mv` +
+        separate `chown`/`chmod`). The staging copy is removed in a `finally` so a
+        failed promotion never leaves transferred key material sitting in the cache.
+        """
+        dest = _repo_item_destination(diff)
+
+        if diff.action == DiffAction.REMOVE:
+            result = await self.target.run_command(f"sudo rm -f {shlex.quote(dest)}", login_shell=False)
+            if not result.success:
+                raise ConvergeItemFailed(f"failed to remove {dest}: {result.stderr.strip()}")
+            return
+
+        if diff.item_class == ItemClass.APT_SOURCE:
+            await self._require_keyrings_ready(diff)
+
+        local_path = Path(dest)
+        staged_name = diff.item_id.replace(":", "_").replace("/", "_")
+        staged_dest = f"{staging_dir}/{staged_name}"
+        try:
+            await self.target.send_file(local_path, staged_dest)
+            promote = await self.target.run_command(
+                f"sudo install -o root -g root -m 0644 {shlex.quote(staged_dest)} {shlex.quote(dest)}",
+                login_shell=False,
+            )
+            if not promote.success:
+                raise ConvergeItemFailed(f"failed to install {dest}: {promote.stderr.strip()}")
+        finally:
+            await self.target.run_command(f"rm -f {shlex.quote(staged_dest)}", login_shell=False)
+
+    async def _require_keyrings_ready(self, diff: ItemDiff) -> None:
+        """Refuse to write a source file whose keyring reference is neither already
+        matching on the target nor among this run's successfully converged key items
+        (Task 2, D-12) — a repository written without its key is a repository apt
+        refuses on every subsequent operation, which makes writing it anyway strictly
+        worse than leaving the target alone.
+
+        Re-reads and re-parses the source file's own content rather than threading the
+        already-parsed `AptSourceItem.keyring_refs` through the plan/diff pipeline: the
+        plan only carries `ItemDiff`s (module docstring — one shared shape for every
+        item class), so re-deriving from the source's own bytes at converge time is the
+        cost of keeping that shape uniform, and the file is small enough that a second
+        `cat` is negligible next to the write it gates.
+        """
+        filename = diff.item_id.removeprefix("apt:source:")
+        source_path = f"{_APT_SOURCES_DIR}/{filename}"
+        content = await _read_file_content(self.source.run_command, source_path)
+        _fmt, refs = _parse_source_file(filename, content)
+
+        for ref in refs:
+            ref_filename = Path(ref).name
+            if self._keyring_ready_on_target(ref_filename):
+                continue
+            raise ConvergeItemFailed(
+                f"source {filename} references keyring {ref_filename!r}, which is neither already "
+                "present on the target nor among this run's successfully converged key items "
+                "(D-12/T-02-16); skipping this repository write"
+            )
+
+    def _keyring_ready_on_target(self, ref_filename: str) -> bool:
+        """A keyring reference is ready for a source file to depend on if it already
+        matches byte-for-byte on the target (no diff was even needed, per the digest
+        maps `_plan_repo_diffs` captured) or if this run already successfully converged
+        it (checked against `_repo_group_outcome`, which — because keys sort before
+        sources — already holds every key diff's real outcome by the time a source
+        diff's own write is attempted).
+        """
+        source_digest = self._source_key_digests_by_filename.get(ref_filename)
+        target_digest = self._target_key_digests_by_filename.get(ref_filename)
+        if source_digest is not None and source_digest == target_digest:
+            return True
+        if self._repo_group_outcome is not None:
+            for scope in ("per-repo", "global-trust"):
+                outcome = self._repo_group_outcome.get(f"apt:key:{scope}:{ref_filename}")
+                if outcome is not None and outcome[0]:
+                    return True
+        return False
+
+    async def _target_home_dir(self) -> str:
+        """The target user's home directory, resolved once per run via `echo $HOME`
+        (`config_sync._copy_config_to_target`'s established pattern) and cached — every
+        repository-group file write needs the same absolute staging path.
+        """
+        if self._target_home is None:
+            result = await self.target.run_command("echo $HOME", login_shell=False)
+            self._target_home = result.stdout.strip()
+        return self._target_home
 
     @override
     async def validate(self) -> list[ValidationError]:
