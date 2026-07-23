@@ -89,6 +89,7 @@ Plans:
 **Goal**: A user can replicate installed packages from source to target across all package sources, with conflicts and version mismatches detected and reported rather than silently overwritten.
 **Depends on**: Phase 1
 **Requirements**: REQ-sync-scope-packages, REQ-conflict-detection-no-resolution
+**Scope note**: `/etc/apt` repository, keyring, pin, and apt-config state is Phase 2 territory (moved from Phase 3). Package data under `~/.var/app`, `~/snap/<app>/common`, and dotfiles stays Phase 1 `folder_sync` territory.
 **Success Criteria** (what must be TRUE):
 
   1. After sync, the target has the same apt, snap, and flatpak packages installed as the source (verifiable by querying each package manager).
@@ -137,6 +138,7 @@ Plans:
 **Goal**: A user can replicate machine-independent application and system configuration from source to target, with conflicting system changes detected.
 **Depends on**: Phase 2
 **Requirements**: REQ-sync-scope-app-and-system-config
+**Scope note**: The rest of `/etc` remains Phase 3 territory; `/etc/apt` is delivered in Phase 2.
 **Success Criteria** (what must be TRUE):
 
   1. After sync, GNOME desktop configuration, cloud mounts, and systemd service definitions on the target match the source.
