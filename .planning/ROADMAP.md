@@ -96,7 +96,7 @@ Plans:
   2. Manually-installed .debs, custom PPAs, and install-script-sourced packages are reproduced on the target.
   3. Package conflicts and version mismatches between source and target are detected and reported before any destructive change; machine-specific packages are not forced onto the target.
 
-**Plans**: 13/13 plans executed
+**Plans**: 13/13 shipped; 8 delta plans (02-14…02-21) added for decision corrections after the executed phase was reviewed
 
 Plans:
 **Wave 1**
@@ -132,6 +132,17 @@ Plans:
 
 - [x] 02-11-PLAN.md — VM integration tests for the whole-run contracts + validation record
 - [x] 02-12-PLAN.md — user + living-spec documentation and end-to-end human verification
+
+**Delta Replan** *(decision corrections after the executed phase was reviewed; the 13 shipped plans stand untouched)*
+
+- [ ] 02-14-PLAN.md — rewrite ADR-020 to the corrected per-manager, four-job, self-pushed-snippet design [wave 1]
+- [ ] 02-15-PLAN.md — remove the cross-manager coordinator; each package job reviews and applies inside its own execute() (D-24) [wave 1]
+- [ ] 02-16-PLAN.md — classify apt collateral: auto proceeds, manual becomes a reviewable install-anyway/skip/abort item at plan time (D-30) [wave 2]
+- [ ] 02-17-PLAN.md — new manual_installs_sync job owning unreproducible detection + snippet registry; skip-once is a valid resolution (D-15/D-18/D-21) [wave 3]
+- [ ] 02-18-PLAN.md — manual_installs_sync pushes package-snippets.yaml itself via send_file(); config_sync reverts to config.yaml only (D-23) [wave 4]
+- [ ] 02-19-PLAN.md — move jobs/package_*.py into jobs/packages/; delete empty apt/snap/flatpak config sections (D-31/D-32) [wave 5]
+- [ ] 02-20-PLAN.md — migrate job behaviour docs out of configuration.md; correct docs/system living specs (D-33) [wave 6]
+- [ ] 02-21-PLAN.md — rework VM integration for the new job/review shape; add apt-repository-state coverage closing broken-window #2 [wave 6]
 
 ### Phase 3: System & Application Configuration Sync
 
