@@ -11,7 +11,7 @@ This document provides explicit traceability from every requirement in specs/001
 ## Coverage Summary
 
 | Category | Total in 001-Spec | Removed | Active | Tests Planned | Coverage |
-|----------|-------------------|---------|--------|---------------|----------|
+| -------- | ----------------- | ------- | ------ | ------------- | -------- |
 | User Stories | 9 | 0 | 9 | 9 | 100% |
 | Acceptance Scenarios | 47 | 3 | 44 | 44 | 100% |
 | Functional Requirements | 48 | 4 | 44 | 44 | 100% |
@@ -35,7 +35,7 @@ This document provides explicit traceability from every requirement in specs/001
 **Acceptance Scenarios**:
 
 | ID | Scenario | Test Function | Type |
-|----|----------|---------------|------|
+| -- | -------- | ------------- | ---- |
 | US1-AS1 | Developer implements job conforming to interface | `test_001_us1_as1_job_integration_via_interface` | integration |
 | US1-AS2 | Job defines config schema, system validates | `test_001_us1_as2_config_schema_validation` | unit |
 | US1-AS3 | Job emits logs at six levels | `test_001_us1_as3_job_logging_at_all_levels` | unit |
@@ -57,7 +57,7 @@ This document provides explicit traceability from every requirement in specs/001
 **Acceptance Scenarios**:
 
 | ID | Scenario | Test Function | Type |
-|----|----------|---------------|------|
+| -- | -------- | ------------- | ---- |
 | US2-AS1 | Target missing pc-switcher, orchestrator installs from GitHub | `test_001_us2_as1_install_missing_pcswitcher` | integration |
 | US2-AS2 | Version mismatch, orchestrator upgrades target | `test_001_us2_as2_upgrade_outdated_target` | integration |
 | US2-AS3 | Versions match, skip installation | `test_001_us2_as3_skip_when_versions_match` | unit |
@@ -78,7 +78,7 @@ This document provides explicit traceability from every requirement in specs/001
 **Acceptance Scenarios**:
 
 | ID | Scenario | Test Function | Type |
-|----|----------|---------------|------|
+| -- | -------- | ------------- | ---- |
 | US3-AS1 | Validate subvolumes exist before snapshots | `test_001_us3_as1_validate_subvolumes_exist` | unit |
 | US3-AS2 | Create pre-sync snapshots before jobs execute | `test_001_us3_as2_create_presync_snapshots` | integration |
 | US3-AS3 | Create post-sync snapshots after success | `test_001_us3_as3_create_postsync_snapshots` | integration |
@@ -100,7 +100,7 @@ This document provides explicit traceability from every requirement in specs/001
 **Acceptance Scenarios**:
 
 | ID | Scenario | Test Function | Type |
-|----|----------|---------------|------|
+| -- | -------- | ------------- | ---- |
 | US4-AS1 | DEBUG excluded when file level is FULL | `test_001_us4_as1_debug_excluded_at_full_level` | unit |
 | US4-AS2 | FULL excluded when file level is INFO | `test_001_us4_as2_full_excluded_at_info_level` | unit |
 | US4-AS4 | Log file contains JSON Lines format | `test_001_us4_as4_log_file_json_lines_format` | unit |
@@ -119,7 +119,7 @@ This document provides explicit traceability from every requirement in specs/001
 **Acceptance Scenarios**:
 
 | ID | Scenario | Test Function | Type |
-|----|----------|---------------|------|
+| -- | -------- | ------------- | ---- |
 | US5-AS1 | Ctrl+C during job, orchestrator requests termination | `test_001_us5_as1_interrupt_requests_job_termination` | integration |
 | US5-AS2 | Ctrl+C between jobs, orchestrator skips remaining | `test_001_us5_as2_interrupt_between_jobs_skips_remaining` | unit |
 | US5-AS3 | Second Ctrl+C forces immediate termination | `test_001_us5_as3_second_interrupt_forces_termination` | integration |
@@ -134,7 +134,7 @@ This document provides explicit traceability from every requirement in specs/001
 **Acceptance Scenarios**:
 
 | ID | Scenario | Test Function | Type |
-|----|----------|---------------|------|
+| -- | -------- | ------------- | ---- |
 | US6-AS1 | Load config, validate, apply defaults | `test_001_us6_as1_load_and_validate_config` | unit |
 | US6-AS2 | Independent file and CLI log levels | `test_001_us6_as2_independent_log_levels` | unit |
 | US6-AS3 | Enable/disable jobs via sync_jobs section | `test_001_us6_as3_enable_disable_jobs` | unit |
@@ -151,7 +151,7 @@ This document provides explicit traceability from every requirement in specs/001
 **Acceptance Scenarios**:
 
 | ID | Scenario | Test Function | Type |
-|----|----------|---------------|------|
+| -- | -------- | ------------- | ---- |
 | US7-AS1 | curl install.sh installs uv and pc-switcher | `test_001_us7_as1_install_script_fresh_machine` | integration |
 | US7-AS2 | InstallOnTargetJob uses same installation logic | `test_001_us7_as2_target_install_shared_logic` | unit |
 | US7-AS3 | Preserve existing config unless overwrite confirmed | `test_001_us7_as3_preserve_existing_config` | integration |
@@ -166,7 +166,7 @@ This document provides explicit traceability from every requirement in specs/001
 **Acceptance Scenarios**:
 
 | ID | Scenario | Test Function | Type |
-|----|----------|---------------|------|
+| -- | -------- | ------------- | ---- |
 | US8-AS1 | dummy_success completes with logs and progress | `test_001_us8_as1_dummy_success_completes` | unit |
 | US8-AS3 | dummy_fail raises exception at 60% | `test_001_us8_as3_dummy_fail_raises_exception` | unit |
 | US8-AS4 | Dummy job handles termination request | `test_001_us8_as4_dummy_job_termination` | unit |
@@ -183,7 +183,7 @@ This document provides explicit traceability from every requirement in specs/001
 **Acceptance Scenarios**:
 
 | ID | Scenario | Test Function | Type |
-|----|----------|---------------|------|
+| -- | -------- | ------------- | ---- |
 | US9-AS1 | Display progress bar, percentage, job name | `test_001_us9_as1_progress_display` | integration |
 | US9-AS2 | Show overall and individual job progress | `test_001_us9_as2_multi_job_progress` | integration |
 | US9-AS3 | Display logs below progress indicators | `test_001_us9_as3_logs_with_progress` | integration |
@@ -195,7 +195,7 @@ This document provides explicit traceability from every requirement in specs/001
 ### Job Architecture (FR-001 through FR-004)
 
 | FR | Requirement | Test Function | File |
-|----|-------------|---------------|------|
+| -- | ----------- | ------------- | ---- |
 | FR-001 | Job interface defines standardized methods | `test_001_fr001_job_interface_contract` | tests/contract/test_job_interface.py |
 | FR-002 | Job lifecycle: validate() then execute() | `test_001_fr002_lifecycle_validate_then_execute` | tests/unit/orchestrator/test_job_lifecycle.py |
 | FR-003 | Termination request with cleanup timeout | `test_001_fr003_termination_request_on_interrupt` | tests/unit/orchestrator/test_interrupt_handling.py |
@@ -204,7 +204,7 @@ This document provides explicit traceability from every requirement in specs/001
 ### Self-Installation (FR-005 through FR-007c)
 
 | FR | Requirement | Test Function | File |
-|----|-------------|---------------|------|
+| -- | ----------- | ------------- | ---- |
 | FR-005 | Check target version, install from GitHub | `test_001_fr005_version_check_and_install` | tests/unit/jobs/test_install_job.py |
 | FR-006 | Abort if target version newer | `test_001_fr006_abort_on_newer_target_version` | tests/unit/jobs/test_install_job.py |
 | FR-007 | Abort on installation failure | `test_001_fr007_abort_on_install_failure` | tests/unit/jobs/test_install_job.py |
@@ -215,7 +215,7 @@ This document provides explicit traceability from every requirement in specs/001
 ### Safety Infrastructure (FR-008 through FR-017)
 
 | FR | Requirement | Test Function | File |
-|----|-------------|---------------|------|
+| -- | ----------- | ------------- | ---- |
 | FR-008 | Create pre-sync snapshots | `test_001_fr008_create_presync_snapshots` | tests/unit/jobs/test_snapshot_job.py |
 | FR-009 | Create post-sync snapshots | `test_001_fr009_create_postsync_snapshots` | tests/unit/jobs/test_snapshot_job.py |
 | FR-010 | Snapshot naming pattern | `test_001_fr010_snapshot_naming_pattern` | tests/unit/jobs/test_snapshot_job.py |
@@ -230,7 +230,7 @@ This document provides explicit traceability from every requirement in specs/001
 ### Logging System (FR-018 through FR-023)
 
 | FR | Requirement | Test Function | File |
-|----|-------------|---------------|------|
+| -- | ----------- | ------------- | ---- |
 | FR-018 | Six log levels with correct ordering | `test_001_fr018_log_level_ordering` | tests/unit/orchestrator/test_logging_system.py |
 | FR-019 | CRITICAL log and halt on exception | `test_001_fr019_critical_on_exception` | tests/unit/orchestrator/test_job_lifecycle.py |
 | FR-020 | Independent file and CLI log levels | `test_001_fr020_independent_log_levels` | tests/unit/orchestrator/test_logging_system.py |
@@ -241,7 +241,7 @@ This document provides explicit traceability from every requirement in specs/001
 ### Interrupt Handling (FR-024 through FR-027)
 
 | FR | Requirement | Test Function | File |
-|----|-------------|---------------|------|
+| -- | ----------- | ------------- | ---- |
 | FR-024 | SIGINT handler, log, exit 130 | `test_001_fr024_sigint_handler_exit_130` | tests/unit/orchestrator/test_interrupt_handling.py |
 | FR-025 | Send termination to target processes | `test_001_fr025_terminate_target_processes` | tests/integration/test_interrupt_integration.py |
 | FR-026 | Force-terminate on second SIGINT | `test_001_fr026_second_sigint_force_terminate` | tests/integration/test_interrupt_integration.py |
@@ -250,7 +250,7 @@ This document provides explicit traceability from every requirement in specs/001
 ### Configuration System (FR-028 through FR-033)
 
 | FR | Requirement | Test Function | File |
-|----|-------------|---------------|------|
+| -- | ----------- | ------------- | ---- |
 | FR-028 | Load from ~/.config/pc-switcher/config.yaml | `test_001_fr028_load_from_config_path` | tests/unit/orchestrator/test_config_system.py |
 | FR-029 | YAML structure: global, sync_jobs, per-job | `test_001_fr029_config_structure` | tests/unit/orchestrator/test_config_system.py |
 | FR-030 | Validate against job schemas | `test_001_fr030_validate_job_configs` | tests/unit/orchestrator/test_config_system.py |
@@ -261,14 +261,14 @@ This document provides explicit traceability from every requirement in specs/001
 ### Installation & Setup (FR-035, FR-036)
 
 | FR | Requirement | Test Function | File |
-|----|-------------|---------------|------|
+| -- | ----------- | ------------- | ---- |
 | FR-035 | install.sh without prerequisites | `test_001_fr035_install_script_no_prereqs` | tests/integration/test_installation_script.py |
 | FR-036 | Default config with inline comments | `test_001_fr036_default_config_with_comments` | tests/integration/test_installation_script.py |
 
 ### Testing Infrastructure (FR-038, FR-039, FR-041, FR-042)
 
 | FR | Requirement | Test Function | File |
-|----|-------------|---------------|------|
+| -- | ----------- | ------------- | ---- |
 | FR-038 | Two dummy jobs exist | `test_001_fr038_dummy_jobs_exist` | tests/unit/jobs/test_dummy_jobs.py |
 | FR-039 | dummy_success behavior | `test_001_fr039_dummy_success_behavior` | tests/unit/jobs/test_dummy_jobs.py |
 | FR-041 | dummy_fail raises exception at 60% | `test_001_fr041_dummy_fail_exception` | tests/unit/jobs/test_dummy_jobs.py |
@@ -279,7 +279,7 @@ This document provides explicit traceability from every requirement in specs/001
 ### Progress Reporting (FR-043 through FR-045)
 
 | FR | Requirement | Test Function | File |
-|----|-------------|---------------|------|
+| -- | ----------- | ------------- | ---- |
 | FR-043 | Jobs can emit progress updates | `test_001_fr043_job_progress_emission` | tests/unit/jobs/test_dummy_jobs.py |
 | FR-044 | Orchestrator forwards progress to UI | `test_001_fr044_orchestrator_forwards_progress` | tests/unit/orchestrator/test_job_lifecycle.py |
 | FR-045 | Progress logged at FULL level | `test_001_fr045_progress_logged_at_full` | tests/unit/orchestrator/test_logging_system.py |
@@ -287,7 +287,7 @@ This document provides explicit traceability from every requirement in specs/001
 ### Core Orchestration (FR-046 through FR-048)
 
 | FR | Requirement | Test Function | File |
-|----|-------------|---------------|------|
+| -- | ----------- | ------------- | ---- |
 | FR-046 | Single command `pc-switcher sync <target>` | `test_001_fr046_sync_command` | tests/unit/cli/test_commands.py |
 | FR-047 | Locking prevents concurrent execution | `test_001_fr047_lock_prevents_concurrent_sync` | tests/unit/test_lock.py (existing) |
 | FR-048 | Log overall result and job summary | `test_001_fr048_log_sync_summary` | tests/unit/orchestrator/test_job_lifecycle.py |
@@ -295,7 +295,7 @@ This document provides explicit traceability from every requirement in specs/001
 ## Edge Case Coverage
 
 | Edge Case | Test Function | Type | File |
-|-----------|---------------|------|------|
+| --------- | ------------- | ---- | ---- |
 | Target unreachable mid-sync | `test_001_edge_target_unreachable_mid_sync` | integration | tests/integration/test_end_to_end_sync.py |
 | Insufficient space for snapshots | `test_001_edge_insufficient_space_snapshots` | unit | tests/unit/jobs/test_snapshot_job.py |
 | Job cleanup raises exception | `test_001_edge_cleanup_exception` | unit | tests/unit/orchestrator/test_job_lifecycle.py |

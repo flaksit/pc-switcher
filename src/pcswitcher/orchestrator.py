@@ -28,6 +28,8 @@ from pcswitcher.jobs.btrfs import BtrfsSnapshotJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
+from pcswitcher.jobs.packages.review import Reviewer, TerminalUIReviewer
+from pcswitcher.jobs.packages.sync_core import PackageItemFailures
 from pcswitcher.lock import (
     SyncLock,
     get_hostname_command,
@@ -169,6 +171,23 @@ def _failure_already_logged(exc: BaseException) -> bool:
     return getattr(exc, _FAILURE_LOGGED_ATTR, False)
 
 
+def _summarize_job_outcomes(job_results: list[JobResult]) -> tuple[SessionStatus, str | None]:
+    """Derive the session outcome from the collected job results.
+
+    Reaching the end of the job loop without an exception is not the same as success:
+    per-item package failures are collected and recorded as FAILED ``JobResult``s rather
+    than raised, so that one manager's item failures cannot cancel another manager's
+    already-approved work (D-27). The outcome therefore has to come from the results
+    themselves, or a sync where every item failed would still exit 0.
+
+    ``SKIPPED`` is a normal outcome for a disabled or not-applicable job, not a failure.
+    """
+    failed_jobs = [r.job_name for r in job_results if r.status is JobStatus.FAILED]
+    if not failed_jobs:
+        return SessionStatus.COMPLETED, None
+    return SessionStatus.FAILED, f"Jobs reported failures: {', '.join(failed_jobs)}"
+
+
 class Orchestrator:
     """Main orchestrator coordinating the complete sync workflow.
 
@@ -242,6 +261,7 @@ class Orchestrator:
         self._console: Console | None = None
         self._ui_task: asyncio.Task[None] | None = None
         self._confirmer: Confirmer | None = None
+        self._reviewer: Reviewer | None = None
 
     def _create_job_context(self, config: dict[str, Any]) -> JobContext:
         """Create JobContext with current orchestrator state.
@@ -262,11 +282,26 @@ class Orchestrator:
             dry_run=self._dry_run,
             allow_first_sync=self._allow_first_sync,
             confirmer=self._confirmer,
+            reviewer=self._reviewer,
             # Connection is always set when _create_job_context is called in
             # production (SyncStep.CONNECT onward), but unit tests mock executors
             # without a real connection, so fall back to None (JobContext accepts it).
             target_username=self._connection.username if self._connection is not None else None,
+            # The full sync_jobs enablement map, not just this job's own section — see
+            # JobContext.enabled_sync_jobs docstring.
+            enabled_sync_jobs=dict(self._config.sync_jobs),
         )
+
+    def _log_sync_outcome(self, session: SyncSession) -> None:
+        """Log the end-of-run outcome at the severity the session status warrants."""
+        if session.status is SessionStatus.FAILED:
+            self._logger.warning(
+                "Sync finished with job failures: %s",
+                session.error_message,
+                extra={"job": "orchestrator", "host": "source"},
+            )
+        else:
+            self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
 
     async def run(self) -> SyncSession:  # noqa: PLR0915
         """Execute the complete sync workflow.
@@ -308,6 +343,7 @@ class Orchestrator:
         # Shared interactive confirmation gate for the orchestrator's out-of-order check
         # and any job-level prompt (e.g. FolderSyncJob first-sync overwrite, ADR-015).
         self._confirmer = TerminalUIConfirmer(self._console, self._ui, logger=self._logger)
+        self._reviewer = TerminalUIReviewer(self._console, self._ui, logger=self._logger)
 
         # Create log file path and set up stdlib logging infrastructure.
         # Passing ui + console lets setup_logging pick the UI-routed TUI
@@ -407,13 +443,16 @@ class Orchestrator:
             await self._create_snapshots(SnapshotPhase.POST)
             self._ui.set_current_step(SyncStep.POST_SNAPSHOT, "Post-sync snapshots")
 
+            # Reaching here only means nothing propagated, which is weaker than success —
+            # see _summarize_job_outcomes for why the outcome comes from job_results.
+            session.status, session.error_message = _summarize_job_outcomes(job_results)
+
             # SyncStep 12: Record sync history on both machines (this machine was SOURCE,
             # target was TARGET). The write is skipped in dry-run mode (D-12: dry-run must
             # not write any state), but the counter still advances so it reaches 100% on
             # both real and dry-run paths — matching the snapshot steps.
-            session.status = SessionStatus.COMPLETED
             session.ended_at = datetime.now(UTC)
-            self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
+            self._log_sync_outcome(session)
             if not self._dry_run:
                 await self._update_sync_history()
             self._ui.set_current_step(SyncStep.RECORD_HISTORY, "Record sync history")
@@ -902,6 +941,8 @@ class Orchestrator:
                 context = self._create_job_context(job_config)
                 jobs.append(job_class(context))
 
+        config_errors.extend(self._check_package_jobs_precede_folder_sync())
+
         # Check for config errors
         if config_errors:
             error_msgs = [f"  - {e.job}: {e.path} - {e.message}" for e in config_errors]
@@ -919,6 +960,37 @@ class Orchestrator:
             raise RuntimeError("System state validation failed:\n" + "\n".join(error_msgs))
 
         return jobs
+
+    def _check_package_jobs_precede_folder_sync(self) -> list[ConfigError]:
+        """D-17: apt_sync/snap_sync/flatpak_sync must run before folder_sync — apps are
+        provisioned first, then their data lands on top (decisive for flatpak, where
+        `flatpak install` must create `~/.local/share/flatpak` before folder_sync would
+        otherwise land `~/.var/app` on top).
+
+        The shipped `default-config.yaml` encodes this ordering only by key order
+        (jobs run in `self._config.sync_jobs.items()` order) — a user who hand-edits
+        their own `config.yaml`, e.g. appending a newly-enabled `flatpak_sync: true`
+        after an existing `folder_sync: true` line, silently inverts it with no error.
+        This validates the RESOLVED, enabled order and turns that silent inversion into
+        a loud `ConfigError` instead (WR-02) — every other ordering (jobs disabled,
+        jobs absent, folder_sync disabled) is unaffected.
+        """
+        enabled_order = [job_name for job_name, enabled in self._config.sync_jobs.items() if enabled]
+        if "folder_sync" not in enabled_order:
+            return []
+        folder_sync_index = enabled_order.index("folder_sync")
+        return [
+            ConfigError(
+                job=job_name,
+                path="sync_jobs",
+                message=(
+                    f"{job_name} must be listed before folder_sync in sync_jobs (D-17): package jobs "
+                    "provision apps before folder_sync lands their data on top. Move it above folder_sync."
+                ),
+            )
+            for job_name in ("apt_sync", "snap_sync", "flatpak_sync")
+            if job_name in enabled_order and enabled_order.index(job_name) > folder_sync_index
+        ]
 
     async def _check_disk_space_preflight(self) -> None:
         """Check disk space on both source and target before creating snapshots.
@@ -1020,6 +1092,13 @@ class Orchestrator:
     async def _execute_jobs(self, jobs: list[Job]) -> list[JobResult]:
         """Execute sync jobs sequentially with background disk monitoring.
 
+        Each package job reviews its own diffs inside its own ``execute()`` (D-24): it
+        plans, prompts through the injected ``JobContext.reviewer``, then converges. The
+        review's blocking prompt runs inside the job TaskGroup alongside the disk-space
+        monitors — ``review_items`` pauses the Live display before prompting and resumes
+        it in a ``finally``, the same mechanism ``TerminalUIConfirmer`` already uses from
+        ``FolderSyncJob.execute()`` — so no coordination outside the TaskGroup is needed.
+
         Args:
             jobs: List of validated jobs to execute
 
@@ -1101,6 +1180,29 @@ class Orchestrator:
                         # records an ABORTED session, rather than a spurious
                         # FAILED job result plus a duplicate CRITICAL log.
                         raise
+                    except PackageItemFailures as e:
+                        # The user approved changes across several package managers in
+                        # ONE batched review (D-24); letting one manager's failed items
+                        # cancel another manager's already-approved work would silently
+                        # break that promise. Record this job's FAILED result (D-27) but
+                        # deliberately do NOT re-raise, so the remaining jobs still run —
+                        # every other exception keeps today's abort-the-run behavior.
+                        ended_at = datetime.now(UTC)
+                        results.append(
+                            JobResult(
+                                job_name=job.name,
+                                status=JobStatus.FAILED,
+                                started_at=started_at,
+                                ended_at=ended_at,
+                                error_message=str(e),
+                            )
+                        )
+                        self._logger.critical(
+                            "Job %s failed: %s",
+                            job.name,
+                            e,
+                            extra={"job": "orchestrator", "host": "source"},
+                        )
                     except Exception as e:
                         ended_at = datetime.now(UTC)
                         results.append(

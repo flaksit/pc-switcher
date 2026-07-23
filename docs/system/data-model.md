@@ -69,7 +69,7 @@ class LogLevel(IntEnum):
 Configuration entity holding log level settings.
 
 | Field | Type | Default | Description |
-|-------|------|---------|-------------|
+| ----- | ---- | ------- | ----------- |
 | `file` | `int` | `10` (DEBUG) | Floor log level for file output. |
 | `tui` | `int` | `20` (INFO) | Floor log level for TUI output. |
 | `external` | `int` | `30` (WARNING) | Additional floor for non-pcswitcher loggers. |
@@ -81,7 +81,7 @@ Configuration entity holding log level settings.
 Structured context added to log records via `extra` dict.
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ----- | ---- | ----------- |
 | `job` | `str` | Job name (e.g., `"btrfs"`). |
 | `host` | `str` | Logical role (`"source"` or `"target"`). |
 | `**context` | `dict` | Additional key=value pairs. |
@@ -157,3 +157,73 @@ class Snapshot:
     phase: str      # "pre" or "post"
     subvolume: str  # "@" or "@home"
 ```
+
+---
+
+## Package Sync Entities
+
+Phase 2's package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) adds its own item model and two on-disk data shapes. See [Package Sync Subsystem](architecture.md#package-sync-subsystem) for the pipeline these flow through.
+
+### Item identity
+
+Every item class computes a stable `item_id` string rather than reusing the manager's own name for identity. This matters because a manager-native name is not always unique on its own — the same apt package name can legitimately mean "install" on one machine and "remove" on another only if there's exactly one identity to diff against, and a flatpak application id or a snap name can exist independently in two different scopes/channels that must NOT collapse into one entity. Folding the disambiguating fact (scope, origin, manager) into the identity string itself — rather than leaving it as a sibling field the diff engine would have to special-case — is what lets one generic source-vs-target diff work unmodified across every item class:
+
+| Item class | `item_id` format | Disambiguating fact folded into identity |
+| - | - | - |
+| `AptPackageItem` | `apt:package:<name>` | — |
+| `AptSourceItem` | `apt:source:<filename>` | filename (a legacy `.list` and a deb822 `.sources` file for the same repo stay two entries) |
+| `AptKeyItem` | `apt:key:<scope>:<filename>` | `scope`: `per-repo` or `global-trust` |
+| `AptPinItem` | `apt:pin:<filename>` | — |
+| `AptConfigItem` | `apt:config:<filename>` | — |
+| `SnapItem` | `snap:<name>` | — (channel and revision are fields, not part of identity) |
+| `FlatpakItem` (ref) | `flatpak:ref:<scope>:<application>` | `scope`: `user` or `system` — the same application installed in both scopes is two distinct items |
+| `FlatpakRemoteItem` | `flatpak:remote:<scope>:<name>` | `scope` — `flathub` commonly exists in both scopes with an identical URL but needs independent provisioning |
+| `UnreproducibleItem` | `unreproducible:<origin>:<identifier>` | `origin`: `apt-no-candidate` or `unowned-path` — the same identifier string can coincidentally collide across origins |
+
+Every item class also exposes a `label()` (or, for `UnreproducibleItem`, a plain `label` field) — the human-readable text the review and logs show; `item_id` is never shown to a user directly.
+
+All item classes flow through one shared diff result shape:
+
+```python
+@dataclass(frozen=True)
+class ItemDiff:
+    item_class: ItemClass
+    diff_class: DiffClass     # MISSING_ON_TARGET, EXTRA_ON_TARGET, VERSION_MISMATCH,
+                               # HELD_OR_PINNED, REPO_UNAVAILABLE, UNREPRODUCIBLE
+    action: DiffAction        # INSTALL, REMOVE, CHANGE, REPORT_ONLY
+    item_id: str
+    label: str
+    detail: str | None = None
+```
+
+### Machine-local decision file (never synced)
+
+One YAML file per package manager, at `~/.config/pc-switcher/<manager>.decisions.yaml` (e.g. `apt.decisions.yaml`). Records every "skip always" (machine-specific) choice made in a review. **Never synced** — excluded from `folder_sync` unconditionally and outside `config_sync`'s file set, since an entry describes what belongs to *this* machine, not a fact to propagate.
+
+```python
+@dataclass(frozen=True)
+class DecisionEntry:
+    item_id: str
+    item_class: ItemClass
+    label: str
+    reason: str | None
+    recorded_at: str  # ISO-8601 UTC
+```
+
+On disk, entries are keyed by `item_id` under a `machine_specific:` mapping.
+
+### Install-snippet registry (synced)
+
+One shared YAML file at `~/.config/pc-switcher/package-snippets.yaml`, holding an opaque, replayable shell command for each item no package manager can reproduce (a bare `.deb`, a manual install). **Reaches the target** — `manual_installs_sync` pushes it to the target itself with `send_file()` immediately after its own review, so a snippet authored on the fly during that review is included in the same run. It does **not** travel via `config_sync`, which carries `config.yaml` only and runs before any review, so it could not carry a snippet the user has not authored yet. How to install something is knowledge about the package, not the machine, so unlike the machine-local decision file above the registry does reach the target — but by the job's own push, never as a synced config file.
+
+```python
+@dataclass(frozen=True)
+class Snippet:
+    item_id: str
+    label: str
+    body: str          # opaque; replayed verbatim, never parsed or interpreted
+    authored_at: str   # ISO-8601 UTC
+    authored_on: str   # hostname the snippet was authored on
+```
+
+On disk, entries are keyed by `item_id` under a `snippets:` mapping. `body` replays as `bash -c <body>` with no stdin available — a snippet expecting a prompt fails rather than hanging the sync.

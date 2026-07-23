@@ -447,7 +447,7 @@ Task: "Create tests/integration/test_end_to_end_sync.py"
 ## Summary
 
 | Category | Count |
-|----------|-------|
+| -------- | ----- |
 | Total Tasks | 41 |
 | Setup Tasks | 4 |
 | Core Tasks | 4 |

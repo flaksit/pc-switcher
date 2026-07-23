@@ -23,7 +23,7 @@ GitHub Secrets in public repositories are encrypted and never visible to anyone,
 ### Required Secrets
 
 | Secret Name | Purpose | Format |
-|-------------|---------|--------|
+| ----------- | ------- | ------ |
 | `HCLOUD_TOKEN` | Hetzner Cloud API access | API token string |
 | `HETZNER_SSH_PRIVATE_KEY` | SSH access to test VMs | ed25519 private key (PEM format) |
 | `SSH_AUTHORIZED_KEY_CI` | CI public key for VM access | ed25519 public key |
@@ -160,7 +160,7 @@ Or push a non-draft PR targeting main.
 ### Expected Monthly Costs
 
 | Resource | Quantity | Unit Cost | Total |
-|----------|----------|-----------|-------|
+| -------- | -------- | --------- | ----- |
 | CX23 VMs | 2 | EUR 3.50/month | EUR 7.00/month |
 | Traffic | Included | - | EUR 0.00 |
 | **Total** | | | **EUR 7.00/month** |
@@ -353,7 +353,7 @@ hcloud server describe pc1 -o json | jq '.labels'
 **Recovery options**:
 
 | Situation | Action |
-|-----------|--------|
+| --------- | ------ |
 | VM is powered off | `hcloud server poweron pc1` |
 | VM running but SSH unreachable | `hcloud server reboot pc1` |
 | VM completely unresponsive | `hcloud server reset pc1` |
@@ -390,7 +390,7 @@ hcloud server describe pc1 -o json | jq '.labels'
 ## Troubleshooting Quick Reference
 
 | Problem | Quick Fix |
-|---------|-----------|
+| ------- | --------- |
 | Provisioning fails | Delete VMs, trigger CI: `gh workflow run integration-tests.yml` |
 | Lock stuck | `hcloud server remove-label pc1 lock_holder lock_acquired` |
 | VM unreachable | `hcloud server reboot pc1` |
@@ -406,7 +406,7 @@ hcloud server describe pc1 -o json | jq '.labels'
 ### Required for Integration Tests
 
 | Variable | Description | Default |
-|----------|-------------|---------|
+| -------- | ----------- | ------- |
 | `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM IP address or hostname | - |
 | `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM IP address or hostname | - |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
@@ -429,7 +429,7 @@ export PC_SWITCHER_TEST_USER="testuser"
 ## Maintenance Schedule
 
 | Frequency | Task |
-|-----------|------|
+| --------- | ---- |
 | **Daily** | Monitor GitHub Actions workflow runs (automated VM updates run at 2am UTC) |
 | **Weekly** | Review Hetzner Cloud costs; check for stuck locks if tests failing |
 | **Monthly** | Validate VM baseline snapshots are healthy; update hcloud CLI if needed |
@@ -440,7 +440,7 @@ export PC_SWITCHER_TEST_USER="testuser"
 All infrastructure scripts are in `tests/integration/scripts/`:
 
 | Script | Purpose |
-|--------|---------|
+| ------ | ------- |
 | `provision-test-infra.sh` | Orchestrator (calls all other scripts) |
 | `reset-vm.sh` | Resets a VM to baseline via snapshot rollback |
 | `upgrade-vms.sh` | Upgrades VMs and updates baseline snapshots |
@@ -448,7 +448,7 @@ All infrastructure scripts are in `tests/integration/scripts/`:
 Internal scripts (`tests/integration/scripts/internal/`):
 
 | Script | Purpose |
-|--------|---------|
+| ------ | ------- |
 | `create-vm.sh` | Creates a single VM via hcloud CLI |
 | `configure-vm.sh` | Configures a single VM (user, SSH, services) |
 | `configure-hosts.sh` | Sets up inter-VM networking and SSH keys |

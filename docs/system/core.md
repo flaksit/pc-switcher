@@ -675,6 +675,61 @@ Lineage: 001-core Key Entities, 003-core-tests Key Entities
 - **CORE-SC-TEST-INT-SPEED**: Integration tests complete full VM-based testing in under 15 minutes
   Lineage: 003-SC-008
 
+## Package Sync Subsystem
+
+**Domain Code**: `PKG` (Package Management Sync, Phase 2)
+
+Four `SyncJob`s — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` — replicate installed software rather than user data (see [Package Sync Subsystem](architecture.md#package-sync-subsystem) in the architecture doc for the per-job plan/review/apply pipeline). They subclass `PackageSyncJob` (`src/pcswitcher/jobs/packages/sync_core.py`), the shared core described below; the four job modules stay directly in `jobs/` because job discovery resolves a `sync_jobs` key to `jobs/<name>.py`, while the shared helpers live in the `jobs/packages/` package (`items.py`, `review.py`, `state.py`, `sync_core.py`).
+
+### Shared core contract (`PackageSyncJob`)
+
+`PackageSyncJob` is an abstract `SyncJob` every package-manager job subclasses. It declares three abstract hooks a concrete job implements:
+
+- `capture_source_items()` — read this manager's manifest from the source. Read-only.
+- `query_target_items()` — read this manager's current state from the target. Read-only.
+- `converge(diff)` — apply one approved diff on the target. May raise `ConvergeItemFailed` to refuse an item without attempting its mutating command (e.g. a transaction-safety guard), or return a `CommandResult` whose non-zero exit code is treated as a per-item failure the same way.
+
+In return, the base class guarantees:
+
+- **Planning is read-only.** `plan()` issues only read commands on both machines; nothing may mutate either machine until a review has been accepted.
+- **Each job's review precedes its own changes.** A job's `execute()` runs its own plan, review and apply in order and applies nothing before its own review returns — a structural property of the single `execute()`, not a convention, and not owned by any outside component.
+- **Per-item continue-on-failure.** `apply()` attempts every approved diff, collects failures rather than stopping at the first one, and raises once at the end (`PackageItemFailures`) naming every item that failed, so one bad item never blocks the rest of the same job's approved work.
+- **Dry-run.** `--dry-run` produces the same plan and review as a real run but issues zero mutating commands (ADR-014).
+- **FULL/INFO logging split.** Per-item convergence detail logs at `FULL`; per-job summaries (counts, overall result) log at `INFO` — the same split `folder_sync` already follows.
+
+A job whose convergence semantics don't fit the shared `plan()` (apt-package-shaped diffing, one item class) overrides `plan()` entirely while still reusing the manager-agnostic pieces (`DecisionFile`/`filter_inert` for machine-specific items, `_build_review_groups` for the review presentation). `snap_sync` and `flatpak_sync` both do this; `apt_sync` calls the base `plan()` and extends it, since apt packages genuinely are the shape the base pipeline expects.
+
+### `apt_sync`
+
+- **Responsibilities**: the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target), plus the repository state that governs where packages come from: sources (`/etc/apt/sources.list.d`), signing keys (`/etc/apt/keyrings`, legacy `/etc/apt/trusted.gpg.d`), pins (`/etc/apt/preferences.d`) and apt config (`/etc/apt/apt.conf.d`). Also detects unreproducible items: apt packages with no repository candidate, and unowned installs under `/usr/local`/`/opt`.
+- **`validate()` checks**: `apt-mark` availability on both source and target; passwordless sudo on the source (needed to read `/etc/apt` state — the source is read-only but the read itself needs root) and on the target (needed to install packages and write `/etc/apt` state); the dpkg frontend lock is free on the target (a held lock, e.g. from `unattended-upgrades`, is reported rather than raced against).
+- **Item classes**: `APT_PACKAGE`, `APT_SOURCE`, `APT_KEY`, `APT_PIN`, `APT_CONFIG`, plus `UNREPRODUCIBLE` for items neither apt nor any package owns.
+- **Convergence verbs**: `apt-get install`/`apt-get remove` for packages (never `purge`), each preceded by an `apt-get -s` transaction simulation that refuses the real command if it would touch an unapproved package; `sudo install` (staged under the target's own `~/.cache/pc-switcher/`, never a direct SFTP write into `/etc`) for repository/key/pin/config files, followed by a single `apt-get update` and a full rollback of the whole repository-file group if that update fails; a snippet replay (see the data model doc) for a resolved unreproducible item.
+- **First-sync scope** (ADR-015): "apt packages (manually-installed set)", via `apt-get install/remove per item, after review`.
+
+### `snap_sync`
+
+- **Responsibilities**: installed snaps, converged to the source's exact revision and tracking channel (never held).
+- **`validate()` checks**: `snap version` on both source and target; passwordless sudo on the target; a read-only `snap get system refresh.hold` probe on both machines, logged as context only — never acted on.
+- **Item classes**: `SNAP` for every install/change/removal diff, including a channel-only retrack — `SNAP_CHANNEL` exists in the item-class enum but `snap_sync` does not use it for a diff's `item_class`, since a review group derives one action verb from its first entry's class and mixing `SNAP`/`SNAP_CHANNEL` diffs under one `CHANGE` group risked the wrong verb; the diff's `detail` text still names the specific revisions or channels involved.
+- **Convergence verbs**: `snap install --revision=N`/`snap refresh --revision=N` (always with an explicit revision, never a bare `snap refresh`), a `snap switch --channel` after every install and whenever the channel differs, `snap remove` (never `--purge`, preserving snapd's own pre-removal snapshot) — no command in this job ever sets a hold.
+- **First-sync scope**: "installed snaps (name, channel, revision)", via `snap install/refresh/remove per item, after review`.
+
+### `flatpak_sync`
+
+- **Responsibilities**: installed flatpak refs and their remotes, per user/system installation scope. Scope is folded into item identity, so the same application installed in both scopes on different machines produces an independent install plus an independent removal, never a single "change".
+- **`validate()` checks**: `flatpak --version` on both source and target (a missing binary is a clean validation error, not an exception — flatpak ships in no default Ubuntu 24.04 install); passwordless sudo on the target, but **only** when a system-scope ref or remote is actually in play on either machine — a user-scope-only sync never has to ask for root.
+- **Item classes**: `FLATPAK_REF`, `FLATPAK_REMOTE`.
+- **Convergence verbs**: `flatpak remote-add --if-not-exists`/`flatpak remote-delete` for remotes, always before the ref installs that depend on them; `flatpak install -y`/`flatpak uninstall -y` for refs, each prefixed with `sudo` if and only if the item's own scope is `system`. A ref whose origin remote is neither already on the target nor among this run's own successfully-added remotes is refused with a per-item failure naming the missing remote, rather than issuing an install flatpak would reject.
+- **First-sync scope**: "installed flatpak refs (per user/system scope)" and "configured flatpak remotes (per scope)", via `flatpak install/uninstall/remote-add per item, after review`.
+
+### `manual_installs_sync`
+
+- **Responsibilities**: everything no package manager can reproduce — apt packages with no repository candidate and unowned installs under `/usr/local`/`/opt` — plus the install-snippet registry. It runs its own `dpkg-query` and `apt-cache policy` queries rather than sharing `apt_sync`'s, so ownership stays clean, and it carries its own `sync_jobs` enable flag so disabling `apt_sync` never silently disables manual-install detection.
+- **Item classes**: `UNREPRODUCIBLE` for the detected items.
+- **Resolution**: an unreproducible item ends a run resolved by a snippet, a machine-specific mark, or a deliberate skip-once — skip-once is a valid resolution, not an unresolved state. A non-interactive run records nothing and does not fail on undecided items alone (D-21/D-26).
+- **Snippet transport**: after its own review, the job pushes the registry (`~/.config/pc-switcher/package-snippets.yaml`) to the target itself with `send_file()`, so a snippet authored on the fly during that review reaches the target in the same run. The registry never travels via `config_sync` (which runs before any review) or `folder_sync` (a user-controlled job).
+
 ## Assumptions
 
 Lineage: 001-core Assumptions, 003-core-tests Assumptions

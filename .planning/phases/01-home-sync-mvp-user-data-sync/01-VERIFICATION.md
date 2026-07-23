@@ -97,7 +97,7 @@ human_verification:
 ### What This Round Fixed (Code-Verified)
 
 | Gap | Plan/Finding | Root Cause | Fix | Verification |
-|---|---|---|---|---|
+| - | - | - | - |---|
 | UAT gap 1 | 01-15 | Orchestrator's first-sync warning read `folder_sync`'s config dict and hardcoded `rsync --delete` | `FirstSyncScope` contract + `SyncJob.describe_first_sync_scope()` hook; orchestrator composes the warning from job self-descriptions | `grep -nE 'folder_sync\|rsync --delete' src/pcswitcher/orchestrator.py` empty; 3 new unit tests incl. a hermetic non-rsync stub job (extensibility) |
 | UAT gap 2 | 01-16 | Declined confirmation raised a plain `RuntimeError` caught by the generic `except Exception` -> logged CRITICAL, re-raised, printed again by the CLI | `SyncAbortedByUser` exception + `SessionStatus.ABORTED`; caught before the generic handler in both `run()` and `_async_run_sync`; logs once at WARNING, prints once (calm, yellow) | Read `orchestrator.py:343-351`, `cli.py:350-355`; unit tests assert WARNING-not-CRITICAL and single "aborted"-not-"failed" message |
 | UAT gap 3 | 01-17 | `TerminalUI.start()` always built a new `Live`; `Confirmer`/`config_sync` called `stop()`+`start()` around every prompt | Single persistent `Live` with `pause()`/`resume()`; `resume()` forces an immediate redraw | Read `ui.py:123-168`; unit tests prove same-instance reuse across pause/resume and a forced redraw with no intervening sleep |
@@ -113,7 +113,7 @@ human_verification:
 ### Observable Truths
 
 | # | Truth | Status | Evidence |
-|---|---|---|---|
+| - | - | - | - |
 | G1 | First-sync warning is assembled from each in-scope `SyncJob`'s self-description; orchestrator names no job/transport mechanism directly (01-15) | VERIFIED | `grep -nE 'folder_sync\|rsync --delete' src/pcswitcher/orchestrator.py` empty; `_first_sync_scopes()`/`_confirm_first_sync()` at orchestrator.py:497-570 compose from `FirstSyncScope` objects |
 | G2 | A future non-rsync job's `FirstSyncScope` flows through the composed warning with zero orchestrator change (extensibility) | VERIFIED | `tests/unit/orchestrator/test_first_sync_scope.py::TestFirstSyncScopesExtensibility::test_stub_non_rsync_job_surfaces_in_warning` passes |
 | G3 | Generic fallback phrasing ("all data configured for sync") used when no enabled job describes a scope, naming no transport | VERIFIED | orchestrator.py:543-544; `TestFirstSyncScopesEmptyFallback` passes |
@@ -142,7 +142,7 @@ human_verification:
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
-|---|---|---|---|
+| - | - | - | - |
 | `src/pcswitcher/models.py` | `FirstSyncScope`, `SyncAbortedByUser`, `SessionStatus.ABORTED` | VERIFIED | All three present, exported in `__all__` (lines 11-27, 125-153, 227-234) |
 | `src/pcswitcher/jobs/base.py` | `SyncJob.describe_first_sync_scope()` classmethod, defaults `None` | VERIFIED | jobs/base.py:172-195 |
 | `src/pcswitcher/jobs/folder_sync.py` | `describe_first_sync_scope()` override, `@override` decorated | VERIFIED | jobs/folder_sync.py:133-155; returns `None` for empty/disabled config, scope for enabled folders |
@@ -160,7 +160,7 @@ human_verification:
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
-|---|---|---|---|---|
+| - | - | - | - |---|
 | `orchestrator._first_sync_scopes()` | `SyncJob.describe_first_sync_scope()` | `_resolve_sync_job_class()` dynamic import + class scan, per enabled job in config order | VERIFIED | orchestrator.py:497-516 |
 | `orchestrator._execute_jobs` job-level `SyncAbortedByUser` | `run()`'s WARNING/ABORTED handler | `except SyncAbortedByUser: raise` before generic `except Exception` | VERIFIED (code) | orchestrator.py:934-941; **no runtime test** — latent path, no current job raises this |
 | `orchestrator.run() except SyncAbortedByUser` | `cli._async_run_sync except SyncAbortedByUser` | re-raise propagates through `main_task` await | VERIFIED | orchestrator.py:343-351 -> cli.py:350-355; `TestSyncAbortedByUserHandling` passes |
@@ -172,7 +172,7 @@ human_verification:
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
-|---|---|---|---|
+| - | - | - | - |
 | Full unit suite | `uv run pytest tests/unit tests/contract -q` | 537 passed, 0 failed | PASS |
 | Lint | `uv run ruff check .` | All checks passed | PASS |
 | Format | `uv run ruff format --check .` | 85 files already formatted | PASS |
@@ -187,7 +187,7 @@ human_verification:
 ### Requirements Coverage
 
 | Requirement | Source Plans | Description | Status | Evidence |
-|---|---|---|---|---|
+| - | - | - | - |---|
 | REQ-sync-scope-user-data | 01-14, unaffected by 01-15..18 | Sync `/home` + `/root` via generic per-folder mechanism | VERIFIED (mechanism, unchanged) | rsync mirror + `describe_first_sync_scope` additions don't touch transfer logic; behavioral proof still via VMs (SC1) |
 | REQ-machine-specific-exclusions | 01-14, unaffected | Never sync `.ssh/id_*`, tailscale, GPU/fontconfig caches | VERIFIED (mechanism, unchanged) | Unaffected by this round; behavioral proof via VMs (SC3) |
 | REQ-sync-scope-file-metadata | 01-14, unaffected | Preserve owner/group/permissions/ACLs/timestamps | VERIFIED (mechanism, unchanged) | Unaffected; behavioral proof via VMs (SC2) |
@@ -199,7 +199,7 @@ No orphaned requirements — all 5 IDs declared across the phase's plans match R
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
-|---|---|---|---|---|
+| - | - | - | - |---|
 | `src/pcswitcher/orchestrator.py` | 190 | `config={},  # TODO: Add config snapshot` | INFO (pre-existing, unrelated) | Introduced by plan 01-03, carried forward from the prior VERIFICATION.md; unrelated to this round's gap closure |
 | `src/pcswitcher/orchestrator.py` | 934-941 | WR-01 fix (`except SyncAbortedByUser: raise` in `_execute_jobs`) has no automated test and no current caller | INFO | Defensive fix for a latent path; verified by reading only. Documented as such in 01-REVIEW-FIX.md itself. Not a blocker — no job today raises `SyncAbortedByUser` from inside `execute()`, so there is nothing to exercise yet |
 

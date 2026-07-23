@@ -89,19 +89,67 @@ Plans:
 **Goal**: A user can replicate installed packages from source to target across all package sources, with conflicts and version mismatches detected and reported rather than silently overwritten.
 **Depends on**: Phase 1
 **Requirements**: REQ-sync-scope-packages, REQ-conflict-detection-no-resolution
+**Scope note**: `/etc/apt` repository, keyring, pin, and apt-config state is Phase 2 territory (moved from Phase 3). Package data under `~/.var/app`, `~/snap/<app>/common`, and dotfiles stays Phase 1 `folder_sync` territory.
 **Success Criteria** (what must be TRUE):
 
   1. After sync, the target has the same apt, snap, and flatpak packages installed as the source (verifiable by querying each package manager).
   2. Manually-installed .debs, custom PPAs, and install-script-sourced packages are reproduced on the target.
   3. Package conflicts and version mismatches between source and target are detected and reported before any destructive change; machine-specific packages are not forced onto the target.
 
-**Plans**: TBD
+**Plans**: 20/21 plans executed
+
+Plans:
+**Wave 1**
+
+- [x] 02-01-PLAN.md — ADR-020 (declarative package convergence) + `/etc/apt` scope boundary move into Phase 2
+- [x] 02-02-PLAN.md — `questionary` legitimacy checkpoint + batched-review primitive composed with the paused Live display
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [x] 02-03-PLAN.md — TRACER: end-to-end apt-package install slice (capture → plan → review → apply) + the package-phase coordinator that gives every manager one batched review
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [x] 02-05-PLAN.md — full diff-class taxonomy (removals, version mismatch, held/pinned, repo-unavailable) + `dpkg --compare-versions` + apt transaction simulation + the shared snap/flatpak/unreproducible item shapes
+- [x] 02-13-PLAN.md — VM integration proof of the tracer path (install + dry-run)
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [x] 02-04-PLAN.md — machine-local decision files, skip-always in both roles, non-overridable folder_sync exclusion
+- [x] 02-06-PLAN.md — apt repository state as items: sources, keyrings, legacy trust keys, pins, apt config, in apt's required order, with staged privileged writes and transactional rollback
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [x] 02-07-PLAN.md — unreproducible-item detection + snippet registry + on-the-fly snippet capture in the review
+- [x] 02-08-PLAN.md — `snap_sync`: header-based capture, revision convergence without a hold, path export
+- [x] 02-09-PLAN.md — `flatpak_sync`: scoped refs, per-scope remotes provisioned first, path export
+
+**Wave 6** *(blocked on Wave 5)*
+
+- [x] 02-10-PLAN.md — config registration, package-jobs-before-folder_sync ordering, automatic mirror exclusions
+
+**Wave 7** *(blocked on Wave 6)*
+
+- [x] 02-11-PLAN.md — VM integration tests for the whole-run contracts + validation record
+- [x] 02-12-PLAN.md — user + living-spec documentation and end-to-end human verification
+
+**Delta Replan** *(decision corrections after the executed phase was reviewed; the 13 shipped plans stand untouched)*
+
+- [x] 02-14-PLAN.md — rewrite ADR-020 to the corrected per-manager, four-job, self-pushed-snippet design [wave 1]
+- [x] 02-15-PLAN.md — remove the cross-manager coordinator; each package job reviews and applies inside its own execute() (D-24) [wave 1]
+- [x] 02-16-PLAN.md — classify apt collateral: auto proceeds, manual becomes a reviewable install-anyway/skip/abort item at plan time (D-30) [wave 2]
+- [x] 02-17-PLAN.md — new manual_installs_sync job owning unreproducible detection + snippet registry; skip-once is a valid resolution (D-15/D-18/D-21) [wave 3]
+- [x] 02-18-PLAN.md — manual_installs_sync pushes package-snippets.yaml itself via send_file(); config_sync reverts to config.yaml only (D-23) [wave 4]
+- [x] 02-19-PLAN.md — move jobs/package_*.py into jobs/packages/; delete empty apt/snap/flatpak config sections (D-31/D-32) [wave 5]
+- [x] 02-20-PLAN.md — migrate job behaviour docs out of configuration.md; correct docs/system living specs (D-33) [wave 6]
+- [ ] 02-21-PLAN.md — rework VM integration for the new job/review shape; add apt-repository-state coverage closing broken-window #2 [wave 6]
 
 ### Phase 3: System & Application Configuration Sync
 
 **Goal**: A user can replicate machine-independent application and system configuration from source to target, with conflicting system changes detected.
 **Depends on**: Phase 2
 **Requirements**: REQ-sync-scope-app-and-system-config
+**Scope note**: The rest of `/etc` remains Phase 3 territory; `/etc/apt` is delivered in Phase 2.
 **Success Criteria** (what must be TRUE):
 
   1. After sync, GNOME desktop configuration, cloud mounts, and systemd service definitions on the target match the source.
@@ -168,9 +216,9 @@ Plans:
 Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
+| ----- | -------------- | ------ | --------- |
 | 1. Folder Sync MVP (User Data Sync) | 18/18 | Complete    | 2026-07-03 |
-| 2. Package Management Sync | 0/TBD | Not started | - |
+| 2. Package Management Sync | 20/21 | In Progress|  |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
 | 5. VM State Sync | 0/TBD | Not started | - |

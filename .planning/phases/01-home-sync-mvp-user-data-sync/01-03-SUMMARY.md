@@ -79,7 +79,7 @@ All plan verification commands green:
 ## Commits
 
 | Hash | Task | Description |
-|------|------|-------------|
+| ---- | ---- | ----------- |
 | bca397a | Task 1 | feat(01-03): plumb allow_divergence flag and dry-run sync-history guard |
 | bbfe702 | Task 2 | feat(01-03): add target_generations store with merge-preserving writes |
 

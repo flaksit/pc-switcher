@@ -30,7 +30,7 @@ markers = [
 ## Environment Variable Contract
 
 | Variable | Required For | Format |
-|----------|-------------|--------|
+| -------- | ----------- | ------ |
 | PC_SWITCHER_TEST_PC1_HOST | Integration tests | IPv4 address or hostname |
 | PC_SWITCHER_TEST_PC2_HOST | Integration tests | IPv4 address or hostname |
 | PC_SWITCHER_TEST_USER | Integration tests | Unix username (default: testuser) |
@@ -40,7 +40,7 @@ markers = [
 ## CI Secrets Contract
 
 | Secret | Required For | Description |
-|--------|-------------|-------------|
+| ------ | ----------- | ----------- |
 | HCLOUD_TOKEN | CI integration tests | Hetzner Cloud API token |
 | HETZNER_SSH_PRIVATE_KEY | CI integration tests | SSH private key for VM access |
 
@@ -50,7 +50,7 @@ The lock is stored as Hetzner Server Labels on the `pc1` server object, which su
 
 **Labels**:
 | Label | Value |
-|-------|-------|
+| ----- | ----- |
 | `lock_holder` | CI job ID or username |
 | `lock_acquired` | ISO 8601 datetime |
 

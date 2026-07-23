@@ -63,6 +63,24 @@ properties:
         type: boolean
         default: false
         description: "Test job that fails at configurable time"
+      # Jobs implemented in Phase 2 (package management sync, D-17: run before folder_sync
+      # so apps are provisioned before their data lands):
+      apt_sync:
+        type: boolean
+        default: false
+        description: "Install apt packages missing on the target, after a batched review (destructive; opt-in)"
+      snap_sync:
+        type: boolean
+        default: false
+        description: "Converge installed snaps to the source's revision/channel, after a batched review (destructive; opt-in)"
+      flatpak_sync:
+        type: boolean
+        default: false
+        description: "Converge installed flatpak refs and remotes, after a batched review (destructive; opt-in)"
+      manual_installs_sync:
+        type: boolean
+        default: false
+        description: "Detect and reproduce installs no package manager can (bare .debs, unowned /usr/local, /opt), after a batched review (destructive; opt-in)"
       # Jobs implemented in Phase 1:
       folder_sync:
         type: boolean
@@ -212,6 +230,11 @@ properties:
 
   # VscodeStateSyncJob has no configuration: the module hardcodes the editor list, DB
   # layout, and the preserved-key namespace (secret://). Enable/disable via sync_jobs.
+
+  # The apt_sync/snap_sync/flatpak_sync/manual_installs_sync jobs have no config section:
+  # they earn one only when they gain a real key (D-32). A config omitting them still
+  # validates, and config.py's get_job_config returns {} for an absent section, which each
+  # job's empty CONFIG_SCHEMA accepts. Enable/disable via sync_jobs only.
 
 # =============================================================================
 # DEVELOPER NOTE: Config Key Naming Convention

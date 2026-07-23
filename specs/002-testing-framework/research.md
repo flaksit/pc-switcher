@@ -245,7 +245,7 @@ This avoids over-complicating the provisioning workflow while ensuring test isol
 ### Lock Labels
 
 | Label | Value |
-|-------|-------|
+| ----- | ----- |
 | `lock_holder` | CI job ID or username |
 | `lock_acquired` | ISO 8601 timestamp |
 

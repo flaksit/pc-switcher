@@ -68,7 +68,7 @@ Current scope. Each item is a modular sync job built on the finished framework, 
 Locked architectural decisions are Accepted ADRs, immutable per ADR-001. They constrain all phases.
 
 | Decision | Source | Status |
-|----------|--------|--------|
+| -------- | ------ | ------ |
 | Immutable ADR process; `_index.md` is the entry point | ADR-001 | Locked |
 | SSH as source↔target channel — multiplexed ControlMaster, source orchestrates, target runs stateless scripts | ADR-002 | Locked |
 | Python 3.14 orchestrator via uv; bash for task-specific ops | ADR-003 | Locked |

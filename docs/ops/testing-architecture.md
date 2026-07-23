@@ -92,7 +92,7 @@ graph LR
 ### VM Specifications
 
 | Property | Value |
-|----------|-------|
+| -------- | ----- |
 | Provider | Hetzner Cloud |
 | Server Type | CX23 (2 vCPU, 4GB RAM) |
 | OS | Ubuntu 24.04 LTS |
@@ -156,7 +156,7 @@ Each VM has the following btrfs subvolume layout (flat layout):
 The baseline snapshots capture the following VM state (as configured during provisioning):
 
 | Component | State | Notes |
-|-----------|-------|-------|
+| --------- | ----- | ----- |
 | **OS** | Ubuntu 24.04 LTS | Installed via Hetzner `installimage` |
 | **Packages** | btrfs-progs, qemu-guest-agent, fail2ban, ufw, sudo | Basic system tools only |
 | **Filesystem** | btrfs with flat subvolume layout (`@`, `@home`, `@snapshots`) | Root mounted as `@`, home as `@home` |
@@ -202,7 +202,7 @@ This ensures test isolation without recreating VMs. The btrfs rollback is much f
 Integration test fixtures use module scope for performance:
 
 | Fixture | Purpose |
-|---------|---------|
+| ------- | ------- |
 | `pc1_connection` | SSH connection to pc1 |
 | `pc2_connection` | SSH connection to pc2 |
 | `pc1_executor` | Command executor for pc1 |
@@ -274,7 +274,7 @@ sequenceDiagram
 The repository uses three GitHub Actions workflows:
 
 | Workflow | File | Triggers | Purpose |
-|----------|------|----------|---------|
+| -------- | ---- | -------- | ------- |
 | CI | `ci.yml` | Every push | Lint (basedpyright, ruff, codespell) and unit tests |
 | Integration Tests | `integration-tests.yml` | PR ready for review | Full integration tests on Hetzner VMs |
 | VM Updates | `vm-updates.yml` | Daily (2am UTC) | Keep test VMs updated with OS patches |
@@ -298,7 +298,7 @@ Documentation-only changes skip integration tests, allowing quick merges.
 Integration tests are expensive (they use cloud VMs), so they don't run on every commit:
 
 | PR State | Integration Tests |
-|----------|-------------------|
+| -------- | ----------------- |
 | Draft PR | **Skipped** |
 | Marked "Ready for review" | **Runs** |
 | New commits to ready PR | **Runs** |
@@ -327,7 +327,7 @@ concurrency:
 ### Required Secrets
 
 | Secret | Description |
-|--------|-------------|
+| ------ | ----------- |
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
 | `HETZNER_SSH_PRIVATE_KEY` | SSH private key for CI VM access |
 | `SSH_AUTHORIZED_KEY_CI` | CI public key for VM access |
@@ -338,7 +338,7 @@ concurrency:
 ### Test Configuration
 
 | Variable | Description | Default |
-|----------|-------------|---------|
+| -------- | ----------- | ------- |
 | `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM hostname/IP | `pc1` |
 | `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM hostname/IP | `pc2` |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
@@ -417,7 +417,7 @@ flowchart TD
 ### Provisioning Scripts
 
 | Script | Description |
-|--------|-------------|
+| ------ | ----------- |
 | **provision-test-infra.sh** | Main orchestrator that coordinates all provisioning steps |
 | **create-vm.sh** | Creates VM with btrfs via Hetzner rescue mode and installimage |
 | **configure-vm.sh** | Configures OS with testuser account, packages, SSH hardening, firewall |
@@ -434,7 +434,7 @@ The infrastructure scripts use proper SSH host key verification. For each host, 
 3. **Subsequent connections**: Normal SSH (verify stored key)
 
 | Script | SSH Pattern | Notes |
-|--------|-------------|-------|
+| ------ | ----------- | ----- |
 | `create-vm.sh` | `wait_for_ssh` (phase) | 3 phase transitions |
 | `provision-test-infra.sh` | `ssh_first` (phase) | Parallel checks for both VMs |
 | `configure-vm.sh` | `ssh_run` only | Key established by create-vm.sh |
@@ -445,7 +445,7 @@ The infrastructure scripts use proper SSH host key verification. For each host, 
 The provisioning scripts above may legitimately encounter new or changed host keys (fresh VMs, reprovisioning), so they use `accept-new`. By the time `run-integration-tests.sh` runs its VM-readiness check, the VMs are already provisioned and their keys should already be trusted — so `check_vm_ready` uses `ssh_verified`, which **never** auto-accepts a new key. Its host-key policy depends on the execution context (`ssh_exec_context` in `common.sh`):
 
 | Context | Detection | Host-key policy |
-|---------|-----------|-----------------|
+| ------- | --------- | --------------- |
 | CI | `CI_JOB_ID` / `GITHUB_RUN_ID` set | `StrictHostKeyChecking=yes` + `BatchMode=yes`. known_hosts is pre-populated by the workflow (`ssh-keyscan`); a new or changed key is a hard failure. |
 | Non-interactive agent | `CLAUDECODE=1` | Same strict + batch policy. No TTY to prompt on, so an unknown key fails fast with an explicit, actionable error. |
 | Interactive developer | neither of the above | Default ssh (`StrictHostKeyChecking=ask`); prompts to accept an unknown key. |
@@ -453,7 +453,7 @@ The provisioning scripts above may legitimately encounter new or changed host ke
 ## Session-Scoped Fixtures
 
 | Fixture | Purpose |
-|---------|---------|
+| ------- | ------- |
 | `integration_lock` | Prevents concurrent test runs via Hetzner labels |
 | `integration_session` | VM provisioning and parallel reset to baseline |
 
@@ -462,7 +462,7 @@ The `integration_session` fixture resets both VMs in parallel using `ThreadPoolE
 ## Isolation Guarantees Summary
 
 | Isolation Level | Shared | Isolated |
-|-----------------|--------|----------|
+| --------------- | ------ | -------- |
 | Within same test file | SSH connection, executor, event loop | Test function state |
 | Between test files | Nothing | Everything (new event loop, new connections) |
 | Between test runs | Nothing | Everything (VMs reset to baseline) |

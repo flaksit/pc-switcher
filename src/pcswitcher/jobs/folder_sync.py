@@ -23,8 +23,12 @@ from typing import Any, ClassVar, override
 
 from pcswitcher.disk import format_bytes
 from pcswitcher.jobs.base import SyncJob
+from pcswitcher.jobs.flatpak_sync import flatpak_sync_exclude_paths
+from pcswitcher.jobs.packages.state import DECISION_FILE_GLOB_RELPATH
+from pcswitcher.jobs.snap_sync import snap_sync_exclude_paths
 from pcswitcher.jobs.vscode_state_sync import vscode_state_exclude_paths
 from pcswitcher.models import ConfigError, FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.sudoers import passwordless_sudo_hint
 
 # Matches rsync --info=progress2 output, e.g.:
 #   "9.53G 21% 317.26MB/s 0:00:28 (xfr#83063, to-chk=443926/538653)"
@@ -89,15 +93,37 @@ def _pass_display(path: str, label: str) -> str:
 # while --delete-mirroring the uv interpreter tree it depends on deleted the in-use
 # interpreter and broke pc-switcher on the target.
 #
-# Two GLOBAL-FIRST, non-overridable exclude groups exist, both owned elsewhere or here
-# and both emitted before the user filter surfaces so no `+` rule can re-expose them:
+# Five GLOBAL-FIRST, non-overridable exclude groups exist, each owned elsewhere or
+# here and all emitted before the user filter surfaces so no `+` rule can re-expose them:
 #   1. this runtime-state relpath (below), home-relative and folder_sync's own concern;
 #   2. the VS Code state DBs (VS Code and its forks), whose ABSOLUTE paths are owned and
 #      computed by vscode_state_sync (which merges them selectively so machine-bound
 #      secret:// rows are never clobbered, ADR-018). folder_sync knows nothing about VS Code
 #      or home layout — it just translates each absolute path from vscode_state_exclude_paths()
 #      into an rsync filter for the folder being synced (see _vscode_state_exclude_filters).
+#   3. every manager's machine-local decision file (`~/.config/pc-switcher/*.decisions.yaml`),
+#      whose home-relative GLOB is owned by packages.state (D-08/D-09). A decision file states
+#      what ONE machine considers machine-specific; mirroring it would silently impose that
+#      machine's hardware exclusions on a peer. Unconditional — never gated on any package job
+#      being enabled, since a decision file must never travel even on a run where the package
+#      jobs happen to be off (see _decision_file_exclude_filters).
+#   4. the `~/snap/<app>/<revision>` directories snap_sync owns (D-29), translated from
+#      snap_sync_exclude_paths() the same way (see _snap_sync_exclude_filters) — but UNLIKE
+#      groups 2-3, gated on sync_jobs.snap_sync being enabled: a disabled snap_sync means
+#      nobody is managing those paths, and excluding them anyway would strand that data
+#      unmirrored rather than protect it.
+#   5. `~/.local/share/flatpak`, which flatpak_sync owns (D-29), translated from
+#      flatpak_sync_exclude_paths() the same way (see _flatpak_sync_exclude_filters) —
+#      gated on sync_jobs.flatpak_sync for the identical reason group 4 is.
+# The rule the asymmetry follows: the VS Code exclusion is unconditional because
+# vscode_state_sync MERGES those DBs and must always hide them from the mirror; groups 4-5
+# are conditional because no such merge happens when their job is off, so hiding the path
+# would just make the data invisible to every sync mechanism at once.
 # Every OTHER exclusion is user-configurable.
+# The binary this job escalates for (ADR-013). A lower bound on what the sudoers
+# entry must permit, not an exact scope — a broader existing grant is fine.
+_RSYNC_SUDO_COMMANDS = ("/usr/bin/rsync",)
+
 _RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
     ".local/share/pc-switcher",  # lock, sync-history.json, logs/
 )
@@ -302,7 +328,8 @@ class FolderSyncJob(SyncJob):
             errors.append(
                 self._validation_error(
                     Host.SOURCE,
-                    "sudo rsync is not available on source (required for metadata-preserving transfer)",
+                    "sudo rsync is not available on source (required for metadata-preserving transfer).\n"
+                    + passwordless_sudo_hint(_RSYNC_SUDO_COMMANDS),
                 )
             )
 
@@ -311,7 +338,8 @@ class FolderSyncJob(SyncJob):
             errors.append(
                 self._validation_error(
                     Host.TARGET,
-                    "sudo rsync is not available on target (required for metadata-preserving transfer)",
+                    "sudo rsync is not available on target (required for metadata-preserving transfer).\n"
+                    + passwordless_sudo_hint(_RSYNC_SUDO_COMMANDS, user=self.context.target_username),
                 )
             )
 
@@ -406,6 +434,97 @@ class FolderSyncJob(SyncJob):
                 continue  # DB not under this folder — nothing to exclude here.
             filters.append(f"--filter={shlex.quote(f'- /{rel}')}")
         return filters
+
+    @staticmethod
+    def _decision_file_exclude_filters(folder_path: str) -> list[str]:
+        """rsync `--filter` arg excluding every manager's machine-local decision file
+        that falls under `folder_path` (D-08, D-09).
+
+        The home-relative GLOB (covers every `<manager>.decisions.yaml`, one filter
+        for all of them) comes from `packages.state.DECISION_FILE_GLOB_RELPATH` —
+        `packages.state` owns which files are decision files; folder_sync only resolves
+        it against `Path.home()`, takes it relative to the transfer root, and translates
+        it into a root-anchored, first-match rsync exclude — the same one-way ownership
+        `_vscode_state_exclude_filters` follows for `vscode_state_sync`. A path outside
+        `folder_path` (e.g. syncing `/root` while the invoking user's home is
+        `/home/<user>`) is skipped, matching that method's out-of-root behavior.
+
+        Deliberately unconditional: NOT gated on any package job being enabled. A
+        decision file states what this machine considers machine-specific; mirroring it
+        would silently impose that on a peer even on a run where the package jobs
+        happen to be off — toggling a job must never be what makes this exclusion
+        disappear.
+        """
+        root = Path(folder_path.rstrip("/") or "/")
+        abs_glob = Path.home() / DECISION_FILE_GLOB_RELPATH
+        try:
+            rel = abs_glob.relative_to(root)
+        except ValueError:
+            return []
+        return [f"--filter={shlex.quote(f'- /{rel}')}"]
+
+    @staticmethod
+    def _snap_sync_exclude_filters(folder_path: str) -> list[str]:
+        """rsync `--filter` args excluding the `~/snap/<app>/<revision>` directories
+        that fall under `folder_path` (D-29).
+
+        The absolute paths come from `snap_sync_exclude_paths()` — `snap_sync` owns
+        which revision directories to exclude; folder_sync only translates each
+        absolute path into a root-anchored, first-match exclude relative to the
+        transfer root, exactly as `_vscode_state_exclude_filters` does for the VS Code
+        DBs. A path outside `folder_path` is skipped.
+
+        The CALLER gates this on `sync_jobs.snap_sync` being enabled (see the
+        GLOBAL-FIRST module comment above `_RSYNC_SUDO_COMMANDS`) — this method itself
+        emits unconditionally whatever `snap_sync_exclude_paths()` currently returns.
+        """
+        root = Path(folder_path.rstrip("/") or "/")
+        filters: list[str] = []
+        for abs_path in snap_sync_exclude_paths():
+            try:
+                rel = abs_path.relative_to(root)
+            except ValueError:
+                continue  # revision dir not under this folder — nothing to exclude here.
+            filters.append(f"--filter={shlex.quote(f'- /{rel}')}")
+        return filters
+
+    @staticmethod
+    def _flatpak_sync_exclude_filters(folder_path: str) -> list[str]:
+        """rsync `--filter` arg excluding `~/.local/share/flatpak` when it falls under
+        `folder_path` (D-29).
+
+        The absolute path comes from `flatpak_sync_exclude_paths()` — `flatpak_sync`
+        owns it; folder_sync only translates it into a root-anchored, first-match
+        exclude relative to the transfer root, exactly as `_vscode_state_exclude_filters`
+        does for the VS Code DBs. A path outside `folder_path` is skipped.
+
+        The CALLER gates this on `sync_jobs.flatpak_sync` being enabled (see the
+        GLOBAL-FIRST module comment above `_RSYNC_SUDO_COMMANDS`) — this method itself
+        emits unconditionally whatever `flatpak_sync_exclude_paths()` currently returns.
+        """
+        root = Path(folder_path.rstrip("/") or "/")
+        filters: list[str] = []
+        for abs_path in flatpak_sync_exclude_paths():
+            try:
+                rel = abs_path.relative_to(root)
+            except ValueError:
+                continue  # flatpak data dir not under this folder — nothing to exclude here.
+            filters.append(f"--filter={shlex.quote(f'- /{rel}')}")
+        return filters
+
+    def _package_job_enabled(self, job_name: str) -> bool:
+        """Whether the sibling package-sync job `job_name` is enabled in this run.
+
+        Reads `self.context.enabled_sync_jobs` — the full sync_jobs enablement map the
+        orchestrator populates for every job (see `JobContext.enabled_sync_jobs`) —
+        NEVER `self.context.config`, which is folder_sync's OWN validated config
+        section (`self.context.config["folders"]`) and has never carried sibling job
+        state. `enabled_sync_jobs` is `None` when no sibling information is available
+        (e.g. the lightweight `JobContext` constructions many existing unit tests use),
+        which this treats as "not enabled" — reproducing today's behavior of emitting
+        no package-job exclusion.
+        """
+        return (self.context.enabled_sync_jobs or {}).get(job_name, False)
 
     def _transport_args(self) -> list[str]:
         """Build the rsync `-e <ssh>` transport and `--rsync-path='sudo rsync'` args.
@@ -539,15 +658,22 @@ class FolderSyncJob(SyncJob):
         parts.extend(self._transport_args())
 
         # GLOBAL-FIRST filter precedence: the un-overridable excludes come first —
-        # pc-switcher's runtime state (ADR-017) followed by the VS Code state DBs
-        # (ADR-018); the folder's central `merge` filter (when configured) comes
-        # next so its rules win over any per-directory file under first-match-wins;
-        # the tree-wide `dir-merge /.pcswitcher-filter` is always last and gives
-        # users a per-directory (gitignore-like) authoring surface. DO NOT add
-        # --delete-excluded — excluded files (e.g. .ssh/id_*, .config/tailscale)
-        # must survive on the target (D-06).
+        # pc-switcher's runtime state (ADR-017), the VS Code state DBs (ADR-018),
+        # every manager's machine-local decision file (D-08/D-09), then — only when
+        # the owning job is enabled — the snap revision dirs and the flatpak data dir
+        # (D-29); the folder's central `merge` filter (when configured) comes next so
+        # its rules win over any per-directory file under first-match-wins; the
+        # tree-wide `dir-merge /.pcswitcher-filter` is always last and gives users a
+        # per-directory (gitignore-like) authoring surface. DO NOT add
+        # --delete-excluded — excluded files (e.g. .ssh/id_*, .config/tailscale) must
+        # survive on the target (D-06).
         parts.extend(self._runtime_exclude_filters(folder.path))
         parts.extend(self._vscode_state_exclude_filters(folder.path))
+        parts.extend(self._decision_file_exclude_filters(folder.path))
+        if self._package_job_enabled("snap_sync"):
+            parts.extend(self._snap_sync_exclude_filters(folder.path))
+        if self._package_job_enabled("flatpak_sync"):
+            parts.extend(self._flatpak_sync_exclude_filters(folder.path))
 
         expanded_filter_file = folder.expanded_filter_file()
         if expanded_filter_file is not None:

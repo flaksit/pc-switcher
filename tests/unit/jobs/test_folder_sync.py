@@ -57,6 +57,7 @@ def make_context(
     config: dict[str, Any] | None = None,
     dry_run: bool = False,
     target_username: str | None = None,
+    enabled_sync_jobs: dict[str, bool] | None = None,
 ) -> JobContext:
     """Create a JobContext with mocked source/target executors."""
     source = MagicMock()
@@ -73,6 +74,7 @@ def make_context(
         target_hostname="target-host",
         dry_run=dry_run,
         target_username=target_username,
+        enabled_sync_jobs=enabled_sync_jobs,
     )
 
 
@@ -655,6 +657,176 @@ class TestVscodeStateExcludeFilters:
             assert backup in cmd
             assert cmd.index(main) < cmd.index("merge /abs/home.filter")
             assert cmd.index(backup) < cmd.index("merge /abs/home.filter")
+
+
+class TestDecisionFileExcludeFilters:
+    """Every manager's machine-local decision file (`~/.config/pc-switcher/*.decisions.yaml`)
+    is excluded from the mirror via a home-relative GLOB that `packages.state` owns;
+    folder_sync only translates it into a root-anchored, first-match filter for the
+    folder being synced (D-08, D-09). Unconditional — not gated on any package job.
+    """
+
+    def _filters(self, folder_path: str, home: str) -> list[str]:
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path(home)):
+            return FolderSyncJob._decision_file_exclude_filters(folder_path)  # pyright: ignore[reportPrivateUsage]
+
+    def test_home_under_synced_folder_anchors_the_glob_under_user_subdir(self) -> None:
+        assert self._filters("/home", "/home/alice") == [
+            f"--filter={shlex.quote('- /alice/.config/pc-switcher/*.decisions.yaml')}"
+        ]
+
+    def test_glob_outside_synced_folder_is_skipped(self) -> None:
+        """Syncing /root while the invoking user's home is /home/alice excludes nothing."""
+        assert self._filters("/root", "/home/alice") == []
+
+    def test_root_invoker_excludes_under_root(self) -> None:
+        assert self._filters("/root", "/root") == [
+            f"--filter={shlex.quote('- /.config/pc-switcher/*.decisions.yaml')}"
+        ]
+
+    def test_decision_file_exclude_precedes_merge_filter(self) -> None:
+        """Emitted GLOBAL-FIRST, before the folder's central merge filter (first-match-wins)."""
+        ctx = make_context(config={"folders": [{"path": "/home"}]}, target_username="testuser")
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path="/home", filter_file="/abs/home.filter")
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path("/home/alice")):
+            cmd = job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
+        assert cmd.index(".config/pc-switcher/*.decisions.yaml") < cmd.index("merge /abs/home.filter")
+
+    def test_user_plus_rule_for_decision_file_does_not_change_command_ordering(self) -> None:
+        """A `+` rule in the user's filter_file cannot re-expose the decision file: the
+        GLOBAL-FIRST exclude is already emitted before that filter file is ever merged,
+        so rsync's first-match-wins semantics keep it excluded regardless of the
+        filter_file's own contents (which this unit test does not need to read)."""
+        ctx = make_context(config={"folders": [{"path": "/home"}]}, target_username="testuser")
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path="/home", filter_file="/abs/home-with-plus-rule.filter")
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path("/home/alice")):
+            cmd = job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
+        decision_exclude = f"--filter={shlex.quote('- /alice/.config/pc-switcher/*.decisions.yaml')}"
+        assert decision_exclude in cmd
+        assert cmd.index(decision_exclude) < cmd.index("merge /abs/home-with-plus-rule.filter")
+
+    def test_unconditional_regardless_of_which_folder_is_synced(self) -> None:
+        """Not gated on any package job's enable flag — present for /root too when the
+        invoking user's home is under it."""
+        assert self._filters("/root", "/root") != []
+
+
+class TestSnapSyncExcludeFilters:
+    """The `~/snap/<app>/<revision>` directories `snap_sync` owns are excluded via
+    absolute paths that module owns; folder_sync only translates each into a
+    root-anchored, first-match filter for the folder being synced (D-29). Gating on
+    `snap_sync` being enabled happens at the `_build_rsync_cmd` call site, not here —
+    see `TestPackageJobExcludeFiltersGating`.
+    """
+
+    def test_revision_dir_included_common_and_current_excluded(self, tmp_path: Path) -> None:
+        home = tmp_path / "alice"
+        firefox_dir = home / "snap" / "firefox"
+        revision_dir = firefox_dir / "2938"
+        common_dir = firefox_dir / "common"
+        revision_dir.mkdir(parents=True)
+        common_dir.mkdir(parents=True)
+        (firefox_dir / "current").symlink_to(revision_dir, target_is_directory=True)
+
+        with patch("pcswitcher.jobs.snap_sync.Path.home", return_value=home):
+            filters = FolderSyncJob._snap_sync_exclude_filters(str(tmp_path))  # pyright: ignore[reportPrivateUsage]
+
+        assert filters == [f"--filter={shlex.quote('- /alice/snap/firefox/2938')}"]
+
+    def test_no_snap_directory_yields_no_filters(self, tmp_path: Path) -> None:
+        with patch("pcswitcher.jobs.snap_sync.Path.home", return_value=tmp_path / "alice"):
+            filters = FolderSyncJob._snap_sync_exclude_filters(str(tmp_path))  # pyright: ignore[reportPrivateUsage]
+        assert filters == []
+
+    def test_revision_dir_outside_synced_folder_is_skipped(self, tmp_path: Path) -> None:
+        """Syncing /root while the invoking user's home is elsewhere excludes nothing."""
+        home = tmp_path / "alice"
+        (home / "snap" / "firefox" / "2938").mkdir(parents=True)
+        with patch("pcswitcher.jobs.snap_sync.Path.home", return_value=home):
+            filters = FolderSyncJob._snap_sync_exclude_filters("/root")  # pyright: ignore[reportPrivateUsage]
+        assert filters == []
+
+
+class TestFlatpakSyncExcludeFilters:
+    """`~/.local/share/flatpak`, which `flatpak_sync` owns, is excluded via the
+    absolute path that module owns; folder_sync only translates it into a
+    root-anchored, first-match filter for the folder being synced (D-29). Gating on
+    `flatpak_sync` being enabled happens at the `_build_rsync_cmd` call site, not here
+    — see `TestPackageJobExcludeFiltersGating`.
+    """
+
+    def test_flatpak_data_dir_included_var_app_never_mentioned(self, tmp_path: Path) -> None:
+        home = tmp_path / "alice"
+        with patch("pcswitcher.jobs.flatpak_sync.Path.home", return_value=home):
+            filters = FolderSyncJob._flatpak_sync_exclude_filters(str(tmp_path))  # pyright: ignore[reportPrivateUsage]
+        assert filters == [f"--filter={shlex.quote('- /alice/.local/share/flatpak')}"]
+        assert not any(".var/app" in f for f in filters)
+
+    def test_flatpak_data_dir_outside_synced_folder_is_skipped(self, tmp_path: Path) -> None:
+        """Syncing /root while the invoking user's home is elsewhere excludes nothing."""
+        home = tmp_path / "alice"
+        with patch("pcswitcher.jobs.flatpak_sync.Path.home", return_value=home):
+            filters = FolderSyncJob._flatpak_sync_exclude_filters("/root")  # pyright: ignore[reportPrivateUsage]
+        assert filters == []
+
+
+class TestPackageJobExcludeFiltersGating:
+    """Enabling `snap_sync`/`flatpak_sync` automatically excludes the paths those jobs
+    own from the built rsync command; a disabled or unknown-enablement job leaves the
+    mirror untouched (D-29). Enablement is read from `JobContext.enabled_sync_jobs`,
+    never from `self.context.config` (that field is folder_sync's OWN config section).
+    """
+
+    def _build_cmd(self, tmp_path: Path, enabled_sync_jobs: dict[str, bool] | None) -> str:
+        # The transfer root is tmp_path itself (not a literal "/home") so it is a real
+        # ancestor of `home`, matching how _snap_sync_exclude_filters/
+        # _flatpak_sync_exclude_filters resolve paths relative to the transfer root.
+        home = tmp_path / "alice"
+        (home / "snap" / "firefox" / "2938").mkdir(parents=True)
+        ctx = make_context(
+            config={"folders": [{"path": str(tmp_path)}]},
+            target_username="testuser",
+            enabled_sync_jobs=enabled_sync_jobs,
+        )
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path=str(tmp_path), filter_file="/abs/home.filter")
+        with (
+            patch("pcswitcher.jobs.folder_sync.Path.home", return_value=home),
+            patch("pcswitcher.jobs.snap_sync.Path.home", return_value=home),
+            patch("pcswitcher.jobs.flatpak_sync.Path.home", return_value=home),
+        ):
+            return job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
+
+    def test_snap_sync_enabled_includes_revision_exclusion(self, tmp_path: Path) -> None:
+        cmd = self._build_cmd(tmp_path, {"snap_sync": True})
+        assert "/alice/snap/firefox/2938" in cmd
+
+    def test_snap_sync_disabled_excludes_nothing(self, tmp_path: Path) -> None:
+        cmd = self._build_cmd(tmp_path, {"snap_sync": False})
+        assert "snap/firefox/2938" not in cmd
+
+    def test_flatpak_sync_enabled_includes_data_dir_exclusion_not_var_app(self, tmp_path: Path) -> None:
+        cmd = self._build_cmd(tmp_path, {"flatpak_sync": True})
+        assert "/alice/.local/share/flatpak" in cmd
+        assert ".var/app" not in cmd
+
+    def test_flatpak_sync_disabled_excludes_nothing(self, tmp_path: Path) -> None:
+        cmd = self._build_cmd(tmp_path, {"flatpak_sync": False})
+        assert ".local/share/flatpak" not in cmd
+
+    def test_both_package_exclusions_precede_merge_filter(self, tmp_path: Path) -> None:
+        cmd = self._build_cmd(tmp_path, {"snap_sync": True, "flatpak_sync": True})
+        assert cmd.index("/alice/snap/firefox/2938") < cmd.index("merge /abs/home.filter")
+        assert cmd.index("/alice/.local/share/flatpak") < cmd.index("merge /abs/home.filter")
+
+    def test_missing_enabled_sync_jobs_omits_both_exclusions_without_raising(self, tmp_path: Path) -> None:
+        """A JobContext built without enabled_sync_jobs (the existing lightweight test
+        constructions' default) emits neither exclusion and does not raise."""
+        cmd = self._build_cmd(tmp_path, enabled_sync_jobs=None)
+        assert "snap/firefox/2938" not in cmd
+        assert ".local/share/flatpak" not in cmd
 
 
 # ---------------------------------------------------------------------------

@@ -200,6 +200,31 @@ class TestCopyConfigToTarget:
             config_file, "/home/user/.config/pc-switcher/config.yaml"
         )
 
+    async def test_copies_the_caller_supplied_file_even_when_not_named_config_yaml(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """Hard constraint 5: config_sync copies the caller's own file, not a re-derived
+        `config.yaml`. Every other fixture happens to name the source `config.yaml`, which
+        hid exactly the bug where a caller whose config was named otherwise had a sibling
+        transferred (or a `config not found`). The remote name is always config.yaml — only
+        the SOURCE file the caller passed is what gets sent."""
+        source_file = tmp_path / "pc-switcher-config-abc123.yaml"
+        source_file.write_text("log_level: INFO\n")
+
+        mock_remote_executor.run_command = AsyncMock(
+            side_effect=[
+                CommandResult(exit_code=0, stdout="", stderr=""),  # mkdir
+                CommandResult(exit_code=0, stdout="/home/user\n", stderr=""),  # echo $HOME
+            ]
+        )
+        mock_remote_executor.send_file = AsyncMock()
+
+        await _copy_config_to_target(mock_remote_executor, source_file)
+
+        mock_remote_executor.send_file.assert_called_once_with(
+            source_file, "/home/user/.config/pc-switcher/config.yaml"
+        )
+
     async def test_raises_on_mkdir_failure(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
         """Should raise RuntimeError if mkdir fails."""
         config_file = tmp_path / "config.yaml"
@@ -238,6 +263,29 @@ class TestSyncConfigToTarget:
 
         with pytest.raises(RuntimeError, match="Source config not found"):
             await sync_config_to_target(mock_remote_executor, non_existent_path, None, console)
+
+    async def test_reads_the_source_path_the_caller_passed_whatever_its_name(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """The main config is read from the caller's own path, not `<parent>/config.yaml`.
+
+        Every other test here happens to name the file `config.yaml`, so deriving the
+        path from the parent directory instead of using the caller's own passes them
+        all while breaking any caller whose config is named something else — which is
+        how this reached the VM suite as `Source config not found: /tmp/config.yaml`
+        for a file no caller ever named.
+        """
+        config_content = "log_level: INFO\n"
+        config_file = tmp_path / "pc-switcher-config-abc123.yaml"
+        config_file.write_text(config_content)
+
+        mock_remote_executor.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=0, stdout=config_content, stderr="")
+        )
+
+        result = await sync_config_to_target(mock_remote_executor, config_file, None, MagicMock())
+
+        assert result is True
 
     async def test_scenario_configs_match_skips_silently(
         self, mock_remote_executor: MagicMock, tmp_path: Path

@@ -2,19 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 2
-current_phase_name: Package Management Sync
+current_phase: 02
+current_phase_name: package-management-sync
 status: executing
-stopped_at: Completed 01-18-PLAN.md
-last_updated: "2026-07-13T12:19:36.228Z"
-last_activity: 2026-07-19
-last_activity_desc: "Completed quick task 260719-g13: Check for new versions at startup (#176)"
+stopped_at: Completed 02-20-PLAN.md
+last_updated: "2026-07-23T20:13:13.207Z"
+last_activity: 2026-07-23
+last_activity_desc: Phase 02 execution started
 progress:
-  total_phases: 7
+  total_phases: 2
   completed_phases: 1
-  total_plans: 18
-  completed_plans: 18
-  percent: 14
+  total_plans: 39
+  completed_plans: 38
 ---
 
 # Project State
@@ -25,19 +24,19 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 **Core value:** After a single sync command, the target machine is a faithful, reliable replica of the source — no data loss, conflicts detected, metadata intact.
 
-**Current focus:** Phase 02 — Package Management Sync
+**Current focus:** Phase 02 — package-management-sync
 
 ## Current Position
 
-Phase: 2 — Package Management Sync
+Phase: 02 (package-management-sync) — EXECUTING
 
-Plan: Not started
+Plan: 8 of 21
 
 Status: Ready to execute
 
-Last activity: 2026-07-13 — Phase 01 complete, transitioned to Phase 2
+Last activity: 2026-07-23 — Phase 02 execution started
 
-Progress: [█████████░] 94%
+Progress: [██████████] 97%
 
 ## Performance Metrics
 
@@ -50,7 +49,7 @@ Progress: [█████████░] 94%
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
+| ----- | ----- | ----- | -------- |
 | 01 | 18 | - | - |
 
 **Recent Trend:**
@@ -78,6 +77,30 @@ Progress: [█████████░] 94%
 | Phase 01 P17 | 8min | 3 tasks | 7 files |
 | Phase 01 P16 | 8min | 3 tasks | 5 files |
 | Phase 01 P18 | 10min | 3 tasks | 4 files |
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+| ---- | -------- | ----- | ----- |
+| Phase 02 P01 | 9min | 2 tasks | 4 files |
+| Phase 02 P02 | 20min | 3 tasks | 4 files |
+| Phase 02 P03 | 26min | 2 tasks | 10 files |
+| Phase 02 P05 | 25min | 2 tasks | 6 files |
+| Phase 02 P13 | 22min | 1 tasks | 2 files |
+| Phase 02 P04 | 135min | 2 tasks | 6 files |
+| Phase 02 P06 | 55min | 2 tasks | 3 files |
+| Phase 02 P08 | 35min | 1 tasks | 2 files |
+| Phase 02 P09 | 27min | 1 tasks | 2 files |
+| Phase 02 P07 | 90min | 2 tasks | 12 files |
+| Phase 02 P10 | 13min | 2 tasks | 7 files |
+| Phase 02 P11 | 32min | 2 tasks | 2 files |
+| Phase 02 P12 | 35min | 2 tasks | 6 files |
+| Phase 02 P14 | 3m | 2 tasks | 2 files |
+| Phase 02 P15 | 45min | 2 tasks | 11 files |
+| Phase 02 P16 | 55min | 2 tasks | 4 files |
+| Phase 02 P17 | 45min | 2 tasks | 13 files |
+| Phase 02 P18 | 40min | 2 tasks | 9 files |
+| Phase 02 P19 | 10min | 2 tasks | 26 files |
+| Phase 02 P20 | 8min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -87,36 +110,47 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 
 - Foundation: 11 Accepted ADRs are locked (SSH channel, Python+uv, asyncio, three-tier testing, TDD, draft-aware CI, stdlib logging, living specs, doc structure, dynamic versioning, ADR process).
 - Foundation: ADR-009 (AI-readiness issue labels) is Proposed, not locked.
-- Phase 1: User-data transport is rsync-over-SSH (chosen over btrfs send/receive) — direction set but not yet captured in an ADR.
-- [Phase ?]: rsync-over-SSH chosen as user-data transport (D-04); rsync runs as root on both ends via sudo, root SSH login forbidden (D-05)
-- [Phase ?]: dry-run is tool-wide contract binding all SyncJobs (D-12): no file writes, no snapshots, no history updates in dry-run mode
-- [Phase ?]: folder_sync job name (not user_data) is canonical per D-01; default excludes live in YAML not Python per D-11
-- [Phase ?]: Remote role-record command now uses python3 -c merge-preserving script instead of echo-overwrite, so target_generations in sync-history.json survive a role switch
-- [Phase ?]: sudo -E rsync preserves SSH_AUTH_SOCK and HOME for root rsync subprocess to access ~/.ssh/config (Pitfall 1 fix)
-- [Phase ?]: test decision
-- [Phase ?]: Integration test: dedicated /home/<user>/pcswitcher-folder-sync-test dir on @home btrfs subvolume for divergence tracking without mirroring real /home
-- [Phase ?]: D-07 no-false-divergence: sync-history writes after rsync fall outside test_dir prefix so btrfs find-new prefix scoping ignores them
-- [Phase ?]: D-12 dry-run verification: compare target_generations in sync-history.json before/after --dry-run to confirm no marker write
-- [Phase 01]: IN-01: Remove asyncio.wait_for(asyncio.shield(asyncio.sleep(0))) from SIGINT path — returned immediately so cleanup time was zero; first-SIGINT message no longer claims a numeric grace period
-- [Phase 01]: IN-02: Two-phase total_steps — enabled-job estimate upfront, set_total_steps correction after Phase 4 discovery so denominator matches executed steps exactly
-- [Phase 01]: WR-01/IN-03: last-progress-line-wins for bytes_transferred (best-effort cumulative); change-type set extended to c/h with inline comments
-- [Phase 01]: WR-03: execute() raises RuntimeError (not ValidationError) for pre-transfer divergence abort — consistent with existing rsync-failure handling; delegated to _check_divergence for all override semantics
-- [Phase ?]: ADR-015: topology-based sync-safety model replaces btrfs find-new
-- [Phase ?]: ADR-014 not superseded by ADR-015: its divergence-detection step is now realized by the topology check, not btrfs find-new
-- [Phase ?]: D-06/D-07/D-08 in 01-CONTEXT.md marked superseded by ADR-015; original text preserved for audit history
-- [Phase ?]: CR-01/CR-02: removed btrfs divergence guard; safety via ADR-015 (snapshots + dry-run deletion log + topology check)
-- [Phase ?]: WR-01: config_sync removeprefix fix — lstrip stripped any leading ~ and / chars, removeprefix strips only exact leading ~/
-- [Phase ?]: sync_history simplified to {last_role, last_peer} per ADR-015; generation store removed; parse_sync_state/get_last_sync_state added for topology check (plan 01-13)
-- [Phase 01]: Single --allow-out-of-order flag replaces --allow-consecutive + --allow-divergence (ADR-015 topology model; plan 01-13)
-- [Phase 01]: _check_out_of_order() inserted between Phase 3 and 4 with no new step counter — 8-phase formula unchanged; W1/W2/W3 warn+confirm never hard-aborts (#159); last_peer recorded on both ends (plan 01-13)
-- [Phase ?]: Phase 01 (01-15): first-sync warning mechanism phrase for FolderSyncJob stays literal 'rsync --delete', now owned by the job via describe_first_sync_scope() instead of the orchestrator
-- [Phase ?]: Phase 01 (01-15): _resolve_sync_job_class() factored out of _discover_and_validate_jobs, shared with the new _first_sync_scopes(), to avoid duplicating dynamic-import/class-scan logic
-- [Phase ?]: [Phase 01] (01-17): sync_config_to_target computes should_pause once and pairs the finally-resume with it, so an auto_accept run (which never paused) no longer resumes an idle Live
-- [Phase ?]: [Phase 01] (01-17): PausableUI now exposes pause()/resume() instead of start()/stop(); TerminalUI.start()/stop() remain the orchestrator's create/teardown lifecycle only
-- [Phase ?]: Phase 01 (01-16): SyncAbortedByUser is a plain Exception (not RuntimeError subclass) carrying a human-readable reason, distinguishing a user decline from every other failure path
-- [Phase ?]: Phase 01 (01-16): CLI abort message reuses exit code 1 (same as generic failure); the distinction is calm wording, not exit code
-- [Phase 01]: 01-18: UILogHandler routes log records into TerminalUI's Recent Logs panel via loop.call_soon_threadsafe, replacing the stderr StreamHandler that desynced Live's cursor bookkeeping — Fixes UAT-diagnosed live-progress flooding (761 duplicate panel headers / 326 duplicate 0% frames in one run); setup_logging is TTY-aware, falling back to stderr when non-interactive
-- [Phase 01]: 01-18: Orchestrator now constructs Console/TerminalUI/TerminalUIConfirmer before calling setup_logging, passing ui+console in — TUI-floor handler selection requires the UI/console to exist first; setup_logging's ui/console params are keyword-only with None defaults so existing callers stay unaffected
+- ADR-013: user-data transport is rsync-over-SSH (over btrfs send/receive). rsync runs as root on both ends via sudo; root SSH login stays forbidden. `sudo -E` preserves SSH_AUTH_SOCK and HOME so the root subprocess can still read `~/.ssh/config`.
+- ADR-014: dry-run is a tool-wide contract binding every SyncJob — full read-only preview, no file writes, no snapshots, no history or marker updates.
+- ADR-015: sync safety is topology-based; btrfs find-new content detection is gone. sync-history is reduced to `{last_role, last_peer}`, recorded on both ends. ADR-014's divergence-detection step is now realized by the topology check.
+- One `--allow-out-of-order` CLI flag overrides the topology warnings; those warnings always warn-and-confirm, never hard-abort (#159).
+- Job conventions: default excludes live in YAML, not Python. Each SyncJob describes its own destructive first-sync scope via `describe_first_sync_scope()` rather than the orchestrator hardcoding it.
+- `SyncAbortedByUser` is a plain Exception carrying a human-readable reason, distinguishing a user decline from every other failure path; the CLI still exits 1 either way.
+- Logging under the TUI: `setup_logging` is TTY-aware and routes records into TerminalUI's Recent Logs panel. Anything writing to stderr while Live is active desyncs its cursor bookkeeping and floods the display.
+- [Phase ?]: ADR-020's PackagePhaseCoordinator plan()/apply() split fixes the cross-AI review's core defect: per-job self-contained review would let apt_sync mutate the target before snap_sync had diffed.
+- [Phase ?]: D-21/D-26 reconciled: interactive runs fail the job result on unresolved unreproducible items; non-interactive runs report but do not fail on unresolved items alone.
+- [Phase ?]: questionary chosen over InquirerPy: legitimacy gate cleared by explicit user approval plus live PyPI/GitHub verification (2138 stars, 24 releases 2018-2025, creation date matches first PyPI release).
+- [Phase ?]: package_review.py's removal-direction check uses a private {remove,delete,disable} action set rather than a DiffAction enum, since that type doesn't exist yet (deferred to plan 02-05).
+- [Phase ?]: manager_name renamed to manager_id in PackageSyncJob: the plan's own grep acceptance criterion (name: ClassVar absent) collided with the plan's own prose-specified ClassVar name.
+- [Phase ?]: Discovered gap (recorded, not fixed): SessionStatus/CLI exit code reflect only whether an exception propagated, never job_results content — a sync with failed package items can exit 0 (WINDOWS.md #1).
+- [Phase ?]: AptSyncJob.plan() overrides base plan() (not a third generic hook) for plan-time apt-get -s collateral simulation — apt-only machinery snap_sync/flatpak_sync don't need
+- [Phase ?]: HELD_OR_PINNED takes precedence over version-mismatch/removal in the diff dispatch for any target item named by a hold/pin fact — the hold/pin fact is itself the more informative review entry
+- [Phase ?]: Plan 02-13: VM-level apt_sync tracer proof (test_package_sync.py) asserts against pc2's own apt-mark showmanual, not pc-switcher logs; candidate package chosen by querying VMs + apt-cache rdepends safety filter, restored in teardown regardless of outcome. VM execution pending CI (no local VM access).
+- [Phase ?]: [Phase 2]: package_state.py's DecisionFile resolves paths via a bare ~/ shell prefix (not echo $HOME) — verified ~/ immediately followed by a shlex-quoted word still tilde-expands as one shell word, avoiding an extra executor round trip while satisfying T-02-01's shlex.quote() requirement.
+- [Phase ?]: [Phase 2]: package_review.py's interactive 'promote skip to permanent' prompt is out of plan 02-04's scope (files_modified excludes package_review.py) — apply()'s SKIP_ALWAYS handling is exercised via hand-constructed ReviewOutcome objects; the UI path that produces SKIP_ALWAYS remains future work.
+- [Phase ?]: apt repo/key/pin/config capture, diff and dependency-ordered convergence implemented entirely within AptSyncJob (not package_sync_core.py), keeping the shared base's typed diff pipeline untouched
+- [Phase ?]: apt-get-update marker inserted in accept_review() (post-decision) rather than plan(), reusing ItemClass.APT_SOURCE with item_id-based exclusion from repo-group membership checks
+- [Phase ?]: repository-group convergence (backup/write/update/rollback) is triggered eagerly by the first repo-group diff converge() sees, caching per-item outcomes so the base apply() loop's per-diff iteration still drives it without package_sync_core.py changes
+- [Phase ?]: snap_sync: SnapSyncJob overrides plan() locally (DecisionFile/filter_inert + _build_review_groups reused) instead of inheriting PackageSyncJob.plan(), since the base diff_items()/_diff_apt_packages() is apt-package-shaped (hardcoded ItemClass.APT_PACKAGE, reads AptPackageItem.version) and crashes/mislabels on SnapItem
+- [Phase ?]: snap_sync: all snap CHANGE diffs (revision or channel-only) tagged ItemClass.SNAP, never SNAP_CHANNEL, to avoid _build_review_groups picking the wrong action_label verb when two item classes share one DiffAction
+- [Phase ?]: flatpak_sync: FlatpakSyncJob overrides plan() (not inherited) for the same structural reason SnapSyncJob does — base diff_items() has no notion of a second, ordering-dependent item class (D-14: remotes before refs)
+- [Phase ?]: flatpak_sync: sudo applied per-scope via one _sudo_prefix(scope) helper shared by all four converge verbs (remote-add/remote-delete/install/uninstall), so --system needs sudo, --user does not (T-02-23) can never drift per-verb
+- [Phase ?]: Plan 02-07: package_sync_core.py/package_phase.py modified outside declared files_modified (Rule 2) — apply()'s D-21 enforcement and per-job outcome slicing structurally required it.
+- [Phase ?]: Plan 02-07: apt-no-candidate detection implemented as new _scan_no_candidate_apt_packages, not reusing the existing collect_unavailable_item_ids hook (different contract: target-side REPO_UNAVAILABLE vs source-side D-18 apt-no-candidate).
+- [Phase ?]: [Phase 2] Plan 02-10: snap_sync/flatpak_sync exclusion gating lives at the folder_sync._build_rsync_cmd call site (one _package_job_enabled helper), not inside the filter-builder methods — keeps the VS-Code-vs-package-job asymmetry visible at one point instead of duplicated in two method bodies
+- [Phase ?]: [Phase 2] Plan 02-10: home.filter's flatpak/snap retirement was verified by reading the shipped file directly (it carried no such rule already) rather than assumed from the CONTEXT canonical-refs note — only the explanatory comment was added
+- [Phase ?]: Plan 02-11: AptSyncJob.plan()'s stable sort always ranks APT_PACKAGE diffs ahead of UNREPRODUCIBLE ones, so the continue-on-failure D-27 proof uses three UNREPRODUCIBLE (unowned-install snippet) items instead of a mix with AptPackageItem, relying on scan_unowned_installs's alphabetical sort for ordering
+- [Phase ?]: Plan 02-11: PACKAGE_REVIEW_AUTOMATION_ENV accepts SKIP_ALWAYS on a regular (non-unreproducible) item even though the interactive checkbox UI has no path to it yet -- used to prove PackageSyncJob._record_permanent_skips/filter_inert's D-08 mechanism independent of that UI gap
+- [Phase ?]: Plan 02-11: 02-VALIDATION.md's nyquist_compliant left false -- the two VM-integration rows have a correct, existing automated command not yet run against real VMs in this environment (pending CI, not pending existence)
+- [Phase ?]: Phase 2 documentation: living specs (docs/system/) now describe the package-sync subsystem per ADR-011/ADR-012; requirements REQ-sync-scope-packages and REQ-conflict-detection-no-resolution marked complete after verifying all 13 plans genuinely deliver them.
+- [Phase ?]: 02-15: corrected D-24 — per-manager review inside each package job's execute() via injected JobContext.reviewer; PackagePhaseCoordinator removed and must never return
+- [Phase ?]: 02-16: corrected D-30 — apt collateral split by target apt-mark showmanual; auto proceeds silently, manual becomes a three-way install-anyway/skip/abort review item (COLLATERAL_REVIEW_ACTION); apply-time guard honours approved manual collateral while still refusing unreviewed drift
+- [Phase ?]: manual_installs_sync owns unreproducible detection on its own enable flag (D-18); runs its own dpkg/apt-cache, never imports apt_sync
+- [Phase ?]: Base PackageSyncJob carries no-op _finalize_unreproducible/_unresolved_as_failures hooks; only manual_installs_sync overrides them
+- [Phase ?]: D-21: an explicit skip-once is a valid resolution, not an unresolved state; only cancelled/abandoned review is unresolved
+- [Phase ?]: Snippet registry travels by manual_installs_sync's own post-review send_file push (D-23), not config_sync; config_sync carries config.yaml only
+- [Phase ?]: 02-19 (D-31): package-sync helpers relocated to jobs/packages/{items,review,state,sync_core}.py (prefix stripped); job modules + base.py/context.py stay in jobs/ for discovery; every importer repointed
+- [Phase ?]: 02-19 (D-32): empty apt_sync/snap_sync/flatpak_sync config sections removed from default-config.yaml + config-schema.yaml; get_job_config defaults an absent section to {}; sync_jobs enable flags retained
 
 ### Pending Todos
 
@@ -124,12 +158,12 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 1: The rsync-over-SSH transport choice is not yet captured in an ADR. ADR-002 mandates SSH as the channel but does not fix the file-sync protocol. Formalize this as a new ADR before or during Phase 1 planning so the decision has a locked source.
+None.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Status | Directory |
-|---|-------------|------|--------|--------|-----------|
+| - | ----------- | ---- | ------ | ------ | --------- |
 | 260718-np8 | folder_sync include-override filter rules (#166) | 2026-07-18 | 2a2c003 | Verified | [260718-np8-folder-sync-include-override-filter-rule](./quick/260718-np8-folder-sync-include-override-filter-rule/) |
 | 260719-g13 | Check for new versions at startup (#176) | 2026-07-19 | cd765bf | Verified | [260719-g13-check-for-new-versions-at-startup-176](./quick/260719-g13-check-for-new-versions-at-startup-176/) |
 | 260720-vhr | Selective SQLite-aware sync of VS Code state.vscdb (#195) | 2026-07-20 | ed7751b | Verified | [260720-vhr-fix-195-selective-sqlite-aware-sync-of-v](./quick/260720-vhr-fix-195-selective-sqlite-aware-sync-of-v/) |
@@ -139,13 +173,13 @@ None yet.
 Items acknowledged and carried forward from previous milestone close:
 
 | Category | Item | Status | Deferred At |
-|----------|------|--------|-------------|
+| -------- | ---- | ------ | ----------- |
 | *(none)* | | | |
 
 ## Session Continuity
 
-Last session: 2026-07-03T22:16:59.386Z
+Last session: 2026-07-23T20:13:13.195Z
 
-Stopped at: Completed 01-18-PLAN.md
+Stopped at: Completed 02-20-PLAN.md
 
 Resume file: None

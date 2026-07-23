@@ -220,7 +220,7 @@ class RichFormatter(logging.Formatter):
 ## Lines of Code Estimate
 
 | Component | Current | With stdlib |
-|-----------|---------|-------------|
+| --------- | ------- | ----------- |
 | Logger class + EventBus pattern | ~100 lines | LoggerAdapter or extra dict (~20 lines) |
 | FileLogger (JSON) | ~50 lines | JsonFormatter (~25 lines) |
 | ConsoleLogger (Rich) | ~60 lines | RichFormatter (~30 lines) |

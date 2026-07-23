@@ -1,201 +1,118 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-06-29
+**Analysis Date:** 2026-07-23
+
+Authoritative project rules live in `docs/dev/development-guide.md` and `docs/dev/testing-guide.md`. This document records the conventions actually observed in `src/pcswitcher/` and `tests/`.
 
 ## Naming Patterns
 
 **Files:**
-- Lowercase with underscores: `executor.py`, `disk_space_monitor.py`, `config_sync.py`
-- Module-level `__all__` export lists to declare public API
+- Modules: `snake_case.py`, one domain concept per module — `src/pcswitcher/btrfs_snapshots.py`, `src/pcswitcher/sync_history.py`
+- Jobs live in `src/pcswitcher/jobs/` and are named after the sync unit: `apt_sync.py`, `folder_sync.py`, `install_on_target.py`
+- Tests mirror the module: `tests/unit/jobs/test_folder_sync.py` for `src/pcswitcher/jobs/folder_sync.py`
 
 **Functions:**
-- snake_case: `run_command()`, `create_subprocess_shell()`, `get_lock_path()`
-- Async functions: same convention, `async def run_command()`
-- Private functions: `_prefix_name()` for module-private helpers
-
-**Classes:**
-- PascalCase: `LocalExecutor`, `CommandResult`, `BtrfsSnapshotJob`
-- StrEnum/IntEnum subclasses: `Host`, `LogLevel`, `SessionStatus`
-- Protocol definitions for interfaces: `Executor`, `Process`
+- `snake_case`. Async I/O functions are `async def` and named as verbs: `run_command`, `start_process`, `create_snapshot`
+- Module-private helpers are prefixed with `_`: `_write`, `_full` (`src/pcswitcher/logger.py:28`)
 
 **Variables:**
-- snake_case for all variables and attributes
-- Private attributes: `_prefix` (e.g., `_processes`, `_connection`, `_session_id`)
-- Constants: UPPERCASE (e.g., `CLEANUP_TIMEOUT_SECONDS`, `FULL = 15`)
-- Type hints in modern syntax: `str | None` not `Optional[str]`, `list[str]` not `List[str]`
+- `snake_case` for locals; `UPPER_SNAKE` for module constants (`FULL = 15` in `src/pcswitcher/logger.py:25`)
+- Module-level loggers: either `logger` or `_logger`. Both appear — prefer `logger` for new modules (`src/pcswitcher/version.py:31`, `src/pcswitcher/jobs/base.py:16`)
 
 **Types:**
-- Use modern type syntax: `dict[str, int]`, `list[T]`, `str | None`
-- Import from `collections.abc` for protocols: `AsyncIterator`, `Callable`, `Generator`
-- Use `@override` decorator when overriding methods
-- Frozen dataclasses for immutable data: `@dataclass(frozen=True)`
+- `PascalCase` classes. Job classes end in `Job` (`InstallOnTargetJob`, `DiskSpaceMonitorJob`)
+- Exceptions end in `Error` (`ConfigurationError`, `SyncLockedError`, `UpdateFailedError`) except intentional control-flow signals (`SyncAbortedByUser` in `src/pcswitcher/models.py:131`)
+- Class-level job metadata uses `ClassVar`: `name`, `required`, `CONFIG_SCHEMA` (`src/pcswitcher/jobs/base.py:32`)
 
 ## Code Style
 
 **Formatting:**
-- Tool: ruff (via `uv run ruff format .`)
-- Line length: 119 characters (per `ruff.toml`)
-- Quote style: double quotes (`"string"`)
-- Indentation: 4 spaces
+- `ruff format` (config: `ruff.toml`)
+- `line-length = 119`, double quotes, space indent, magic trailing comma respected
+- Run: `uv run ruff check . && uv run ruff format .`
 
 **Linting:**
-- Tool: ruff check
-- Configured in `ruff.toml`
-- Selected rules: E, W, F, I (isort), B, C4, UP, RUF, SIM, PTH, PL, PERF, FURB
-- Ignored: PLR0913 (too many arguments), PLR2004 (magic value comparison)
+- `ruff` with rule sets `E, W, F, I, B, C4, UP, RUF, SIM, PTH, PL, PERF, FURB`
+- Ignored: `PLR0913` (too many args), `PLR2004` (magic value comparison)
+- `PTH` is on: use `pathlib.Path`, never `os.path`
 
-**Type Checking:**
-- Tool: basedpyright
-- Full type annotations on all function signatures
-- Use `# pyright: ignore` sparingly with explanation
+**Type checking:**
+- `basedpyright` in **strict** mode over `src` and `tests` (`pyrightconfig.json`)
+- `pythonVersion = 3.14`, `pythonPlatform = Linux`
+- `reportUnknown*` relaxed; `reportPrivateUsage` off inside `tests/`
+- Every function must be annotated, including `-> None`. Avoid `Any`; where an escape hatch is needed use a targeted `# pyright: ignore[ruleName]` with the rule named (`src/pcswitcher/logger.py:34`, `tests/conftest.py:16`)
+
+**Spell check:**
+- `uv run codespell` runs in CI (`.github/workflows/ci.yml`)
 
 ## Import Organization
 
-**Order:**
-1. `from __future__ import annotations` (first import, always)
-2. Standard library: `import asyncio`, `from pathlib import Path`, `from datetime import UTC, datetime`
-3. Third-party: `import asyncssh`, `from rich.console import Console`, `import yaml`
-4. Local: `from pcswitcher.config import Configuration`, `from pcswitcher.models import CommandResult`
+**Order** (enforced by ruff `I` with `known-first-party = ["pcswitcher"]`):
+1. `from __future__ import annotations` — first line of every module, no exceptions
+2. Standard library
+3. Third-party (`asyncssh`, `rich`, `typer`, `jsonschema`, `yaml`)
+4. First-party `pcswitcher.*` absolute imports
+5. Relative imports (used only inside the `jobs` package: `from .context import JobContext`)
 
-**Path Aliases:**
-- First-party module: `pcswitcher` (defined in `ruff.toml` as known-first-party)
-- No relative imports
+**Type-only imports:**
+- Guard import cycles and heavy modules with `if TYPE_CHECKING:` (`src/pcswitcher/jobs/base.py:19`)
 
-**Barrel Files:**
-- Public APIs exported via `__all__` in module `__init__.py` and main modules
-- Example from `src/pcswitcher/connection.py`: `__all__ = ["Connection"]`
-- Example from `src/pcswitcher/models.py`: large `__all__` list of exported types
+**Path aliases:**
+- None. Source layout is `src/`, package installed via `uv`; always use absolute `pcswitcher.*` imports outside the package-internal relative case above.
+
+## Public API Declaration
+
+Modules with a public surface declare `__all__` sorted alphabetically — `src/pcswitcher/models.py:10`, `src/pcswitcher/logger.py:36`. Add new public names there when extending those modules.
 
 ## Error Handling
 
 **Patterns:**
-- Raise specific exception types with descriptive messages
-- Example: `raise RuntimeError("Not connected to target")` in `connection.py:51`
-- Custom exceptions inherit from base types: `DiskSpaceCriticalError(Exception)` with `__init__` storing context
-- Configuration errors wrapped: `ConfigurationError(errors)` aggregates `ConfigError` instances
-- Handle TimeoutError explicitly: catch `asyncio.wait_for()` timeout, terminate process, re-raise
+- Domain exceptions defined near their owner: `ConfigurationError` (`src/pcswitcher/config.py:221`), `SyncLockedError`/`SyncAbortedByUser`/`DiskSpaceCriticalError` (`src/pcswitcher/models.py`), `UpdateFailedError`/`UpgradeNotStartedError` (`src/pcswitcher/cli.py:531`), `ConvergeItemFailed`/`PackageItemFailures` (`src/pcswitcher/jobs/package_sync_core.py:64`)
+- Commands return values, not exceptions: `CommandResult(exit_code, stdout, stderr)` (frozen dataclass, `src/pcswitcher/models.py:52`) with a `.success` property. Check the result; do not wrap every command in try/except
+- Validation collects rather than raises: `Job.validate_config()` returns `list[ConfigError]`, `Job.validate()` returns `list[ValidationError]` (`src/pcswitcher/jobs/base.py`). Empty list = valid
+- Re-raise with cause: `raise typer.Exit(1) from e` at the CLI boundary; never swallow the original
+- `asyncio.CancelledError` is caught explicitly for graceful cancellation and re-raised or converted to an aborted job status — never treated as a generic failure
+- Broad `except Exception` is reserved for top-level orchestration/CLI boundaries where a failure must be reported rather than crash the run
 
-**Assertions:**
-- Use `AssertionError` with descriptive message for invariant violations
-- Example: `assert self._conn is not None` with clear context
-
-**Error Messages:**
-- Include context: variable values, paths, expected vs actual
-- Example: `f"Configuration file not found: {path}"` provides the actual path
+**Rule:** validate inputs up front in `validate()` with actionable, copy-pasteable remediation text rather than failing mid-execution.
 
 ## Logging
 
-**Framework:** stdlib `logging`
+**Framework:** stdlib `logging`, configured in `src/pcswitcher/logger.py` (queue-based handler + Rich rendering + JSON file formatter).
 
 **Patterns:**
-- Get logger: `logging.getLogger("pcswitcher.orchestrator")`
-- Use levels: DEBUG, FULL (15, custom), INFO, WARNING, ERROR, CRITICAL
-- Log with context using `extra` dict: `logger.info("msg", extra={"job": "job_name", "host": host})`
-- JSON-formatted logs to file via `JsonFormatter` in `logger.py`
-- TUI/console logs via `RichFormatter`
+- One module-level logger per module, named under the `pcswitcher.` hierarchy: `logging.getLogger("pcswitcher.jobs.package_state")`
+- Custom level `FULL = 15` (between DEBUG and INFO) for file-level operational detail; call `logger.full(...)`
+- Level semantics are defined by `LogLevel` in `src/pcswitcher/models.py:36` — DEBUG internals, FULL per-file detail, INFO high-level operations, WARNING non-fatal, ERROR recoverable, CRITICAL abort
+- Never pass untrusted/log text straight into a Rich `Panel` or markup-parsing renderable — wrap in `rich.text.Text`
 
-**Custom Level:**
-- FULL (15): between DEBUG (10) and INFO (20) for operational details
-- Added via `logging.addLevelName(FULL, "FULL")`
+## Comments and Docstrings
 
-## Comments
+**Docstrings:**
+- Every module, class, and public function has one. Google style with `Args:` / `Returns:` sections (`src/pcswitcher/jobs/base.py:56-66`)
+- Test docstrings state the expected behavior, and for spec-driven tests begin with the requirement ID: `"""CORE-FR-VERSION-CHECK: System must ..."""`
 
-**When to Comment:**
-- Non-obvious design decisions: "Connection uses keepalive to detect failures proactively"
-- Workarounds and their reasoning: reference GitHub issues or ADRs
-- Complex logic or subtle edge cases: explain the reasoning
-- Changes to other files: "If you change this format, also update version.py:find_one_version()"
+**Comments:**
+- Explain non-obvious decisions and constraints only (e.g. why root logger stays at WARNING in `tests/conftest.py:22`)
+- Never restate names or types; never narrate change history
 
-**JSDoc/TSDoc:**
-- Module-level docstring explains purpose
-- Class docstring: responsibilities and key behavior
-- Function docstring (Google style):
-  - One-line summary
-  - Args: parameter names and types (redundant with signature, but document semantics)
-  - Returns: what is returned and its type
-  - Raises: exceptions that may be raised
+## Function and Module Design
 
-**Example** from `connection.py:29-37`:
-```python
-def __init__(
-    self,
-    target: str,
-    event_bus: EventBus,
-    max_sessions: int = 10,
-    keepalive_interval: int = 15,
-    keepalive_count_max: int = 3,
-) -> None:
-    """Initialize connection parameters.
+**Functions:**
+- Small and single-purpose. `PLR0913` (arg count) is deliberately disabled because config-carrying constructors need many parameters
+- Prefer frozen `@dataclass` for value objects (`CommandResult`, `Snapshot`, `ProgressUpdate` in `src/pcswitcher/models.py`)
+- Enums: `StrEnum` for identifiers (`Host`), `IntEnum` where ordering matters (`LogLevel`)
 
-    Args:
-        target: Hostname or SSH config alias for target machine
-        event_bus: EventBus for publishing connection events
-        max_sessions: Maximum concurrent SSH sessions (default 10)
-        keepalive_interval: Seconds between keepalive packets (default 15)
-        keepalive_count_max: Max missed keepalives before disconnect (default 3)
-    """
-```
-
-## Function Design
-
-**Size:** Focus on single responsibility; typical functions 10-50 lines
-
-**Parameters:**
-- Name descriptively: `target` not `t`, `hostname` not `h`
-- Type hint all parameters: `cmd: str`, `timeout: float | None = None`
-- Keyword-only for optional parameters: `def method(required, *, optional: bool = False)`
-- Use dataclass instead of many parameters when groups are related
-
-**Return Values:**
-- Always type hint return: `-> CommandResult`, `-> None`, `-> AsyncIterator[str]`
-- Return objects (dataclasses) instead of tuples when multiple values
-- async functions return `Coroutine`: `async def method() -> ResultType`
-
-## Module Design
+**Jobs:**
+- Subclass `Job` (`src/pcswitcher/jobs/base.py`) and implement `validate()` and `execute()`; declare `name`, optional `required`, and a JSON-Schema `CONFIG_SCHEMA` validated with `jsonschema.Draft7Validator`
+- Use `self.source` / `self.target` executor shortcuts rather than reaching into `self.context`
+- Publish progress via `ProgressEvent` on the event bus rather than printing
 
 **Exports:**
-- Define `__all__` at module level listing public API
-- Place after imports, before implementations
-- Example: `__all__ = ["Connection"]` in `connection.py:11`
+- No barrel re-export sprawl; `src/pcswitcher/jobs/__init__.py` re-exports the job interface (`Job`, `JobContext`) only.
 
-**Organization:**
-- Module docstring describing purpose
-- Protocol definitions first (if any)
-- Main class definitions
-- Helper functions and utilities
-- Implementation of protocols at end
+## Tooling Discipline
 
-**File-Module Boundaries:**
-- One primary class per file is typical: `connection.py` exports `Connection`
-- Related types may coexist: `models.py` exports many dataclasses/enums
-- Large features → subdirectory: `src/pcswitcher/jobs/` contains job implementations
-
-## Additional Patterns
-
-**Frozen Dataclasses:**
-- Use `@dataclass(frozen=True)` for immutable value objects
-- Example: `CommandResult`, `ConfigError`, `ProgressUpdate`, `Snapshot`
-- Frozen dataclasses are hashable and can be used in sets/dicts
-
-**Protocol Classes:**
-- Define implicit interfaces as Protocols (no ABC inheritance needed)
-- Example: `Executor` protocol in `executor.py:26` defines contract for local and remote executors
-- Both `LocalExecutor` and `RemoteExecutor` implement without explicit inheritance
-
-**String Enums:**
-- Use `StrEnum` for string-based enums: `class Host(StrEnum): SOURCE = "source"`
-- Use `IntEnum` for integer-based enums: `class LogLevel(IntEnum): DEBUG = 10`
-- Enums are comparable and can be serialized directly
-
-**Type: Context Managers:**
-- Use async context managers for resource cleanup: `async with connection.start_sftp_client() as sftp:`
-- Implement via `__aenter__` and `__aexit__` or use `asynccontextmanager` decorator
-
-**Private vs Public:**
-- Module-private: prefix with `_` (e.g., `_load_schema()`, `_parse_log_config()`)
-- Do not expose in `__all__`
-- Underscore-prefixed attributes: implementation details clients should not access
-
----
-
-*Convention analysis: 2026-06-29*
+- Always `uv run <tool>`. Never bare `python`, `python3`, or `pip`
+- Requires Python >= 3.14
+- Conventional commit prefixes: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`

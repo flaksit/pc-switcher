@@ -11,7 +11,7 @@
 ## Scope boundary
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | /home + /root, system config stays P3 | Folder-data only; /etc, systemd, users/groups, dconf stay Phase 3 | ✓ |
 | /home + /root + /etc now | Pull /etc in too | |
 | Let me clarify | User describes boundary | |
@@ -23,7 +23,7 @@
 ## Deletion / mirror semantics
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Mirror (--delete) + mass-delete guard | Exact replica + ceiling on deletions | |
 | Mirror (--delete), no guard | Exact replica, no ceiling | ✓ |
 | Additive only | Never delete on target | |
@@ -35,7 +35,7 @@
 ## Target-divergence guard
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Warn + confirm if last role was SOURCE | Use sync_history role | ✓ (reframed) |
 | Hard block | Refuse sync, require override | |
 | No guard in Phase 1 | One-directional overwrite only | |
@@ -47,7 +47,7 @@
 ## Preview & dry-run (Phase 1 framing)
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Summary + confirm before applying | Auto dry-run preview every sync | |
 | --dry-run flag only | Preview only when flag passed | ✓ |
 | No preview at all | Rely on snapshots | |
@@ -57,7 +57,7 @@
 ## Root access model
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | sudo via --rsync-path, normal SSH login | Escalate only for rsync; no root SSH | ✓ |
 | Direct root SSH login | Connect as root | |
 | Let me think | Discuss further | |
@@ -67,7 +67,7 @@
 ## Integrity verification
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | rsync default delta + optional verify pass | Default delta, opt-in --checksum | ✓ then dropped |
 | Force --checksum every sync | Read+checksum all files each run | |
 | rsync default only | Trust delta detection | ✓ (final) |
@@ -79,7 +79,7 @@
 ## TUI granularity
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Overall progress + current file | rsync --info=progress2 style | ✓ |
 | Per-file streaming | Print every file | |
 | Phase-level only | Per-folder only | |
@@ -89,7 +89,7 @@
 ## Logging verbosity
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Per-file at FULL, summary at INFO | File-level audit at FULL, summaries at INFO | ✓ |
 | Per-file at INFO | Surface every file in terminal | |
 | Summary only | No per-file audit trail | |
@@ -99,7 +99,7 @@
 ## Tool-wide dry-run policy
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Full preview, zero writes anywhere | Read-only preview across all jobs; every SyncJob implements a real preview | ✓ |
 | Validate-only, no per-job preview | Validation + which-jobs-run only | |
 | Let me specify | User defines | |
@@ -109,7 +109,7 @@
 ## Include/exclude config model
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | List of folder entries, each with own rules | Per-folder include/exclude → rsync filter rules | ✓ |
 | Global folder list + one shared exclude list | One shared exclude for all | |
 | Raw rsync filter-file passthrough | Native rsync filter syntax | |
@@ -119,7 +119,7 @@
 ## Job name
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | folder_sync (generic) | Reflects generic folder sync | ✓ |
 | user_data (matches existing config) | Existing config comment | |
 | Other name | User-supplied | |
@@ -129,7 +129,7 @@
 ## Preconditions (consistency)
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Note as documented assumption | Don't enforce in Phase 1 | |
 | Discuss now | Talk through enforcement | |
 | Explore more | Other areas | ✓ |

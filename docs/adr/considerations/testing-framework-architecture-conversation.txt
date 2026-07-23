@@ -319,7 +319,7 @@ What do you think?
   | Approach                                | Pros
      | Cons                                                              |
   |-----------------------------------------|-------------------------------
-  ---|-------------------------------------------------------------------|
+  ---| ----------------------------------------------------------------- |
   | Ephemeral (create/destroy per test run) | Clean state guaranteed, no
   drift | Slow (3-5 min VM creation), more complex Tofu
   |
@@ -335,7 +335,7 @@ What do you think?
 
   | Setup                   | Coverage                             |
   Complexity                            |
-  |-------------------------|--------------------------------------|--------
+  |-------------------------| ------------------------------------ |--------
   -------------------------------|
   | 1 VM (SSH to localhost) | ~70% - can test most flows           | Simple,
    cheap                         |
@@ -548,7 +548,7 @@ the very beginning of this conversation.
 
   | Component            | File(s)            | What We Test
                                                   |
-  |----------------------|--------------------|-----------------------------
+  |----------------------| ------------------ |-----------------------------
   ------------------------------------------------|
   | Config System        | config.py          | YAML parsing, schema
   validation, defaults, error messages with line numbers |
@@ -578,7 +578,7 @@ the very beginning of this conversation.
 
   | Component           | File(s)                    | What We Test
                                                             |
-  |---------------------|----------------------------|----------------------
+  |---------------------| -------------------------- |----------------------
   ----------------------------------------------------------|
   | SSH Connection      | connection.py              | Connect, disconnect,
   keepalive, connection loss detection                      |
@@ -763,7 +763,7 @@ an .md in docs/ and write your implementation plan for all this in another
      │                                                                         │
      │ | Decision         | Choice                         | Rationale         │
      │                                |                                        │
-     │ |------------------|--------------------------------|-------------------│
+     │ |------------------| ------------------------------ |-------------------│
      │ -------------------------------|                                        │
      │ | VM Provider      | Hetzner Cloud (CX23)           | CI-compatible,    │
      │ real btrfs root                   |                                     │
@@ -958,7 +958,7 @@ an .md in docs/ and write your implementation plan for all this in another
      │ Critical Files to Modify                                                │
      │                                                                         │
      │ | File              | Purpose                        |                  │
-     │ |-------------------|--------------------------------|                  │
+     │ |-------------------| ------------------------------ |                  │
      │ | tests/conftest.py | Update with shared fixtures    |                  │
      │ | pyproject.toml    | Add pytest-cov, pytest markers |                  │
      │                                                                         │
@@ -991,7 +991,7 @@ an .md in docs/ and write your implementation plan for all this in another
      │                                                                         │
      │ | Test                                  | Risk                      |   │
      │ Mitigation                        |                                     │
-     │ |---------------------------------------|---------------------------|---│
+     │ |---------------------------------------| ------------------------- |---│
      │ --------------------------------|                                       │
      │ | test_btrfs_snapshots.py (integration) | Could corrupt filesystem  |   │
      │ Run only on test VMs, reset after |                                     │
@@ -1005,7 +1005,7 @@ an .md in docs/ and write your implementation plan for all this in another
      │ Low-Risk Tests (Local Safe)                                             │
      │                                                                         │
      │ | Test                | Why Safe                       |                │
-     │ |---------------------|--------------------------------|                │
+     │ |---------------------| ------------------------------ |                │
      │ | All unit tests      | Mocked I/O, pure logic         |                │
      │ | test_disk.py (unit) | Uses LocalExecutor, only reads |                │
      │ | Config/model tests  | No external effects            |                │
@@ -1088,7 +1088,7 @@ implementation.
      ## Coverage Summary
      ### Coverage by Module
      | Module | Unit Tests | Integration Tests | Coverage |
-     |--------|------------|-------------------|----------|
+     |--------| ---------- | ----------------- | -------- |
      … +253 lines (ctrl+o to expand)
 
 ● I've created all three documentation files:

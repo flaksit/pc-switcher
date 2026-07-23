@@ -18,7 +18,7 @@ overrides_applied: 0
 ### Observable Truths
 
 | # | Truth | Status | Evidence |
-|---|-------|--------|----------|
+| - | ----- | ------ | -------- |
 | 1 | Real subcommand in interactive terminal with newer stable release prints current-vs-available and prompts y/N | VERIFIED | `src/pcswitcher/cli.py:718-721` prints `"A new stable version... {current} -> {latest}"` then `Prompt.ask("Upgrade now?", choices=["y","n"], default="n")`. Behavioral test: `test_update_available_yes_upgrades_and_reexecs` PASSED. |
 | 2 | y installs via existing install+verify path then re-execs same argv; N continues unchanged | VERIFIED | `cli.py:725-743` calls `_install_and_verify(latest)`, sets guard env, flushes stdio, `os.execvp(sys.argv[0], sys.argv)`. N-path returns at `cli.py:723`. Tests `test_update_available_yes_upgrades_and_reexecs` (asserts `execvp` called with `(sys.argv[0], sys.argv)` and env var set) and `test_update_available_no_continues_without_reexec` (asserts `execvp` NOT called) both PASSED. |
 | 3 | Check skipped for `--no-version-check`, `PCSWITCHER_SKIP_VERSION_CHECK`, non-TTY, `self`, bare invocation, `--version` | VERIFIED | `cli.py:705` single guard covers flag/env/TTY; `cli.py:116` guards `self`/bare via `ctx.invoked_subcommand not in (None, "self")`; `--version` is Typer's `is_eager` callback (`cli.py:101-103`) which raises `typer.Exit()` before the callback body runs. Unit tests cover flag, env, non-TTY, `self`. Bare invocation and `--version` are not covered by the unit suite but were independently confirmed live in this session: `runner.invoke(cli.app, [])` and `runner.invoke(cli.app, ["--version"])` both exit without calling `_maybe_check_for_update` (mocked and asserted `.called == False`). |
@@ -30,7 +30,7 @@ overrides_applied: 0
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
-|----------|----------|--------|---------|
+| -------- | -------- | ------ | ------- |
 | `src/pcswitcher/cli.py` | `UpdateFailedError`, `_install_and_verify`, `_maybe_check_for_update`, `--no-version-check` option + `ctx` on `main` | VERIFIED | All four present: class at `524`, function at `576`, function at `693`, option+ctx at `97-108`. Confirmed importable and callable via `python -c` symbol check. |
 | `tests/unit/cli/test_version_check.py` | Covers every CONTEXT.md branch plus execvp-OSError fallback | VERIFIED | 13 tests, all PASSED. Covers upgrade-yes/no, already-up-to-date, ahead-of-stable, non-TTY, flag skip, env skip, check-raises, upgrade-fails, execvp-OSError, `--no-version-check` CliRunner, `self` guard (both directions). |
 | `README.md` | Documents `--no-version-check`, startup check, `PCSWITCHER_SKIP_VERSION_CHECK` | VERIFIED | Lines 132-133 (flag in Available Commands), 136-138 (Startup version check subsection), 159 (rate-limit note extended to mention the startup check). |
@@ -38,7 +38,7 @@ overrides_applied: 0
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
-|------|-----|-----|--------|---------|
+| ---- | --- | --- | ------ | ------- |
 | `main` callback | `_maybe_check_for_update` | `ctx.invoked_subcommand not in (None, 'self')` guard | WIRED | `cli.py:116-117`; behaviorally confirmed both directions (`self` skips, `logs` invokes) via `test_self_subcommand_skips_version_check` / `test_non_self_subcommand_invokes_version_check`, plus live bare/`--version` checks in this session. |
 | `_maybe_check_for_update` + `update` | `_install_and_verify(release)` | Shared helper, fork at call sites | WIRED | `_maybe_check_for_update` at `cli.py:727` (warn+return on failure), `update` at `cli.py:683` (print+exit on failure) — same helper, different `except` bodies. |
 | Re-exec guard | `os.execvp(sys.argv[0], sys.argv)` | `PCSWITCHER_SKIP_VERSION_CHECK=1` set immediately before | WIRED | `cli.py:737-743`; test asserts env var == "1" and `execvp` called with exact argv. |
@@ -46,7 +46,7 @@ overrides_applied: 0
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
-|----------|---------|--------|--------|
+| -------- | ------- | ------ | ------ |
 | Full unit test file | `uv run pytest tests/unit/cli/test_version_check.py -q` | 13 passed | PASS |
 | Lint | `uv run ruff check src/pcswitcher/cli.py tests/unit/cli/test_version_check.py` | All checks passed | PASS |
 | Format | `uv run ruff format --check .` | 88 files already formatted | PASS |

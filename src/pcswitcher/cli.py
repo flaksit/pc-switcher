@@ -21,7 +21,7 @@ from rich.text import Text
 from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
-from pcswitcher.models import SyncAbortedByUser, SyncLockedError, SyncSession
+from pcswitcher.models import SessionStatus, SyncAbortedByUser, SyncLockedError, SyncSession
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.terminal import is_interactive
 from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
@@ -351,7 +351,13 @@ async def _async_run_sync(
         main_task = asyncio.create_task(orchestrator.run())
 
         try:
-            await main_task
+            session = await main_task
+            # A completed run is not automatically a clean one: per-item job failures are
+            # collected rather than raised (D-27), so the exit code comes from the session
+            # status the orchestrator derived from job_results, not from "nothing raised".
+            if session.status is SessionStatus.FAILED:
+                console.print(f"\n[bold red]Sync finished with failures:[/bold red] {session.error_message}")
+                return 1
             return 0
 
         except asyncio.CancelledError:

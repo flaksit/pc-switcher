@@ -23,12 +23,14 @@ Test Coverage:
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 import pcswitcher
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.models import LogLevel
+from pcswitcher.orchestrator import Orchestrator
 
 
 class TestConfigLoading:
@@ -387,6 +389,22 @@ sync_jobs:
 
         # dummy_fail should be disabled
         assert config.sync_jobs.get("dummy_fail") is False
+
+    def test_manual_installs_sync_is_an_accepted_job_name(self, tmp_path: Path) -> None:
+        """The schema accepts `manual_installs_sync` as a valid sync_jobs key (D-15/D-18):
+        the fourth package job has its own independent enable flag."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            """
+sync_jobs:
+  manual_installs_sync: true
+  folder_sync: true
+"""
+        )
+
+        config = Configuration.from_yaml(config_file)
+
+        assert config.sync_jobs["manual_installs_sync"] is True
 
     def test_core_edge_unknown_job_in_config(self, tmp_path: Path) -> None:
         """Edge case: Unknown job name in sync_jobs is rejected.
@@ -749,3 +767,112 @@ class TestShippedDefaultConfig:
         config = Configuration.from_yaml(self._default_config_path())
         order = list(config.sync_jobs)
         assert order.index("folder_sync") < order.index("vscode_state_sync")
+
+    def test_package_jobs_ship_disabled(self) -> None:
+        """snap_sync, flatpak_sync and manual_installs_sync are valid sync_jobs keys,
+        shipped opted-out by default."""
+        config = Configuration.from_yaml(self._default_config_path())
+        assert config.sync_jobs["snap_sync"] is False
+        assert config.sync_jobs["flatpak_sync"] is False
+        assert config.sync_jobs["manual_installs_sync"] is False
+
+    def test_package_jobs_precede_folder_sync(self) -> None:
+        """D-17: all four package jobs (apt_sync, snap_sync, flatpak_sync,
+        manual_installs_sync) resolve before folder_sync in sync_jobs insertion order —
+        the order both _discover_and_validate_jobs and _first_sync_scopes iterate
+        directly, so apps land before folder_sync's data does.
+        """
+        config = Configuration.from_yaml(self._default_config_path())
+        order = list(config.sync_jobs)
+        folder_sync_index = order.index("folder_sync")
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
+            assert order.index(job_name) < folder_sync_index
+
+    def test_shipped_config_omits_empty_package_sections(self) -> None:
+        """D-32: no top-level apt_sync/snap_sync/flatpak_sync/manual_installs_sync section
+        ships; a job earns a section only when it has a real key, and its resolved config
+        defaults to an empty mapping."""
+        config = Configuration.from_yaml(self._default_config_path())
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
+            assert config.get_job_config(job_name) == {}
+
+    def test_config_omitting_package_sections_validates(self, tmp_path: Path) -> None:
+        """D-32: a config that enables every package job via sync_jobs but ships no
+        top-level section for them still validates (root additionalProperties: false
+        rejects unknown keys, but an absent section is not one), and each job's resolved
+        config is an empty mapping."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            """
+sync_jobs:
+  apt_sync: true
+  snap_sync: true
+  flatpak_sync: true
+  manual_installs_sync: true
+  folder_sync: true
+"""
+        )
+
+        config = Configuration.from_yaml(config_file)
+
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
+            assert config.get_job_config(job_name) == {}
+
+
+class TestPackageJobsBeforeFolderSyncStructuralCheck:
+    """WR-02 regression: D-17 ordering must be a structural `ConfigError`, not just a
+    convention the shipped `default-config.yaml`'s key order happens to satisfy — a
+    user who hand-edits their own `config.yaml` (e.g. appending a newly-enabled
+    `flatpak_sync: true` after an existing `folder_sync: true` line) must get a loud
+    error instead of a silent flatpak-data-race.
+    """
+
+    def _mock_config(self, sync_jobs: dict[str, bool]) -> MagicMock:
+        config = MagicMock(spec=Configuration)
+        config.sync_jobs = sync_jobs
+        return config
+
+    def _orchestrator(self, sync_jobs: dict[str, bool]) -> Orchestrator:
+        return Orchestrator(target="target-host", config=self._mock_config(sync_jobs))
+
+    def test_package_job_after_folder_sync_yields_config_error(self) -> None:
+        orchestrator = self._orchestrator({"folder_sync": True, "flatpak_sync": True})
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert len(errors) == 1
+        assert errors[0].job == "flatpak_sync"
+        assert "folder_sync" in errors[0].message
+
+    def test_all_three_package_jobs_after_folder_sync_yields_three_errors(self) -> None:
+        orchestrator = self._orchestrator(
+            {"folder_sync": True, "apt_sync": True, "snap_sync": True, "flatpak_sync": True}
+        )
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert {e.job for e in errors} == {"apt_sync", "snap_sync", "flatpak_sync"}
+
+    def test_package_jobs_before_folder_sync_yields_no_error(self) -> None:
+        orchestrator = self._orchestrator(
+            {"apt_sync": True, "snap_sync": True, "flatpak_sync": True, "folder_sync": True}
+        )
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert errors == []
+
+    def test_disabled_package_job_after_folder_sync_yields_no_error(self) -> None:
+        """A disabled job's position is irrelevant — only enabled jobs can race."""
+        orchestrator = self._orchestrator({"folder_sync": True, "flatpak_sync": False})
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert errors == []
+
+    def test_folder_sync_disabled_yields_no_error_regardless_of_order(self) -> None:
+        orchestrator = self._orchestrator({"folder_sync": False, "flatpak_sync": True})
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert errors == []

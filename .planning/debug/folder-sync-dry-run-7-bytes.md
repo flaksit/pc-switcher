@@ -1,11 +1,12 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: |
   Ran `pc-switcher sync fleksi --dry-run`. Log shows:
   "Completed sync of '/home/janfr': 1119279 files transferred, 7 bytes, 18514 deletions".
   Only 7 bytes reported for 1.1M files — is that right?
 created: 2026-07-19
-updated: 2026-07-19
+updated: 2026-07-22
+resolution: "Root cause: `_PROGRESS2_RE` captured only the fragment of rsync's byte counter after the last comma (e.g. `29,958,458` → `458`). Fixed by parsing the comma-grouped counter (commit 047daa9, merged in #184) with a regression test in tests/unit/jobs/test_folder_sync.py."
 ---
 
 # Debug: folder-sync dry-run reports only 7 bytes
@@ -20,8 +21,8 @@ updated: 2026-07-19
 
 ## Current Focus
 
-status: ROOT CAUSE CONFIRMED — proceeding to fix_and_verify.
-next_action: Apply regex fix to `_PROGRESS2_RE`, correct misleading locale comments/docstrings, add regression test, run full test suite.
+status: RESOLVED. Regex fix merged in #184 with a regression test.
+next_action: none.
 
 reasoning_checkpoint:
   hypothesis: >

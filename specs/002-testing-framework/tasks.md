@@ -262,7 +262,7 @@ With multiple developers:
 ## Summary
 
 | Metric | Value |
-|--------|-------|
+| ------ | ----- |
 | Total tasks | 41 |
 | Phase 1 (Setup) | 3 tasks |
 | Phase 2 (Foundational) | 7 tasks |

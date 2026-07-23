@@ -18,7 +18,15 @@ if TYPE_CHECKING:
 
 # Single source of truth for the remote pc-switcher config directory and file path.
 # folder_sync derives its tool-state filter token from CONFIG_REMOTE_DIR rather than
-# hardcoding a second copy of the literal (CR-01 empty-prefix tool-state filter).
+# hardcoding a second copy of the literal (CR-01 empty-prefix tool-state filter);
+# packages/state.py derives its decision-file and snippet-registry relpaths from
+# CONFIG_REMOTE_DIR the same way.
+#
+# config_sync carries exactly ONE file, config.yaml (D-23): it is the single required
+# config a first sync needs. The shared install-snippet registry is NOT carried here —
+# it travels by `manual_installs_sync`'s own post-review `send_file` push, because
+# config_sync runs before any review (sync step 9) and so cannot carry a snippet the
+# user authored during that review.
 CONFIG_REMOTE_DIR: str = "~/.config/pc-switcher"
 CONFIG_REMOTE_PATH: str = f"{CONFIG_REMOTE_DIR}/config.yaml"
 
@@ -275,9 +283,15 @@ async def sync_config_to_target(
     2. Target config differs: Display diff, offer three choices
     3. Target config matches: Skip silently
 
+    Carries exactly one file, the caller-supplied `source_config_path` (config.yaml). The
+    install-snippet registry is NOT transferred here — `manual_installs_sync` pushes it
+    itself after its review (D-23).
+
     Args:
         target: RemoteExecutor for target machine
-        source_config_path: Path to source config file
+        source_config_path: Path to source config file; read exactly as given, never
+            re-derived from its parent directory (a caller whose config is named something
+            other than `config.yaml` must have that file transferred, not a sibling).
         ui: TerminalUI instance (will be paused during prompts)
         console: Rich console for display
         auto_accept: If True, auto-accept source config without prompting
@@ -289,7 +303,7 @@ async def sync_config_to_target(
     Raises:
         RuntimeError: If config sync fails due to file operations
     """
-    # Read source config
+    # Read source config from the path the caller passed, whatever its name.
     if not source_config_path.exists():
         raise RuntimeError(f"Source config not found: {source_config_path}")
 

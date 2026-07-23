@@ -1,375 +1,197 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-06-29
+**Analysis Date:** 2026-07-23
+
+Full authoring rules: `docs/dev/testing-guide.md`. This document records the framework, layout, and patterns as they exist.
 
 ## Test Framework
 
 **Runner:**
-- Framework: pytest 9.0.1+
-- Async support: pytest-asyncio 1.3.0+
-- Config: `pyproject.toml` under `[tool.pytest]`
+- `pytest >= 9.1.1` with `pytest-asyncio >= 1.4.0` and `pytest-randomly >= 4.1.0` (random test ordering — tests must be order-independent)
+- `freezegun >= 1.5.5` for deterministic timestamps
+- Config: `[tool.pytest]` table in `pyproject.toml`
 
-**Assertion Library:**
-- Built-in pytest assertions
-- Exception testing: `pytest.raises()`
+**Config highlights (`pyproject.toml`):**
+- `addopts = ["--strict-markers", "-v", "-m", "not integration"]` — integration tests are excluded by default
+- `asyncio_mode = "auto"`, module-scoped default fixture and test loops
+- `log_cli = true`, `log_cli_level = "WARNING"` (third-party noise suppressed; `tests/conftest.py` raises `pcswitcher` and `tests` loggers to DEBUG)
+
+**Assertion library:** plain `assert` + `unittest.mock` (`AsyncMock`, `MagicMock`, `patch`).
 
 **Run Commands:**
 ```bash
-uv run pytest                                    # Run all tests (excludes integration)
-uv run pytest tests/unit tests/contract         # Unit + contract tests only
-uv run pytest tests/integration                 # Integration tests (requires VM env)
-uv run pytest -k "test_name"                    # Run tests matching pattern
-uv run pytest tests/unit/test_version.py        # Specific test file
-uv run pytest tests/unit/test_version.py::TestVersionStr::test_str  # Specific test
-uv run pytest -v                                # Verbose output
-uv run pytest --tb=short                        # Shorter traceback format
+uv run pytest                                   # unit + contract (integration deselected)
+uv run pytest tests/unit tests/contract -v      # what CI runs
+uv run pytest tests/unit/test_lock.py::TestSyncLock::test_release_is_idempotent
+tests/run-integration-tests.sh                  # integration, provisions/reset VMs
+tests/run-integration-tests.sh --skip-reset -k test_ssh
+uv run pytest tests/local_rsync                 # real local rsync, no VMs
 ```
+
+Always `uv run pytest`; bare `pytest` or `python -m pytest` fails with `No module named 'pcswitcher'`.
 
 ## Test File Organization
 
-**Location:**
-- Unit tests: `tests/unit/` - no external dependencies, fast
-- Contract tests: `tests/contract/` - verify interface compliance
-- Integration tests: `tests/integration/` - require VM infrastructure
-- Tests for jobs: `tests/unit/jobs/`, `tests/unit_jobs/` (legacy pattern)
-- Tests for orchestrator: `tests/unit/orchestrator/`
-- Tests for CLI: `tests/unit/cli/`
-
-**Naming:**
-- Test files: `test_<module>.py` (e.g., `test_version.py`, `test_lock.py`)
-- Test classes: `Test<Feature>` (e.g., `TestVersionStr`, `TestGetCurrentVersion`)
-- Test functions: `test_<what_is_tested>_<expected_result>()` or `test_<behavior>_<condition>()`
-
-**Structure:**
-```
+```text
 tests/
-├── conftest.py                 # Shared fixtures (session scope)
-├── unit/
-│   ├── conftest.py            # Unit test fixtures
-│   ├── test_version.py
-│   ├── test_lock.py
-│   ├── jobs/
-│   │   ├── test_snapshot_job.py
-│   │   └── conftest.py        # Job-specific fixtures if needed
-│   └── orchestrator/
-│       ├── test_job_lifecycle.py
-│       └── test_lock_conflicts.py
-├── contract/
-│   ├── test_executor_contract.py
-│   └── test_job_interface.py
-└── integration/
-    ├── conftest.py            # Integration fixtures (VM connections, etc.)
-    ├── test_end_to_end_sync.py
-    └── jobs/
-        └── test_install_on_target_job.py
+├── conftest.py              # global fixtures: logging reset, mock connection/executors, event bus
+├── unit/                    # mocked, fast — mirrors src layout
+│   ├── conftest.py          # mock JobContext factory, frozen_time
+│   ├── cli/ executor/ jobs/ orchestrator/ ui/
+│   └── test_lock.py, test_logging.py, test_version.py, ...
+├── unit_jobs/               # legacy job unit tests (prefer tests/unit/jobs/)
+├── contract/                # job-interface conformance
+├── local_rsync/             # shells out to a real local rsync binary
+├── integration/             # real SSH against pc1/pc2 VMs
+│   ├── conftest.py          # VM connections, executors, env-var gate, auto marker
+│   ├── scripts/             # VM reset/provisioning helpers
+│   └── benchmarks/          # perf, excluded from CI
+├── run-integration-tests.sh
+├── manual-playbook.md       # manual TUI verification steps
+└── self-update-test-playbook.md
 ```
+
+**Tiers:** unit (logic, mocked executors) → contract (job interface) → local_rsync (real binary, no VM) → integration (real SSH/btrfs) → manual playbook (TUI visuals). Most requirements need both a unit and an integration test.
+
+## Naming
+
+**Spec-driven tests** (requirements from `specs/*/spec.md`): `test_<feature>_<req-id>_<description>`, docstring opening with the requirement ID.
+
+```python
+async def test_core_fr_version_check(self, mock_install_context: JobContext) -> None:
+    """CORE-FR-VERSION-CHECK: System must check target version and install from GitHub."""
+```
+
+**General tests:** `test_<subject>_<expected_behavior>`, e.g. `test_acquire_creates_lock_file`.
+
+**Grouping:** behavior-scoped classes named `Test<Subject><Aspect>` — `TestInstallOnTargetJobVersionCheck`, `TestSyncLock`, `TestStartPersistentRemoteLock`. No `unittest.TestCase`; plain classes with fixture-injected args.
 
 ## Test Structure
 
-**Suite Organization:** Class-based grouping with related test methods:
-
 ```python
-class TestGetCurrentVersion:
-    """Tests for get_this_version()."""
+class TestDiskSpaceMonitorValidation:
+    """Test validate() method for system state validation."""
 
-    def test_get_this_version_success(self) -> None:
-        """Should return Version object from package metadata."""
-        # Arrange
-        with patch("pcswitcher.version.get_pkg_version") as mock_version:
-            mock_version.return_value = "1.2.3"
+    @pytest.mark.asyncio
+    async def test_validate_checks_mount_point_exists(self, mock_job_context: JobContext) -> None:
+        """validate() should check that mount point exists."""
+        job = DiskSpaceMonitorJob(mock_job_context, Host.SOURCE, "/")
+        errors = await job.validate()
 
-            # Act
-            result = get_this_version()
-
-            # Assert
-            assert isinstance(result, Version)
-            assert result.pep440_str() == "1.2.3"
-            mock_version.assert_called_once_with("pcswitcher")
+        assert errors == []
+        mock_job_context.source.run_command.assert_called_once_with("test -d /")
 ```
 
-**Docstring Pattern:** One sentence explaining the test expectation (what SHOULD happen). Example: "Should return Version object from package metadata." May reference requirements: "CORE-FR-LOCK: Locking prevents concurrent execution."
-
-**Patterns:**
-
-### Synchronous Tests
+Module-level marker application for a whole file:
 
 ```python
-class TestLockPath:
-    """Tests for lock path utilities."""
-
-    def test_lock_file_name_is_unified(self) -> None:
-        """LOCK_FILE_NAME should be a single unified name."""
-        assert LOCK_FILE_NAME == "pc-switcher.lock"
+pytestmark = [
+    pytest.mark.local_rsync,
+    pytest.mark.skipif(shutil.which("rsync") is None, reason="requires local rsync binary"),
+]
 ```
 
-### Async Tests
+`@pytest.mark.parametrize` is used sparingly (`tests/unit/test_version.py`, `tests/unit/test_disk_format.py`) — preferred for pure format/parse tables, not for behavioral variants.
 
-```python
-@pytest.mark.asyncio
-class TestBtrfsSnapshotJobDryRun:
-    """Tests for BtrfsSnapshotJob dry-run behavior."""
+## Fixtures
 
-    async def test_btrfs_snapshot_job_dry_run_logs_without_creating(
-        self,
-        mock_job_context_factory: Any,
-    ) -> None:
-        """Verify dry-run mode logs snapshot names but doesn't create them."""
-        context = mock_job_context_factory(config={...}, dry_run=True)
-        job = BtrfsSnapshotJob(context)
-        await job.execute()
-        # assertions...
-```
+From `tests/conftest.py`:
+- `_configure_test_logging` (session, autouse) — root at WARNING, `pcswitcher`/`tests` at DEBUG
+- `_reset_logging_after_test` (autouse) — clears handlers/propagate so `setup_logging()` calls don't leak into `caplog` assertions
+- `mock_connection`, `mock_executor`, `mock_remote_executor`, `mock_event_bus`, `sample_command_result`, `failed_command_result`
 
-### Parametrized Tests
+From `tests/unit/conftest.py`:
+- `mock_local_executor`, `mock_remote_executor`, `mock_event_bus`
+- `mock_job_context` — fully mocked `JobContext`; plus a factory fixture for custom config
+- `frozen_time` / its companion datetime fixture for deterministic timestamps
 
-```python
-class TestVersionRoundTrip:
-    """Tests for round-trip version conversions."""
+From `tests/integration/conftest.py`:
+- `pc1_connection`, `pc2_connection`, `pc1_executor`, `pc2_executor`, `test_volume` — all module-scoped
+- `pytest_collection_modifyitems` auto-applies `@pytest.mark.integration` to everything under `tests/integration/`
+- session fixture asserts `PC_SWITCHER_TEST_PC1_HOST` / `PC2_HOST` / `TEST_USER` are set
 
-    @pytest.mark.parametrize(
-        "pep440",
-        [
-            "1.0.0",
-            "1.0.0a1",
-            "1.0.0.post1",
-            "1.0.0a1.post2.dev3+local",
-        ],
-    )
-    def test_pep440_to_semver_to_pep440(self, pep440: str) -> None:
-        """PEP 440 → SemVer → PEP 440 should preserve meaning."""
-        v = Version.parse_pep440(pep440)
-        semver_str = v.semver_str()
-        v2 = Version.parse_semver(semver_str)
-        assert v == v2
-```
+Per-test-file fixtures build a specialized `JobContext` on top of the shared mocks (see `tests/unit/jobs/test_install_on_target_job.py:24`).
 
 ## Mocking
 
-**Framework:** `unittest.mock`
-
-**Patterns:**
-
-### Basic Mocking
+**What to mock:** SSH connections, executors, the event bus, network/GitHub lookups, and the clock.
 
 ```python
-from unittest.mock import MagicMock, AsyncMock
-
-mock_executor = MagicMock()
 mock_executor.run_command = AsyncMock(
-    return_value=CommandResult(exit_code=0, stdout="", stderr="")
+    return_value=CommandResult(exit_code=0, stdout="output", stderr="")
 )
+
+# ordered command sequence
+mock_ctx.target.run_command = AsyncMock(side_effect=[
+    CommandResult(exit_code=127, stdout="", stderr="command not found"),
+    CommandResult(exit_code=0, stdout="", stderr=""),
+])
+
+# command-dependent dispatch
+async def mock_run_command(cmd: str) -> CommandResult:
+    return CommandResult(exit_code=0 if "test -d" in cmd else 1, stdout="", stderr="")
+mock_executor.run_command = AsyncMock(side_effect=mock_run_command)
+
+# patch module-level lookups where they are used, not where defined
+with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=mock_version):
+    ...
 ```
 
-### Patching
+**What NOT to mock:** pure logic under test, dataclasses/models, filesystem work that `tmp_path` can host, and rsync filter semantics (covered by real rsync in `tests/local_rsync/`).
+
+Debug mismatches with `print(mock_executor.run_command.call_args_list)`.
+
+## Integration Test Rules
+
+- VMs reset to baseline once per pytest session, not between tests; the baseline has no pc-switcher installed
+- Every test cleans its own artifacts in `try/finally`, tolerating failure (`... 2>/dev/null || true`)
+- Artifact names must be unique and descriptive: `/.snapshots/test-foo-verify-readonly`
+- Each `run_command()` costs ~70–80 ms SSH round trip; chain with `&&` when more than 3–5 sequential commands are needed
+- Never hardcode VM IPs or paths — use env vars and fixtures
+- Integration CI (`.github/workflows/integration-tests.yml`) runs only on non-draft PRs targeting `main`; stacked PRs based on another branch skip integration entirely
+
+## Contract Tests
+
+`tests/contract/` verifies every job satisfies the `Job` interface: presence of `name` and `CONFIG_SCHEMA`, `validate_config()` returning `[]` for valid config and `list[ConfigError]` for invalid, `validate()` returning `list[ValidationError]`, and `execute()` completing. Add a contract entry when introducing a new job class.
+
+## Markers
 
 ```python
-with patch("pcswitcher.version.get_pkg_version") as mock_version:
-    mock_version.return_value = "1.2.3"
-    result = get_this_version()
-    mock_version.assert_called_once_with("pcswitcher")
+@pytest.mark.integration   # requires VMs (auto-applied in tests/integration/)
+@pytest.mark.local_rsync   # shells out to real rsync; skipped if the binary is absent
+@pytest.mark.slow          # >5 seconds
+@pytest.mark.benchmark     # perf, not run by default
 ```
-
-### Fixture-Based Mocks
-
-Fixtures in `conftest.py` provide reusable mocks:
-- `mock_connection`: asyncssh.SSHClientConnection mock
-- `mock_executor`: Executor protocol mock (local or remote)
-- `mock_remote_executor`: RemoteExecutor with file transfer methods
-- `mock_event_bus`: EventBus mock
-- `mock_job_context`: Fully mocked JobContext
-- `mock_job_context_factory`: Factory for creating JobContext with custom config
-
-**What to Mock:**
-- External I/O: file system, network, SSH
-- External services: GitHub API, cloud services
-- Slow operations: file transfers, database queries
-- Non-deterministic operations: system calls, timestamps
-
-**What NOT to Mock:**
-- Value objects: dataclasses, enums (use real instances)
-- Data structures: dicts, lists (use real instances)
-- Core business logic: let it run (create integration tests if needed)
-- Time for deterministic behavior: use `freezegun` instead of mocking `datetime`
-
-## Fixtures and Factories
-
-**Test Data:** Fixtures for common results:
-
-```python
-@pytest.fixture
-def success_result() -> CommandResult:
-    """A successful command result with empty output."""
-    return CommandResult(exit_code=0, stdout="", stderr="")
-
-@pytest.fixture
-def failed_result() -> CommandResult:
-    """A failed command result with error message."""
-    return CommandResult(exit_code=1, stdout="", stderr="error occurred")
-```
-
-**Location:**
-- Shared fixtures: `tests/conftest.py` (session/module scope)
-- Unit test fixtures: `tests/unit/conftest.py` (unit-specific)
-- Integration fixtures: `tests/integration/conftest.py` (VM setup, SSH connections)
-- Job-specific: `tests/unit/jobs/conftest.py` if needed
-
-**Factory Fixture Pattern:**
-
-```python
-@pytest.fixture
-def mock_job_context_factory(
-    mock_local_executor: MagicMock,
-    mock_remote_executor: MagicMock,
-    mock_event_bus: MagicMock,
-) -> Callable[[dict[str, Any] | None, bool], JobContext]:
-    """Factory fixture to create JobContext with custom config."""
-
-    def create_context(config: dict[str, Any] | None = None, dry_run: bool = False) -> JobContext:
-        return JobContext(
-            config=config or {},
-            source=mock_local_executor,
-            target=mock_remote_executor,
-            event_bus=mock_event_bus,
-            session_id="test-session-12345678",
-            source_hostname="source-host",
-            target_hostname="target-host",
-            dry_run=dry_run,
-        )
-
-    return create_context
-```
+`--strict-markers` is on: register any new marker in `pyproject.toml` before using it.
 
 ## Coverage
 
-**Requirements:** No enforced minimum, but tests should cover happy path and error cases.
+No coverage threshold is configured or enforced in CI. Ad-hoc report:
 
-**View Coverage:**
 ```bash
-uv run pytest --cov=src/pcswitcher --cov-report=term-missing
+uv run pytest tests/unit --cov=src/pcswitcher --cov-report=html
 ```
 
-## Test Types
-
-**Unit Tests** (`tests/unit/`): Scope: Single function or class in isolation. Mocks: All external dependencies. Speed: Milliseconds. Example: `test_version.py` tests Version parsing without network calls.
-
-**Contract Tests** (`tests/contract/`): Scope: Verify interface implementations. Example: `test_executor_contract.py` verifies both LocalExecutor and RemoteExecutor implement Executor protocol. Mocks: Only truly external (network, FS for some).
-
-**Integration Tests** (`tests/integration/`): Scope: Multiple components working together. Environment: Requires VM infrastructure (HCloud). Skipped: If environment variables `PC_SWITCHER_TEST_PC1_HOST`, `PC_SWITCHER_TEST_PC2_HOST`, `PC_SWITCHER_TEST_USER`, `HCLOUD_TOKEN` not set. Marked: `@pytest.mark.integration`. Run: `uv run pytest tests/integration` (if VMs available).
-
-**Async Tests:** Marked: `@pytest.mark.asyncio`. Mode: `auto` (pytest-asyncio in auto mode, see `pyproject.toml`). Fixture scope: `module` default for connection fixtures (module scoped).
+Spec-requirement coverage is tracked instead in `specs/<feature>/contracts/coverage-map.yaml` — update it when a test covers a spec requirement.
 
 ## Common Patterns
 
-**Async Testing:**
+**Async testing:** `asyncio_mode = "auto"`, but existing tests still carry explicit `@pytest.mark.asyncio`; match the surrounding file. Fixtures and tests default to module-scoped loops — do not override the scope without a reason, or async objects leak across loops.
+
+**Error testing:**
 ```python
-@pytest.mark.asyncio
-async def test_run_command_success(mock_executor: MagicMock) -> None:
-    """Should return CommandResult with exit code 0."""
-    result = await mock_executor.run_command("echo test")
-    assert result.exit_code == 0
+with pytest.raises(SyncLockedError, match="held by"):
+    await lock.acquire()
 ```
 
-**Error Testing:**
-```python
-def test_find_one_version_no_version_raises(self) -> None:
-    """Should raise ValueError for invalid version string."""
-    with pytest.raises(ValueError, match="No version string found"):
-        find_one_version("no version here")
-```
+**Filesystem testing:** use `tmp_path`; write helper builders (`_write(path, content)`) instead of fixture files where the tree is small.
 
-**Fixture Parametrization:**
-```python
-@pytest.fixture(params=["pep440", "semver"])
-def version_format(request: pytest.FixtureRequest) -> str:
-    """Parametrized fixture for testing both version formats."""
-    return request.param
+**TUI testing:** poll for a render marker instead of `sleep()` — rich 15's `Live` paints its first frame after the initial 10 Hz tick. Visual-only changes go into `tests/manual-playbook.md`.
 
-def test_parse_handles_both_formats(version_format: str) -> None:
-    """Should parse both PEP 440 and SemVer formats."""
-    if version_format == "pep440":
-        v = Version.parse_pep440("1.0.0a1")
-    else:
-        v = Version.parse_semver("1.0.0-alpha.1")
-    assert v.major == 1
-```
+## CI
 
-**Time Freezing:**
-```python
-@pytest.fixture
-def frozen_time():
-    """Time-freezing fixture for deterministic tests."""
-    return freeze_time("2025-01-15T10:30:00Z")
-
-def test_timestamp_deterministic(frozen_time):
-    """Should produce consistent timestamps."""
-    with frozen_time:
-        now = datetime.now(UTC)
-        assert now.year == 2025
-```
-
-**Monkeypatching:**
-```python
-def test_lock_path_uses_home_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """get_lock_path() should return path in .local/share/pc-switcher."""
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    expected = tmp_path / ".local/share/pc-switcher" / LOCK_FILE_NAME
-    assert get_lock_path() == expected
-```
-
-## Test Markers
-
-**Defined Markers** (from `pyproject.toml`):
-```python
-markers = [
-    "integration: Integration tests (require VM infrastructure)",
-    "slow: Tests that take >5 seconds",
-    "benchmark: Performance benchmarks (not run by default)",
-]
-```
-
-**Usage:**
-```python
-@pytest.mark.slow
-def test_long_operation() -> None:
-    """This test takes several seconds."""
-    pass
-
-@pytest.mark.integration
-async def test_full_sync_on_vms(pc1_executor, pc2_executor) -> None:
-    """Run actual sync between test VMs."""
-    pass
-```
-
-**Running by Marker:**
-```bash
-uv run pytest -m "not integration"      # Exclude integration tests
-uv run pytest -m "slow"                 # Run only slow tests
-uv run pytest -m "benchmark"            # Run benchmarks
-```
-
-## Pytest Configuration
-
-**Config Location:** `pyproject.toml` under `[tool.pytest]`
-
-**Key Settings:**
-- `asyncio_mode = "auto"`: Automatically apply asyncio to test functions
-- `asyncio_default_fixture_loop_scope = "module"`: Fixtures use module scope by default
-- `asyncio_default_test_loop_scope = "module"`: Tests use module scope by default
-- `testpaths = ["tests"]`: Search for tests in `tests/` directory
-- `log_cli = true`: Print logs during test execution
-- `log_cli_level = "WARNING"`: Suppress noisy third-party logs
-
-**Markers Registration:**
-```python
-markers = [
-    "integration: Integration tests (require VM infrastructure)",
-    "slow: Tests that take >5 seconds",
-    "benchmark: Performance benchmarks (not run by default)",
-]
-```
-
-**Strict Markers:** `-m` flag with unknown marker fails: prevents typos in marker names.
-
----
-
-*Testing analysis: 2026-06-29*
+`.github/workflows/ci.yml` on every branch push, gated by a paths filter (`src/**`, `tests/unit/**`, `tests/contract/**`, `pyproject.toml`, `uv.lock`, `ruff.toml`):
+1. `uv run basedpyright`
+2. `uv run ruff check` + `uv run ruff format --check`
+3. `uv run codespell`
+4. `uv run pytest tests/unit tests/contract -v`

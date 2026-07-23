@@ -124,7 +124,7 @@ All plan verification commands green:
 ## Commits
 
 | Hash | Task | Description |
-|------|------|-------------|
+| ---- | ---- | ----------- |
 | fea6dc1 | Task 1 RED | test(01-05): add failing tests for _build_rsync_cmd |
 | f2dc285 | Task 1 GREEN | feat(01-05): implement _build_rsync_cmd in FolderSyncJob |
 | 237a84e | Task 2 RED | test(01-05): add failing tests for execute(), _stream_rsync, and FolderSyncJob contract |
@@ -165,7 +165,7 @@ None. `FolderSyncJob.execute()` is fully implemented. No hardcoded empty values 
 No new network endpoints, auth paths, or schema changes beyond what the plan's threat model already covers:
 
 | Mitigation | Status |
-|-----------|--------|
+| --------- | ------ |
 | T-05-01 (shell injection) | Applied: shlex.quote on all config-derived values |
 | T-05-02 (rsync-as-root via sudo) | Applied: sudoers scoped to /usr/bin/rsync documented in user_setup |
 | T-05-03 (--delete mirror) | Applied: gated by divergence guard (plan 04 validate()) |
