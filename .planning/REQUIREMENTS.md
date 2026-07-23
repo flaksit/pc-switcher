@@ -15,7 +15,7 @@ These requirements carry the full project vision (all sync scopes plus workflow,
 ### Sync Scope
 
 - [x] **REQ-sync-scope-user-data**: Sync `/home` and `/root` (documents, code, configs, application data) via a generic per-folder include/exclude mechanism usable for any path. Include dev-tool caches (uv, pip, cargo, npm) and VS Code `User/` state; exclude regenerable caches (VS Code cache dirs, browser caches). (`/root` is included here because rsync must run as root to preserve cross-owner files; `/etc` and other system config remain REQ-sync-scope-app-and-system-config, Phase 3.)
-- [ ] **REQ-sync-scope-packages**: Sync installed packages across apt, snap, flatpak, manual .debs, custom PPAs, and install-script packages; detect package conflicts / version mismatches. Includes the repository state those installs depend on: `/etc/apt/sources.list.d`, `/etc/apt/keyrings`, `/etc/apt/trusted.gpg.d`, `/etc/apt/preferences.d`, `/etc/apt/apt.conf.d`, flatpak remotes, and snap channels. (`/etc/apt` moved here from REQ-sync-scope-app-and-system-config, Phase 2.)
+- [x] **REQ-sync-scope-packages**: Sync installed packages across apt, snap, flatpak, manual .debs, custom PPAs, and install-script packages; detect package conflicts / version mismatches. Includes the repository state those installs depend on: `/etc/apt/sources.list.d`, `/etc/apt/keyrings`, `/etc/apt/trusted.gpg.d`, `/etc/apt/preferences.d`, `/etc/apt/apt.conf.d`, flatpak remotes, and snap channels. (`/etc/apt` moved here from REQ-sync-scope-app-and-system-config, Phase 2.)
 - [ ] **REQ-sync-scope-app-and-system-config**: Sync application configuration (GNOME desktop, cloud mounts, systemd services) and machine-independent system config (`/etc`, startup services, users/groups); detect conflicting system changes. (`/root` moved to REQ-sync-scope-user-data, Phase 1; `/etc/apt` is delivered by REQ-sync-scope-packages, Phase 2 — the rest of `/etc` remains here, Phase 3.)
 - [x] **REQ-sync-scope-file-metadata**: Preserve file metadata — owner, group, permissions, POSIX ACLs, timestamps.
 - [ ] **REQ-sync-scope-docker**: Sync Docker images, containers, volumes, and cache; detect running containers or incompatible states.
@@ -25,7 +25,7 @@ These requirements carry the full project vision (all sync scopes plus workflow,
 ### Exclusions and Safety
 
 - [x] **REQ-machine-specific-exclusions**: Never sync machine-specific items — SSH keys (`.ssh/id_*`), Tailscale config (`.config/tailscale`), hardware caches (GPU shaders, fontconfig), machine-specific packages and configuration.
-- [ ] **REQ-conflict-detection-no-resolution**: Detect conflicts arising from unsupported concurrent use and report them; resolution is manual (no automatic resolution).
+- [x] **REQ-conflict-detection-no-resolution**: Detect conflicts arising from unsupported concurrent use and report them; resolution is manual (no automatic resolution).
 
 ### Workflow and UX
 
@@ -78,8 +78,8 @@ Each requirement maps to the phase that first delivers it. Foundation requiremen
 | REQ-sync-scope-file-metadata | Phase 1 | Complete |
 | REQ-manual-sync-workflow | Phase 1 | Complete |
 | REQ-terminal-ux | Phase 1 | Complete |
-| REQ-sync-scope-packages | Phase 2 | Pending |
-| REQ-conflict-detection-no-resolution | Phase 2 (cross-cutting, per job) | Pending |
+| REQ-sync-scope-packages | Phase 2 | Complete |
+| REQ-conflict-detection-no-resolution | Phase 2 (cross-cutting, per job) | Complete |
 | REQ-sync-scope-app-and-system-config | Phase 3 | Pending |
 | REQ-sync-scope-docker | Phase 4 | Pending |
 | REQ-sync-scope-vms | Phase 5 | Pending |
