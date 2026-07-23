@@ -6,8 +6,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from rich.panel import Panel
 
 from pcswitcher.config_sync import (
+    SYNCED_CONFIG_FILENAMES,
     ConfigSyncAction,
     _copy_config_to_target,
     _generate_diff,
@@ -41,10 +43,23 @@ class TestGetTargetConfig:
             return_value=CommandResult(exit_code=0, stdout=config_content, stderr="")
         )
 
-        result = await _get_target_config(mock_remote_executor)
+        result = await _get_target_config(mock_remote_executor, "config.yaml")
 
         assert result == config_content
         mock_remote_executor.run_command.assert_called_once_with("cat ~/.config/pc-switcher/config.yaml 2>/dev/null")
+
+    async def test_returns_content_for_a_different_filename(self, mock_remote_executor: MagicMock) -> None:
+        """Should fetch whichever filename is passed, not just config.yaml."""
+        mock_remote_executor.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=0, stdout="snippets: {}", stderr="")
+        )
+
+        result = await _get_target_config(mock_remote_executor, "package-snippets.yaml")
+
+        assert result == "snippets: {}"
+        mock_remote_executor.run_command.assert_called_once_with(
+            "cat ~/.config/pc-switcher/package-snippets.yaml 2>/dev/null"
+        )
 
     async def test_returns_none_when_file_missing(self, mock_remote_executor: MagicMock) -> None:
         """Should return None when config file doesn't exist on target."""
@@ -52,7 +67,7 @@ class TestGetTargetConfig:
             return_value=CommandResult(exit_code=1, stdout="", stderr="No such file")
         )
 
-        result = await _get_target_config(mock_remote_executor)
+        result = await _get_target_config(mock_remote_executor, "config.yaml")
 
         assert result is None
 
@@ -62,7 +77,7 @@ class TestGetTargetConfig:
             return_value=CommandResult(exit_code=0, stdout="   \n  ", stderr="")
         )
 
-        result = await _get_target_config(mock_remote_executor)
+        result = await _get_target_config(mock_remote_executor, "config.yaml")
 
         assert result is None
 
@@ -111,7 +126,7 @@ class TestPromptNewConfig:
         """Should return True when user enters 'y'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="y"):
-            result = _prompt_new_config(console, "config: value")
+            result = _prompt_new_config(console, "config.yaml", "config: value")
 
         assert result is True
 
@@ -119,7 +134,7 @@ class TestPromptNewConfig:
         """Should return False when user enters 'n'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="n"):
-            result = _prompt_new_config(console, "config: value")
+            result = _prompt_new_config(console, "config.yaml", "config: value")
 
         assert result is False
 
@@ -129,10 +144,19 @@ class TestPromptNewConfig:
         config_content = "log_level: DEBUG"
 
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="n"):
-            _prompt_new_config(console, config_content)
+            _prompt_new_config(console, "config.yaml", config_content)
 
         # Verify console.print was called multiple times
         assert console.print.call_count >= 3
+
+    def test_panel_title_names_the_filename(self) -> None:
+        """Answering two prompts in a row must let the user tell them apart (Task 1)."""
+        console = MagicMock()
+        with patch("pcswitcher.config_sync.Prompt.ask", return_value="n"):
+            _prompt_new_config(console, "package-snippets.yaml", "snippets: {}")
+
+        printed = [str(call) for call in console.print.call_args_list]
+        assert any("package-snippets.yaml" in text for text in printed)
 
 
 class TestPromptConfigDiff:
@@ -142,7 +166,7 @@ class TestPromptConfigDiff:
         """Should return ACCEPT_SOURCE when user enters 'a'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="a"):
-            result = _prompt_config_diff(console, "diff")
+            result = _prompt_config_diff(console, "config.yaml", "diff")
 
         assert result == ConfigSyncAction.ACCEPT_SOURCE
 
@@ -150,7 +174,7 @@ class TestPromptConfigDiff:
         """Should return KEEP_TARGET when user enters 'k'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="k"):
-            result = _prompt_config_diff(console, "diff")
+            result = _prompt_config_diff(console, "config.yaml", "diff")
 
         assert result == ConfigSyncAction.KEEP_TARGET
 
@@ -158,7 +182,7 @@ class TestPromptConfigDiff:
         """Should return ABORT when user enters 'x'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="x"):
-            result = _prompt_config_diff(console, "diff")
+            result = _prompt_config_diff(console, "config.yaml", "diff")
 
         assert result == ConfigSyncAction.ABORT
 
@@ -167,10 +191,23 @@ class TestPromptConfigDiff:
         console = MagicMock()
 
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="x"):
-            _prompt_config_diff(console, "--- diff ---")
+            _prompt_config_diff(console, "config.yaml", "--- diff ---")
 
         # Verify console.print was called with options
         assert console.print.call_count >= 5  # Panel, diff, options
+
+    def test_diff_panel_title_names_the_filename(self) -> None:
+        """Answering two prompts in a row must let the user tell them apart (Task 1)."""
+        console = MagicMock()
+        with patch("pcswitcher.config_sync.Prompt.ask", return_value="x"):
+            _prompt_config_diff(console, "package-snippets.yaml", "--- diff ---")
+
+        titles = [
+            str(call.args[0].title)
+            for call in console.print.call_args_list
+            if call.args and isinstance(call.args[0], Panel)
+        ]
+        assert any("package-snippets.yaml" in title for title in titles)
 
 
 class TestCopyConfigToTarget:
@@ -189,7 +226,7 @@ class TestCopyConfigToTarget:
         )
         mock_remote_executor.send_file = AsyncMock()
 
-        await _copy_config_to_target(mock_remote_executor, config_file)
+        await _copy_config_to_target(mock_remote_executor, "config.yaml", config_file)
 
         # Verify mkdir was called
         mkdir_call = mock_remote_executor.run_command.call_args_list[0]
@@ -198,6 +235,27 @@ class TestCopyConfigToTarget:
         # Verify send_file was called with correct paths
         mock_remote_executor.send_file.assert_called_once_with(
             config_file, "/home/user/.config/pc-switcher/config.yaml"
+        )
+
+    async def test_copies_a_different_filename_to_its_own_remote_path(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """Should copy whichever filename is passed, not just config.yaml."""
+        snippets_file = tmp_path / "package-snippets.yaml"
+        snippets_file.write_text("snippets: {}\n")
+
+        mock_remote_executor.run_command = AsyncMock(
+            side_effect=[
+                CommandResult(exit_code=0, stdout="", stderr=""),  # mkdir
+                CommandResult(exit_code=0, stdout="/home/user\n", stderr=""),  # echo $HOME
+            ]
+        )
+        mock_remote_executor.send_file = AsyncMock()
+
+        await _copy_config_to_target(mock_remote_executor, "package-snippets.yaml", snippets_file)
+
+        mock_remote_executor.send_file.assert_called_once_with(
+            snippets_file, "/home/user/.config/pc-switcher/package-snippets.yaml"
         )
 
     async def test_raises_on_mkdir_failure(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
@@ -210,7 +268,7 @@ class TestCopyConfigToTarget:
         )
 
         with pytest.raises(RuntimeError, match="Failed to create config directory"):
-            await _copy_config_to_target(mock_remote_executor, config_file)
+            await _copy_config_to_target(mock_remote_executor, "config.yaml", config_file)
 
     async def test_raises_on_home_dir_failure(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
         """Should raise RuntimeError if getting home directory fails."""
@@ -225,7 +283,7 @@ class TestCopyConfigToTarget:
         )
 
         with pytest.raises(RuntimeError, match="Failed to get home directory"):
-            await _copy_config_to_target(mock_remote_executor, config_file)
+            await _copy_config_to_target(mock_remote_executor, "config.yaml", config_file)
 
 
 class TestSyncConfigToTarget:
@@ -578,7 +636,7 @@ class TestDryRunSkipsPrompting:
 
         with patch("pcswitcher.config_sync._prompt_new_config") as mock_prompt:
             result = await _handle_no_target_config(
-                mock_remote_executor, config_file, "log_level: INFO", console, False, True
+                mock_remote_executor, "config.yaml", config_file, "log_level: INFO", console, False, True
             )
 
         assert result is True
@@ -596,6 +654,7 @@ class TestDryRunSkipsPrompting:
         with patch("pcswitcher.config_sync._prompt_config_diff") as mock_prompt:
             result = await _handle_config_diff(
                 mock_remote_executor,
+                "config.yaml",
                 config_file,
                 "log_level: DEBUG\n",
                 "log_level: INFO\n",
@@ -628,3 +687,188 @@ class TestDryRunSkipsPrompting:
         ui.pause.assert_not_called()
         ui.resume.assert_not_called()
         mock_remote_executor.send_file.assert_not_called()
+
+
+class TestMultiFileSync:
+    """Task 1: config sync carries every `SYNCED_CONFIG_FILENAMES` entry, generalised
+    from the single-file `config.yaml` path — the fix for the plan's HIGH cross-AI
+    review finding that the snippet registry never reached the target.
+    """
+
+    def _write_config(self, tmp_path: Path, content: str = "log_level: INFO\n") -> Path:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(content)
+        return config_file
+
+    def test_synced_filenames_never_include_a_decisions_file(self) -> None:
+        """D-09: machine-local decision files must never be added to this tuple."""
+        assert not any(name.endswith(".decisions.yaml") for name in SYNCED_CONFIG_FILENAMES)
+        assert "package-snippets.yaml" in SYNCED_CONFIG_FILENAMES
+        assert "config.yaml" in SYNCED_CONFIG_FILENAMES
+
+    async def test_registry_absent_on_source_transfers_config_only_and_prompts_nothing_else(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """No package-snippets.yaml on the source: skipped entirely, no target round trip."""
+        config_file = self._write_config(tmp_path)
+        # Only config.yaml exists in the source directory — no package-snippets.yaml.
+
+        mock_remote_executor.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=0, stdout="log_level: INFO\n", stderr="")
+        )
+        console = MagicMock()
+
+        result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+
+        assert result is True
+        issued = [call.args[0] for call in mock_remote_executor.run_command.call_args_list]
+        assert not any("package-snippets" in cmd for cmd in issued)
+
+    async def test_registry_present_on_source_absent_on_target_prompts_naming_it_and_copies(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        config_file = self._write_config(tmp_path)
+        (tmp_path / "package-snippets.yaml").write_text("snippets: {}\n")
+
+        # config.yaml matches (no prompt); package-snippets.yaml is absent on target
+        # (cat fails), then mkdir + echo $HOME for the copy.
+        mock_remote_executor.run_command = AsyncMock(
+            side_effect=[
+                CommandResult(exit_code=0, stdout="log_level: INFO\n", stderr=""),  # cat config.yaml
+                CommandResult(exit_code=1, stdout="", stderr=""),  # cat package-snippets.yaml (absent)
+                CommandResult(exit_code=0, stdout="", stderr=""),  # mkdir
+                CommandResult(exit_code=0, stdout="/home/user\n", stderr=""),  # echo $HOME
+            ]
+        )
+        mock_remote_executor.send_file = AsyncMock()
+        console = MagicMock()
+
+        with patch("pcswitcher.config_sync._prompt_new_config", return_value=True) as mock_prompt:
+            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+
+        assert result is True
+        mock_prompt.assert_called_once()
+        assert mock_prompt.call_args.args[1] == "package-snippets.yaml"
+        mock_remote_executor.send_file.assert_called_once()
+        remote_path = mock_remote_executor.send_file.call_args.args[1]
+        assert remote_path.endswith("package-snippets.yaml")
+
+    async def test_registry_differing_prompts_naming_it_in_the_output(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        config_file = self._write_config(tmp_path)
+        (tmp_path / "package-snippets.yaml").write_text("snippets:\n  a: {}\n")
+
+        mock_remote_executor.run_command = AsyncMock(
+            side_effect=[
+                CommandResult(exit_code=0, stdout="log_level: INFO\n", stderr=""),  # cat config.yaml
+                CommandResult(exit_code=0, stdout="snippets:\n  b: {}\n", stderr=""),  # cat package-snippets.yaml
+                CommandResult(exit_code=0, stdout="", stderr=""),  # mkdir
+                CommandResult(exit_code=0, stdout="/home/user\n", stderr=""),  # echo $HOME
+            ]
+        )
+        mock_remote_executor.send_file = AsyncMock()
+        console = MagicMock()
+
+        with patch(
+            "pcswitcher.config_sync._prompt_config_diff", return_value=ConfigSyncAction.ACCEPT_SOURCE
+        ) as mock_prompt:
+            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+
+        assert result is True
+        mock_prompt.assert_called_once()
+        assert mock_prompt.call_args.args[1] == "package-snippets.yaml"
+
+    async def test_abort_on_second_file_aborts_the_whole_sync(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        config_file = self._write_config(tmp_path)
+        (tmp_path / "package-snippets.yaml").write_text("snippets:\n  a: {}\n")
+
+        mock_remote_executor.run_command = AsyncMock(
+            side_effect=[
+                CommandResult(exit_code=0, stdout="log_level: INFO\n", stderr=""),  # cat config.yaml (matches)
+                CommandResult(exit_code=0, stdout="snippets:\n  b: {}\n", stderr=""),  # cat package-snippets.yaml
+            ]
+        )
+        mock_remote_executor.send_file = AsyncMock()
+        console = MagicMock()
+
+        with patch("pcswitcher.config_sync._prompt_config_diff", return_value=ConfigSyncAction.ABORT):
+            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+
+        assert result is False
+        mock_remote_executor.send_file.assert_not_called()
+
+    async def test_dry_run_copies_neither_file(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
+        config_file = self._write_config(tmp_path, "log_level: DEBUG\n")
+        (tmp_path / "package-snippets.yaml").write_text("snippets:\n  a: {}\n")
+
+        mock_remote_executor.run_command = AsyncMock(
+            side_effect=[
+                CommandResult(exit_code=0, stdout="log_level: INFO\n", stderr=""),  # cat config.yaml (differs)
+                CommandResult(exit_code=0, stdout="snippets:\n  b: {}\n", stderr=""),  # cat package-snippets.yaml
+            ]
+        )
+        mock_remote_executor.send_file = AsyncMock()
+        console = MagicMock()
+
+        result = await sync_config_to_target(mock_remote_executor, config_file, None, console, dry_run=True)
+
+        assert result is True
+        mock_remote_executor.send_file.assert_not_called()
+
+    async def test_decisions_file_never_among_transferred_paths(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        config_file = self._write_config(tmp_path)
+        (tmp_path / "package-snippets.yaml").write_text("snippets: {}\n")
+        # A decision file sitting in the same directory must never be picked up, even
+        # though it is a real, readable file right next to the ones that ARE synced.
+        (tmp_path / "apt.decisions.yaml").write_text("machine_specific: {}\n")
+
+        def _side_effect(cmd: str, **_: object) -> CommandResult:
+            if cmd.startswith("cat "):
+                return CommandResult(exit_code=1, stdout="", stderr="")  # nothing on target yet
+            if cmd == "echo $HOME":
+                return CommandResult(exit_code=0, stdout="/home/user\n", stderr="")
+            return CommandResult(exit_code=0, stdout="", stderr="")  # mkdir
+
+        mock_remote_executor.run_command = AsyncMock(side_effect=_side_effect)
+        mock_remote_executor.send_file = AsyncMock()
+        console = MagicMock()
+
+        with patch("pcswitcher.config_sync._prompt_new_config", return_value=True):
+            await sync_config_to_target(mock_remote_executor, config_file, None, console)
+
+        sent_paths = [call.args[1] for call in mock_remote_executor.send_file.call_args_list]
+        assert not any("decisions" in path for path in sent_paths)
+
+    async def test_only_one_aggregate_pause_across_two_prompting_files(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """Pausing/resuming between two prompts would leave the stale-panel artefact
+        the single aggregate pause exists to prevent (module docstring)."""
+        config_file = self._write_config(tmp_path)
+        (tmp_path / "package-snippets.yaml").write_text("snippets:\n  a: {}\n")
+
+        mock_remote_executor.run_command = AsyncMock(
+            side_effect=[
+                CommandResult(exit_code=1, stdout="", stderr=""),  # cat config.yaml (absent)
+                CommandResult(exit_code=1, stdout="", stderr=""),  # cat package-snippets.yaml (absent)
+                CommandResult(exit_code=0, stdout="", stderr=""),  # mkdir (config.yaml)
+                CommandResult(exit_code=0, stdout="/home/user\n", stderr=""),  # echo $HOME (config.yaml)
+                CommandResult(exit_code=0, stdout="", stderr=""),  # mkdir (package-snippets.yaml)
+                CommandResult(exit_code=0, stdout="/home/user\n", stderr=""),  # echo $HOME (package-snippets.yaml)
+            ]
+        )
+        mock_remote_executor.send_file = AsyncMock()
+        console = MagicMock()
+        ui = MagicMock()
+
+        with patch("pcswitcher.config_sync._prompt_new_config", return_value=True):
+            result = await sync_config_to_target(mock_remote_executor, config_file, ui, console)
+
+        assert result is True
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()

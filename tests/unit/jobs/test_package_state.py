@@ -21,17 +21,28 @@ import pytest
 
 from pcswitcher.config_sync import CONFIG_REMOTE_PATH, _copy_config_to_target  # pyright: ignore[reportPrivateUsage]
 from pcswitcher.jobs import package_state
+from pcswitcher.jobs.apt_sync import AptSyncJob
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
-from pcswitcher.jobs.package_review import Decision, ReviewOutcome
+from pcswitcher.jobs.package_items import (
+    AptPackageItem,
+    DiffAction,
+    DiffClass,
+    ItemClass,
+    ItemDiff,
+    UnreproducibleItem,
+)
+from pcswitcher.jobs.package_review import UNREPRODUCIBLE_REVIEW_ACTION, Decision, ReviewOutcome
 from pcswitcher.jobs.package_state import (
     DECISION_FILE_GLOB_RELPATH,
     DECISION_FILE_RELPATH_TEMPLATE,
+    SNIPPET_REGISTRY_RELPATH,
     DecisionEntry,
     DecisionFile,
+    Snippet,
+    SnippetRegistry,
     filter_inert,
 )
-from pcswitcher.jobs.package_sync_core import PackagePlan, PackageSyncJob
+from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, ValidationError
 
 # ---------------------------------------------------------------------------
@@ -54,6 +65,51 @@ def make_context(*, dry_run: bool = False) -> JobContext:
         target_hostname="target-host",
         dry_run=dry_run,
     )
+
+
+def respond_to(
+    mapping: dict[str, CommandResult], default: CommandResult | None = None
+) -> Callable[..., CommandResult]:
+    """Build a `run_command` side_effect matching by substring (first match wins) —
+    mirrors `test_apt_sync.py`'s helper of the same shape.
+    """
+    fallback = default if default is not None else CommandResult(exit_code=0, stdout="", stderr="")
+
+    def _side_effect(cmd: str, **_: object) -> CommandResult:
+        for pattern, result in mapping.items():
+            if pattern in cmd:
+                return result
+        return fallback
+
+    return _side_effect
+
+
+def make_apt_context(
+    *,
+    source_responses: dict[str, CommandResult] | None = None,
+    target_responses: dict[str, CommandResult] | None = None,
+    dry_run: bool = False,
+) -> tuple[JobContext, MagicMock, MagicMock]:
+    """An `AptSyncJob`-ready `JobContext`, mirroring `test_apt_sync.py`'s `make_context`
+    — used here because the unreproducible-item detection tests below need `AptSyncJob`
+    itself, not the generic `_FakePackageJob` the rest of this file exercises.
+    """
+    source = MagicMock()
+    source.run_command = AsyncMock(side_effect=respond_to(source_responses or {}))
+    target = MagicMock()
+    target.run_command = AsyncMock(side_effect=respond_to(target_responses or {}))
+    target.send_file = AsyncMock(return_value=None)
+    context = JobContext(
+        config={},
+        source=source,
+        target=target,
+        event_bus=MagicMock(),
+        session_id="test-1234",
+        source_hostname="source-host",
+        target_hostname="target-host",
+        dry_run=dry_run,
+    )
+    return context, source, target
 
 
 class FakeShellExecutor:
@@ -531,10 +587,321 @@ class TestConfigSyncScope:
         target.run_command = AsyncMock(side_effect=_respond_echo_home("/home/alice"))
         target.send_file = AsyncMock()
 
-        await _copy_config_to_target(target, source_path)
+        await _copy_config_to_target(target, "config.yaml", source_path)
 
         assert target.send_file.await_count == 1
         remote_path = target.send_file.call_args.args[1]
         assert remote_path.endswith("config.yaml")
         assert "decisions" not in remote_path
         assert CONFIG_REMOTE_PATH.endswith("/config.yaml")
+
+
+# ---------------------------------------------------------------------------
+# SnippetRegistry — the shared, synced counterpart to DecisionFile (D-20, D-23).
+# ---------------------------------------------------------------------------
+
+
+class TestSnippetRegistry:
+    def test_relpath_places_file_under_config_pc_switcher(self) -> None:
+        assert SNIPPET_REGISTRY_RELPATH == ".config/pc-switcher/package-snippets.yaml"
+
+    @pytest.mark.asyncio
+    async def test_absent_file_returns_empty_mapping(self) -> None:
+        executor = MagicMock()
+        executor.run_command = AsyncMock(return_value=CommandResult(1, "", ""))
+        registry = SnippetRegistry(executor)
+
+        assert await registry.load() == {}
+
+    @pytest.mark.asyncio
+    async def test_empty_file_returns_empty_mapping(self) -> None:
+        executor = MagicMock()
+        executor.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
+        registry = SnippetRegistry(executor)
+
+        assert await registry.load() == {}
+
+    @pytest.mark.asyncio
+    async def test_malformed_registry_returns_empty_mapping_and_warns_naming_the_path(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        executor = MagicMock()
+        executor.run_command = AsyncMock(return_value=CommandResult(0, "snippets: [\n  - broken\n", ""))
+        registry = SnippetRegistry(executor)
+
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.package_state"):
+            entries = await registry.load()
+
+        assert entries == {}
+        assert len(caplog.records) == 1
+        assert "package-snippets.yaml" in caplog.records[0].message
+
+    @pytest.mark.asyncio
+    async def test_add_then_get_round_trips_body_verbatim_including_whitespace(self) -> None:
+        shell = FakeShellExecutor()
+        snippet = Snippet(
+            item_id="unreproducible:apt-no-candidate:brscan3",
+            label="brscan3 (no apt candidate)",
+            body="  sudo dpkg -i /tmp/brscan3.deb\n\nsudo apt-get install -f -y\n",
+            authored_at="2026-07-23T09:00:00+00:00",
+            authored_on="laptop",
+        )
+
+        await SnippetRegistry(shell).add(snippet)
+        reloaded = await SnippetRegistry(shell).get(snippet.item_id)
+
+        assert reloaded is not None
+        assert reloaded.body == snippet.body
+
+    @pytest.mark.asyncio
+    async def test_get_returns_none_for_an_unregistered_item(self) -> None:
+        shell = FakeShellExecutor()
+
+        assert await SnippetRegistry(shell).get("unreproducible:apt-no-candidate:missing") is None
+
+    @pytest.mark.asyncio
+    async def test_write_is_atomic_temp_then_move(self) -> None:
+        executor = MagicMock()
+        executor.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
+        registry = SnippetRegistry(executor)
+
+        await registry.add(Snippet(item_id="x", label="x", body="echo hi", authored_at="t", authored_on="h"))
+
+        cmd = executor.run_command.call_args.args[0]
+        assert "mkdir -p" in cmd
+        assert ".pcswitcher-tmp" in cmd
+        assert "mv -f" in cmd
+        assert cmd.index("mkdir -p") < cmd.index(".pcswitcher-tmp") < cmd.index("mv -f")
+
+    @pytest.mark.asyncio
+    async def test_add_preserves_an_unrelated_pre_existing_entry(self) -> None:
+        shell = FakeShellExecutor()
+        first = Snippet(item_id="a", label="a", body="echo a", authored_at="t", authored_on="h")
+        second = Snippet(item_id="b", label="b", body="echo b", authored_at="t", authored_on="h")
+
+        await SnippetRegistry(shell).add(first)
+        await SnippetRegistry(shell).add(second)
+
+        entries = await SnippetRegistry(shell).load()
+        assert set(entries) == {"a", "b"}
+        assert entries["a"].body == "echo a"
+
+    @pytest.mark.asyncio
+    async def test_replay_passes_body_as_one_quoted_argument_with_login_shell_false(self) -> None:
+        shell = FakeShellExecutor()
+        snippet = Snippet(item_id="x", label="x", body="echo hello world", authored_at="t", authored_on="h")
+        await SnippetRegistry(shell).add(snippet)
+
+        target = MagicMock()
+        target.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
+
+        result = await SnippetRegistry(shell).replay("x", target)
+
+        target.run_command.assert_called_once_with("bash -c 'echo hello world'", login_shell=False)
+        assert result.success
+
+    @pytest.mark.asyncio
+    async def test_replay_with_no_registered_snippet_returns_a_failed_result_not_a_raise(self) -> None:
+        shell = FakeShellExecutor()
+        target = MagicMock()
+        target.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
+
+        result = await SnippetRegistry(shell).replay("unreproducible:apt-no-candidate:missing", target)
+
+        assert result.success is False
+        target.run_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_replay_exit_code_alone_decides_success(self) -> None:
+        shell = FakeShellExecutor()
+        snippet = Snippet(item_id="x", label="x", body="false", authored_at="t", authored_on="h")
+        await SnippetRegistry(shell).add(snippet)
+
+        target = MagicMock()
+        target.run_command = AsyncMock(return_value=CommandResult(1, "", "boom"))
+
+        result = await SnippetRegistry(shell).replay("x", target)
+
+        assert result.success is False
+        assert result.stderr == "boom"
+
+
+# ---------------------------------------------------------------------------
+# apt_sync.py's D-18 unreproducible-item detection (Task 1): apt-no-candidate
+# packages and unowned /usr/local, /opt installs.
+# ---------------------------------------------------------------------------
+
+
+class TestUnreproducibleDetection:
+    @pytest.mark.asyncio
+    async def test_no_candidate_source_package_becomes_unreproducible_diff(self) -> None:
+        """A package that is fully installed and matching on BOTH machines (no normal
+        AptPackageItem diff at all) is still flagged unreproducible if the SOURCE's own
+        apt-cache has no candidate for it — D-18 is a fact about the source's install,
+        independent of the target's current state.
+        """
+        context, _source, _target = make_apt_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "dpkg-query": CommandResult(0, "brscan3\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0, "brscan3:\n  Installed: 1.0\n  Candidate: (none)\n  Version table:\n", ""
+                ),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "dpkg-query": CommandResult(0, "brscan3\t1.0\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        unreproducible = [d for d in plan.diffs if d.item_class == ItemClass.UNREPRODUCIBLE]
+        assert len(unreproducible) == 1
+        assert unreproducible[0].item_id == "unreproducible:apt-no-candidate:brscan3"
+        assert unreproducible[0].diff_class == DiffClass.UNREPRODUCIBLE
+        assert unreproducible[0].action == DiffAction.REPORT_ONLY
+
+    @pytest.mark.asyncio
+    async def test_scan_unowned_installs_yields_two_items_from_four_candidates(self) -> None:
+        context, _source, _target = make_apt_context(
+            source_responses={
+                "find /usr/local": CommandResult(
+                    0,
+                    "/usr/local/flux\n/usr/local/bin/talosctl\n/usr/local/bin/kubectl-cnpg\n/opt/az\n",
+                    "",
+                ),
+                "dpkg -S": CommandResult(0, "cnpg: /usr/local/bin/kubectl-cnpg\nazure-cli: /opt/az\n", ""),
+            }
+        )
+        job = AptSyncJob(context)
+
+        items = await job.scan_unowned_installs()
+
+        assert {item.identifier for item in items} == {"/usr/local/flux", "/usr/local/bin/talosctl"}
+        assert all(item.origin == "unowned-path" for item in items)
+        assert all(isinstance(item, UnreproducibleItem) for item in items)
+
+    @pytest.mark.asyncio
+    async def test_unowned_scan_queries_only_usr_local_and_opt(self) -> None:
+        context, source, _target = make_apt_context()
+        job = AptSyncJob(context)
+
+        await job.scan_unowned_installs()
+
+        find_calls = [c.args[0] for c in source.run_command.call_args_list if c.args[0].startswith("find ")]
+        assert len(find_calls) == 1
+        assert (
+            find_calls[0] == "find /usr/local /opt /usr/local/bin /usr/local/lib -mindepth 1 -maxdepth 1 2>/dev/null"
+        )
+
+    @pytest.mark.asyncio
+    async def test_item_with_snippet_converges_by_replaying_it(self) -> None:
+        registry_yaml = (
+            "snippets:\n"
+            "  unreproducible:apt-no-candidate:brscan3:\n"
+            "    label: brscan3 (no apt candidate)\n"
+            "    body: sudo dpkg -i /tmp/brscan3.deb\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: laptop\n"
+        )
+        context, _source, target = make_apt_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "dpkg-query": CommandResult(0, "brscan3\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "dpkg-query": CommandResult(0, "brscan3\t1.0\n", ""),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
+                "bash -c 'sudo dpkg -i /tmp/brscan3.deb'": CommandResult(0, "brscan3 installed\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+        item_id = "unreproducible:apt-no-candidate:brscan3"
+        diff = next(d for d in plan.diffs if d.item_id == item_id)
+        assert diff.action == DiffAction.INSTALL
+
+        job.accept_review(plan, ReviewOutcome(decisions={item_id: Decision.APPLY}, was_interactive=True))
+        await job.apply()
+
+        replay_calls = [c.args[0] for c in target.run_command.call_args_list if c.args[0].startswith("bash -c")]
+        assert len(replay_calls) == 1
+        assert "dpkg -i /tmp/brscan3.deb" in replay_calls[0]
+
+    @pytest.mark.asyncio
+    async def test_item_without_snippet_is_report_only_and_grouped_separately(self) -> None:
+        context, _source, _target = make_apt_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "dpkg-query": CommandResult(0, "brscan3\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "dpkg-query": CommandResult(0, "brscan3\t1.0\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        item_id = "unreproducible:apt-no-candidate:brscan3"
+        diff = next(d for d in plan.diffs if d.item_id == item_id)
+        assert diff.action == DiffAction.REPORT_ONLY
+
+        resolution_group = next(g for g in plan.groups if g.action == UNREPRODUCIBLE_REVIEW_ACTION)
+        assert {e.item_id for e in resolution_group.entries} == {item_id}
+        for group in plan.groups:
+            if group.action != UNREPRODUCIBLE_REVIEW_ACTION:
+                assert item_id not in {e.item_id for e in group.entries}
+
+    @pytest.mark.asyncio
+    async def test_failed_snippet_replay_is_a_per_item_failure_and_does_not_stop_the_job(self) -> None:
+        registry_yaml = (
+            "snippets:\n"
+            "  unreproducible:apt-no-candidate:brscan3:\n"
+            "    label: brscan3 (no apt candidate)\n"
+            "    body: sudo dpkg -i /tmp/brscan3.deb\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: laptop\n"
+            "  unreproducible:apt-no-candidate:cnpg:\n"
+            "    label: cnpg (no apt candidate)\n"
+            "    body: sudo dpkg -i /tmp/cnpg.deb\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: laptop\n"
+        )
+        context, _source, _target = make_apt_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\ncnpg\n", ""),
+                "dpkg-query": CommandResult(0, "brscan3\t1.0\ncnpg\t2.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0, "brscan3:\n  Candidate: (none)\ncnpg:\n  Candidate: (none)\n", ""
+                ),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\ncnpg\n", ""),
+                "dpkg-query": CommandResult(0, "brscan3\t1.0\ncnpg\t2.0\n", ""),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
+                "bash -c 'sudo dpkg -i /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
+                "bash -c 'sudo dpkg -i /tmp/cnpg.deb'": CommandResult(1, "", "dpkg: error processing archive"),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+        decisions = {
+            "unreproducible:apt-no-candidate:brscan3": Decision.APPLY,
+            "unreproducible:apt-no-candidate:cnpg": Decision.APPLY,
+        }
+        job.accept_review(plan, ReviewOutcome(decisions=decisions, was_interactive=True))
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.apply()
+
+        failed_ids = {diff.item_id for diff, _stderr in exc_info.value.failures}
+        assert failed_ids == {"unreproducible:apt-no-candidate:cnpg"}
