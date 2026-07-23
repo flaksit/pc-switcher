@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 02
 current_phase_name: Package Management Sync
 status: executing
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-07-23T09:57:41.023Z"
+stopped_at: Completed 02-06-PLAN.md
+last_updated: "2026-07-23T10:28:13.073Z"
 last_activity: 2026-07-23
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 31
-  completed_plans: 24
+  completed_plans: 25
 ---
 
 # Project State
@@ -30,13 +30,13 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 02 (Package Management Sync) — EXECUTING
 
-Plan: 7 of 13
+Plan: 8 of 13
 
 Status: Ready to execute
 
 Last activity: 2026-07-23 — Phase 02 execution started
 
-Progress: [████████░░] 77%
+Progress: [████████░░] 81%
 
 ## Performance Metrics
 
@@ -87,6 +87,7 @@ Progress: [████████░░] 77%
 | Phase 02 P05 | 25min | 2 tasks | 6 files |
 | Phase 02 P13 | 22min | 1 tasks | 2 files |
 | Phase 02 P04 | 135min | 2 tasks | 6 files |
+| Phase 02 P06 | 55min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: Plan 02-13: VM-level apt_sync tracer proof (test_package_sync.py) asserts against pc2's own apt-mark showmanual, not pc-switcher logs; candidate package chosen by querying VMs + apt-cache rdepends safety filter, restored in teardown regardless of outcome. VM execution pending CI (no local VM access).
 - [Phase ?]: [Phase 2]: package_state.py's DecisionFile resolves paths via a bare ~/ shell prefix (not echo $HOME) — verified ~/ immediately followed by a shlex-quoted word still tilde-expands as one shell word, avoiding an extra executor round trip while satisfying T-02-01's shlex.quote() requirement.
 - [Phase ?]: [Phase 2]: package_review.py's interactive 'promote skip to permanent' prompt is out of plan 02-04's scope (files_modified excludes package_review.py) — apply()'s SKIP_ALWAYS handling is exercised via hand-constructed ReviewOutcome objects; the UI path that produces SKIP_ALWAYS remains future work.
+- [Phase ?]: apt repo/key/pin/config capture, diff and dependency-ordered convergence implemented entirely within AptSyncJob (not package_sync_core.py), keeping the shared base's typed diff pipeline untouched
+- [Phase ?]: apt-get-update marker inserted in accept_review() (post-decision) rather than plan(), reusing ItemClass.APT_SOURCE with item_id-based exclusion from repo-group membership checks
+- [Phase ?]: repository-group convergence (backup/write/update/rollback) is triggered eagerly by the first repo-group diff converge() sees, caching per-item outcomes so the base apply() loop's per-diff iteration still drives it without package_sync_core.py changes
 
 ### Pending Todos
 
@@ -141,8 +145,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-23T09:57:31.851Z
+Last session: 2026-07-23T10:28:13.062Z
 
-Stopped at: Completed 02-04-PLAN.md
+Stopped at: Completed 02-06-PLAN.md
 
 Resume file: None
