@@ -45,6 +45,13 @@ from pcswitcher.jobs.package_state import DECISION_FILE_RELPATH_TEMPLATE, Decisi
 # Prefix marking each candidate's reverse-dependency block in the batched pc2 probe below.
 RDEPENDS_MARKER = "@@RDEPENDS_FOR@@"
 
+# How many shared packages to probe for reverse dependencies when looking for one safe
+# to remove. Each probe is a separate `apt-cache rdepends` process on the target, so the
+# cost is linear and the whole probe runs under a single command timeout — bounding it
+# keeps the search well inside that budget while still offering far more candidates than
+# any test asks for.
+_RDEPENDS_PROBE_LIMIT = 40
+
 
 def nonblank_lines(text: str) -> list[str]:
     """Split command output into stripped, non-empty lines."""
@@ -174,11 +181,20 @@ async def _find_removable_candidates(
     if not initial_candidates:
         return []
 
-    quoted = " ".join(shlex.quote(name) for name in initial_candidates)
+    # Probe only a bounded slice, not every shared package. Each loop iteration is its
+    # own `apt-cache rdepends` process reloading the apt cache, so probing the whole
+    # `apt-mark showmanual` intersection (~100-150 packages on these VMs) costs more
+    # wall-clock than the timeout allows — which is exactly how this helper timed out
+    # and took all six tests in this module with it. We only ever need `count` safe
+    # candidates, so a slice comfortably larger than `count` is sufficient; the
+    # docstring already allows returning fewer than requested.
+    probe_set = initial_candidates[:_RDEPENDS_PROBE_LIMIT]
+
+    quoted = " ".join(shlex.quote(name) for name in probe_set)
     rdepends_result = await pc2_executor.run_command(
         f'for p in {quoted}; do echo "{RDEPENDS_MARKER}$p"; apt-cache rdepends --installed "$p"; done',
         login_shell=False,
-        timeout=60.0,
+        timeout=120.0,
     )
     reverse_deps_by_candidate = parse_batched_rdepends(rdepends_result.stdout)
 
