@@ -273,8 +273,16 @@ async def _capture_dir_digests(run: Callable[[str], Awaitable[CommandResult]], d
 
 
 async def _read_file_content(run: Callable[[str], Awaitable[CommandResult]], path: str) -> str:
-    """One `cat <path>` — used only for a file a diff actually implicates."""
-    result = await run(f"cat {shlex.quote(path)}")
+    """One `sudo cat <path>` — used only for a file a diff actually implicates.
+
+    `sudo`-qualified to match `_capture_dir_digests`'s `sudo find ... sha256sum`
+    privilege (WR-04): an unprivileged `cat` on a source file locked down to
+    `0600`-or-similar would silently return empty stdout instead of failing, while
+    the digest capture (root) still sees it and proposes a diff — an `AptSourceItem`
+    parsed from that empty content would find zero `keyring_refs`, so a dangling key
+    reference this run never actually validated would go undetected.
+    """
+    result = await run(f"sudo cat {shlex.quote(path)}")
     return result.stdout
 
 

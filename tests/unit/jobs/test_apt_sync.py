@@ -844,6 +844,31 @@ class TestRepoStateCapture:
         assert bar_diff.item_class == ItemClass.APT_SOURCE
 
     @pytest.mark.asyncio
+    async def test_content_hydration_reads_use_sudo_matching_the_digest_capture(self) -> None:
+        """WR-04 regression: content reads for diff hydration must use the same
+        `sudo`-qualified privilege as the digest capture (`sudo find ... sha256sum`),
+        not a plain unprivileged `cat` — otherwise a source file locked down to
+        `0600`-or-similar digests correctly (root) but reads back empty (unprivileged),
+        silently hiding any keyring reference it names.
+        """
+        context, source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={**_NO_PACKAGES},
+        )
+        job = AptSyncJob(context)
+
+        await job.plan()
+
+        commands = all_calls(source)
+        assert any(cmd == "sudo cat /etc/apt/sources.list.d/foo.sources" for cmd in commands)
+        assert not any(cmd == "cat /etc/apt/sources.list.d/foo.sources" for cmd in commands)
+
+    @pytest.mark.asyncio
     async def test_source_with_key_present_on_source_yields_plain_install(self) -> None:
         """The keyring `foo.sources` references (`foo.gpg`) exists among the source's
         OWN captured keys — a real link, not a dangling one — so the source is
