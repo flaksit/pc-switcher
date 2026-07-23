@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 02
 current_phase_name: package-management-sync
 status: executing
-stopped_at: Completed 02-16-PLAN.md
-last_updated: "2026-07-23T19:09:31.791Z"
+stopped_at: Completed 02-17-PLAN.md
+last_updated: "2026-07-23T19:33:45.312Z"
 last_activity: 2026-07-23
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 39
-  completed_plans: 34
+  completed_plans: 35
 ---
 
 # Project State
@@ -30,13 +30,13 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 02 (package-management-sync) — EXECUTING
 
-Plan: 4 of 21
+Plan: 5 of 21
 
 Status: Ready to execute
 
 Last activity: 2026-07-23 — Phase 02 execution started
 
-Progress: [█████████░] 87%
+Progress: [█████████░] 90%
 
 ## Performance Metrics
 
@@ -97,6 +97,7 @@ Progress: [█████████░] 87%
 | Phase 02 P14 | 3m | 2 tasks | 2 files |
 | Phase 02 P15 | 45min | 2 tasks | 11 files |
 | Phase 02 P16 | 55min | 2 tasks | 4 files |
+| Phase 02 P17 | 45min | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -141,6 +142,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: Phase 2 documentation: living specs (docs/system/) now describe the package-sync subsystem per ADR-011/ADR-012; requirements REQ-sync-scope-packages and REQ-conflict-detection-no-resolution marked complete after verifying all 13 plans genuinely deliver them.
 - [Phase ?]: 02-15: corrected D-24 — per-manager review inside each package job's execute() via injected JobContext.reviewer; PackagePhaseCoordinator removed and must never return
 - [Phase ?]: 02-16: corrected D-30 — apt collateral split by target apt-mark showmanual; auto proceeds silently, manual becomes a three-way install-anyway/skip/abort review item (COLLATERAL_REVIEW_ACTION); apply-time guard honours approved manual collateral while still refusing unreviewed drift
+- [Phase ?]: manual_installs_sync owns unreproducible detection on its own enable flag (D-18); runs its own dpkg/apt-cache, never imports apt_sync
+- [Phase ?]: Base PackageSyncJob carries no-op _finalize_unreproducible/_unresolved_as_failures hooks; only manual_installs_sync overrides them
+- [Phase ?]: D-21: an explicit skip-once is a valid resolution, not an unresolved state; only cancelled/abandoned review is unresolved
 
 ### Pending Todos
 
@@ -168,8 +172,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-23T19:09:21.439Z
+Last session: 2026-07-23T19:33:32.396Z
 
-Stopped at: Completed 02-16-PLAN.md
+Stopped at: Completed 02-17-PLAN.md
 
 Resume file: None
