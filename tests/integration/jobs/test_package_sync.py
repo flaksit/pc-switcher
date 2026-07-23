@@ -37,7 +37,9 @@ import re
 import shlex
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 import pytest
 
@@ -519,6 +521,80 @@ async def _find_flatpak_ref_and_remote(
     return None
 
 
+# -- apt repository-state helpers (D-11/D-12): find a real repo+key pair to diverge -----
+#
+# The two `/etc/apt` directories the apt-repository-state test touches (apt_sync.py owns
+# the full five-directory set).
+_APT_SOURCES_DIR = "/etc/apt/sources.list.d"
+_APT_KEYRINGS_DIR = "/etc/apt/keyrings"
+
+# signed-by parsing, kept independent of apt_sync's private regexes (same discipline as
+# the snap/flatpak parsers above) -- used only to pair a source file with the keyring it
+# names so the divergence is a real "one vendor repo" (ledger entry #2), not two unrelated
+# files. deb822 `.sources` uses a `Signed-By:` field; legacy `.list` names the key inside
+# the options bracket as `signed-by=<path>`.
+_SIGNED_BY_DEB822_RE = re.compile(r"^Signed-By:\s*(?P<path>\S+)", re.IGNORECASE)
+_SIGNED_BY_LIST_RE = re.compile(r"signed-by=(?P<path>[^\]\s,]+)")
+
+
+def parse_signed_by_refs(content: str) -> set[str]:
+    """Every keyring BASENAME a source file references via `Signed-By:`/`signed-by=`.
+
+    Basename, not path: item identity for a key is its filename (packages/items.py), so
+    both `/etc/apt/keyrings/foo.gpg` and a bare `foo.gpg` reference resolve to the same
+    key item.
+    """
+    refs: set[str] = set()
+    for line in content.splitlines():
+        deb822 = _SIGNED_BY_DEB822_RE.match(line.strip())
+        if deb822:
+            refs.add(Path(deb822.group("path")).name)
+        refs.update(Path(match.group("path")).name for match in _SIGNED_BY_LIST_RE.finditer(line))
+    return refs
+
+
+async def _list_apt_dir_files(executor: BashLoginRemoteExecutor, directory: str) -> set[str]:
+    """The basenames of every regular file directly under `directory` on `executor` (or
+    an empty set when the directory is absent/empty). `sudo` because `/etc/apt/keyrings`
+    files can be root-only readable; one batched `find`, never one command per file.
+    """
+    result = await executor.run_command(
+        f"sudo find {shlex.quote(directory)} -maxdepth 1 -type f -printf '%f\\n' 2>/dev/null",
+        login_shell=False,
+        timeout=15.0,
+    )
+    return set(nonblank_lines(result.stdout))
+
+
+async def _find_repo_and_key_pair(
+    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
+) -> tuple[str, str] | None:
+    """`(source_filename, key_filename)` for a repository on pc1 whose `signed-by` key
+    lives in `/etc/apt/keyrings`, where BOTH the source file and the key file also exist
+    on pc2 -- so removing both from pc2 produces a target missing exactly one vendor repo,
+    whose source and key diff as two SEPARATE `INSTALL` review entries (ledger entry #2).
+    `None` when the VM has no such pair (a fresh Ubuntu image with no third-party repo in
+    `/etc/apt/keyrings`), which the test turns into a clear `pytest.skip`.
+    """
+    pc1_sources = await _list_apt_dir_files(pc1_executor, _APT_SOURCES_DIR)
+    pc2_sources = await _list_apt_dir_files(pc2_executor, _APT_SOURCES_DIR)
+    pc1_keys = await _list_apt_dir_files(pc1_executor, _APT_KEYRINGS_DIR)
+    pc2_keys = await _list_apt_dir_files(pc2_executor, _APT_KEYRINGS_DIR)
+    shared_keys = pc1_keys & pc2_keys
+    if not shared_keys:
+        return None
+
+    for source_filename in sorted(pc1_sources & pc2_sources):
+        content = await pc1_executor.run_command(
+            f"sudo cat {shlex.quote(f'{_APT_SOURCES_DIR}/{source_filename}')}",
+            login_shell=False,
+            timeout=15.0,
+        )
+        for key_filename in sorted(parse_signed_by_refs(content.stdout) & shared_keys):
+            return source_filename, key_filename
+    return None
+
+
 class TestAptSyncEndToEnd:
     """VM-level proof of plan 02-03's tracer path: a package missing on pc2 travels
     source capture -> target query -> diff -> apt_sync's own batched review ->
@@ -620,6 +696,98 @@ class TestAptSyncEndToEnd:
             )
         finally:
             await _restore_package(pc2_executor, candidate)
+
+    async def test_apt_repository_state_dry_run_reviews_source_and_key_separately(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """Broken-window ledger entry #2, exercised at VM level: a target missing one
+        vendor repo receives, in the review, the source's repository file and its signing
+        key as TWO separate `INSTALL` entries, and the intended `apt-get update` (the
+        metadata-refresh marker) is reported.
+
+        This is the one test whose subject is legitimately the run's own output
+        (`--dry-run` makes no filesystem change to assert against, so ADR-014's read-only
+        preview IS the review): apply()'s dry-run branch logs `[dry-run] Would install
+        <label>` per approved item and `[dry-run] Would change Refresh apt package
+        metadata (apt-get update)` for the marker (`accept_review` inserts it once any
+        repository-group item is approved). Because it is `--dry-run` nothing on pc2
+        changes, but the removed repo file and key are restored in a `finally` regardless.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        pair = await _find_repo_and_key_pair(pc1_executor, pc2_executor)
+        if pair is None:
+            pytest.skip(
+                "No apt repository on pc1 whose signed-by key lives in /etc/apt/keyrings "
+                "with both the source file and the key present on pc2: searched the "
+                "intersection of both machines' sources.list.d and keyrings directories."
+            )
+        source_filename, key_filename = pair
+        source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
+        key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
+        backup_dir = f"/tmp/pcswitcher-it-apt-repo-{uuid4().hex}"
+
+        try:
+            backup = await pc2_executor.run_command(
+                f"mkdir -p {shlex.quote(backup_dir)} && "
+                f"sudo cp -a {shlex.quote(source_dest)} {shlex.quote(f'{backup_dir}/source')} && "
+                f"sudo cp -a {shlex.quote(key_dest)} {shlex.quote(f'{backup_dir}/key')}",
+                login_shell=False,
+                timeout=20.0,
+            )
+            assert backup.success, f"Failed to back up {source_dest}/{key_dest} on pc2: {backup.stderr}"
+
+            remove = await pc2_executor.run_command(
+                f"sudo rm -f {shlex.quote(source_dest)} {shlex.quote(key_dest)}",
+                login_shell=False,
+                timeout=15.0,
+            )
+            assert remove.success, f"Failed to remove repo files from pc2: {remove.stderr}"
+
+            await _write_apt_sync_config(pc1_executor)
+
+            source_item_id = f"apt:source:{source_filename}"
+            key_item_id = f"apt:key:per-repo:{key_filename}"
+            decisions = {source_item_id: Decision.APPLY, key_item_id: Decision.APPLY}
+            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --dry-run"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync --dry-run exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            combined_output = sync_result.stdout + sync_result.stderr
+            # The source file and its key are two SEPARATE review entries (ledger #2):
+            # each appears in its own `Would install <label>` dry-run line, the source's
+            # label being `<file> (<fmt>)` and the key's `<file> (per-repo key)`.
+            assert f"install {source_filename}" in combined_output, (
+                f"missing source file {source_filename!r} not shown as its own review entry.\n{combined_output}"
+            )
+            assert f"install {key_filename}" in combined_output, (
+                f"signing key {key_filename!r} not shown as a separate review entry.\n{combined_output}"
+            )
+            # The intended metadata refresh (the apt-get update the repo change requires)
+            # is reported as its own marker item.
+            assert "apt-get update" in combined_output, (
+                f"intended apt-get update (metadata refresh) not reported.\n{combined_output}"
+            )
+        finally:
+            await pc2_executor.run_command(
+                f"if [ -f {shlex.quote(f'{backup_dir}/source')} ]; then "
+                f"sudo install -o root -g root -m 0644 {shlex.quote(f'{backup_dir}/source')} "
+                f"{shlex.quote(source_dest)}; fi; "
+                f"if [ -f {shlex.quote(f'{backup_dir}/key')} ]; then "
+                f"sudo install -o root -g root -m 0644 {shlex.quote(f'{backup_dir}/key')} "
+                f"{shlex.quote(key_dest)}; fi; "
+                f"rm -rf {shlex.quote(backup_dir)}",
+                login_shell=False,
+                timeout=30.0,
+            )
 
 
 class TestPackageSyncWholeRunContracts:
@@ -1188,3 +1356,96 @@ class TestPackageSyncWholeRunContracts:
                         f"[cleanup] failed to restore {snap_candidate} to revision "
                         f"{original_snap_revision} on pc2: {restore_result.stderr}"
                     )
+
+
+class TestManualInstallsSyncEndToEnd:
+    """VM-level proof that `manual_installs_sync` pushes the install-snippet registry to
+    the target with its OWN `send_file()` (D-23) and replays a snippet there (D-18/D-20),
+    against pc2's own filesystem and registry file -- never pc-switcher's log text.
+    """
+
+    async def test_manual_installs_sync_pushes_registry_and_replays_snippet(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """A snippet registered on the source travels to the target by the job's own push
+        and is replayed there, all in one run (D-23), proven against pc2's own filesystem
+        and registry file.
+
+        `manual_installs_sync.plan()` classifies an unreproducible item `INSTALL` only when
+        the item's snippet is in the TARGET registry, and `after_review()` pushes the
+        SOURCE registry to the target before `apply()` replays. To witness BOTH the push
+        and the replay-of-the-pushed-content in a single run, the SAME item is seeded with
+        DIFFERENT bodies on each machine: pc2's pre-existing snippet drops an OLD marker,
+        pc1's source snippet drops a NEW marker. The run must push pc1's registry over
+        pc2's (so the replay reads the NEW body) and then replay it -- so a NEW marker on
+        pc2 and NO OLD marker proves the push overwrote the target registry AND that the
+        replay used the pushed source version, in order. An unowned `/opt` path on pc1
+        makes the item detectable (`_scan_unowned_installs`).
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        uniq = uuid4().hex[:12]
+        unowned_path = f"/opt/pcswitcher-it-manual-{uniq}"
+        item_id = _unowned_item_id(unowned_path)
+        # Home-relative markers so the snippet needs no sudo: replay runs `bash -c <body>`
+        # as the SSH user on pc2, and $HOME expands there.
+        old_marker = f"$HOME/.cache/pcswitcher-it-manual-old-{uniq}"
+        new_marker = f"$HOME/.cache/pcswitcher-it-manual-new-{uniq}"
+        registry_relpath = "~/.config/pc-switcher/package-snippets.yaml"
+
+        try:
+            # The source item to detect (unowned, so root-owned /opt needs sudo to create).
+            await _create_unowned_marker(pc1_executor, unowned_path)
+
+            # Same item_id, different bodies: pc2 (target) gets the OLD-marker snippet so
+            # plan() sees a target snippet and classifies INSTALL; pc1 (source) gets the
+            # NEW-marker snippet so the post-review push overwrites pc2's copy.
+            await _author_snippet(
+                pc2_executor, item_id, unowned_path, f'mkdir -p "$(dirname {old_marker})" && touch {old_marker}'
+            )
+            await _author_snippet(
+                pc1_executor, item_id, unowned_path, f'mkdir -p "$(dirname {new_marker})" && touch {new_marker}'
+            )
+
+            await _write_package_sync_config(pc1_executor, manual_installs_sync=True)
+
+            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            # The push placed the source registry on pc2 (D-23) -- the registry file exists
+            # on pc2 after the run.
+            registry_exists = await pc2_executor.run_command(
+                f"test -f {registry_relpath}", login_shell=False, timeout=10.0
+            )
+            assert registry_exists.success, (
+                f"snippet registry not present on pc2 at {registry_relpath} after the run -- the push did not land"
+            )
+
+            # The replay ran the PUSHED (source) snippet body: the NEW marker exists and
+            # the OLD (pre-seeded target) marker does not -- proving the push overwrote the
+            # target registry before the replay read it.
+            new_exists = await pc2_executor.run_command(f"test -f {new_marker}", login_shell=False, timeout=10.0)
+            assert new_exists.success, (
+                f"NEW marker {new_marker} absent on pc2 -- the pushed snippet was not replayed.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            old_exists = await pc2_executor.run_command(f"test -f {old_marker}", login_shell=False, timeout=10.0)
+            assert not old_exists.success, (
+                f"OLD marker {old_marker} present on pc2 -- the pre-seeded target snippet ran instead of the "
+                "pushed source one, so the push did not overwrite the target registry before replay"
+            )
+        finally:
+            await _remove_unowned_marker(pc1_executor, unowned_path)
+            await pc2_executor.run_command(
+                f"rm -f {new_marker} {old_marker} {registry_relpath}", login_shell=False, timeout=15.0
+            )
+            await pc1_executor.run_command(f"rm -f {registry_relpath}", login_shell=False, timeout=15.0)
