@@ -1,0 +1,5 @@
+"ADR-013 already specifies": it is formulated too specific: it should read "require passwordless sudoers entry that gives at least access to the rsync binary path". Fix that directly in the file.
+
+And I want to broaden the remark: anything a job assumes about the environment that is not already an explicit convention (like same arch, OS, userids), should be checked in validation phase instead of erroring while the job is executing.
+
+Continue
