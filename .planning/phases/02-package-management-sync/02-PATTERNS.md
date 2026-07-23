@@ -5,7 +5,7 @@
 ## File Classification
 
 | New/Modified File | Role | Data Flow | Closest Analog | Match Quality |
-|---|---|---|---|---|
+| - | - | - | - |---|
 | `src/pcswitcher/jobs/package_sync_core.py` | service (shared core: item model, diff, decision-file I/O, snippet registry, review renderer) | transform + CRUD | `src/pcswitcher/jobs/vscode_state_sync.py` (module-level helpers, not a Job) | role-match |
 | `src/pcswitcher/jobs/apt_sync.py` | controller (SyncJob) | CRUD (manifest capture → diff → converge) | `src/pcswitcher/jobs/folder_sync.py` | exact (SyncJob shape, validate/execute split, shlex-quoted shell-out) |
 | `src/pcswitcher/jobs/snap_sync.py` | controller (SyncJob) | CRUD | `src/pcswitcher/jobs/apt_sync.py` (sibling, same core) | exact |
@@ -236,7 +236,7 @@ Never interpolate a package name, path, ref, or URI into a command string withou
 ## No Analog Found
 
 | File | Role | Data Flow | Reason |
-|---|---|---|---|
+| - | - | - | - |
 | `questionary.checkbox()` integration itself | component | request-response | No existing multi-select TUI in this codebase (Rich has no built-in checkbox widget — RESEARCH.md "Don't Hand-Roll"); RESEARCH.md Pattern 3 (lines 271-291) is the only reference, not a codebase analog. Treat first integration as a spike per RESEARCH.md Assumption A2. |
 | Snippet-registry storage format (shared, synced config location) | config/model | CRUD | No existing "shared synced config beyond `config.yaml`" precedent in the codebase this session; `config_sync.py` was not read in depth this session — planner should verify how `config.yaml` reaches the target (`config_sync.py`, referenced in CONTEXT.md canonical refs) before deciding whether the snippet registry piggybacks on that same sync path or needs its own. |
 | Version-comparison wrapper (`dpkg --compare-versions`) | utility | transform | No existing deb-version-comparison code in the codebase; RESEARCH.md Code Examples (lines 378-384) is the reference, not a codebase analog — implement as a small new pure-shell-out function following the shlex/executor conventions above. |

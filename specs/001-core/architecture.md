@@ -28,7 +28,7 @@ This document describes the architecture for the pc-switcher core infrastructure
 Throughout this document, two related but distinct concepts are used:
 
 | Term | Type | Values | Description |
-|------|------|--------|-------------|
+| ---- | ---- | ------ | ----------- |
 | **host** | `Host` (enum) | `SOURCE`, `TARGET` | The logical role of a machine in the sync operation |
 | **hostname** | `str` | e.g., `"laptop-work"`, `"desktop-home"` | The actual machine name |
 
@@ -95,7 +95,7 @@ graph TD
 ### Component Responsibilities
 
 | Component | Responsibility |
-|-----------|----------------|
+| --------- | -------------- |
 | **CLI** | Entry point. Parses commands (`sync`, `logs`, `cleanup-snapshots`, `rollback` (later)), loads config file (YAML), instantiates and runs Orchestrator |
 | **Orchestrator** | Central coordinator. Validates config (schema + general config + (delegated) job configs), manages job lifecycle via TaskGroup, handles SIGINT via asyncio cancellation, produces final sync summary |
 | **Config** | Validated configuration dataclass. Holds global settings, job enable/disable flags, and per-job settings after validation |
@@ -152,7 +152,7 @@ graph LR
 ### Event Types
 
 | Event | Fields | Description |
-|-------|--------|-------------|
+| ----- | ------ | ----------- |
 | `LogEvent` | level, job, host, message, context, timestamp | Log message from any component |
 | `ProgressEvent` | job, update (ProgressUpdate), timestamp | Job progress update (update contains percent, current, total, item, heartbeat) |
 | `ConnectionEvent` | status, latency | SSH connection status change |
@@ -434,7 +434,7 @@ classDiagram
 ### Class Relationships
 
 | Relationship | Description |
-|--------------|-------------|
+| ------------ | ----------- |
 | Orchestrator → Connection | Owns and manages the SSH connection lifecycle |
 | Orchestrator → LocalExecutor | Creates for local command execution |
 | Orchestrator → Job[] | Creates, validates, and executes jobs; uses TaskGroup for background jobs |
@@ -486,7 +486,7 @@ graph TD
 ```
 
 | Phase | Responsibility | Method | Error Message Style |
-|-------|----------------|--------|---------------------|
+| ----- | -------------- | ------ | ------------------- |
 | 1. Schema | Orchestrator | JSON Schema | Config file invalid: ... |
 | 2. Job Config | Orchestrator | Job.validate_config() | Invalid config for 'job': ... |
 | 3. System State | Jobs | Job.validate() | Cannot sync: ... |
@@ -927,7 +927,7 @@ graph TD
 ### Data Flow via EventBus
 
 | Producer | Event Type | Fields |
-|----------|------------|--------|
+| -------- | ---------- | ------ |
 | Orchestrator | ProgressEvent | Overall progress (step N/M) |
 | Jobs | LogEvent | Log messages at any level |
 | Jobs | ProgressEvent | Job progress (%, count, heartbeat) |
@@ -1013,7 +1013,7 @@ class Process:
 ### Implementations
 
 | Implementation | Description |
-|----------------|-------------|
+| -------------- | ----------- |
 | **LocalExecutor** | Runs commands via async subprocess on source machine |
 | **RemoteExecutor** | Runs commands via SSH on target machine. Adds: `send_file()`, `get_file()`, `get_hostname()` |
 
@@ -1162,7 +1162,7 @@ Per FR-047, the system implements locking to prevent concurrent sync participati
 A single lock file `~/.local/share/pc-switcher/pc-switcher.lock` is used on every machine. This ensures a machine can only participate in one sync at a time, regardless of role (source or target).
 
 | Acquisition | Method | Purpose |
-|-------------|--------|---------|
+| ----------- | ------ | ------- |
 | Source (local) | `fcntl.flock()` | Acquired when starting as sync source |
 | Target (remote) | `flock` via SSH | Acquired on target machine via persistent SSH process |
 
@@ -1260,7 +1260,7 @@ uv tool install git+https://github.com/[owner]/pc-switcher@v0.4.0
 ### Log Messages
 
 | Scenario | Level | Message |
-|----------|-------|---------|
+| -------- | ----- | ------- |
 | Not installed | INFO | "Target pc-switcher not found, will install version {version}" |
 | Version match | INFO | "Target pc-switcher version matches source ({version}), skipping installation" |
 | Outdated | INFO | "Target pc-switcher version {old} is outdated, will upgrade to {new}" |
@@ -1321,7 +1321,7 @@ disk_space_monitor:
 Supports percentage or absolute values (FR-016):
 
 | Format | Example | Interpretation |
-|--------|---------|----------------|
+| ------ | ------- | -------------- |
 | Percentage | `"20%"` | 20% of total disk must be free |
 | GiB | `"50GiB"` | 50 gibibytes must be free |
 | MiB | `"500MiB"` | 500 mebibytes must be free |
@@ -1547,7 +1547,7 @@ graph TD
 ### Dependency Installation
 
 | Dependency | Check Command | Install Command |
-|------------|---------------|-----------------|
+| ---------- | ------------- | --------------- |
 | uv | `command -v uv` | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | btrfs-progs | `command -v btrfs` | `sudo apt-get install -y btrfs-progs` |
 
@@ -1740,7 +1740,7 @@ btrfs_snapshots:
 3. **Clear correspondence**: Easy to trace from config file to code module
 
 | Job Class | Module File | Job Name | Config Key |
-|-----------|-------------|----------|------------|
+| --------- | ----------- | -------- | ---------- |
 | DiskSpaceMonitorJob | disk_space_monitor.py | `disk_space_monitor` | `disk_space_monitor:` |
 | BtrfsSnapshotJob | btrfs_snapshots.py | `btrfs_snapshots` | `btrfs_snapshots:` |
 | DummySuccessJob | dummy.py | `dummy_success` | `dummy_success:` |

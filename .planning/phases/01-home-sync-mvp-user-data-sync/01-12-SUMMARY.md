@@ -34,7 +34,7 @@ sync_history simplified to the {last_role, last_peer} topology model: peer persi
 ## Tasks Completed
 
 | Task | Description | Commit |
-|------|-------------|--------|
+| ---- | ----------- | ------ |
 | 1 | Add last_peer support and (role, peer) readers | 8b45531 |
 | 2 | Remove btrfs per-target generation store | 2ad8228 |
 | 3 | Rework sync_history tests for {last_role, last_peer} schema | 590962c |

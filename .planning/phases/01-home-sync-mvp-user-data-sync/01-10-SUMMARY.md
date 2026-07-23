@@ -36,7 +36,7 @@ ADR-015 documenting the topology-based sync-safety pivot: btrfs find-new removed
 ## Tasks Completed
 
 | Task | Description | Commit | Files |
-|------|-------------|--------|-------|
+| ---- | ----------- | ------ | ----- |
 | 1 | Write ADR-015 (topology-based sync-safety model) | 765ce9c | docs/adr/adr-015-topology-based-sync-safety-model.md |
 | 2 | Index ADR-015 in _index.md | 1403bc5 | docs/adr/_index.md |
 | 3 | Mark D-06/D-07/D-08 superseded in 01-CONTEXT.md | a01be42 | .planning/phases/01-home-sync-mvp-user-data-sync/01-CONTEXT.md |

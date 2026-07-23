@@ -69,7 +69,7 @@ class LogLevel(IntEnum):
 Configuration entity holding log level settings.
 
 | Field | Type | Default | Description |
-|-------|------|---------|-------------|
+| ----- | ---- | ------- | ----------- |
 | `file` | `int` | `10` (DEBUG) | Floor log level for file output. |
 | `tui` | `int` | `20` (INFO) | Floor log level for TUI output. |
 | `external` | `int` | `30` (WARNING) | Additional floor for non-pcswitcher loggers. |
@@ -81,7 +81,7 @@ Configuration entity holding log level settings.
 Structured context added to log records via `extra` dict.
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ----- | ---- | ----------- |
 | `job` | `str` | Job name (e.g., `"btrfs"`). |
 | `host` | `str` | Logical role (`"source"` or `"target"`). |
 | `**context` | `dict` | Additional key=value pairs. |
@@ -169,7 +169,7 @@ Phase 2's package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`) adds 
 Every item class computes a stable `item_id` string rather than reusing the manager's own name for identity. This matters because a manager-native name is not always unique on its own — the same apt package name can legitimately mean "install" on one machine and "remove" on another only if there's exactly one identity to diff against, and a flatpak application id or a snap name can exist independently in two different scopes/channels that must NOT collapse into one entity. Folding the disambiguating fact (scope, origin, manager) into the identity string itself — rather than leaving it as a sibling field the diff engine would have to special-case — is what lets one generic source-vs-target diff work unmodified across every item class:
 
 | Item class | `item_id` format | Disambiguating fact folded into identity |
-|---|---|---|
+| - | - | - |
 | `AptPackageItem` | `apt:package:<name>` | — |
 | `AptSourceItem` | `apt:source:<filename>` | filename (a legacy `.list` and a deb822 `.sources` file for the same repo stay two entries) |
 | `AptKeyItem` | `apt:key:<scope>:<filename>` | `scope`: `per-repo` or `global-trust` |

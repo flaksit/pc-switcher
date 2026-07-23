@@ -52,7 +52,7 @@
 ## Component Responsibilities
 
 | Component | Responsibility | File |
-|-----------|----------------|------|
+| --------- | -------------- | ---- |
 | CLI | Parse arguments, load config, invoke orchestrator | `cli.py` |
 | Orchestrator | Orchestrate 10-phase workflow (lock, SSH, validation, jobs, snapshots) | `orchestrator.py` |
 | Connection | Manage SSH connection with keepalive and session multiplexing | `connection.py` |

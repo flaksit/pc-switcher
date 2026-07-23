@@ -82,7 +82,7 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 
 ### Well-supported Tools and Best Practices
 | Tool | Purpose | Support Status |
-|------|---------|----------------|
+| ---- | ------- | -------------- |
 | asyncssh | SSH/SFTP | Mature, async-native, Python 3.14 compatible |
 | rich | Terminal UI | Very active, widely used |
 | typer | CLI | Built on click, well-maintained |
@@ -117,7 +117,7 @@ The architecture is fully designed in [architecture.md](./architecture.md), whic
 ### Up-to-date Documentation
 **Artifacts to update**:
 | Document | Owner | Update Required |
-|----------|-------|-----------------|
+| -------- | ----- | --------------- |
 | architecture.md | Plan phase | Already complete |
 | README.md | Implementation | Installation instructions |
 | CLAUDE.md | Implementation | Active technologies section |
@@ -192,7 +192,7 @@ tests/
 > No constitution violations requiring justification. Architecture follows deliberate simplicity.
 
 | Design Choice | Rationale | Simpler Alternative Considered |
-|--------------|-----------|-------------------------------|
+| ------------ | --------- | ----------------------------- |
 | EventBus pattern | Decouples producers from consumers, prevents UI blocking jobs | Direct calls - rejected because UI operations could block job execution |
 | Three validation phases | Clear separation of concerns, distinct error messages | Single validate() - rejected because schema errors differ from runtime checks |
 | TaskGroup for background jobs | Native asyncio pattern for managing concurrent tasks | Manual task tracking - rejected as more error-prone |
@@ -206,7 +206,7 @@ tests/
 All constitution principles are satisfied by the design. No violations requiring exemption.
 
 | Principle | Status | Evidence |
-|-----------|--------|----------|
+| --------- | ------ | -------- |
 | Reliability Without Compromise | ✅ Pass | Btrfs snapshots, validation phases, lock file, version checking |
 | Frictionless Command UX | ✅ Pass | Single `sync` command, self-installation, defaults, progress UI |
 | Well-supported Tools | ✅ Pass | All dependencies actively maintained, Python 3.14 compatible |
@@ -218,7 +218,7 @@ All constitution principles are satisfied by the design. No violations requiring
 ### Design Artifacts Produced
 
 | Artifact | Location | Purpose |
-|----------|----------|---------|
+| -------- | -------- | ------- |
 | research.md | `specs/001-core/research.md` | Technology decisions and patterns |
 | data-model.md | `specs/001-core/data-model.md` | Entity definitions and relationships |
 | config-schema.yaml | `specs/001-core/contracts/config-schema.yaml` | JSON Schema for config validation |

@@ -149,7 +149,7 @@ docs/
 > No constitution violations identified. The implementation follows existing patterns and uses proven tooling.
 
 | Aspect | Decision | Rationale |
-|--------|----------|-----------|
+| ------ | -------- | --------- |
 | VM isolation | Hetzner Cloud VMs | Safety requirement; can't test destructive btrfs ops locally |
 | VM provisioning | hcloud CLI (no Terraform/OpenTofu) | Simple; only 2 VMs; no state management needed |
 | Snapshot reset | Btrfs snapshots at `/.snapshots/baseline/@` | Fast (< 30s) vs VM reprovisioning (minutes); matches docs/testing-framework.md |

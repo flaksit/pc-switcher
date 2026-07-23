@@ -91,7 +91,7 @@ All plan verification commands green:
 ## Commits
 
 | Hash | Task | Description |
-|------|------|-------------|
+| ---- | ---- | ----------- |
 | 6773f95 | RED (both tasks) | test(01-04): add failing tests for FolderSyncJob preflight and divergence guard |
 | 8eb38cc | GREEN (both tasks) | feat(01-04): implement FolderSyncJob with validate() preflight and divergence guard |
 

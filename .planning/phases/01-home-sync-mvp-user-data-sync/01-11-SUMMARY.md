@@ -35,7 +35,7 @@ Removed the btrfs content-based target-divergence guard from FolderSyncJob and f
 ## Tasks Completed
 
 | # | Task | Commit | Files |
-|---|------|--------|-------|
+| - | ---- | ------ | ----- |
 | 1 | Remove divergence guard from FolderSyncJob | a02db77 | src/pcswitcher/jobs/folder_sync.py |
 | 2 | WR-01 config_sync prefix-strip fix | a1536a6 | src/pcswitcher/config_sync.py |
 | 3 | Prune obsolete folder_sync and contract tests | d0678a8 | tests/unit/jobs/test_folder_sync.py, tests/contract/test_job_interface.py |

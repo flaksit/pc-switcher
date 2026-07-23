@@ -54,7 +54,7 @@ None deferred to a separate release. The full vision above is in scope across th
 ## Out of Scope
 
 | Feature | Reason |
-|---------|--------|
+| ------- | ------ |
 | Simultaneous / real-time bi-directional (merge) sync | Only one machine active at a time; each sync is one-directional. The round-trip metric is two sequential one-directional syncs, not a concurrent merge. |
 | Continuous / cloud / real-time syncing | Workflow is a manual single-command trigger by design (REQ-manual-sync-workflow). |
 | Automatic conflict resolution | Detection only; manual resolution preserves reliability over a guessed merge. |
@@ -65,7 +65,7 @@ None deferred to a separate release. The full vision above is in scope across th
 Each requirement maps to the phase that first delivers it. Foundation requirements are already shipped; cross-cutting requirements are realized per modular job and anchored to the phase where they are first or most concretely delivered.
 
 | Requirement | Phase | Status |
-|-------------|-------|--------|
+| ----------- | ----- | ------ |
 | REQ-core-001-infrastructure | Foundation | Complete |
 | REQ-testing-framework-002 | Foundation | Complete |
 | REQ-core-tests-003 | Foundation | Complete |

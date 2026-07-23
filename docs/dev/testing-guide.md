@@ -9,7 +9,7 @@ Instructions for writing tests in pc-switcher. Target audience: AI agents implem
 ## Test Tiers: When to Use Each
 
 | Tier | Use When | Location |
-|------|----------|----------|
+| ---- | -------- | -------- |
 | **Unit Tests** | Testing business logic, validation, configuration parsing, models, utilities. Use mocked executors. | `tests/unit/` |
 | **Contract Tests** | Verifying jobs implement required interfaces and class attributes. | `tests/contract/` |
 | **Integration Tests** | Testing real SSH, btrfs operations, full workflows. Requires VMs. | `tests/integration/` |

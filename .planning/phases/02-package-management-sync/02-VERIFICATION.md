@@ -41,7 +41,7 @@ human_verification:
 ### Observable Truths (ROADMAP §Phase 2 success criteria)
 
 | # | Truth | Status | Evidence |
-|---|-------|--------|----------|
+| - | ----- | ------ | -------- |
 | 1 | After sync, the target has the same apt, snap, and flatpak packages installed as the source (verifiable by querying each package manager) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | `apt_sync.py`/`snap_sync.py`/`flatpak_sync.py` fully implement capture→diff→converge for all three managers (1434/414/591 lines respectively); 974 unit tests pass, all against a mocked `Executor`. The only tests that would exercise real package-manager state — `tests/integration/jobs/test_package_sync.py` (8 tests, correctly collected and deselected by default under `-m integration`) — require `HCLOUD_TOKEN`/`PC_SWITCHER_TEST_PC1_HOST`/`PC_SWITCHER_TEST_PC2_HOST`, all unset in this environment. Unexecuted, not passing. |
 | 2 | Manually-installed .debs, custom PPAs, and install-script-sourced packages are reproduced on the target | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Unreproducible-item detection (`scan_unowned_installs`/apt-no-candidate scan, `apt_sync.py:634-681`) and the install-snippet registry (`package_state.py` `SnippetRegistry`, wired into `config_sync.py`'s `SYNCED_CONFIG_FILENAMES`) are implemented and unit-tested against a mocked executor and mocked `questionary` prompts. Real snippet replay on a live target and real `/etc/apt` repo-item convergence are VM-integration-test territory (same 8 tests as truth 1), unexecuted here. |
 | 3 | Package conflicts and version mismatches between source and target are detected and reported before any destructive change; machine-specific packages are not forced onto the target | ✓ VERIFIED | See "Key Link Verification" and "Behavioral Spot-Checks" below — every sub-claim is proven by a real behavioral unit test that exercises pc-switcher's own control-flow invariants (not real package-manager output), which is sufficient since the invariant lives entirely in pc-switcher's code, not in apt/snap/flatpak's behavior. |
@@ -51,7 +51,7 @@ human_verification:
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
-|----------|----------|--------|---------|
+| -------- | -------- | ------ | ------- |
 | `src/pcswitcher/jobs/package_phase.py` | `PackagePhaseCoordinator`: plan-all → review-once → distribute | ✓ VERIFIED | 139 lines; `run()` collects every job's `plan()`, calls `review_items()` exactly once, slices the outcome per job via `accept_review()` |
 | `src/pcswitcher/jobs/package_sync_core.py` | Shared `PackageSyncJob` plan()/apply()/execute() pipeline | ✓ VERIFIED | 636 lines; `execute()` structurally refuses to run without `accept_review()` having been called first (raises `RuntimeError` naming the coordinator) |
 | `src/pcswitcher/jobs/package_review.py` | Batched checkbox review, removals separated and unchecked | ✓ VERIFIED | 339 lines; `_is_removal_direction`, group-by-action, `checked=not removal` |
@@ -66,7 +66,7 @@ human_verification:
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
-|------|-----|-----|--------|---------|
+| ---- | --- | --- | ------ | ------- |
 | `orchestrator._execute_jobs` | `PackagePhaseCoordinator.run` | `coordinate_package_review(package_jobs, ...)` called **outside and before** the `TaskGroup` that runs each job's `execute()` | ✓ WIRED | `orchestrator.py:1074-1079`; confirmed by reading — the coordinator call precedes `_run_jobs_in_task_group` |
 | `PackageSyncJob.execute()` | `PackagePhaseCoordinator.accept_review()` | Structural guard: `execute()` raises `RuntimeError` if `_accepted_plan`/`_accepted_outcome` is `None` | ✓ WIRED | `package_sync_core.py:616-636`; no fallback path that plans inline exists — confirmed by reading |
 | `apt_sync._write_or_remove_repo_item` | `RemoteExecutor.send_file` | Stages to `~/.cache/pc-switcher/apt-staging`, never `/etc/apt` directly; promotes with `sudo install -o root -g root -m 0644` | ✓ WIRED | `apt_sync.py:1181-1290`; the one `send_file(` call in the file targets `staged_dest`, not a `/etc` path — confirmed by grep across all three jobs (only one `send_file` call total, in `apt_sync.py`) |
@@ -83,7 +83,7 @@ human_verification:
 All single-named-test runs (never a full-suite filter), each proving a real control-flow/state-transition invariant, not mere presence:
 
 | Behavior | Command | Result | Status |
-|----------|---------|--------|--------|
+| -------- | ------- | ------ | ------ |
 | Both jobs plan before the one review runs, decisions distributed by item-id membership | `pytest tests/unit/jobs/test_package_phase.py -k test_both_jobs_plan_before_review_which_runs_once_then_accept_review` | 1 passed | ✓ PASS |
 | Removal group defaults unchecked; install group defaults checked | `pytest tests/unit/jobs/test_package_review.py -k test_install_group_defaults_checked_removal_group_defaults_unchecked` | 1 passed | ✓ PASS |
 | No group ever mixes install and removal entries | `pytest tests/unit/jobs/test_package_review.py -k test_no_group_mixes_install_and_removal_entries_in_one_prompt` | 1 passed | ✓ PASS |
@@ -105,7 +105,7 @@ N/A — no `scripts/*/tests/probe-*.sh` convention exists in this project and no
 ### Requirements Coverage
 
 | Requirement | Source Plan | Description | Status | Evidence |
-|-------------|-------------|--------------|--------|----------|
+| ----------- | ----------- | ------------ | ------ | -------- |
 | REQ-sync-scope-packages | 02-01 .. 02-13 | apt/snap/flatpak/.deb/PPA/install-script package sync + `/etc/apt` state | Marked Complete in REQUIREMENTS.md — **justified for code delivery**, code-level truths verified; **the live-system claim (SC1/SC2) is not yet proven**, pending VM-integration CI run | All jobs implemented, unit-tested; VM test exists but unexecuted (see behavior_unverified_items) |
 | REQ-conflict-detection-no-resolution | 02-02, 02-03, 02-05, 02-06 | Conflict/version-mismatch detection, reported not auto-resolved | Marked Complete — **justified**, this requirement is inherently about pc-switcher's own decision logic (not live package-manager state) and is comprehensively proven by real behavioral unit tests | Coordinator ordering, transaction guard, removal-group unchecked-by-default all behaviorally tested and passing |
 
@@ -120,7 +120,7 @@ None in any Phase-2-touched file. Checked every `src/pcswitcher/jobs/apt_sync.py
 All nine confirmed-real findings from the Codex review were checked directly against the current code (not the SUMMARY narrative):
 
 | Finding | Fixed? | Evidence |
-|---------|--------|----------|
+| ------- | ------ | -------- |
 | HIGH — no true cross-manager batched review | ✓ Fixed | `PackagePhaseCoordinator` (see Key Link Verification, spot-check 1) |
 | HIGH — `send_file()` into `/etc/apt` impossible | ✓ Fixed | Stage-then-`sudo install` (see Key Link Verification) |
 | HIGH — snippet registry not wired into `config_sync.py` | ✓ Fixed | `SYNCED_CONFIG_FILENAMES` includes `package-snippets.yaml` |

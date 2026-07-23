@@ -601,7 +601,7 @@ stateDiagram-v2
 ## Validation Rules Summary
 
 | Entity | Field | Rule |
-|--------|-------|------|
+| ------ | ----- | ---- |
 | ProgressUpdate | percent | 0-100 if set |
 | SyncSession | session_id | Exactly 8 hex characters |
 | Configuration | log_*_level | Valid LogLevel enum |

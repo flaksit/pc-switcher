@@ -19,7 +19,7 @@ The one place this phase needs a genuinely new capability is the **batched check
 This project is a two-machine SSH-orchestrated CLI tool (ADR-002), not a multi-tier web app. Tiers below are adapted to that shape.
 
 | Capability | Primary Tier | Secondary Tier | Rationale |
-|------------|-------------|----------------|-----------|
+| ---------- | ----------- | -------------- | --------- |
 | Manifest capture (what's installed) | Source Orchestrator (`LocalExecutor`) | — | Source always runs locally; captures its own state via each ecosystem's CLI |
 | Target state query (diff basis) | Target Executor (`RemoteExecutor`, stateless) | — | Per ADR-002, target runs stateless scripts over SSH; no persistent target-side process |
 | Diff / decide / three-way-decision logic | Source Orchestrator | — | All decision logic runs on the source, which drives the whole sync (ADR-002) |
@@ -33,7 +33,7 @@ This project is a two-machine SSH-orchestrated CLI tool (ADR-002), not a multi-t
 ## Phase Requirements
 
 | ID | Description | Research Support |
-|----|-------------|------------------|
+| -- | ----------- | ---------------- |
 | REQ-sync-scope-packages | Sync installed packages across apt, snap, flatpak, manual .debs, custom PPAs, and install-script packages; detect package conflicts / version mismatches | Standard Stack (CLI commands per ecosystem), Architecture Patterns (item model, three-way diff), Don't Hand-Roll (version comparison, GPG trust), Code Examples |
 | REQ-conflict-detection-no-resolution | Detect conflicts arising from unsupported concurrent use and report them; resolution is manual | Architecture Patterns (batched review = D-24/D-25), Common Pitfalls (dpkg lock, apt-mark hold vs pin distinction), Code Examples (diff class enumeration) |
 </phase_requirements>
@@ -107,7 +107,7 @@ This project is a two-machine SSH-orchestrated CLI tool (ADR-002), not a multi-t
 ### Core (ecosystem CLIs — no library replaces these; D-01 mandates using each tool's own mechanism)
 
 | Tool/Command | Verified Version (this machine) | Purpose | Why Standard |
-|---|---|---|---|
+| - | - | - | - |
 | `apt-mark showmanual` / `apt-mark manual` / `apt-mark auto` | apt 2.8.3 [VERIFIED: local dpkg/apt] | Read/write the manually-installed set (D-03) | The only correct source for "what the user asked for" vs. what apt pulled in as a dependency; confirmed 153 manual packages on this machine, matching CONTEXT.md |
 | `apt-mark showhold` | apt 2.8.3 [VERIFIED: local dpkg/apt] | List packages held from upgrade (dpkg selection state, distinct from a pin) | Needed to detect the "held" diff class in D-25; confirmed 0 held packages on this machine |
 | `dpkg-query -W -f='<fmt>'` | dpkg 1.22.6 (Ubuntu 24.04) [VERIFIED: local dpkg] | Query installed package name + exact version reliably, machine-parseable | `apt list --installed` explicitly warns it has no stable CLI/output contract for scripting; `dpkg-query` custom format strings are the documented stable interface |
@@ -128,13 +128,13 @@ This project is a two-machine SSH-orchestrated CLI tool (ADR-002), not a multi-t
 ### Supporting (new Python dependency)
 
 | Library | Version | Purpose | When to Use |
-|---|---|---|---|
+| - | - | - | - |
 | `questionary` | 2.1.1 [ASSUMED — package name from WebSearch/training, not from an authoritative source; flagged SUS below, gate behind `checkpoint:human-verify`] | Checkbox-style multi-select prompt (`questionary.checkbox()`) for the batched TUI review (D-24) | Only when building the checkable review list; invoke after `TerminalUI.pause()` exactly where `confirmer.py` calls `Prompt.ask()`, then `TerminalUI.resume()` |
 
 ### Alternatives Considered
 
 | Instead of | Could Use | Tradeoff |
-|---|---|---|
+| - | - | - |
 | `questionary` | `InquirerPy` (0.3.4) [ASSUMED, also SUS] | Actively-maintained PyInquirer successor with a similar checkbox API; slightly less widely adopted than questionary. Either works with the pause/resume pattern; pick one, don't depend on both. |
 | `questionary`/`InquirerPy` (prompt_toolkit-based) | Hand-rolled curses/readchar checkbox rendered with Rich | Avoids a new dependency entirely, but reinvents arrow-key navigation, scrolling for long lists, and terminal-resize handling that questionary/InquirerPy already solve — explicitly a Don't Hand-Roll case (see below) |
 | Column-parsed `snap list --all` | snapd's local REST API over `/run/snapd.socket` (JSON) | More robust to future column-format changes, but adds raw HTTP-over-unix-socket handling for no immediate benefit at this project's scale (17 snaps on the reference machine); revisit only if column parsing proves fragile |
@@ -150,7 +150,7 @@ uv add questionary
 ## Package Legitimacy Audit
 
 | Package | Registry | Age | Downloads | Source Repo | Verdict | Disposition |
-|---|---|---|---|---|---|---|
+| - | - | - | - |---| - | - |
 | `questionary` | PyPI | First release 2018, latest 2.1.1 published 2025-08-28 [VERIFIED: package-legitimacy seam] | Unknown (seam could not fetch download stats — not itself a red flag; the seam has no negative signal beyond this) | `github.com/tmbo/questionary` [VERIFIED: package-legitimacy seam] | SUS (reason: `unknown-downloads` only) | Flagged — planner must add `checkpoint:human-verify` before `uv add questionary`, but the multi-year release history and public GitHub repo make this a low-risk flag in practice |
 | `InquirerPy` | PyPI | First release 2021, latest 0.3.4 published 2022-06-27 [VERIFIED: package-legitimacy seam] | Unknown (same seam limitation) | `github.com/kazhala/InquirerPy` [VERIFIED: package-legitimacy seam] | SUS (reason: `unknown-downloads` only) | Alternative if `questionary` doesn't fit — same checkpoint requirement applies if chosen instead |
 
@@ -300,7 +300,7 @@ Note: `questionary.checkbox(...).ask()` is a blocking call — wrap in `asyncio.
 ## Don't Hand-Roll
 
 | Problem | Don't Build | Use Instead | Why |
-|---|---|---|---|
+| - | - | - | - |
 | Comparing two deb version strings for the version-mismatch diff class | A custom "parse epoch:upstream-revision and compare" function | `dpkg --compare-versions <v1> lt <v2>` (shell out) | Debian version ordering has specific tilde/epoch/tie-breaking rules that differ from PEP 440 and from naive string/semver comparison; verified live that `dpkg --compare-versions` correctly ranks `2:1.0` above `10.0` (epoch beats upstream number) — a naive comparator would get this backwards |
 | Checkable multi-select TUI list with arrow-key navigation, scrolling, "select all" | Curses-based or raw-ANSI checkbox renderer on top of Rich | `questionary.checkbox()` (or `InquirerPy`) | Rich has no built-in multi-select widget (confirmed: no such component exists in Rich as of this session); reinventing keyboard navigation, terminal resize handling, and scrolling for potentially 100+ item lists (apt alone can have 153 manual packages) is exactly the kind of "deceptively complex" UI problem a maintained library already solves |
 | Verifying a repo's GPG signature manually (parsing/verifying a detached signature) | Custom `gpg --verify` wrapper | apt's own `Signed-By`/legacy trust mechanism — just copy the keyring file bytes (D-12) and let `apt-get update`/`apt-get install` do the actual cryptographic verification | apt already re-verifies every fetch against the configured keyring on every operation; the job's only responsibility is getting the correct keyring bytes onto the target, not re-implementing signature checking |
@@ -408,7 +408,7 @@ flatpak remotes --columns=name,url
 ## State of the Art
 
 | Old Approach | Current Approach | When Changed | Impact |
-|---|---|---|---|
+| - | - | - | - |
 | `apt-key add` / global `/etc/apt/trusted.gpg` | Per-repo keyring in `/etc/apt/keyrings` + `Signed-By`/`signed-by=` in the repo's own source entry | apt-key deprecated Ubuntu 20.10+, stricter enforcement 24.04+ [CITED: DigitalOcean/opensource.com/Debian manpages] | Any repo the tool captures may be in either the legacy trusted.gpg.d style (D-12's "separate global-trust item set") or the modern per-repo style — both must be handled, not just the modern one |
 | Legacy one-line `sources.list`/`.list` entries | deb822 `.sources` structured format | Ongoing migration since ~2022, `apt modernize-sources` helper added recently [CITED: sleeplessbeastie.eu/OSTechnix] | Both formats coexist on this machine today; the item model must not assume one format exclusively |
 
@@ -418,7 +418,7 @@ flatpak remotes --columns=name,url
 ## Assumptions Log
 
 | # | Claim | Section | Risk if Wrong |
-|---|-------|---------|---------------|
+| - | ----- | ------- | ------------- |
 | A1 | `questionary` is the right checkbox library choice (vs. `InquirerPy` or a hand-rolled widget) | Standard Stack / Supporting, Architecture Patterns Pattern 3 | Low-medium — both candidate libraries have the same integration shape with the existing pause/resume pattern; swapping later is a contained change confined to one review-renderer module (D-16's extracted shared core) |
 | A2 | `questionary.checkbox().ask()` composes cleanly with an already-paused Rich `Live` display with no terminal-mode conflicts | Architecture Patterns Pattern 3 | Medium — this was reasoned from documented behavior (both libraries fully own the terminal during their own prompt, same as Rich's own `Prompt.ask` which this project already pauses Live for) but not empirically tested in this session; the planner should treat the first integration as a spike/prototype task with a `checkpoint:human-verify` before building the full review renderer on top of it |
 | A3 | Whole-file diffing is sufficient for `preferences.d`/`apt.conf.d` items (vs. parsed-stanza diffing) | Standard Stack, Alternatives Considered | Low — explicitly left as Claude's Discretion in CONTEXT.md; if wrong, only affects diff message quality, not correctness |
@@ -440,7 +440,7 @@ flatpak remotes --columns=name,url
 ## Environment Availability
 
 | Dependency | Required By | Available | Version | Fallback |
-|---|---|---|---|---|
+| - | - | - | - |---|
 | `apt`/`apt-mark`/`apt-cache`/`dpkg`/`dpkg-query` | `apt_sync` | ✓ | apt 2.8.3, dpkg 1.22.6 | — (required; Ubuntu 24.04 ships all of these by default, REQ-environment-constraints) |
 | `snap`/snapd | `snap_sync` | ✓ | snap/snapd 2.76.1 | — (required; Ubuntu 24.04 ships snapd by default) |
 | `flatpak` | `flatpak_sync` | ✓ | Flatpak 1.14.6 | If absent on a given machine, `flatpak_sync` should validate() and report cleanly rather than fail hard — flatpak is not part of the default Ubuntu 24.04 install and may be genuinely absent on some fleet machines |
@@ -457,7 +457,7 @@ flatpak remotes --columns=name,url
 ### Test Framework
 
 | Property | Value |
-|---|---|
+| - | - |
 | Framework | pytest 9.1.1 + pytest-asyncio 1.4.0 (asyncio_mode=auto), pytest-randomly [VERIFIED: pyproject.toml] |
 | Config file | `pyproject.toml` `[tool.pytest]` section |
 | Quick run command | `uv run pytest tests/unit/jobs/ -x` |
@@ -466,7 +466,7 @@ flatpak remotes --columns=name,url
 ### Phase Requirements → Test Map
 
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
-|---|---|---|---|---|
+| - | - | - | - |---|
 | REQ-sync-scope-packages | apt manifest capture returns exactly `apt-mark showmanual` set with correct versions | unit | `uv run pytest tests/unit/jobs/test_apt_sync.py -x` | ❌ Wave 0 |
 | REQ-sync-scope-packages | snap manifest capture parses `snap list --all` by header, not fixed offsets | unit | `uv run pytest tests/unit/jobs/test_snap_sync.py -x` | ❌ Wave 0 |
 | REQ-sync-scope-packages | flatpak manifest capture separates user/system scope correctly | unit | `uv run pytest tests/unit/jobs/test_flatpak_sync.py -x` | ❌ Wave 0 |
@@ -496,7 +496,7 @@ flatpak remotes --columns=name,url
 ### Applicable ASVS Categories
 
 | ASVS Category | Applies | Standard Control |
-|---|---|---|
+| - | - | - |
 | V2 Authentication | No | This phase adds no new authentication surface; SSH auth is unchanged from Phase 1 (ADR-002) |
 | V3 Session Management | No | N/A — no session concept introduced |
 | V4 Access Control | Yes | Package installs on the target require root (sudo) for apt/snap; flatpak `--user` scope does not. Sudo access must be validated per-job in `validate()`, matching `folder_sync`'s existing pattern of checking sudo access before executing |
@@ -506,7 +506,7 @@ flatpak remotes --columns=name,url
 ### Known Threat Patterns for this stack
 
 | Pattern | STRIDE | Standard Mitigation |
-|---|---|---|
+| - | - | - |
 | Shell injection via an attacker-controlled or malformed package name/repo URI reaching a shelled-out apt/snap/flatpak command | Tampering | `shlex.quote()` every interpolated value, exactly as the existing codebase already does in `vscode_state_sync.py`/`folder_sync.py` (`shlex.quote(target_db)`, etc.) — no new pattern needed, just apply the existing convention to the new jobs |
 | A malicious or corrupted snippet (D-20) executing arbitrary code on the target | Elevation of Privilege / Tampering | Snippets are user-authored (added during the human-driven review flow, D-21) and run through the same executor as everything else — no additional sandboxing is specified by CONTEXT.md and none is proposed here (snippets are explicitly "opaque, never parsed" by design — the trust boundary is "the user who runs pc-switcher already has root on both machines," same as every other converge action in this phase) |
 | Re-fetching a repo's signing key from an untrusted network location instead of copying the source's own verified key | Spoofing | D-12 already mandates byte-for-byte transfer of the source's own keyring file — no network key fetch, ever, for this phase |

@@ -17,7 +17,7 @@ created: 2026-07-22
 ## Test Infrastructure
 
 | Property | Value |
-|----------|-------|
+| -------- | ----- |
 | **Framework** | pytest 9.1.1 + pytest-asyncio 1.4.0 (`asyncio_mode=auto`), pytest-randomly |
 | **Config file** | `pyproject.toml` (`[tool.pytest]`) |
 | **Quick run command** | `uv run pytest tests/unit/jobs/ -x` |
@@ -36,7 +36,7 @@ created: 2026-07-22
 One row per requirement-bearing task across every plan in the phase (02-02 through 02-11, plus 02-13, which sits at wave 3 despite its plan number — it was executed as the tracer's VM-level proof one wave after 02-03). `checkpoint:human-verify` tasks with no `<automated>` verify are not rows here; they are listed under Manual-Only Verifications below. 02-01 (ADR authorship, no test-bearing task) and 02-12 (documentation, not yet executed) are out of scope for this map.
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
+| ------- | ---- | ---- | ----------- | ---------- | --------------- | --------- | ----------------- | ----------- | ------ |
 | 02-02.2 | 02-02 | 1 | REQ-conflict-detection-no-resolution | T-02-02 | batched checkbox review renders every group; untrusted item text never reaches `Panel` unwrapped (markup-injection guard) | unit | `uv run pytest tests/unit/jobs/test_package_review.py -x && uv run ruff check src/pcswitcher/jobs/package_review.py tests/unit/jobs/test_package_review.py && uv run basedpyright src/pcswitcher/jobs/package_review.py` | ✅ | ✅ green |
 | 02-03.1 | 02-03 | 2 | REQ-sync-scope-packages | T-02-01 | tracer: apt manifest capture → diff → review → `apt-get install` on the target, one path end to end | unit | `uv run pytest tests/unit/jobs/test_apt_sync.py -x && uv run pytest && uv run ruff check . && uv run basedpyright` | ✅ | ✅ green |
 | 02-03.2 | 02-03 | 2 | REQ-conflict-detection-no-resolution | T-02-33 | `PackagePhaseCoordinator` plans every enabled manager before rendering the one batched review; no manager mutates before another has diffed | unit | `uv run pytest tests/unit/jobs/test_package_phase.py -x && uv run pytest && uv run ruff check . && uv run basedpyright` | ✅ | ✅ green |
@@ -72,7 +72,7 @@ One row per requirement-bearing task across every plan in the phase (02-02 throu
 ## Manual-Only Verifications
 
 | Behavior | Requirement | Why Manual | Test Instructions |
-|----------|-------------|------------|-------------------|
+| -------- | ----------- | ---------- | ----------------- |
 | Package legitimacy of `questionary` before install (02-02 task 1, `gate="blocking-human"`) | REQ-conflict-detection-no-resolution | A one-time human judgment call on a third-party dependency (PyPI/GitHub history, star count, release cadence) that no automated test can substitute for | Historical — already performed during 02-02's execution (see 02-02-SUMMARY.md's `key-decisions`: cleared via explicit user approval plus live PyPI/GitHub verification). No further action; recorded here for audit completeness |
 | Checkbox prompt composes with the paused Live display (02-02 task 3) | REQ-conflict-detection-no-resolution | Confirms the real terminal pause/resume/redraw sequence around a blocking `questionary` prompt; a mocked `.ask()` never exercises the actual Live-region handoff | Run a real sync between the pc1/pc2 test VMs with a package diverged; confirm the Live display visibly pauses before the checkbox prompt, the prompt renders cleanly with no display corruption, and the Live display resumes afterward |
 | Interactive batched review screen (D-24) — the human reads the per-item diff and chooses apply/skip/skip-always | REQ-conflict-detection-no-resolution | The review flow is a TUI checkbox interaction; unit tests mock `.ask()` and therefore never exercise the real rendering, keybindings, or selection ergonomics | Run a real sync between the pc1/pc2 test VMs with packages diverged in both directions; confirm every diff class (missing, extra, version mismatch, held, pinned) renders distinguishably and that each of apply / skip / skip-always produces the recorded outcome |

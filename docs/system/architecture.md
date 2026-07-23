@@ -22,7 +22,7 @@ This document describes the architecture for the pc-switcher system, covering th
 ## Terminology: Host vs Hostname
 
 | Term | Type | Values | Description |
-|------|------|--------|-------------|
+| ---- | ---- | ------ | ----------- |
 | **host** | `Host` (enum) | `SOURCE`, `TARGET` | The logical role of a machine in the sync operation |
 | **hostname** | `str` | e.g., `"laptop-work"` | The actual machine name |
 
@@ -86,7 +86,7 @@ graph TD
 ### Component Responsibilities
 
 | Component | Responsibility |
-|-----------|----------------|
+| --------- | -------------- |
 | **CLI** | Entry point. Parses commands, loads config, runs Orchestrator. |
 | **Orchestrator** | Central coordinator. Validates config, manages job lifecycle, handles SIGINT. |
 | **Config** | Validated configuration dataclass. |
@@ -145,7 +145,7 @@ graph LR
 ### Event Types
 
 | Event | Fields | Description |
-|-------|--------|-------------|
+| ----- | ------ | ----------- |
 | `LogEvent` | level, job, host, message, context, timestamp | Log message from any component |
 | `ProgressEvent` | job, update (ProgressUpdate), timestamp | Job progress update |
 | `ConnectionEvent` | status, latency | SSH connection status change |

@@ -433,7 +433,7 @@ echo "Rollback: sudo btrfs subvolume delete /home && sudo btrfs subvolume snapsh
 ### What Changed from Original Plan
 
 | Component            | Original Approach                                 | New Approach with btrfs                                          |
-|----------------------|---------------------------------------------------|------------------------------------------------------------------|
+| -------------------- | ------------------------------------------------- | ---------------------------------------------------------------- |
 | `/home` sync         | Syncthing                                         | **Keep Syncthing** (selective sync requirement)                  |
 | `/etc` sync          | Git repo with `etc-tracked/` and `.track-rules`   | **Syncthing with `/etc/.stignore`** (simpler, no `.track-rules`) |
 | `/etc` versioning    | Git repo in `~/system-state/`                     | **etckeeper locally** (per-machine, NOT synced)                  |

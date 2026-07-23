@@ -19,7 +19,7 @@ The code has the form `YXcstpoguax`. The first two characters describe the item;
 ### Character 1 — what happened
 
 | Char | Meaning |
-|------|---------|
+| ---- | ------- |
 | `<`  | the item was **copied to the target** |
 | `c`  | a directory, symlink, device, or special file was **created** on the target |
 | `h`  | the item is a **hard link** to another item |
@@ -31,7 +31,7 @@ pc-switcher only ever copies **from this machine to the target**, so you will ne
 ### Character 2 — the kind of item
 
 | Char | Meaning |
-|------|---------|
+| ---- | ------- |
 | `f`  | regular file |
 | `d`  | directory |
 | `L`  | symlink |
@@ -43,7 +43,7 @@ pc-switcher only ever copies **from this machine to the target**, so you will ne
 For a **newly created** item there is nothing on the target to compare against, so every slot shows `+` (that's why new files read `<f+++++++++`). Otherwise each slot shows its letter if that attribute differed, or `.` if it matched:
 
 | Char | Attribute |
-|------|-----------|
+| ---- | --------- |
 | `s`  | size |
 | `t`  | modification time |
 | `p`  | permissions |

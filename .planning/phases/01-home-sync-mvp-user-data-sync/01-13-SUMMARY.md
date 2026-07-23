@@ -40,7 +40,7 @@ Single --allow-out-of-order flag and topology warn+confirm step replace the cons
 ## Tasks Completed
 
 | Task | Name | Commit | Files |
-|------|------|--------|-------|
+| ---- | ---- | ------ | ----- |
 | 1 | Consolidate CLI + context flags onto --allow-out-of-order | f3cc45d | cli.py, jobs/context.py |
 | 2 | Replace consecutive check with out-of-order/target-state step | efe1f07 | orchestrator.py, test_folder_sync.py |
 | 3 | Rework orchestrator and dry-run tests | 87b5092 | test_consecutive_sync.py, test_dry_run.py |

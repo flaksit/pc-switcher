@@ -8,7 +8,7 @@
 ## Current State Summary
 
 | Item | Value |
-|------|-------|
+| ---- | ----- |
 | Existing release | `v0.1.0-alpha.1` (prerelease, does NOT have self-update) |
 | Branch with self-update feature | `32-self-update` |
 | Main branch | Does NOT have self-update command yet |
@@ -314,7 +314,7 @@ gh release list --repo flaksit/pc-switcher
 ### Phase 1: Pre-Merge
 
 | # | Scenario | Result | Notes |
-|---|----------|--------|-------|
+| - | -------- | ------ | ----- |
 | 1.1 | Install old, upgrade to branch | ☐ | |
 | 1.2 | Self update finds latest release | ☐ | |
 | 1.3 | Explicit version downgrade | ☐ | |
@@ -324,7 +324,7 @@ gh release list --repo flaksit/pc-switcher
 ### Phase 2: Merge & Release
 
 | Task | Done | Details |
-|------|------|---------|
+| ---- | ---- | ------- |
 | PR created | ☐ | PR #___ |
 | PR merged | ☐ | |
 | New release created | ☐ | Version: v_______ |
@@ -332,7 +332,7 @@ gh release list --repo flaksit/pc-switcher
 ### Phase 3: Post-Release
 
 | # | Scenario | Result | Notes |
-|---|----------|--------|-------|
+| - | -------- | ------ | ----- |
 | 3.1 | Fresh install of new release | ☐ | |
 | 3.2 | Upgrade from old release via install script | ☐ | |
 | 3.3 | Self update to get latest (no args) | ☐ | |

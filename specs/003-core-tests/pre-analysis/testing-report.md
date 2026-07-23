@@ -7,7 +7,7 @@ This report provides a comprehensive overview of testing coverage for the core f
 ### Coverage by Module
 
 | Module | Unit Tests | Integration Tests | Coverage |
-|--------|------------|-------------------|----------|
+| ------ | ---------- | ----------------- | -------- |
 | `cli.py` | Argument parsing | SIGINT handling, commands | Full |
 | `orchestrator.py` | - | Full 9-phase workflow | Full |
 | `config.py` | YAML parsing, validation, defaults | - | Full |
@@ -34,7 +34,7 @@ This report provides a comprehensive overview of testing coverage for the core f
 ### Coverage by Spec Requirement
 
 | Requirement | Test File(s) | Type |
-|-------------|--------------|------|
+| ----------- | ------------ | ---- |
 | **FR-001** Job interface | `test_job_interface.py`, `test_base.py` | Contract, Unit |
 | **FR-002** Job lifecycle | `test_orchestrator.py` | Integration |
 | **FR-003** Termination handling | `test_cli.py` (SIGINT tests) | Integration |
@@ -84,7 +84,7 @@ This report provides a comprehensive overview of testing coverage for the core f
 ### Coverage by User Story
 
 | User Story | Primary Test Files | Type |
-|------------|-------------------|------|
+| ---------- | ----------------- | ---- |
 | **US-1** Job Architecture | `test_job_interface.py`, `test_base.py`, `test_orchestrator.py` | Contract, Unit, Integration |
 | **US-2** Self-Installation | `test_install_on_target.py`, `test_install_script.py` | Unit, Integration |
 | **US-3** Safety Infrastructure | `test_btrfs.py`, `test_btrfs_snapshots.py`, `test_disk_space_monitor.py` | Unit, Integration |
@@ -101,7 +101,7 @@ This report provides a comprehensive overview of testing coverage for the core f
 These tests exist but need verification against spec.md standards (FR-007 through FR-012):
 
 | Category | File | Tests | Covers | Verification Status |
-|----------|------|-------|--------|---------------------|
+| -------- | ---- | ----- | ------ | ------------------- |
 | Contract | `test_job_interface.py` | 15 | FR-001 (job interface) | ⚠️ Needs review |
 | Contract | `test_executor_contract.py` | 16 | Executor parity | ⚠️ Needs review |
 | Unit | `test_lock.py` | 10 | FR-047 | ⚠️ Needs review |
@@ -113,7 +113,7 @@ These tests exist but need verification against spec.md standards (FR-007 throug
 
 ### Out of Scope
 | Category | File | Tests | Reason |
-|----------|------|-------|--------|
+| -------- | ---- | ----- | ------ |
 | Integration | `test_vm_connectivity.py` | 14 | Framework smoke test |
 | Integration | `test_btrfs_operations.py` | 11 | Framework smoke test |
 | Unit | `test_cli_self_update.py` | 17 | PR #42, not 001-core |
@@ -221,7 +221,7 @@ Note: **Disk space exhaustion** is tested by setting thresholds very high (e.g.,
 ### High-Risk Tests (Require VM Isolation)
 
 | Test | Risk | Potential Damage | Mitigation |
-|------|------|------------------|------------|
+| ---- | ---- | ---------------- | ---------- |
 | `test_btrfs_snapshots.py` (integration) | **HIGH** | Could corrupt btrfs filesystem if snapshot commands fail unexpectedly | Run only on dedicated test VMs; reset VMs after each session |
 | `test_cleanup_snapshots.py` | **HIGH** | Deletes btrfs subvolumes; could delete wrong snapshots if path logic is buggy | Use unique test session IDs; verify paths before deletion; test only on VMs |
 | `test_install_script.py` | **MEDIUM** | Installs packages via apt; could leave system in inconsistent state | Run only on VMs; reset after tests |
@@ -232,7 +232,7 @@ Note: **Disk space exhaustion** is tested by setting thresholds very high (e.g.,
 ### Medium-Risk Tests (Careful Implementation Required)
 
 | Test | Risk | Concern | Mitigation |
-|------|------|---------|------------|
+| ---- | ---- | ------- | ---------- |
 | `test_executor.py` (integration) | Command injection if test inputs aren't sanitized | Use fixed, safe test commands |
 | `test_disk.py` (integration) | Incorrect parsing could cause false positives/negatives | Verify against known df output formats |
 | `test_install_on_target.py` | Downloads from GitHub; could fail on network issues | Retry logic; clear error messages |
@@ -240,7 +240,7 @@ Note: **Disk space exhaustion** is tested by setting thresholds very high (e.g.,
 ### Low-Risk Tests (Safe)
 
 | Test Category | Why Low Risk |
-|---------------|--------------|
+| ------------- | ------------ |
 | All unit tests | Mocked I/O, no external effects |
 | `test_config.py` | Only reads/parses files, no writes |
 | `test_models.py` | Pure dataclass tests |
@@ -266,7 +266,7 @@ Note: **Disk space exhaustion** is tested by setting thresholds very high (e.g.,
 ### What Could Go Wrong
 
 | Scenario | Impact | Likelihood | Detection |
-|----------|--------|------------|-----------|
+| -------- | ------ | ---------- | --------- |
 | Bug in cleanup fixture leaves test snapshots | VM disk fills up over time | Low | Monitoring, manual inspection |
 | Lock script fails to release lock | Subsequent test runs blocked | Low | Timeout in lock acquisition |
 | VM reset fails | Tests run on dirty state | Low | Reset script validates success |

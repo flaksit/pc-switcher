@@ -16,7 +16,7 @@ The user selected all eight proposed gray areas and added two: the overlap with 
 ## Replication model
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Declarative manifest, replayed | Source captures a manifest; target converges via its own package managers; no rsyncing of package DBs | ✓ |
 | File-level copy of package state | rsync /var/lib/dpkg, /var/lib/snapd, flatpak OSTree store | |
 | Hybrid: manifest + cache reuse | Manifest convergence with blobs pulled from the source's caches | |
@@ -26,7 +26,7 @@ The user selected all eight proposed gray areas and added two: the overlap with 
 ## Apt manifest scope
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Manually-installed set only | 153 packages from `apt-mark showmanual`; apt resolves dependencies | ✓ (amended) |
 | Full dpkg selection set | All 2306 packages including auto-installed | |
 | Manual set + auto-set audit | Sync manual set, report auto-set drift | |
@@ -38,7 +38,7 @@ The user selected all eight proposed gray areas and added two: the overlap with 
 ## Version fidelity
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Same set, repo-current versions | Install by name; report mismatches, don't pin | ✓ (amended) |
 | Pin exact source versions | `apt install pkg=version`, `snap install --revision` for everything | |
 | Pin where it matters, float otherwise | Config list of must-match packages | |
@@ -50,7 +50,7 @@ The user selected all eight proposed gray areas and added two: the overlap with 
 ## Snap revisions and flatpak scope
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Converge revisions + preserve scope | Manifest records snap channel+revision and flatpak ref+origin+scope | ✓ (amended) |
 | Names and channels only | Let each machine refresh independently | |
 | Converge revisions; normalize flatpak scope | Also collapse the system/user split | |
@@ -62,7 +62,7 @@ The user selected all eight proposed gray areas and added two: the overlap with 
 ## Removal semantics
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Remove, after warn + confirm | Mirror semantics with a confirmation and an override flag | |
 | Additive only — never remove | Target accumulates | |
 | Remove silently, like a file mirror | Snapshots and dry-run as the only safety net | |
@@ -74,7 +74,7 @@ The user selected all eight proposed gray areas and added two: the overlap with 
 ## Machine-specific list: location and expression
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Per-manager lists in the central YAML config | Lists in `config.yaml` | |
 | A .filter-style file per manager | Reuse folder_sync's filter authoring surface | |
 | One flat list across all managers | Single list matched against any manager | |
@@ -84,7 +84,7 @@ The user selected all eight proposed gray areas and added two: the overlap with 
 Follow-up on where the file lives:
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | `~/.local/share/pc-switcher/` | Already hard-excluded from folder_sync by ADR-017 | |
 | `~/.config/pc-switcher/` next to config.yaml | Discoverable, but inside folder_sync's mirror — needs a new exclusion | ✓ |
 | `/etc` or another root-owned location | Unambiguously machine-scoped, but Phase 3 territory and needs sudo | |
@@ -96,7 +96,7 @@ Follow-up on where the file lives:
 ## Machine-specific list: semantics and seeding
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Inert on M in both roles | Not pushed from M, not installed/removed on M | ✓ |
 | Two lists: don't-push and don't-install | More precise, two lists to maintain | |
 | Inert on M as target only | Peer answers the same prompt in the other direction | |
@@ -108,7 +108,7 @@ Follow-up on where the file lives:
 ## Review UX and headless behavior
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | One batched review before any change | Grouped by manager and action, per-item apply/skip-once/skip-always | ✓ |
 | Prompt per package as encountered | Simple, but reproduces the Phase 1 prompt-flooding problem | |
 | Report, then require a second run | Fully non-interactive, breaks the single-command workflow | |
@@ -118,7 +118,7 @@ Follow-up on where the file lives:
 Headless behavior:
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Apply installs, skip removals, report | Non-destructive but still makes progress | |
 | Skip everything unresolved, report only | Most conservative | ✓ (amended) |
 | Abort the job | Refuse to proceed without a human | |
@@ -128,7 +128,7 @@ Headless behavior:
 ## Repo sources and the Phase 3 boundary
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Pull the apt subset into Phase 2 | Phase 2 owns `/etc/apt/**`; Phase 3 keeps the rest of /etc | ✓ |
 | Declarative repos in the manifest | Reconstruct repo files from parsed data | |
 | Wait for Phase 3 — Phase 2 only reports | Success criterion 2 would not be met | |
@@ -138,7 +138,7 @@ Headless behavior:
 Mechanism, as first posed:
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Reuse folder_sync's rsync machinery on scoped paths | Same transport, proven in Phase 1 | (superseded) |
 | Purpose-built copy in the package job | Second file-transfer implementation | |
 | Configure a folder_sync entry instead | Decouples repo state from the job that needs it | |
@@ -148,7 +148,7 @@ Mechanism, as first posed:
 Re-posed as an item model:
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Inventory items, same 3-way decision as packages | Merge is just what item-level convergence does, every run | ✓ |
 | File mirror with an exception list | Exception unit is a filename, not a repo | |
 | Union-only: add missing, never remove | Stale repos live forever | |
@@ -160,7 +160,7 @@ Re-posed as an item model:
 ## Job granularity
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | One file per manager for decisions | Cleaner if the job is later split per manager | ✓ |
 | One file, sectioned by item type | One file to exclude and back up | |
 | You decide | Leave layout to the planner | |
@@ -170,7 +170,7 @@ Re-posed as an item model:
 Follow-up on the job set:
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | 3 jobs + a shared package-sync core | Shared item model, decision flow, TUI, file I/O | |
 | 3 fully independent jobs | Logic written three times | |
 | 3 jobs, extract the core later | Avoid abstracting before two real users exist | ✓ (amended) |
@@ -180,7 +180,7 @@ Follow-up on the job set:
 ## Job ordering
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Packages first, then folder_sync | Apps provisioned before their data lands | ✓ |
 | folder_sync first, then packages | postinst could overwrite synced config | |
 | You decide, but document it | Leave to planner with a documentation requirement | |
@@ -192,7 +192,7 @@ Follow-up on the job set:
 Inventory finding presented: exactly 4 apt packages have no repo candidate (`brscan3`, `brother-udev-rule-type1`, `cnpg`, `falco-app`); `/usr/local/bin` holds `flux`, `talosctl`, `yq`, `kubectl-cnpg`, `batteryhealthchargingctl-janfr`; `/opt` holds az, brother, containerd, Falco, google.
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Out of scope; detect and report | Machine-local treatment, no replay machinery | |
 | In scope via a tracked directory convention | Install .debs from a folder_sync'd dir, replay on target | |
 | In scope by copying the installed .deb | Pull from apt cache or dpkg-repack | |
@@ -204,7 +204,7 @@ Inventory finding presented: exactly 4 apt packages have no repo candidate (`brs
 Snippet registry, as decided:
 
 | Question | Options | User's choice |
-|----------|---------|---------------|
+| -------- | ------- | ------------- |
 | Adopt the registry? | opaque and optional / mandatory / no, report only | Yes, **mandatory** — and pc-switcher must allow adding snippets on the fly |
 | Coverage | any unreproducible item / bare .debs only / bare .debs + free-form manual list | Bare .debs and manual installs; snap and flatpak are YAGNI |
 | Timing | Phase 2 / own phase / Phase 2 report-only | Phase 2, as part of the shared core |
@@ -213,7 +213,7 @@ Snippet registry, as decided:
 ## Script installs
 
 | Option | Description | Selected |
-|--------|-------------|----------|
+| ------ | ----------- | -------- |
 | Out of scope; document the convention | ~/.local/bin and uv tools already sync via folder_sync | ✓ |
 | Add /usr/local and /opt as synced paths | Would fight apt over vendor-owned trees | |
 | Manifest of re-runnable install commands | A package manager of our own making | |
@@ -225,7 +225,7 @@ Snippet registry, as decided:
 ## Conflicts, failures, downloads, overlap
 
 | Question | Options | User's choice |
-|----------|---------|---------------|
+| -------- | ------- | ------------- |
 | What is a conflict? | diff class in the same checklist / separate pre-flight report / hard block | Diff class in the same checklist |
 | Item fails mid-apply | continue and report / abort job / abort sync | Continue, collect, report at the end |
 | Download source | target's own repos / reuse source caches over SSH / opt-in flag | Target's own repos |

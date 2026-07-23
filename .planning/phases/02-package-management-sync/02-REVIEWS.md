@@ -84,7 +84,7 @@ Single reviewer, so there is no cross-reviewer consensus to compute. Instead, ev
 ### Verified Findings
 
 | Severity | Plan(s) | Finding | Verification |
-|----------|---------|---------|--------------|
+| -------- | ------- | ------- | ------------ |
 | HIGH | 02-03, 02-05, 02-08, 02-09, 02-10 | Per-job `execute()` means `apt_sync` mutates the target before `snap_sync`/`flatpak_sync` have diffed — D-24's single cross-manager batched review is not achieved | Confirmed: `orchestrator.py:1070-1080` awaits each `job.execute()` in turn; 02-03 places capture→diff→review→converge inside one job's `execute()` |
 | HIGH | 02-06 | `send_file()` into `/etc/apt` is impossible — it is plain SFTP as the SSH user with no sudo path | Confirmed: `executor.py:362-370` is `sftp.put()`; the only existing caller writes under `$HOME` (`vscode_state_sync.py:364,369`). 02-06:142 stages the temp file inside the destination directory |
 | HIGH | 02-07 | Snippet registry cannot reach the target — `config_sync.py` transfers only `config.yaml` and is absent from `files_modified` | Confirmed: `CONFIG_REMOTE_PATH` is hardcoded to `config.yaml` (`config_sync.py:23`), `_get_target_config` reads only that path; 02-07 `files_modified` lists no `config_sync.py` |

@@ -49,7 +49,7 @@ Progress: [██████████] 100%
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
+| ----- | ----- | ----- | -------- |
 | 01 | 18 | - | - |
 
 **Recent Trend:**
@@ -80,7 +80,7 @@ Progress: [██████████] 100%
 **Per-Plan Metrics:**
 
 | Plan | Duration | Tasks | Files |
-|------|----------|-------|-------|
+| ---- | -------- | ----- | ----- |
 | Phase 02 P01 | 9min | 2 tasks | 4 files |
 | Phase 02 P02 | 20min | 3 tasks | 4 files |
 | Phase 02 P03 | 26min | 2 tasks | 10 files |
@@ -148,7 +148,7 @@ None.
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Status | Directory |
-|---|-------------|------|--------|--------|-----------|
+| - | ----------- | ---- | ------ | ------ | --------- |
 | 260718-np8 | folder_sync include-override filter rules (#166) | 2026-07-18 | 2a2c003 | Verified | [260718-np8-folder-sync-include-override-filter-rule](./quick/260718-np8-folder-sync-include-override-filter-rule/) |
 | 260719-g13 | Check for new versions at startup (#176) | 2026-07-19 | cd765bf | Verified | [260719-g13-check-for-new-versions-at-startup-176](./quick/260719-g13-check-for-new-versions-at-startup-176/) |
 | 260720-vhr | Selective SQLite-aware sync of VS Code state.vscdb (#195) | 2026-07-20 | ed7751b | Verified | [260720-vhr-fix-195-selective-sqlite-aware-sync-of-v](./quick/260720-vhr-fix-195-selective-sqlite-aware-sync-of-v/) |
@@ -158,7 +158,7 @@ None.
 Items acknowledged and carried forward from previous milestone close:
 
 | Category | Item | Status | Deferred At |
-|----------|------|--------|-------------|
+| -------- | ---- | ------ | ----------- |
 | *(none)* | | | |
 
 ## Session Continuity
