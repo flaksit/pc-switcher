@@ -35,7 +35,7 @@ from uuid import uuid4
 
 from pcswitcher.executor import RemoteExecutor
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.package_items import (
+from pcswitcher.jobs.packages.items import (
     AptConfigItem,
     AptKeyItem,
     AptPackageItem,
@@ -50,20 +50,20 @@ from pcswitcher.jobs.package_items import (
     build_version_mismatch_detail,
     compare_deb_versions,
 )
-from pcswitcher.jobs.package_review import (
+from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
     Decision,
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
+from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
 __all__ = ["AptSyncJob", "AptTransactionPreview", "simulate_apt_transaction"]
 
-# `AptPackageItem.item_id` is always this prefix + the package name (package_items.py).
+# `AptPackageItem.item_id` is always this prefix + the package name (packages/items.py).
 # Parsing the name back out of the id is a legitimate use of a stable identity string,
 # not string-matching on manager-specific content.
 _APT_PACKAGE_ID_PREFIX = "apt:package:"

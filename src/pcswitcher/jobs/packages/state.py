@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Protocol
 import yaml
 
 from pcswitcher.config_sync import CONFIG_REMOTE_DIR
-from pcswitcher.jobs.package_items import ItemClass
+from pcswitcher.jobs.packages.items import ItemClass
 from pcswitcher.models import CommandResult
 
 if TYPE_CHECKING:
@@ -62,7 +62,7 @@ __all__ = [
     "filter_inert",
 ]
 
-_logger = logging.getLogger("pcswitcher.jobs.package_state")
+_logger = logging.getLogger("pcswitcher.jobs.packages.state")
 
 # Home-relative directory holding every manager's decision file, derived from
 # CONFIG_REMOTE_DIR ("~/.config/pc-switcher") rather than a second hardcoded literal.

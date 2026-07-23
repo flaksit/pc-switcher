@@ -1,4 +1,4 @@
-"""Unit tests for `package_state.py`'s machine-local decision store (plan 02-04).
+"""Unit tests for `packages/state.py`'s machine-local decision store (plan 02-04).
 
 Task 1 covers `DecisionFile`/`DecisionEntry`/`filter_inert` as standalone units, using
 stub/fake `Executor`s — no real shell/SSH. Task 2 (`TestPipelineWiring` and
@@ -20,17 +20,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pcswitcher.config_sync import CONFIG_REMOTE_PATH, _copy_config_to_target  # pyright: ignore[reportPrivateUsage]
-from pcswitcher.jobs import package_state
+from pcswitcher.jobs.packages import state as package_state
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.package_items import (
+from pcswitcher.jobs.packages.items import (
     AptPackageItem,
     DiffAction,
     DiffClass,
     ItemClass,
     ItemDiff,
 )
-from pcswitcher.jobs.package_review import Decision, ReviewOutcome
-from pcswitcher.jobs.package_state import (
+from pcswitcher.jobs.packages.review import Decision, ReviewOutcome
+from pcswitcher.jobs.packages.state import (
     DECISION_FILE_GLOB_RELPATH,
     DECISION_FILE_RELPATH_TEMPLATE,
     SNIPPET_REGISTRY_RELPATH,
@@ -40,7 +40,7 @@ from pcswitcher.jobs.package_state import (
     SnippetRegistry,
     filter_inert,
 )
-from pcswitcher.jobs.package_sync_core import PackagePlan, PackageSyncJob
+from pcswitcher.jobs.packages.sync_core import PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, ValidationError
 
 # ---------------------------------------------------------------------------
@@ -192,7 +192,7 @@ class TestDecisionFileLoad:
         executor.run_command = AsyncMock(return_value=CommandResult(1, "", ""))
         store = DecisionFile("apt", executor)
 
-        with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.package_state"):
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.packages.state"):
             await store.load()
 
         assert caplog.records == []
@@ -215,7 +215,7 @@ class TestDecisionFileLoad:
         )
         store = DecisionFile("apt", executor)
 
-        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.package_state"):
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.packages.state"):
             entries = await store.load()
 
         assert entries == {}
@@ -582,7 +582,7 @@ class TestSnippetRegistry:
         executor.run_command = AsyncMock(return_value=CommandResult(0, "snippets: [\n  - broken\n", ""))
         registry = SnippetRegistry(executor)
 
-        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.package_state"):
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.packages.state"):
             entries = await registry.load()
 
         assert entries == {}

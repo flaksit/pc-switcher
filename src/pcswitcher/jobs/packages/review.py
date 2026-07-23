@@ -75,7 +75,7 @@ __all__ = [
     "review_items",
 ]
 
-_logger = logging.getLogger("pcswitcher.jobs.package_review")
+_logger = logging.getLogger("pcswitcher.jobs.packages.review")
 
 # Undocumented on purpose (D-26): lets integration tests answer a review without a TTY.
 # Never mentioned in --help, the config schema, or docs/configuration.md.
@@ -90,7 +90,7 @@ _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable"})
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of unreproducible items (D-18/D-21) as needing the three-way per-entry resolution flow
 # below, rather than the ordinary checkbox tick. Not a `DiffAction` value — this is a
-# `package_review`-owned interaction kind, independent of the underlying diff's own
+# `packages.review`-owned interaction kind, independent of the underlying diff's own
 # `action` (which stays `REPORT_ONLY`/`INSTALL` per D-25's taxonomy).
 UNREPRODUCIBLE_REVIEW_ACTION = "unreproducible"
 

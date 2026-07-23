@@ -23,8 +23,8 @@ from rich.console import Console
 
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
-from pcswitcher.jobs.package_items import DiffAction, DiffClass, ItemClass, ItemDiff
-from pcswitcher.jobs.package_review import (
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
+from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
     PACKAGE_REVIEW_AUTOMATION_ENV,
     UNREPRODUCIBLE_REVIEW_ACTION,
@@ -35,7 +35,7 @@ from pcswitcher.jobs.package_review import (
     TerminalUIReviewer,
     review_items,
 )
-from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan
+from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
 from pcswitcher.models import CommandResult, SyncAbortedByUser
 
 
@@ -99,7 +99,7 @@ class TestNonInteractive:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(False)),
-            patch("pcswitcher.jobs.package_review.questionary.checkbox") as checkbox,
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
         ):
             outcome = await review_items(groups, console=console, ui=ui)
 
@@ -146,7 +146,7 @@ class TestInteractive:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.checkbox", return_value=prompt) as checkbox,
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
         ):
             outcome = await review_items(groups, console=console, ui=ui)
 
@@ -168,7 +168,7 @@ class TestInteractive:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.checkbox", return_value=prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt),
             pytest.raises(KeyboardInterrupt),
         ):
             await review_items(groups, console=console, ui=ui)
@@ -189,7 +189,7 @@ class TestInteractive:
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch(
-                "pcswitcher.jobs.package_review.questionary.checkbox",
+                "pcswitcher.jobs.packages.review.questionary.checkbox",
                 side_effect=[aborted_prompt, never_prompt],
             ) as checkbox,
         ):
@@ -211,7 +211,7 @@ class TestInteractive:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.checkbox", return_value=prompt) as checkbox,
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
         ):
             await review_items([install_group, removal_group], console=console, ui=ui)
 
@@ -238,7 +238,7 @@ class TestInteractive:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.checkbox", return_value=prompt) as checkbox,
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
         ):
             outcome = await review_items([install_group, removal_group, change_group], console=console, ui=ui)
 
@@ -259,7 +259,7 @@ class TestInteractive:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.checkbox", return_value=prompt) as checkbox,
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
         ):
             await review_items([group], console=console, ui=ui)
 
@@ -283,7 +283,7 @@ class TestTerminalUIReviewer:
         sentinel_outcome = ReviewOutcome(decisions={"a": Decision.APPLY}, was_interactive=True)
 
         with patch(
-            "pcswitcher.jobs.package_review.review_items",
+            "pcswitcher.jobs.packages.review.review_items",
             AsyncMock(return_value=sentinel_outcome),
         ) as review_mock:
             result = await reviewer.review(groups)
@@ -303,7 +303,7 @@ class TestTerminalUIReviewer:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.checkbox", return_value=prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt),
             pytest.raises(KeyboardInterrupt),
         ):
             await reviewer.review(groups)
@@ -338,7 +338,7 @@ class TestBlockingPromptOffLoop:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.checkbox", return_value=prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt),
         ):
             ticker_task = asyncio.create_task(_ticker())
             await review_items(groups, console=console, ui=ui)
@@ -363,7 +363,7 @@ class TestAutomationEnv:
 
         with (
             patch.dict("os.environ", env),
-            patch("pcswitcher.jobs.package_review.questionary.checkbox") as checkbox,
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
         ):
             outcome = await review_items(groups, console=console, ui=ui)
 
@@ -399,8 +399,8 @@ class TestUnreproducibleGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.package_review.questionary.text", return_value=text_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui)
 
@@ -415,7 +415,7 @@ class TestUnreproducibleGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui)
 
@@ -433,7 +433,7 @@ class TestUnreproducibleGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui)
 
@@ -450,7 +450,7 @@ class TestUnreproducibleGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui)
 
@@ -466,8 +466,8 @@ class TestUnreproducibleGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.package_review.questionary.text", return_value=text_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui)
 
@@ -483,8 +483,8 @@ class TestUnreproducibleGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.package_review.questionary.text", return_value=text_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
             pytest.raises(KeyboardInterrupt),
         ):
             await review_items([group], console=console, ui=ui)
@@ -499,8 +499,8 @@ class TestUnreproducibleGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(False)),
-            patch("pcswitcher.jobs.package_review.questionary.select") as select_mock,
-            patch("pcswitcher.jobs.package_review.questionary.text") as text_mock,
+            patch("pcswitcher.jobs.packages.review.questionary.select") as select_mock,
+            patch("pcswitcher.jobs.packages.review.questionary.text") as text_mock,
         ):
             outcome = await review_items([group], console=console, ui=ui)
 
@@ -522,8 +522,8 @@ class TestUnreproducibleGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.package_review.questionary.checkbox") as checkbox,
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
         ):
             await review_items([group], console=console, ui=ui)
 
@@ -545,7 +545,7 @@ class TestCollateralGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui)
 
@@ -559,7 +559,7 @@ class TestCollateralGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui)
 
@@ -573,7 +573,7 @@ class TestCollateralGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             pytest.raises(SyncAbortedByUser, match="other-manual"),
         ):
             await review_items([group], console=console, ui=ui)
@@ -592,7 +592,7 @@ class TestCollateralGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui)
 
@@ -606,8 +606,8 @@ class TestCollateralGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.package_review.questionary.checkbox") as checkbox,
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
         ):
             await review_items([group], console=console, ui=ui)
 
@@ -624,7 +624,7 @@ class TestCollateralGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(False)),
-            patch("pcswitcher.jobs.package_review.questionary.select") as select_mock,
+            patch("pcswitcher.jobs.packages.review.questionary.select") as select_mock,
         ):
             outcome = await review_items([group], console=console, ui=ui)
 

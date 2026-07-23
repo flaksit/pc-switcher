@@ -21,7 +21,7 @@ from pcswitcher.config import Configuration
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
-from pcswitcher.jobs.package_items import (
+from pcswitcher.jobs.packages.items import (
     AptPackageItem,
     DiffAction,
     DiffClass,
@@ -29,8 +29,8 @@ from pcswitcher.jobs.package_items import (
     ItemClass,
     ItemDiff,
 )
-from pcswitcher.jobs.package_review import Decision, ReviewGroup, ReviewOutcome
-from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan, PackageSyncJob
+from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome
+from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, JobStatus, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 

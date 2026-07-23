@@ -18,15 +18,15 @@ import pytest
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
-from pcswitcher.jobs.package_items import DiffAction, DiffClass, ItemClass, ItemDiff, UnreproducibleItem
-from pcswitcher.jobs.package_review import (
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, UnreproducibleItem
+from pcswitcher.jobs.packages.review import (
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.package_state import SNIPPET_REGISTRY_RELPATH
-from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan
+from pcswitcher.jobs.packages.state import SNIPPET_REGISTRY_RELPATH
+from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
 from pcswitcher.models import CommandResult, Host, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 

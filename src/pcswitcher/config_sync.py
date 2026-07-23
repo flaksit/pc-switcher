@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 # Single source of truth for the remote pc-switcher config directory and file path.
 # folder_sync derives its tool-state filter token from CONFIG_REMOTE_DIR rather than
 # hardcoding a second copy of the literal (CR-01 empty-prefix tool-state filter);
-# package_state.py derives its decision-file and snippet-registry relpaths from
+# packages/state.py derives its decision-file and snippet-registry relpaths from
 # CONFIG_REMOTE_DIR the same way.
 #
 # config_sync carries exactly ONE file, config.yaml (D-23): it is the single required

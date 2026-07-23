@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from pcswitcher.confirmer import Confirmer
     from pcswitcher.events import EventBus
     from pcswitcher.executor import LocalExecutor, RemoteExecutor
-    from pcswitcher.jobs.package_review import Reviewer
+    from pcswitcher.jobs.packages.review import Reviewer
 
 
 @dataclass(frozen=True)

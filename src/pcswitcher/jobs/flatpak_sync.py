@@ -4,7 +4,7 @@ D-29, ADR-020).
 Scope (user vs. system) is part of a flatpak item's identity, not just a field on it:
 this project's own reference machine has several runtimes installed in BOTH scopes
 under the same application id, and `FlatpakItem.item_id`/`FlatpakRemoteItem.item_id`
-already fold scope into the identity string (`package_items.py`). That is what makes
+already fold scope into the identity string (`packages/items.py`). That is what makes
 "same application, different scope" fall out of the generic source-vs-target diff as
 two independent items with no special-casing in this module — a ref present as
 `user` on the source and `system` on the target produces one install diff and one
@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, override
 
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.package_items import (
+from pcswitcher.jobs.packages.items import (
     DiffAction,
     DiffClass,
     FlatpakItem,
@@ -69,8 +69,8 @@ from pcswitcher.jobs.package_items import (
     ItemDiff,
     build_version_mismatch_detail,
 )
-from pcswitcher.jobs.package_state import DecisionFile, filter_inert
-from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
+from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
+from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
@@ -124,7 +124,7 @@ def _sudo_prefix(scope: str) -> str:
 
 
 def _split_flatpak_item_id(item_id: str, expected_kind: Literal["ref", "remote"]) -> tuple[str, str]:
-    """`(scope, name)` from a `flatpak:<kind>:<scope>:<name>` item id (package_items.py).
+    """`(scope, name)` from a `flatpak:<kind>:<scope>:<name>` item id (packages/items.py).
 
     `name` is the application id for a ref, the remote name for a remote — both are
     dotted/alnum tokens with no `:` of their own (RESEARCH Standard Stack), so a fixed

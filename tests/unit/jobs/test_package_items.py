@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from pcswitcher.executor import LocalExecutor
-from pcswitcher.jobs.package_items import (
+from pcswitcher.jobs.packages.items import (
     DiffAction,
     DiffClass,
     FlatpakItem,

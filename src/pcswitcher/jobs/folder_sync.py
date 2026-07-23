@@ -24,7 +24,7 @@ from typing import Any, ClassVar, override
 from pcswitcher.disk import format_bytes
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.flatpak_sync import flatpak_sync_exclude_paths
-from pcswitcher.jobs.package_state import DECISION_FILE_GLOB_RELPATH
+from pcswitcher.jobs.packages.state import DECISION_FILE_GLOB_RELPATH
 from pcswitcher.jobs.snap_sync import snap_sync_exclude_paths
 from pcswitcher.jobs.vscode_state_sync import vscode_state_exclude_paths
 from pcswitcher.models import ConfigError, FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
@@ -102,7 +102,7 @@ def _pass_display(path: str, label: str) -> str:
 #      or home layout — it just translates each absolute path from vscode_state_exclude_paths()
 #      into an rsync filter for the folder being synced (see _vscode_state_exclude_filters).
 #   3. every manager's machine-local decision file (`~/.config/pc-switcher/*.decisions.yaml`),
-#      whose home-relative GLOB is owned by package_state (D-08/D-09). A decision file states
+#      whose home-relative GLOB is owned by packages.state (D-08/D-09). A decision file states
 #      what ONE machine considers machine-specific; mirroring it would silently impose that
 #      machine's hardware exclusions on a peer. Unconditional — never gated on any package job
 #      being enabled, since a decision file must never travel even on a run where the package
@@ -441,8 +441,8 @@ class FolderSyncJob(SyncJob):
         that falls under `folder_path` (D-08, D-09).
 
         The home-relative GLOB (covers every `<manager>.decisions.yaml`, one filter
-        for all of them) comes from `package_state.DECISION_FILE_GLOB_RELPATH` —
-        `package_state` owns which files are decision files; folder_sync only resolves
+        for all of them) comes from `packages.state.DECISION_FILE_GLOB_RELPATH` —
+        `packages.state` owns which files are decision files; folder_sync only resolves
         it against `Path.home()`, takes it relative to the transfer root, and translates
         it into a root-anchored, first-match rsync exclude — the same one-way ownership
         `_vscode_state_exclude_filters` follows for `vscode_state_sync`. A path outside

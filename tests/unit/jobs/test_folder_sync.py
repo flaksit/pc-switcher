@@ -661,7 +661,7 @@ class TestVscodeStateExcludeFilters:
 
 class TestDecisionFileExcludeFilters:
     """Every manager's machine-local decision file (`~/.config/pc-switcher/*.decisions.yaml`)
-    is excluded from the mirror via a home-relative GLOB that `package_state` owns;
+    is excluded from the mirror via a home-relative GLOB that `packages.state` owns;
     folder_sync only translates it into a root-anchored, first-match filter for the
     folder being synced (D-08, D-09). Unconditional — not gated on any package job.
     """

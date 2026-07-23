@@ -17,9 +17,9 @@ import pytest
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.apt_sync import AptSyncJob, simulate_apt_transaction
-from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass
-from pcswitcher.jobs.package_review import COLLATERAL_REVIEW_ACTION, Decision
-from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackageItemFailures
+from pcswitcher.jobs.packages.items import AptPackageItem, DiffAction, DiffClass, ItemClass
+from pcswitcher.jobs.packages.review import COLLATERAL_REVIEW_ACTION, Decision
+from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFailures
 from pcswitcher.models import CommandResult, Host
 from pcswitcher.orchestrator import Orchestrator
 from tests.unit.jobs.test_package_sync_core import FakeReviewer

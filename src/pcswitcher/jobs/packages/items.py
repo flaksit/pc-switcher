@@ -5,7 +5,7 @@ signing key, pin, config file, snap, snap channel, flatpak ref, flatpak remote a
 unreproducible install this phase handles is identified by a stable `item_id` string,
 not by any manager-specific value. A package name, a flatpak ref, a filename — each is
 a FIELD of one variant's dataclass, never the primary key itself. This is what lets the
-shared diff/review/decision-file pipeline in `package_sync_core.py` operate on one shape
+shared diff/review/decision-file pipeline in `packages/sync_core.py` operate on one shape
 (`ItemDiff`) regardless of which manager or item class produced it.
 
 This module is the phase's single registry of item shapes: the manager jobs built in
@@ -87,7 +87,7 @@ class ItemClass(StrEnum):
 
 class DiffClass(StrEnum):
     """The full D-25 conflict taxonomy — every member is producible once this plan's
-    `diff_items` dispatch (`package_sync_core.py`) is filled out.
+    `diff_items` dispatch (`packages/sync_core.py`) is filled out.
     """
 
     MISSING_ON_TARGET = "missing_on_target"
@@ -101,7 +101,7 @@ class DiffClass(StrEnum):
 class DiffAction(StrEnum):
     """The concrete converge verb a diff implies (D-07's direction-dependent "apply").
 
-    Values match `package_review`'s private removal-action set (`{"remove", "delete",
+    Values match `packages.review`'s private removal-action set (`{"remove", "delete",
     "disable"}`) so a `ReviewGroup` built from these actions gets the right
     default-checked/unchecked behavior without that module knowing this enum exists.
     """
@@ -137,7 +137,7 @@ class ItemDiff:
 
     This is D-02's "all classes flow through one pipeline" made real: regardless of
     which manager or item class produced it, `PackageSyncJob.apply()` and
-    `package_review.review_items()` only ever see `ItemDiff`/`ReviewEntry` shapes.
+    `packages.review.review_items()` only ever see `ItemDiff`/`ReviewEntry` shapes.
     """
 
     item_class: ItemClass

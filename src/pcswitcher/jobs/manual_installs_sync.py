@@ -42,21 +42,21 @@ from typing import Any, ClassVar, override
 
 from pcswitcher.config_sync import CONFIG_REMOTE_DIR
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.package_items import (
+from pcswitcher.jobs.packages.items import (
     DiffAction,
     DiffClass,
     ItemClass,
     ItemDiff,
     UnreproducibleItem,
 )
-from pcswitcher.jobs.package_review import (
+from pcswitcher.jobs.packages.review import (
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.package_state import (
+from pcswitcher.jobs.packages.state import (
     SNIPPET_REGISTRY_RELPATH,
     DecisionEntry,
     DecisionFile,
@@ -64,7 +64,7 @@ from pcswitcher.jobs.package_state import (
     SnippetRegistry,
     filter_inert,
 )
-from pcswitcher.jobs.package_sync_core import PackagePlan, PackageSyncJob
+from pcswitcher.jobs.packages.sync_core import PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 
 __all__ = ["ManualInstallsSyncJob"]
@@ -435,7 +435,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         never fail on that basis alone, since the user was never offered a resolution) and
         a dry-run (ADR-014 — a preview that fails would make `--dry-run` unusable as a
         check). A deliberate skip-once is NOT in `outcome.unresolved` (D-21, decided in
-        `package_review._review_unreproducible_group`), so it never reaches this method.
+        `packages.review._review_unreproducible_group`), so it never reaches this method.
         Converge failures (`failures` in `apply()`) are NOT covered by either exemption;
         they fail the job unconditionally.
         """

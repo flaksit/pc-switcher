@@ -28,8 +28,8 @@ from pcswitcher.jobs.btrfs import BtrfsSnapshotJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
-from pcswitcher.jobs.package_review import Reviewer, TerminalUIReviewer
-from pcswitcher.jobs.package_sync_core import PackageItemFailures
+from pcswitcher.jobs.packages.review import Reviewer, TerminalUIReviewer
+from pcswitcher.jobs.packages.sync_core import PackageItemFailures
 from pcswitcher.lock import (
     SyncLock,
     get_hostname_command,

@@ -38,9 +38,9 @@ from typing import Literal
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
-from pcswitcher.jobs.package_items import AptPackageItem, FlatpakItem, FlatpakRemoteItem, UnreproducibleItem
-from pcswitcher.jobs.package_review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
-from pcswitcher.jobs.package_state import DECISION_FILE_RELPATH_TEMPLATE, DecisionFile, Snippet, SnippetRegistry
+from pcswitcher.jobs.packages.items import AptPackageItem, FlatpakItem, FlatpakRemoteItem, UnreproducibleItem
+from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
+from pcswitcher.jobs.packages.state import DECISION_FILE_RELPATH_TEMPLATE, DecisionFile, Snippet, SnippetRegistry
 
 # Prefix marking each candidate's reverse-dependency block in the batched pc2 probe below.
 RDEPENDS_MARKER = "@@RDEPENDS_FOR@@"

@@ -16,8 +16,8 @@ import pytest
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.flatpak_sync import FlatpakSyncJob, flatpak_sync_exclude_paths
-from pcswitcher.jobs.package_items import DiffAction, DiffClass, ItemClass
-from pcswitcher.jobs.package_sync_core import ConvergeItemFailed
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
+from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed
 from pcswitcher.models import CommandResult, Host, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 

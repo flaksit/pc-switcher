@@ -9,7 +9,7 @@ review-before-any-change ordering checkable and testable per job:
 - `plan()` captures the source manifest, queries the target, diffs, and builds this job's
   own `ReviewGroup`s. It issues READ commands only — nothing here may mutate either
   machine, because a job plans and reviews before it converges. Before capturing anything,
-  it loads both machines' machine-local decision files (D-08, D-09, `package_state.py`) and
+  it loads both machines' machine-local decision files (D-08, D-09, `packages/state.py`) and
   filters an inert item out of the side that holds it, so an item recorded "skip always"
   never becomes an `ItemDiff` in the first place — D-08's "inert on M in both roles" made
   real at the diff-input boundary rather than as a later filter on the review.
@@ -35,7 +35,7 @@ from typing import ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.package_items import (
+from pcswitcher.jobs.packages.items import (
     AptPackageItem,
     DiffAction,
     DiffClass,
@@ -46,8 +46,8 @@ from pcswitcher.jobs.package_items import (
     build_repo_unavailable_detail,
     build_version_mismatch_detail,
 )
-from pcswitcher.jobs.package_review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome
-from pcswitcher.jobs.package_state import DecisionEntry, DecisionFile, filter_inert
+from pcswitcher.jobs.packages.review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome
+from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, filter_inert
 from pcswitcher.models import CommandResult, Host, LogLevel, ProgressUpdate
 
 __all__ = [

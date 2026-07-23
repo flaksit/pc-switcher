@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any, ClassVar, override
 
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.package_items import (
+from pcswitcher.jobs.packages.items import (
     DiffAction,
     DiffClass,
     ItemClass,
@@ -57,14 +57,14 @@ from pcswitcher.jobs.package_items import (
     SnapItem,
     build_version_mismatch_detail,
 )
-from pcswitcher.jobs.package_state import DecisionFile, filter_inert
-from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
+from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
+from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
 __all__ = ["SnapSyncJob", "snap_sync_exclude_paths"]
 
-# `SnapItem.item_id` is always this prefix + the snap name (package_items.py).
+# `SnapItem.item_id` is always this prefix + the snap name (packages/items.py).
 _SNAP_ID_PREFIX = "snap:"
 
 # Binaries this job runs under sudo, quoted back to the user when the passwordless-sudo

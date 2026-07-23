@@ -14,7 +14,7 @@ import pytest
 
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.package_items import DiffAction, DiffClass
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass
 from pcswitcher.jobs.snap_sync import SnapSyncJob, snap_sync_exclude_paths
 from pcswitcher.models import CommandResult, Host, ValidationError
 from pcswitcher.orchestrator import Orchestrator
