@@ -26,6 +26,7 @@ from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.package_state import DECISION_FILE_GLOB_RELPATH
 from pcswitcher.jobs.vscode_state_sync import vscode_state_exclude_paths
 from pcswitcher.models import ConfigError, FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.sudoers import passwordless_sudo_hint
 
 # Matches rsync --info=progress2 output, e.g.:
 #   "9.53G 21% 317.26MB/s 0:00:28 (xfr#83063, to-chk=443926/538653)"
@@ -105,6 +106,10 @@ def _pass_display(path: str, label: str) -> str:
 #      being enabled, since a decision file must never travel even on a run where the package
 #      jobs happen to be off (see _decision_file_exclude_filters).
 # Every OTHER exclusion is user-configurable.
+# The binary this job escalates for (ADR-013). A lower bound on what the sudoers
+# entry must permit, not an exact scope — a broader existing grant is fine.
+_RSYNC_SUDO_COMMANDS = ("/usr/bin/rsync",)
+
 _RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
     ".local/share/pc-switcher",  # lock, sync-history.json, logs/
 )
@@ -309,7 +314,8 @@ class FolderSyncJob(SyncJob):
             errors.append(
                 self._validation_error(
                     Host.SOURCE,
-                    "sudo rsync is not available on source (required for metadata-preserving transfer)",
+                    "sudo rsync is not available on source (required for metadata-preserving transfer).\n"
+                    + passwordless_sudo_hint(_RSYNC_SUDO_COMMANDS),
                 )
             )
 
@@ -318,7 +324,8 @@ class FolderSyncJob(SyncJob):
             errors.append(
                 self._validation_error(
                     Host.TARGET,
-                    "sudo rsync is not available on target (required for metadata-preserving transfer)",
+                    "sudo rsync is not available on target (required for metadata-preserving transfer).\n"
+                    + passwordless_sudo_hint(_RSYNC_SUDO_COMMANDS, user=self.context.target_username),
                 )
             )
 

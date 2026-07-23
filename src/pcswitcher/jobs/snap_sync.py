@@ -60,11 +60,16 @@ from pcswitcher.jobs.package_items import (
 from pcswitcher.jobs.package_state import DecisionFile, filter_inert
 from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
+from pcswitcher.sudoers import passwordless_sudo_hint
 
 __all__ = ["SnapSyncJob", "snap_sync_exclude_paths"]
 
 # `SnapItem.item_id` is always this prefix + the snap name (package_items.py).
 _SNAP_ID_PREFIX = "snap:"
+
+# Binaries this job runs under sudo, quoted back to the user when the passwordless-sudo
+# check fails. A lower bound on what must be permitted, not an exact scope (ADR-013).
+_TARGET_SUDO_COMMANDS = ("/usr/bin/snap",)
 
 # Directory names under ~/snap/<app>/ that are NOT per-revision data snapd hands this
 # job (D-29): `common` is revision-independent user data folder_sync must keep
@@ -381,7 +386,9 @@ class SnapSyncJob(PackageSyncJob):
             errors.append(
                 self._validation_error(
                     Host.TARGET,
-                    "passwordless sudo is not available on target (required for snap install/refresh/remove)",
+                    "passwordless sudo is not available on target "
+                    "(required for snap install/refresh/remove).\n"
+                    + passwordless_sudo_hint(_TARGET_SUDO_COMMANDS, user=self.context.target_username),
                 )
             )
 

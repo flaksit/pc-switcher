@@ -52,6 +52,7 @@ from pcswitcher.jobs.package_items import (
 from pcswitcher.jobs.package_review import Decision, ReviewOutcome
 from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
+from pcswitcher.sudoers import passwordless_sudo_hint
 
 __all__ = ["AptSyncJob", "AptTransactionPreview", "simulate_apt_transaction"]
 
@@ -59,6 +60,19 @@ __all__ = ["AptSyncJob", "AptTransactionPreview", "simulate_apt_transaction"]
 # Parsing the name back out of the id is a legitimate use of a stable identity string,
 # not string-matching on manager-specific content.
 _APT_PACKAGE_ID_PREFIX = "apt:package:"
+
+# Binaries this job runs under sudo, quoted back to the user when the passwordless-sudo
+# check fails. A lower bound on what must be permitted, not an exact scope (ADR-013).
+# The source is only ever read, so it needs just the /etc/apt digest capture.
+_SOURCE_SUDO_COMMANDS = ("/usr/bin/find",)
+_TARGET_SUDO_COMMANDS = (
+    "/usr/bin/apt-get",
+    "/usr/bin/find",
+    "/usr/bin/install",
+    "/usr/bin/cp",
+    "/usr/bin/rm",
+    "/usr/bin/fuser",
+)
 
 # The five `/etc/apt/*` directories D-11/D-13 pull into scope, each captured with one
 # batched `sha256sum` listing (never one command per file).
@@ -1180,7 +1194,8 @@ class AptSyncJob(PackageSyncJob):
                 self._validation_error(
                     Host.SOURCE,
                     "passwordless sudo is not available on source "
-                    "(required to read /etc/apt repository, keyring and pin state)",
+                    "(required to read /etc/apt repository, keyring and pin state).\n"
+                    + passwordless_sudo_hint(_SOURCE_SUDO_COMMANDS),
                 )
             )
 
@@ -1188,7 +1203,10 @@ class AptSyncJob(PackageSyncJob):
         if not sudo_check.success:
             errors.append(
                 self._validation_error(
-                    Host.TARGET, "passwordless sudo is not available on target (required for apt-get install)"
+                    Host.TARGET,
+                    "passwordless sudo is not available on target "
+                    "(required to install packages and write /etc/apt state).\n"
+                    + passwordless_sudo_hint(_TARGET_SUDO_COMMANDS, user=self.context.target_username),
                 )
             )
 
