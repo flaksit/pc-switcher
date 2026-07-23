@@ -18,7 +18,7 @@ logging:
 ### Log levels
 
 | Level | Value | Description |
-|-------|-------|-------------|
+| ----- | ----- | ----------- |
 | DEBUG | 10 | Internal diagnostics, very verbose |
 | FULL | 15 | Operational details (file-level sync info) |
 | INFO | 20 | High-level progress (job start/complete) |
@@ -144,20 +144,20 @@ Pattern syntax:
 - `dir/**` matches a directory's contents but **not** the directory entry itself; `dir/***` matches the directory *and* everything in it. Reach for `/***` when a later exclude (like `- .cache/*`) would otherwise drop the directory and stop rsync from descending into it
 
 | Pattern | Matches |
-|---------|---------|
+| ------- | ------- |
 | `.ssh/id_*` | `id_*` inside any `.ssh` directory |
 | `.config/tailscale` | a `tailscale` file or directory inside any `.config` |
 | `/lost+found` | `lost+found` only at the folder root |
 | `*.tmp` | any `.tmp` file, at any depth |
 | `node_modules/` | any directory named `node_modules` |
 
-Full pattern reference: rsync's manpage, "FILTER RULES" section — https://download.samba.org/pub/rsync/rsync.1
+Full pattern reference: rsync's manpage, "FILTER RULES" section [https://download.samba.org/pub/rsync/rsync.1](https://download.samba.org/pub/rsync/rsync.1).
 
 ### Keep a subfolder inside an excluded one
 
 To drop most of a directory but keep selected children — for example drop `~/.cache` but keep the dev-tool caches so offline work doesn't re-download them — re-include the children before excluding the rest:
 
-```
+```text
 + .cache/
 + .cache/uv/***
 + .cache/pip/***
@@ -176,7 +176,7 @@ Pick one of two approaches:
 
 1. **Exclude it (safest default).** Each machine keeps its own independent access list. The shipped `home.filter` and `root.filter` do this:
 
-   ```
+   ```text
    - .ssh/authorized_keys
    ```
 
@@ -282,7 +282,7 @@ Some installed things no package manager can reproduce — a bare `.deb` someone
 
 An install snippet is a shell command that reproduces the item — the tool never parses, interprets, or reasons about it. It is **stored and replayed verbatim**, and it must run **non-interactively**: no stdin is supplied during replay, so a command that prompts (e.g. a debconf question) hangs the sync rather than failing cleanly. A typical shape:
 
-```
+```bash
 sudo DEBIAN_FRONTEND=noninteractive dpkg -i /path/to/package.deb || \
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -f
 ```
