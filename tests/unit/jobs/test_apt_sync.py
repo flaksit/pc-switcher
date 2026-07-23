@@ -8,8 +8,8 @@ validate(). All executor interactions are mocked; no real apt/dpkg/sudo commands
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -18,10 +18,11 @@ from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.apt_sync import AptSyncJob, simulate_apt_transaction
 from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass
-from pcswitcher.jobs.package_review import Decision, ReviewOutcome
-from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackageItemFailures, PackagePlan
+from pcswitcher.jobs.package_review import Decision
+from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackageItemFailures
 from pcswitcher.models import CommandResult, Host
 from pcswitcher.orchestrator import Orchestrator
+from tests.unit.jobs.test_package_sync_core import FakeReviewer
 
 SHOWMANUAL_3 = "pkg-a\npkg-b\npkg-c\n"
 DPKG_QUERY_3 = "pkg-a\t1.0\npkg-b\t2.0\npkg-c\t3.0\n"
@@ -193,28 +194,22 @@ class TestPlanApplySplit:
             assert "sudo cp" not in cmd
 
     @pytest.mark.asyncio
-    async def test_execute_without_accepted_plan_raises_naming_coordinator(self) -> None:
-        context, _source, _target = make_context()
-        job = AptSyncJob(context)
+    async def test_execute_without_a_reviewer_raises_and_issues_no_command(self) -> None:
+        context, _source, target = make_context()
+        job = AptSyncJob(context)  # context.reviewer defaults to None
 
-        with pytest.raises(RuntimeError, match="PackagePhaseCoordinator"):
+        with pytest.raises(AssertionError, match="no reviewer"):
             await job.execute()
 
-    @pytest.mark.asyncio
-    async def test_execute_reraises_stored_plan_failure(self) -> None:
-        context, _source, _target = make_context(
-            source_responses={"apt-mark showmanual": CommandResult(1, "", "boom")}
-        )
-        job = AptSyncJob(context)
-        failure = RuntimeError("plan blew up")
-        job.record_plan_failure(failure)
-
-        with pytest.raises(RuntimeError, match="plan blew up"):
-            await job.execute()
+        target.run_command.assert_not_called()
 
 
-def _accept(job: AptSyncJob, plan: Any, decisions: dict[str, Decision]) -> None:
-    job.accept_review(plan, ReviewOutcome(decisions=decisions, was_interactive=True))
+def _install_reviewer(job: AptSyncJob, decisions: dict[str, Decision]) -> None:
+    """Inject a `FakeReviewer` returning `decisions`, so `execute()` plans, reviews and
+    applies through the same self-contained path production uses. Unlisted item ids
+    default to `SKIP_ONCE`, matching the review's own default for an unticked entry.
+    """
+    job.context = dataclasses.replace(job.context, reviewer=FakeReviewer(decisions))
 
 
 class TestConverge:
@@ -237,8 +232,7 @@ class TestConverge:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:package:pkg-a": Decision.APPLY, "apt:package:pkg-b": Decision.SKIP_ONCE})
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:package:pkg-b": Decision.SKIP_ONCE})
 
         await job.execute()
 
@@ -263,8 +257,7 @@ class TestDryRun:
             dry_run=True,
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:package:pkg-a": Decision.APPLY})
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
 
         await job.execute()
 
@@ -301,10 +294,8 @@ class TestContinueOnFailure:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(
+        _install_reviewer(
             job,
-            plan,
             {
                 "apt:package:pkg-a": Decision.APPLY,
                 "apt:package:pkg-b": Decision.APPLY,
@@ -343,8 +334,7 @@ class TestTransactionGuard:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:package:pkg-a": Decision.APPLY})
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
@@ -372,8 +362,7 @@ class TestTransactionGuard:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:package:pkg-a": Decision.APPLY})
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
 
         await job.execute()
 
@@ -421,8 +410,7 @@ class TestTransactionGuard:
         )
         target.run_command = AsyncMock(side_effect=target_side_effect)
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:package:pkg-a": Decision.APPLY})
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
@@ -565,8 +553,7 @@ class TestRemovalConverge:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:package:pkg-extra": Decision.APPLY})
+        _install_reviewer(job, {"apt:package:pkg-extra": Decision.APPLY})
 
         await job.execute()
 
@@ -590,10 +577,7 @@ class TestRemovalGuard:
             },
         )
         job = AptSyncJob(context)
-        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
-        diffs = job.diff_items([], target_items)
-        plan = PackagePlan(manager="apt", diffs=diffs, groups=job._build_review_groups(diffs))
-        _accept(job, plan, {"apt:package:pkg-a": Decision.APPLY})
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
@@ -618,10 +602,7 @@ class TestRemovalGuard:
             },
         )
         job = AptSyncJob(context)
-        target_items = [AptPackageItem(name="pkg-a", version="1.0"), AptPackageItem(name="pkg-b", version="1.0")]
-        diffs = job.diff_items([], target_items)
-        plan = PackagePlan(manager="apt", diffs=diffs, groups=job._build_review_groups(diffs))
-        _accept(job, plan, {"apt:package:pkg-a": Decision.APPLY, "apt:package:pkg-b": Decision.APPLY})
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:package:pkg-b": Decision.APPLY})
 
         await job.execute()
 
@@ -648,8 +629,7 @@ class TestDowngradeGuard:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:package:pkg-a": Decision.APPLY})
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
@@ -1100,10 +1080,8 @@ class TestRepoGroupOrdering:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(
+        _install_reviewer(
             job,
-            plan,
             {
                 "apt:key:per-repo:foo.gpg": Decision.APPLY,
                 "apt:source:foo.sources": Decision.APPLY,
@@ -1141,10 +1119,8 @@ class TestRepoGroupOrdering:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(
+        _install_reviewer(
             job,
-            plan,
             {
                 "apt:pin:a-pin": Decision.APPLY,
                 "apt:config:a-conf": Decision.APPLY,
@@ -1171,8 +1147,7 @@ class TestRepoGroupOrdering:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:key:per-repo:a.gpg": Decision.APPLY})
+        _install_reviewer(job, {"apt:key:per-repo:a.gpg": Decision.APPLY})
 
         await job.execute()
 
@@ -1198,10 +1173,8 @@ class TestRepoGroupOrdering:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(
+        _install_reviewer(
             job,
-            plan,
             {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:source:foo.sources": Decision.APPLY},
         )
 
@@ -1227,8 +1200,7 @@ class TestRepoGroupOrdering:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:source:extra.list": Decision.APPLY})
+        _install_reviewer(job, {"apt:source:extra.list": Decision.APPLY})
 
         await job.execute()
 
@@ -1251,8 +1223,7 @@ class TestRepoGroupOrdering:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:config:99conf": Decision.APPLY})
+        _install_reviewer(job, {"apt:config:99conf": Decision.APPLY})
 
         await job.execute()
 
@@ -1281,8 +1252,7 @@ class TestRepoGroupOrdering:
                 },
             )
             job = AptSyncJob(context)
-            plan = await job.plan()
-            _accept(job, plan, {"apt:config:99conf": Decision.APPLY})
+            _install_reviewer(job, {"apt:config:99conf": Decision.APPLY})
 
             if label == "success":
                 await job.execute()
@@ -1308,8 +1278,7 @@ class TestRepoGroupOrdering:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:config:99conf": Decision.APPLY})
+        _install_reviewer(job, {"apt:config:99conf": Decision.APPLY})
 
         await job.execute()
 
@@ -1342,8 +1311,7 @@ class TestRepoGroupTransaction:
             ),
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:pin:curl-pin": Decision.APPLY})
+        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:pin:curl-pin": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
@@ -1374,8 +1342,7 @@ class TestRepoGroupTransaction:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
+        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
 
         await job.execute()
 
@@ -1404,8 +1371,7 @@ class TestRepoGroupTransaction:
             ),
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
+        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
@@ -1447,8 +1413,7 @@ class TestRepoGroupBackupFailure:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:pin:pin-a": Decision.APPLY, "apt:pin:pin-b": Decision.APPLY})
+        _install_reviewer(job, {"apt:pin:pin-a": Decision.APPLY, "apt:pin:pin-b": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
@@ -1487,8 +1452,7 @@ class TestKeyringsDirectoryEnsured:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
+        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
 
         await job.execute()
 
@@ -1514,8 +1478,7 @@ class TestKeyringsDirectoryEnsured:
             },
         )
         job = AptSyncJob(context)
-        plan = await job.plan()
-        _accept(job, plan, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
+        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()

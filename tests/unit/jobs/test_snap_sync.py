@@ -6,21 +6,15 @@ All executor interactions are mocked; no real snap/snapd commands run.
 
 from __future__ import annotations
 
-import io
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from rich.console import Console
 
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
-from pcswitcher.jobs.package_phase import PackagePhaseCoordinator
-from pcswitcher.jobs.package_review import Decision, ReviewGroup, ReviewOutcome
-from pcswitcher.jobs.package_sync_core import PackagePlan, PackageSyncJob
+from pcswitcher.jobs.package_items import DiffAction, DiffClass
 from pcswitcher.jobs.snap_sync import SnapSyncJob, snap_sync_exclude_paths
 from pcswitcher.models import CommandResult, Host, ValidationError
 from pcswitcher.orchestrator import Orchestrator
@@ -397,65 +391,3 @@ class TestJobDiscovery:
         job_class = orchestrator._resolve_sync_job_class("snap_sync")  # pyright: ignore[reportPrivateUsage]
 
         assert job_class is SnapSyncJob
-
-
-class _StubAptLikeSiblingJob(PackageSyncJob):
-    """A minimal `apt_sync`-shaped sibling: enough to drive `PackagePhaseCoordinator`
-    alongside a real `SnapSyncJob`, without depending on `AptSyncJob` itself.
-    """
-
-    name: ClassVar[str] = "stub_apt_like"
-    manager_id: ClassVar[str] = "apt"
-
-    async def capture_source_items(self) -> Sequence[AptPackageItem]:
-        return []
-
-    async def query_target_items(self) -> Sequence[AptPackageItem]:
-        return []
-
-    async def converge(self, diff: ItemDiff) -> CommandResult:
-        raise NotImplementedError
-
-    async def validate(self) -> list[ValidationError]:
-        return []
-
-    async def plan(self) -> PackagePlan:
-        diff = ItemDiff(
-            item_class=ItemClass.APT_PACKAGE,
-            diff_class=DiffClass.MISSING_ON_TARGET,
-            action=DiffAction.INSTALL,
-            item_id="apt:package:stub-pkg",
-            label="stub-pkg",
-            detail=None,
-        )
-        groups = self._build_review_groups((diff,))
-        return PackagePlan(manager=self.manager_id, diffs=(diff,), groups=groups)
-
-
-class TestCoordinatorIntegration:
-    @pytest.mark.asyncio
-    async def test_accepted_outcome_contains_only_snap_prefixed_item_ids(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        async def _auto_apply(
-            groups: Sequence[ReviewGroup], *, console: object, ui: object, logger: object = None
-        ) -> ReviewOutcome:
-            decisions = {entry.item_id: Decision.APPLY for group in groups for entry in group.entries}
-            return ReviewOutcome(decisions=decisions, was_interactive=True)
-
-        monkeypatch.setattr("pcswitcher.jobs.package_phase.review_items", AsyncMock(side_effect=_auto_apply))
-
-        context, _source, _target = make_context(
-            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
-            target_responses={"snap list --all": CommandResult(0, "", "")},
-        )
-        snap_job = SnapSyncJob(context)
-        apt_job = _StubAptLikeSiblingJob(context)
-        coordinator = PackagePhaseCoordinator(Console(file=io.StringIO()), MagicMock())
-
-        await coordinator.run([apt_job, snap_job])
-
-        outcome = snap_job._accepted_outcome  # pyright: ignore[reportPrivateUsage]
-        assert outcome is not None
-        assert outcome.decisions
-        assert all(item_id.startswith("snap:") for item_id in outcome.decisions)

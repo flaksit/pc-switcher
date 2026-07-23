@@ -30,6 +30,7 @@ from pcswitcher.jobs.package_review import (
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
+    TerminalUIReviewer,
     review_items,
 )
 from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan, PackageSyncJob
@@ -254,6 +255,50 @@ class TestInteractive:
         message = checkbox.call_args.args[0]
         assert message == "Remove packages"
         assert message != "Apply"
+
+
+@pytest.mark.asyncio
+class TestTerminalUIReviewer:
+    """`TerminalUIReviewer` is a thin adapter: it forwards to `review_items` with the
+    console, ui and logger it was constructed with, and returns the outcome unchanged.
+    """
+
+    async def test_review_forwards_console_ui_logger_and_returns_outcome_unchanged(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        logger = MagicMock()
+        reviewer = TerminalUIReviewer(console, ui, logger=logger)
+        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        sentinel_outcome = ReviewOutcome(decisions={"a": Decision.APPLY}, was_interactive=True)
+
+        with patch(
+            "pcswitcher.jobs.package_review.review_items",
+            AsyncMock(return_value=sentinel_outcome),
+        ) as review_mock:
+            result = await reviewer.review(groups)
+
+        assert result is sentinel_outcome
+        review_mock.assert_awaited_once_with(groups, console=console, ui=ui, logger=logger)
+
+    async def test_pause_and_resume_both_run_when_the_underlying_prompt_raises(self) -> None:
+        """The adapter keeps `review_items`'s pause/resume `finally`: even when the
+        blocking prompt raises, the live display is handed back.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        reviewer = TerminalUIReviewer(console, ui)
+        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        prompt = _fake_prompt(ask_side_effect=KeyboardInterrupt)
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.checkbox", return_value=prompt),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            await reviewer.review(groups)
+
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()
 
 
 @pytest.mark.asyncio

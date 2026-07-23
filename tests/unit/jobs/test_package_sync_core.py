@@ -9,12 +9,16 @@ independent of `AptSyncJob`'s apt-specific machinery, which `test_apt_sync.py` c
 
 from __future__ import annotations
 
+import io
 from collections.abc import Sequence
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from rich.console import Console
 
+from pcswitcher.config import Configuration
+from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.package_items import (
     AptPackageItem,
@@ -25,11 +29,22 @@ from pcswitcher.jobs.package_items import (
     ItemDiff,
 )
 from pcswitcher.jobs.package_review import Decision, ReviewGroup, ReviewOutcome
-from pcswitcher.jobs.package_sync_core import PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult
+from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan, PackageSyncJob
+from pcswitcher.models import CommandResult, JobStatus, ValidationError
+from pcswitcher.orchestrator import Orchestrator
+
+DF_OUTPUT = (
+    "Filesystem     1B-blocks       Used  Available Use% Mounted on\n"
+    "/dev/sda1  1000000000000 500000000000 500000000000  50% /\n"
+)
 
 
-def make_context(*, dry_run: bool = False, reviewer: object | None = None) -> JobContext:
+def make_context(
+    *,
+    dry_run: bool = False,
+    reviewer: object | None = None,
+    enabled_sync_jobs: dict[str, bool] | None = None,
+) -> JobContext:
     source = MagicMock()
     source.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
     target = MagicMock()
@@ -44,6 +59,7 @@ def make_context(*, dry_run: bool = False, reviewer: object | None = None) -> Jo
         target_hostname="target-host",
         dry_run=dry_run,
         reviewer=reviewer,  # pyright: ignore[reportArgumentType]
+        enabled_sync_jobs=enabled_sync_jobs,
     )
 
 
@@ -572,3 +588,135 @@ class TestExecuteSelfContained:
         assert exc_info.value is failure
         # The review is never reached when planning fails.
         assert reviewer.call_count == 0
+
+
+class TestJobContextEnabledSyncJobs:
+    """`JobContext.enabled_sync_jobs` is optional with a `None` default (a sibling of the
+    `reviewer`/`confirmer` fields), so lightweight test contexts keep working.
+    """
+
+    def test_defaults_to_none_and_does_not_raise(self) -> None:
+        context = make_context()
+        assert context.enabled_sync_jobs is None
+
+    def test_can_be_populated_with_the_full_enablement_map(self) -> None:
+        context = make_context(enabled_sync_jobs={"apt_sync": True, "folder_sync": False})
+        assert context.enabled_sync_jobs == {"apt_sync": True, "folder_sync": False}
+
+
+class _StubFailingPackageJob(PackageSyncJob):
+    """A package job whose execute() raises PackageItemFailures directly, isolating the
+    orchestrator's except-chain branch (D-27): its items failed, so the run continues.
+    """
+
+    name: ClassVar[str] = "stub_failing_package"
+    manager_id: ClassVar[str] = "stub-failing"
+
+    async def capture_source_items(self) -> Sequence[AptPackageItem]:
+        raise NotImplementedError
+
+    async def query_target_items(self) -> Sequence[AptPackageItem]:
+        raise NotImplementedError
+
+    async def converge(self, diff: ItemDiff) -> CommandResult:
+        raise NotImplementedError
+
+    async def validate(self) -> list[ValidationError]:
+        return []
+
+    async def plan(self) -> PackagePlan:
+        return PackagePlan(manager="stub-failing", diffs=(), groups=())
+
+    async def execute(self) -> None:
+        raise PackageItemFailures("stub-failing", [])
+
+
+class _StubSuccessJob(SyncJob):
+    name: ClassVar[str] = "stub_success"
+
+    async def validate(self) -> list[ValidationError]:
+        return []
+
+    async def execute(self) -> None:
+        return None
+
+
+class _StubOtherFailureJob(SyncJob):
+    """A non-package job whose execute() raises a plain exception — the abort-the-run
+    path that only `PackageItemFailures` is exempt from; every other exception still
+    stops the remaining jobs.
+    """
+
+    name: ClassVar[str] = "stub_other_failure"
+
+    async def validate(self) -> list[ValidationError]:
+        return []
+
+    async def execute(self) -> None:
+        raise RuntimeError("unrelated job crashed")
+
+
+def _make_wired_orchestrator() -> Orchestrator:
+    """A narrowly-constructed Orchestrator with enough wiring for `_execute_jobs` /
+    `_run_jobs_in_task_group` to run: mocked local/remote executors returning valid `df`
+    output for the background disk-space monitors, a non-interactive Console, and a
+    silenced logger/UI.
+    """
+    config = MagicMock(spec=Configuration)
+    config.logging = MagicMock()
+    config.logging.file = 10
+    config.logging.tui = 20
+    config.logging.external = 30
+    config.sync_jobs = {}
+    config.job_configs = {}
+    config.disk = MagicMock()
+    config.disk.preflight_minimum = "20%"
+    config.disk.runtime_minimum = "15%"
+    config.disk.warning_threshold = "25%"
+    config.disk.check_interval = 30
+
+    orchestrator = Orchestrator(target="target-host", config=config)
+    orchestrator._console = Console(file=io.StringIO())  # pyright: ignore[reportPrivateUsage]
+    orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
+    orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
+    local_executor = MagicMock()
+    local_executor.run_command = AsyncMock(return_value=CommandResult(0, DF_OUTPUT, ""))
+    remote_executor = MagicMock()
+    remote_executor.run_command = AsyncMock(return_value=CommandResult(0, DF_OUTPUT, ""))
+    orchestrator._local_executor = local_executor  # pyright: ignore[reportPrivateUsage]
+    orchestrator._remote_executor = remote_executor  # pyright: ignore[reportPrivateUsage]
+    return orchestrator
+
+
+class TestOrchestratorPackageItemFailuresContinuation:
+    """PackageItemFailures records a FAILED JobResult but does not abort the run (D-27).
+
+    Re-homed from the deleted test_package_phase.py: the coordinator is gone, but the
+    orchestrator's per-job except chain that this exercises is a delivered behaviour.
+    """
+
+    @pytest.mark.asyncio
+    async def test_failing_package_job_does_not_cancel_remaining_jobs(self) -> None:
+        orchestrator = _make_wired_orchestrator()
+        failing_job = _StubFailingPackageJob(make_context())
+        success_job = _StubSuccessJob(make_context())
+
+        results = await orchestrator._execute_jobs([failing_job, success_job])  # pyright: ignore[reportPrivateUsage]
+
+        assert len(results) == 2
+        assert results[0].job_name == "stub_failing_package"
+        assert results[0].status == JobStatus.FAILED
+        assert results[1].job_name == "stub_success"
+        assert results[1].status == JobStatus.SUCCESS
+
+    @pytest.mark.asyncio
+    async def test_other_exception_types_still_abort_the_run(self) -> None:
+        """Regression guard: only PackageItemFailures gets the non-aborting branch —
+        every other exception must still stop the remaining jobs from running.
+        """
+        orchestrator = _make_wired_orchestrator()
+        failing_job = _StubOtherFailureJob(make_context())
+        never_run_job = _StubSuccessJob(make_context())
+
+        with pytest.raises(RuntimeError, match="unrelated job crashed"):
+            await orchestrator._execute_jobs([failing_job, never_run_job])  # pyright: ignore[reportPrivateUsage]
