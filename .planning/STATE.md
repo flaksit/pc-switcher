@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 02
 current_phase_name: Package Management Sync
 status: executing
-stopped_at: Completed 02-07-PLAN.md
-last_updated: "2026-07-23T11:47:23.935Z"
+stopped_at: Completed 02-10-PLAN.md
+last_updated: "2026-07-23T12:01:41.362Z"
 last_activity: 2026-07-23
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 31
-  completed_plans: 28
+  completed_plans: 29
 ---
 
 # Project State
@@ -30,13 +30,13 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 02 (Package Management Sync) — EXECUTING
 
-Plan: 11 of 13
+Plan: 12 of 13
 
 Status: Ready to execute
 
 Last activity: 2026-07-23 — Phase 02 execution started
 
-Progress: [█████████░] 90%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
@@ -91,6 +91,7 @@ Progress: [█████████░] 90%
 | Phase 02 P08 | 35min | 1 tasks | 2 files |
 | Phase 02 P09 | 27min | 1 tasks | 2 files |
 | Phase 02 P07 | 90min | 2 tasks | 12 files |
+| Phase 02 P10 | 13min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -127,6 +128,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: flatpak_sync: sudo applied per-scope via one _sudo_prefix(scope) helper shared by all four converge verbs (remote-add/remote-delete/install/uninstall), so --system needs sudo, --user does not (T-02-23) can never drift per-verb
 - [Phase ?]: Plan 02-07: package_sync_core.py/package_phase.py modified outside declared files_modified (Rule 2) — apply()'s D-21 enforcement and per-job outcome slicing structurally required it.
 - [Phase ?]: Plan 02-07: apt-no-candidate detection implemented as new _scan_no_candidate_apt_packages, not reusing the existing collect_unavailable_item_ids hook (different contract: target-side REPO_UNAVAILABLE vs source-side D-18 apt-no-candidate).
+- [Phase ?]: [Phase 2] Plan 02-10: snap_sync/flatpak_sync exclusion gating lives at the folder_sync._build_rsync_cmd call site (one _package_job_enabled helper), not inside the filter-builder methods — keeps the VS-Code-vs-package-job asymmetry visible at one point instead of duplicated in two method bodies
+- [Phase ?]: [Phase 2] Plan 02-10: home.filter's flatpak/snap retirement was verified by reading the shipped file directly (it carried no such rule already) rather than assumed from the CONTEXT canonical-refs note — only the explanatory comment was added
 
 ### Pending Todos
 
@@ -154,8 +157,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-23T11:47:23.925Z
+Last session: 2026-07-23T12:01:41.352Z
 
-Stopped at: Completed 02-07-PLAN.md
+Stopped at: Completed 02-10-PLAN.md
 
 Resume file: None
