@@ -1,0 +1,35 @@
+# pc-switcher machine-specific decision file — EXAMPLE ONLY.
+#
+# This is documentation, not a template pc-switcher reads or writes. The real
+# files live at ~/.config/pc-switcher/<manager>.decisions.yaml (one per manager,
+# e.g. apt.decisions.yaml, snap.decisions.yaml, flatpak.decisions.yaml) and are
+# generated and rewritten automatically whenever you choose "skip always" for an
+# item in a sync review (D-08). pc-switcher never ships a default entry in code
+# or in default-config.yaml (D-10) — every real entry below is something a
+# review taught it, on this machine only.
+#
+# An item listed in a machine's decision file is inert on THAT machine in both
+# roles: it is never pushed to a peer when this machine is the source, and never
+# installed or removed here when this machine is the target. This file is never
+# synced to any peer (D-09) — copying it would silently impose one machine's
+# hardware exclusions on another.
+#
+# Remove an entry (or delete the whole file) to make that item eligible again on
+# the next sync.
+#
+# Illustrative entries (commented out — copying this file produces an empty,
+# but documented, `machine_specific:` mapping):
+#
+# machine_specific:
+#   apt:package:brscan3:
+#     item_class: apt_package
+#     label: brscan3 (0.4.11-2.amd64)
+#     reason: Brother scanner driver for the printer wired to this desk only
+#     recorded_at: "2026-07-22T09:14:03Z"
+#   apt:package:some-vendor-tool:
+#     item_class: apt_package
+#     label: some-vendor-tool (3.2.1)
+#     reason: Vendor utility tied to hardware only present on this machine
+#     recorded_at: "2026-07-22T09:15:47Z"
+
+machine_specific: {}
