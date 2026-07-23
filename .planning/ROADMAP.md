@@ -95,7 +95,7 @@ Plans:
   2. Manually-installed .debs, custom PPAs, and install-script-sourced packages are reproduced on the target.
   3. Package conflicts and version mismatches between source and target are detected and reported before any destructive change; machine-specific packages are not forced onto the target.
 
-**Plans**: 12 plans
+**Plans**: 13 plans
 
 Plans:
 **Wave 1**
@@ -105,16 +105,17 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 02-03-PLAN.md — TRACER: end-to-end apt-package install slice (capture → diff → review → converge) + VM integration proof
+- [ ] 02-03-PLAN.md — TRACER: end-to-end apt-package install slice (capture → plan → review → apply) + the package-phase coordinator that gives every manager one batched review
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 02-04-PLAN.md — machine-local decision files, skip-always in both roles, non-overridable folder_sync exclusion
-- [ ] 02-05-PLAN.md — full diff-class taxonomy (removals, version mismatch, held/pinned, repo-unavailable) + `dpkg --compare-versions` + the shared snap/flatpak/unreproducible item shapes
+- [ ] 02-05-PLAN.md — full diff-class taxonomy (removals, version mismatch, held/pinned, repo-unavailable) + `dpkg --compare-versions` + apt transaction simulation + the shared snap/flatpak/unreproducible item shapes
+- [ ] 02-13-PLAN.md — VM integration proof of the tracer path (install + dry-run)
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 02-06-PLAN.md — apt repository state as items: sources, keyrings, legacy trust keys, pins, apt config, in apt's required order
+- [ ] 02-04-PLAN.md — machine-local decision files, skip-always in both roles, non-overridable folder_sync exclusion
+- [ ] 02-06-PLAN.md — apt repository state as items: sources, keyrings, legacy trust keys, pins, apt config, in apt's required order, with staged privileged writes and transactional rollback
 
 **Wave 5** *(blocked on Wave 4)*
 
