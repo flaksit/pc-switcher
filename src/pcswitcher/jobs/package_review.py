@@ -23,6 +23,15 @@ without a TTY and cannot drive a real terminal prompt. When set, its value is tr
 (no schema validation) mapping item_id -> decision, applied instead of prompting. It never
 widens what the review offers (D-25 items are still exactly what the caller passed in) and
 is deliberately absent from `--help`, the config schema and user docs (D-26).
+
+A `ReviewGroup` whose `action` is `UNREPRODUCIBLE_REVIEW_ACTION` gets a different
+interaction shape from every other group (D-21): instead of a checkbox tick, each entry
+is resolved one at a time with a three-way choice — add an install snippet, record it as
+machine-specific (skip always), or skip for now — because "should this apply" is not the
+question for an item no package manager can reproduce; "how does this get resolved" is.
+`ReviewOutcome.snippets`/`unresolved` carry that group's results back to the caller
+(`PackageSyncJob.apply()`), which persists snippets/decisions and fails the job when
+anything is left unresolved after an interactive review (D-21, D-27).
 """
 
 from __future__ import annotations
@@ -32,7 +41,7 @@ import json
 import logging
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
@@ -45,6 +54,7 @@ from pcswitcher.terminal import is_interactive
 
 __all__ = [
     "PACKAGE_REVIEW_AUTOMATION_ENV",
+    "UNREPRODUCIBLE_REVIEW_ACTION",
     "Decision",
     "ReviewEntry",
     "ReviewGroup",
@@ -63,6 +73,13 @@ PACKAGE_REVIEW_AUTOMATION_ENV = "PCSWITCHER_PACKAGE_REVIEW_AUTOMATION"
 # default) — covers "install"/"add"/"enable" as well as "change" (converging an existing
 # item to match the source is not the destructive branch a bulk tick must guard against).
 _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable"})
+
+# Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
+# of unreproducible items (D-18/D-21) as needing the three-way per-entry resolution flow
+# below, rather than the ordinary checkbox tick. Not a `DiffAction` value — this is a
+# `package_review`-owned interaction kind, independent of the underlying diff's own
+# `action` (which stays `REPORT_ONLY`/`INSTALL` per D-25's taxonomy).
+UNREPRODUCIBLE_REVIEW_ACTION = "unreproducible"
 
 
 class PausableUI(Protocol):
@@ -108,21 +125,49 @@ class Decision(StrEnum):
 
     APPLY = "apply"
     SKIP_ONCE = "skip_once"
-    # Not reachable from review_items yet — plan 02-04 adds the second prompt that
-    # promotes a skip to permanent. Carried here so that addition is additive.
+    # Reachable two ways: the unreproducible group's "record as machine-specific" choice
+    # below (plan 02-07), and hand-constructed `ReviewOutcome`s elsewhere (plan 02-04's
+    # `PackageSyncJob.apply()`/`_record_permanent_skips`). No ordinary checkbox tick
+    # produces this value — D-07's three-way decision needs its own dedicated prompt to
+    # promote a skip to permanent, not a fourth checkbox state.
     SKIP_ALWAYS = "skip_always"
 
 
 @dataclass(frozen=True)
 class ReviewOutcome:
-    """The result of a review: every entry's decision, plus how it was reached."""
+    """The result of a review: every entry's decision, plus how it was reached.
+
+    `snippets` (item_id -> body, D-20) and `unresolved` (item ids, D-21) are populated
+    only by an `UNREPRODUCIBLE_REVIEW_ACTION` group's per-entry resolution; every other
+    group leaves both at their empty defaults, so existing callers constructing a
+    `ReviewOutcome` by hand (tests, `PackagePhaseCoordinator._slice_for`) are unaffected.
+    """
 
     decisions: Mapping[str, Decision]
     was_interactive: bool
+    snippets: Mapping[str, str] = field(default_factory=dict)
+    unresolved: tuple[str, ...] = ()
 
 
 def _is_removal_direction(action: str) -> bool:
     return action in _REMOVAL_ACTIONS
+
+
+def _is_unreproducible_group(action: str) -> bool:
+    return action == UNREPRODUCIBLE_REVIEW_ACTION
+
+
+# Printed once before the multi-line capture, so a user does not author a snippet that
+# hangs the sync (T-02-18): the executor supplies no stdin, and a worked shape showing
+# the DEBIAN_FRONTEND=noninteractive + dependency-fix pattern is cheaper to read here
+# than to discover as a stuck sync.
+_SNIPPET_AUTHORING_NOTE = (
+    "This snippet replays non-interactively on the target — no stdin is available, so a\n"
+    "command that prompts (e.g. a debconf question) will hang the sync rather than fail.\n"
+    "A typical shape:\n\n"
+    "  sudo DEBIAN_FRONTEND=noninteractive dpkg -i /path/to/package.deb || \\\n"
+    "  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -f\n"
+)
 
 
 def _render_group_panel(group: ReviewGroup) -> Panel:
@@ -154,6 +199,63 @@ def _decisions_from_automation(groups: Sequence[ReviewGroup], raw: str) -> dict[
     }
 
 
+async def _review_unreproducible_group(
+    group: ReviewGroup,
+    *,
+    console: Console,
+    decisions: dict[str, Decision],
+    snippets: dict[str, str],
+    unresolved: list[str],
+) -> None:
+    """Resolve one `UNREPRODUCIBLE_REVIEW_ACTION` group's entries, one at a time, with
+    the three-way choice D-21 requires: add an install snippet, record as
+    machine-specific, or skip for now. Never a checkbox tick — a checkbox answers
+    "should this apply", but an unreproducible item's question is "how does this get
+    resolved", which is not a yes/no.
+
+    An entry that ends up neither snippet-authored nor skip-always'd (skip-once, an
+    aborted/empty snippet capture, or a cancelled select) is appended to `unresolved` —
+    the caller (`PackageSyncJob.apply()`) reports every such item and fails the job
+    after an interactive review (D-21, D-27).
+    """
+    for entry in group.entries:
+        console.print()
+        console.print(Text(entry.label, style="bold"))
+        if entry.detail:
+            console.print(Text(entry.detail, style="dim"))
+
+        choice_prompt = questionary.select(
+            f"How should {entry.label} be resolved?",
+            choices=[
+                questionary.Choice(title="Add an install snippet", value="add_snippet"),
+                questionary.Choice(title="Record as machine-specific (skip always)", value="skip_always"),
+                questionary.Choice(title="Skip for now", value="skip_once"),
+            ],
+        )
+        selected = await asyncio.to_thread(choice_prompt.ask)
+
+        if selected == "skip_always":
+            decisions[entry.item_id] = Decision.SKIP_ALWAYS
+            continue
+
+        if selected == "add_snippet":
+            console.print(Text(_SNIPPET_AUTHORING_NOTE, style="dim"))
+            body_prompt = questionary.text(
+                f"Install snippet for {entry.label} (Esc then Enter to finish):", multiline=True
+            )
+            # Stored verbatim, never stripped — D-20 forbids reasoning about the body,
+            # and leading whitespace/newlines are the user's own formatting choice.
+            body = await asyncio.to_thread(body_prompt.ask)
+            if body:
+                snippets[entry.item_id] = body
+                continue
+
+        # selected is "skip_once", None (the select was cancelled), or the snippet
+        # capture came back empty/None — none of these permanently resolve the item.
+        decisions[entry.item_id] = Decision.SKIP_ONCE
+        unresolved.append(entry.item_id)
+
+
 async def review_items(
     groups: Sequence[ReviewGroup],
     *,
@@ -181,14 +283,28 @@ async def review_items(
         for group in groups:
             console.print(_render_group_panel(group))
         decisions = {entry.item_id: Decision.SKIP_ONCE for group in groups for entry in group.entries}
-        return ReviewOutcome(decisions=decisions, was_interactive=False)
+        # D-26: no capture is ever offered without a TTY, so every unreproducible item
+        # is unresolved by construction — never a snippet, never a recorded decision.
+        non_interactive_unresolved = tuple(
+            entry.item_id for group in groups if _is_unreproducible_group(group.action) for entry in group.entries
+        )
+        return ReviewOutcome(decisions=decisions, was_interactive=False, unresolved=non_interactive_unresolved)
 
     ui.pause()
     decisions: dict[str, Decision] = {}
+    snippets: dict[str, str] = {}
+    unresolved: list[str] = []
     try:
         for index, group in enumerate(groups):
             console.print()
             console.print(_render_group_panel(group))
+
+            if _is_unreproducible_group(group.action):
+                await _review_unreproducible_group(
+                    group, console=console, decisions=decisions, snippets=snippets, unresolved=unresolved
+                )
+                continue
+
             removal = _is_removal_direction(group.action)
             choices = [
                 questionary.Choice(
@@ -203,10 +319,15 @@ async def review_items(
 
             if selected is None:
                 # Aborted (e.g. Ctrl-C): everything not yet decided, including the rest
-                # of this group, comes back SKIP_ONCE and later groups are not shown.
+                # of this group AND every later group, comes back SKIP_ONCE and later
+                # groups are not shown — any unreproducible group among them is
+                # unresolved too, since it never got its own resolution prompt.
                 for remaining_group in groups[index:]:
+                    unreproducible = _is_unreproducible_group(remaining_group.action)
                     for entry in remaining_group.entries:
                         decisions.setdefault(entry.item_id, Decision.SKIP_ONCE)
+                        if unreproducible:
+                            unresolved.append(entry.item_id)
                 break
 
             selected_ids = set(selected)
@@ -215,4 +336,4 @@ async def review_items(
     finally:
         ui.resume()
 
-    return ReviewOutcome(decisions=decisions, was_interactive=True)
+    return ReviewOutcome(decisions=decisions, was_interactive=True, snippets=snippets, unresolved=tuple(unresolved))

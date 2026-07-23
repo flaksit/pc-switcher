@@ -112,12 +112,18 @@ class PackagePhaseCoordinator:
 
     @staticmethod
     def _slice_for(plan: PackagePlan, outcome: ReviewOutcome) -> ReviewOutcome:
-        """This job's own item ids only — the review is global, a decision is per-manager."""
+        """This job's own item ids only — the review is global, a decision (and any
+        snippet authored or unresolved status, plan 02-07's D-21) is per-manager.
+        """
         plan_item_ids = {entry.item_id for group in plan.groups for entry in group.entries}
         decisions: dict[str, Decision] = {
             item_id: decision for item_id, decision in outcome.decisions.items() if item_id in plan_item_ids
         }
-        return ReviewOutcome(decisions=decisions, was_interactive=outcome.was_interactive)
+        snippets = {item_id: body for item_id, body in outcome.snippets.items() if item_id in plan_item_ids}
+        unresolved = tuple(item_id for item_id in outcome.unresolved if item_id in plan_item_ids)
+        return ReviewOutcome(
+            decisions=decisions, was_interactive=outcome.was_interactive, snippets=snippets, unresolved=unresolved
+        )
 
 
 async def coordinate_package_review(

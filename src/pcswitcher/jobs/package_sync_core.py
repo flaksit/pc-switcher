@@ -50,7 +50,7 @@ from pcswitcher.jobs.package_items import (
     build_version_mismatch_detail,
 )
 from pcswitcher.jobs.package_review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome
-from pcswitcher.jobs.package_state import DecisionEntry, DecisionFile, filter_inert
+from pcswitcher.jobs.package_state import DecisionEntry, DecisionFile, Snippet, SnippetRegistry, filter_inert
 from pcswitcher.models import CommandResult, Host, LogLevel, ProgressUpdate
 
 __all__ = [
@@ -395,7 +395,10 @@ class PackageSyncJob(SyncJob):
         (ADR-010). A per-item failure (`ConvergeItemFailed`, or a converge command that
         exits non-zero) is caught, logged with its stderr as structured context, and
         collected — the loop always completes (D-27) — then `PackageItemFailures` is
-        raised once, after the loop, if anything failed.
+        raised once, after the loop, if anything failed OR anything is left unresolved
+        (D-21) — even when `total` is zero, since an interactive run whose ONLY diffs
+        were unreproducible items never has any INSTALL/CHANGE/REMOVE work to do, and
+        must still fail if one of them ended up unresolved.
 
         Dry-run (ADR-014): each intended action is logged at FULL with a `[dry-run] `
         prefix and no converge command is ever issued.
@@ -406,16 +409,20 @@ class PackageSyncJob(SyncJob):
         for one even if something recorded `APPLY` against it.
 
         Before converging anything, `_record_permanent_skips` persists a `DecisionEntry`
-        for every `SKIP_ALWAYS`-decided item (D-08) — independent of whether this run
-        applies anything else, so a run with zero installs but one permanently-declined
-        removal still records it.
+        for every `SKIP_ALWAYS`-decided item (D-08), and `_finalize_unreproducible`
+        writes this run's authored snippets and unreproducible-item skip-always
+        decisions (D-20/D-21/D-23) — both independent of whether this run applies
+        anything else, so a run with zero installs but one permanently-declined removal
+        (or one newly-authored snippet) still records it.
         """
         assert self._accepted_plan is not None
         assert self._accepted_outcome is not None
         plan = self._accepted_plan
-        decisions = self._accepted_outcome.decisions
+        outcome = self._accepted_outcome
+        decisions = outcome.decisions
 
         await self._record_permanent_skips(plan, decisions)
+        await self._finalize_unreproducible(plan, outcome)
 
         apply_diffs = [
             diff
@@ -425,36 +432,124 @@ class PackageSyncJob(SyncJob):
         prefix = "[dry-run] " if self.context.dry_run else ""
         total = len(apply_diffs)
 
+        failures: list[tuple[ItemDiff, str]] = []
         if total == 0:
             self._log(Host.TARGET, LogLevel.INFO, f"{prefix}No {self.manager_id} changes to apply")
             self._report_progress(ProgressUpdate(percent=100))
-            return
+        else:
+            self._log(Host.TARGET, LogLevel.INFO, f"{prefix}Applying {total} {self.manager_id} change(s)")
 
-        self._log(Host.TARGET, LogLevel.INFO, f"{prefix}Applying {total} {self.manager_id} change(s)")
+            for index, diff in enumerate(apply_diffs):
+                if self.context.dry_run:
+                    self._log(Host.TARGET, LogLevel.FULL, f"{prefix}Would {diff.action.value} {diff.label}")
+                else:
+                    await self._converge_one(diff, failures)
+                self._report_progress(ProgressUpdate(percent=int((index + 1) / total * 100)))
 
-        failures: list[tuple[ItemDiff, str]] = []
-        for index, diff in enumerate(apply_diffs):
-            if self.context.dry_run:
-                self._log(Host.TARGET, LogLevel.FULL, f"{prefix}Would {diff.action.value} {diff.label}")
-            else:
-                await self._converge_one(diff, failures)
-            self._report_progress(ProgressUpdate(percent=int((index + 1) / total * 100)))
-
-        succeeded = total - len(failures)
-        self._log(
-            Host.TARGET,
-            LogLevel.INFO,
-            f"{prefix}{succeeded}/{total} {self.manager_id} change(s) applied",
-        )
-
-        if failures:
-            summary = "; ".join(f"{diff.label}: {stderr.strip()}" for diff, stderr in failures)
+            succeeded = total - len(failures)
             self._log(
                 Host.TARGET,
                 LogLevel.INFO,
-                f"{len(failures)} {self.manager_id} item(s) failed: {summary}",
+                f"{prefix}{succeeded}/{total} {self.manager_id} change(s) applied",
             )
-            raise PackageItemFailures(self.manager_id, failures)
+
+        all_failures = [*failures, *self._unresolved_as_failures(plan, outcome)]
+        if all_failures:
+            summary = "; ".join(f"{diff.label}: {stderr.strip()}" for diff, stderr in all_failures)
+            self._log(
+                Host.TARGET,
+                LogLevel.INFO,
+                f"{len(all_failures)} {self.manager_id} item(s) failed: {summary}",
+            )
+            raise PackageItemFailures(self.manager_id, all_failures)
+
+    def _unresolved_as_failures(self, plan: PackagePlan, outcome: ReviewOutcome) -> list[tuple[ItemDiff, str]]:
+        """D-21/D-27: after an INTERACTIVE, non-dry-run review, an unreproducible item
+        left with neither a snippet nor a recorded decision makes this job's result a
+        failure — the run is visibly not clean, and stays that way every run until the
+        item is resolved.
+
+        Two exemptions, both governed by a decision more specific than D-21 for their
+        case: a non-interactive run (D-26 — skip all, record nothing, report
+        everything, never fail on that basis alone, since the user was never offered a
+        resolution) and a dry-run (ADR-014 — a preview that fails would make
+        `--dry-run` unusable as a check). Converge failures (`failures` in `apply()`)
+        are NOT covered by either exemption; they fail the job unconditionally, as
+        before this method existed.
+        """
+        if not outcome.unresolved or not outcome.was_interactive or self.context.dry_run:
+            return []
+
+        by_id = {diff.item_id: diff for diff in plan.diffs}
+        failures: list[tuple[ItemDiff, str]] = []
+        for item_id in outcome.unresolved:
+            diff = by_id[item_id]
+            message = (
+                f"{diff.label} has no install snippet and no recorded machine-specific decision (D-21); "
+                "author a snippet or choose 'skip always' on a future sync to resolve it"
+            )
+            self._log(Host.SOURCE, LogLevel.ERROR, message)
+            failures.append((diff, message))
+        return failures
+
+    async def _finalize_unreproducible(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
+        """Persist this run's snippet authoring and unreproducible-item skip-always
+        decisions (D-20/D-21/D-23).
+
+        Kept separate from `_record_permanent_skips`: an `UNREPRODUCIBLE` diff is always
+        `REPORT_ONLY`- or `INSTALL`-actioned, never `INSTALL`/`CHANGE`/`REMOVE` in the
+        sense that method's action-based dispatch expects, so its own docstring already
+        excludes `REPORT_ONLY` on purpose and never sees these items.
+
+        Snippets are written to `self.source` — never `self.target` — because D-23's
+        "shared, synced config" travels source-to-target via `config_sync`, which
+        already ran earlier this same sync; a snippet authored during THIS run's review
+        reaches the target on its NEXT sync, not this one (matching the plan's own
+        "available on the next machine's next sync" framing). Skip-always decisions are
+        also recorded on `self.source`: unreproducible items are always source-held —
+        they describe what is installed on the machine currently acting as source — so
+        there is no target-held case to route to `self.target`, unlike
+        `_record_permanent_skips`'s INSTALL/CHANGE/REMOVE split.
+
+        Never during dry-run (ADR-014) and never for a non-interactive outcome (D-26):
+        nothing is recorded permanently when nothing was actually decided by a human.
+        """
+        if self.context.dry_run or not outcome.was_interactive:
+            return
+
+        by_id = {diff.item_id: diff for diff in plan.diffs}
+
+        if outcome.snippets:
+            registry = SnippetRegistry(self.source)
+            authored_at = datetime.now(UTC).isoformat()
+            for item_id, body in outcome.snippets.items():
+                diff = by_id.get(item_id)
+                label = diff.label if diff is not None else item_id
+                await registry.add(
+                    Snippet(
+                        item_id=item_id,
+                        label=label,
+                        body=body,
+                        authored_at=authored_at,
+                        authored_on=self.context.source_hostname,
+                    )
+                )
+
+        recorded_at = datetime.now(UTC).isoformat()
+        for diff in plan.diffs:
+            if diff.item_class != ItemClass.UNREPRODUCIBLE:
+                continue
+            if outcome.decisions.get(diff.item_id) != Decision.SKIP_ALWAYS:
+                continue
+            await DecisionFile(self.manager_id, self.source).record(
+                DecisionEntry(
+                    item_id=diff.item_id,
+                    item_class=diff.item_class,
+                    label=diff.label,
+                    reason=None,
+                    recorded_at=recorded_at,
+                )
+            )
 
     async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
         """Persist a `DecisionEntry` for every `SKIP_ALWAYS`-decided, actionable diff.
