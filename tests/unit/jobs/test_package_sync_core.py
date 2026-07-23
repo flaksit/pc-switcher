@@ -235,6 +235,31 @@ class TestReviewGroupsByAction:
         assert len(groups) == 4
         assert {g.action for g in groups} == {"install", "change", "remove", "report_only"}
 
+    def test_report_only_falls_back_to_report_for_a_class_with_no_vocabulary_entry(self) -> None:
+        """IN-01 regression: `_ACTION_VOCABULARY` only lists an explicit REPORT_ONLY
+        entry for APT_PACKAGE. Every other item class's REPORT_ONLY diff must still
+        fall back to the word "report", not the raw enum value "report_only" (which
+        produced a title like "Report_only fake packages").
+        """
+        job = FakeSyncJob(make_context())
+        diffs = [
+            ItemDiff(
+                item_class=ItemClass.FLATPAK_REF,
+                diff_class=DiffClass.VERSION_MISMATCH,
+                action=DiffAction.REPORT_ONLY,
+                item_id="p1",
+                label="p1",
+                detail=None,
+            )
+        ]
+
+        groups = job._build_review_groups(diffs)
+
+        assert len(groups) == 1
+        assert groups[0].entries[0].action_label == "report"
+        assert "report_only" not in groups[0].title.lower()
+        assert "report" in groups[0].title.lower()
+
     def test_removal_group_title_names_a_removal_verb_never_apply(self) -> None:
         job = FakeSyncJob(make_context())
         diffs = [_diff("i1", DiffAction.INSTALL), _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET)]

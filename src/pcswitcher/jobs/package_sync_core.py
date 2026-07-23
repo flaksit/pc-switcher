@@ -326,7 +326,13 @@ class PackageSyncJob(SyncJob):
             entries = by_action.get(action)
             if not entries:
                 continue
-            verb = _ACTION_VOCABULARY.get((entries[0].item_class, action), action.value)
+            # REPORT_ONLY has no more-specific per-item-class meaning for any current
+            # manager (IN-01): fall back to "report" rather than the raw enum value
+            # ("report_only"), which read awkwardly in review text like "Report_only
+            # flatpak packages". Every other action still falls back to its own
+            # `action.value`, unchanged.
+            default_verb = "report" if action == DiffAction.REPORT_ONLY else action.value
+            verb = _ACTION_VOCABULARY.get((entries[0].item_class, action), default_verb)
             groups.append(
                 ReviewGroup(
                     manager=self.manager_id,
