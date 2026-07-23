@@ -540,7 +540,7 @@ class TestConfigSyncScope:
         target.run_command = AsyncMock(side_effect=_respond_echo_home("/home/alice"))
         target.send_file = AsyncMock()
 
-        await _copy_config_to_target(target, "config.yaml", source_path)
+        await _copy_config_to_target(target, source_path)
 
         assert target.send_file.await_count == 1
         remote_path = target.send_file.call_args.args[1]

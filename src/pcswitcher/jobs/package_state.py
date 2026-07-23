@@ -25,9 +25,10 @@ follows for its own tool-state filter token).
 This module also owns `SnippetRegistry` (D-20, D-23): the SHARED, synced counterpart to
 the machine-local decision store above. Where a `DecisionEntry` says "never touch this
 item on this machine", a `Snippet` says "this is how to install something no package
-manager can reproduce" — knowledge about the PACKAGE, not the machine, so it travels
-with `config.yaml` via `config_sync.SYNCED_CONFIG_FILENAMES` rather than living in a
-`*.decisions.yaml` file. A snippet's body is stored and replayed as an opaque text
+manager can reproduce" — knowledge about the PACKAGE, not the machine, so it is SHARED
+and synced (D-23) rather than living in a machine-local `*.decisions.yaml` file. It
+travels source-to-target by `manual_installs_sync`'s own post-review `send_file` push,
+not via `config_sync`. A snippet's body is stored and replayed as an opaque text
 blob — never parsed, versioned, diffed or reasoned about (D-20) — and replay never
 supplies stdin, since `pcswitcher.executor.Process` documents that commands must be
 non-interactive; a snippet expecting a prompt fails rather than hanging the sync.
@@ -76,8 +77,8 @@ DECISION_FILE_GLOB_RELPATH = f"{_DECISION_DIR_RELPATH}/*.decisions.yaml"
 
 # The shared install-snippet registry, home-relative, alongside every manager's
 # decision file — but unlike those, this ONE file is not per-manager and is meant to be
-# synced (D-23): `config_sync.SYNCED_CONFIG_FILENAMES` carries it to the target the same
-# way it carries config.yaml.
+# synced (D-23): `manual_installs_sync` pushes it to the target with its own `send_file`
+# call after its review, so a snippet authored on the fly reaches the target that same run.
 SNIPPET_REGISTRY_RELPATH = f"{_DECISION_DIR_RELPATH}/package-snippets.yaml"
 
 _FILE_HEADER = (
@@ -316,11 +317,12 @@ class SnippetRegistry:
     (same one-`Executor`-per-instance shape `DecisionFile` follows).
 
     Unlike `DecisionFile`, the registry is not machine-scoped data — both machines may
-    hold different copies of the SAME file until `config_sync` reconciles them (D-23).
-    Construct with `SnippetRegistry(self.source)` to read/write the source's own copy
-    (e.g. when a freshly authored snippet is recorded, so the NEXT config sync carries
-    it onward) or `SnippetRegistry(self.target)` to read the target's copy (e.g. at
-    plan/converge time, after this run's config sync has already reconciled it).
+    hold different copies of the SAME file until `manual_installs_sync` reconciles them
+    by pushing the source's copy to the target (D-23). Construct with
+    `SnippetRegistry(self.source)` to read/write the source's own copy (e.g. when a
+    freshly authored snippet is recorded, before that run's push carries it to the
+    target) or `SnippetRegistry(self.target)` to read the target's copy (e.g. at
+    plan/converge time, after this run's push has already placed it there).
     """
 
     def __init__(self, executor: Executor) -> None:

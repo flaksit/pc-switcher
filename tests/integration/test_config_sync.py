@@ -23,7 +23,7 @@ class TestConfigSyncIntegration:
         # Ensure config doesn't exist
         await pc1_executor.run_command("rm -f ~/.config/pc-switcher/config.yaml")
 
-        result = await _get_target_config(pc1_executor, "config.yaml")
+        result = await _get_target_config(pc1_executor)
 
         assert result is None
 
@@ -36,7 +36,7 @@ class TestConfigSyncIntegration:
         await pc1_executor.run_command(f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{config_content}EOF")
 
         try:
-            result = await _get_target_config(pc1_executor, "config.yaml")
+            result = await _get_target_config(pc1_executor)
 
             assert result is not None
             assert "log_level: DEBUG" in result
@@ -55,7 +55,7 @@ class TestConfigSyncIntegration:
             local_path = Path(f.name)
 
         try:
-            await _copy_config_to_target(pc1_executor, "config.yaml", local_path)
+            await _copy_config_to_target(pc1_executor, local_path)
 
             # Verify file was created
             result = await pc1_executor.run_command("cat ~/.config/pc-switcher/config.yaml")
@@ -77,7 +77,7 @@ class TestConfigSyncIntegration:
             local_path = Path(f.name)
 
             try:
-                await _copy_config_to_target(pc1_executor, "config.yaml", local_path)
+                await _copy_config_to_target(pc1_executor, local_path)
 
                 # Verify directory was created
                 result = await pc1_executor.run_command("test -d ~/.config/pc-switcher")
