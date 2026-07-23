@@ -20,7 +20,7 @@ from pcswitcher.jobs.apt_sync import AptSyncJob
 from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass
 from pcswitcher.jobs.package_review import Decision, ReviewOutcome
 from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan
-from pcswitcher.models import CommandResult
+from pcswitcher.models import CommandResult, Host
 from pcswitcher.orchestrator import Orchestrator
 
 SHOWMANUAL_3 = "pkg-a\npkg-b\npkg-c\n"
@@ -716,6 +716,23 @@ class TestValidate:
         errors = await job.validate()
 
         assert any("lock" in e.message.lower() for e in errors)
+
+    @pytest.mark.asyncio
+    async def test_source_without_passwordless_sudo_yields_validation_error(self) -> None:
+        """Capturing /etc/apt state needs `sudo find` on the SOURCE.
+
+        Without this check the capture degrades to empty digest maps and the sync
+        reports success having replicated no repository state at all.
+        """
+        context, _source, _target = make_context(
+            source_responses={"sudo -n true": CommandResult(1, "", "sudo: a password is required")},
+            target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", "")},
+        )
+        job = AptSyncJob(context)
+
+        errors = await job.validate()
+
+        assert any(e.host is Host.SOURCE and "sudo" in e.message for e in errors)
 
 
 class TestJobDiscovery:

@@ -1154,7 +1154,7 @@ class AptSyncJob(PackageSyncJob):
 
     @override
     async def validate(self) -> list[ValidationError]:
-        """apt-mark availability on both ends, sudo on target, dpkg lock free on target.
+        """apt-mark availability on both ends, sudo on both ends, dpkg lock free on target.
 
         Sequential checks appending to `errors`, never raising mid-validate (matches
         `folder_sync.validate()`'s shape).
@@ -1168,6 +1168,21 @@ class AptSyncJob(PackageSyncJob):
         target_check = await self.target.run_command("apt-mark --version", login_shell=False)
         if not target_check.success:
             errors.append(self._validation_error(Host.TARGET, "apt-mark is not available on target"))
+
+        # Source-side sudo matters even though the source is never mutated: capturing
+        # /etc/apt state runs `sudo find` there, and without passwordless sudo that
+        # capture degrades to empty digest maps rather than failing. The sync would then
+        # report success having replicated no repository state at all — a silent
+        # wrong-result, which is worse than refusing to start.
+        source_sudo_check = await self.source.run_command("sudo -n true")
+        if not source_sudo_check.success:
+            errors.append(
+                self._validation_error(
+                    Host.SOURCE,
+                    "passwordless sudo is not available on source "
+                    "(required to read /etc/apt repository, keyring and pin state)",
+                )
+            )
 
         sudo_check = await self.target.run_command("sudo -n true", login_shell=False)
         if not sudo_check.success:
