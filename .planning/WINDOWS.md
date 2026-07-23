@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 1
+open_count: 0
 waived_count: 0
-fixed_count: 0
+fixed_count: 1
 total_count: 1
-last_updated: 2026-07-23T06:24:50.013Z
+last_updated: 2026-07-23T06:33:11.003Z
 ---
 
 # Broken Windows Ledger
@@ -15,7 +15,7 @@ last_updated: 2026-07-23T06:24:50.013Z
 
 | id | phase | kind | file | line | description | status | reason | recorded_at | resolved_at |
 |----|-------|------|------|------|-------------|--------|--------|-------------|-------------|
-| 1 | 02 | deviation | src/pcswitcher/orchestrator.py |  | PackageItemFailures no longer aborts the run, but session.status/CLI exit code is still derived purely from whether an exception propagated (SessionStatus.COMPLETED unconditionally after job loop; CLI _run_sync returns 0 whenever orchestrator.run() doesn't raise), never from job_results content. A sync where one package manager's items failed can now exit 0. Fixing requires touching cli.py session-status logic, out of plan 02-03's stated 'two narrow changes' scope. | open |  | 2026-07-23T06:24:50.013Z |  |
+| 1 | 02 | deviation | src/pcswitcher/orchestrator.py |  | PackageItemFailures no longer aborts the run, but session.status/CLI exit code is still derived purely from whether an exception propagated (SessionStatus.COMPLETED unconditionally after job loop; CLI _run_sync returns 0 whenever orchestrator.run() doesn't raise), never from job_results content. A sync where one package manager's items failed can now exit 0. Fixing requires touching cli.py session-status logic, out of plan 02-03's stated 'two narrow changes' scope. | fixed |  | 2026-07-23T06:24:50.013Z | 2026-07-23T06:33:11.003Z |
 
 ````json
 [
@@ -26,10 +26,10 @@ last_updated: 2026-07-23T06:24:50.013Z
     "file": "src/pcswitcher/orchestrator.py",
     "line": null,
     "description": "PackageItemFailures no longer aborts the run, but session.status/CLI exit code is still derived purely from whether an exception propagated (SessionStatus.COMPLETED unconditionally after job loop; CLI _run_sync returns 0 whenever orchestrator.run() doesn't raise), never from job_results content. A sync where one package manager's items failed can now exit 0. Fixing requires touching cli.py session-status logic, out of plan 02-03's stated 'two narrow changes' scope.",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-07-23T06:24:50.013Z",
-    "resolved_at": null
+    "resolved_at": "2026-07-23T06:33:11.003Z"
   }
 ]
 ````
