@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 2
+current_phase: 02
 current_phase_name: Package Management Sync
-status: ready_to_execute
-stopped_at: Phase 2 planned
-last_updated: "2026-07-23T01:05:00.000Z"
+status: executing
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-07-23T01:00:40.380Z"
 last_activity: 2026-07-23
-last_activity_desc: "Phase 02 replanned after codex cross-AI review: 13 plans across 7 waves, plan-checker verified"
+last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 31
-  completed_plans: 18
+  completed_plans: 19
 ---
 
 # Project State
@@ -28,15 +28,15 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 ## Current Position
 
-Phase: 2 — Package Management Sync
+Phase: 02 (Package Management Sync) — EXECUTING
 
-Plan: 0 of 13 complete
+Plan: 2 of 13
 
-Status: Ready to execute — 13 plans across 7 waves, cross-AI reviewed and plan-checker verified
+Status: Ready to execute
 
-Last activity: 2026-07-23 — Phase 02 replanned after codex cross-AI review: 13 plans across 7 waves, plan-checker verified
+Last activity: 2026-07-23 — Phase 02 execution started
 
-Progress: 1 of 7 phases complete
+Progress: [██████░░░░] 61%
 
 ## Performance Metrics
 
@@ -77,6 +77,11 @@ Progress: 1 of 7 phases complete
 | Phase 01 P17 | 8min | 3 tasks | 7 files |
 | Phase 01 P16 | 8min | 3 tasks | 5 files |
 | Phase 01 P18 | 10min | 3 tasks | 4 files |
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 02 P01 | 9min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -93,6 +98,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - Job conventions: default excludes live in YAML, not Python. Each SyncJob describes its own destructive first-sync scope via `describe_first_sync_scope()` rather than the orchestrator hardcoding it.
 - `SyncAbortedByUser` is a plain Exception carrying a human-readable reason, distinguishing a user decline from every other failure path; the CLI still exits 1 either way.
 - Logging under the TUI: `setup_logging` is TTY-aware and routes records into TerminalUI's Recent Logs panel. Anything writing to stderr while Live is active desyncs its cursor bookkeeping and floods the display.
+- [Phase ?]: ADR-020's PackagePhaseCoordinator plan()/apply() split fixes the cross-AI review's core defect: per-job self-contained review would let apt_sync mutate the target before snap_sync had diffed.
+- [Phase ?]: D-21/D-26 reconciled: interactive runs fail the job result on unresolved unreproducible items; non-interactive runs report but do not fail on unresolved items alone.
 
 ### Pending Todos
 
@@ -120,8 +127,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-22T22:10:50.777Z
+Last session: 2026-07-23T01:00:40.371Z
 
-Stopped at: Phase 2 planned — ready to execute
+Stopped at: Completed 02-01-PLAN.md
 
-Resume file: .planning/phases/02-package-management-sync/02-03-PLAN.md (tracer slice, wave 2)
+Resume file: None
