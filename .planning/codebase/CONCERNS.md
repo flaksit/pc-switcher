@@ -1,170 +1,239 @@
-<!-- refreshed: 2026-06-29 -->
 # Codebase Concerns
 
-**Analysis Date:** 2026-06-29
+**Analysis Date:** 2026-07-23
+
+Baseline is healthy: `uv run ruff check .` passes, `uv run basedpyright` reports 0 errors/0 warnings, 1057 tests collected. The concerns below are structural, operational and coverage risks, not lint debt.
 
 ## Tech Debt
 
-### Session Config Snapshot Missing
-- Issue: Session config is initialized as empty dict `{}` and never populated with the actual configuration used for the sync
-- Files: `src/pcswitcher/orchestrator.py:158`
-- Impact: Audit trail incomplete — cannot later review what config was active when a sync occurred; limits forensics and rollback safety
-- Fix approach: Capture full config snapshot during session initialization; store in `SyncSession.config`
+### Phase 02 rework is mid-flight
 
-### Hardcoded Subvolume-to-Mount-Point Mapping
-- Issue: `subvolume_to_mount_point()` uses a fixed mapping (@→/, @home→/home, etc.) instead of querying live from the system
+- Issue: Phase 02 (Package Management Sync) shipped 13 plans, then a user review corrected 5 decisions. A delta replan + re-execution + code review (`.planning/HANDOFF.json` tasks 7-9) is outstanding. Current package-sync code implements the *pre-correction* decisions in places.
+- Files: `src/pcswitcher/jobs/apt_sync.py`, `src/pcswitcher/jobs/snap_sync.py`, `src/pcswitcher/jobs/flatpak_sync.py`, `src/pcswitcher/jobs/package_sync_core.py`, `.planning/phases/02-package-management-sync/02-CONTEXT.md`
+- Impact: Any new work touching package sync risks building on code slated for rework.
+- Fix approach: Complete HANDOFF tasks 7-9 before starting Phase 03.
+
+### Shared package-sync core is not actually shared
+
+- Issue: D-16 mandated one extracted core, but `SnapSyncJob`, `FlatpakSyncJob` and `AptSyncJob` each override `plan()` instead of inheriting `PackageSyncJob.plan()`. The base `diff_items()` is apt-package-shaped (hardcoded `ItemClass.APT_PACKAGE`, reads `AptPackageItem.version`) and crashes or mislabels on `SnapItem`.
+- Files: `src/pcswitcher/jobs/package_sync_core.py:136`, `src/pcswitcher/jobs/apt_sync.py:724`, `src/pcswitcher/jobs/snap_sync.py:219`, `src/pcswitcher/jobs/flatpak_sync.py:320`
+- Impact: Three near-parallel `plan()` implementations must be kept in sync by hand; the base class is a partial abstraction that is unsafe to call generically.
+- Fix approach: Make `diff_items()` item-class agnostic (dispatch on `ItemClass`), then collapse the three overrides.
+
+### `apt_sync.py` carries repository/key/pin/config convergence alone
+
+- Issue: 1493 lines, ~40 module-level and method functions. All apt repo/key/pin/config capture, diff and dependency-ordered convergence lives here rather than in the shared core, and repo-group convergence is triggered *eagerly by the first repo-group diff* `converge()` sees, with per-item outcomes cached so the base per-diff loop still drives it.
+- Files: `src/pcswitcher/jobs/apt_sync.py`
+- Impact: Convergence ordering is implicit in call order rather than explicit; the file is the largest in the codebase and the hardest to reason about.
+- Fix approach: Split repo/key/pin/config into its own module with an explicit ordered convergence pass.
+
+### Orchestrator size and unfinished session snapshot
+
+- Issue: `src/pcswitcher/orchestrator.py` is 1304 lines across 27 methods, and carries `# TODO: Add config snapshot` at line 318 — sync history records an empty `config={}`.
+- Impact: Post-hoc forensics cannot tell what config a past run used.
+- Fix approach: Serialize the resolved config into the history record.
+
+### Hardcoded btrfs subvolume→mountpoint mapping
+
+- Issue: `_subvol_to_mount_point()` assumes the Ubuntu `@`/`@home` convention rather than reading the live mount table. Flagged in-code as a TODO.
 - Files: `src/pcswitcher/jobs/btrfs.py:39`
-- Impact: Breaks on custom btrfs layouts; snapshots created at wrong paths if user has non-standard mount scheme
-- Fix approach: Query `btrfs subvolume list` or mount table at runtime to derive actual mount points for each subvolume
+- Impact: Non-standard btrfs layouts get wrong snapshot targets. Bounded today by the Ubuntu 24.04 constraint (issue #26).
+- Fix approach: Derive from `findmnt`/`/proc/self/mountinfo`.
 
-### Exception Masking in Lock Acquisition
-- Issue: Broad `except Exception:` swallows all errors from `start_persistent_remote_lock()`, returning None instead of reporting actual failure
-- Files: `src/pcswitcher/lock.py:155`
-- Impact: Network timeouts, permission errors, and SSH failures silently treated as "lock already held"; user gets misleading "machine already in sync" error instead of real cause
-- Fix approach: Catch specific exceptions (TimeoutError, SSHException, etc.); re-raise unexpected ones; log actual error before returning None
+### Stray test package `tests/unit_jobs/`
+
+- Issue: A second test package `tests/unit_jobs/` exists alongside `tests/unit/jobs/`, containing only `test_disk_space_monitor.py` (459 lines).
+- Files: `tests/unit_jobs/test_disk_space_monitor.py`
+- Impact: Test discovery convention is ambiguous; new job tests may land in the wrong tree.
+- Fix approach: Move into `tests/unit/jobs/` and delete the directory.
+
+### Hard dependency on GitHub API in core
+
+- Issue: `pygithub` is a runtime dependency of the tool itself for version checks and target installs (open issues #82, #79).
+- Files: `src/pcswitcher/version.py:25`, `src/pcswitcher/jobs/install_on_target.py`
+- Impact: Unauthenticated calls are capped at 60 req/hr, so `InstallOnTargetJob` can fail on rate limits (#79); a network-isolated LAN sync depends on github.com reachability.
+- Fix approach: Per #82, isolate the release-query behind an interface and make version-check failures non-fatal by design rather than by `except Exception`.
+
+### Duplicate command construction for source vs target
+
+- Issue: Open issue #126 — source and target execution paths build separate bash command strings instead of both invoking the tool's internal CLI.
+- Impact: Every job maintains two shapes of the same operation; behavioral drift between roles is easy to introduce.
 
 ## Known Bugs
 
-### Command Execution Quoting Risk in Config Sync
-- Symptoms: If config file path contains spaces or special characters, SFTP copy may fail silently
-- Files: `src/pcswitcher/config_sync.py:39` (cat command), `src/pcswitcher/config_sync.py:310-313` (home directory expansion)
-- Trigger: Config file at path like `/home/user name/config.yaml` or home dir with special chars
-- Workaround: Ensure config path has no spaces; use standard home directories
+### Sync can exit 0 with failed package items (recorded, fixed in ledger, verify)
+
+- Symptoms: `SessionStatus`/CLI exit code derive solely from whether an exception propagated, never from `job_results` content, so a run where a package manager's items failed returned 0.
+- Files: `src/pcswitcher/orchestrator.py`, `src/pcswitcher/cli.py`
+- Status: Broken-windows ledger entry 1, marked `fixed` 2026-07-23. Worth a regression test asserting non-zero exit on item-level failure.
+
+### Integration-test lock not released on cancelled CI run
+
+- Symptoms: Cancelling the Integration Test workflow leaves the remote flock held; subsequent runs cannot acquire it.
+- Files: `src/pcswitcher/lock.py`, `tests/run-integration-tests.sh`
+- Status: Open issue #78 (P1).
+- Workaround: Manually clear the lock on the VM.
+
+### Integration fixtures re-establish state unnecessarily
+
+- Symptoms: `pc2_executor_without_pcswitcher_tool` / `pc2_executor_with_old_pcswitcher_tool` rebuild VM state every run.
+- Files: `tests/integration/conftest.py`
+- Status: Open issue #68. Contributes to integration-suite runtime.
 
 ## Security Considerations
 
-### File Ownership Not Verified on SFTP Transfer
-- Risk: Config file copied to target without verifying ownership/permissions on either side; could allow privilege escalation if source config is world-readable or target directory is writable by other users
-- Files: `src/pcswitcher/executor.py:312-320` (send_file), `src/pcswitcher/config_sync.py:314-316` (copy_config_to_target)
-- Current mitigation: Config directory created with `mkdir -p` (default umask); file contents validated by user before sync
-- Recommendations: (1) Verify source config is 0600 (owner-read-write only) before copying; (2) On target, create config dir with explicit mode 0700 and verify after transfer; (3) Document config file security requirements
+### Broad `pkill -f` on the remote during interrupt cleanup
 
-### Subprocess Shell Injection in Btrfs Commands
-- Risk: Subvolume names in snapshot paths are user-controlled via config; no escaping applied before shell execution
-- Files: `src/pcswitcher/jobs/btrfs.py:151, 186` (mkdir with user-supplied session_folder), `src/pcswitcher/jobs/btrfs.py:153, 188` (create_snapshot)
-- Current mitigation: Config schema restricts subvolume names to pattern `^@`; session_folder from orchestrator is random hex (secrets.token_hex)
-- Recommendations: (1) Validate session_folder is hex-only before use; (2) Use subprocess args array instead of shell strings; (3) Add integration test with pathological session_folder names
+- Risk: `kill_all_remote_processes()` runs `pkill -f 'pc-switcher'` with the pattern interpolated into a shell string. The default pattern matches *any* remote process whose full command line contains `pc-switcher` — including an unrelated shell, editor or log tail — and the parameter is not `shlex.quote`d.
+- Files: `src/pcswitcher/connection.py:150`
+- Current mitigation: The pattern is never caller-supplied today.
+- Recommendations: Quote the pattern and narrow the match (PID file, or `pkill -f "^/.*/pc-switcher "`).
 
-### SSH Connection Not Re-validated on Reconnect
-- Risk: Connection may be established but later drop silently if keepalive fails; next command hangs or times out unexpectedly
-- Files: `src/pcswitcher/connection.py:70-76` (connect), `src/pcswitcher/executor.py:264-275` (run_command with timeout)
-- Current mitigation: keepalive_interval=15s, keepalive_count_max=3 (45s before disconnect detected); command-level timeouts
-- Recommendations: (1) Log all keepalive failures; (2) Add health check before critical phases; (3) Test keepalive behavior with simulated network interruptions
+### Inconsistent shell quoting of config-derived paths
+
+- Risk: `shlex.quote` is used in ~70 places, but several `sudo`/`find`/`df` commands interpolate config- or discovery-derived paths raw.
+- Files: `src/pcswitcher/jobs/folder_sync.py:592` (`sudo find {path} -name .pcswitcher-filter …`), `src/pcswitcher/btrfs_snapshots.py:80,135,179,266,278`, `src/pcswitcher/disk.py:115`, `src/pcswitcher/jobs/btrfs.py:151,186`, `src/pcswitcher/jobs/disk_space_monitor.py:114`
+- Current mitigation: Values originate from the user's own YAML config, not from a remote or untrusted source.
+- Recommendations: Quote uniformly; a path with a space silently misbehaves today even without malice.
+
+### Passwordless-sudo surface
+
+- Risk: Jobs require `NOPASSWD` grants for `rsync`, apt/snap/flatpak binaries and `/etc/apt` reads on both machines; rsync runs as root on both ends (ADR-013).
+- Files: `src/pcswitcher/sudoers.py`, `src/pcswitcher/jobs/folder_sync.py`, `src/pcswitcher/jobs/apt_sync.py`
+- Current mitigation: Grants are scoped to explicit absolute binary paths in `/etc/sudoers.d/pc-switcher`; root SSH login stays forbidden; remediation text mandates `visudo -f`.
+- Recommendations: Document the residual risk that `NOPASSWD rsync` as root is effectively full filesystem write access.
+
+### Destructive convergence is the default "apply" branch
+
+- Risk: Per D-07, "apply" means remove/delete/disable whenever an item is present on target and absent on source. `folder_sync` uses `rsync --delete`; `apt_sync` runs `remove -y`.
+- Files: `src/pcswitcher/jobs/apt_sync.py:1109`, `src/pcswitcher/jobs/folder_sync.py:652`, `src/pcswitcher/jobs/snap_sync.py:362`
+- Current mitigation: Pre-sync btrfs snapshots, per-item interactive review, `apt-get -s` simulation before removal, `snap remove` never `--purge`, hardcoded runtime excludes (ADR-016/017) including `.ssh/authorized_keys`.
+- Recommendations: Keep the review UI naming concrete actions ("remove brscan3") rather than "apply"; regression-test the non-overridable exclude list.
 
 ## Performance Bottlenecks
 
-### Login Shell Overhead on Every Remote Command
-- Problem: RemoteExecutor wraps commands in `bash -l -c` to source ~/.profile, adding 10-50ms per command (noted in code)
-- Files: `src/pcswitcher/executor.py:218-236` (login shell wrapping), `src/pcswitcher/executor.py:260-262` (default_login_shell flag)
-- Cause: Profile sourcing required only for commands needing user env (uv, pc-switcher path lookup); but flag defaults to False, so overhead only incurred when explicitly requested
-- Improvement path: (1) Profile commands needing login shell explicitly (install_on_target, version checks); (2) Batch related commands to amortize startup cost; (3) Cache user environment from first login check instead of re-sourcing
+### Integration suite runtime
 
-### Disk Space Check Polling
-- Problem: DiskSpaceMonitorJob polls disk space every N seconds (configurable); may miss rapid depletion or waste time on fast syncs
-- Files: `src/pcswitcher/jobs/disk_space_monitor.py:200-240`
-- Cause: Polling is simpler than inotify-based monitoring but introduces lag
-- Improvement path: (1) Adjust check_interval per job expected duration; (2) Hook disk writes to trigger checks on-demand; (3) Integrate with rsync --progress for better coupling
+- Problem: The VM-backed suite is slow; one test alone takes ~90s.
+- Files: `tests/integration/test_end_to_end_sync.py`, `tests/run-integration-tests.sh`
+- Cause: Full VM reset per run, unconditional fixture state rebuilds, generous timeouts.
+- Improvement path: Open issues #150 (that specific timeout), #76 (skip unnecessary VM reset), #69 (split VM vs non-VM integration tests), #65, #64.
+
+### Per-item SSH round trips
+
+- Problem: Version comparison shells out to `dpkg --compare-versions` twice per item pair, and file digests are read one file at a time.
+- Files: `src/pcswitcher/jobs/package_items.py:169,173`, `src/pcswitcher/jobs/apt_sync.py:264,275`
+- Cause: One remote command per comparison, over a semaphore capped at 10 concurrent SSH sessions.
+- Improvement path: Batch comparisons into a single remote script; the digest capture already uses one `find … sha256sum` pass and is the right model.
+
+### `login_shell=True` overhead
+
+- Problem: Documented 10-50ms per command penalty.
+- Files: `src/pcswitcher/executor.py:307,340,393`, `src/pcswitcher/jobs/install_on_target.py:48,124`
+- Current state: Already treated as opt-in with an explicit warning — monitor rather than fix.
 
 ## Fragile Areas
 
-### Config Validation Spread Across Multiple Modules
-- Files: `src/pcswitcher/config.py` (schema validation), `src/pcswitcher/jobs/disk_space_monitor.py:62-85` (threshold parsing), individual Job CONFIG_SCHEMA definitions
-- Why fragile: Schema validation is split between Jsonschema (config.py) and semantic validation (disk_space_monitor threshold format, job-specific rules); easy to miss validation or create inconsistent error messages
-- Safe modification: (1) Centralize all validation in config.py; (2) Require all jobs to register schemas; (3) Add integration test that loads every possible bad config and verifies error message quality
+### TUI + Live display + blocking prompts
 
-### Job Discovery and Instantiation at Runtime
-- Files: `src/pcswitcher/orchestrator.py:400-450` (discover_and_validate_jobs), `src/pcswitcher/jobs/` (dynamic import)
-- Why fragile: Jobs are discovered by importing config["type"] as Python module; failure at runtime if job class missing, misnamed, or schema incompatible
-- Safe modification: (1) Validate job names and schemas at config load time; (2) Add registry of known jobs; (3) Fail early with clear error if job not found
+- Files: `src/pcswitcher/ui.py`, `src/pcswitcher/logger.py:321`, `src/pcswitcher/jobs/package_review.py:227`
+- Why fragile: Anything writing to stderr while the persistent Rich `Live` display is active desyncs its cursor bookkeeping and floods the display. `package_review.py` runs a blocking `questionary` checkbox off the event loop, interleaved with `Live`. `rich` 15 paints Live's first frame past one 10Hz tick, so timing-based TUI tests are flaky. Untrusted log content passed to `Panel(str)` is parsed as markup and raises `MarkupError`.
+- Safe modification: Wrap untrusted content in `Text`; poll for a render marker in tests rather than sleeping; never write to stderr under `Live`.
+- Test coverage: `tests/unit/ui/test_terminal_ui.py` (600 lines) — no automated coverage of the questionary/Live interleave; that remains a pending human UAT item.
 
-### Config Sync Decision Tree
-- Files: `src/pcswitcher/config_sync.py:151-235` (three-way branching: no config, configs match, configs differ)
-- Why fragile: Multiple code paths with similar logic (auto_accept, dry_run, user prompts); easy to miss a branch when adding features
-- Safe modification: (1) Extract decision tree to table-driven logic; (2) Add parametric tests covering all branch combinations; (3) Clarify what "config differs" means (whitespace, semantic content, etc.)
+### `folder_sync` filter rules
 
-### SSH Connection Semaphore
-- Files: `src/pcswitcher/connection.py:41` (session semaphore with max_sessions=10)
-- Why fragile: Hard limit on concurrent SSH sessions; if a job spawns many long-lived processes, later jobs block; no logging of semaphore wait time
-- Safe modification: (1) Make max_sessions configurable; (2) Log when tasks wait on semaphore; (3) Add metrics for session utilization
+- Files: `src/pcswitcher/jobs/folder_sync.py:87-93`, `src/pcswitcher/default-config.yaml`, shipped `home.filter`
+- Why fragile: rsync filter files do not support trailing inline comments — a `# comment` on a pattern line becomes part of the pattern and silently disables the rule. Omitting `.ssh/authorized_keys` from the excludes locks the sync out of its own target. Excluding the pcswitcher venv while `--delete`-mirroring `uv/python/` deleted the in-use interpreter (#185).
+- Safe modification: Comments on their own line only; treat `_RUNTIME_EXCLUDE_RELPATHS` as append-only without review.
+
+### Self-upgrade / re-exec
+
+- Files: `src/pcswitcher/install.py`, `src/pcswitcher/version.py`, `src/pcswitcher/jobs/install_on_target.py`
+- Why fragile: An in-place self-upgrade must re-exec or exit once it has touched disk; continuing in the old process mixes new and old code via lazy imports.
+
+### Remote lock acquisition uses a fixed sleep
+
+- Files: `src/pcswitcher/lock.py:150-162`
+- Why fragile: Acquisition is decided by `asyncio.sleep(0.5)` then `process.poll()`. On a slow link, flock may not yet have failed, and the lock is reported as acquired. The surrounding `except Exception: return None` maps every error to "could not lock".
+- Safe modification: Have the remote command emit a token on successful acquisition and read for it, rather than timing it.
 
 ## Scaling Limits
 
-### Single SSH Connection Multiplexing
-- Current capacity: 10 concurrent SSH sessions (semaphore limit in Connection)
-- Limit: Jobs spawning >10 concurrent operations will queue and block; no graceful degradation
-- Scaling path: (1) Increase max_sessions for parallel-capable hardware; (2) Pool multiple SSH connections; (3) Implement job-level semaphores to prevent runaway spawning
+### Concurrent SSH sessions
 
-### Btrfs Snapshot Storage
-- Current capacity: Snapshots stored in `/.snapshots/pc-switcher/` on source and target
-- Limit: Unbounded growth if cleanup not run; large snapshots (>50GiB) consume disk space quickly
-- Scaling path: (1) Implement automatic cleanup per `cleanup_older_than` config; (2) Add size-based retention; (3) Warn if snapshot directory grows >X% of filesystem
+- Current capacity: `max_sessions=10` semaphore in `Connection`.
+- Limit: Per-item remote commands (package diffing) serialize behind it; the effective ceiling is sshd's `MaxSessions` on the target.
+- Scaling path: Batch remote work into fewer, larger commands rather than raising the semaphore.
 
-### Log File Storage
-- Current capacity: Logs written to `~/.local/share/pc-switcher/logs/`
-- Limit: No rotation or cleanup; if syncs run frequently, logs grow unbounded
-- Scaling path: (1) Implement log rotation (e.g., keep last 30 days); (2) Add compaction for older logs; (3) Document cleanup procedure
+### Snapshot disk consumption
+
+- Current capacity: Retention is `keep_recent` sessions plus an optional `max_age_days`.
+- Files: `src/pcswitcher/btrfs_snapshots.py:199-278`
+- Limit: Cleanup is a separate CLI command (`pc-switcher cleanup-snapshots`); a user who never runs it accumulates snapshots until the filesystem fills.
+- Scaling path: Run retention automatically post-sync; `DiskSpaceMonitorJob` already exists to observe the pressure.
+
+### Platform constraints
+
+- Ubuntu 24.04 only (#26) and btrfs required (#23) are open ideas, not resolved. ADR-019 assumes a homogeneous fleet.
 
 ## Dependencies at Risk
 
-### Version Class Complexity
-- Risk: `src/pcswitcher/version.py` (713 lines) handles both PEP 440 and SemVer formats with complex regex and version comparison; many edge cases (dev versions, local builds, epochs)
-- Impact: Version comparison bugs could block installations or suggest wrong upgrade path; hard to test all combinations
-- Migration plan: (1) Add comprehensive property-based tests for version ordering; (2) Test all edge cases from real released versions; (3) Consider simplifying to single version format if SemVer proves sufficient
+### `pygithub`
 
-### asyncssh Keepalive Defaults
-- Risk: Hardcoded keepalive_interval=15s, keepalive_count_max=3 in Connection; may be too aggressive for high-latency networks or too lenient for fast failures
-- Impact: Slow to detect dead connections on WAN; potential false timeouts on congested networks
-- Migration plan: (1) Make keepalive params configurable; (2) Add metrics for keepalive activity; (3) Test with realistic network conditions (VPN, Tailscale, high latency)
+- Risk: Core runtime dependency for a non-core concern; unauthenticated rate limit of 60 req/hr.
+- Impact: `InstallOnTargetJob` failures (#79).
+- Migration plan: #82 — remove the dependency from core.
+
+### `questionary`
+
+- Risk: Newly introduced; the legitimacy gate was cleared by explicit user approval plus live PyPI/GitHub verification. Interacts with the Rich `Live` display in a way only human UAT covers today.
+- Files: `src/pcswitcher/jobs/package_review.py:48`
+- Migration plan: None needed; add automated coverage of the Live interleave.
+
+### `requires-python = ">=3.14"`
+
+- Risk: Very recent floor narrows the pool of usable third-party wheels and CI images.
+- Impact: Contributor onboarding friction; already reconciled with `uv`.
 
 ## Missing Critical Features
 
-### No Rollback Capability
-- Problem: Pre- and post-sync snapshots are created but not exposed to user; no `pc-switcher rollback` command
-- Blocks: Phase 7 and full reliability story; users must manually `btrfs subvolume snapshot` or use external tools
-- Impact: If sync fails or causes issues, recovery is manual and error-prone
-
-### No Conflict Detection
-- Problem: No detection of concurrent machine use (both machines modified same files) or incompatible package versions
-- Blocks: Phases 2-6; phase 1 assumes single-user alternating workflow
-- Impact: Syncs could silently overwrite recent changes on target if user worked on target without syncing back first
-
-### No Partial Sync
-- Problem: All configured jobs run every sync; no way to skip categories (e.g., "just sync home, skip packages")
-- Blocks: User feedback expectation; some phases may allow incremental sync
-- Impact: Syncs slow; no fine-grained control
+- **Rollback command** (#31): pre/post btrfs snapshots exist at `/mnt/btrfs-snapshots/pc-switcher`, but there is no `pc-switcher rollback` to use them. Recovery is manual `btrfs` work.
+- **Non-interactive flags** (#48): every confirmation is interactive-only. Non-TTY runs fall back to "skip all, once" (D-26), so an unattended sync converges nothing that needed a decision.
+- **Job DAG / dependencies** (#28): job ordering is a hardcoded sequence in the orchestrator.
+- **Warning visibility during a run** (#181) and a real log viewer (#182).
+- **System configuration sync** (#119): Feature 7 is not started.
+- **SKIP_ALWAYS from the interactive UI**: `PackageSyncJob._record_permanent_skips`/`filter_inert` implement D-08, but the checkbox UI has no path to produce a `SKIP_ALWAYS` outcome for a regular (non-unreproducible) item. Exercised today only via `PACKAGE_REVIEW_AUTOMATION_ENV`. Files: `src/pcswitcher/jobs/package_review.py`, `src/pcswitcher/jobs/package_sync_core.py`.
 
 ## Test Coverage Gaps
 
-### Config Sync Error Paths
-- What's not tested: Scenarios where SFTP fails mid-transfer, target home directory query fails, config file is unreadable on source
-- Files: `src/pcswitcher/config_sync.py:291-316` (copy_config_to_target)
-- Risk: Silent failures or misleading error messages if copy fails
-- Priority: High
+### No coverage measurement at all
 
-### Lock Acquisition Failures
-- What's not tested: What happens when flock fails due to permission error, network timeout, or unexpected signal
-- Files: `src/pcswitcher/lock.py:145-156` (start_persistent_remote_lock)
-- Risk: Confusing "already in sync" error hides the real problem
-- Priority: High
+- What's not tested: Unknown — `pytest-cov` is absent from `[dependency-groups] dev` and no coverage threshold is configured.
+- Files: `pyproject.toml`
+- Risk: Coverage claims are unverifiable; regressions in untouched branches go unnoticed.
+- Priority: High. Open issue #156 ("Audit modular test coverage").
 
-### Disk Space Preflight Edge Cases
-- What's not tested: Mount point doesn't exist, df returns unexpected format, threshold parsing with unusual units (MiB vs MB)
-- Files: `src/pcswitcher/jobs/disk_space_monitor.py`, `src/pcswitcher/disk.py`
-- Risk: Preflight passes unexpectedly or fails with unclear error
-- Priority: Medium
+### Real integration coverage questioned
 
-### Interrupt Handling During Critical Phases
-- What's not tested: SIGINT during snapshot creation, lock release, or SSH session teardown
-- Files: `src/pcswitcher/cli.py:280-332` (interrupt handler), `src/pcswitcher/orchestrator.py:282-298` (CancelledError handling)
-- Risk: Dangling locks or incomplete snapshots if interrupt lands at wrong time
-- Priority: Medium
+- What's not tested: Open issue #62 (P0, `status:working`) — "Are we missing real integration tests?" remains unresolved.
+- Priority: High.
 
-### Job Validation Failures
-- What's not tested: Job validation returning errors; does orchestrator halt early and cleanly or try to continue?
-- Files: `src/pcswitcher/orchestrator.py:237` (discover_and_validate_jobs)
-- Risk: Failed validation may not trigger cleanup or proper error reporting
-- Priority: Medium
+### Unrun VM verification for apt repo/key diffing
 
----
+- What's not tested: Plan 02-06's VM-level check — dry-run against a target missing one vendor repo, key and source shown as separate review entries, intended `apt-get update` reported.
+- Files: `.planning/phases/02-package-management-sync/02-06-PLAN.md`, `tests/integration/jobs/test_package_sync.py`
+- Risk: The repo/key convergence path — the most destructive part of `apt_sync` — has no proven end-to-end run.
+- Priority: High. Broken-windows ledger entry 2, still `open`; `open_count: 1` blocks `/gsd-ship`.
 
-*Concerns audit: 2026-06-29*
+### Interrupt / cleanup semantics
+
+- What's not tested: Real SIGINT handling in integration (#132); cleanup on both source and target when interrupted (#85, P1).
+- Files: `tests/integration/test_interrupt_integration.py`, `src/pcswitcher/jobs/dummy_fail.py`, `src/pcswitcher/jobs/dummy_success.py`
+- Risk: A mid-sync interrupt is the highest-consequence path (partial `--delete` mirror, held locks) and is proven only by proxy.
+- Priority: High.
+
+### Pending human UAT
+
+- What's not tested: The questionary/Live TUI rendering check and the documentation walkthrough are open `human_actions_pending` in `.planning/HANDOFF.json` (tasks 10-11).
+- Priority: Medium — blocks Phase 02 closure.
