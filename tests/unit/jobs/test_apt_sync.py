@@ -891,6 +891,34 @@ class TestRepoStateCapture:
         assert "bar.gpg" in diff.detail
 
     @pytest.mark.asyncio
+    async def test_changed_source_with_dangling_keyring_reference_is_downgraded_to_report_only(self) -> None:
+        """WR-03 regression: mirrors the missing-file case above — a changed source
+        file whose keyring reference is dangling on the source must also be
+        downgraded to REPORT_ONLY, not left as an ordinary CHANGE a user can tick and
+        have fail at converge time (`_require_keyrings_ready` refuses it anyway).
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d2-new", "bar.list"), ""),
+                "cat /etc/apt/sources.list.d/bar.list": CommandResult(0, _LEGACY_BAR, ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d2-old", "bar.list"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:source:bar.list")
+        assert diff.diff_class == DiffClass.VERSION_MISMATCH
+        assert diff.action == DiffAction.REPORT_ONLY
+        assert diff.detail is not None
+        assert "bar.gpg" in diff.detail
+
+    @pytest.mark.asyncio
     async def test_per_repo_and_global_trust_keys_are_distinct_item_ids(self) -> None:
         context, _source, _target = make_context(
             source_responses={

@@ -884,11 +884,15 @@ class AptSyncJob(PackageSyncJob):
             item = AptSourceItem(filename=filename, digest=source_digests[filename], fmt=fmt, keyring_refs=refs)
             dangling = _dangling_keyring_ref(refs, source_key_filenames)
             detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename])
+            # Mirrors the "missing" branch above (D-12): a dangling keyring reference
+            # makes this file converge-time-refused by `_require_keyrings_ready`
+            # regardless, so the review must present it as the same informational fact
+            # up front rather than as an ordinary change a user can tick and have fail.
             diffs.append(
                 ItemDiff(
                     item_class=ItemClass.APT_SOURCE,
                     diff_class=DiffClass.VERSION_MISMATCH,
-                    action=DiffAction.CHANGE,
+                    action=DiffAction.REPORT_ONLY if dangling is not None else DiffAction.CHANGE,
                     item_id=item.item_id,
                     label=item.label(),
                     detail=build_dangling_keyring_detail(filename, dangling) if dangling is not None else detail,
