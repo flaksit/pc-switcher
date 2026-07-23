@@ -91,7 +91,7 @@ The twelve steps are listed below. Every sync shows a fixed count of twelve — 
 7. **Pre-sync snapshots.** Create btrfs snapshots on both hosts. This is the rollback point; every mutating step below happens after it.
 8. **Install/upgrade pc-switcher on target.** Ensures the target has a compatible version to run its side of later jobs. After snapshots, so a bad install is recoverable.
 9. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs with identical settings.
-10. **Run sync jobs sequentially.** The actual data movement, one UI step per enabled job. By default `folder_sync` (rsync-over-SSH as root on both ends) runs first, then `vscode_state_sync` (a selective, SQLite-aware merge of each editor's `state.vscdb` that keeps the target's machine-bound `secret://` keys). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
+10. **Run sync jobs sequentially.** The actual data movement, one UI step per enabled job. If enabled, `apt_sync`, `snap_sync` and `flatpak_sync` run first — one batched review covers all enabled package jobs before any of them changes anything (see [Configuration Reference](docs/configuration.md#package-sync)) — then `folder_sync` (rsync-over-SSH as root on both ends), then `vscode_state_sync` (a selective, SQLite-aware merge of each editor's `state.vscdb` that keeps the target's machine-bound `secret://` keys). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
 11. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state.
 12. **Record sync history.** Write the sync-history record on both machines (source: `last_role=SOURCE`, target: `last_role=TARGET`), enabling step 4's out-of-order check next time. The write is skipped in `--dry-run`, but the step still runs. This is the last step — `Step 12/12`.
 
@@ -107,8 +107,13 @@ Top-level sections:
 - `sync_jobs` — which sync jobs are enabled
 - `disk_space_monitor` — free-space thresholds checked before and during a sync
 - `btrfs_snapshots` — subvolumes to snapshot and retention policy
+- `apt_sync` — installs apt packages missing on the target (the manually-installed set, plus repositories/keys/pins/config), after a batched review shared with `snap_sync`/`flatpak_sync`; opt-in, disabled by default
+- `snap_sync` — converges installed snaps to the source's exact revision and tracking channel, after the same batched review; opt-in, disabled by default
+- `flatpak_sync` — converges installed flatpak refs and remotes per user/system scope, after the same batched review; opt-in, disabled by default
 - `folder_sync` — folders to mirror via rsync, filtered by a per-folder filter file (native rsync `+`/`-` rules) plus optional per-directory `.pcswitcher-filter` files. Filter rules can exclude a subtree and re-include selected children (e.g. drop `~/.cache` but keep `~/.cache/uv`)
 - `vscode_state_sync` — SQLite-aware selective sync of each editor's `state.vscdb`, preserving the target's machine-bound `secret://` keys (no settings; enable/disable only)
+
+See the **[Package Sync](docs/configuration.md#package-sync)** section of the Configuration Reference for the full detail on all three package jobs: the batched cross-manager review, marking a package machine-specific, and install snippets for items no package manager can reproduce.
 
 See the **[Configuration Reference](docs/configuration.md)** for every option, defaults, the folder-sync filter-rule syntax, and a "coming from `.gitignore`" guide.
 

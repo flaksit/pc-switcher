@@ -210,9 +210,14 @@ Otherwise it matches gitignore (basenames, a trailing `/` for directories, `*`/`
 
 ### Always excluded
 
-Two groups are always excluded from the mirror and cannot be re-included by any filter rule:
+Several groups are excluded from the mirror and cannot be re-included by any filter rule. Two are unconditional; two more are conditional on a package job being enabled:
 - pc-switcher's own runtime state — `~/.local/share/pc-switcher/` (lock file, sync history, logs) — so a sync never disturbs the target's sync state or per-machine logs (ADR-017); its install itself (uv tool venv and `~/.local/bin` shim) mirrors like any other file, so it stays consistent with the interpreter it depends on.
+- pc-switcher's machine-specific package decision files — `~/.config/pc-switcher/*.decisions.yaml` (one file per package manager) — excluded unconditionally, regardless of which package jobs are enabled, so a machine-specific package list is never accidentally pushed to a peer (D-09; see [Package Sync](#package-sync) below).
 - If `vscode_state_sync` is enabled, the VS Code state DBs (`state.vscdb` and `state.vscdb.backup` for Code, Antigravity, Cursor, VSCodium, plus the install-shared `~/.vscode-shared/sharedStorage/`) — these are handed to `vscode_state_sync`, which merges them selectively so machine-bound account rows are never clobbered (ADR-018; see [`vscode_state_sync`](#vscode_state_sync) below).
+- If `snap_sync` is enabled, every `~/snap/<app>/<revision>` directory (never `common` or `current`) — `snap_sync` itself converges these via `snap install`/`snap refresh --revision`, so folder_sync stops mirroring the ones it manages (see [Package Sync](#package-sync) below).
+- If `flatpak_sync` is enabled, `~/.local/share/flatpak` (never `~/.var/app`, which stays folder_sync's territory) — `flatpak_sync` itself provisions this store (see [Package Sync](#package-sync) below).
+
+Enabling `snap_sync` or `flatpak_sync` supplies its exclusion automatically; any hand-written filter rule for those paths in a personal filter file can be deleted once the corresponding job is enabled.
 
 ## `vscode_state_sync`
 
@@ -233,3 +238,67 @@ The job has no settings: the editor list, DB layout, and the preserved-key patte
 Covered VS Code-based editors: Code, Antigravity, Cursor, VSCodium. Also covered is `~/.vscode-shared/sharedStorage/state.vscdb`, an install-shared state DB outside any editor's config directory (recent VS Code versions) holding cross-install state such as the workspace-trust list and recently-opened paths; it has the same schema and is merged the same way. For each covered DB, both the main `state.vscdb` and its `state.vscdb.backup` sidecar are handled identically — the exact set `folder_sync` excludes is the exact set this job merges, so no file is hidden from the mirror without being merged. A file absent on the source is skipped. On a first sync (the target has no such DB yet) the target simply receives the secret-stripped database, causing a one-time re-login. The job runs after `folder_sync`, as the invoking normal user (no `sudo`), and needs `sqlite3` on both machines.
 
 Scope: this covers **only the invoking user** — whoever runs `pc-switcher`. If a synced `/home` contains other users, their VS Code state DBs are excluded from the mirror (so their secrets are never clobbered) but are not merged, so their VS Code global state does not sync. Multi-user coverage would require running the merge as root and is not currently supported.
+
+## Package Sync
+
+Three jobs replicate *what is installed* — apt packages plus the repository state they depend on, snaps, and flatpaks:
+
+```yaml
+sync_jobs:
+  apt_sync: false        # Install apt packages missing on the target, after a batched review
+  snap_sync: false        # Converge installed snaps to the source's revision/channel, after a batched review
+  flatpak_sync: false     # Converge installed flatpak refs and remotes, after a batched review
+```
+
+All three ship **disabled** — enabling any of them lets pc-switcher change installed software on the target, so it is opt-in. Each has its own top-level config section (`apt_sync:`, `snap_sync:`, `flatpak_sync:`), currently empty — there are no tunable keys yet, only the enable flag above.
+
+All three run **before** `folder_sync`, so applications exist on the target before their data lands on top of them — decisive for flatpak, where `flatpak install` must create `~/.local/share/flatpak` before folder_sync would otherwise place `~/.var/app` content there.
+
+### What each job covers
+
+- **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), plus the repository state that governs where packages come from: sources under `/etc/apt/sources.list.d`, signing keys (`/etc/apt/keyrings`, legacy `/etc/apt/trusted.gpg.d`), pins (`/etc/apt/preferences.d`) and apt config (`/etc/apt/apt.conf.d`).
+- **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
+- **`flatpak_sync`** — installed flatpak refs and their remotes, per user/system installation scope.
+
+### The batched review
+
+Before anything is changed on any manager, pc-switcher shows **one review** covering every enabled package job at once — not one review per manager. If you enable all three, one screen answers for apt, snap and flatpak together. The review appears before any change and shows every difference, grouped by manager and by action.
+
+Installs and removals are always separate groups: a group proposing to remove software is never mixed into a group proposing to install it, and its title names the removal explicitly (e.g. "Remove packages"), never the word "apply". Removal entries start **unticked**, so a bulk tick can never silently delete something. Every item offers a three-way choice: apply it, skip it for this run only, or skip it always (making it machine-specific — see below).
+
+For apt specifically, the review shows more than the packages you named: apt may need to remove or change other packages to satisfy a request (a dependency resolution side effect), and those collateral changes are shown in the review as their own entries before you decide anything. If an approved item's real transaction would end up doing more than what was reviewed, pc-switcher refuses to run it and reports the refusal rather than executing a transaction nobody saw.
+
+### Machine-specific packages
+
+Some packages belong to one machine only — a hardware driver, a vendor tool tied to a peripheral. Marking a package **machine-specific** (choosing "skip always" in the review) is the way to tell pc-switcher: *don't touch that package on that machine*. This is deliberately not called an "exclusion" — the file records what belongs to this machine, not what to hide from it.
+
+Marking an item machine-specific writes an entry to that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one file per manager, e.g. `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`). This file is **never synced** — it stays local to the machine it describes, in both roles: the marked item is never pushed from this machine when it is the source, and never installed or removed on this machine when it is the target. An annotated example lives at [`src/pcswitcher/machine-packages.example.yaml`](../src/pcswitcher/machine-packages.example.yaml).
+
+To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again.
+
+### Install snippets
+
+Some installed things no package manager can reproduce — a bare `.deb` someone downloaded and installed by hand, or a manual install under `/usr/local` or `/opt`. pc-switcher detects these (apt packages with no repository candidate, and files under `/usr/local`/`/opt` that no package owns) and surfaces them in the review as items needing a resolution. For each one, the review offers three choices: add an install snippet, mark it machine-specific (see above), or skip for now.
+
+An install snippet is a shell command that reproduces the item — the tool never parses, interprets, or reasons about it. It is **stored and replayed verbatim**, and it must run **non-interactively**: no stdin is supplied during replay, so a command that prompts (e.g. a debconf question) hangs the sync rather than failing cleanly. A typical shape:
+
+```
+sudo DEBIAN_FRONTEND=noninteractive dpkg -i /path/to/package.deb || \
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -f
+```
+
+Unlike the decision files above, the snippet registry (`~/.config/pc-switcher/package-snippets.yaml`) **is synced** — it travels alongside `config.yaml` during config sync, with its own diff-and-confirm prompt when the two machines' registries differ. This is because how to install something is knowledge about the *package*, not about the machine: a snippet authored on one machine should be usable to reproduce the same item on any peer.
+
+Resolving an unreproducible item is mandatory, not optional: while any such item is left with neither a snippet nor a machine-specific mark, the package job reports the run as a **failure** at the end, every time, even if everything it did apply succeeded. This is deliberate — it is how the tool keeps asking rather than letting the gap quietly disappear.
+
+### Versions
+
+pc-switcher installs packages **by name** and lets versions float to whatever each machine's own repositories currently offer — it never pins the source's exact version. A version difference between source and target is detected and reported in the review, never silently forced. Deliberate version pinning does replicate, because `/etc/apt/preferences.d` pin files are synced as items like any other apt state.
+
+### Non-interactive runs
+
+A sync run without a TTY (e.g. from a script or CI) changes **nothing**: every item that needed a decision is treated as skipped for this run only, nothing is recorded permanently (no machine-specific marks, no snippets), and everything left unresolved is reported. Re-run interactively to actually apply or resolve anything.
+
+### Prerequisites: passwordless sudo
+
+Each enabled package job needs passwordless sudo for a handful of binaries — `apt_sync` on both source (to read `/etc/apt` state) and target (to install packages and write `/etc/apt` state); `snap_sync` and `flatpak_sync` on the target only, and only when the diff involves a system-scope item. `validate()` checks this before anything runs and, on failure, prints the exact `visudo` command and sudoers line to add. The binaries it names are a **lower bound** on what must be permitted, not an exact scope to lock the grant down to — a broader existing grant is fine.
