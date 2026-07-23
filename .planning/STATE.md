@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 02
 current_phase_name: Package Management Sync
 status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-07-23T06:27:31.227Z"
+stopped_at: Completed 02-05-PLAN.md
+last_updated: "2026-07-23T07:02:11.786Z"
 last_activity: 2026-07-23
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 31
-  completed_plans: 21
+  completed_plans: 22
 ---
 
 # Project State
@@ -30,13 +30,13 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 02 (Package Management Sync) — EXECUTING
 
-Plan: 4 of 13
+Plan: 5 of 13
 
 Status: Ready to execute
 
 Last activity: 2026-07-23 — Phase 02 execution started
 
-Progress: [███████░░░] 68%
+Progress: [███████░░░] 71%
 
 ## Performance Metrics
 
@@ -84,6 +84,7 @@ Progress: [███████░░░] 68%
 | Phase 02 P01 | 9min | 2 tasks | 4 files |
 | Phase 02 P02 | 20min | 3 tasks | 4 files |
 | Phase 02 P03 | 26min | 2 tasks | 10 files |
+| Phase 02 P05 | 25min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -106,6 +107,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: package_review.py's removal-direction check uses a private {remove,delete,disable} action set rather than a DiffAction enum, since that type doesn't exist yet (deferred to plan 02-05).
 - [Phase ?]: manager_name renamed to manager_id in PackageSyncJob: the plan's own grep acceptance criterion (name: ClassVar absent) collided with the plan's own prose-specified ClassVar name.
 - [Phase ?]: Discovered gap (recorded, not fixed): SessionStatus/CLI exit code reflect only whether an exception propagated, never job_results content — a sync with failed package items can exit 0 (WINDOWS.md #1).
+- [Phase ?]: AptSyncJob.plan() overrides base plan() (not a third generic hook) for plan-time apt-get -s collateral simulation — apt-only machinery snap_sync/flatpak_sync don't need
+- [Phase ?]: HELD_OR_PINNED takes precedence over version-mismatch/removal in the diff dispatch for any target item named by a hold/pin fact — the hold/pin fact is itself the more informative review entry
 
 ### Pending Todos
 
@@ -133,8 +136,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-23T06:27:31.218Z
+Last session: 2026-07-23T07:02:11.775Z
 
-Stopped at: Completed 02-03-PLAN.md
+Stopped at: Completed 02-05-PLAN.md
 
 Resume file: None

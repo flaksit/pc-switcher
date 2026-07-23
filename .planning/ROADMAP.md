@@ -96,7 +96,7 @@ Plans:
   2. Manually-installed .debs, custom PPAs, and install-script-sourced packages are reproduced on the target.
   3. Package conflicts and version mismatches between source and target are detected and reported before any destructive change; machine-specific packages are not forced onto the target.
 
-**Plans**: 3/13 plans executed
+**Plans**: 4/13 plans executed
 
 Plans:
 **Wave 1**
@@ -110,7 +110,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 02-05-PLAN.md — full diff-class taxonomy (removals, version mismatch, held/pinned, repo-unavailable) + `dpkg --compare-versions` + apt transaction simulation + the shared snap/flatpak/unreproducible item shapes
+- [x] 02-05-PLAN.md — full diff-class taxonomy (removals, version mismatch, held/pinned, repo-unavailable) + `dpkg --compare-versions` + apt transaction simulation + the shared snap/flatpak/unreproducible item shapes
 - [ ] 02-13-PLAN.md — VM integration proof of the tracer path (install + dry-run)
 
 **Wave 4** *(blocked on Wave 3)*
@@ -207,7 +207,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Folder Sync MVP (User Data Sync) | 18/18 | Complete    | 2026-07-03 |
-| 2. Package Management Sync | 3/13 | In Progress|  |
+| 2. Package Management Sync | 4/13 | In Progress|  |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
 | 5. VM State Sync | 0/TBD | Not started | - |
