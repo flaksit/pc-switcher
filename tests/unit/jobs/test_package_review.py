@@ -22,7 +22,8 @@ import pytest
 from rich.console import Console
 
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
+from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
+from pcswitcher.jobs.package_items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.package_review import (
     COLLATERAL_REVIEW_ACTION,
     PACKAGE_REVIEW_AUTOMATION_ENV,
@@ -34,8 +35,8 @@ from pcswitcher.jobs.package_review import (
     TerminalUIReviewer,
     review_items,
 )
-from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, SyncAbortedByUser, ValidationError
+from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan
+from pcswitcher.models import CommandResult, SyncAbortedByUser
 
 
 def _mock_isatty(interactive: bool) -> MagicMock:
@@ -422,11 +423,30 @@ class TestUnreproducibleGroupResolution:
         assert outcome.snippets == {}
         assert "u1" not in outcome.unresolved
 
-    async def test_skip_once_choice_leaves_the_item_unresolved(self) -> None:
+    async def test_explicit_skip_once_is_a_resolution_not_unresolved(self) -> None:
+        """D-21: an explicit "Skip for now" is a real decision, so the item is resolved
+        for this run and left OUT of `unresolved`."""
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         select_prompt = _fake_prompt(ask_return="skip_once")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        assert outcome.decisions["u1"] == Decision.SKIP_ONCE
+        assert "u1" not in outcome.unresolved
+
+    async def test_cancelled_select_leaves_the_item_unresolved(self) -> None:
+        """D-21: a cancelled select (`None`) decided nothing — distinct from an explicit
+        skip-once — so the item is genuinely unresolved."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        select_prompt = _fake_prompt(ask_return=None)
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
@@ -617,27 +637,15 @@ class TestCollateralGroupResolution:
 # D-21/D-27: mandatory registration terminates — an unresolved unreproducible item
 # fails the job after an interactive review; non-interactive and dry-run are exempt.
 #
-# `apply()`'s raise logic lives in `PackageSyncJob` (package_sync_core.py); tested here
-# per the plan's own file scope, using a minimal concrete subclass the same shape
-# `test_package_sync_core.py`'s `FakeSyncJob` uses.
+# `apply()`'s raise on a non-empty unresolved list is driven by the
+# `_unresolved_as_failures` hook, which `ManualInstallsSyncJob` implements (D-18); a
+# thin subclass fixes name/manager_id so these apply()-only tests use the real hook.
 # ---------------------------------------------------------------------------------
 
 
-class _FakeUnreproducibleJob(PackageSyncJob):
+class _FakeUnreproducibleJob(ManualInstallsSyncJob):
     name: ClassVar[str] = "fake_unrepro"
     manager_id: ClassVar[str] = "fake"
-
-    async def capture_source_items(self) -> list[AptPackageItem]:
-        return []
-
-    async def query_target_items(self) -> list[AptPackageItem]:
-        return []
-
-    async def validate(self) -> list[ValidationError]:
-        return []
-
-    async def converge(self, diff: ItemDiff) -> CommandResult:
-        return CommandResult(0, "", "")
 
 
 def _unresolved_job_context(*, dry_run: bool = False) -> JobContext:

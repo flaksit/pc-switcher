@@ -390,6 +390,22 @@ sync_jobs:
         # dummy_fail should be disabled
         assert config.sync_jobs.get("dummy_fail") is False
 
+    def test_manual_installs_sync_is_an_accepted_job_name(self, tmp_path: Path) -> None:
+        """The schema accepts `manual_installs_sync` as a valid sync_jobs key (D-15/D-18):
+        the fourth package job has its own independent enable flag."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            """
+sync_jobs:
+  manual_installs_sync: true
+  folder_sync: true
+"""
+        )
+
+        config = Configuration.from_yaml(config_file)
+
+        assert config.sync_jobs["manual_installs_sync"] is True
+
     def test_core_edge_unknown_job_in_config(self, tmp_path: Path) -> None:
         """Edge case: Unknown job name in sync_jobs is rejected.
 
@@ -752,21 +768,24 @@ class TestShippedDefaultConfig:
         order = list(config.sync_jobs)
         assert order.index("folder_sync") < order.index("vscode_state_sync")
 
-    def test_snap_and_flatpak_sync_ship_disabled(self) -> None:
-        """snap_sync and flatpak_sync are valid sync_jobs keys, shipped opted-out by default."""
+    def test_package_jobs_ship_disabled(self) -> None:
+        """snap_sync, flatpak_sync and manual_installs_sync are valid sync_jobs keys,
+        shipped opted-out by default."""
         config = Configuration.from_yaml(self._default_config_path())
         assert config.sync_jobs["snap_sync"] is False
         assert config.sync_jobs["flatpak_sync"] is False
+        assert config.sync_jobs["manual_installs_sync"] is False
 
     def test_package_jobs_precede_folder_sync(self) -> None:
-        """D-17: apt_sync, snap_sync and flatpak_sync all resolve before folder_sync in
-        sync_jobs insertion order — the order both _discover_and_validate_jobs and
-        _first_sync_scopes iterate directly, so apps land before folder_sync's data does.
+        """D-17: all four package jobs (apt_sync, snap_sync, flatpak_sync,
+        manual_installs_sync) resolve before folder_sync in sync_jobs insertion order —
+        the order both _discover_and_validate_jobs and _first_sync_scopes iterate
+        directly, so apps land before folder_sync's data does.
         """
         config = Configuration.from_yaml(self._default_config_path())
         order = list(config.sync_jobs)
         folder_sync_index = order.index("folder_sync")
-        for job_name in ("apt_sync", "snap_sync", "flatpak_sync"):
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
             assert order.index(job_name) < folder_sync_index
 
 

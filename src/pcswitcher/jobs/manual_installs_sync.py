@@ -36,6 +36,7 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Any, ClassVar, override
 
 from pcswitcher.jobs.package_items import (
@@ -47,12 +48,14 @@ from pcswitcher.jobs.package_items import (
 )
 from pcswitcher.jobs.package_review import (
     UNREPRODUCIBLE_REVIEW_ACTION,
+    Decision,
     ReviewEntry,
     ReviewGroup,
+    ReviewOutcome,
 )
-from pcswitcher.jobs.package_state import DecisionFile, SnippetRegistry, filter_inert
+from pcswitcher.jobs.package_state import DecisionEntry, DecisionFile, Snippet, SnippetRegistry, filter_inert
 from pcswitcher.jobs.package_sync_core import PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, FirstSyncScope, Host, ValidationError
+from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 
 __all__ = ["ManualInstallsSyncJob"]
 
@@ -71,10 +74,6 @@ _UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")
 # keeps ownership clean by NOT importing apt_sync, and this parser is small enough that
 # one duplicated line is cheaper than a shared-core coupling.
 _DPKG_S_OWNED_RE = re.compile(r"^[^:]+:\s+(?P<path>/\S.*)$")
-
-# Binaries this job runs to DETECT unreproducible items — none need sudo (all read
-# world-readable state), quoted here only so `validate()` can name what it depends on.
-_SOURCE_DETECT_COMMANDS = ("/usr/bin/apt-cache", "/usr/bin/dpkg")
 
 
 def _lines(output: str) -> list[str]:
@@ -292,6 +291,93 @@ class ManualInstallsSyncJob(PackageSyncJob):
         filter).
         """
         return await SnippetRegistry(self.target).replay(diff.item_id, self.target)
+
+    # -- Unreproducible finalize / unresolved hooks (moved off the base, D-18) -----------
+
+    @override
+    async def _finalize_unreproducible(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
+        """Persist this run's snippet authoring and unreproducible-item skip-always
+        decisions (D-20/D-21/D-23). Overrides the base no-op hook (D-18: only this job
+        produces unreproducible items).
+
+        Snippets are written to `self.source` — never `self.target` — because D-23's
+        "shared, synced config" travels source-to-target via `config_sync`, which already
+        ran earlier this same sync; a snippet authored during THIS run's review reaches
+        the target on its NEXT sync, not this one. Skip-always decisions are also recorded
+        on `self.source`: unreproducible items are always source-held (they describe what
+        is installed on the machine currently acting as source), so there is no
+        target-held case to route to `self.target`.
+
+        Never during dry-run (ADR-014) and never for a non-interactive outcome (D-26):
+        nothing is recorded permanently when nothing was actually decided by a human.
+        """
+        if self.context.dry_run or not outcome.was_interactive:
+            return
+
+        by_id = {diff.item_id: diff for diff in plan.diffs}
+
+        if outcome.snippets:
+            registry = SnippetRegistry(self.source)
+            authored_at = datetime.now(UTC).isoformat()
+            for item_id, body in outcome.snippets.items():
+                diff = by_id.get(item_id)
+                label = diff.label if diff is not None else item_id
+                await registry.add(
+                    Snippet(
+                        item_id=item_id,
+                        label=label,
+                        body=body,
+                        authored_at=authored_at,
+                        authored_on=self.context.source_hostname,
+                    )
+                )
+
+        recorded_at = datetime.now(UTC).isoformat()
+        for diff in plan.diffs:
+            if diff.item_class != ItemClass.UNREPRODUCIBLE:
+                continue
+            if outcome.decisions.get(diff.item_id) != Decision.SKIP_ALWAYS:
+                continue
+            await DecisionFile(self.manager_id, self.source).record(
+                DecisionEntry(
+                    item_id=diff.item_id,
+                    item_class=diff.item_class,
+                    label=diff.label,
+                    reason=None,
+                    recorded_at=recorded_at,
+                )
+            )
+
+    @override
+    def _unresolved_as_failures(self, plan: PackagePlan, outcome: ReviewOutcome) -> list[tuple[ItemDiff, str]]:
+        """D-21/D-27: after an INTERACTIVE, non-dry-run review, an unreproducible item
+        left with neither a snippet nor a recorded decision makes this job's result a
+        failure — the run is visibly not clean, and stays that way every run until the
+        item is resolved. Overrides the base no-op hook (D-18).
+
+        Two exemptions, both governed by a decision more specific than D-21 for their
+        case: a non-interactive run (D-26 — skip all, record nothing, report everything,
+        never fail on that basis alone, since the user was never offered a resolution) and
+        a dry-run (ADR-014 — a preview that fails would make `--dry-run` unusable as a
+        check). A deliberate skip-once is NOT in `outcome.unresolved` (D-21, decided in
+        `package_review._review_unreproducible_group`), so it never reaches this method.
+        Converge failures (`failures` in `apply()`) are NOT covered by either exemption;
+        they fail the job unconditionally.
+        """
+        if not outcome.unresolved or not outcome.was_interactive or self.context.dry_run:
+            return []
+
+        by_id = {diff.item_id: diff for diff in plan.diffs}
+        failures: list[tuple[ItemDiff, str]] = []
+        for item_id in outcome.unresolved:
+            diff = by_id[item_id]
+            message = (
+                f"{diff.label} has no install snippet and no recorded machine-specific decision (D-21); "
+                "author a snippet or choose 'skip always' on a future sync to resolve it"
+            )
+            self._log(Host.SOURCE, LogLevel.ERROR, message)
+            failures.append((diff, message))
+        return failures
 
     @override
     async def validate(self) -> list[ValidationError]:

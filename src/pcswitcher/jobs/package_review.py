@@ -238,14 +238,18 @@ async def _review_unreproducible_group(
 ) -> None:
     """Resolve one `UNREPRODUCIBLE_REVIEW_ACTION` group's entries, one at a time, with
     the three-way choice D-21 requires: add an install snippet, record as
-    machine-specific, or skip for now. Never a checkbox tick — a checkbox answers
-    "should this apply", but an unreproducible item's question is "how does this get
-    resolved", which is not a yes/no.
+    machine-specific (skip always), or skip for now. Never a checkbox tick — a checkbox
+    answers "should this apply", but an unreproducible item's question is "how does this
+    get resolved", which is not a yes/no.
 
-    An entry that ends up neither snippet-authored nor skip-always'd (skip-once, an
-    aborted/empty snippet capture, or a cancelled select) is appended to `unresolved` —
-    the caller (`PackageSyncJob.apply()`) reports every such item and fails the job
-    after an interactive review (D-21, D-27).
+    All three choices are VALID resolutions (D-21): a snippet, a skip-always, and an
+    explicit skip-once. Skip-once is a real decision — the user may be declining something
+    temporary — so a run where they made that choice is clean; it records `SKIP_ONCE` and
+    is NOT appended to `unresolved`. Only a genuinely undecided item is unresolved: a
+    cancelled select (`None`) or a snippet capture the user abandoned decided nothing, so
+    those record `SKIP_ONCE` AND append to `unresolved`. The caller
+    (`ManualInstallsSyncJob._unresolved_as_failures`) fails the job for every unresolved
+    item after an interactive review (D-21, D-27).
     """
     for entry in group.entries:
         console.print()
@@ -267,6 +271,12 @@ async def _review_unreproducible_group(
             decisions[entry.item_id] = Decision.SKIP_ALWAYS
             continue
 
+        if selected == "skip_once":
+            # An explicit "Skip for now" is a real decision (D-21): the item is resolved
+            # for this run and does NOT count as unresolved.
+            decisions[entry.item_id] = Decision.SKIP_ONCE
+            continue
+
         if selected == "add_snippet":
             console.print(Text(_SNIPPET_AUTHORING_NOTE, style="dim"))
             body_prompt = questionary.text(
@@ -279,8 +289,9 @@ async def _review_unreproducible_group(
                 snippets[entry.item_id] = body
                 continue
 
-        # selected is "skip_once", None (the select was cancelled), or the snippet
-        # capture came back empty/None — none of these permanently resolve the item.
+        # selected is None (the select was cancelled) or the snippet capture came back
+        # empty/None (the user abandoned it) — nothing was actually decided, so the item
+        # is genuinely unresolved (D-21), distinct from the explicit skip-once above.
         decisions[entry.item_id] = Decision.SKIP_ONCE
         unresolved.append(entry.item_id)
 

@@ -24,6 +24,7 @@ from pcswitcher.jobs.package_review import (
     ReviewGroup,
     ReviewOutcome,
 )
+from pcswitcher.jobs.package_sync_core import PackageItemFailures
 from pcswitcher.models import CommandResult, Host, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
@@ -379,6 +380,99 @@ class TestTracerEndToEnd:
         replay_calls = [c.args[0] for c in target.run_command.call_args_list if c.args[0].startswith("bash -c")]
         assert len(replay_calls) == 1
         assert "/tmp/brscan3.deb" in replay_calls[0]
+
+
+class TestSkipOnceResolution:
+    """D-21: skip-once is a valid resolution — a run whose only items were skipped-once
+    is clean; a genuinely undecided item still fails an interactive run."""
+
+    @pytest.mark.asyncio
+    async def test_run_whose_only_items_were_skipped_once_passes(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+        item_id = "unreproducible:apt-no-candidate:brscan3"
+        # Explicit skip-once: a resolution, NOT in unresolved (D-21).
+        job.accept_review(
+            plan,
+            ReviewOutcome(decisions={item_id: Decision.SKIP_ONCE}, was_interactive=True, unresolved=()),
+        )
+
+        await job.apply()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_genuinely_undecided_item_fails_the_run(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+        item_id = "unreproducible:apt-no-candidate:brscan3"
+        # Cancelled/abandoned in review: genuinely unresolved (D-21/D-27).
+        job.accept_review(
+            plan,
+            ReviewOutcome(decisions={item_id: Decision.SKIP_ONCE}, was_interactive=True, unresolved=(item_id,)),
+        )
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.apply()
+
+        assert {d.item_id for d, _stderr in exc_info.value.failures} == {item_id}
+
+
+class TestContinueOnFailure:
+    @pytest.mark.asyncio
+    async def test_failed_snippet_replay_is_a_per_item_failure_and_does_not_stop_the_job(self) -> None:
+        registry_yaml = (
+            "snippets:\n"
+            "  unreproducible:apt-no-candidate:brscan3:\n"
+            "    label: brscan3 (no apt candidate)\n"
+            "    body: sudo dpkg -i /tmp/brscan3.deb\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: laptop\n"
+            "  unreproducible:apt-no-candidate:cnpg:\n"
+            "    label: cnpg (no apt candidate)\n"
+            "    body: sudo dpkg -i /tmp/cnpg.deb\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: laptop\n"
+        )
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\ncnpg\n", ""),
+                "apt-cache policy": CommandResult(
+                    0, "brscan3:\n  Candidate: (none)\ncnpg:\n  Candidate: (none)\n", ""
+                ),
+            },
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
+                "bash -c 'sudo dpkg -i /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
+                "bash -c 'sudo dpkg -i /tmp/cnpg.deb'": CommandResult(1, "", "dpkg: error processing archive"),
+            },
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+        decisions = {
+            "unreproducible:apt-no-candidate:brscan3": Decision.APPLY,
+            "unreproducible:apt-no-candidate:cnpg": Decision.APPLY,
+        }
+        job.accept_review(plan, ReviewOutcome(decisions=decisions, was_interactive=True))
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.apply()
+
+        failed_ids = {diff.item_id for diff, _stderr in exc_info.value.failures}
+        assert failed_ids == {"unreproducible:apt-no-candidate:cnpg"}
 
 
 class TestValidate:

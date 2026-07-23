@@ -20,6 +20,7 @@ from rich.console import Console
 from pcswitcher.config import Configuration
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
+from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
 from pcswitcher.jobs.package_items import (
     AptPackageItem,
     DiffAction,
@@ -411,16 +412,26 @@ def _unreproducible_diff(item_id: str, action: DiffAction = DiffAction.REPORT_ON
     )
 
 
+class _FakeManualJob(ManualInstallsSyncJob):
+    """A `ManualInstallsSyncJob` with `manager_id="fake"` so the moved finalize hook's
+    decision-file assertions keep reading `fake.decisions` (D-18: finalize/unresolved
+    now live on this job, not the base)."""
+
+    name: ClassVar[str] = "fake_manual"
+    manager_id: ClassVar[str] = "fake"
+
+
 class TestFinalizeUnreproducible:
-    """D-20/D-21/D-23 (plan 02-07): `apply()` writes this run's snippet authoring and
-    unreproducible-item skip-always decisions, both to the SOURCE — never the target,
-    and never during a dry run or a non-interactive outcome.
+    """D-20/D-21/D-23: the `_finalize_unreproducible` hook (owned by
+    `ManualInstallsSyncJob`, D-18) writes this run's snippet authoring and
+    unreproducible-item skip-always decisions, both to the SOURCE — never the target, and
+    never during a dry run or a non-interactive outcome.
     """
 
     @pytest.mark.asyncio
     async def test_authored_snippet_is_written_to_the_source_registry_not_target(self) -> None:
         context = make_context()
-        job = FakeSyncJob(context)
+        job = _FakeManualJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
         plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
         job.accept_review(
@@ -438,7 +449,7 @@ class TestFinalizeUnreproducible:
     @pytest.mark.asyncio
     async def test_skip_always_on_unreproducible_item_records_on_source(self) -> None:
         context = make_context()
-        job = FakeSyncJob(context)
+        job = _FakeManualJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
         plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
         job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
@@ -453,7 +464,7 @@ class TestFinalizeUnreproducible:
     @pytest.mark.asyncio
     async def test_no_finalize_writes_during_dry_run(self) -> None:
         context = make_context(dry_run=True)
-        job = FakeSyncJob(context)
+        job = _FakeManualJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
         plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
         job.accept_review(
@@ -473,7 +484,7 @@ class TestFinalizeUnreproducible:
     @pytest.mark.asyncio
     async def test_no_finalize_writes_when_outcome_not_interactive(self) -> None:
         context = make_context()
-        job = FakeSyncJob(context)
+        job = _FakeManualJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
         plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
         job.accept_review(
@@ -489,6 +500,43 @@ class TestFinalizeUnreproducible:
 
         for cmd in [c.args[0] for c in context.source.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
             assert "mv -f" not in cmd
+
+
+class TestBaseHooksAreNoOps:
+    """D-18: a manager with no unreproducible items (the base `FakeSyncJob`, standing in
+    for apt/snap/flatpak) inherits no-op finalize/unresolved hooks — an unresolved list or
+    authored snippet on such a job's outcome is ignored, never raising and never writing.
+    """
+
+    @pytest.mark.asyncio
+    async def test_base_unresolved_hook_is_no_op_and_does_not_raise(self) -> None:
+        job = FakeSyncJob(make_context())
+        diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(plan, ReviewOutcome(decisions={}, was_interactive=True, unresolved=(diff.item_id,)))
+
+        await job.apply()  # base _unresolved_as_failures is a no-op -> no PackageItemFailures
+
+    @pytest.mark.asyncio
+    async def test_base_finalize_hook_writes_nothing(self) -> None:
+        context = make_context()
+        job = FakeSyncJob(context)
+        diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={diff.item_id: Decision.SKIP_ALWAYS},
+                was_interactive=True,
+                snippets={diff.item_id: "echo x"},
+            ),
+        )
+
+        await job.apply()
+
+        for cmd in [c.args[0] for c in context.source.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
+            assert "package-snippets" not in cmd
+            assert "fake.decisions" not in cmd
 
 
 class _OrderRecordingJob(FakeSyncJob):
