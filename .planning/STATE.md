@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 02
 current_phase_name: Package Management Sync
 status: executing
-stopped_at: Completed 02-10-PLAN.md
-last_updated: "2026-07-23T12:01:41.362Z"
+stopped_at: Completed 02-11-PLAN.md
+last_updated: "2026-07-23T12:34:04.793Z"
 last_activity: 2026-07-23
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 31
-  completed_plans: 29
+  completed_plans: 30
 ---
 
 # Project State
@@ -30,13 +30,13 @@ See: .planning/PROJECT.md (updated 2026-06-30)
 
 Phase: 02 (Package Management Sync) — EXECUTING
 
-Plan: 12 of 13
+Plan: 13 of 13
 
 Status: Ready to execute
 
 Last activity: 2026-07-23 — Phase 02 execution started
 
-Progress: [█████████░] 94%
+Progress: [██████████] 97%
 
 ## Performance Metrics
 
@@ -92,6 +92,7 @@ Progress: [█████████░] 94%
 | Phase 02 P09 | 27min | 1 tasks | 2 files |
 | Phase 02 P07 | 90min | 2 tasks | 12 files |
 | Phase 02 P10 | 13min | 2 tasks | 7 files |
+| Phase 02 P11 | 32min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -130,6 +131,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Relevant to current work
 - [Phase ?]: Plan 02-07: apt-no-candidate detection implemented as new _scan_no_candidate_apt_packages, not reusing the existing collect_unavailable_item_ids hook (different contract: target-side REPO_UNAVAILABLE vs source-side D-18 apt-no-candidate).
 - [Phase ?]: [Phase 2] Plan 02-10: snap_sync/flatpak_sync exclusion gating lives at the folder_sync._build_rsync_cmd call site (one _package_job_enabled helper), not inside the filter-builder methods — keeps the VS-Code-vs-package-job asymmetry visible at one point instead of duplicated in two method bodies
 - [Phase ?]: [Phase 2] Plan 02-10: home.filter's flatpak/snap retirement was verified by reading the shipped file directly (it carried no such rule already) rather than assumed from the CONTEXT canonical-refs note — only the explanatory comment was added
+- [Phase ?]: Plan 02-11: AptSyncJob.plan()'s stable sort always ranks APT_PACKAGE diffs ahead of UNREPRODUCIBLE ones, so the continue-on-failure D-27 proof uses three UNREPRODUCIBLE (unowned-install snippet) items instead of a mix with AptPackageItem, relying on scan_unowned_installs's alphabetical sort for ordering
+- [Phase ?]: Plan 02-11: PACKAGE_REVIEW_AUTOMATION_ENV accepts SKIP_ALWAYS on a regular (non-unreproducible) item even though the interactive checkbox UI has no path to it yet -- used to prove PackageSyncJob._record_permanent_skips/filter_inert's D-08 mechanism independent of that UI gap
+- [Phase ?]: Plan 02-11: 02-VALIDATION.md's nyquist_compliant left false -- the two VM-integration rows have a correct, existing automated command not yet run against real VMs in this environment (pending CI, not pending existence)
 
 ### Pending Todos
 
@@ -157,8 +161,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-23T12:01:41.352Z
+Last session: 2026-07-23T12:34:04.783Z
 
-Stopped at: Completed 02-10-PLAN.md
+Stopped at: Completed 02-11-PLAN.md
 
 Resume file: None
