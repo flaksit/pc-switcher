@@ -31,7 +31,17 @@ from typing import ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
+from pcswitcher.jobs.package_items import (
+    AptPackageItem,
+    DiffAction,
+    DiffClass,
+    HoldPinFact,
+    ItemClass,
+    ItemDiff,
+    build_held_or_pinned_detail,
+    build_repo_unavailable_detail,
+    build_version_mismatch_detail,
+)
 from pcswitcher.jobs.package_review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome
 from pcswitcher.models import CommandResult, Host, LogLevel, ProgressUpdate
 
@@ -84,15 +94,35 @@ class PackagePlan:
     groups: tuple[ReviewGroup, ...]
 
 
-# Verb + review-group title per action, in the fixed order groups are emitted. Install
-# before change before remove keeps the most common/least-destructive action first;
-# report_only trails since it needs a decision but implies no direct converge verb.
-_ACTION_VERBS: dict[DiffAction, str] = {
-    DiffAction.INSTALL: "install",
-    DiffAction.CHANGE: "change",
-    DiffAction.REMOVE: "remove",
-    DiffAction.REPORT_ONLY: "report",
+# The concrete converge verb for one (item_class, action) pair (D-07, D-24): "apply" is
+# never shown to the user, because it is the destructive branch as often as the
+# additive one. An apt package REMOVE reads as "remove"; a future apt source REMOVE
+# reads as "delete repository"; a future snap channel CHANGE reads as "retrack". Data,
+# not per-job string formatting, is what makes "the review names the concrete action"
+# checkable rather than left to each job's own wording. Entries beyond APT_PACKAGE are
+# illustrative for item classes this plan defines but does not yet diff (SNAP_CHANNEL,
+# APT_SOURCE) — `_build_review_groups` falls back to the bare `DiffAction` value for any
+# (item_class, action) pair not listed here, so a missing vocabulary entry degrades to a
+# plain verb instead of silently dropping the group (the backstop this plan requires:
+# every diff class the engine produces gets SOME review presentation).
+_ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
+    (ItemClass.APT_PACKAGE, DiffAction.INSTALL): "install",
+    (ItemClass.APT_PACKAGE, DiffAction.CHANGE): "change",
+    (ItemClass.APT_PACKAGE, DiffAction.REMOVE): "remove",
+    (ItemClass.APT_PACKAGE, DiffAction.REPORT_ONLY): "report",
+    (ItemClass.APT_SOURCE, DiffAction.REMOVE): "delete repository",
+    (ItemClass.SNAP_CHANNEL, DiffAction.CHANGE): "retrack",
 }
+
+# Fixed emission order for review groups: install before change before remove keeps
+# the most common/least-destructive action first; report_only trails since it needs a
+# decision but implies no direct converge verb.
+_ACTION_ORDER: tuple[DiffAction, ...] = (
+    DiffAction.INSTALL,
+    DiffAction.CHANGE,
+    DiffAction.REMOVE,
+    DiffAction.REPORT_ONLY,
+)
 
 
 class PackageSyncJob(SyncJob):
@@ -131,55 +161,164 @@ class PackageSyncJob(SyncJob):
         May raise `ConvergeItemFailed` to refuse the item without even attempting the
         mutating command (e.g. a transaction-safety guard); otherwise returns the
         `CommandResult` of the converge command, whose `.success` decides pass/fail.
+        Called for every APPLY-decided diff whose action is `INSTALL`, `REMOVE` or
+        `CHANGE` — `REPORT_ONLY` diffs never reach this hook (see `apply()`).
         """
         ...
+
+    async def collect_hold_pin_facts(self) -> Sequence[HoldPinFact]:
+        """Hold/pin facts (D-25, RESEARCH Pitfall 2) this manager's diff should treat
+        as `HELD_OR_PINNED` rather than proposing a normal install/remove/change.
+
+        Default: none. Only apt has a hold-vs-pin concept (`apt-mark showhold` and
+        `preferences.d` are two distinct mechanisms); `snap_sync`/`flatpak_sync` need
+        not override this.
+        """
+        return ()
+
+    async def collect_unavailable_item_ids(self, missing_item_ids: frozenset[str]) -> frozenset[str]:
+        """Of `missing_item_ids` (items missing on the target), which have no
+        installable candidate — `REPO_UNAVAILABLE` rather than `MISSING_ON_TARGET`.
+
+        Default: none. Only managers whose ecosystem can report "no candidate" (apt
+        via `apt-cache policy`) need override this.
+        """
+        return frozenset()
 
     # -- Shared diff -----------------------------------------------------------------
 
     def diff_items(
-        self, source_items: Sequence[AptPackageItem], target_items: Sequence[AptPackageItem]
+        self,
+        source_items: Sequence[AptPackageItem],
+        target_items: Sequence[AptPackageItem],
+        *,
+        hold_pin_facts: Sequence[HoldPinFact] = (),
+        unavailable_item_ids: frozenset[str] = frozenset(),
     ) -> tuple[ItemDiff, ...]:
-        """Diff source against target into `ItemDiff`s.
+        """Diff source against target into every D-25 `ItemDiff` class.
 
-        This slice produces only `MISSING_ON_TARGET`/`INSTALL` (a name present on the
-        source but absent from the target). It is structured as a per-item-class
-        dispatch (`_diff_apt_packages` today) so a later plan adds new item classes and
-        diff directions (extra-on-target, version-mismatch, ...) by adding more private
-        helpers here rather than reshaping this method.
+        Structured as a per-item-class dispatch (`_diff_apt_packages` today) so a
+        later plan adds new item classes by adding more private helpers here rather
+        than reshaping this method. `hold_pin_facts` and `unavailable_item_ids` come
+        from the two hooks above (`collect_hold_pin_facts`/`collect_unavailable_item_ids`)
+        so this method stays manager-agnostic — it never shells out itself.
         """
         diffs: list[ItemDiff] = []
-        diffs.extend(self._diff_apt_packages(source_items, target_items))
+        diffs.extend(self._diff_apt_packages(source_items, target_items, hold_pin_facts, unavailable_item_ids))
         return tuple(diffs)
 
     @staticmethod
     def _diff_apt_packages(
-        source_items: Sequence[AptPackageItem], target_items: Sequence[AptPackageItem]
+        source_items: Sequence[AptPackageItem],
+        target_items: Sequence[AptPackageItem],
+        hold_pin_facts: Sequence[HoldPinFact],
+        unavailable_item_ids: frozenset[str],
     ) -> list[ItemDiff]:
-        target_ids = {item.item_id for item in target_items}
-        return [
-            ItemDiff(
-                item_class=ItemClass.APT_PACKAGE,
-                diff_class=DiffClass.MISSING_ON_TARGET,
-                action=DiffAction.INSTALL,
-                item_id=item.item_id,
-                label=item.label(),
-                detail=None,
-            )
-            for item in source_items
-            if item.item_id not in target_ids
-        ]
+        """One diff per item id present on either side, source-then-target order.
+
+        Precedence per item id: `HELD_OR_PINNED` (present on the target and named by
+        a hold/pin fact) beats every other outcome — a hold/pin is itself the
+        review-worthy fact, more informative than the install/remove/change it would
+        otherwise imply. Otherwise: missing-on-target -> `REPO_UNAVAILABLE` if apt
+        reports no candidate, else `MISSING_ON_TARGET`/`INSTALL`; extra-on-target ->
+        `EXTRA_ON_TARGET`/`REMOVE`; present on both with differing versions ->
+        `VERSION_MISMATCH`/`REPORT_ONLY` (D-04: reported, never force-downgraded);
+        present on both with equal versions -> no diff at all.
+        """
+        source_by_id = {item.item_id: item for item in source_items}
+        target_by_id = {item.item_id: item for item in target_items}
+
+        held_or_pinned: dict[str, HoldPinFact] = {}
+        for fact in hold_pin_facts:
+            held_or_pinned.setdefault(fact.package, fact)
+
+        seen: dict[str, None] = {}
+        for item in (*source_items, *target_items):
+            seen.setdefault(item.item_id, None)
+
+        diffs: list[ItemDiff] = []
+        for item_id in seen:
+            source_item = source_by_id.get(item_id)
+            target_item = target_by_id.get(item_id)
+
+            if target_item is not None and target_item.name in held_or_pinned:
+                diffs.append(
+                    ItemDiff(
+                        item_class=ItemClass.APT_PACKAGE,
+                        diff_class=DiffClass.HELD_OR_PINNED,
+                        action=DiffAction.REPORT_ONLY,
+                        item_id=item_id,
+                        label=target_item.label(),
+                        detail=build_held_or_pinned_detail(held_or_pinned[target_item.name]),
+                    )
+                )
+            elif source_item is not None and target_item is None:
+                if item_id in unavailable_item_ids:
+                    diffs.append(
+                        ItemDiff(
+                            item_class=ItemClass.APT_PACKAGE,
+                            diff_class=DiffClass.REPO_UNAVAILABLE,
+                            action=DiffAction.REPORT_ONLY,
+                            item_id=item_id,
+                            label=source_item.label(),
+                            detail=build_repo_unavailable_detail(source_item.name),
+                        )
+                    )
+                else:
+                    diffs.append(
+                        ItemDiff(
+                            item_class=ItemClass.APT_PACKAGE,
+                            diff_class=DiffClass.MISSING_ON_TARGET,
+                            action=DiffAction.INSTALL,
+                            item_id=item_id,
+                            label=source_item.label(),
+                            detail=None,
+                        )
+                    )
+            elif target_item is not None and source_item is None:
+                diffs.append(
+                    ItemDiff(
+                        item_class=ItemClass.APT_PACKAGE,
+                        diff_class=DiffClass.EXTRA_ON_TARGET,
+                        action=DiffAction.REMOVE,
+                        item_id=item_id,
+                        label=target_item.label(),
+                        detail=None,
+                    )
+                )
+            elif source_item is not None and target_item is not None and source_item.version != target_item.version:
+                diffs.append(
+                    ItemDiff(
+                        item_class=ItemClass.APT_PACKAGE,
+                        diff_class=DiffClass.VERSION_MISMATCH,
+                        action=DiffAction.REPORT_ONLY,
+                        item_id=item_id,
+                        label=target_item.label(),
+                        detail=build_version_mismatch_detail(source_item.version, target_item.version),
+                    )
+                )
+            # else: present on both, equal versions, not held/pinned -> no diff.
+
+        return diffs
 
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
-        """One `ReviewGroup` per action present in `diffs`, removals in their own group."""
+        """One `ReviewGroup` per action present in `diffs`, keyed by `(manager, action)`
+        (D-24) so removals never share a group with installs. The title's verb comes
+        from `_ACTION_VOCABULARY`, keyed by the group's item class — today every diff
+        this job produces shares one item class per action, so the first entry's
+        `item_class` is unambiguous; a manager mixing item classes under one action
+        would need this revisited.
+        """
         by_action: dict[DiffAction, list[ItemDiff]] = {}
         for diff in diffs:
             by_action.setdefault(diff.action, []).append(diff)
 
         groups: list[ReviewGroup] = []
-        for action, verb in _ACTION_VERBS.items():
+        for action in _ACTION_ORDER:
             entries = by_action.get(action)
             if not entries:
                 continue
+            verb = _ACTION_VOCABULARY.get((entries[0].item_class, action), action.value)
             groups.append(
                 ReviewGroup(
                     manager=self.manager_id,
@@ -203,7 +342,17 @@ class PackageSyncJob(SyncJob):
         """
         source_items = await self.capture_source_items()
         target_items = await self.query_target_items()
-        diffs = self.diff_items(source_items, target_items)
+        hold_pin_facts = await self.collect_hold_pin_facts()
+        missing_item_ids = frozenset(item.item_id for item in source_items) - frozenset(
+            item.item_id for item in target_items
+        )
+        unavailable_item_ids = await self.collect_unavailable_item_ids(missing_item_ids)
+        diffs = self.diff_items(
+            source_items,
+            target_items,
+            hold_pin_facts=hold_pin_facts,
+            unavailable_item_ids=unavailable_item_ids,
+        )
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
 
@@ -232,13 +381,22 @@ class PackageSyncJob(SyncJob):
 
         Dry-run (ADR-014): each intended action is logged at FULL with a `[dry-run] `
         prefix and no converge command is ever issued.
+
+        `REPORT_ONLY` diffs are excluded here regardless of decision: they imply no
+        converge verb (D-25's held/pinned, version-mismatch, repo-unavailable,
+        unreproducible classes are informational), so `converge()` is never called
+        for one even if something recorded `APPLY` against it.
         """
         assert self._accepted_plan is not None
         assert self._accepted_outcome is not None
         plan = self._accepted_plan
         decisions = self._accepted_outcome.decisions
 
-        apply_diffs = [diff for diff in plan.diffs if decisions.get(diff.item_id) == Decision.APPLY]
+        apply_diffs = [
+            diff
+            for diff in plan.diffs
+            if decisions.get(diff.item_id) == Decision.APPLY and diff.action != DiffAction.REPORT_ONLY
+        ]
         prefix = "[dry-run] " if self.context.dry_run else ""
         total = len(apply_diffs)
 
