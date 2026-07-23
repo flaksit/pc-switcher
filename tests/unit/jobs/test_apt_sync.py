@@ -17,7 +17,7 @@ import pytest
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.apt_sync import AptSyncJob
-from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass
+from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass
 from pcswitcher.jobs.package_review import Decision, ReviewOutcome
 from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan
 from pcswitcher.models import CommandResult
@@ -25,6 +25,16 @@ from pcswitcher.orchestrator import Orchestrator
 
 SHOWMANUAL_3 = "pkg-a\npkg-b\npkg-c\n"
 DPKG_QUERY_3 = "pkg-a\t1.0\npkg-b\t2.0\npkg-c\t3.0\n"
+
+# Empty-package, empty-repo-state baseline for both machines: every `find /etc/apt/*`
+# listing and `apt-mark showmanual` returns nothing unless a test overrides one entry,
+# so a repo-state test only has to specify the directories it actually cares about.
+_NO_PACKAGES = {"apt-mark showmanual": CommandResult(0, "", "")}
+
+
+def sha256_line(digest: str, filename: str) -> str:
+    """One `sha256sum`-shaped line: `<digest>  <filename>\\n`."""
+    return f"{digest}  {filename}\n"
 
 
 def respond_to(
@@ -52,6 +62,7 @@ def make_context(
     source.run_command = AsyncMock(side_effect=respond_to(source_responses or {}))
     target = MagicMock()
     target.run_command = AsyncMock(side_effect=respond_to(target_responses or {}))
+    target.send_file = AsyncMock(return_value=None)
     context = JobContext(
         config={},
         source=source,
@@ -172,8 +183,14 @@ class TestPlanApplySplit:
         for cmd in all_calls(target):
             # `apt-get -s` (simulate) IS expected during plan() — plan 02-05's
             # plan-time collateral simulation is read-only by design (D-24/T-02-32).
+            # `sudo find ... sha256sum` IS also expected — plan 02-06's repo-state
+            # capture reads `/etc/apt/*` via sudo to guarantee access regardless of
+            # file permissions; it is a read, never a write (D-11/D-12/D-13).
             assert "apt-get install" not in cmd
-            assert "sudo" not in cmd
+            assert "sudo install" not in cmd
+            assert "sudo rm" not in cmd
+            assert "sudo apt-get" not in cmd
+            assert "sudo cp" not in cmd
 
     @pytest.mark.asyncio
     async def test_execute_without_accepted_plan_raises_naming_coordinator(self) -> None:
@@ -716,3 +733,562 @@ class TestJobDiscovery:
         job_class = orchestrator._resolve_sync_job_class("apt_sync")  # pyright: ignore[reportPrivateUsage]
 
         assert job_class is AptSyncJob
+
+
+# -- Task 1: repository/key/pin/config capture and diff (plan 02-06) -------------------
+
+_DEB822_FOO = (
+    "Types: deb\nURIs: https://example.com\nSuites: stable\nComponents: main\nSigned-By: /etc/apt/keyrings/foo.gpg\n"
+)
+_LEGACY_BAR = "deb [signed-by=/etc/apt/keyrings/bar.gpg] https://example.com stable main\n"
+
+
+class TestRepoStateCapture:
+    """AptSyncJob.plan() extended with source/key/pin/config diffs (D-11/D-12/D-13)."""
+
+    @pytest.mark.asyncio
+    async def test_deb822_and_legacy_source_each_record_own_format(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(
+                    0, sha256_line("d1", "foo.sources") + sha256_line("d2", "bar.list"), ""
+                ),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "cat /etc/apt/sources.list.d/bar.list": CommandResult(0, _LEGACY_BAR, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={**_NO_PACKAGES},
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        by_id = {d.item_id: d for d in plan.diffs}
+        foo_diff = by_id["apt:source:foo.sources"]
+        bar_diff = by_id["apt:source:bar.list"]
+        assert "deb822" in foo_diff.label
+        assert "list" in bar_diff.label
+        assert foo_diff.item_class == ItemClass.APT_SOURCE
+        assert bar_diff.item_class == ItemClass.APT_SOURCE
+
+    @pytest.mark.asyncio
+    async def test_source_with_key_present_on_source_yields_plain_install(self) -> None:
+        """The keyring `foo.sources` references (`foo.gpg`) exists among the source's
+        OWN captured keys — a real link, not a dangling one — so the source is
+        proposed for install like any other missing item.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={**_NO_PACKAGES},
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:source:foo.sources")
+        assert diff.diff_class == DiffClass.MISSING_ON_TARGET
+        assert diff.action == DiffAction.INSTALL
+        assert diff.detail is None
+
+    @pytest.mark.asyncio
+    async def test_source_with_dangling_keyring_reference_is_flagged_not_installable(self) -> None:
+        """`bar.list` names `bar.gpg`, which nothing captured on the source: the diff
+        carries the dangling-reference detail and is downgraded to REPORT_ONLY —
+        not proposed for install on its own (D-12).
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d2", "bar.list"), ""),
+                "cat /etc/apt/sources.list.d/bar.list": CommandResult(0, _LEGACY_BAR, ""),
+            },
+            target_responses={**_NO_PACKAGES},
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:source:bar.list")
+        assert diff.action == DiffAction.REPORT_ONLY
+        assert diff.detail is not None
+        assert "bar.gpg" in diff.detail
+
+    @pytest.mark.asyncio
+    async def test_per_repo_and_global_trust_keys_are_distinct_item_ids(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "shared.gpg"), ""),
+                "find /etc/apt/trusted.gpg.d": CommandResult(0, sha256_line("k1", "shared.gpg"), ""),
+            },
+            target_responses={**_NO_PACKAGES},
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        item_ids = {d.item_id for d in plan.diffs}
+        assert "apt:key:per-repo:shared.gpg" in item_ids
+        assert "apt:key:global-trust:shared.gpg" in item_ids
+
+    @pytest.mark.asyncio
+    async def test_key_matching_digest_on_both_sides_produces_no_diff(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "x.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "x.gpg"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_id.startswith("apt:key:") for d in plan.diffs)
+
+    @pytest.mark.asyncio
+    async def test_pin_and_config_diff_missing_extra_and_changed(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "curl-pin"), ""),
+                "cat /etc/apt/preferences.d/curl-pin": CommandResult(
+                    0, "Package: curl libcurl4\nPin: origin example.com\nPin-Priority: 900\n", ""
+                ),
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99update"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/preferences.d": CommandResult(
+                    0, sha256_line("p2", "curl-pin") + sha256_line("p3", "extra-pin"), ""
+                ),
+                "cat /etc/apt/preferences.d/extra-pin": CommandResult(0, "Package: extra\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        by_id = {d.item_id: d for d in plan.diffs}
+        assert by_id["apt:pin:curl-pin"].diff_class == DiffClass.VERSION_MISMATCH
+        assert by_id["apt:pin:curl-pin"].action == DiffAction.CHANGE
+        assert "p1" in (by_id["apt:pin:curl-pin"].detail or "")
+        assert "p2" in (by_id["apt:pin:curl-pin"].detail or "")
+        assert by_id["apt:pin:extra-pin"].diff_class == DiffClass.EXTRA_ON_TARGET
+        assert by_id["apt:pin:extra-pin"].action == DiffAction.REMOVE
+        assert by_id["apt:config:99update"].diff_class == DiffClass.MISSING_ON_TARGET
+        assert by_id["apt:config:99update"].action == DiffAction.INSTALL
+
+
+# -- Task 2: ordered, transactional repository-group convergence -----------------------
+
+
+def _index_of(commands: list[str], predicate: Callable[[str], bool]) -> int:
+    return next(i for i, cmd in enumerate(commands) if predicate(cmd))
+
+
+def respond_with_update_sequence(
+    mapping: dict[str, CommandResult],
+    update_results: list[CommandResult],
+    default: CommandResult | None = None,
+) -> Callable[..., CommandResult]:
+    """Like `respond_to`, but `sudo apt-get update` returns successive results from
+    `update_results` (last one repeats) — needed to test the rollback-then-reprobe
+    sequence, where the same command must fail once and then succeed.
+    """
+    fallback = default if default is not None else CommandResult(exit_code=0, stdout="", stderr="")
+    state = {"update_calls": 0}
+
+    def _side_effect(cmd: str, **_: object) -> CommandResult:
+        if "sudo apt-get update" in cmd:
+            index = min(state["update_calls"], len(update_results) - 1)
+            state["update_calls"] += 1
+            return update_results[index]
+        for pattern, result in mapping.items():
+            if pattern in cmd:
+                return result
+        return fallback
+
+    return _side_effect
+
+
+def _repo_context(
+    *,
+    source_responses: dict[str, CommandResult] | None = None,
+    target_responses: dict[str, CommandResult] | None = None,
+    target_side_effect: Callable[..., CommandResult] | None = None,
+    dry_run: bool = False,
+) -> tuple[JobContext, MagicMock, MagicMock]:
+    """`make_context`, plus a resolved target `$HOME` (`/home/target-user`) — every
+    repository-group write needs it for the staging path.
+    """
+    source = MagicMock()
+    source.run_command = AsyncMock(side_effect=respond_to(source_responses or {}))
+    target = MagicMock()
+    if target_side_effect is not None:
+        target.run_command = AsyncMock(side_effect=target_side_effect)
+    else:
+        merged = {"echo $HOME": CommandResult(0, "/home/target-user", ""), **(target_responses or {})}
+        target.run_command = AsyncMock(side_effect=respond_to(merged))
+    target.send_file = AsyncMock(return_value=None)
+    context = JobContext(
+        config={},
+        source=source,
+        target=target,
+        event_bus=MagicMock(),
+        session_id="test-1234",
+        source_hostname="source-host",
+        target_hostname="target-host",
+        dry_run=dry_run,
+    )
+    return context, source, target
+
+
+class TestRepoGroupOrdering:
+    @pytest.mark.asyncio
+    async def test_key_then_source_then_update_then_package_install(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
+                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": CommandResult(
+                    0, "", ""
+                ),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(
+            job,
+            plan,
+            {
+                "apt:key:per-repo:foo.gpg": Decision.APPLY,
+                "apt:source:foo.sources": Decision.APPLY,
+                "apt:package:pkg-a": Decision.APPLY,
+            },
+        )
+
+        await job.execute()
+
+        commands = all_calls(target)
+        key_idx = _index_of(commands, lambda c: "sudo install" in c and "keyrings/foo.gpg" in c)
+        source_idx = _index_of(commands, lambda c: "sudo install" in c and "sources.list.d/foo.sources" in c)
+        update_idx = _index_of(commands, lambda c: c == "sudo apt-get update")
+        package_idx = _index_of(
+            commands, lambda c: "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-a" in c
+        )
+        assert key_idx < source_idx < update_idx < package_idx
+
+    @pytest.mark.asyncio
+    async def test_apt_get_update_runs_exactly_once_for_three_repo_items(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "a-pin"), ""),
+                "cat /etc/apt/preferences.d/a-pin": CommandResult(0, "Package: a\n", ""),
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "a-conf"), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "a.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "test -f /etc/apt/preferences.d/a-pin": CommandResult(1, "", ""),
+                "test -f /etc/apt/apt.conf.d/a-conf": CommandResult(1, "", ""),
+                "test -f /etc/apt/keyrings/a.gpg": CommandResult(1, "", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(
+            job,
+            plan,
+            {
+                "apt:pin:a-pin": Decision.APPLY,
+                "apt:config:a-conf": Decision.APPLY,
+                "apt:key:per-repo:a.gpg": Decision.APPLY,
+            },
+        )
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert sum(1 for c in commands if c == "sudo apt-get update") == 1
+
+    @pytest.mark.asyncio
+    async def test_no_key_command_contains_a_url(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "a.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "test -f /etc/apt/keyrings/a.gpg": CommandResult(1, "", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(job, plan, {"apt:key:per-repo:a.gpg": Decision.APPLY})
+
+        await job.execute()
+
+        for cmd in all_calls(target):
+            assert "http://" not in cmd
+            assert "https://" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_failed_key_write_leaves_dependent_source_unwritten(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
+                "sudo install -o root -g root -m 0644": CommandResult(1, "", "disk full"),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(
+            job,
+            plan,
+            {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:source:foo.sources": Decision.APPLY},
+        )
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
+        assert "apt:key:per-repo:foo.gpg" in failed_ids
+        assert "apt:source:foo.sources" in failed_ids
+        commands = all_calls(target)
+        assert not any("sudo install" in c and "sources.list.d/foo.sources" in c for c in commands)
+
+    @pytest.mark.asyncio
+    async def test_remove_source_issues_single_rm_naming_that_file(self) -> None:
+        context, _source, target = _repo_context(
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d9", "extra.list"), ""),
+                "cat /etc/apt/sources.list.d/extra.list": CommandResult(
+                    0, "deb https://example.com stable main\n", ""
+                ),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(job, plan, {"apt:source:extra.list": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        etc_removals = [c for c in commands if "sudo rm -f" in c]
+        assert len(etc_removals) == 1
+        assert "sources.list.d/extra.list" in etc_removals[0]
+
+    @pytest.mark.asyncio
+    async def test_promotion_uses_sudo_install_with_owner_group_mode_never_mv(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99conf"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(job, plan, {"apt:config:99conf": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        promotions = [c for c in commands if "apt.conf.d/99conf" in c and "sudo install" in c]
+        assert len(promotions) == 1
+        assert "-o root -g root -m 0644" in promotions[0]
+        assert not any("sudo mv" in c for c in commands)
+
+    @pytest.mark.asyncio
+    async def test_staging_file_removed_after_success_and_after_failure(self) -> None:
+        for promote_result, label in (
+            (CommandResult(0, "", ""), "success"),
+            (CommandResult(1, "", "boom"), "failure"),
+        ):
+            context, _source, target = _repo_context(
+                source_responses={
+                    **_NO_PACKAGES,
+                    "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99conf"), ""),
+                },
+                target_responses={
+                    **_NO_PACKAGES,
+                    "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
+                    "sudo install -o root -g root -m 0644": promote_result,
+                    "sudo apt-get update": CommandResult(0, "", ""),
+                },
+            )
+            job = AptSyncJob(context)
+            plan = await job.plan()
+            _accept(job, plan, {"apt:config:99conf": Decision.APPLY})
+
+            if label == "success":
+                await job.execute()
+            else:
+                with pytest.raises(PackageItemFailures):
+                    await job.execute()
+
+            commands = all_calls(target)
+            staged_cleanup = [c for c in commands if c.startswith("rm -f") and "apt-staging" in c]
+            assert len(staged_cleanup) == 1, f"expected one staging cleanup for {label}"
+
+    @pytest.mark.asyncio
+    async def test_send_file_destinations_start_with_home_never_contain_etc(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99conf"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(job, plan, {"apt:config:99conf": Decision.APPLY})
+
+        await job.execute()
+
+        destinations = [call.args[1] for call in target.send_file.call_args_list]
+        assert destinations, "expected at least one send_file call"
+        for dest in destinations:
+            assert dest.startswith("/home/target-user")
+            assert "/etc" not in dest
+
+
+class TestRepoGroupTransaction:
+    @pytest.mark.asyncio
+    async def test_failed_update_restores_changed_deletes_created_records_group_failures(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "curl-pin"), ""),
+                "cat /etc/apt/preferences.d/curl-pin": CommandResult(0, "Package: curl\n", ""),
+            },
+            target_side_effect=respond_with_update_sequence(
+                mapping={
+                    "echo $HOME": CommandResult(0, "/home/target-user", ""),
+                    **_NO_PACKAGES,
+                    "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                    "test -f /etc/apt/preferences.d/curl-pin": CommandResult(0, "", ""),
+                    "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p2", "curl-pin"), ""),
+                },
+                update_results=[CommandResult(1, "", "update failed"), CommandResult(0, "", "")],
+            ),
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(job, plan, {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:pin:curl-pin": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
+        assert "apt:key:per-repo:foo.gpg" in failed_ids
+        assert "apt:pin:curl-pin" in failed_ids
+
+        commands = all_calls(target)
+        # Restore: the pre-existing pin file is put back from its backup.
+        assert any("sudo install" in c and "backup-" in c and "preferences.d/curl-pin" in c for c in commands)
+        # Delete: the brand-new key file this run created is removed.
+        assert any("sudo rm -f" in c and "keyrings/foo.gpg" in c for c in commands)
+        # Two `apt-get update` calls: the failing one and the post-rollback reprobe.
+        assert sum(1 for c in commands if c == "sudo apt-get update") == 2
+
+    @pytest.mark.asyncio
+    async def test_successful_update_issues_no_restore_command(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(job, plan, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert not any("sudo install" in c and "backup-" in c for c in commands)
+
+    @pytest.mark.asyncio
+    async def test_rollback_does_not_prevent_package_items_from_being_attempted(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_side_effect=respond_with_update_sequence(
+                mapping={
+                    "echo $HOME": CommandResult(0, "/home/target-user", ""),
+                    "apt-mark showmanual": CommandResult(0, "", ""),
+                    "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                    "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                    "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                        CommandResult(0, "", "")
+                    ),
+                },
+                update_results=[CommandResult(1, "", "update failed"), CommandResult(0, "", "")],
+            ),
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        _accept(job, plan, {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
+        assert "apt:key:per-repo:foo.gpg" in failed_ids
+        assert "apt:package:pkg-a" not in failed_ids
+
+        commands = all_calls(target)
+        assert any("sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-a" in c for c in commands)
