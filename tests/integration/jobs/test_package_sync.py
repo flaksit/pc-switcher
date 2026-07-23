@@ -1,22 +1,26 @@
 """Integration tests proving the tracer's end-to-end apt_sync path against real VMs.
 
 `apt_sync` (plan 02-03) claims that a package missing on the target travels source
-capture -> target query -> diff -> the coordinator's one batched review -> `apt-get
-install` on the target. Plan 02-03's own unit tests only prove that shape against a
-mocked executor; this module is the VM-level proof against real apt/dpkg/sudo, run one
-wave after the tracer and before snap_sync/flatpak_sync exist (02-13-PLAN.md).
+capture -> target query -> diff -> apt_sync's own batched review (each manager reviews
+its own diffs inside its own `execute()`, per the corrected D-24; there is no
+cross-manager coordinator) -> `apt-get install` on the target. Plan 02-03's own unit
+tests only prove that shape against a mocked executor; this module is the VM-level proof
+against real apt/dpkg/sudo.
 
-Both tests drive the review non-interactively through
-`PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` (D-26's hidden test hook, `package_review.py`)
-rather than through a real TTY, and assert exclusively against pc2's own `apt-mark
-showmanual` output -- never against pc-switcher's log text -- per this plan's own
-prohibition. The one exception: `apt-cache rdepends` output is read to pick a safe
-removal candidate before either machine's package state is touched.
+The tests drive each manager's review non-interactively through
+`PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` (D-26's hidden test hook,
+`jobs.packages.review`) rather than through a real TTY, and assert against the target's
+own package-manager or filesystem state (`apt-mark showmanual`, `/etc/apt`, `snap list`,
+the pushed snippet registry) -- never against pc-switcher's log text -- except where an
+explicit witness legitimately needs the run's own output: the apt-repository-state
+dry-run test, whose subject IS the review output because a rehearsal makes no filesystem
+change to assert against. `apt-cache rdepends` output is also read to pick a safe removal
+candidate before either machine's package state is touched.
 
 `TestPackageSyncWholeRunContracts` (plan 02-11) extends this same module with the
 phase's whole-run contracts -- properties of an entire sync (non-interactive skip-all,
-continue-on-item-failure, snap/flatpak convergence, skip-always inertness in both
-roles, cross-manager batched review ordering) that are invisible to any single item's
+continue-on-item-failure, snap/flatpak convergence, skip-always inertness in both roles,
+per-manager review-before-own-mutation) that are invisible to any single item's
 mocked-executor unit test, reusing the fixture/teardown/candidate-selection
 conventions established below by the tracer.
 
@@ -444,8 +448,9 @@ async def _find_removable_snap_candidate(
 ) -> str | None:
     """A snap installed on both pc1 and pc2, excluding `_SNAP_REMOVAL_DENYLIST`
     (T-02-28: never a base/snapd runtime everything else depends on) -- used by
-    `test_all_managers_diff_before_any_applies` to diverge a second manager alongside
-    apt without needing an exact-revision match the way `_find_divergeable_snap` does.
+    `test_each_manager_reviews_before_its_own_mutation` to diverge a second manager
+    alongside apt without needing an exact-revision match the way `_find_divergeable_snap`
+    does.
     """
     pc1_list = await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
     pc2_list = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
@@ -516,7 +521,7 @@ async def _find_flatpak_ref_and_remote(
 
 class TestAptSyncEndToEnd:
     """VM-level proof of plan 02-03's tracer path: a package missing on pc2 travels
-    source capture -> target query -> diff -> the coordinator's one batched review ->
+    source capture -> target query -> diff -> apt_sync's own batched review ->
     `apt-get install` on pc2 -- proven against pc2's own package manager, never against
     pc-switcher's log text.
     """
@@ -620,8 +625,8 @@ class TestAptSyncEndToEnd:
 class TestPackageSyncWholeRunContracts:
     """VM-level proof of the phase's whole-run contracts (plan 02-11): properties of an
     entire sync -- non-interactive skip-all, continue-on-item-failure, snap/flatpak
-    convergence, skip-always inertness in both roles, cross-manager batched-review
-    ordering -- rather than any single item's diff/converge, and therefore invisible to
+    convergence, skip-always inertness in both roles, per-manager review-before-own-
+    mutation -- rather than any single item's diff/converge, and therefore invisible to
     plans 02-03/02-05/02-07/02-08's mocked-executor unit tests.
     """
 
@@ -1086,7 +1091,7 @@ class TestPackageSyncWholeRunContracts:
         finally:
             await _restore_package(pc2_executor, candidate)
 
-    async def test_all_managers_diff_before_any_applies(
+    async def test_each_manager_reviews_before_its_own_mutation(
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -1094,18 +1099,19 @@ class TestPackageSyncWholeRunContracts:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """The whole-run proof of D-24: with two package jobs enabled and both machines
-        diverged, no manager's first mutating command runs before every enabled manager
-        has produced its diff. `PackagePhaseCoordinator.run` plans every job, reviews
-        once, then distributes -- proven here by finding the coordinator's own "N
-        package manager(s) planned" log line and confirming it precedes the first
-        per-item converge success log from either manager.
+        """The corrected D-24 (per-manager review): with two package jobs enabled and
+        both machines diverged, each enabled manager completes its OWN batched review
+        before that same manager issues its OWN first mutating command. With the
+        cross-manager coordinator gone (plan 02-15), the old "no manager mutates before
+        EVERY manager has diffed" contract no longer exists and is not asserted here --
+        each job runs plan -> review -> apply inside its own `execute()`, independently.
 
-        This is the one test in this module whose PRIMARY claim is about ordering
-        rather than end state (this plan's own prohibition explicitly carves this out):
-        the end state alone -- both items converged -- cannot distinguish "planned
-        together, then applied" from "apt_sync planned, applied, THEN snap_sync
-        planned, applied", so the run's own per-item log is the only witness available.
+        The per-manager property is proven by end state, not a log witness: an item
+        converges on pc2 ONLY because that manager's own review returned APPLY for it
+        (`apply()` reads the accepted review outcome), so both items landing on pc2's own
+        package managers -- apt via `apt-mark showmanual`, snap via `snap list` -- is the
+        witness that each manager reviewed-then-mutated its own diff. No inter-manager
+        ordering is asserted (this plan's prohibition), and no run-log line is scraped.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
@@ -1147,33 +1153,21 @@ class TestPackageSyncWholeRunContracts:
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
 
+            # Per-manager end state is the witness (this plan's prohibition: assert the
+            # target's own package-manager state, not a run-log line): apt's item is back
+            # in pc2's own `apt-mark showmanual`, and snap's item is back in pc2's own
+            # `snap list`. Each converged only because its OWN manager's review approved
+            # it, so both landing proves each manager reviewed-then-mutated its own diff.
             after_apt = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert apt_candidate in nonblank_lines(after_apt.stdout), f"{apt_candidate} not reinstalled on pc2"
+            assert apt_candidate in nonblank_lines(after_apt.stdout), (
+                f"{apt_candidate} not reinstalled on pc2 -- apt_sync did not converge its own approved diff"
+            )
             after_snap = await pc2_executor.run_command(
                 f"snap list {shlex.quote(snap_candidate)}", login_shell=False, timeout=15.0
             )
-            assert after_snap.success, f"{snap_candidate} not reinstalled on pc2: {after_snap.stderr}"
-
-            # Ordering evidence (this test's one, explicitly-permitted exception to
-            # asserting only against package-manager output): the coordinator's own
-            # "planned; review covers" log line must precede EVERY converge success
-            # log line from either manager.
-            combined_output = sync_result.stdout + sync_result.stderr
-            assert "2 package manager(s) planned" in combined_output, (
-                "coordinator did not report both enabled managers planned together (D-24)"
-            )
-            coordinator_index = combined_output.find("package manager(s) planned; review covers")
-            assert coordinator_index != -1, "coordinator's 'planned; review covers' log line not found"
-
-            apt_converge_index = combined_output.find(f"install {apt_candidate} (")
-            snap_converge_index = combined_output.find(f"install {snap_candidate} (")
-            assert apt_converge_index != -1, "apt converge success log line not found"
-            assert snap_converge_index != -1, "snap converge success log line not found"
-            first_converge_index = min(apt_converge_index, snap_converge_index)
-
-            assert coordinator_index < first_converge_index, (
-                "a manager's first mutating command ran before every enabled manager "
-                "had planned/diffed and the one batched review completed (D-24)"
+            assert after_snap.success, (
+                f"{snap_candidate} not reinstalled on pc2 -- snap_sync did not converge its own approved diff: "
+                f"{after_snap.stderr}"
             )
         finally:
             await _restore_package(pc2_executor, apt_candidate)
