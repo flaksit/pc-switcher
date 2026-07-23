@@ -749,3 +749,20 @@ class TestShippedDefaultConfig:
         config = Configuration.from_yaml(self._default_config_path())
         order = list(config.sync_jobs)
         assert order.index("folder_sync") < order.index("vscode_state_sync")
+
+    def test_snap_and_flatpak_sync_ship_disabled(self) -> None:
+        """snap_sync and flatpak_sync are valid sync_jobs keys, shipped opted-out by default."""
+        config = Configuration.from_yaml(self._default_config_path())
+        assert config.sync_jobs["snap_sync"] is False
+        assert config.sync_jobs["flatpak_sync"] is False
+
+    def test_package_jobs_precede_folder_sync(self) -> None:
+        """D-17: apt_sync, snap_sync and flatpak_sync all resolve before folder_sync in
+        sync_jobs insertion order — the order both _discover_and_validate_jobs and
+        _first_sync_scopes iterate directly, so apps land before folder_sync's data does.
+        """
+        config = Configuration.from_yaml(self._default_config_path())
+        order = list(config.sync_jobs)
+        folder_sync_index = order.index("folder_sync")
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync"):
+            assert order.index(job_name) < folder_sync_index

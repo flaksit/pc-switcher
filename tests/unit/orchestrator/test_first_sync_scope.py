@@ -123,6 +123,33 @@ class TestFirstSyncScopesFolderSync:
         assert scopes == []
 
 
+class TestFirstSyncScopesPackageJobsOrdering:
+    """D-17: package job scopes precede folder_sync's scope, one entry per enabled job."""
+
+    def test_all_package_jobs_and_folder_sync_each_contribute_one_scope_in_order(
+        self, mock_config: MagicMock
+    ) -> None:
+        """apt_sync, snap_sync, flatpak_sync and folder_sync each resolve to a real job
+        class and contribute exactly one FirstSyncScope, in sync_jobs order."""
+        mock_config.sync_jobs = {
+            "apt_sync": True,
+            "snap_sync": True,
+            "flatpak_sync": True,
+            "folder_sync": True,
+        }
+        mock_config.job_configs = {"folder_sync": {"folders": [{"path": "/home"}]}}
+        orchestrator, _ = _make_orchestrator(mock_config)
+
+        scopes = orchestrator._first_sync_scopes()  # pyright: ignore[reportPrivateUsage]
+
+        assert [scope.job_name for scope in scopes] == [
+            "apt_sync",
+            "snap_sync",
+            "flatpak_sync",
+            "folder_sync",
+        ]
+
+
 class TestFirstSyncScopesEmptyFallback:
     """With no enabled sync jobs, the warning falls back to generic phrasing."""
 
