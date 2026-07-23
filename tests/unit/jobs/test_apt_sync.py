@@ -18,7 +18,7 @@ from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.apt_sync import AptSyncJob, simulate_apt_transaction
 from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass
-from pcswitcher.jobs.package_review import Decision
+from pcswitcher.jobs.package_review import COLLATERAL_REVIEW_ACTION, Decision
 from pcswitcher.jobs.package_sync_core import ConvergeItemFailed, PackageItemFailures
 from pcswitcher.models import CommandResult, Host
 from pcswitcher.orchestrator import Orchestrator
@@ -320,19 +320,36 @@ class TestContinueOnFailure:
 
 class TestTransactionGuard:
     @pytest.mark.asyncio
-    async def test_collateral_removal_refuses_install_and_names_the_package(self) -> None:
+    async def test_guard_refuses_drifted_manual_removal_not_seen_at_plan_time(self) -> None:
+        """The apply-time guard is the last line of defence (D-30): a real transaction
+        that has drifted since plan time to remove a manually-installed package nobody
+        reviewed is still refused — D-30 changes what plan time asks, not whether apply
+        time verifies. `ghost-pkg` is manual on the target and matches the source, so it
+        never appears as a diff; the plan-time simulation is clean, but the apply-time
+        simulation removes it.
+        """
+        sim_cmd = "apt-get -s install -y --no-install-recommends pkg-a"
+        state = {"sim": 0}
+
+        def target_side_effect(cmd: str, **_: object) -> CommandResult:
+            if cmd == "apt-mark showmanual":
+                return CommandResult(0, "ghost-pkg\n", "")
+            if "dpkg-query" in cmd:
+                return CommandResult(0, "ghost-pkg\t1.0\n", "")
+            if cmd == sim_cmd:
+                state["sim"] += 1
+                if state["sim"] == 1:
+                    return CommandResult(0, "Inst pkg-a (1.0)\n", "")
+                return CommandResult(0, "Inst pkg-a (1.0)\nRemv ghost-pkg [1.0]\n", "")
+            return CommandResult(0, "", "")
+
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-            },
-            target_responses={
-                "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nRemv other-pkg [1.0]\n", ""
-                ),
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nghost-pkg\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nghost-pkg\t1.0\n", ""),
             },
         )
+        target.run_command = AsyncMock(side_effect=target_side_effect)
         job = AptSyncJob(context)
         _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
 
@@ -341,10 +358,39 @@ class TestTransactionGuard:
 
         assert len(exc_info.value.failures) == 1
         _diff, message = exc_info.value.failures[0]
-        assert "other-pkg" in message
+        assert "ghost-pkg" in message
 
         commands = all_calls(target)
         assert not any("sudo" in cmd and "apt-get install" in cmd for cmd in commands)
+
+    @pytest.mark.asyncio
+    async def test_install_whose_only_collateral_is_auto_deps_proceeds(self) -> None:
+        """The D-30 win, at the guard: an install whose simulation removes only
+        auto-installed dependencies (nothing in the target's manual set) is NOT refused —
+        this is the legitimate install the old blanket refusal wrongly blocked.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""
+                ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                    CommandResult(0, "", "")
+                ),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert any("sudo" in cmd and "apt-get install" in cmd and "pkg-a" in cmd for cmd in commands)
 
     @pytest.mark.asyncio
     async def test_clean_simulation_proceeds_to_real_install(self) -> None:
@@ -565,26 +611,66 @@ class TestRemovalConverge:
 
 
 class TestRemovalGuard:
-    """ "Removes nothing the user did not approve", not "removes nothing else"."""
+    """Auto reverse-deps proceed (D-30); an unapproved manual removal is still refused."""
 
     @pytest.mark.asyncio
-    async def test_unapproved_collateral_removal_refuses_and_names_the_package(self) -> None:
+    async def test_auto_reverse_dep_removal_proceeds(self) -> None:
+        """Removing a package legitimately removes the auto-installed dependencies apt
+        pulled in for it (D-30): `pkg-b` is not in the target manual set, so the removal
+        of `pkg-a` proceeds even though its transaction also removes `pkg-b`.
+        """
         context, _source, target = make_context(
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
                 "apt-get -s remove -y pkg-a": CommandResult(0, "Remv pkg-a [1.0]\nRemv pkg-b [1.0]\n", ""),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y pkg-a": CommandResult(0, "", ""),
             },
         )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert any("sudo" in cmd and "apt-get remove" in cmd and "pkg-a" in cmd for cmd in commands)
+
+    @pytest.mark.asyncio
+    async def test_drifted_manual_reverse_dep_removal_refused(self) -> None:
+        """A removal whose real transaction drifted to also remove a manually-installed
+        package nobody reviewed is still refused (D-30). `manual-b` is manual on both
+        machines and matches, so it is not a diff; the plan-time simulation is clean.
+        """
+        sim_cmd = "apt-get -s remove -y pkg-a"
+        state = {"sim": 0}
+
+        def target_side_effect(cmd: str, **_: object) -> CommandResult:
+            if cmd == "apt-mark showmanual":
+                return CommandResult(0, "pkg-a\nmanual-b\n", "")
+            if "dpkg-query" in cmd:
+                return CommandResult(0, "pkg-a\t1.0\nmanual-b\t1.0\n", "")
+            if cmd == sim_cmd:
+                state["sim"] += 1
+                if state["sim"] == 1:
+                    return CommandResult(0, "Remv pkg-a [1.0]\n", "")
+                return CommandResult(0, "Remv pkg-a [1.0]\nRemv manual-b [1.0]\n", "")
+            return CommandResult(0, "", "")
+
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "manual-b\n", ""),
+                "dpkg-query": CommandResult(0, "manual-b\t1.0\n", ""),
+            },
+        )
+        target.run_command = AsyncMock(side_effect=target_side_effect)
         job = AptSyncJob(context)
         _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
 
-        assert len(exc_info.value.failures) == 1
         _diff, message = exc_info.value.failures[0]
-        assert "pkg-b" in message
+        assert "manual-b" in message
 
         commands = all_calls(target)
         assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in commands)
@@ -614,20 +700,36 @@ class TestRemovalGuard:
 
 class TestDowngradeGuard:
     @pytest.mark.asyncio
-    async def test_downgrade_in_install_simulation_refuses_and_names_the_downgrade(self) -> None:
+    async def test_guard_refuses_drifted_manual_downgrade(self) -> None:
+        """The apply-time guard still refuses a downgrade of a manually-installed package
+        that drifted in after plan time (D-30, D-04). `manual-dg` is manual on the target
+        at 2.0 and matches the source, so it is not a diff; the plan-time simulation is
+        clean, but the apply-time simulation would downgrade it to 1.0.
+        """
+        sim_cmd = "apt-get -s install -y --no-install-recommends pkg-a"
+        state = {"sim": 0}
+
+        def target_side_effect(cmd: str, **_: object) -> CommandResult:
+            if cmd == "apt-mark showmanual":
+                return CommandResult(0, "manual-dg\n", "")
+            if "dpkg-query" in cmd:
+                return CommandResult(0, "manual-dg\t2.0\n", "")
+            if cmd == "dpkg --compare-versions 1.0 lt 2.0":
+                return CommandResult(0, "", "")
+            if cmd == sim_cmd:
+                state["sim"] += 1
+                if state["sim"] == 1:
+                    return CommandResult(0, "Inst pkg-a (1.0)\n", "")
+                return CommandResult(0, "Inst pkg-a (1.0)\nInst manual-dg [2.0] (1.0)\n", "")
+            return CommandResult(0, "", "")
+
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t2.0\n", ""),
-            },
-            target_responses={
-                "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a [2.0] (1.0)\n", ""
-                ),
-                "dpkg --compare-versions 1.0 lt 2.0": CommandResult(0, "", ""),
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nmanual-dg\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nmanual-dg\t2.0\n", ""),
             },
         )
+        target.run_command = AsyncMock(side_effect=target_side_effect)
         job = AptSyncJob(context)
         _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
 
@@ -637,16 +739,90 @@ class TestDowngradeGuard:
         assert len(exc_info.value.failures) == 1
         _diff, message = exc_info.value.failures[0]
         assert "downgrade" in message.lower()
+        assert "manual-dg" in message
 
         commands = all_calls(target)
         assert not any("sudo" in cmd and "apt-get install" in cmd for cmd in commands)
 
+    @pytest.mark.asyncio
+    async def test_guard_allows_auto_downgrade(self) -> None:
+        """An auto-installed package the simulation would downgrade proceeds silently —
+        apt resolving its own dependencies (D-30). `auto-dg` is not in the target manual
+        set, so the guard never even compares versions for it.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nInst auto-dg [2.0] (1.0)\n", ""
+                ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                    CommandResult(0, "", "")
+                ),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert any("sudo" in cmd and "apt-get install" in cmd and "pkg-a" in cmd for cmd in commands)
+        # auto-dg is not manual, so no version comparison is issued for it.
+        assert not any("dpkg --compare-versions" in cmd for cmd in commands)
+
 
 class TestPlanTimeCollateral:
-    """Two BATCHED simulations at plan time surface collateral before any decision."""
+    """D-30: batched-simulation collateral is split by provenance against the target
+    manual set — manual becomes a three-way review item, auto produces nothing.
+    """
 
     @pytest.mark.asyncio
-    async def test_collateral_removal_surfaces_as_report_only_in_its_own_group(self) -> None:
+    async def test_manual_collateral_removal_becomes_a_collateral_review_item(self) -> None:
+        """A package the install simulation would remove that IS in the target manual set
+        becomes exactly one collateral review item, in a COLLATERAL_REVIEW_ACTION group,
+        naming the triggering install (`other-manual` distinct from `pkg-a`).
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nother-manual\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nother-manual\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
+                "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""
+                ),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        collateral = [diff for diff in plan.diffs if diff.item_id == "apt:collateral:other-manual"]
+        assert len(collateral) == 1
+        assert collateral[0].action == DiffAction.REPORT_ONLY
+        assert collateral[0].label == "other-manual"
+        assert collateral[0].detail is not None and "removed" in collateral[0].detail
+
+        collateral_group = next(g for g in plan.groups if g.action == COLLATERAL_REVIEW_ACTION)
+        assert "apt:collateral:other-manual" in {entry.item_id for entry in collateral_group.entries}
+        install_group = next(g for g in plan.groups if g.action == "install")
+        assert "apt:collateral:other-manual" not in {entry.item_id for entry in install_group.entries}
+        # pkg-a stays a normal, approvable install candidate.
+        assert "apt:package:pkg-a" in {entry.item_id for entry in install_group.entries}
+
+    @pytest.mark.asyncio
+    async def test_auto_collateral_removal_produces_no_review_item(self) -> None:
+        """A package the simulation would remove that is NOT in the target manual set is
+        auto-installed — apt's own business (D-30) — so no review item is emitted and the
+        install remains approvable.
+        """
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
@@ -655,7 +831,7 @@ class TestPlanTimeCollateral:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nRemv unrelated-pkg [1.0]\n", ""
+                    0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""
                 ),
             },
         )
@@ -663,17 +839,39 @@ class TestPlanTimeCollateral:
 
         plan = await job.plan()
 
-        collateral = [diff for diff in plan.diffs if diff.item_id == "apt:collateral:unrelated-pkg"]
-        assert len(collateral) == 1
-        assert collateral[0].action == DiffAction.REPORT_ONLY
-        assert collateral[0].label == "unrelated-pkg"
-        assert collateral[0].detail is not None
-        assert "removed" in collateral[0].detail
+        assert not any(diff.item_id.startswith("apt:collateral:") for diff in plan.diffs)
+        assert not any(group.action == COLLATERAL_REVIEW_ACTION for group in plan.groups)
+        install_group = next(g for g in plan.groups if g.action == "install")
+        assert "apt:package:pkg-a" in {entry.item_id for entry in install_group.entries}
 
-        report_group = next(group for group in plan.groups if group.action == "report_only")
-        install_group = next(group for group in plan.groups if group.action == "install")
-        assert "apt:collateral:unrelated-pkg" in {entry.item_id for entry in report_group.entries}
-        assert "apt:collateral:unrelated-pkg" not in {entry.item_id for entry in install_group.entries}
+    @pytest.mark.asyncio
+    async def test_manual_downgrade_becomes_item_auto_downgrade_does_not(self) -> None:
+        """A downgrade of a manually-installed package produces a collateral item the same
+        way a removal does; a downgrade of an auto-installed package produces nothing.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nmanual-dg\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nmanual-dg\t2.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "manual-dg\n", ""),
+                "dpkg-query": CommandResult(0, "manual-dg\t2.0\n", ""),
+                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nInst manual-dg [2.0] (1.0)\nInst auto-dg [2.0] (1.0)\n", ""
+                ),
+                "dpkg --compare-versions 1.0 lt 2.0": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        collateral_ids = {diff.item_id for diff in plan.diffs if diff.item_id.startswith("apt:collateral:")}
+        assert "apt:collateral:manual-dg" in collateral_ids
+        assert "apt:collateral:auto-dg" not in collateral_ids
+        manual_dg = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:manual-dg")
+        assert manual_dg.detail is not None and "downgrade" in manual_dg.detail.lower()
 
     @pytest.mark.asyncio
     async def test_clean_simulation_produces_no_collateral_entry(self) -> None:
@@ -713,6 +911,63 @@ class TestPlanTimeCollateral:
         assert len(plan.diffs) == 10
         simulations = [cmd for cmd in all_calls(target) if "apt-get -s" in cmd]
         assert len(simulations) <= 2
+
+
+def _manual_collateral_context() -> tuple[JobContext, MagicMock, MagicMock]:
+    """A job whose only install candidate (`pkg-a`) would, per the simulation, remove the
+    manually-installed `other-manual` — the shared fixture for the install-anyway / skip
+    flow tests. `other-manual` is manual and identical on both machines, so it is not a
+    diff, only collateral. Its name is deliberately distinct from `pkg-a` so a bug that
+    conflated the collateral package with its triggering install would be caught.
+    """
+    return make_context(
+        source_responses={
+            "apt-mark showmanual": CommandResult(0, "pkg-a\nother-manual\n", ""),
+            "dpkg-query": CommandResult(0, "pkg-a\t1.0\nother-manual\t1.0\n", ""),
+        },
+        target_responses={
+            "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
+            "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+            "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""
+            ),
+            "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                CommandResult(0, "", "")
+            ),
+        },
+    )
+
+
+class TestCollateralFlow:
+    """D-30 three-way outcome, end to end through execute()."""
+
+    @pytest.mark.asyncio
+    async def test_install_anyway_proceeds_and_guard_allows_the_collateral_removal(self) -> None:
+        context, _source, target = _manual_collateral_context()
+        job = AptSyncJob(context)
+        _install_reviewer(
+            job,
+            {"apt:package:pkg-a": Decision.APPLY, "apt:collateral:other-manual": Decision.APPLY},
+        )
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert any("sudo" in cmd and "apt-get install" in cmd and "pkg-a" in cmd for cmd in commands)
+
+    @pytest.mark.asyncio
+    async def test_skip_leaves_the_triggering_install_unapproved(self) -> None:
+        context, _source, target = _manual_collateral_context()
+        job = AptSyncJob(context)
+        _install_reviewer(
+            job,
+            {"apt:package:pkg-a": Decision.APPLY, "apt:collateral:other-manual": Decision.SKIP_ONCE},
+        )
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert not any("sudo" in cmd and "apt-get install" in cmd for cmd in commands)
 
 
 class TestValidate:

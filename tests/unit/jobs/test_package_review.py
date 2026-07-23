@@ -24,6 +24,7 @@ from rich.console import Console
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.package_items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.package_review import (
+    COLLATERAL_REVIEW_ACTION,
     PACKAGE_REVIEW_AUTOMATION_ENV,
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
@@ -34,7 +35,7 @@ from pcswitcher.jobs.package_review import (
     review_items,
 )
 from pcswitcher.jobs.package_sync_core import PackageItemFailures, PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, ValidationError
+from pcswitcher.models import CommandResult, SyncAbortedByUser, ValidationError
 
 
 def _mock_isatty(interactive: bool) -> MagicMock:
@@ -73,6 +74,15 @@ def _unreproducible_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
         manager="apt",
         action=UNREPRODUCIBLE_REVIEW_ACTION,
         title="Resolve apt items with no reproducible install",
+        entries=tuple(entries),
+    )
+
+
+def _collateral_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
+    return ReviewGroup(
+        manager="apt",
+        action=COLLATERAL_REVIEW_ACTION,
+        title="Resolve apt manual-collateral removals",
         entries=tuple(entries),
     )
 
@@ -498,6 +508,109 @@ class TestUnreproducibleGroupResolution:
             await review_items([group], console=console, ui=ui)
 
         checkbox.assert_not_called()
+
+
+@pytest.mark.asyncio
+class TestCollateralGroupResolution:
+    """D-30: a `COLLATERAL_REVIEW_ACTION` group gets the three-way per-entry flow
+    (install-anyway / skip / abort), recorded against `entry.item_id` (which the caller,
+    `AptSyncJob`, maps onto the triggering install), never a checkbox tick.
+    """
+
+    async def test_install_anyway_records_apply(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
+        select_prompt = _fake_prompt(ask_return="install_anyway")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        assert outcome.decisions["apt:package:pkg-a"] == Decision.APPLY
+
+    async def test_skip_records_skip_once(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
+        select_prompt = _fake_prompt(ask_return="skip")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
+
+    async def test_abort_raises_sync_aborted_by_user_naming_the_collateral_package(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
+        select_prompt = _fake_prompt(ask_return="abort")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            pytest.raises(SyncAbortedByUser, match="other-manual"),
+        ):
+            await review_items([group], console=console, ui=ui)
+
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()
+
+    async def test_bracketed_collateral_label_renders_without_markup_error(self) -> None:
+        """T-02-02: a collateral package name containing bracket characters must not reach
+        a Rich `Panel`/console as a bare `str`, or markup parsing raises `MarkupError`.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _collateral_group([_entry("apt:package:pkg-a", label="pkg[weird]name")])
+        select_prompt = _fake_prompt(ask_return="skip")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
+
+    async def test_collateral_group_never_offered_as_a_checkbox(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
+        select_prompt = _fake_prompt(ask_return="skip")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.package_review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.package_review.questionary.checkbox") as checkbox,
+        ):
+            await review_items([group], console=console, ui=ui)
+
+        checkbox.assert_not_called()
+
+    async def test_non_interactive_collateral_entries_skip_once_and_are_not_unresolved(self) -> None:
+        """D-26: without a TTY a collateral entry comes back SKIP_ONCE like every other
+        item (the install it gates is simply not approved) and is never flagged unresolved
+        — that status is reserved for unreproducible items.
+        """
+        console = _non_interactive_console()
+        ui = MagicMock()
+        group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(False)),
+            patch("pcswitcher.jobs.package_review.questionary.select") as select_mock,
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        select_mock.assert_not_called()
+        assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
+        assert outcome.unresolved == ()
 
 
 # ---------------------------------------------------------------------------------
