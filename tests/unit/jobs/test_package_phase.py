@@ -345,39 +345,61 @@ class _StubSuccessJob(SyncJob):
         return None
 
 
+class _StubOtherFailureJob(SyncJob):
+    """A non-package job whose execute() raises a plain exception — the pre-existing
+    abort-the-run path this plan must NOT change (only PackageItemFailures gets a
+    non-aborting branch; every other exception type keeps today's behavior).
+    """
+
+    name: ClassVar[str] = "stub_other_failure"
+
+    async def validate(self) -> list[ValidationError]:
+        return []
+
+    async def execute(self) -> None:
+        raise RuntimeError("unrelated job crashed")
+
+
+def _make_wired_orchestrator() -> Orchestrator:
+    """A narrowly-constructed Orchestrator with enough wiring for `_execute_jobs` /
+    `_run_jobs_in_task_group` to run: mocked local/remote executors returning valid `df`
+    output for the background disk-space monitors, a non-interactive Console (so the
+    package review never blocks on a prompt), and a silenced logger/UI.
+    """
+    config = MagicMock(spec=Configuration)
+    config.logging = MagicMock()
+    config.logging.file = 10
+    config.logging.tui = 20
+    config.logging.external = 30
+    config.sync_jobs = {}
+    config.job_configs = {}
+    config.disk = MagicMock()
+    config.disk.preflight_minimum = "20%"
+    config.disk.runtime_minimum = "15%"
+    config.disk.warning_threshold = "25%"
+    config.disk.check_interval = 30
+
+    orchestrator = Orchestrator(target="target-host", config=config)
+    orchestrator._console = Console(file=io.StringIO())  # pyright: ignore[reportPrivateUsage]
+    orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
+    orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
+    local_executor = MagicMock()
+    local_executor.run_command = AsyncMock(return_value=CommandResult(0, DF_OUTPUT, ""))
+    remote_executor = MagicMock()
+    remote_executor.run_command = AsyncMock(return_value=CommandResult(0, DF_OUTPUT, ""))
+    orchestrator._local_executor = local_executor  # pyright: ignore[reportPrivateUsage]
+    orchestrator._remote_executor = remote_executor  # pyright: ignore[reportPrivateUsage]
+    return orchestrator
+
+
 class TestOrchestratorPackageItemFailuresContinuation:
     """PackageItemFailures records a FAILED JobResult but does not abort the run (D-24)."""
 
     @pytest.mark.asyncio
     async def test_failing_package_job_does_not_cancel_remaining_jobs(self) -> None:
-        config = MagicMock(spec=Configuration)
-        config.logging = MagicMock()
-        config.logging.file = 10
-        config.logging.tui = 20
-        config.logging.external = 30
-        config.sync_jobs = {}
-        config.job_configs = {}
-        config.disk = MagicMock()
-        config.disk.preflight_minimum = "20%"
-        config.disk.runtime_minimum = "15%"
-        config.disk.warning_threshold = "25%"
-        config.disk.check_interval = 30
-
-        orchestrator = Orchestrator(target="target-host", config=config)
-        orchestrator._console = Console(file=io.StringIO())  # pyright: ignore[reportPrivateUsage]
-        orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
-        orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
-        local_executor = MagicMock()
-        local_executor.run_command = AsyncMock(return_value=CommandResult(0, DF_OUTPUT, ""))
-        remote_executor = MagicMock()
-        remote_executor.run_command = AsyncMock(return_value=CommandResult(0, DF_OUTPUT, ""))
-        orchestrator._local_executor = local_executor  # pyright: ignore[reportPrivateUsage]
-        orchestrator._remote_executor = remote_executor  # pyright: ignore[reportPrivateUsage]
-
-        failing_context = make_context()
-        success_context = make_context()
-        failing_job = _StubFailingPackageJob(failing_context)
-        success_job = _StubSuccessJob(success_context)
+        orchestrator = _make_wired_orchestrator()
+        failing_job = _StubFailingPackageJob(make_context())
+        success_job = _StubSuccessJob(make_context())
 
         results = await orchestrator._execute_jobs([failing_job, success_job])  # pyright: ignore[reportPrivateUsage]
 
@@ -386,3 +408,15 @@ class TestOrchestratorPackageItemFailuresContinuation:
         assert results[0].status == JobStatus.FAILED
         assert results[1].job_name == "stub_success"
         assert results[1].status == JobStatus.SUCCESS
+
+    @pytest.mark.asyncio
+    async def test_other_exception_types_still_abort_the_run(self) -> None:
+        """Regression guard: only PackageItemFailures gets the non-aborting branch —
+        every other exception must still stop the remaining jobs from running.
+        """
+        orchestrator = _make_wired_orchestrator()
+        failing_job = _StubOtherFailureJob(make_context())
+        never_run_job = _StubSuccessJob(make_context())
+
+        with pytest.raises(RuntimeError, match="unrelated job crashed"):
+            await orchestrator._execute_jobs([failing_job, never_run_job])  # pyright: ignore[reportPrivateUsage]
