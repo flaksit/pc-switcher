@@ -290,6 +290,137 @@ class TestNoHold:
         assert any("snap install --revision=10 alpha" in cmd for cmd in commands)
 
 
+# Per-snap hold fixtures (#208): `held` in the Notes column marks a per-snap refresh hold.
+SNAP_LIST_SOURCE_HELD_ALPHA = (
+    _HEADER
+    + "alpha     1.0        10     latest/stable   pub✓         held\n"
+    + "beta      2.0        20     latest/stable   pub✓         -\n"
+)
+SNAP_LIST_TARGET_UNHELD = (
+    _HEADER
+    + "alpha     1.0        10     latest/stable   pub✓         -\n"
+    + "beta      2.0        20     latest/stable   pub✓         -\n"
+)
+SNAP_LIST_TARGET_HELD_ALPHA = (
+    _HEADER
+    + "alpha     1.0        10     latest/stable   pub✓         held\n"
+    + "beta      2.0        20     latest/stable   pub✓         -\n"
+)
+# alpha held on the source but ABSENT on the target -> both an install (presence) diff
+# and a hold diff, exercising the D8 install-before-hold ordering guarantee.
+SNAP_LIST_SOURCE_HELD_ONLY_ALPHA = _HEADER + "alpha     1.0        10     latest/stable   pub✓         held\n"
+
+
+class TestParseHeld:
+    """`held` in the Notes column sets `SnapItem.held` (#208)."""
+
+    @pytest.mark.asyncio
+    async def test_held_note_sets_item_held(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ALPHA, "")}
+        )
+        job = SnapSyncJob(context)
+
+        items = await job.capture_source_items()
+
+        by_name = {item.name: item for item in items}
+        assert by_name["alpha"].held is True
+        assert by_name["beta"].held is False
+
+
+class TestHolds:
+    """Per-snap hold membership replication (#208, D2/D4/D6)."""
+
+    @pytest.mark.asyncio
+    async def test_source_held_yields_install_hold_diff_and_converges_hold_forever(self) -> None:
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ALPHA, "")},
+            target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_UNHELD, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        hold = next(d for d in plan.diffs if d.item_id == "snap:hold:alpha")
+        assert hold.action == DiffAction.INSTALL
+        assert hold.diff_class == DiffClass.MISSING_ON_TARGET
+
+        await job.converge(hold)
+
+        commands = all_calls(target)
+        assert any("snap refresh --hold=forever alpha" in cmd for cmd in commands)
+
+    @pytest.mark.asyncio
+    async def test_target_held_only_yields_remove_hold_diff_and_converges_unhold(self) -> None:
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_UNHELD, "")},
+            target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_HELD_ALPHA, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        hold = next(d for d in plan.diffs if d.item_id == "snap:hold:alpha")
+        assert hold.action == DiffAction.REMOVE
+        assert hold.diff_class == DiffClass.EXTRA_ON_TARGET
+
+        await job.converge(hold)
+
+        commands = all_calls(target)
+        assert any("snap refresh --unhold alpha" in cmd for cmd in commands)
+
+    @pytest.mark.asyncio
+    async def test_both_held_yields_no_hold_diff(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ALPHA, "")},
+            target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_HELD_ALPHA, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_id.startswith("snap:hold:") for d in plan.diffs)
+
+    @pytest.mark.asyncio
+    async def test_hold_diff_emitted_after_presence_diffs(self) -> None:
+        """D8 install-before-hold: alpha is new on the target AND held on the source, so
+        its `snap:hold:alpha` diff must come after its `snap:alpha` install diff.
+        """
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ONLY_ALPHA, "")},
+            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        ids = [d.item_id for d in plan.diffs]
+        assert "snap:alpha" in ids
+        assert "snap:hold:alpha" in ids
+        assert ids.index("snap:alpha") < ids.index("snap:hold:alpha")
+
+    @pytest.mark.asyncio
+    async def test_hold_converge_never_emits_bare_hold(self) -> None:
+        """The D-06/RESEARCH Pitfall 1 guarantee for the hold path: the snap name is
+        always present, so `--hold` never appears without a following snap name.
+        """
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ALPHA, "")},
+            target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_UNHELD, "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        hold = next(d for d in plan.diffs if d.item_id == "snap:hold:alpha")
+
+        await job.converge(hold)
+
+        for cmd in all_calls(target):
+            assert "--hold=forever alpha" in cmd or "--hold" not in cmd
+            # A bare `snap refresh --hold` with no snap name is the global-hold pitfall.
+            assert cmd.strip() != "sudo snap refresh --hold"
+            assert not cmd.rstrip().endswith("--hold")
+
+
 class TestConvergeRemoval:
     @pytest.mark.asyncio
     async def test_removal_never_passes_purge(self) -> None:

@@ -67,6 +67,13 @@ __all__ = ["SnapSyncJob", "snap_sync_exclude_paths"]
 # `SnapItem.item_id` is always this prefix + the snap name (packages/items.py).
 _SNAP_ID_PREFIX = "snap:"
 
+# A per-snap hold membership item's item_id (#208, D1): this prefix + the snap name.
+# NOTE this also starts with `_SNAP_ID_PREFIX`, so converge() must test this longer
+# prefix FIRST, before the presence-diff (install/change/remove) dispatch, or a
+# `snap:hold:<name>` REMOVE would be misrouted into `_converge_remove` as a `snap:`
+# item (D4 — route by prefix, never by action).
+_SNAP_HOLD_ID_PREFIX = "snap:hold:"
+
 # Binaries this job runs under sudo, quoted back to the user when the passwordless-sudo
 # check fails. A lower bound on what must be permitted, not an exact scope (ADR-013).
 _TARGET_SUDO_COMMANDS = ("/usr/bin/snap",)
@@ -116,9 +123,22 @@ def _parse_snap_list(output: str) -> list[SnapItem]:
         fields = line.split()
         if len(fields) <= max_idx:
             continue
-        if "disabled" in fields[notes_idx].split(","):
+        notes = fields[notes_idx].split(",")
+        if "disabled" in notes:
             continue
-        items.append(SnapItem(name=fields[name_idx], channel=fields[tracking_idx], revision=fields[rev_idx]))
+        # `held` in the Notes column is a PER-SNAP refresh hold (#208, D9) — snapstate
+        # attached to this one snap. It is SEPARATE state from the system-wide
+        # `refresh.hold` the orchestrator sets across the sync window via `snap set
+        # system refresh.hold` (different snapd namespaces), so capturing here, inside
+        # the sync window, does not mask a per-snap hold: the system hold never writes
+        # `held` into an individual snap's Notes. If a VM integration test ever shows a
+        # system hold flipping this token, capture would have to move BEFORE the
+        # sync-window hold is applied. Fail-safe even then: a system hold flips both
+        # hosts symmetrically -> both-held -> no spurious diff.
+        held = "held" in notes
+        items.append(
+            SnapItem(name=fields[name_idx], channel=fields[tracking_idx], revision=fields[rev_idx], held=held)
+        )
     return items
 
 
@@ -164,9 +184,50 @@ def _change_diff(item_id: str, source_item: SnapItem, target_item: SnapItem) -> 
     )
 
 
+def _hold_diff(name: str, *, in_source: bool) -> ItemDiff:
+    """One `snap:hold:<name>` membership diff (#208, D2, the snap analog of
+    `AptHoldItem`): `in_source` (source-held, target-not) -> INSTALL (hold on target);
+    otherwise (target-held, source-not) -> REMOVE (unhold on target). The identity
+    (`snap:hold:<name>`) is DISTINCT from the snap item's (`snap:<name>`) so a snap and
+    its hold are two separate review items.
+    """
+    return ItemDiff(
+        item_class=ItemClass.SNAP_HOLD,
+        diff_class=DiffClass.MISSING_ON_TARGET if in_source else DiffClass.EXTRA_ON_TARGET,
+        action=DiffAction.INSTALL if in_source else DiffAction.REMOVE,
+        item_id=f"{_SNAP_HOLD_ID_PREFIX}{name}",
+        label=f"{name} (hold)",
+        detail=None,
+    )
+
+
+def _diff_snap_holds(source_items: Sequence[SnapItem], target_items: Sequence[SnapItem]) -> list[ItemDiff]:
+    """Per-snap hold membership diffs (#208, D2), emitted AFTER the presence diffs so
+    install-before-hold ordering holds (`apply()` preserves diff order): source-held &
+    not target-held -> INSTALL (hold); target-held & not source-held -> REMOVE (unhold);
+    both-held or neither -> no diff.
+
+    Only snaps present on the SOURCE are considered — source is authoritative for hold
+    intent (a hold on a snap the source no longer has is not the user's current intent).
+    `sorted` for a stable, deterministic review order.
+    """
+    source_by_name = {item.name: item for item in source_items}
+    target_held = {item.name for item in target_items if item.held}
+
+    diffs: list[ItemDiff] = []
+    for name in sorted(source_by_name):
+        in_source = source_by_name[name].held
+        in_target = name in target_held
+        if in_source == in_target:
+            continue
+        diffs.append(_hold_diff(name, in_source=in_source))
+    return diffs
+
+
 def _diff_snap_items(source_items: Sequence[SnapItem], target_items: Sequence[SnapItem]) -> list[ItemDiff]:
     """One diff per snap name present on either side, source-then-target order — same
     shape as `PackageSyncJob._diff_apt_packages`, but with D-06's own convergence rule.
+    Per-snap hold membership diffs follow the presence diffs (D8: install-before-hold).
     """
     source_by_id = {item.item_id: item for item in source_items}
     target_by_id = {item.item_id: item for item in target_items}
@@ -191,6 +252,10 @@ def _diff_snap_items(source_items: Sequence[SnapItem], target_items: Sequence[Sn
         ):
             diffs.append(_change_diff(item_id, source_item, target_item))
         # else: present on both, identical revision and channel -> no diff.
+
+    # Hold diffs AFTER presence diffs (D8) so a hold on a same-run install lands once the
+    # snap is present.
+    diffs.extend(_diff_snap_holds(source_items, target_items))
 
     return diffs
 
@@ -327,7 +392,16 @@ class SnapSyncJob(PackageSyncJob):
         it differs, or remove (never purge) — the only D-06-safe verbs (module
         docstring). One snap per invocation (D-27) so a single bad snap cannot fail the
         whole batch.
+
+        Hold membership items (`snap:hold:<name>`) are routed FIRST, by item_id prefix
+        (#208, D4), so a `snap:hold:` INSTALL runs `snap refresh --hold=forever` rather
+        than a snap install, and a `snap:hold:` REMOVE (unhold) is never misread as a
+        snap removal. This test MUST precede the action-based dispatch below, because
+        `snap:hold:` also matches the plain `snap:` prefix.
         """
+        if diff.item_id.startswith(_SNAP_HOLD_ID_PREFIX):
+            return await self._converge_hold(diff)
+
         if diff.action == DiffAction.REMOVE:
             return await self._converge_remove(diff)
 
@@ -400,6 +474,25 @@ class SnapSyncJob(PackageSyncJob):
         """
         name = shlex.quote(_snap_name(diff.item_id))
         return await self.target.run_command(f"sudo snap remove {name}", login_shell=False)
+
+    async def _converge_hold(self, diff: ItemDiff) -> CommandResult:
+        """Converge one `snap:hold:<name>` membership item (#208, D4/D6): INSTALL ->
+        `snap refresh --hold=forever <name>` (per-snap hold on the target), REMOVE ->
+        `snap refresh --unhold <name>`.
+
+        CRITICAL (module docstring, RESEARCH Pitfall 1): the snap name is ALWAYS
+        interpolated, so this never degenerates into a bare `snap refresh --hold` — the
+        form that silently sets an INDEFINITE GLOBAL hold on every snap. The name comes
+        from the item_id's `snap:hold:` suffix, which `_diff_snap_holds` only ever built
+        from a concrete source/target snap name, so it is never empty.
+
+        Selection state only, no gating (D6): a hold on a snap the user skipped
+        installing this run hits an absent snap and fails — that is a normal per-item
+        failure (D-27, the exit code alone decides pass/fail), not a gated abort.
+        """
+        name = shlex.quote(diff.item_id.removeprefix(_SNAP_HOLD_ID_PREFIX))
+        flag = "--hold=forever" if diff.action == DiffAction.INSTALL else "--unhold"
+        return await self.target.run_command(f"sudo snap refresh {flag} {name}", login_shell=False)
 
     @override
     async def validate(self) -> list[ValidationError]:
