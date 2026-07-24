@@ -9,6 +9,7 @@ and snippet-replay coverage that previously lived against `AptSyncJob` in
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -200,8 +201,11 @@ class TestSnippetResolution:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
                 "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+                # plan() now classifies from the SOURCE registry (corrected D-23).
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
             target_responses={
+                # converge/replay still reads the target's copy, placed there by the push.
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
                 "bash -c 'sudo dpkg -i /tmp/brscan3.deb'": CommandResult(0, "brscan3 installed\n", ""),
             },
@@ -329,6 +333,8 @@ class TestExecuteIndependentOfApt:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
                 "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+                # plan() classifies INSTALL from the SOURCE registry (corrected D-23).
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
             target_responses={
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
@@ -357,6 +363,8 @@ class TestTracerEndToEnd:
                 "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
                 "find /usr/local": CommandResult(0, "/usr/local/flux\n/opt/az\n", ""),
                 "dpkg -S": CommandResult(0, "azure-cli: /opt/az\n", ""),
+                # Source registry holds only brscan3 -> it plans INSTALL, flux plans REPORT_ONLY.
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
             target_responses={
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
@@ -431,6 +439,85 @@ class TestSameRunApplication:
         assert body in replay_calls[0]
 
 
+class TestClassificationAuthority:
+    """Corrected D-23: reproducibility is judged from the SOURCE registry, never the
+    target. A snippet only on the target does NOT make an item reproducible; the same
+    snippet on the source does. Direct pin of the one-run-too-late bug's root cause."""
+
+    @pytest.mark.asyncio
+    async def test_target_only_snippet_stays_report_only(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+                # Source registry empty -> no source snippet.
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
+            },
+            target_responses={
+                # Present only on the target: must NOT make the item reproducible.
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
+            },
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "unreproducible:apt-no-candidate:brscan3")
+        assert diff.action == DiffAction.REPORT_ONLY
+
+    @pytest.mark.asyncio
+    async def test_source_snippet_classifies_install(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
+            },
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "unreproducible:apt-no-candidate:brscan3")
+        assert diff.action == DiffAction.INSTALL
+
+    @pytest.mark.asyncio
+    async def test_dry_run_previews_on_the_fly_install_without_replay_or_write(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """ADR-014: under dry-run an on-the-fly-authored item is promoted and previewed as
+        an install (`apply()`'s dry-run branch reports 1 change to apply), yet NO `bash -c`
+        replay reaches the target and NO source registry write (`mv -f` of
+        `package-snippets.yaml`) runs — a rehearsal leaves no trace and touches nothing."""
+        item_id = "unreproducible:apt-no-candidate:falco-app"
+        body = "sudo dpkg -i /tmp/falco.deb"
+        reviewer = FakeReviewer(snippets={item_id: body})
+        context, source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "falco-app\n", ""),
+                "apt-cache policy": CommandResult(0, "falco-app:\n  Candidate: (none)\n", ""),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
+            },
+            dry_run=True,
+            reviewer=reviewer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with caplog.at_level(logging.INFO):
+            await job.execute()  # must not raise
+
+        # Promoted: previewed as an install rather than reported as no-change.
+        assert "Applying 1 manual change(s)" in caplog.text
+        # No replay reached the target and no source registry write happened.
+        assert not [c.args[0] for c in target.run_command.call_args_list if c.args[0].startswith("bash -c")]
+        source_writes = [
+            c.args[0]
+            for c in source.run_command.call_args_list
+            if "package-snippets" in c.args[0] and "mv -f" in c.args[0]
+        ]
+        assert not source_writes
+
+
 class TestSkipOnceResolution:
     """D-21: skip-once is a valid resolution — a run whose only items were skipped-once
     is clean; a genuinely undecided item still fails an interactive run."""
@@ -501,6 +588,8 @@ class TestContinueOnFailure:
                 "apt-cache policy": CommandResult(
                     0, "brscan3:\n  Candidate: (none)\ncnpg:\n  Candidate: (none)\n", ""
                 ),
+                # plan() classifies both INSTALL from the SOURCE registry (corrected D-23).
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
             },
             target_responses={
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
@@ -666,6 +755,8 @@ class TestSnippetPush:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
                 "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+                # plan() classifies INSTALL from the SOURCE registry (corrected D-23).
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
             target_responses={
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
