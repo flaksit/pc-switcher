@@ -92,6 +92,16 @@ With both machines on the same revision, snap application data now follows you: 
 
 To keep the revision from changing mid-sync, snapd's **automatic** refresh is briefly paused on both machines for the duration of the run (snapd auto-refreshes several times a day, even for closed apps). The pause blocks only automatic refreshes; snap_sync's own `--revision` convergence still works. Each machine's prior refresh policy is captured and restored when the run ends.
 
+## Holds and masks
+
+Beyond *what is installed*, pc-switcher also replicates the deliberate **blocks** you set to stop a package from updating: apt holds (`apt-mark hold`), per-snap refresh holds (`snap refresh --hold`), and flatpak masks (`flatpak mask`). (apt version *pins* already travel — they are `/etc/apt/preferences.d` files that sync as apt configuration items.)
+
+Each block is its own review item, distinct from the package it applies to. A held package and its hold are two separate lines in the review, each with the usual three-way choice — **apply** (make the target match the source), **skip this run**, or **skip always**. Adding a block (one present on the source but not the target) is checked by default. **Removing** a block — undoing one you set, present on the target but not the source — lands in its own removal group, **unticked**, so a bulk approval can never silently drop a block you meant to keep.
+
+Replicating the block never touches the package's version. A held apt package is still never installed or upgraded by a sync — its version is left exactly as it is — and the hold itself now travels as its own item rather than only being reported alongside the package.
+
+The review verbs match the mechanism: apt and snap holds read *hold* / *unhold*, flatpak masks read *mask* / *unmask*. flatpak masks are patterns, replicated whether or not a matching ref is installed; a pattern edit reads as remove-old plus add-new, and a user/system scope change as add plus remove, reported as found rather than normalised.
+
 ## Deletions
 
 Removals propagate for the three package managers. A package removed from the source's `apt-mark showmanual` set, a snap uninstalled on the source, or a flatpak ref or remote removed on the source becomes a removal review item on the target — unticked by default, so you approve deletions deliberately.
@@ -102,7 +112,7 @@ Removals propagate for the three package managers. A package removed from the so
 
 Each enabled package job needs passwordless sudo for a handful of binaries:
 
-- **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages and write `/etc/apt` configuration).
+- **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages, write `/etc/apt` configuration, and set or clear apt holds via `apt-mark`).
 - **`snap_sync`** — on both the **source** and the **target**; validation fails if either lacks it. The target needs it to install, refresh and remove snaps, and both hosts need it to pause snapd's auto-refresh for the sync window (`sudo snap set system refresh.hold`). The runtime pause itself tolerates a transient failure without aborting the sync, but the sudo grant is checked up front on both machines.
-- **`flatpak_sync`** — on the target only, and only when the diff involves a system-scope item.
+- **`flatpak_sync`** — on the target only, and only when the diff involves a system-scope item (a system-scope ref, remote, or mask). User-scope masks need no sudo.
 - **`manual_installs_sync`** — a snippet author decides its own privilege needs; the replay itself runs unprivileged, so the job requires no sudo beyond what a given snippet writes for itself.
