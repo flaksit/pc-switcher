@@ -231,6 +231,112 @@ class TestPlanDiff:
         assert max(remote_indices) < min(ref_indices)
 
 
+class TestRemoteUrlChange:
+    """Decision 7: a remote present on both sides with the same name+scope but a
+    DIFFERING URL is a CHANGE diff that converges the target to the source's URL via
+    `flatpak remote-modify --url`, not a REMOVE+INSTALL churn and not silently ignored.
+    """
+
+    _SRC_URL = "https://dl.flathub.org/repo/"
+    _TGT_URL = "https://old.mirror.example.org/repo/"
+
+    def _responses(self, *, src_url: str, tgt_url: str) -> tuple[dict[str, CommandResult], dict[str, CommandResult]]:
+        source = {
+            "flatpak list --app": CommandResult(0, "", ""),
+            "flatpak remotes --user --columns=name,url": CommandResult(0, f"flathub\t{src_url}\n", ""),
+            "flatpak remotes --system --columns=name,url": CommandResult(0, "", ""),
+        }
+        target = {
+            "flatpak list --app": CommandResult(0, "", ""),
+            "flatpak remotes --user --columns=name,url": CommandResult(0, f"flathub\t{tgt_url}\n", ""),
+            "flatpak remotes --system --columns=name,url": CommandResult(0, "", ""),
+        }
+        return source, target
+
+    @pytest.mark.asyncio
+    async def test_changed_url_yields_one_change_diff(self) -> None:
+        source_responses, target_responses = self._responses(src_url=self._SRC_URL, tgt_url=self._TGT_URL)
+        context, _source, _target = make_context(source_responses=source_responses, target_responses=target_responses)
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        remote_diffs = [d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE]
+        assert len(remote_diffs) == 1
+        change = remote_diffs[0]
+        assert change.item_id == "flatpak:remote:user:flathub"
+        assert change.action == DiffAction.CHANGE
+        assert change.diff_class == DiffClass.VERSION_MISMATCH
+        assert change.detail is not None
+        assert self._SRC_URL in change.detail
+        assert self._TGT_URL in change.detail
+
+    @pytest.mark.asyncio
+    async def test_changed_url_lands_in_default_ticked_change_group(self) -> None:
+        source_responses, target_responses = self._responses(src_url=self._SRC_URL, tgt_url=self._TGT_URL)
+        context, _source, _target = make_context(source_responses=source_responses, target_responses=target_responses)
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        change_group = next(g for g in plan.groups if g.action == "change")
+        assert "flatpak:remote:user:flathub" in {e.item_id for e in change_group.entries}
+        # A change is install-direction, not removal — it shares no group with removals.
+        assert not any(g.action == "remove" for g in plan.groups)
+
+    @pytest.mark.asyncio
+    async def test_identical_url_yields_no_diff(self) -> None:
+        source_responses, target_responses = self._responses(src_url=self._SRC_URL, tgt_url=self._SRC_URL)
+        context, _source, _target = make_context(source_responses=source_responses, target_responses=target_responses)
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_class == ItemClass.FLATPAK_REMOTE for d in plan.diffs)
+
+    @pytest.mark.asyncio
+    async def test_converge_uses_remote_modify_with_source_url_and_scope_flag(self) -> None:
+        source_responses, target_responses = self._responses(src_url=self._SRC_URL, tgt_url=self._TGT_URL)
+        context, _source, target = make_context(source_responses=source_responses, target_responses=target_responses)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        change = next(d for d in plan.diffs if d.action == DiffAction.CHANGE)
+
+        await job.converge(change)
+
+        modify_cmd = next(c for c in all_calls(target) if "remote-modify" in c)
+        assert "--user" in modify_cmd
+        assert "sudo" not in modify_cmd
+        assert f"--url={self._SRC_URL}" in modify_cmd
+        assert modify_cmd.rstrip().endswith("flathub")
+        # No delete+add churn: remote-modify is the only remote-mutating verb issued.
+        assert not any("remote-delete" in c for c in all_calls(target))
+        assert not any("remote-add" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_system_scope_url_change_uses_sudo_and_system_flag(self) -> None:
+        source_responses = {
+            "flatpak list --app": CommandResult(0, "", ""),
+            "flatpak remotes --user --columns=name,url": CommandResult(0, "", ""),
+            "flatpak remotes --system --columns=name,url": CommandResult(0, f"flathub\t{self._SRC_URL}\n", ""),
+        }
+        target_responses = {
+            "flatpak list --app": CommandResult(0, "", ""),
+            "flatpak remotes --user --columns=name,url": CommandResult(0, "", ""),
+            "flatpak remotes --system --columns=name,url": CommandResult(0, f"flathub\t{self._TGT_URL}\n", ""),
+        }
+        context, _source, target = make_context(source_responses=source_responses, target_responses=target_responses)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        change = next(d for d in plan.diffs if d.action == DiffAction.CHANGE)
+
+        await job.converge(change)
+
+        modify_cmd = next(c for c in all_calls(target) if "remote-modify" in c)
+        assert modify_cmd.startswith("sudo ")
+        assert "--system" in modify_cmd
+
+
 class TestPlanReadOnly:
     @pytest.mark.asyncio
     async def test_plan_issues_no_mutating_flatpak_command(self) -> None:

@@ -273,16 +273,39 @@ def _remove_remote_diff(item: FlatpakRemoteItem) -> ItemDiff:
     )
 
 
+def _change_remote_diff(source_item: FlatpakRemoteItem, target_item: FlatpakRemoteItem) -> ItemDiff:
+    """A remote present on both sides with the same name AND scope but a DIFFERING URL:
+    converge the target's remote to the source's URL (decision 7).
+
+    A URL edit is a config change, so this is a `DiffAction.CHANGE` (default-ticked
+    review group, install-direction), not a REMOVE+INSTALL churn — `_converge_remote`
+    prefers `flatpak remote-modify --url`, which edits the entry in place and preserves
+    the remote's other configuration (gpg key, filter, priority). Tagged
+    `VERSION_MISMATCH` for the same reason apt config/source edits and snap
+    revision/channel changes are (`apt_sync`/`snap_sync`): it is the "same identity,
+    differing value" conflict class, the only `DiffClass` a CHANGE ever carries.
+    """
+    return ItemDiff(
+        item_class=ItemClass.FLATPAK_REMOTE,
+        diff_class=DiffClass.VERSION_MISMATCH,
+        action=DiffAction.CHANGE,
+        item_id=source_item.item_id,
+        label=source_item.label(),
+        detail=f"remote {source_item.name} url: {source_item.url} vs {target_item.url}",
+    )
+
+
 def _diff_flatpak_remotes(
     source_items: Sequence[FlatpakRemoteItem], target_items: Sequence[FlatpakRemoteItem]
 ) -> list[ItemDiff]:
     """One diff per remote `item_id` (name + scope) present on either side.
 
-    A remote present on both sides with the SAME name and scope is never diffed by
-    URL here (T-02-22's own review-item requirement is about ADDING a remote, not
-    about detecting a URL edit on an existing one — out of this plan's stated
-    behavior set; D-11 names remotes as three-way-decision items, not as a field the
-    diff engine compares byte-for-byte the way apt keys/config do).
+    A remote present on both sides with the SAME name and scope but a DIFFERING URL is
+    a `CHANGE` diff that converges the target to the source's URL (decision 7 /
+    T-02-22): a same-name remote whose URL was silently not propagated is exactly the
+    gap this closes. URL is the only field compared here — name and scope ARE the
+    identity, so a difference in either produces two separate install/remove diffs, not
+    a change (module docstring's scope-as-identity rule).
     """
     source_by_id = {item.item_id: item for item in source_items}
     target_by_id = {item.item_id: item for item in target_items}
@@ -300,7 +323,9 @@ def _diff_flatpak_remotes(
             diffs.append(_install_remote_diff(source_item))
         elif target_item is not None and source_item is None:
             diffs.append(_remove_remote_diff(target_item))
-        # else: present on both -> no diff.
+        elif source_item is not None and target_item is not None and source_item.url != target_item.url:
+            diffs.append(_change_remote_diff(source_item, target_item))
+        # else: present on both, same url -> no diff.
 
     return diffs
 
@@ -469,6 +494,22 @@ class FlatpakSyncJob(PackageSyncJob):
             if result.success:
                 self._converged_remote_scope_names.add((scope, name))
             return result
+
+        if diff.action == DiffAction.CHANGE:
+            source_item = self._source_remotes_by_id.get(diff.item_id)
+            if source_item is None:
+                raise ConvergeItemFailed(
+                    f"no captured source remote for {diff.label} (item_id={diff.item_id!r}); "
+                    "was plan() run before converge()?"
+                )
+            # `remote-modify --url` edits the existing entry in place (the remote is
+            # present on both sides by construction of a CHANGE diff), preserving its
+            # other config and avoiding the ref-origin disruption a delete+re-add would
+            # cause. No need to record it in `_converged_remote_scope_names`: the remote
+            # already exists on the target, so ref-readiness (`_remote_ready_on_target`)
+            # is already satisfied via the plan-time target query.
+            cmd = f"{sudo}flatpak remote-modify {scope_flag} --url={shlex.quote(source_item.url)} {shlex.quote(name)}"
+            return await self.target.run_command(cmd, login_shell=False)
 
         if diff.action == DiffAction.REMOVE:
             cmd = f"{sudo}flatpak remote-delete {scope_flag} {shlex.quote(name)}"
