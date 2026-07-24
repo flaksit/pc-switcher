@@ -751,12 +751,8 @@ class TestAptSyncEndToEnd:
                 if filename
             )
             if cleanup_paths:
-                await pc1_executor.run_command(
-                    f"sudo rm -f {cleanup_paths}", login_shell=False, timeout=15.0
-                )
-                await pc2_executor.run_command(
-                    f"sudo rm -f {cleanup_paths}", login_shell=False, timeout=15.0
-                )
+                await pc1_executor.run_command(f"sudo rm -f {cleanup_paths}", login_shell=False, timeout=15.0)
+                await pc2_executor.run_command(f"sudo rm -f {cleanup_paths}", login_shell=False, timeout=15.0)
 
 
 class TestPackageSyncWholeRunContracts:
@@ -1409,7 +1405,5 @@ class TestManualInstallsSyncEndToEnd:
             )
         finally:
             await _remove_unowned_marker(pc1_executor, unowned_path)
-            await pc2_executor.run_command(
-                f"rm -f {new_marker} {registry_relpath}", login_shell=False, timeout=15.0
-            )
+            await pc2_executor.run_command(f"rm -f {new_marker} {registry_relpath}", login_shell=False, timeout=15.0)
             await pc1_executor.run_command(f"rm -f {registry_relpath}", login_shell=False, timeout=15.0)
