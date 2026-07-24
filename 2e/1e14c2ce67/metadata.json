@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "2e1e14c2ce67",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 14,
+  "files_touched": [
+    "README.md",
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/dev/development-guide.md",
+    "docs/jobs/package-sync.md",
+    "src/pcswitcher/default-config.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2e/1e14c2ce67/0/metadata.json",
+      "transcript": "/2e/1e14c2ce67/0/full.jsonl",
+      "compact_transcript": "/2e/1e14c2ce67/0/transcript.jsonl",
+      "content_hash": "/2e/1e14c2ce67/0/content_hash.txt",
+      "prompt": "/2e/1e14c2ce67/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 110,
+    "cache_creation_tokens": 234393,
+    "cache_read_tokens": 8832504,
+    "output_tokens": 123724,
+    "api_call_count": 60
+  }
+}
