@@ -36,6 +36,7 @@ from typing import ClassVar
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.items import (
+    AptHoldItem,
     AptPackageItem,
     DiffAction,
     DiffClass,
@@ -117,6 +118,17 @@ _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
     (ItemClass.APT_PACKAGE, DiffAction.REPORT_ONLY): "report",
     (ItemClass.APT_SOURCE, DiffAction.REMOVE): "delete repository",
     (ItemClass.SNAP_CHANNEL, DiffAction.CHANGE): "retrack",
+    # Block-state membership items (#208): the add direction reads "hold"/"mask" and the
+    # remove direction "unhold"/"unmask", never "install"/"remove". `_build_review_groups`
+    # keys the group title AND every entry's action_label off this table by the group's own
+    # item class, so a hold/mask item never displays under an "Install/Remove packages"
+    # group even when it shares a `DiffAction` with a package.
+    (ItemClass.APT_HOLD, DiffAction.INSTALL): "hold",
+    (ItemClass.APT_HOLD, DiffAction.REMOVE): "unhold",
+    (ItemClass.SNAP_HOLD, DiffAction.INSTALL): "hold",
+    (ItemClass.SNAP_HOLD, DiffAction.REMOVE): "unhold",
+    (ItemClass.FLATPAK_MASK, DiffAction.INSTALL): "mask",
+    (ItemClass.FLATPAK_MASK, DiffAction.REMOVE): "unmask",
 }
 
 # Fixed emission order for review groups: install before change before remove keeps
@@ -177,8 +189,26 @@ class PackageSyncJob(SyncJob):
         Default: none. Only apt has a hold-vs-pin concept (`apt-mark showhold` and
         `preferences.d` are two distinct mechanisms); `snap_sync`/`flatpak_sync` need
         not override this.
+
+        As of #208 this hook carries PIN facts only (the target-only `REPORT_ONLY` echo
+        on the package item). Apt HOLDS travel as their own `apt:hold:` membership items,
+        fed by `collect_hold_sets` — not through this hook — so a held package is never
+        double-reported (once as a package `HELD_OR_PINNED` echo and once as a hold item).
         """
         return ()
+
+    async def collect_hold_sets(self) -> tuple[frozenset[str], frozenset[str]]:
+        """Source and target package-hold NAME sets feeding the `apt:hold:` membership
+        diff (#208, D5). Returned as `(source_hold_names, target_hold_names)`.
+
+        Default: two empty sets. Only apt overrides this (`apt-mark showhold` on both
+        machines). The two sets drive `_diff_apt_packages`: a name held on the source but
+        not the target becomes an `AptHoldItem` INSTALL (hold), the reverse a REMOVE
+        (unhold), and the target set additionally SUPPRESSES a held package's own
+        install/upgrade action (a held package is never proposed for install/version
+        change) without emitting any package-level hold report.
+        """
+        return frozenset(), frozenset()
 
     async def collect_unavailable_item_ids(self, missing_item_ids: frozenset[str]) -> frozenset[str]:
         """Of `missing_item_ids` (items missing on the target), which have no
@@ -198,17 +228,29 @@ class PackageSyncJob(SyncJob):
         *,
         hold_pin_facts: Sequence[HoldPinFact] = (),
         unavailable_item_ids: frozenset[str] = frozenset(),
+        source_hold_names: frozenset[str] = frozenset(),
+        target_hold_names: frozenset[str] = frozenset(),
     ) -> tuple[ItemDiff, ...]:
         """Diff source against target into every D-25 `ItemDiff` class.
 
         Structured as a per-item-class dispatch (`_diff_apt_packages` today) so a
         later plan adds new item classes by adding more private helpers here rather
-        than reshaping this method. `hold_pin_facts` and `unavailable_item_ids` come
-        from the two hooks above (`collect_hold_pin_facts`/`collect_unavailable_item_ids`)
-        so this method stays manager-agnostic — it never shells out itself.
+        than reshaping this method. `hold_pin_facts`, `unavailable_item_ids` and the two
+        hold-name sets come from the hooks above
+        (`collect_hold_pin_facts`/`collect_unavailable_item_ids`/`collect_hold_sets`) so
+        this method stays manager-agnostic — it never shells out itself.
         """
         diffs: list[ItemDiff] = []
-        diffs.extend(self._diff_apt_packages(source_items, target_items, hold_pin_facts, unavailable_item_ids))
+        diffs.extend(
+            self._diff_apt_packages(
+                source_items,
+                target_items,
+                hold_pin_facts,
+                unavailable_item_ids,
+                source_hold_names,
+                target_hold_names,
+            )
+        )
         return tuple(diffs)
 
     @staticmethod
@@ -217,24 +259,36 @@ class PackageSyncJob(SyncJob):
         target_items: Sequence[AptPackageItem],
         hold_pin_facts: Sequence[HoldPinFact],
         unavailable_item_ids: frozenset[str],
+        source_hold_names: frozenset[str] = frozenset(),
+        target_hold_names: frozenset[str] = frozenset(),
     ) -> list[ItemDiff]:
-        """One diff per item id present on either side, source-then-target order.
+        """One diff per item id present on either side, source-then-target order,
+        followed by the `apt:hold:` membership diffs (#208, D5/D8 — holds emitted AFTER
+        package diffs so install lands before its hold once the diffs converge).
 
-        Precedence per item id: `HELD_OR_PINNED` (present on the target and named by
-        a hold/pin fact) beats every other outcome — a hold/pin is itself the
-        review-worthy fact, more informative than the install/remove/change it would
-        otherwise imply. Otherwise: missing-on-target -> `REPO_UNAVAILABLE` if apt
-        reports no candidate, else `MISSING_ON_TARGET`/`INSTALL`; extra-on-target ->
-        `EXTRA_ON_TARGET`/`REMOVE`; present on both with differing versions ->
-        `VERSION_MISMATCH`/`REPORT_ONLY` (D-04: reported, never force-downgraded);
-        present on both with equal versions -> no diff at all.
+        Precedence per package id: a PINNED package (present on the target and named by a
+        pin fact) yields `HELD_OR_PINNED`/`REPORT_ONLY` — the pin echo D-25 requires,
+        informational only. A HELD package (target hold set) has its install/upgrade
+        action SUPPRESSED (a held package is never proposed for install/version change)
+        but produces NO package-level report — the hold travels as its own `apt:hold:`
+        item, so a held package is never double-reported. Otherwise: missing-on-target ->
+        `REPO_UNAVAILABLE` if apt reports no candidate, else `MISSING_ON_TARGET`/`INSTALL`;
+        extra-on-target -> `EXTRA_ON_TARGET`/`REMOVE`; present on both with differing
+        versions -> `VERSION_MISMATCH`/`REPORT_ONLY` (D-04: reported, never
+        force-downgraded); present on both with equal versions -> no diff at all.
+
+        Hold membership (D2): source-held & target-not -> `AptHoldItem` INSTALL (hold);
+        target-held & source-not -> REMOVE (unhold); held on both or neither -> no diff.
         """
         source_by_id = {item.item_id: item for item in source_items}
         target_by_id = {item.item_id: item for item in target_items}
 
-        held_or_pinned: dict[str, HoldPinFact] = {}
+        # PINS only (#208, D5): holds no longer key this guard — they travel as their own
+        # `apt:hold:` items below, so this branch keys purely on the pin mechanism.
+        pinned: dict[str, HoldPinFact] = {}
         for fact in hold_pin_facts:
-            held_or_pinned.setdefault(fact.package, fact)
+            if fact.mechanism == "pin":
+                pinned.setdefault(fact.package, fact)
 
         seen: dict[str, None] = {}
         for item in (*source_items, *target_items):
@@ -245,7 +299,7 @@ class PackageSyncJob(SyncJob):
             source_item = source_by_id.get(item_id)
             target_item = target_by_id.get(item_id)
 
-            if target_item is not None and target_item.name in held_or_pinned:
+            if target_item is not None and target_item.name in pinned:
                 diffs.append(
                     ItemDiff(
                         item_class=ItemClass.APT_PACKAGE,
@@ -253,9 +307,14 @@ class PackageSyncJob(SyncJob):
                         action=DiffAction.REPORT_ONLY,
                         item_id=item_id,
                         label=target_item.label(),
-                        detail=build_held_or_pinned_detail(held_or_pinned[target_item.name]),
+                        detail=build_held_or_pinned_detail(pinned[target_item.name]),
                     )
                 )
+            elif target_item is not None and target_item.name in target_hold_names:
+                # Held on the target: suppress its install/version action entirely (a held
+                # package must never be proposed for install/upgrade). No package-level
+                # report — the `apt:hold:` item below carries the hold fact.
+                continue
             elif source_item is not None and target_item is None:
                 if item_id in unavailable_item_ids:
                     diffs.append(
@@ -303,43 +362,85 @@ class PackageSyncJob(SyncJob):
                 )
             # else: present on both, equal versions, not held/pinned -> no diff.
 
+        # Hold membership diffs (#208, D2/D8): emitted AFTER every package diff so a
+        # package install lands before its hold when both are approved.
+        diffs.extend(PackageSyncJob._diff_apt_holds(source_hold_names, target_hold_names))
+        return diffs
+
+    @staticmethod
+    def _diff_apt_holds(source_hold_names: frozenset[str], target_hold_names: frozenset[str]) -> list[ItemDiff]:
+        """`apt:hold:` membership diffs (#208, D2): source-held & target-not -> INSTALL
+        (hold); target-held & source-not -> REMOVE (unhold); held on both or on neither
+        -> no diff. `sorted` for a stable, deterministic review order.
+        """
+        diffs: list[ItemDiff] = []
+        for name in sorted(source_hold_names | target_hold_names):
+            in_source = name in source_hold_names
+            in_target = name in target_hold_names
+            if in_source == in_target:
+                continue
+            hold_item = AptHoldItem(name=name)
+            diffs.append(
+                ItemDiff(
+                    item_class=ItemClass.APT_HOLD,
+                    diff_class=DiffClass.MISSING_ON_TARGET if in_source else DiffClass.EXTRA_ON_TARGET,
+                    action=DiffAction.INSTALL if in_source else DiffAction.REMOVE,
+                    item_id=hold_item.item_id,
+                    label=hold_item.label(),
+                    detail=None,
+                )
+            )
         return diffs
 
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
-        """One `ReviewGroup` per action present in `diffs`, keyed by `(manager, action)`
-        (D-24) so removals never share a group with installs. The title's verb comes
-        from `_ACTION_VOCABULARY`, keyed by the group's item class — today every diff
-        this job produces shares one item class per action, so the first entry's
-        `item_class` is unambiguous; a manager mixing item classes under one action
-        would need this revisited.
+        """One `ReviewGroup` per `(action, item_class)` present in `diffs`, keyed on
+        `(manager, action)` for the reviewer's removal-direction test (D-24) so removals
+        never share a group with installs. The title's verb and every entry's
+        `action_label` come from `_ACTION_VOCABULARY`, keyed by the group's own item
+        class — so a block-state membership item (`apt:hold:`, `snap:hold:`,
+        `flatpak:mask:`) whose add direction shares the `INSTALL` action with a package
+        still reads "Hold/Mask ..." rather than displaying under "Install packages"
+        (#208). Grouping by item class as well as action is what keeps that verb correct
+        when one action mixes item classes (e.g. apt package INSTALL alongside apt hold
+        INSTALL); the group's `action` value stays the raw `DiffAction` so add-direction
+        stays default-checked and remove-direction lands in its own unticked group.
+
+        Emission order: `_ACTION_ORDER` (install, change, remove, report) outer, and
+        within one action the item classes in first-seen order — which, because
+        `_diff_apt_packages` emits package diffs before hold diffs, keeps a package group
+        ahead of its hold group.
         """
-        by_action: dict[DiffAction, list[ItemDiff]] = {}
+        by_key: dict[tuple[DiffAction, ItemClass], list[ItemDiff]] = {}
+        class_order: dict[DiffAction, list[ItemClass]] = {}
         for diff in diffs:
-            by_action.setdefault(diff.action, []).append(diff)
+            key = (diff.action, diff.item_class)
+            if key not in by_key:
+                by_key[key] = []
+                class_order.setdefault(diff.action, []).append(diff.item_class)
+            by_key[key].append(diff)
 
         groups: list[ReviewGroup] = []
         for action in _ACTION_ORDER:
-            entries = by_action.get(action)
-            if not entries:
-                continue
-            # REPORT_ONLY has no more-specific per-item-class meaning for any current
-            # manager (IN-01): fall back to "report" rather than the raw enum value
-            # ("report_only"), which read awkwardly in review text like "Report_only
-            # flatpak packages". Every other action still falls back to its own
-            # `action.value`, unchanged.
-            default_verb = "report" if action == DiffAction.REPORT_ONLY else action.value
-            verb = _ACTION_VOCABULARY.get((entries[0].item_class, action), default_verb)
-            groups.append(
-                ReviewGroup(
-                    manager=self.manager_id,
-                    action=action.value,
-                    title=f"{verb.capitalize()} {self.manager_id} packages",
-                    entries=tuple(
-                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label=verb, detail=diff.detail)
-                        for diff in entries
-                    ),
+            for item_class in class_order.get(action, []):
+                entries = by_key[(action, item_class)]
+                # REPORT_ONLY has no more-specific per-item-class meaning for any current
+                # manager (IN-01): fall back to "report" rather than the raw enum value
+                # ("report_only"), which read awkwardly in review text like "Report_only
+                # flatpak packages". Every other action still falls back to its own
+                # `action.value`, unchanged.
+                default_verb = "report" if action == DiffAction.REPORT_ONLY else action.value
+                verb = _ACTION_VOCABULARY.get((item_class, action), default_verb)
+                groups.append(
+                    ReviewGroup(
+                        manager=self.manager_id,
+                        action=action.value,
+                        title=f"{verb.capitalize()} {self.manager_id} packages",
+                        entries=tuple(
+                            ReviewEntry(item_id=diff.item_id, label=diff.label, action_label=verb, detail=diff.detail)
+                            for diff in entries
+                        ),
+                    )
                 )
-            )
         return tuple(groups)
 
     # -- plan() / accept_review() / apply() / execute() -------------------------------
@@ -363,6 +464,7 @@ class PackageSyncJob(SyncJob):
         source_items = await filter_inert(await self.capture_source_items(), source_decisions)
         target_items = await filter_inert(await self.query_target_items(), target_decisions)
         hold_pin_facts = await self.collect_hold_pin_facts()
+        source_hold_names, target_hold_names = await self.collect_hold_sets()
         missing_item_ids = frozenset(item.item_id for item in source_items) - frozenset(
             item.item_id for item in target_items
         )
@@ -372,6 +474,8 @@ class PackageSyncJob(SyncJob):
             target_items,
             hold_pin_facts=hold_pin_facts,
             unavailable_item_ids=unavailable_item_ids,
+            source_hold_names=source_hold_names,
+            target_hold_names=target_hold_names,
         )
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)

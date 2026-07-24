@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AptConfigItem",
+    "AptHoldItem",
     "AptKeyItem",
     "AptPackageItem",
     "AptPinItem",
@@ -50,6 +51,7 @@ __all__ = [
     "DiffAction",
     "DiffClass",
     "FlatpakItem",
+    "FlatpakMaskItem",
     "FlatpakRemoteItem",
     "HoldPinFact",
     "ItemClass",
@@ -78,10 +80,13 @@ class ItemClass(StrEnum):
     APT_KEY = "apt_key"
     APT_PIN = "apt_pin"
     APT_CONFIG = "apt_config"
+    APT_HOLD = "apt_hold"
     SNAP = "snap"
     SNAP_CHANNEL = "snap_channel"
+    SNAP_HOLD = "snap_hold"
     FLATPAK_REF = "flatpak_ref"
     FLATPAK_REMOTE = "flatpak_remote"
+    FLATPAK_MASK = "flatpak_mask"
     UNREPRODUCIBLE = "unreproducible"
 
 
@@ -354,6 +359,33 @@ class AptConfigItem:
 
 
 @dataclass(frozen=True)
+class AptHoldItem:
+    """One apt package hold (#208): dpkg selection state read via `apt-mark showhold`.
+
+    A hold is boolean-membership: a package is either held or it is not, so this item
+    carries only the package `name` and diffs as a presence difference (source-held &
+    target-not -> add the hold; target-held & source-not -> remove it). Its identity
+    (`apt:hold:<name>`) is DISTINCT from the package item's (`apt:package:<name>`) so a
+    package and its hold are two separate review items — replicating the user's
+    deliberate "block all upgrades" intent independently of whether the package itself
+    is being installed this run.
+    """
+
+    name: str
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_HOLD
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `apt:hold:<name>`."""
+        return f"apt:hold:{self.name}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return f"{self.name} (hold)"
+
+
+@dataclass(frozen=True)
 class SnapItem:
     """One installed snap (D-06): name, tracked channel, and installed revision.
 
@@ -361,11 +393,18 @@ class SnapItem:
     `ItemClass.SNAP_CHANNEL` is reserved for the diff DETAIL on a channel-only change
     (retracking with no revision change) and never becomes a standalone item — a
     channel with no snap attached to it has no meaning of its own.
+
+    `held` is per-snap refresh-hold state parsed from `snap list` Notes (#208): it is a
+    FIELD, not part of the snap's identity, and defaults `False` so existing construction
+    sites and the shared diff never have to name it. `snap_sync` populates it and diffs it
+    into a separate `snap:hold:<name>` membership item (`ItemClass.SNAP_HOLD`), keeping the
+    hold a distinct review item from the snap itself.
     """
 
     name: str
     channel: str
     revision: str
+    held: bool = False
 
     ITEM_CLASS: ClassVar[ItemClass] = ItemClass.SNAP
 
@@ -431,6 +470,33 @@ class FlatpakRemoteItem:
     def label(self) -> str:
         """Human-readable text for the review UI and logs."""
         return f"{self.name} remote ({self.scope}): {self.url}"
+
+
+@dataclass(frozen=True)
+class FlatpakMaskItem:
+    """One flatpak mask pattern (#208, D-10), scoped user or system.
+
+    A mask is a pattern flatpak refuses to install or update (`flatpak mask <pattern>`),
+    replicated as a PURE pattern — never filtered to installed refs (D-10) — so a mask
+    edit reads as remove-old + add-new and a scope split as add + remove, reported as
+    found rather than normalised. `scope` lives inside `item_id` (same reasoning as
+    `FlatpakItem`/`FlatpakRemoteItem`) so the same pattern masked in both scopes falls
+    out of the generic diff as two distinct items.
+    """
+
+    pattern: str
+    scope: Literal["user", "system"]
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.FLATPAK_MASK
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `flatpak:mask:<scope>:<pattern>`."""
+        return f"flatpak:mask:{self.scope}:{self.pattern}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return f"{self.pattern} (mask, {self.scope})"
 
 
 @dataclass(frozen=True)

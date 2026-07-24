@@ -74,6 +74,7 @@ _APT_PACKAGE_ID_PREFIX = "apt:package:"
 _SOURCE_SUDO_COMMANDS = ("/usr/bin/find",)
 _TARGET_SUDO_COMMANDS = (
     "/usr/bin/apt-get",
+    "/usr/bin/apt-mark",
     "/usr/bin/find",
     "/usr/bin/install",
     "/usr/bin/cp",
@@ -104,7 +105,17 @@ _ITEM_CLASS_ORDER: dict[ItemClass, int] = {
     ItemClass.APT_PIN: 1,
     ItemClass.APT_CONFIG: 1,
     ItemClass.APT_SOURCE: 2,
+    # Holds converge AFTER package installs (#208, D8: install-before-hold) — rank 4,
+    # behind the module-level package default (3). A hold is dpkg selection state only:
+    # holding a package that this same run is installing must happen once it is present.
+    ItemClass.APT_HOLD: 4,
 }
+
+# `AptHoldItem.item_id` is always this prefix + the package name (packages/items.py).
+# `converge()` dispatches on it BEFORE the action-based package dispatch so an
+# `apt:hold:` INSTALL never routes into `apt-get install` (#208, D4 — routed by prefix,
+# never by action).
+_APT_HOLD_ID_PREFIX = "apt:hold:"
 
 # Synthetic diff id for the one `apt-get update` this job issues per run when at least
 # one source/key/pin/config item was approved (Task 2). Not a real `/etc/apt` item —
@@ -584,27 +595,17 @@ class AptSyncJob(PackageSyncJob):
 
     @override
     async def collect_hold_pin_facts(self) -> Sequence[HoldPinFact]:
-        """Hold facts from `apt-mark showhold` on BOTH machines (RESEARCH: "either
-        machine" — a hold recorded on either end is worth surfacing), pin facts from
-        the target's `/etc/apt/preferences.d/*` `Package:` stanzas.
+        """PIN facts from the target's `/etc/apt/preferences.d/*` `Package:` stanzas —
+        the target-only `HELD_OR_PINNED`/`REPORT_ONLY` echo on the package item.
 
-        Reading only one of the two mechanisms would silently miss half the held
-        packages (RESEARCH Pitfall 2): a hold is dpkg selection state, a pin is an apt
-        priority preference, and neither implies the other.
+        As of #208 this reads PINS only. HOLDS moved out of this hook: a hold is dpkg
+        selection state (`apt-mark showhold`) replicated as its own `apt:hold:` membership
+        item via `collect_hold_sets`, not surfaced as a package-level report — so a held
+        package is never double-reported (once here and once as a hold item). A pin
+        remains an apt priority preference that can still permit an upgrade, so it stays a
+        report on the package rather than a converge action (RESEARCH Pitfall 2).
         """
         facts: list[HoldPinFact] = []
-
-        source_hold = await self.source.run_command("apt-mark showhold")
-        facts.extend(
-            HoldPinFact(mechanism="hold", package=name, source_ref="source: apt-mark showhold")
-            for name in _lines(source_hold.stdout)
-        )
-
-        target_hold = await self.target.run_command("apt-mark showhold", login_shell=False)
-        facts.extend(
-            HoldPinFact(mechanism="hold", package=name, source_ref="target: apt-mark showhold")
-            for name in _lines(target_hold.stdout)
-        )
 
         # `find ... -exec ... {} +` passes every matching file to one awk invocation
         # (not a per-file command); if the directory has no files, -exec never runs,
@@ -619,6 +620,18 @@ class AptSyncJob(PackageSyncJob):
                 facts.append(HoldPinFact(mechanism="pin", package=package, source_ref=filename))
 
         return facts
+
+    @override
+    async def collect_hold_sets(self) -> tuple[frozenset[str], frozenset[str]]:
+        """Source and target package-hold NAME sets from `apt-mark showhold` on BOTH
+        machines (#208, D5). Read from both ends because the hold is replicated as a
+        membership diff: a name held on the source but not the target becomes a hold
+        (INSTALL), the reverse an unhold (REMOVE), and the target set also suppresses a
+        held package's own install/upgrade action in `_diff_apt_packages`.
+        """
+        source_hold = await self.source.run_command("apt-mark showhold")
+        target_hold = await self.target.run_command("apt-mark showhold", login_shell=False)
+        return frozenset(_lines(source_hold.stdout)), frozenset(_lines(target_hold.stdout))
 
     @override
     async def collect_unavailable_item_ids(self, missing_item_ids: frozenset[str]) -> frozenset[str]:
@@ -901,8 +914,12 @@ class AptSyncJob(PackageSyncJob):
         in `self._collateral_trigger_ids`, so a `skip` decision can later be translated
         into `SKIP_ONCE` on the installs it gates.
         """
-        install_names = [_package_name(d.item_id) for d in diffs if d.action == DiffAction.INSTALL]
-        remove_names = [_package_name(d.item_id) for d in diffs if d.action == DiffAction.REMOVE]
+        # APT_PACKAGE only: a hold item (`apt:hold:`) shares the INSTALL/REMOVE actions
+        # but is dpkg selection state, not an apt-get transaction, so it drives no
+        # collateral simulation and its id is not a package id (#208).
+        pkg = [d for d in diffs if d.item_class == ItemClass.APT_PACKAGE]
+        install_names = [_package_name(d.item_id) for d in pkg if d.action == DiffAction.INSTALL]
+        remove_names = [_package_name(d.item_id) for d in pkg if d.action == DiffAction.REMOVE]
         reviewed_names = frozenset(install_names) | frozenset(remove_names)
 
         collateral: list[ItemDiff] = []
@@ -977,7 +994,9 @@ class AptSyncJob(PackageSyncJob):
         return frozenset(
             _package_name(diff.item_id)
             for diff in self._accepted_plan.diffs
-            if diff.action == DiffAction.REMOVE and decisions.get(diff.item_id) == Decision.APPLY
+            if diff.item_class == ItemClass.APT_PACKAGE
+            and diff.action == DiffAction.REMOVE
+            and decisions.get(diff.item_id) == Decision.APPLY
         )
 
     def _resolve_collateral(self, plan: PackagePlan, outcome: ReviewOutcome) -> ReviewOutcome:
@@ -1046,9 +1065,16 @@ class AptSyncJob(PackageSyncJob):
         )
         if approved_group:
             marker = _metadata_refresh_diff()
-            non_package = [diff for diff in plan.diffs if diff.item_class != ItemClass.APT_PACKAGE]
+            # Repo-group items sort before the metadata refresh, packages after it, and
+            # holds LAST (#208, D8: install-before-hold). Holds are neither package nor
+            # repo-group, so they are pulled out explicitly rather than folding into the
+            # pre-marker `non_package` bucket, which would converge them before installs.
+            repo_like = [
+                diff for diff in plan.diffs if diff.item_class not in (ItemClass.APT_PACKAGE, ItemClass.APT_HOLD)
+            ]
             package = [diff for diff in plan.diffs if diff.item_class == ItemClass.APT_PACKAGE]
-            plan = PackagePlan(manager=plan.manager, diffs=(*non_package, marker, *package), groups=plan.groups)
+            holds = [diff for diff in plan.diffs if diff.item_class == ItemClass.APT_HOLD]
+            plan = PackagePlan(manager=plan.manager, diffs=(*repo_like, marker, *package, *holds), groups=plan.groups)
             outcome = ReviewOutcome(
                 decisions={**outcome.decisions, marker.item_id: Decision.APPLY},
                 was_interactive=outcome.was_interactive,
@@ -1062,17 +1088,22 @@ class AptSyncJob(PackageSyncJob):
     @override
     async def converge(self, diff: ItemDiff) -> CommandResult:
         """Simulate the exact apt transaction, guard it, then run the real command —
-        for apt packages. Repository-group items (keys, pins, apt config, sources) and
-        the synthetic metadata-refresh marker converge as one ordered, transactional
-        unit via `_converge_repo_group_item` instead (Task 2). Unreproducible items are
-        not apt's concern (D-18) — `manual_installs_sync` owns their snippet replay — so
-        `converge()` here only ever sees repository-group, `INSTALL` or `REMOVE` diffs.
+        for apt packages. Hold items (`apt:hold:<name>`) are routed FIRST, by item_id
+        prefix, to `_converge_hold` so an `apt:hold:` INSTALL runs `apt-mark hold` rather
+        than falling into the action-based `apt-get install` dispatch (#208, D4).
+        Repository-group items (keys, pins, apt config, sources) and the synthetic
+        metadata-refresh marker converge as one ordered, transactional unit via
+        `_converge_repo_group_item` instead (Task 2). Unreproducible items are not apt's
+        concern (D-18) — `manual_installs_sync` owns their snippet replay — so `converge()`
+        here only ever sees hold, repository-group, `INSTALL` or `REMOVE` diffs.
 
         One package per invocation (D-27) so a single bad package cannot fail the
         whole batch, and so each package's simulation corresponds exactly to the
         command that follows it. The target resolves dependencies and downloads from
         its own repos (D-28) — no source cache is consulted.
         """
+        if diff.item_id.startswith(_APT_HOLD_ID_PREFIX):
+            return await self._converge_hold(diff)
         if diff.item_class in _REPO_GROUP_CLASSES or diff.item_id == _METADATA_REFRESH_ITEM_ID:
             return await self._converge_repo_group_item(diff)
         if diff.action == DiffAction.INSTALL:
@@ -1188,6 +1219,19 @@ class AptSyncJob(PackageSyncJob):
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {remove_args}"
         return await self.target.run_command(real_cmd, login_shell=False)
+
+    async def _converge_hold(self, diff: ItemDiff) -> CommandResult:
+        """Converge one `apt:hold:<name>` membership item (#208, D4/D5): `apt-mark hold`
+        for the add direction (INSTALL), `apt-mark unhold` for the remove direction
+        (REMOVE). Selection state only — no `apt-get -s` simulation and no transaction
+        guard (a hold changes nothing about the installed package set, D4). The command's
+        exit code alone decides pass/fail (D-27); a hold on an absent or unknown package
+        that `apt-mark` rejects is a normal per-item failure (D6), not a gated abort.
+        """
+        name = diff.item_id.removeprefix(_APT_HOLD_ID_PREFIX)
+        quoted = shlex.quote(name)
+        verb = "hold" if diff.action == DiffAction.INSTALL else "unhold"
+        return await self.target.run_command(f"sudo apt-mark {verb} {quoted}", login_shell=False)
 
     # -- Repository-group convergence (Task 2: D-11, D-12, D-13, D-27, T-02-34/35) -----
     #

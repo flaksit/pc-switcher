@@ -16,10 +16,10 @@ import pytest
 
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.apt_sync import AptSyncJob, simulate_apt_transaction
-from pcswitcher.jobs.packages.items import AptPackageItem, DiffAction, DiffClass, ItemClass
-from pcswitcher.jobs.packages.review import COLLATERAL_REVIEW_ACTION, Decision
-from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFailures
+from pcswitcher.jobs.apt_sync import _TARGET_SUDO_COMMANDS, AptSyncJob, simulate_apt_transaction
+from pcswitcher.jobs.packages.items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
+from pcswitcher.jobs.packages.review import COLLATERAL_REVIEW_ACTION, Decision, ReviewOutcome
+from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFailures, PackagePlan
 from pcswitcher.models import CommandResult, Host
 from pcswitcher.orchestrator import Orchestrator
 from tests.unit.jobs.test_package_sync_core import FakeReviewer
@@ -470,22 +470,39 @@ class TestTransactionGuard:
 
 
 class TestHoldPinCapture:
-    """collect_hold_pin_facts: apt-mark showhold on BOTH machines + preferences.d pins."""
+    """collect_hold_sets: apt-mark showhold on BOTH machines; collect_hold_pin_facts:
+    preferences.d pins only (#208 — holds moved to their own membership item)."""
 
     @pytest.mark.asyncio
-    async def test_holds_from_both_machines_surface(self) -> None:
+    async def test_hold_sets_from_both_machines_surface(self) -> None:
         context, _source, _target = make_context(
             source_responses={"apt-mark showhold": CommandResult(0, "pkg-src-held\n", "")},
             target_responses={"apt-mark showhold": CommandResult(0, "pkg-tgt-held\n", "")},
         )
         job = AptSyncJob(context)
 
+        source_holds, target_holds = await job.collect_hold_sets()
+
+        assert source_holds == frozenset({"pkg-src-held"})
+        assert target_holds == frozenset({"pkg-tgt-held"})
+
+    @pytest.mark.asyncio
+    async def test_collect_hold_pin_facts_returns_pins_only_no_holds(self) -> None:
+        """#208: `collect_hold_pin_facts` no longer reads `apt-mark showhold` — holds
+        travel as `apt:hold:` items, so only pin facts surface here."""
+        context, _source, _target = make_context(
+            source_responses={"apt-mark showhold": CommandResult(0, "src-held\n", "")},
+            target_responses={
+                "apt-mark showhold": CommandResult(0, "tgt-held\n", ""),
+                "find /etc/apt/preferences.d": CommandResult(0, "/etc/apt/preferences.d/curl-pin\tcurl\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
         facts = await job.collect_hold_pin_facts()
 
-        packages = {fact.package for fact in facts}
-        assert "pkg-src-held" in packages
-        assert "pkg-tgt-held" in packages
-        assert all(fact.mechanism == "hold" for fact in facts)
+        assert all(fact.mechanism == "pin" for fact in facts)
+        assert {fact.package for fact in facts} == {"curl"}
 
     @pytest.mark.asyncio
     async def test_preferences_d_pin_surfaces_with_pin_mechanism_and_filename(self) -> None:
@@ -503,15 +520,118 @@ class TestHoldPinCapture:
         assert pins[0].package == "curl"
         assert pins[0].source_ref == "/etc/apt/preferences.d/curl-pin"
 
+
+class TestAptHold:
+    """#208: hold replication — `apt:hold:` membership items, converge via `apt-mark`,
+    the HELD_OR_PINNED reshape (pins echo, holds don't double-report), and sudo scope."""
+
     @pytest.mark.asyncio
-    async def test_hold_and_pin_wired_end_to_end_both_held_or_pinned_and_distinguishable(self) -> None:
-        """Must-have: a hold and a pin, read from their two different sources, both
-        surface as HELD_OR_PINNED in the SAME plan(), and stay distinguishable facts.
-        """
+    async def test_source_held_yields_install_hold_item_and_converge_runs_apt_mark_hold(self) -> None:
+        """A package held on the source but not the target produces an `apt:hold:`
+        INSTALL item; approving it converges via `sudo apt-mark hold`, never apt-get."""
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+                "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:hold:pkg-a": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert any(cmd == "sudo apt-mark hold pkg-a" for cmd in commands)
+        assert not any("apt-get install" in cmd for cmd in commands)
+
+    @pytest.mark.asyncio
+    async def test_target_held_only_yields_remove_unhold_item(self) -> None:
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+                "sudo apt-mark unhold pkg-a": CommandResult(0, "Canceled hold on pkg-a.\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+        by_id = {diff.item_id: diff for diff in plan.diffs}
+        assert by_id["apt:hold:pkg-a"].action == DiffAction.REMOVE
+
+        _install_reviewer(job, {"apt:hold:pkg-a": Decision.APPLY})
+        await job.execute()
+        assert any(cmd == "sudo apt-mark unhold pkg-a" for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_held_on_both_yields_no_hold_diff(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(diff.item_class == ItemClass.APT_HOLD for diff in plan.diffs)
+
+    @pytest.mark.asyncio
+    async def test_held_package_yields_hold_item_not_duplicate_held_or_pinned_report(self) -> None:
+        """A target-held package produces the `apt:hold:` item and NOT a package-level
+        HELD_OR_PINNED report for the same name (#208 dedup)."""
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t2.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+            },
+            target_responses={
+                # Different version on target: without the hold this would be a
+                # VERSION_MISMATCH; the hold suppresses that package action.
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        by_id = {diff.item_id: diff for diff in plan.diffs}
+        assert "apt:hold:pkg-a" in by_id
+        assert "apt:package:pkg-a" not in by_id
+        assert not any(diff.diff_class == DiffClass.HELD_OR_PINNED for diff in plan.diffs)
+
+    @pytest.mark.asyncio
+    async def test_pin_still_yields_report_only_echo_alongside_a_hold_item(self) -> None:
+        """A pin keeps its REPORT_ONLY HELD_OR_PINNED echo on the package; a separate
+        held package produces its own `apt:hold:` item — both coexist (#208)."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "curl\nheld-pkg\n", ""),
                 "dpkg-query": CommandResult(0, "curl\t1.0\nheld-pkg\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "curl\nheld-pkg\n", ""),
@@ -526,10 +646,38 @@ class TestHoldPinCapture:
 
         by_id = {diff.item_id: diff for diff in plan.diffs}
         curl_diff = by_id["apt:package:curl"]
-        held_diff = by_id["apt:package:held-pkg"]
         assert curl_diff.diff_class == DiffClass.HELD_OR_PINNED
-        assert held_diff.diff_class == DiffClass.HELD_OR_PINNED
-        assert curl_diff.detail != held_diff.detail
+        assert curl_diff.action == DiffAction.REPORT_ONLY
+        hold_diff = by_id["apt:hold:held-pkg"]
+        assert hold_diff.item_class == ItemClass.APT_HOLD
+        assert hold_diff.action == DiffAction.REMOVE
+
+    @pytest.mark.asyncio
+    async def test_skip_always_on_a_hold_writes_the_decision_file(self) -> None:
+        """SKIP_ALWAYS on an `apt:hold:` INSTALL item (source-held) persists a decision
+        on the SOURCE via the machine-local decision file (D-08a)."""
+        context, source, _target = make_context()
+        job = AptSyncJob(context)
+        hold_diff = ItemDiff(
+            item_class=ItemClass.APT_HOLD,
+            diff_class=DiffClass.MISSING_ON_TARGET,
+            action=DiffAction.INSTALL,
+            item_id="apt:hold:pkg-a",
+            label="pkg-a (hold)",
+            detail=None,
+        )
+        plan = PackagePlan(manager="apt", diffs=(hold_diff,), groups=())
+        job.accept_review(
+            plan, ReviewOutcome(decisions={"apt:hold:pkg-a": Decision.SKIP_ALWAYS}, was_interactive=True)
+        )
+
+        await job.apply()
+
+        source_cmds = all_calls(source)
+        assert any("mv -f" in cmd and "apt.decisions" in cmd for cmd in source_cmds)
+
+    def test_apt_mark_is_in_the_target_sudo_command_list(self) -> None:
+        assert "/usr/bin/apt-mark" in _TARGET_SUDO_COMMANDS
 
 
 class TestUnavailableCapture:
