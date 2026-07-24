@@ -71,9 +71,13 @@ _SNAP_ID_PREFIX = "snap:"
 # check fails. A lower bound on what must be permitted, not an exact scope (ADR-013).
 _TARGET_SUDO_COMMANDS = ("/usr/bin/snap",)
 
-# Directory names under ~/snap/<app>/ that are NOT per-revision data snapd hands this
-# job (D-29): `common` is revision-independent user data folder_sync must keep
-# mirroring, `current` is a symlink snapd itself maintains to the active revision.
+# Directory names under ~/snap/<app>/ that are never a per-revision data dir (D-29):
+# `common` is revision-independent user data folder_sync must keep mirroring, `current`
+# is the symlink snapd maintains to the active revision. Both are always kept for the
+# mirror. Of the per-revision dirs, folder_sync mirrors the ONE the app's `current`
+# resolves to (so the active revision's per-user app data travels — decision 3, issue
+# #118) and excludes the retained older ones (revisions the target's snapd never
+# installed). See `snap_sync_exclude_paths`.
 _NON_REVISION_DIR_NAMES = frozenset({"common", "current"})
 
 
@@ -191,15 +195,44 @@ def _diff_snap_items(source_items: Sequence[SnapItem], target_items: Sequence[Sn
     return diffs
 
 
-def snap_sync_exclude_paths() -> list[Path]:
-    """Absolute `~/snap/<app>/<revision>` directories this job owns (D-29), resolved
-    against `Path.home()` at call time exactly like `vscode_state_exclude_paths()` —
-    unlike VS Code's fixed relpath list, the revision set is dynamic, so it is
-    enumerated from the filesystem rather than hardcoded.
+def _current_revision_name(app_dir: Path) -> str | None:
+    """The revision directory name `~/<app>/current` resolves to, or None when the
+    symlink is missing or dangling.
 
-    Deliberately excludes `~/snap/<app>/common` (revision-independent user data
-    folder_sync must keep mirroring) and `~/snap/<app>/current` (a symlink snapd
-    itself maintains) — the whole reason this export is not simply `~/snap`.
+    snapd maintains `current` as a symlink to the active revision's directory. Resolving
+    it (readlink, followed to the real dir) yields that revision's directory name so the
+    caller can keep the matching data dir in the mirror (decision 3). A missing or dangling
+    `current` — the active revision is then indeterminate — returns None, and the caller
+    falls back to excluding every revision dir for that app (the safe default).
+    """
+    current = app_dir / "current"
+    try:
+        resolved = current.resolve(strict=True)
+    except OSError:
+        return None
+    if not resolved.is_dir():
+        return None
+    return resolved.name
+
+
+def snap_sync_exclude_paths() -> list[Path]:
+    """Absolute `~/snap/<app>/<revision>` data directories folder_sync must NOT mirror,
+    resolved against `Path.home()` at call time exactly like `vscode_state_exclude_paths()`
+    — unlike VS Code's fixed relpath list, the revision set is dynamic, so it is enumerated
+    from the filesystem rather than hardcoded.
+
+    Per app this excludes every revision dir EXCEPT the one the app's `current` symlink
+    resolves to (decision 3, issue #118): snap_sync converges the target onto the source's
+    revision before folder_sync runs (D-17 order), so by folder_sync time both machines'
+    `current` points at the same revision, and mirroring THAT revision's data dir carries
+    the active revision's per-user app data across. The retained older revision dirs stay
+    excluded so folder_sync never plants data dirs for revisions the target's snapd never
+    installed.
+
+    `~/snap/<app>/common` (revision-independent user data folder_sync must keep mirroring)
+    and `~/snap/<app>/current` (the symlink itself) are always kept — the whole reason this
+    export is not simply `~/snap`. When `current` is missing or dangling the active revision
+    cannot be determined, so ALL of that app's revision dirs are excluded (safe default).
     """
     snap_root = Path.home() / "snap"
     if not snap_root.is_dir():
@@ -209,9 +242,12 @@ def snap_sync_exclude_paths() -> list[Path]:
     for app_dir in sorted(snap_root.iterdir()):
         if not app_dir.is_dir():
             continue
+        current_revision = _current_revision_name(app_dir)
         for entry in sorted(app_dir.iterdir()):
             if entry.name in _NON_REVISION_DIR_NAMES or not entry.is_dir():
                 continue
+            if current_revision is not None and entry.name == current_revision:
+                continue  # active-revision data dir travels with folder_sync (decision 3)
             paths.append(entry)
     return paths
 
@@ -367,9 +403,15 @@ class SnapSyncJob(PackageSyncJob):
 
     @override
     async def validate(self) -> list[ValidationError]:
-        """`snap version` on both ends, `sudo -n true` on the target, and a read-only
-        informational hold check on both ends (never acted on — module docstring).
+        """`snap version` on both ends, passwordless `sudo -n true` on BOTH ends, and a
+        read-only informational hold check on both ends (never acted on — module docstring).
         Sequential checks appending to `errors`, matching `AptSyncJob.validate()`'s shape.
+
+        Passwordless sudo is now required on the SOURCE too, not just the target: the
+        orchestrator pauses snapd auto-refresh across the sync window by writing
+        `refresh.hold` via `sudo snap set system` on both hosts (decision 4), so the source
+        needs the same `sudo -n` grant for `/usr/bin/snap` that the target already needed
+        for install/refresh/remove.
         """
         errors: list[ValidationError] = []
 
@@ -380,6 +422,17 @@ class SnapSyncJob(PackageSyncJob):
         target_check = await self.target.run_command("snap version", login_shell=False)
         if not target_check.success:
             errors.append(self._validation_error(Host.TARGET, "snap is not available on target"))
+
+        source_sudo_check = await self.source.run_command("sudo -n true")
+        if not source_sudo_check.success:
+            errors.append(
+                self._validation_error(
+                    Host.SOURCE,
+                    "passwordless sudo is not available on source "
+                    "(required to pause snapd auto-refresh for the sync window).\n"
+                    + passwordless_sudo_hint(_TARGET_SUDO_COMMANDS),
+                )
+            )
 
         sudo_check = await self.target.run_command("sudo -n true", login_shell=False)
         if not sudo_check.success:

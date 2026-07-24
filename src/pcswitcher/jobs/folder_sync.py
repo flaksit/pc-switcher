@@ -107,10 +107,14 @@ def _pass_display(path: str, label: str) -> str:
 #      machine's hardware exclusions on a peer. Unconditional — never gated on any package job
 #      being enabled, since a decision file must never travel even on a run where the package
 #      jobs happen to be off (see _decision_file_exclude_filters).
-#   4. the `~/snap/<app>/<revision>` directories snap_sync owns (D-29), translated from
-#      snap_sync_exclude_paths() the same way (see _snap_sync_exclude_filters) — but UNLIKE
-#      groups 2-3, gated on sync_jobs.snap_sync being enabled: a disabled snap_sync means
-#      nobody is managing those paths, and excluding them anyway would strand that data
+#   4. the retained OLD `~/snap/<app>/<revision>` data dirs snap_sync owns (D-29),
+#      translated from snap_sync_exclude_paths() the same way (see _snap_sync_exclude_filters).
+#      The CURRENT-revision data dir is deliberately NOT excluded — snap_sync converges both
+#      machines onto the same revision before folder_sync runs (D-17), so mirroring it carries
+#      the active revision's per-user app data across (decision 3, issue #118); only the
+#      retained older rev dirs, which the target's snapd never installed, stay excluded.
+#      UNLIKE groups 2-3, gated on sync_jobs.snap_sync being enabled: a disabled snap_sync
+#      means nobody is managing those paths, and excluding them anyway would strand that data
 #      unmirrored rather than protect it.
 #   5. `~/.local/share/flatpak`, which flatpak_sync owns (D-29), translated from
 #      flatpak_sync_exclude_paths() the same way (see _flatpak_sync_exclude_filters) —
@@ -465,13 +469,15 @@ class FolderSyncJob(SyncJob):
 
     @staticmethod
     def _snap_sync_exclude_filters(folder_path: str) -> list[str]:
-        """rsync `--filter` args excluding the `~/snap/<app>/<revision>` directories
-        that fall under `folder_path` (D-29).
+        """rsync `--filter` args excluding the retained OLD `~/snap/<app>/<revision>`
+        data dirs that fall under `folder_path` (D-29).
 
-        The absolute paths come from `snap_sync_exclude_paths()` — `snap_sync` owns
-        which revision directories to exclude; folder_sync only translates each
-        absolute path into a root-anchored, first-match exclude relative to the
-        transfer root, exactly as `_vscode_state_exclude_filters` does for the VS Code
+        The absolute paths come from `snap_sync_exclude_paths()` — `snap_sync` owns which
+        revision directories to exclude, and deliberately keeps the CURRENT-revision data
+        dir OUT of that set so folder_sync mirrors it (decision 3, issue #118): both machines
+        are converged onto the same revision before folder_sync runs (D-17). folder_sync only
+        translates each absolute path into a root-anchored, first-match exclude relative to
+        the transfer root, exactly as `_vscode_state_exclude_filters` does for the VS Code
         DBs. A path outside `folder_path` is skipped.
 
         The CALLER gates this on `sync_jobs.snap_sync` being enabled (see the

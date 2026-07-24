@@ -7,6 +7,7 @@ import importlib
 import logging
 import os
 import secrets
+import shlex
 from datetime import UTC, datetime
 from enum import IntEnum
 from logging.handlers import QueueListener
@@ -44,6 +45,7 @@ from pcswitcher.logger import (
     setup_logging,
 )
 from pcswitcher.models import (
+    CommandResult,
     ConfigError,
     FirstSyncScope,
     Host,
@@ -68,6 +70,25 @@ from pcswitcher.sync_history import (
 from pcswitcher.ui import TerminalUI
 
 __all__ = ["Orchestrator"]
+
+# Transient snapd auto-refresh hold applied around the RUN_JOBS window (decision 4,
+# 02-UAT-REVIEW-FIXES). snapd auto-refreshes ~4x/day even for closed apps; an auto-refresh
+# landing between snap_sync's revision convergence and folder_sync mirroring the matching
+# ~/snap/<app>/<current-rev> data dir would desync the two machines. Pausing it closes that
+# window on BOTH hosts. Mechanism: write the system-wide `refresh.hold` option (the same one
+# snap_sync.validate reads read-only), which gates ONLY the auto-refresh manager — the manual
+# `snap install/refresh --revision=N` convergence is unaffected (verified against snapd
+# overlord/snapstate/autorefresh.go: EffectiveRefreshHold is consumed only by autoRefresh).
+# It is written as a TIMED timestamp (now + _SNAP_AUTOREFRESH_HOLD_DURATION) so a crashed sync
+# self-heals when the hold expires; the prior refresh.hold is captured and restored exactly in
+# _cleanup (D-06: no standing block left behind). Deliberately NOT the `snap refresh --hold`
+# verb, whose no-snap form sets an INDEFINITE global hold (snap_sync module docstring, Pitfall
+# 1) and whose `--unhold` would also clear unrelated per-snap holds; `snap set system
+# refresh.hold` touches only the general option and is fully symmetric with `snap get`.
+_SNAP_AUTOREFRESH_HOLD_DURATION = "+6 hours"
+# Shell snippet computing an RFC3339-UTC "now + hold duration" timestamp ON THE HOST (correct
+# against each host's own clock, and parseable by snapd's refresh.hold RFC3339 validator).
+_SNAP_HOLD_TIMESTAMP_CMD = f"date -u -d '{_SNAP_AUTOREFRESH_HOLD_DURATION}' +%Y-%m-%dT%H:%M:%SZ"
 
 
 class SyncStep(IntEnum):
@@ -255,6 +276,14 @@ class Orchestrator:
         self._task_group: asyncio.TaskGroup | None = None
         self._cleanup_in_progress = False
 
+        # Snap auto-refresh hold state (decision 4). Engaged only when snap_sync is enabled
+        # on a non-dry-run; the captured prior `refresh.hold` per host is restored (or unset)
+        # in _cleanup. `_snap_hold_engaged` gates the restore so it is a no-op on runs that
+        # never set a hold, and idempotent if _cleanup were entered twice.
+        self._snap_hold_engaged = False
+        self._snap_hold_prior_source: str | None = None
+        self._snap_hold_prior_target: str | None = None
+
         # Logging infrastructure (initialized in run())
         self._queue_listener: QueueListener | None = None
         self._ui: TerminalUI | None = None
@@ -435,6 +464,9 @@ class Orchestrator:
 
             # SyncStep 10: Run sync jobs — _execute_jobs sets the 10a/10b sub-steps per job
             self._logger.info("Starting sync operations", extra={"job": "orchestrator", "host": "source"})
+            # Pause snapd auto-refresh on both hosts across the whole RUN_JOBS window
+            # (snap convergence → folder_sync); released in _cleanup (decision 4).
+            await self._hold_snap_autorefresh()
             job_results = await self._execute_jobs(jobs)
             session.job_results = job_results
 
@@ -1230,9 +1262,125 @@ class Orchestrator:
                 source_monitor_task.cancel()
                 target_monitor_task.cancel()
 
+    async def _run_snap_hold_command(self, host: Host, cmd: str) -> CommandResult:
+        """Run a snap-hold command on `host`, honoring each executor's shell contract.
+
+        The source is the local executor (no login-shell notion — its `run_command` takes
+        no `login_shell`); the target is the remote executor, invoked with
+        `login_shell=False` to match snap_sync's own target calls. Callers only reach here
+        after the hold is engaged, which happens post-connect, so both executors are set.
+        """
+        if host is Host.SOURCE:
+            assert self._local_executor is not None
+            return await self._local_executor.run_command(cmd)
+        assert self._remote_executor is not None
+        return await self._remote_executor.run_command(cmd, login_shell=False)
+
+    async def _capture_snap_hold(self, host: Host) -> str | None:
+        """Read `host`'s current system-wide snap `refresh.hold` (read-only).
+
+        Returns the raw value — an RFC3339 timestamp or the literal `forever` — when a hold
+        is set, or None when none is (snap exits non-zero, or prints nothing, for an unset
+        option). Never mutates: `snap get` is the same read-only verb snap_sync.validate uses.
+        """
+        result = await self._run_snap_hold_command(host, "snap get system refresh.hold")
+        value = result.stdout.strip()
+        return value if result.success and value else None
+
+    async def _apply_snap_hold(self, host: Host) -> None:
+        """Set a timed system-wide `refresh.hold` on `host` (best-effort).
+
+        Writes `now + _SNAP_AUTOREFRESH_HOLD_DURATION` (computed on the host) via
+        `sudo snap set system refresh.hold=...`. A failure is logged, not raised: pausing
+        auto-refresh is a best-effort race guard, and failing the whole sync because it could
+        not be set would be worse than proceeding without it (validate() has already
+        confirmed snap + passwordless sudo on both hosts).
+        """
+        cmd = f'sudo snap set system refresh.hold="$({_SNAP_HOLD_TIMESTAMP_CMD})"'
+        result = await self._run_snap_hold_command(host, cmd)
+        if not result.success:
+            self._logger.warning(
+                "Could not pause snapd auto-refresh on %s: %s",
+                host.value,
+                result.stderr.strip(),
+                extra={"job": "orchestrator", "host": host.value},
+            )
+
+    async def _hold_snap_autorefresh(self) -> None:
+        """Pause snapd AUTOMATIC refreshes on both hosts for the sync window (decision 4).
+
+        Gated on `sync_jobs.snap_sync` being enabled and skipped in dry-run (writing
+        `refresh.hold` is a system mutation; ADR-014/D-12). Captures each host's prior
+        `refresh.hold` first so `_cleanup` can restore it exactly, marks the hold engaged,
+        then applies a timed hold on both hosts. Only touches the system-wide `refresh.hold`
+        option — never per-snap holds — and never blocks the manual `--revision` convergence
+        snap_sync performs.
+        """
+        if self._dry_run or not self._config.sync_jobs.get("snap_sync", False):
+            return
+
+        self._snap_hold_prior_source = await self._capture_snap_hold(Host.SOURCE)
+        self._snap_hold_prior_target = await self._capture_snap_hold(Host.TARGET)
+        # Engage BEFORE applying so a partially-applied hold is still restored in _cleanup.
+        self._snap_hold_engaged = True
+        self._logger.info(
+            "Pausing snapd auto-refresh on both hosts for the sync window",
+            extra={"job": "orchestrator", "host": "source"},
+        )
+        await self._apply_snap_hold(Host.SOURCE)
+        await self._apply_snap_hold(Host.TARGET)
+
+    async def _restore_snap_hold(self, host: Host, prior: str | None) -> None:
+        """Restore `host`'s `refresh.hold` to its pre-sync value, or unset it (best-effort).
+
+        When a prior hold was captured it is written back verbatim (an RFC3339 timestamp or
+        `forever`); when there was none, `refresh.hold` is set empty, which snapd treats as
+        no hold — leaving any unrelated per-snap holds untouched. Never raises: this runs
+        from `_cleanup`, which must complete every teardown step regardless.
+        """
+        if prior is not None:
+            cmd = f"sudo snap set system refresh.hold={shlex.quote(prior)}"
+        else:
+            cmd = 'sudo snap set system refresh.hold=""'
+        try:
+            result = await self._run_snap_hold_command(host, cmd)
+            if not result.success:
+                self._logger.warning(
+                    "Could not restore snapd refresh.hold on %s: %s",
+                    host.value,
+                    result.stderr.strip(),
+                    extra={"job": "orchestrator", "host": host.value},
+                )
+        except Exception as e:
+            # Teardown must not be derailed by a failed restore (e.g. the connection is
+            # already tearing down). The timed hold self-expires regardless.
+            self._logger.warning(
+                "Error restoring snapd refresh.hold on %s: %s",
+                host.value,
+                e,
+                extra={"job": "orchestrator", "host": host.value},
+            )
+
+    async def _restore_snap_autorefresh(self) -> None:
+        """Restore both hosts' snap auto-refresh policy captured by `_hold_snap_autorefresh`.
+
+        A no-op when no hold was engaged, and idempotent (clears the engaged flag first) so a
+        second `_cleanup` entry cannot double-restore. Runs early in `_cleanup`, before the
+        SSH connection the target restore needs is torn down.
+        """
+        if not self._snap_hold_engaged:
+            return
+        self._snap_hold_engaged = False
+        await self._restore_snap_hold(Host.SOURCE, self._snap_hold_prior_source)
+        await self._restore_snap_hold(Host.TARGET, self._snap_hold_prior_target)
+
     async def _cleanup(self) -> None:
         """Clean up resources (connection, locks, executors)."""
         self._cleanup_in_progress = True
+
+        # Restore snapd auto-refresh FIRST, while the connection the target restore needs is
+        # still up (decision 4). Best-effort and idempotent — a no-op when no hold was set.
+        await self._restore_snap_autorefresh()
 
         # Release target lock first (before terminating other processes)
         if self._target_lock_process is not None:

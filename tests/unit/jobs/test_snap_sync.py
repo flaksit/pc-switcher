@@ -309,22 +309,62 @@ class TestConvergeRemoval:
 
 
 class TestExcludePaths:
-    def test_returns_revision_dirs_excludes_common_and_current(
+    def test_excludes_old_revisions_keeps_current_common_and_current_symlink(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The revision `current` resolves to is mirrored (kept OUT of the exclude set,
+        decision 3); every retained OLDER revision dir is excluded, and `common`/`current`
+        are always kept.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        firefox_dir = tmp_path / "snap" / "firefox"
+        current_rev = firefox_dir / "2938"
+        old_rev = firefox_dir / "2911"
+        common_dir = firefox_dir / "common"
+        current_rev.mkdir(parents=True)
+        old_rev.mkdir(parents=True)
+        common_dir.mkdir(parents=True)
+        (firefox_dir / "current").symlink_to(current_rev, target_is_directory=True)
+
+        paths = snap_sync_exclude_paths()
+
+        assert old_rev in paths  # retained old revision the target never installed
+        assert current_rev not in paths  # active-revision data dir travels
+        assert not any(p.name == "common" for p in paths)
+        assert not any(p.name == "current" for p in paths)
+
+    def test_dangling_current_falls_back_to_excluding_all_revisions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing/dangling `current` means the active revision is indeterminate, so every
+        revision dir is excluded (safe default).
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        firefox_dir = tmp_path / "snap" / "firefox"
+        rev_a = firefox_dir / "2938"
+        rev_b = firefox_dir / "2911"
+        rev_a.mkdir(parents=True)
+        rev_b.mkdir(parents=True)
+        # `current` points at a revision dir that does not exist -> dangling.
+        (firefox_dir / "current").symlink_to(firefox_dir / "9999", target_is_directory=True)
+
+        paths = snap_sync_exclude_paths()
+
+        assert rev_a in paths
+        assert rev_b in paths
+
+    def test_missing_current_symlink_falls_back_to_excluding_all_revisions(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         firefox_dir = tmp_path / "snap" / "firefox"
-        revision_dir = firefox_dir / "2938"
-        common_dir = firefox_dir / "common"
-        revision_dir.mkdir(parents=True)
-        common_dir.mkdir(parents=True)
-        (firefox_dir / "current").symlink_to(revision_dir, target_is_directory=True)
+        rev = firefox_dir / "2938"
+        rev.mkdir(parents=True)
+        # No `current` symlink created at all.
 
         paths = snap_sync_exclude_paths()
 
-        assert revision_dir in paths
-        assert not any(p.name == "common" for p in paths)
-        assert not any(p.name == "current" for p in paths)
+        assert rev in paths
 
     def test_no_snap_directory_returns_empty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -365,6 +405,20 @@ class TestValidate:
         errors = await job.validate()
 
         assert any(e.host is Host.TARGET and "sudo" in e.message for e in errors)
+
+    @pytest.mark.asyncio
+    async def test_source_without_passwordless_sudo_yields_validation_error(self) -> None:
+        """The source needs passwordless sudo too — the orchestrator pauses snapd
+        auto-refresh via `sudo snap set system refresh.hold` on the source as well (decision 4).
+        """
+        context, _source, _target = make_context(
+            source_responses={"sudo -n true": CommandResult(1, "", "sudo: a password is required")}
+        )
+        job = SnapSyncJob(context)
+
+        errors = await job.validate()
+
+        assert any(e.host is Host.SOURCE and "sudo" in e.message for e in errors)
 
     @pytest.mark.asyncio
     async def test_valid_environment_yields_no_errors(self) -> None:

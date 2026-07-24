@@ -721,19 +721,24 @@ class TestSnapSyncExcludeFilters:
     see `TestPackageJobExcludeFiltersGating`.
     """
 
-    def test_revision_dir_included_common_and_current_excluded(self, tmp_path: Path) -> None:
+    def test_old_revision_excluded_current_kept(self, tmp_path: Path) -> None:
+        """The retained OLD revision dir is excluded; the CURRENT-revision data dir (what
+        `current` resolves to) is mirrored, so it is absent from the filter list (decision 3).
+        """
         home = tmp_path / "alice"
         firefox_dir = home / "snap" / "firefox"
-        revision_dir = firefox_dir / "2938"
+        current_rev = firefox_dir / "2938"
+        old_rev = firefox_dir / "2911"
         common_dir = firefox_dir / "common"
-        revision_dir.mkdir(parents=True)
+        current_rev.mkdir(parents=True)
+        old_rev.mkdir(parents=True)
         common_dir.mkdir(parents=True)
-        (firefox_dir / "current").symlink_to(revision_dir, target_is_directory=True)
+        (firefox_dir / "current").symlink_to(current_rev, target_is_directory=True)
 
         with patch("pcswitcher.jobs.snap_sync.Path.home", return_value=home):
             filters = FolderSyncJob._snap_sync_exclude_filters(str(tmp_path))  # pyright: ignore[reportPrivateUsage]
 
-        assert filters == [f"--filter={shlex.quote('- /alice/snap/firefox/2938')}"]
+        assert filters == [f"--filter={shlex.quote('- /alice/snap/firefox/2911')}"]
 
     def test_no_snap_directory_yields_no_filters(self, tmp_path: Path) -> None:
         with patch("pcswitcher.jobs.snap_sync.Path.home", return_value=tmp_path / "alice"):
