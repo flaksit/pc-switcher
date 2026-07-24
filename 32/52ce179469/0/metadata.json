@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "3252ce179469",
+  "session_id": "dcaeb7c1-933d-49f6-b7d6-5a9f9247098a",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-24T16:03:11.019676196Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 14,
+  "save_step_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "tests/unit/jobs/test_flatpak_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "cc82bf9d11e2",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 110,
+    "cache_creation_tokens": 234393,
+    "cache_read_tokens": 8832504,
+    "output_tokens": 123724,
+    "api_call_count": 60
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-24T16:03:10.89044121Z",
+    "agent_lines": 153,
+    "agent_removed": 6,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 153,
+    "total_lines_changed": 159,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
