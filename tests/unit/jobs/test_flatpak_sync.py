@@ -15,7 +15,7 @@ import pytest
 
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.flatpak_sync import FlatpakSyncJob, flatpak_sync_exclude_paths
+from pcswitcher.jobs.flatpak_sync import FlatpakSyncJob, _parse_flatpak_masks, flatpak_sync_exclude_paths
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed
 from pcswitcher.models import CommandResult, Host, ValidationError
@@ -427,6 +427,195 @@ class TestConverge:
             await job.converge(diff)
 
         assert not any("customremote" in c for c in all_calls(target) if "flatpak install" in c)
+
+
+class TestMaskParse:
+    """`flatpak {--user|--system} mask` prints one pattern per line, each prefixed with
+    two leading spaces and no header (RESEARCH: verified live, Flatpak 1.14.6) — parsed
+    by stripping leading whitespace, unlike the tab-separated list commands.
+    """
+
+    def test_parses_two_leading_space_format_and_wildcard_patterns(self) -> None:
+        output = (
+            "  org.freedesktop.Platform.ffmpeg-full\n"
+            "  app/com.example.Blocked/x86_64/*\n"
+            "  runtime/org.gnome.*/x86_64/45\n"
+        )
+
+        items = _parse_flatpak_masks(output, "user")
+
+        assert [item.pattern for item in items] == [
+            "org.freedesktop.Platform.ffmpeg-full",
+            "app/com.example.Blocked/x86_64/*",
+            "runtime/org.gnome.*/x86_64/45",
+        ]
+        assert all(item.scope == "user" for item in items)
+
+    def test_blank_lines_skipped_and_scope_is_the_passed_argument(self) -> None:
+        output = "\n  org.example.Blocked\n\n"
+
+        items = _parse_flatpak_masks(output, "system")
+
+        assert [item.pattern for item in items] == ["org.example.Blocked"]
+        assert items[0].scope == "system"
+        assert items[0].item_id == "flatpak:mask:system:org.example.Blocked"
+
+    def test_no_masks_yields_empty_list(self) -> None:
+        assert _parse_flatpak_masks("", "user") == []
+
+
+class TestMaskDiff:
+    """Pure membership diff (#208, D-10): source-only -> INSTALL (mask), target-only ->
+    REMOVE (unmask), present-both -> no diff. No CHANGE — a mask has no value to change.
+    """
+
+    @pytest.mark.asyncio
+    async def test_source_user_mask_absent_on_target_yields_install(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={"flatpak --user mask": CommandResult(0, "  org.freedesktop.Platform.ffmpeg-full\n", "")},
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        mask_diffs = [d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_MASK]
+        assert len(mask_diffs) == 1
+        diff = mask_diffs[0]
+        assert diff.item_id == "flatpak:mask:user:org.freedesktop.Platform.ffmpeg-full"
+        assert diff.action == DiffAction.INSTALL
+        assert diff.diff_class == DiffClass.MISSING_ON_TARGET
+
+    @pytest.mark.asyncio
+    async def test_target_only_system_mask_yields_removal(self) -> None:
+        context, _source, _target = make_context(
+            target_responses={"flatpak --system mask": CommandResult(0, "  org.example.Blocked\n", "")},
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        mask_diffs = [d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_MASK]
+        assert len(mask_diffs) == 1
+        diff = mask_diffs[0]
+        assert diff.item_id == "flatpak:mask:system:org.example.Blocked"
+        assert diff.action == DiffAction.REMOVE
+        assert diff.diff_class == DiffClass.EXTRA_ON_TARGET
+        # A removal lands in its own unticked removal group, never the install group.
+        remove_group = next(g for g in plan.groups if g.action == "remove")
+        assert "flatpak:mask:system:org.example.Blocked" in {e.item_id for e in remove_group.entries}
+
+    @pytest.mark.asyncio
+    async def test_mask_present_on_both_yields_no_diff(self) -> None:
+        mask_line = "  org.example.Both\n"
+        context, _source, _target = make_context(
+            source_responses={"flatpak --user mask": CommandResult(0, mask_line, "")},
+            target_responses={"flatpak --user mask": CommandResult(0, mask_line, "")},
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_class == ItemClass.FLATPAK_MASK for d in plan.diffs)
+
+    @pytest.mark.asyncio
+    async def test_masks_ordered_after_refs_in_diffs_tuple(self) -> None:
+        # A ref install (source-only app) plus a mask install (source-only mask): the
+        # mask diff must come AFTER the ref diff so it cannot suppress an auto-pulled
+        # dependency of the ref being installed the same run (D-08).
+        context, _source, _target = make_context(
+            source_responses={
+                "flatpak list --app": CommandResult(0, "org.example.App\t1.0\tflathub\tuser\n", ""),
+                "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+                "flatpak --user mask": CommandResult(0, "  org.example.Blocked\n", ""),
+            },
+            target_responses={
+                "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+            },
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        ref_indices = [i for i, d in enumerate(plan.diffs) if d.item_class == ItemClass.FLATPAK_REF]
+        mask_indices = [i for i, d in enumerate(plan.diffs) if d.item_class == ItemClass.FLATPAK_MASK]
+        assert ref_indices
+        assert mask_indices
+        assert max(ref_indices) < min(mask_indices)
+
+
+class TestMaskConverge:
+    """`[sudo] flatpak {--user|--system} mask [--remove] <pattern>` (#208, D-10): scope +
+    pattern recovered from the item_id (no source-side lookup), sudo iff system scope.
+    """
+
+    @pytest.mark.asyncio
+    async def test_user_scope_mask_install_runs_mask_without_sudo(self) -> None:
+        pattern = "org.freedesktop.Platform.ffmpeg-full"
+        context, _source, target = make_context(
+            source_responses={"flatpak --user mask": CommandResult(0, f"  {pattern}\n", "")},
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        diff = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_MASK)
+
+        await job.converge(diff)
+
+        # The capture call is `flatpak --user mask` (no pattern); only converge carries
+        # the pattern, so filtering by it uniquely selects the mutating command.
+        mask_cmd = next(c for c in all_calls(target) if pattern in c)
+        assert "--user" in mask_cmd
+        assert "sudo" not in mask_cmd
+        assert "--remove" not in mask_cmd
+        assert mask_cmd.rstrip().endswith(pattern)
+
+    @pytest.mark.asyncio
+    async def test_system_scope_mask_removal_uses_sudo_and_remove_flag(self) -> None:
+        pattern = "org.example.Blocked"
+        context, _source, target = make_context(
+            target_responses={"flatpak --system mask": CommandResult(0, f"  {pattern}\n", "")},
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        diff = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_MASK)
+
+        await job.converge(diff)
+
+        mask_cmd = next(c for c in all_calls(target) if pattern in c and "--remove" in c)
+        assert mask_cmd.startswith("sudo ")
+        assert "--system" in mask_cmd
+        assert "--remove" in mask_cmd
+        assert mask_cmd.rstrip().endswith(pattern)
+
+
+class TestMaskSystemScopeGate:
+    """A system-scope mask on either machine (#208, D-07) writes into `/var/lib/flatpak`
+    just like a system remote, so it flips `_system_scope_in_play` and requires target
+    sudo; a user-scope-only mask never does.
+    """
+
+    @pytest.mark.asyncio
+    async def test_system_scope_mask_requires_target_sudo(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={"flatpak --system mask": CommandResult(0, "  org.example.Blocked\n", "")},
+            target_responses={"sudo -n true": CommandResult(1, "", "sudo: a password is required")},
+        )
+        job = FlatpakSyncJob(context)
+
+        errors = await job.validate()
+
+        assert any(e.host is Host.TARGET and "sudo" in e.message for e in errors)
+
+    @pytest.mark.asyncio
+    async def test_user_scope_only_mask_never_checks_sudo(self) -> None:
+        context, _source, target = make_context(
+            source_responses={"flatpak --user mask": CommandResult(0, "  org.example.UserOnly\n", "")},
+        )
+        job = FlatpakSyncJob(context)
+
+        errors: list[ValidationError] = await job.validate()
+
+        assert errors == []
+        assert not any("sudo -n true" in c for c in all_calls(target))
 
 
 class TestExcludePaths:

@@ -36,9 +36,10 @@ inheriting the base implementation, for the same reason `SnapSyncJob` does (see 
 module's docstring and 02-08's own deviation note): `PackageSyncJob.diff_items`/
 `_diff_apt_packages` is apt-package-shaped — one item class, `MISSING_ON_TARGET`/
 `EXTRA_ON_TARGET`/`VERSION_MISMATCH` only, no notion of a second item class that must
-converge ahead of the first. This job diffs and converges TWO item classes
-(`FLATPAK_REF`, `FLATPAK_REMOTE`) with an ordering dependency between them, which the
-shared dispatch has no way to express. `plan()` here reuses every manager-agnostic
+converge ahead of the first. This job diffs and converges THREE item classes
+(`FLATPAK_REMOTE`, `FLATPAK_REF`, `FLATPAK_MASK`) with an ordering dependency between
+them (remotes -> refs -> masks, D-08/D-14), which the shared dispatch has no way to
+express. `plan()` here reuses every manager-agnostic
 building block the shared core provides — `DecisionFile`/`filter_inert` (D-08's
 machine-local skip-always filtering) and `PackageSyncJob._build_review_groups`
 (D-24's action-grouped review) — so only capture, diff and converge are genuinely
@@ -64,6 +65,7 @@ from pcswitcher.jobs.packages.items import (
     DiffAction,
     DiffClass,
     FlatpakItem,
+    FlatpakMaskItem,
     FlatpakRemoteItem,
     ItemClass,
     ItemDiff,
@@ -86,6 +88,12 @@ _FLATPAK_LIST_CMD = "flatpak list --app --columns=application,version,origin,ins
 # even a byte-identical `flathub` URL is two separate configuration entries — so this
 # is run once per scope rather than once combined (module docstring, D-14).
 _FLATPAK_REMOTES_CMD_TEMPLATE = "flatpak remotes {flag} --columns=name,url"
+
+# Masks are ALSO per-installation (#208, D-10), listed one pattern per line with no
+# header — but the scope flag MUST precede the `mask` subcommand: bare `flatpak mask`
+# omits --user masks and defaults to --system (RESEARCH: verified live, Flatpak 1.14.6),
+# so this always names its scope explicitly, once per scope like remotes.
+_FLATPAK_MASK_CMD_TEMPLATE = "flatpak {flag} mask"
 
 # Both scopes this item model and flatpak's own --user/--system flags recognise.
 _SCOPES: tuple[Literal["user", "system"], ...] = ("user", "system")
@@ -123,12 +131,15 @@ def _sudo_prefix(scope: str) -> str:
     return "sudo " if scope == "system" else ""
 
 
-def _split_flatpak_item_id(item_id: str, expected_kind: Literal["ref", "remote"]) -> tuple[str, str]:
+def _split_flatpak_item_id(item_id: str, expected_kind: Literal["ref", "remote", "mask"]) -> tuple[str, str]:
     """`(scope, name)` from a `flatpak:<kind>:<scope>:<name>` item id (packages/items.py).
 
-    `name` is the application id for a ref, the remote name for a remote — both are
-    dotted/alnum tokens with no `:` of their own (RESEARCH Standard Stack), so a fixed
-    3-colon split is exact rather than a heuristic. This is a legitimate use of a
+    `name` is the application id for a ref, the remote name for a remote, the pattern
+    for a mask — none carries a `:` of its own: refs/remotes are dotted/alnum tokens
+    and mask patterns are partial refs with `/` and `*` wildcards but never `:`
+    (RESEARCH Standard Stack, verified live), so a fixed 3-colon split is exact rather
+    than a heuristic (the `split(":", 3)` cap keeps any `/` inside a pattern intact).
+    This is a legitimate use of a
     stable identity string (the same pattern `apt_sync._package_name` and
     `snap_sync._snap_name` already establish): the plan only ever carries `ItemDiff`s,
     not the richer item dataclasses, so converge() recovers scope/name from the id.
@@ -180,6 +191,25 @@ def _parse_flatpak_remotes(output: str, scope: Literal["user", "system"]) -> lis
             continue
         name, url = fields
         items.append(FlatpakRemoteItem(name=name, url=url, scope=scope))
+    return items
+
+
+def _parse_flatpak_masks(output: str, scope: Literal["user", "system"]) -> list[FlatpakMaskItem]:
+    """Parse one scope's `flatpak {--user|--system} mask` output into `FlatpakMaskItem`s.
+
+    Unlike the tab-separated list commands, `flatpak mask` prints each pattern on its
+    own line prefixed with two leading spaces and no header (RESEARCH: verified live,
+    Flatpak 1.14.6), so this strips leading/trailing whitespace per non-blank line
+    rather than splitting on tabs. `scope` is a parameter, not a parsed column: the
+    command has no scope column: the caller already chose the `--user`/`--system` flag
+    (same reasoning as `_parse_flatpak_remotes`).
+    """
+    items: list[FlatpakMaskItem] = []
+    for line in output.splitlines():
+        pattern = line.strip()
+        if not pattern:
+            continue
+        items.append(FlatpakMaskItem(pattern=pattern, scope=scope))
     return items
 
 
@@ -330,6 +360,61 @@ def _diff_flatpak_remotes(
     return diffs
 
 
+def _install_mask_diff(item: FlatpakMaskItem) -> ItemDiff:
+    return ItemDiff(
+        item_class=ItemClass.FLATPAK_MASK,
+        diff_class=DiffClass.MISSING_ON_TARGET,
+        action=DiffAction.INSTALL,
+        item_id=item.item_id,
+        label=item.label(),
+        detail=None,
+    )
+
+
+def _remove_mask_diff(item: FlatpakMaskItem) -> ItemDiff:
+    return ItemDiff(
+        item_class=ItemClass.FLATPAK_MASK,
+        diff_class=DiffClass.EXTRA_ON_TARGET,
+        action=DiffAction.REMOVE,
+        item_id=item.item_id,
+        label=item.label(),
+        detail=None,
+    )
+
+
+def _diff_flatpak_masks(
+    source_items: Sequence[FlatpakMaskItem], target_items: Sequence[FlatpakMaskItem]
+) -> list[ItemDiff]:
+    """One diff per mask `item_id` (scope + pattern) present on either side (#208, D-10).
+
+    Pure membership, no `CHANGE`: a mask has no value to change, only presence — so
+    source-has & target-lacks -> `INSTALL` (add the mask on target); target-has &
+    source-lacks -> `REMOVE` (unmask on target); present on both -> no diff. A pattern
+    edit therefore reads as remove-old + add-new and a user/system scope split as
+    add + remove (scope is identity, same as refs/remotes), reported as found rather
+    than normalised.
+    """
+    source_by_id = {item.item_id: item for item in source_items}
+    target_by_id = {item.item_id: item for item in target_items}
+
+    seen: dict[str, None] = {}
+    for item in (*source_items, *target_items):
+        seen.setdefault(item.item_id, None)
+
+    diffs: list[ItemDiff] = []
+    for item_id in seen:
+        source_item = source_by_id.get(item_id)
+        target_item = target_by_id.get(item_id)
+
+        if source_item is not None and target_item is None:
+            diffs.append(_install_mask_diff(source_item))
+        elif target_item is not None and source_item is None:
+            diffs.append(_remove_mask_diff(target_item))
+        # else: present on both -> no diff (pure membership, no value to change).
+
+    return diffs
+
+
 def flatpak_sync_exclude_paths() -> list[Path]:
     """The single absolute path this job owns (D-29), resolved against `Path.home()`
     at call time exactly like `vscode_state_exclude_paths()`/`snap_sync_exclude_paths()`.
@@ -423,20 +508,47 @@ class FlatpakSyncJob(PackageSyncJob):
             remotes.extend(await self._query_target_remotes(scope))
         return remotes
 
+    async def _capture_source_masks(self, scope: Literal["user", "system"]) -> list[FlatpakMaskItem]:
+        cmd = _FLATPAK_MASK_CMD_TEMPLATE.format(flag=_scope_flag(scope))
+        result = await self.source.run_command(cmd)
+        return _parse_flatpak_masks(result.stdout, scope)
+
+    async def _query_target_masks(self, scope: Literal["user", "system"]) -> list[FlatpakMaskItem]:
+        cmd = _FLATPAK_MASK_CMD_TEMPLATE.format(flag=_scope_flag(scope))
+        result = await self.target.run_command(cmd, login_shell=False)
+        return _parse_flatpak_masks(result.stdout, scope)
+
+    async def _capture_all_source_masks(self) -> list[FlatpakMaskItem]:
+        """Both scopes, one call each (D-10): masks are per-installation like remotes,
+        so a pattern masked in both scopes is two independent reads.
+        """
+        masks: list[FlatpakMaskItem] = []
+        for scope in _SCOPES:
+            masks.extend(await self._capture_source_masks(scope))
+        return masks
+
+    async def _query_all_target_masks(self) -> list[FlatpakMaskItem]:
+        masks: list[FlatpakMaskItem] = []
+        for scope in _SCOPES:
+            masks.extend(await self._query_target_masks(scope))
+        return masks
+
     @override
     async def plan(self) -> PackagePlan:
         """Load decision files -> capture -> query -> diff -> build review groups.
 
-        Read-only: only `flatpak list`/`flatpak remotes` (both machines, both scopes)
-        and a decision-file `cat` run here — no `flatpak install`/`uninstall`/
-        `remote-add`/`remote-delete` before this returns. Caches the filtered
-        source/target items by id for `converge()` (see `__init__`).
+        Read-only: only `flatpak list`/`flatpak remotes`/`flatpak mask` (both machines,
+        both scopes) and a decision-file `cat` run here — no `flatpak install`/
+        `uninstall`/`remote-add`/`remote-delete`/`mask` mutation before this returns.
+        Caches the filtered source/target refs and remotes by id for `converge()` (see
+        `__init__`); masks need no cache (pattern is fully in the item_id).
 
-        Remote diffs are placed before ref diffs in the returned `diffs` tuple — this
-        job's own ordering stage, mirroring `apt_sync`'s key-before-source sort, for
-        the same class of reason: `flatpak install` fails when its remote is not yet
-        configured in that scope (D-14), so the base `apply()` loop (which converges
-        `plan.diffs` in order) must see every remote diff first.
+        Diffs are ordered remotes -> refs -> masks in the returned `diffs` tuple — this
+        job's own ordering stage, mirroring `apt_sync`'s key-before-source sort: a ref's
+        `flatpak install` fails when its remote is not yet configured in that scope
+        (D-14), and a mask applied before its refs could suppress an auto-pulled
+        dependency of a ref being installed the same run (D-08). The base `apply()` loop
+        converges `plan.diffs` in order, so this ordering is what enforces both.
         """
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
@@ -445,6 +557,8 @@ class FlatpakSyncJob(PackageSyncJob):
         target_refs = await filter_inert(await self.query_target_items(), target_decisions)
         source_remotes = await filter_inert(await self._capture_all_source_remotes(), source_decisions)
         target_remotes = await filter_inert(await self._query_all_target_remotes(), target_decisions)
+        source_masks = await filter_inert(await self._capture_all_source_masks(), source_decisions)
+        target_masks = await filter_inert(await self._query_all_target_masks(), target_decisions)
 
         self._source_refs_by_id = {item.item_id: item for item in source_refs}
         self._source_remotes_by_id = {item.item_id: item for item in source_remotes}
@@ -452,7 +566,12 @@ class FlatpakSyncJob(PackageSyncJob):
 
         remote_diffs = _diff_flatpak_remotes(source_remotes, target_remotes)
         ref_diffs = _diff_flatpak_refs(source_refs, target_refs)
-        diffs = (*remote_diffs, *ref_diffs)
+        mask_diffs = _diff_flatpak_masks(source_masks, target_masks)
+        # Ordering (D-08): remotes -> refs -> masks. A mask must land AFTER the refs so
+        # it can never suppress an auto-pulled dependency of a ref being installed the
+        # same run; converge() carries the pattern fully in the item_id, so masks (unlike
+        # refs) need no source-side cache.
+        diffs = (*remote_diffs, *ref_diffs, *mask_diffs)
 
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
@@ -470,6 +589,8 @@ class FlatpakSyncJob(PackageSyncJob):
             return await self._converge_remote(diff)
         if diff.item_class == ItemClass.FLATPAK_REF:
             return await self._converge_ref(diff)
+        if diff.item_class == ItemClass.FLATPAK_MASK:
+            return await self._converge_mask(diff)
         raise ConvergeItemFailed(
             f"FlatpakSyncJob.converge: unsupported item class {diff.item_class.value!r} for {diff.label}"
         )
@@ -550,6 +671,34 @@ class FlatpakSyncJob(PackageSyncJob):
             "— version mismatches are report_only per D-04 and never reach converge()"
         )
 
+    async def _converge_mask(self, diff: ItemDiff) -> CommandResult:
+        """Add or remove one flatpak mask (#208, D-10). Scope + pattern come entirely
+        from the item_id (no source-side lookup, unlike refs/remotes): a mask is a pure
+        pattern, so `_split_flatpak_item_id(..., "mask")` recovers everything converge
+        needs. `sudo` iff system scope (`_sudo_prefix`), the pattern `shlex.quote`d.
+
+        Idempotent for the add direction (masking an already-present pattern exits 0);
+        the remove direction only ever targets a pattern the target scope actually
+        reported (it came from a REMOVE diff against the target's own mask set), so
+        `mask --remove` never hits the exit-1 non-existent-pattern path. Exit code alone
+        decides pass/fail (D-27).
+        """
+        scope, pattern = _split_flatpak_item_id(diff.item_id, "mask")
+        scope_flag = _scope_flag(scope)
+        sudo = _sudo_prefix(scope)
+
+        if diff.action == DiffAction.INSTALL:
+            cmd = f"{sudo}flatpak {scope_flag} mask {shlex.quote(pattern)}"
+            return await self.target.run_command(cmd, login_shell=False)
+
+        if diff.action == DiffAction.REMOVE:
+            cmd = f"{sudo}flatpak {scope_flag} mask --remove {shlex.quote(pattern)}"
+            return await self.target.run_command(cmd, login_shell=False)
+
+        raise ConvergeItemFailed(
+            f"FlatpakSyncJob.converge: unsupported action {diff.action.value!r} for a flatpak mask ({diff.label})"
+        )
+
     def _remote_ready_on_target(self, scope: str, origin: str) -> bool:
         """Whether `origin` is usable as a ref's remote in `scope`: already present on
         the target per the plan-time query, or successfully added earlier in THIS run
@@ -561,10 +710,11 @@ class FlatpakSyncJob(PackageSyncJob):
         return (scope, origin) in self._converged_remote_scope_names
 
     async def _system_scope_in_play(self) -> bool:
-        """Whether ANY system-scope ref or remote exists on either machine — the gate
-        for `validate()`'s sudo check (T-02-23, ASVS V4): user-scope flatpak
+        """Whether ANY system-scope ref, remote or mask exists on either machine — the
+        gate for `validate()`'s sudo check (T-02-23, ASVS V4): user-scope flatpak
         operations need no root at all, so this job never asks for a privilege it
-        will not use.
+        will not use. A system-scope mask on either machine (#208, D-07) writes into
+        `/var/lib/flatpak` just like a system remote, so it too requires target sudo.
         """
         if any(item.scope == "system" for item in await self.capture_source_items()):
             return True
@@ -572,15 +722,19 @@ class FlatpakSyncJob(PackageSyncJob):
             return True
         if await self._capture_source_remotes("system"):
             return True
-        return bool(await self._query_target_remotes("system"))
+        if await self._query_target_remotes("system"):
+            return True
+        if await self._capture_source_masks("system"):
+            return True
+        return bool(await self._query_target_masks("system"))
 
     @override
     async def validate(self) -> list[ValidationError]:
         """`flatpak --version` on both ends — a missing binary is a reported
         validation error naming flatpak's absence (it ships in no default Ubuntu
         24.04 install and may genuinely be absent), never an exception. `sudo -n
-        true` on the target only when a system-scope ref or remote actually exists on
-        either machine.
+        true` on the target only when a system-scope ref, remote or mask actually
+        exists on either machine.
 
         Sequential checks appending to `errors`, matching `AptSyncJob.validate()`'s/
         `SnapSyncJob.validate()`'s shape.
@@ -624,9 +778,13 @@ class FlatpakSyncJob(PackageSyncJob):
     @classmethod
     @override
     def describe_first_sync_scope(cls, config: dict[str, Any]) -> FirstSyncScope | None:
-        """Name this job's destructive first-sync scope (ADR-015): flatpak refs and remotes."""
+        """Name this job's destructive first-sync scope (ADR-015): flatpak refs, remotes and masks."""
         return FirstSyncScope(
             job_name=cls.name,
-            scope_items=["installed flatpak refs (per user/system scope)", "configured flatpak remotes (per scope)"],
-            mechanism="flatpak install/uninstall/remote-add per item, after review",
+            scope_items=[
+                "installed flatpak refs (per user/system scope)",
+                "configured flatpak remotes (per scope)",
+                "flatpak mask patterns (per scope)",
+            ],
+            mechanism="flatpak install/uninstall/remote-add/mask per item, after review",
         )
