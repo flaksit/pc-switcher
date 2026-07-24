@@ -1772,3 +1772,196 @@ class TestKeyringsDirectoryEnsured:
         assert "apt:key:per-repo:foo.gpg" in failed_ids
         commands = all_calls(target)
         assert not any("sudo install -o root -g root -m 0644" in c and "keyrings/foo.gpg" in c for c in commands)
+
+
+# -- Decision 1: one `apt-get update` before installs, across both refresh paths ---------
+
+
+class TestMetadataRefreshBeforeInstall:
+    """Decision 1: a run that approves at least one INSTALL but changes no repo-group item
+    still runs exactly one `apt-get update` before the first install; a failed refresh
+    aborts the installs; and a run that already refreshed via the repo-group path does not
+    refresh a second time.
+    """
+
+    @pytest.mark.asyncio
+    async def test_install_only_run_refreshes_metadata_once_before_first_install(self) -> None:
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t2.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                "apt-get -s install -y --no-install-recommends pkg-b": CommandResult(0, "Inst pkg-b (2.0)\n", ""),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                    CommandResult(0, "", "")
+                ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-b": (
+                    CommandResult(0, "", "")
+                ),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:package:pkg-b": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        # Exactly one refresh, even though two packages install (idempotent guard).
+        assert sum(1 for c in commands if c == "sudo apt-get update") == 1
+        update_idx = _index_of(commands, lambda c: c == "sudo apt-get update")
+        first_install_idx = _index_of(commands, lambda c: "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c)
+        assert update_idx < first_install_idx
+
+    @pytest.mark.asyncio
+    async def test_failed_metadata_refresh_aborts_installs_with_a_single_update(self) -> None:
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t2.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                "apt-get -s install -y --no-install-recommends pkg-b": CommandResult(0, "Inst pkg-b (2.0)\n", ""),
+                "sudo apt-get update": CommandResult(1, "", "Could not resolve host archive.ubuntu.com"),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:package:pkg-b": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        messages = [m for _d, m in exc_info.value.failures]
+        assert len(messages) == 2
+        assert all("apt-get update" in m for m in messages)
+        commands = all_calls(target)
+        # The failure is cached: one update issued, then every install aborts on it —
+        # never a second `apt-get update`, and never a real install against stale lists.
+        assert sum(1 for c in commands if c == "sudo apt-get update") == 1
+        assert not any("sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c for c in commands)
+
+    @pytest.mark.asyncio
+    async def test_repo_group_refresh_is_not_repeated_by_the_install_path(self) -> None:
+        """A run that changes a repo-group item AND installs a package: the repository-
+        group convergence's own `apt-get update` is the run's single refresh; the install
+        path sees the flag already set and issues no second one (decision 1)."""
+        context, _source, target = _repo_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                    CommandResult(0, "", "")
+                ),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert sum(1 for c in commands if c == "sudo apt-get update") == 1
+        update_idx = _index_of(commands, lambda c: c == "sudo apt-get update")
+        install_idx = _index_of(
+            commands,
+            lambda c: "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-a" in c,
+        )
+        assert update_idx < install_idx
+
+
+# -- Decision 8: collateral protects the SOURCE manual set too (union of target, source) -
+
+_SOURCE_DECISION_SKIP_SRC_ONLY = (
+    "machine_specific:\n"
+    '  "apt:package:src-only":\n'
+    "    item_class: apt_package\n"
+    "    label: src-only\n"
+    "    recorded_at: '2026-01-01T00:00:00Z'\n"
+)
+
+
+class TestSourceOnlyCollateral:
+    """Decision 8: a package in the SOURCE manual set is protected from collateral
+    removal/downgrade even when it is absent from the TARGET manual set."""
+
+    @pytest.mark.asyncio
+    async def test_source_only_manual_collateral_removal_becomes_a_review_item(self) -> None:
+        """`src-only` is manual on the source but skip-recorded there, so it is filtered
+        out of the source manifest (not a reviewed install candidate) yet still counts as
+        source-manual. It is not in the target manual set. Installing `pkg-a` would remove
+        it: under the old target-only rule this was silent auto collateral; under the union
+        it becomes a manual-collateral review item.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nsrc-only\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nsrc-only\t1.0\n", ""),
+                "apt.decisions.yaml": CommandResult(0, _SOURCE_DECISION_SKIP_SRC_ONLY, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nRemv src-only [1.0]\n", ""
+                ),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        collateral = [d for d in plan.diffs if d.item_id == "apt:collateral:src-only"]
+        assert len(collateral) == 1
+        assert collateral[0].detail is not None and "removed" in collateral[0].detail
+        # src-only was filtered from the source manifest, so it is NOT itself a review
+        # candidate — it only surfaces via the source-manual union.
+        assert "apt:package:src-only" not in {d.item_id for d in plan.diffs}
+
+    @pytest.mark.asyncio
+    async def test_apply_time_guard_refuses_source_only_manual_collateral(self) -> None:
+        """The apply-time install guard consults the union too: a drifted real transaction
+        that would remove a package manual on the SOURCE only (not the target) is refused.
+        `src-only` is skip-recorded on the source so it is not a reviewed candidate.
+        """
+        sim_cmd = "apt-get -s install -y --no-install-recommends pkg-a"
+        state = {"sim": 0}
+
+        def target_side_effect(cmd: str, **_: object) -> CommandResult:
+            if cmd == "apt-mark showmanual":
+                return CommandResult(0, "", "")
+            if cmd == sim_cmd:
+                state["sim"] += 1
+                if state["sim"] == 1:
+                    return CommandResult(0, "Inst pkg-a (1.0)\n", "")
+                return CommandResult(0, "Inst pkg-a (1.0)\nRemv src-only [1.0]\n", "")
+            return CommandResult(0, "", "")
+
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nsrc-only\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nsrc-only\t1.0\n", ""),
+                "apt.decisions.yaml": CommandResult(0, _SOURCE_DECISION_SKIP_SRC_ONLY, ""),
+            },
+        )
+        target.run_command = AsyncMock(side_effect=target_side_effect)
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        _diff, message = exc_info.value.failures[0]
+        assert "src-only" in message
+        commands = all_calls(target)
+        assert not any("sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c for c in commands)

@@ -504,6 +504,22 @@ class AptSyncJob(PackageSyncJob):
         # silently) if it is not. Consulted at plan time by `_classify_collateral` and
         # at apply time by the converge guards, which must agree.
         self._target_manual_set: frozenset[str] = frozenset()
+        # The source's raw `apt-mark showmanual` set, captured in `capture_source_items`
+        # (before decision-file filtering). The SOURCE half of the collateral-protection
+        # union (decision 8): a package the user manually installed on EITHER machine is
+        # protected from a silent collateral removal/downgrade, so `_protected_manual_set`
+        # is `target` unioned with `source` rather than target alone.
+        self._source_manual_set: frozenset[str] = frozenset()
+        # Metadata-refresh bookkeeping (decision 1). At most ONE `apt-get update` runs per
+        # run across both refresh paths: `_metadata_refreshed` is set True by the first
+        # successful refresh — whether the repository-group convergence's own `apt-get
+        # update` or `_ensure_metadata_refreshed`'s pre-install refresh — so the second
+        # path becomes a no-op. `_metadata_refresh_error` caches an install-path refresh
+        # failure so every remaining install this run aborts on the same error WITHOUT
+        # issuing a second `apt-get update` (the "at most one" guarantee holds even on the
+        # failure path).
+        self._metadata_refreshed: bool = False
+        self._metadata_refresh_error: str | None = None
         # Package names of every manual-collateral item the user resolved install-anyway,
         # computed in `accept_review` from the collateral group's decisions. The apply-time
         # guard lets a removal/downgrade of one of these through; every other manual
@@ -519,8 +535,15 @@ class AptSyncJob(PackageSyncJob):
 
     @override
     async def capture_source_items(self) -> Sequence[AptPackageItem]:
-        """Manually-installed apt packages on the source, with versions (D-03)."""
+        """Manually-installed apt packages on the source, with versions (D-03).
+
+        Also records the source's raw `apt-mark showmanual` names into
+        `self._source_manual_set` — captured here, before any decision-file filtering, so
+        a package the user chose to skip on the source still counts as source-manual for
+        collateral protection (decision 8, the SOURCE half of `_protected_manual_set`).
+        """
         manual = await self.source.run_command("apt-mark showmanual")
+        self._source_manual_set = frozenset(_lines(manual.stdout))
         return await self._resolve_versions(manual.stdout, self.source.run_command)
 
     @override
@@ -845,6 +868,17 @@ class AptSyncJob(PackageSyncJob):
 
         return diffs
 
+    def _protected_manual_set(self) -> frozenset[str]:
+        """Packages a collateral removal/downgrade must not silently touch: the union of
+        the TARGET's and the SOURCE's `apt-mark showmanual` sets (decision 8). A package
+        the user manually installed on EITHER machine is one they chose to have, so
+        protecting the union closes the rare edge case where a package is manual on the
+        source but auto-installed (or absent) on the target and would otherwise be
+        removed/downgraded silently. The machine-specific decision list is intentionally
+        NOT consulted (decision 8, accepted limitation).
+        """
+        return self._target_manual_set | self._source_manual_set
+
     async def _capture_target_manual_set(self) -> frozenset[str]:
         """The target's `apt-mark showmanual` set — one batched command, the single
         source of the auto-versus-manual collateral split (D-30). This is the same set
@@ -895,26 +929,27 @@ class AptSyncJob(PackageSyncJob):
         verb: str,
     ) -> list[ItemDiff]:
         """Partition a simulation's would-remove/would-downgrade packages by provenance
-        (D-30): a package in the target's manual set becomes a manual-collateral review
-        item; one that is not is auto-installed — apt's own dependency — and produces
-        nothing, not even a report line the user cannot act on.
+        (D-30): a package in the target OR source manual set becomes a manual-collateral
+        review item (decision 8); one in neither is auto-installed — apt's own dependency
+        — and produces nothing, not even a report line the user cannot act on.
 
         A downgrade is detected exactly as before: an `install_versions` entry with a
         non-`None` old version and `compare_deb_versions(target, new, old) < 0`. The
         triggering candidate set is recorded against each emitted item's id so `skip`
         can be translated to `SKIP_ONCE` on the installs it gates (`accept_review`).
         """
+        protected = self._protected_manual_set()
         collateral: list[ItemDiff] = []
 
         for pkg in preview.removals:
-            if pkg in reviewed_names or pkg not in self._target_manual_set:
+            if pkg in reviewed_names or pkg not in protected:
                 continue
             collateral.append(
                 self._collateral_item(pkg, f"would be removed by {verb} the selected packages", trigger_ids)
             )
 
         for pkg, (old_version, new_version) in preview.install_versions.items():
-            if pkg in reviewed_names or old_version is None or pkg not in self._target_manual_set:
+            if pkg in reviewed_names or old_version is None or pkg not in protected:
                 continue
             if await compare_deb_versions(self.target, new_version, old_version) < 0:
                 effect = f"would be downgraded from {old_version} to {new_version} by {verb} the selected packages"
@@ -1049,24 +1084,59 @@ class AptSyncJob(PackageSyncJob):
             "(only 'install' and 'remove' exist for apt packages)"
         )
 
+    async def _ensure_metadata_refreshed(self) -> None:
+        """Run exactly one `apt-get update` before the first package install of a run that
+        approves an INSTALL but changes no repository-group item (decision 1) — resolving
+        installs against a stale package list can pick candidates the target can no longer
+        fetch. A no-op once metadata has already been refreshed this run, INCLUDING by the
+        repository-group convergence's own `apt-get update` (which sets the same flag), so
+        the two refresh paths never both fire.
+
+        Aborts the install by raising `ConvergeItemFailed` if the refresh fails: unlike the
+        repository-group path — which has `/etc/apt` writes to roll back and owns that
+        behaviour — this path made no changes, so failing the item (installing nothing) is
+        its whole safe response. The failure is cached so every remaining install this run
+        aborts on the same error without issuing a second `apt-get update`. Never reached
+        under dry-run: the base `apply()` loop does not call `converge()` when
+        `self.context.dry_run` is set.
+        """
+        if self._metadata_refreshed:
+            return
+        if self._metadata_refresh_error is not None:
+            raise ConvergeItemFailed(self._metadata_refresh_error)
+
+        result = await self.target.run_command("sudo apt-get update", login_shell=False)
+        if not result.success:
+            self._metadata_refresh_error = (
+                f"apt-get update failed before installing {self.manager_id} packages; refusing to install "
+                f"against a stale package list (decision 1): {result.stderr.strip()}"
+            )
+            raise ConvergeItemFailed(self._metadata_refresh_error)
+        self._metadata_refreshed = True
+
     async def _converge_install(self, diff: ItemDiff) -> CommandResult:
         """Simulate, then apply, one apt install — the last line of defence behind the
         plan-time collateral classification (D-30). Auto-installed collateral (a package
-        apt pulls in that is not in the target's `apt-mark showmanual` set) proceeds
-        silently — apt resolving its own dependencies. A manually-installed collateral
-        removal or downgrade is refused unless the user approved it install-anyway in the
-        review; the decision was made at plan time, and this guard only verifies the
-        real transaction has not drifted to touch a manual package nobody saw.
+        apt pulls in that is in neither the target nor source `apt-mark showmanual` set)
+        proceeds silently — apt resolving its own dependencies. A manually-installed
+        collateral removal or downgrade (manual on the target OR source, decision 8) is
+        refused unless the user approved it install-anyway in the review; the decision was
+        made at plan time, and this guard only verifies the real transaction has not
+        drifted to touch a manual package nobody saw.
+
+        A single `apt-get update` runs before the first install of the run
+        (`_ensure_metadata_refreshed`, decision 1) unless the repository-group convergence
+        already refreshed metadata this run.
         """
         name = _package_name(diff.item_id)
+        await self._ensure_metadata_refreshed()
         quoted = shlex.quote(name)
         install_args = f"install -y --no-install-recommends {quoted}"
 
         preview = await simulate_apt_transaction(self.target, install_args, login_shell=False)
 
-        refused = [
-            pkg for pkg in preview.removals if pkg in self._target_manual_set and pkg not in self._approved_collateral
-        ]
+        protected = self._protected_manual_set()
+        refused = [pkg for pkg in preview.removals if pkg in protected and pkg not in self._approved_collateral]
         if refused:
             removed = ", ".join(refused)
             raise ConvergeItemFailed(
@@ -1075,7 +1145,7 @@ class AptSyncJob(PackageSyncJob):
             )
 
         for pkg, (old_version, new_version) in preview.install_versions.items():
-            if old_version is None or pkg not in self._target_manual_set or pkg in self._approved_collateral:
+            if old_version is None or pkg not in protected or pkg in self._approved_collateral:
                 continue
             if await compare_deb_versions(self.target, new_version, old_version) < 0:
                 raise ConvergeItemFailed(
@@ -1088,13 +1158,14 @@ class AptSyncJob(PackageSyncJob):
 
     async def _converge_remove(self, diff: ItemDiff) -> CommandResult:
         """Simulate, then apply, one apt remove — the same last line of defence the
-        install guard is (D-30). A collateral removal of an auto-installed package (not in
-        the target's `apt-mark showmanual` set) proceeds — removing a package legitimately
-        removes the now-orphaned dependencies apt pulled in for it. A collateral removal of
-        a manually-installed package is refused unless it was itself an approved removal
-        this run or approved install-anyway as collateral; that decision was made at plan
-        time, and this guard only catches a real transaction that drifted to touch a manual
-        package nobody reviewed.
+        install guard is (D-30). A collateral removal of an auto-installed package (in
+        neither the target nor source `apt-mark showmanual` set) proceeds — removing a
+        package legitimately removes the now-orphaned dependencies apt pulled in for it. A
+        collateral removal of a manually-installed package (manual on the target OR source,
+        decision 8) is refused unless it was itself an approved removal this run or approved
+        install-anyway as collateral; that decision was made at plan time, and this guard
+        only catches a real transaction that drifted to touch a manual package nobody
+        reviewed.
         """
         name = _package_name(diff.item_id)
         quoted = shlex.quote(name)
@@ -1102,13 +1173,11 @@ class AptSyncJob(PackageSyncJob):
 
         preview = await simulate_apt_transaction(self.target, remove_args, login_shell=False)
         approved = self._approved_removal_names()
+        protected = self._protected_manual_set()
         refused = [
             pkg
             for pkg in preview.removals
-            if pkg != name
-            and pkg not in approved
-            and pkg not in self._approved_collateral
-            and pkg in self._target_manual_set
+            if pkg != name and pkg not in approved and pkg not in self._approved_collateral and pkg in protected
         ]
         if refused:
             removed = ", ".join(refused)
@@ -1166,7 +1235,7 @@ class AptSyncJob(PackageSyncJob):
         every destination the group will touch, write/remove in the already-established
         order, run ONE `apt-get update`, and roll back the whole group if it fails
         (T-02-34) — never partially, since a failed metadata refresh with some files
-        written and others not would leave `/etc/apt` in a state nobody reviewed.
+        written and others not would leave `/etc/apt` in a configuration nobody reviewed.
 
         Idempotent: a no-op on every call after the first (`self._repo_group_outcome`
         is `None` only until this method's first successful completion). Never called
@@ -1224,6 +1293,10 @@ class AptSyncJob(PackageSyncJob):
 
         update_result = await self.target.run_command("sudo apt-get update", login_shell=False)
         if update_result.success:
+            # This IS the run's single metadata refresh (decision 1): flag it so the
+            # install path's `_ensure_metadata_refreshed` is a no-op and never issues a
+            # second `apt-get update`.
+            self._metadata_refreshed = True
             await self.target.run_command(f"rm -rf {shlex.quote(backup_dir)}", login_shell=False)
             if marker_present:
                 self._repo_group_outcome[_METADATA_REFRESH_ITEM_ID] = (True, "apt-get update succeeded")
@@ -1245,6 +1318,13 @@ class AptSyncJob(PackageSyncJob):
         await self.target.run_command(f"rm -rf {shlex.quote(backup_dir)}", login_shell=False)
 
         reprobe = await self.target.run_command("sudo apt-get update", login_shell=False)
+        if reprobe.success:
+            # After rollback `/etc/apt` is the pre-run configuration and this reprobe refreshed
+            # metadata for it; package installs that still run against that config (D-27 —
+            # a repo-group rollback does not cancel package items) then need no further
+            # `apt-get update`. If the reprobe itself failed, the flag stays unset and the
+            # install path's own refresh attempt will surface the still-broken apt.
+            self._metadata_refreshed = True
         recovery = (
             "target apt recovered after rollback" if reprobe.success else "target apt still broken after rollback"
         )
@@ -1427,9 +1507,9 @@ class AptSyncJob(PackageSyncJob):
             errors.append(self._validation_error(Host.TARGET, "apt-mark is not available on target"))
 
         # Source-side sudo matters even though the source is never mutated: capturing
-        # /etc/apt state runs `sudo find` there, and without passwordless sudo that
+        # /etc/apt config runs `sudo find` there, and without passwordless sudo that
         # capture degrades to empty digest maps rather than failing. The sync would then
-        # report success having replicated no repository state at all — a silent
+        # report success having replicated no repository configuration at all — a silent
         # wrong-result, which is worse than refusing to start.
         source_sudo_check = await self.source.run_command("sudo -n true")
         if not source_sudo_check.success:
@@ -1437,7 +1517,7 @@ class AptSyncJob(PackageSyncJob):
                 self._validation_error(
                     Host.SOURCE,
                     "passwordless sudo is not available on source "
-                    "(required to read /etc/apt repository, keyring and pin state).\n"
+                    "(required to read /etc/apt repository, keyring and pin config).\n"
                     + passwordless_sudo_hint(_SOURCE_SUDO_COMMANDS),
                 )
             )
@@ -1448,7 +1528,7 @@ class AptSyncJob(PackageSyncJob):
                 self._validation_error(
                     Host.TARGET,
                     "passwordless sudo is not available on target "
-                    "(required to install packages and write /etc/apt state).\n"
+                    "(required to install packages and write /etc/apt config).\n"
                     + passwordless_sudo_hint(_TARGET_SUDO_COMMANDS, user=self.context.target_username),
                 )
             )
