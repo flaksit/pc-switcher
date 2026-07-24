@@ -1,0 +1,130 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "3cbd2d4e1ea9",
+  "session_id": "dcaeb7c1-933d-49f6-b7d6-5a9f9247098a",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-24T20:29:26.509851622Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 8,
+  "save_step_count": 5,
+  "files_touched": [
+    "src/pcswitcher/jobs/apt_sync.py",
+    "src/pcswitcher/jobs/packages/items.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "tests/unit/jobs/test_apt_sync.py",
+    "tests/unit/jobs/test_package_sync_core.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "263f6eae3682",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 141,
+    "cache_creation_tokens": 570608,
+    "cache_read_tokens": 13569890,
+    "output_tokens": 162876,
+    "api_call_count": 77
+  },
+  "session_metrics": {
+    "turn_count": 22
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-24T20:29:26.303908915Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 400,
+    "human_modified": 101,
+    "human_removed": 0,
+    "total_committed": 400,
+    "total_lines_changed": 501,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 58,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/phases/02-package-management-sync/02-UAT.md": 49
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 559,
+      "user_lines_removed": 101,
+      "agent_lines_added": 37,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/phases/02-package-management-sync/02-UAT.md": 49,
+        "src/pcswitcher/jobs/apt_sync.py": 72,
+        "src/pcswitcher/jobs/packages/items.py": 66,
+        "src/pcswitcher/jobs/packages/sync_core.py": 149,
+        "tests/unit/jobs/test_apt_sync.py": 165,
+        "tests/unit/jobs/test_package_sync_core.py": 49
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/apt_sync.py": 28,
+        "src/pcswitcher/jobs/packages/sync_core.py": 45,
+        "tests/unit/jobs/test_apt_sync.py": 17,
+        "tests/unit/jobs/test_package_sync_core.py": 11
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 448,
+      "user_lines_removed": 14,
+      "agent_lines_added": 538,
+      "agent_lines_removed": 101,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/phases/02-package-management-sync/02-UAT.md": 49,
+        "src/pcswitcher/jobs/flatpak_sync.py": 164,
+        "src/pcswitcher/jobs/snap_sync.py": 95,
+        "tests/unit/jobs/test_snap_sync.py": 131
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/flatpak_sync.py": 12,
+        "src/pcswitcher/jobs/snap_sync.py": 2
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 250,
+      "user_lines_removed": 3,
+      "agent_lines_added": 946,
+      "agent_lines_removed": 127,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/phases/02-package-management-sync/02-UAT.md": 49,
+        "src/pcswitcher/jobs/flatpak_sync.py": 2,
+        "tests/unit/jobs/test_flatpak_sync.py": 190
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/flatpak_sync.py": 2,
+        "tests/unit/jobs/test_flatpak_sync.py": 1
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 76,
+      "user_lines_removed": 2,
+      "agent_lines_added": 1138,
+      "agent_lines_removed": 130,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/phases/02-package-management-sync/02-208-HOLD-MASK-REPLICATION.md": 4,
+        ".planning/phases/02-package-management-sync/02-UAT.md": 49,
+        "docs/adr/adr-020-declarative-package-convergence.md": 2,
+        "docs/jobs/package-sync.md": 12
+      },
+      "user_removed_per_file": {
+        "docs/jobs/package-sync.md": 2
+      }
+    }
+  ]
+}

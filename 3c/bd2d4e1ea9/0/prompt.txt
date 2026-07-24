@@ -1,0 +1,1111 @@
+Does apt-sync do "apt-get update" before installing new packages?
+
+---
+
+does apt-sync use apt or apt-get commands?
+
+---
+
+Before UAT, I read README.md and package-sync.md. Questions and remarks to be answered and resolved before UAT. Answer first and propose a design for the fix for the non-obvious. Wait for my approval.
+
+Apt-sync job should run "apt-get update" not only if key/source/config changes, but ALWAYS if there is a package to install or upgrade.
+
+Unclear how versions work: how does each package sync job handle version divergences? Do they? I think they do not and that is good. We use the package managers during normal machine usage for updates; pc-switcher does not have a role in that.
+Except for manual installs (.deb and pure manual) because there is no manager that will handle upgrades on both sides. Here, pc-switcher needs to be the "manager". Snippets will need to have "update/upgrade"-functionality. Create github issue for that.
+
+Do we sync package deletions? I remove package P on source, that was synced before (or installed on target before). Do I get a review item to remove P on target? If yes, document it. If not, why not? I think we should. Waiting for the back-sync can take a long time and the user can already have forgotten that they deleted it and the good reason they had to remote it.
+
+## package-sync.md
+Speaks about apt "`/etc/apt` repository state".
+- Not state, I hope. What is installed and what not is machine-specific. You mean apt config? That, yes!  
+  Other example: "repository state that governs where packages come from": that is not state, but config. Sweep all docs and comments to change "state" to "config" where appropriate.
+- Does not speak about snaps or flatpaks config. Is there none? I'm sure there is (at least flatpak sources, snap probably as well). Do the snap_sync and flatpak_sync jobs handle that? If not, they should. If yes, it should be documented.
+
+You write everywhere that "The three package-manager jobs run **before** `folder_sync`". But jobs are run in the order they appear in config.yaml, no? So if the user puts them after folder_sync, they will run after. You should clarify that in the docs. Better: "The three package-manager jobs MUST run **before** `folder_sync` (<and say why: default files/config written by install would otherwise overwrite the user's tweaked versions; with folder_sync after, the folder_sync can overwrite the defaults with the user's versions>), so state them in the correct order in config.yaml."
+The "decisive for flatpak" phrase is not logic: it speaks about two different folders that would overwrite each other? Not possible. Not clear example.
+
+snap_sync "never held or otherwise blocked from auto-refresh": I hope this is not literally true. If the user configured a snap on source to be held or blocked or whatever, that config MUST travel to target, just like it does for apt. Same for flatpak.
+
+"Batched review" section gives deep tech design details that are not relevant to the user. This is user doc. Explain only what's relevant to user. Start by telling what the review is. With the current text, I only start SLIGHTLY understanding first when reading all the way to the end of the section. I already removed a lot of rubbish from that section. Rewrite completely.
+
+"apt collateral": "other than the one you named": user doesn't NAME anything. User answers install / skip-once / skip-always; only on the USER-installed packages that apt-sync detected are different on target.
+Collatoral that is manually installed: becomes its own reviewable item: I think only a single case is valid: "apt-sync would apply a change (after user review) and (a) this change would REMOVE/DOWNGRADE a manually installed package from target that we still want to keep synced (we know from review) or (b) this change would REMOVE/DOWNGRADE a package that is on the target's machine-specific list". Verify the code doesn't do more than that.
+
+"Machine-specific packages": "skip always" "*don't touch that package on THAT machine*". Be more clear what THAT means (used repeatingly in that section). Readers may think "the maching that runs pc-switcher". Ensure it is 100% clear that it means "the machine that needs this package and doesn't want syncs from other machines to touch it and doesn't want to sync it to other machines".
+The second paragraph describes this more clearly and explicitly. So maybe just need to restructure the text so it is clear without repeating.
+
+Snippets: not clear what is done in case of differences between registry of source and target. Doc mentions "a snippet present only on the target does not make the item reproducible" so mentions this case is possible, but doesn't say if there is any consolidation done. Or does source just overwrite target entirely? That is acceptable, but must be documented clearly because I don't see a confirmation-dialog that explicitly the asks the user if overwrite is ok. We don't need that dialog, just clearly document the behavior. If there is a consolidation, document that too.
+
+"Resolving unreproducible items": "Only an item nobody decided on": is that possible? User is forced to choose one of the three options. Remove if not possible. If possible, explain how.
+
+Snippets: I think snippets should not be run as sudo but by the pc-switcher user. If sudo needed, the snippet should contain sudo. Because some snippets may genuinly need parts to be run by user.
+
+## README.md
+"Overview": update "Status"
+"Key Design Principles" don't belong in readme but in developer docs/instructions.
+"GitHub API Rate Limits": RuntimeError with code 403? Not 429?
+"Documentation": not up to date / complete
+
+---
+
+<task-notification>
+<task-id>aeecb00aa1f544264</task-id>
+<tool-use-id>toolu_01ASadrwXXr4wndhYE3Py8wd</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/aeecb00aa1f544264.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify version &amp; deletion handling" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have all the evidence needed. Here is the report.
+
+## QUESTION 1 — VERSION DIVERGENCE (same item on both sides, different version/revision/channel)
+
+### apt — reports only, never converges; installs by name, version floats
+The base diff handles "present on both, differing versions" in `sync_core.py:293-303`: when `source_item.version != target_item.version` it emits `DiffClass.VERSION_MISMATCH` with `action=DiffAction.REPORT_ONLY`. The `apply()` loop explicitly excludes `REPORT_ONLY` from convergence (`sync_core.py:438-441`, `diff.action != DiffAction.REPORT_ONLY`), so a version difference produces a review item but is **never acted on** — no upgrade, no downgrade. The docstring at `sync_core.py:228-229` states this: "present on both with differing versions -&gt; `VERSION_MISMATCH`/`REPORT_ONLY` (D-04: reported, never force-downgraded)". Detail text is "source has X, target has Y" (`items.py:203-210`).
+
+When apt *does* install (a missing package), it installs by **name only** — no version pin. `apt_sync.py:1063` builds `install -y --no-install-recommends {quoted}` (just the name); the real command at `apt_sync.py:1086` is `apt-get install ... {name}`. Version therefore floats to whatever the target's own repos offer.
+- Net: version difference on an already-installed package → `REPORT_ONLY` review item, ignored for convergence.
+
+### snap — forces source's exact revision AND channel; produces a CHANGE review item
+Verified in code. `_diff_snap_items` (`snap_sync.py:183-188`) treats "present on both" where `source_item.revision != target_item.revision OR source_item.channel != target_item.channel` as a diff, building `_change_diff` (`snap_sync.py:143-160`): `diff_class=VERSION_MISMATCH`, `action=DiffAction.CHANGE`. Unlike apt, this is not `REPORT_ONLY`, so it converges. The docstring at `snap_sync.py:144-147` says "unlike apt package versions (D-04), both actively converge — never `REPORT_ONLY`".
+
+Convergence forces the exact revision: `_converge_change` (`snap_sync.py:331-354`) runs `sudo snap refresh --revision={revision} {name}` when the revision differs (`snap_sync.py:344-346`), and `_switch_channel` runs `sudo snap switch --channel={channel} {name}` when the channel differs (`snap_sync.py:356-359`). The revision string comes from the captured source `SnapItem` (`snap_sync.py:298-309`, `_source_items_by_id`). So yes — snap lands the target on the source's exact revision and tracking channel. It is a CHANGE-group review item (default-checked, since CHANGE is not a removal direction — `review.py:88`, `_REMOVAL_ACTIONS = {"remove","delete","disable"}`).
+
+### flatpak — does NOT converge version; REPORT_ONLY only, like apt
+`_diff_flatpak_refs` (`flatpak_sync.py:247-248`): "present on both" same `item_id` (same application AND same scope) with `source_item.version != target_item.version` → `_version_mismatch_ref_diff` (`flatpak_sync.py:208-221`) with `action=DiffAction.REPORT_ONLY`. The docstring (`flatpak_sync.py:50-53`, `208-213`) is explicit: "a flatpak ref's version floats like an apt package's does — reported, never force-installed/removed to converge it." `converge()` for a ref only handles `REMOVE` and `INSTALL` and raises for anything else (`flatpak_sync.py:481-510`), and INSTALL just runs `flatpak install -y {scope_flag} {origin} {application}` (`flatpak_sync.py:504`) — no commit/version pin. So flatpak just ensures the ref is installed; a version difference is a report-only review item and is never converged to an exact commit.
+
+### manual_installs — no version comparison at all
+There is no target manifest and no version field compared. `query_target_items` unconditionally returns `[]` (`manual_installs_sync.py:318-325`, docstring: "No target-side manifest exists for unreproducible items"). `plan()` (`manual_installs_sync.py:327-363`) iterates only over source-detected items and decides the action solely by **snippet presence in the source registry**: `action = DiffAction.INSTALL if snippet is not None else DiffAction.REPORT_ONLY` (`manual_installs_sync.py:350`). "Differs" is never computed against the target — an item is `INSTALL` if it has a source-side snippet, else `REPORT_ONLY` (needs resolution). No version/revision comparison for `.deb`, `/usr/local`, or `/opt` items exists anywhere in the job.
+
+## QUESTION 2 — DELETIONS / REMOVALS (present before, now absent on source, still on target)
+
+### apt — YES, removes
+Base diff `sync_core.py:282-292`: `target_item is not None and source_item is None` → `DiffClass.EXTRA_ON_TARGET`, `action=DiffAction.REMOVE`. Grouped into its own removal group (default-unchecked; `review.py:88`, `_build_review_groups` keys groups by action at `sync_core.py:308-343`). Converged by `_converge_remove` → `sudo ... apt-get remove -y {name}` (`apt_sync.py:1089-1121`).
+- (Separately, `apt:collateral:*` items are also `EXTRA_ON_TARGET` but `REPORT_ONLY` — `apt_sync.py:1490-1502` — that is the collateral mechanism, not the "absent on source" removal.)
+
+### snap — YES, removes
+`_diff_snap_items` (`snap_sync.py:181-182`): `target_item is not None and source_item is None` → `_remove_diff` → `EXTRA_ON_TARGET`/`REMOVE` (`snap_sync.py:132-140`). Converged by `_converge_remove` → `sudo snap remove {name}` (never `--purge`; `snap_sync.py:361-366`).
+
+### flatpak — YES, removes (both refs and remotes)
+Refs: `_diff_flatpak_refs` (`flatpak_sync.py:245-246`) → `_remove_ref_diff` → `EXTRA_ON_TARGET`/`REMOVE` (`flatpak_sync.py:197-205`); converged via `flatpak uninstall -y` (`flatpak_sync.py:486-488`). Remotes: `_diff_flatpak_remotes` (`flatpak_sync.py:301-302`) → `_remove_remote_diff` → `REMOVE` (`flatpak_sync.py:265-273`); converged via `flatpak remote-delete` (`flatpak_sync.py:473-475`).
+
+### manual_installs — NO, install-only; never removes
+This is the asymmetric one. `query_target_items` always returns `[]` (`manual_installs_sync.py:318-325`), and `plan()` iterates only over source items (`manual_installs_sync.py:344-360`). There is **no `EXTRA_ON_TARGET` / `REMOVE` branch anywhere** in the job — the only actions ever produced are `INSTALL` and `REPORT_ONLY` (`manual_installs_sync.py:350`), and `converge()` only ever replays a snippet (`manual_installs_sync.py:397-407`). If a snippet/item is gone from the source registry but present on target: it is **not even detected** (no target query exists), so no removal is proposed. Confirmed install-only.
+
+### Symmetry summary
+Removal is symmetric across **apt, snap, flatpak** — each has an `EXTRA_ON_TARGET` → `REMOVE` path with a real uninstall verb. **manual_installs is the exception: install-only, never removes**, because it has no target-side manifest to diff against (unreproducible items are "always source-held", `manual_installs_sync.py:319-325`).</result>
+<usage><subagent_tokens>124140</subagent_tokens><tool_uses>8</tool_uses><duration_ms>70245</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a844043bb08e8a0c6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/a844043bb08e8a0c6.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify snippet replay &amp; resolution" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have all the evidence. Here is the report.
+
+## QUESTION 1 — Snippet replay privilege
+
+The snippet is run as the plain SSH/target user with NO outer sudo. Any privilege escalation must be written inside the snippet by its author.
+
+Exact runner — `SnippetRegistry.replay`, `src/pcswitcher/jobs/packages/state.py:404-405`:
+
+```python
+cmd = f"bash -c {shlex.quote(snippet.body)}"
+return await executor.run_command(cmd, login_shell=False)
+```
+
+- No `sudo` is prepended. The command is literally `bash -c '&lt;body&gt;'`, with the whole snippet body passed as a single shlex-quoted argv string (opaque blob, D-20). `executor` is the target's `RemoteExecutor` (`converge()`, `manual_installs_sync.py:407` passes `self.target`), so it runs over SSH as the SSH login user.
+- `login_shell=False` (state.py:405) — the user's `~/.profile` is NOT sourced; it runs as a fixed non-login shell script. No stdin is supplied (documented state.py:33-34, 393-398), so a snippet that prompts hangs/fails rather than getting input.
+- Sudo is the author's responsibility, confirmed by the authoring note the tool prints before capture, `review.py:193-199`, whose worked example is `sudo DEBIAN_FRONTEND=noninteractive dpkg -i ...`.
+- `validate()` explicitly does NOT pre-check target sudo (`manual_installs_sync.py:508-511`): "A snippet's own sudo needs are unpredictable ... this job does NOT pre-validate target sudo; a snippet that needs it and lacks it fails as a per-item converge failure."
+
+Privilege context: the unprivileged SSH/target user, non-login `bash -c`. Root only if the snippet body itself invokes `sudo`.
+
+## QUESTION 2 — Registry source vs target reconciliation
+
+The push is a WHOLESALE FILE OVERWRITE. The source's `package-snippets.yaml` replaces the target's copy entirely. There is no per-entry merge on the target.
+
+Push code — `_push_snippet_registry`, `manual_installs_sync.py:227-254`:
+
+```python
+source_path = Path.home() / SNIPPET_REGISTRY_RELPATH
+if not source_path.exists():
+    return
+mkdir = await self.target.run_command(f"mkdir -p {CONFIG_REMOTE_DIR}")
+...
+absolute_remote_path = f"{home.stdout.strip()}/{SNIPPET_REGISTRY_RELPATH}"
+await self.target.send_file(source_path, absolute_remote_path)
+```
+
+`send_file` writes the source file to the target's absolute path via SFTP (docstring state.py:227-237 / manual_installs_sync.py:228-237: "Copy the source's ... to the target's own copy", SFTP write as the SSH user). It transfers the file as-is; it does not read, load, or merge the target's existing registry. `SnippetRegistry.load`/`add` (state.py:337-382) do per-`item_id` merge, but those operate ONLY on the SOURCE's own copy during authoring (`SnippetRegistry(self.source)`, manual_installs_sync.py:443) — never against the target during the push.
+
+Consequence for a target-only or differing entry: after the push the target file is byte-identical to the source file. An entry that existed on the target but not in the source is LOST (overwritten). An entry present in both but differing is overwritten with the source's version. The reconciliation is source-wins, whole-file, not a union.
+
+Caveat on "lost": the source registry accumulates entries across runs via `add()` merges (state.py:361-382, last-write-wins by item_id), so the source file is usually a superset over time — but that is source-side history, not a target-side merge. Anything only ever authored on the machine currently acting as target is not preserved by this push.
+
+## QUESTION 3 — "Nobody decided" reachability
+
+REFUTED. In an interactive run the user is NOT forced to pick one of the three valid resolutions; an item can end unresolved. The doc's claim that an undecided item "happens only on a non-interactive run" is wrong.
+
+Prompt loop — `_review_unreproducible_group`, `review.py:254-296`. The three valid choices are `skip_always` (271), `skip_once` (274-278), and `add_snippet` with a non-empty body (280-289). But two interactive escapes fall through to the unresolved path at `review.py:294-296`:
+
+```python
+# selected is None (the select was cancelled) or the snippet capture came back
+# empty/None (the user abandoned it) — nothing was actually decided...
+decisions[entry.item_id] = Decision.SKIP_ONCE
+unresolved.append(entry.item_id)
+```
+
+Reachable interactively when:
+1. The `questionary.select` returns `None` — cancelled via Ctrl-C / EOF at the choice prompt (`selected = ...ask()`, review.py:268; falls past all three `if` branches).
+2. `add_snippet` chosen but the multiline capture returns empty/`None` (abandoned with no text), review.py:287-289 `if body:` is false, falls through to 295-296.
+
+A third interactive escape is the top-level checkbox abort, `review.py:417-428`: Ctrl-C on any earlier group returns `None`, and every remaining group — including a later unreproducible group that never got its own prompt — is marked `SKIP_ONCE` and appended to `unresolved` (424-427).
+
+These unresolved items then fail the job in an interactive, non-dry-run: `_unresolved_as_failures`, `manual_installs_sync.py:490-503` (returns failures whenever `outcome.unresolved and outcome.was_interactive and not dry_run`). So "nobody decided" is genuinely reachable in a real interactive TTY session (cancel the select, abandon a snippet, or Ctrl-C mid-review) and makes the run unclean — not exclusively a non-interactive outcome.
+
+Note: an explicit "Skip for now" (review.py:274-278) is a real decision — records `SKIP_ONCE`, NOT appended to `unresolved` — so that path is clean. The unclean path is specifically cancel/EOF/empty-abandon, which the design treats as "nothing decided."</result>
+<usage><subagent_tokens>59486</subagent_tokens><tool_uses>4</tool_uses><duration_ms>53501</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a331603811467871a</task-id>
+<tool-use-id>toolu_018Uqc131vFnCXdRsE58UtPF</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/a331603811467871a.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify snap/flatpak config &amp; apt collateral" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything needed. Here is my report.
+
+## QUESTION 1 — SNAP CONFIG (hold/refresh control)
+
+What snap_sync syncs per snap: **name, channel (tracking), and revision** — nothing else. `_parse_snap_list` builds each `SnapItem` from exactly three columns: `Name`, `Rev`, `Tracking` (`snap_sync.py:117`). The `Notes` column is read only to skip disabled duplicate lines (`snap_sync.py:115`), never captured as state.
+
+Channel tracking IS replicated: `_switch_channel` runs `sudo snap switch --channel=&lt;channel&gt;` on the target (`snap_sync.py:356-359`), called after every install (`snap_sync.py:329`) and on channel-differ changes (`snap_sync.py:350-351`). Revision is forced via `snap install --revision=N` / `snap refresh --revision=N` (`snap_sync.py:324-326`, `344-346`).
+
+Hold / refresh-inhibit state is **NOT synced**. The doc's claim holds:
+- The module docstring explicitly states this job never calls `snap refresh --hold` and uses only `install --revision`/`refresh --revision`, which "land the target on the source's exact revision without touching the standing auto-refresh policy at all" (`snap_sync.py:6-13`).
+- The ONLY place hold is touched is `validate()`, read-only and informational: `snap get system refresh.hold` on each end, the result merely logged, explicitly "never appended to `errors`" and never acted on (`snap_sync.py:395-402`). Note this reads the *global* `system refresh.hold`, not per-snap hold state.
+- There is no `--hold`, `--unhold`, `snap refresh --list`, or per-snap hold read/write anywhere in the module (confirmed by reading the full file).
+
+Verdict: If a snap is held on the source, that hold does **NOT** travel to the target. The code never reads per-snap hold state on the source, so it has nothing to replicate; it never writes hold state on the target. Convergence is revision+channel only. `converge()` dispatches only to install / change / remove (`snap_sync.py:295-311`); no hold verb exists.
+
+## QUESTION 2 — FLATPAK CONFIG (remotes + pin/mask)
+
+Remotes ARE synced. They are a first-class item class (`FLATPAK_REMOTE`) captured, diffed, and converged:
+- Capture: `_capture_all_source_remotes` / `_query_all_target_remotes` run `flatpak remotes --columns=name,url` once per scope (user + system) on each machine (`flatpak_sync.py:83-99` template `_FLATPAK_REMOTES_CMD_TEMPLATE` at line 88; loops at `386-399`).
+- Diff: **`_diff_flatpak_remotes` (`flatpak_sync.py:276-305`)** is the remote-diffing code. It keys on `item_id` (name + scope): source-only → INSTALL diff (`299-300`), target-only → REMOVE diff (`301-302`), present-on-both → no diff.
+- Converge: `_converge_remote` runs `flatpak remote-add --if-not-exists &lt;flag&gt; &lt;name&gt; &lt;url&gt;` or `flatpak remote-delete` (`flatpak_sync.py:452-479`). Remote diffs are ordered ahead of ref diffs in the plan (`flatpak_sync.py:428-430`) because `flatpak install` rejects a ref whose remote is absent.
+
+Only NAME + SCOPE are compared, NOT url. A remote present on both sides with the same name+scope but a **different URL** is explicitly never diffed (`flatpak_sync.py:279-286`, comment: "never diffed by URL here").
+
+Flatpak **mask** and **pin**: **NOT synced.** There is no `flatpak mask`, `flatpak pin`, `flatpak remote-modify`, or any masking/pinning verb anywhere in the module. Flatpak state synced = installed refs (`FLATPAK_REF`) + remotes (`FLATPAK_REMOTE`) only. Ref capture uses `flatpak list --app --columns=application,version,origin,installation` (`flatpak_sync.py:83`) — application id, version, origin, scope; no mask/pin field. Ref versions are captured for REPORT_ONLY (`flatpak_sync.py:208-221`), never forced.
+
+## QUESTION 3 — SNAP REMOTES/SOURCES
+
+Snap has no remotes/sources equivalent in the code, and none is synced. `snap_sync.py` shells out only to `snap list --all`, `snap install/refresh/switch/remove`, `snap version`, and the read-only `snap get system refresh.hold`. There is no store, assertion, or channel-source configuration captured or written. The module docstring states snapd "stays authoritative for its own state... this job never touches `/var/lib/snapd` directly" (`snap_sync.py:15-17`). The closest analog to a "source" that snap has is the tracking **channel**, which IS synced via `snap switch` (see Q1). No store/assertion config is handled.
+
+## QUESTION 4 — APT COLLATERAL SCOPE
+
+Collateral review items are generated **ONLY** for a remove-or-downgrade of a package that is in the target's `apt-mark showmanual` set. This is exact — confirmed, not refuted.
+
+The single classification function is **`_classify_collateral` (`apt_sync.py:889-923`)**. It emits collateral items in exactly two branches, both gated identically:
+
+Removal branch (`apt_sync.py:909-914`):
+```
+for pkg in preview.removals:
+    if pkg in reviewed_names or pkg not in self._target_manual_set:
+        continue
+    collateral.append(self._collateral_item(pkg, f"would be removed by {verb}...", trigger_ids))
+```
+The gate `pkg not in self._target_manual_set: continue` is the exact condition. An auto-installed package (absent from the manual set) is skipped silently — no review item.
+
+Downgrade branch (`apt_sync.py:916-921`):
+```
+for pkg, (old_version, new_version) in preview.install_versions.items():
+    if pkg in reviewed_names or old_version is None or pkg not in self._target_manual_set:
+        continue
+    if await compare_deb_versions(self.target, new_version, old_version) &lt; 0:
+        collateral.append(...)
+```
+Same manual-set gate, plus `old_version is None` skips fresh installs (only an actual version regression, `compare &lt; 0`, qualifies).
+
+Answers to the specific sub-questions:
+- Does it flag auto-installed (dependency) collateral? **No.** Both branches `continue` when `pkg not in self._target_manual_set`. Docstring at `apt_sync.py:900-902`: "one that is not is auto-installed — apt's own dependency — and produces nothing, not even a report line."
+- Does it flag pure installs (not removes/downgrades) as collateral? **No.** Collateral is drawn only from `preview.removals` and from `install_versions` entries that are genuine downgrades (`old_version` present AND `compare_deb_versions &lt; 0`). A fresh install (`old_version is None`) is excluded (`apt_sync.py:917`).
+- Auto-installed collateral proceeds silently: confirmed both at plan time (above) and at the apply-time guard, which refuses only `pkg in self._target_manual_set and pkg not in self._approved_collateral` (`_converge_install` `apt_sync.py:1067-1084`; `_converge_remove` `apt_sync.py:1105-1112`). Auto packages never trip the guard.
+
+The classification uses ONLY `apt-mark showmanual`, NOT the machine-specific decision list. `_target_manual_set` is populated once by `_capture_target_manual_set` → `apt-mark showmanual` on the target (`apt_sync.py:848-855`, called at `apt_sync.py:636`). Grep confirms `_classify_collateral` and both converge guards reference `_target_manual_set` exclusively; there is no `DecisionFile`/`filter_inert` consultation inside collateral classification.
+
+How case (b) is actually handled: The machine-specific decision file (`~/.config/pc-switcher/apt.decisions.yaml`, D-08 "skip always" entries) is applied *only* via `filter_inert` at `plan()`, which drops decided item_ids from the base diff candidate sets *before* simulation (`filter_inert`, `state.py:116-124`; used in `PackageSyncJob.plan` for the install/remove candidates). It is NOT re-consulted when classifying collateral. Consequently, a decision-list package is protected as collateral only if it is *also* manually-installed (`apt-mark showmanual`) — in which case it is caught by the same manual-set gate as case (a), not by any distinct decision-list lookup. There is no code path where the decision list independently produces or gates a collateral review item. So in the implementation, case (b) is not a separate mechanism; it collapses into the `apt-mark showmanual` check of case (a).
+
+Relevant files (all absolute):
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/snap_sync.py`
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/flatpak_sync.py`
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/apt_sync.py`
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/packages/state.py` (decision file / `filter_inert`)
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/packages/review.py` (`COLLATERAL_REVIEW_ACTION`, three-way resolution)</result>
+<usage><subagent_tokens>84400</subagent_tokens><tool_uses>7</tool_uses><duration_ms>77145</duration_ms></usage>
+</task-notification>
+
+---
+
+1. b: abort. Using outdated package lists opens a can of worms.
+2. Didn't we need exact same snap versions for folder_sync somehow? Or that we otherwise would accumulate versions/refs? I don't know anymore. Analyze as deeply as needed to answer if there is a really good reason why we decided (did we?) to sync snap up to the versions. Answer and I'll decide from there.
+5. diff url too
+8. Hold blocks, ... any config must travel. These are Items. So come in review. Show diff and ask user "overwrite (src>tgt), skip once, skip always". Changes are rare, so don't spend hours on building a fancy UI.
+10. "only in target's manual set": should check source's manual set as well! The rare edge case.
+  Don't do (b). Accept limitation. Normally, only showmanual packages will ever be marked as "skip always" anyway because only showmanual packages come in the review.
+12. Acceptable but show diff if not purely additive and ask user for overwrite confirmation. Confirm or abort: if user doesn't confirm, they need to consolidate manually themselves and run pc-switcher again.
+13. Ctrl+C/EOF -> this is not an acceptable option; this means the user wants to abort entirely -> pc-switcher should abort entirely
+    Code must be so that "unresolved" just cannot exist.
+    Non-interactive: all answers are skip-once.
+    Empty snippet: pc-switcher must not accept and don't let user finish without adding a REAL snippet or skip-once/always.
+
+GitHub issues to be created:
+1+2 better together so they are architected together.
+
+Answer at least on 2. Wait for my approval.
+
+---
+
+Do I understand well we have a gap now? Why is ~/snap/<app>/<rev> excluded from folder sync? If snap-sync ensures both have the same app revision, then we can safely let folder_sync sync ~/snap/app/391 to target and remove ~/snap/app/388 from target, no? Even in the case I experienced where target had newer version than source, I don't see a problem with this approach.
+Ideally, we would stop snap from doing upgrades-in-the-background while we are running pc-switcher. Possible? Or doesn't snap do that?
+
+Option A. But including above remark.
+So snap DOES sync versions, apt and flatpak don't.
+
+Option B doesn't work: we want folder_sync to sync our data. If source is on rev 391 and tgt on 388, folder_sync will send its current data to ~/snap/app/391 on target. On target, this folder is not used, but keeps using old ~/snap/app/388 until snapd finally upgrades to 391. Bad. And snapd risks getting confused: what will snapd do with the already existing ~/snap/app/391? Bad.
+
+Correct?
+
+---
+
+3: hold and unhold on both source and target. upgrading on target possibly while "hold"? If so, we're ready and fold all this in the plan (including the third GitHub issue) and execute. This is a whole lot. Put your project manager / agent orchestrator hat on. Don't do anything yourself; delegate to subagents and keep your context free for coordination. plan-execute-review. Update code and docs, including .planning. We don't do the full GSD thing here. Too much overhead. But keep .planning on sync with our decisions. 
+
+Or do you rather propose to start this plan-execute-review in a fresh session, maybe one with model Fable? Do NOT use your Claude API skill to answer this!
+
+---
+
+<task-notification>
+<task-id>afe03296ad047088f</task-id>
+<tool-use-id>toolu_01GFYGd56gJZ5NFNGWv4MNfj</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/afe03296ad047088f.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-C flatpak remote URL diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All checks pass. Concise report follows.
+
+## WP-C (decision 7) — flatpak remotes diff by URL
+
+### Changes (all confined to the two allowed files)
+
+`src/pcswitcher/jobs/flatpak_sync.py`:
+- Added `_change_remote_diff(source_item, target_item)` builder — emits `DiffAction.CHANGE` / `DiffClass.VERSION_MISMATCH`, `item_id` from source, `detail="remote &lt;name&gt; url: &lt;src&gt; vs &lt;tgt&gt;"`.
+- `_diff_flatpak_remotes` — added the present-on-both branch: `source_item.url != target_item.url → _change_remote_diff(...)`. Rewrote the stale docstring (previously claimed URL is never diffed).
+- `_converge_remote` — added `DiffAction.CHANGE` branch issuing `{sudo}flatpak remote-modify {scope_flag} --url=&lt;quoted-url&gt; &lt;quoted-name&gt;`, sourcing the desired URL from `self._source_remotes_by_id`.
+
+`tests/unit/jobs/test_flatpak_sync.py`:
+- New `TestRemoteUrlChange` class, 5 tests: `test_changed_url_yields_one_change_diff`, `test_changed_url_lands_in_default_ticked_change_group`, `test_identical_url_yields_no_diff`, `test_converge_uses_remote_modify_with_source_url_and_scope_flag`, `test_system_scope_url_change_uses_sudo_and_system_flag`.
+
+### Converge command chosen and why
+`flatpak remote-modify --url=&lt;url&gt; &lt;name&gt;` (with `--user`/`--system` and `sudo` for system). Preferred over delete+add because a CHANGE diff only fires when the remote is present on both sides, so the entry already exists — remote-modify edits it in place, preserving the remote's other config (gpg key, filter, priority) and avoiding disruption to installed refs' origin binding that a delete+re-add would cause.
+
+### Remote item model
+No `url` field needed to be added — `FlatpakRemoteItem` (items.py:421) already carries `url`, `_parse_flatpak_remotes` already retains it, and `plan()` already caches full source/target remote items by id. Also no shared-core edit needed: `DiffAction.CHANGE` already exists and `_ACTION_ORDER` already emits CHANGE groups between INSTALL and REMOVE as default-ticked (install-direction, non-removal) — so a remote URL change lands in a default-ticked "Change flatpak packages" group via the existing fallback vocabulary.
+
+### Verification — all pass
+- `uv run ruff format` — 2 files reformatted.
+- `uv run ruff check` (both files) — All checks passed.
+- `uv run basedpyright src/pcswitcher/jobs/flatpak_sync.py` — 0 errors, 0 warnings, 0 notes.
+- `uv run pytest tests/unit/jobs/test_flatpak_sync.py -q` — 25 passed (5 new + 20 pre-existing).
+
+No deviations. Touched only `flatpak_sync.py` and its unit test; did not modify `items.py`, `sync_core.py`, `review.py`, or any other job.</result>
+<usage><subagent_tokens>98241</subagent_tokens><tool_uses>14</tool_uses><duration_ms>148396</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a59dd48bb864978cf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/a59dd48bb864978cf.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-A apt_sync changes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All checks pass. Here's the concise report.
+
+## What changed
+
+`src/pcswitcher/jobs/apt_sync.py`:
+
+TASK 1 — apt-get update before installs (decision 1):
+- `__init__` (~514): added `self._metadata_refreshed: bool` and `self._metadata_refresh_error: str | None`.
+- New helper `_ensure_metadata_refreshed()` (~1088): the run-once guard. Contract: no-op if a refresh already succeeded this run (flag set by either path); if a prior install-path refresh failed, re-raise the cached `ConvergeItemFailed` without issuing a second `apt-get update`; otherwise run one `sudo apt-get update` — on success set the flag, on failure cache the error and raise `ConvergeItemFailed` (aborts the item, so installing against stale lists never happens). Guarantees at most ONE install-path `apt-get update` per run even across multiple installs and even on the failure path.
+- `_converge_install` (~1120): calls `await self._ensure_metadata_refreshed()` before the simulation/real command.
+- `_ensure_repo_group_converged`: sets `self._metadata_refreshed = True` at the primary `apt-get update` success (~1263) and at the post-rollback reprobe success (~1290), so the repo-group path's own refresh suppresses the install-path one. Repo-group rollback behavior itself is unchanged.
+
+TASK 2 — collateral protects target OR source manual set (decision 8):
+- `__init__` (~510): added `self._source_manual_set: frozenset[str]`.
+- `capture_source_items` (~535): populates `_source_manual_set` from the raw source `apt-mark showmanual` (before decision-file filtering).
+- New helper `_protected_manual_set()` (~865): returns `target | source` manual sets; docstrings note the machine-specific decision list is intentionally not consulted.
+- Swapped `self._target_manual_set` → `_protected_manual_set()` in `_classify_collateral` (removal + downgrade branches), `_converge_install` (removal + downgrade guards), and `_converge_remove` (removal guard). Docstrings updated to "target OR source manual set".
+
+`tests/unit/jobs/test_apt_sync.py` — added tests:
+- `TestMetadataRefreshBeforeInstall::test_install_only_run_refreshes_metadata_once_before_first_install` (a: one update, before first install)
+- `TestMetadataRefreshBeforeInstall::test_failed_metadata_refresh_aborts_installs_with_a_single_update` (a: abort on failure, single update, no real install)
+- `TestMetadataRefreshBeforeInstall::test_repo_group_refresh_is_not_repeated_by_the_install_path` (b: no double-refresh)
+- `TestSourceOnlyCollateral::test_source_only_manual_collateral_removal_becomes_a_review_item` (c: plan-time, source-decision-filtered `src-only` surfaces as collateral only via the union)
+- `TestSourceOnlyCollateral::test_apply_time_guard_refuses_source_only_manual_collateral` (c: apply-time guard refuses a drifted removal of a source-only manual package)
+
+## Verification (all four pass)
+
+- `uv run ruff format` — 2 files already formatted (reformatted during work, now clean)
+- `uv run ruff check` — All checks passed!
+- `uv run basedpyright src/pcswitcher/jobs/apt_sync.py` — 0 errors, 0 warnings, 0 notes
+- `uv run pytest tests/unit/jobs/test_apt_sync.py -q` — 65 passed
+
+## Deviations from spec
+
+- The spec said the source manual set "is already captured — see `_source_manual_packages`/`source_manual_installs` around apt_sync.py:522 (verify the exact attribute)." Verified: no such stored attribute existed — `capture_source_items` fetched the source `apt-mark showmanual` but discarded the raw set. I added `_source_manual_set`, populated inside `capture_source_items` at the existing fetch (no extra command). Capturing from the raw list (pre-filter) is deliberate: it protects a package the user skip-recorded on the source but still has manually installed there — the true edge case decision 8 targets.
+- Spec suggested the run-once helper be "invoked from both the repo-group path and before the first install." The repo-group path keeps its inline `apt-get update` (its result drives rollback, which the helper's raise-on-failure semantics would break), so instead of calling the helper it sets the shared `_metadata_refreshed` flag on success. This honors "do not change repo-group rollback behavior" while still giving one refresh per run and no double-refresh. The helper is the single guard for the install path.</result>
+<usage><subagent_tokens>173128</subagent_tokens><tool_uses>29</tool_uses><duration_ms>637479</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ace7d3ffd34304147</task-id>
+<tool-use-id>toolu_013Vd6f3BmV6KZcegTLTAuFA</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/ace7d3ffd34304147.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-B snap data sync + hold" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>WP-B complete. All checks green on my files.
+
+## Changes
+
+### Task 1 — sync the current-revision data dir (decision 3)
+
+`src/pcswitcher/jobs/snap_sync.py`
+- New `_current_revision_name(app_dir)` (after line ~193): resolves `~/&lt;app&gt;/current` via `Path.resolve(strict=True)`, returns the active revision dir name, or `None` when the symlink is missing/dangling.
+- Rewrote `snap_sync_exclude_paths()`: per app now excludes every revision dir EXCEPT the one `current` resolves to; `common`/`current` still kept; missing/dangling `current` → excludes ALL rev dirs (safe fallback). Docstring updated.
+- Updated the `_NON_REVISION_DIR_NAMES` comment (~74-81).
+
+`src/pcswitcher/jobs/folder_sync.py` — updated the group-4 GLOBAL-FIRST comment (~110-119) and `_snap_sync_exclude_filters` docstring (~467-497) to say the current-revision data dir IS mirrored.
+
+`src/pcswitcher/home.filter` — updated the package-store excludes comment (12-19).
+
+### Task 2 — transient snapd auto-refresh hold (decision 4)
+
+`src/pcswitcher/orchestrator.py`
+- Module constants `_SNAP_AUTOREFRESH_HOLD_DURATION = "+6 hours"` and `_SNAP_HOLD_TIMESTAMP_CMD` (host-side `date` producing an RFC3339-UTC timestamp).
+- `__init__`: `_snap_hold_engaged`, `_snap_hold_prior_source`, `_snap_hold_prior_target`.
+- New methods: `_run_snap_hold_command` (source uses `LocalExecutor.run_command`, target uses `login_shell=False`), `_capture_snap_hold`, `_apply_snap_hold`, `_hold_snap_autorefresh`, `_restore_snap_hold`, `_restore_snap_autorefresh`.
+- Wired the hold into `run()` right before `_execute_jobs` (spans snap convergence → folder_sync, both in RUN_JOBS), and the restore at the top of `_cleanup()` (before connection teardown).
+
+`src/pcswitcher/jobs/snap_sync.py` — `validate()` now also requires passwordless `sudo -n true` on the SOURCE (the source-side hold needs `sudo snap set`); docstring updated. Noted below.
+
+### Exact snap CLI chosen and why
+
+I used `snap set system refresh.hold="&lt;now+6h RFC3339&gt;"` to set, `snap get system refresh.hold` to capture (read-only), and `snap set system refresh.hold=&lt;prior&gt;` / `=""` to restore — NOT `snap refresh --hold[=duration]`/`--unhold`.
+
+Rationale (verified this session against snapd source, not memory):
+- `overlord/snapstate/autorefresh.go` — `refresh.hold` is consumed ONLY by `EffectiveRefreshHold`/the auto-refresh manager, so it cannot block the manual `snap install/refresh --revision=N` convergence snap_sync issues. It supports a timestamp or `"forever"`; `maxPostponement` is 95 days, so 6h is well within bounds and auto-expires (crash backstop).
+- `overlord/configstate/configcore/refresh.go:85-87` — value must be `""`, `"forever"`, or a parseable RFC3339 timestamp; `""` is accepted and treated as no hold, so my "no prior" restore precisely unsets only the general option.
+- This is the same read verb `snap_sync.validate()` already uses, is fully symmetric (get/set), touches only the system-wide option (never per-snap holds), computes the timestamp on each host (clock-correct), and avoids the module's Pitfall-1 landmine (`snap refresh --hold` with no snap = indefinite global hold) and `--unhold`'s collateral clearing of unrelated per-snap holds.
+
+This is a deliberate deviation from the literal instruction to use `snap refresh --hold`. Flagging it explicitly: both achieve the same effect; `snap set system refresh.hold` is the one I could fully verify against source and is strictly safer/symmetric. The snap_sync module docstring's "This module never calls `snap refresh --hold`" remains accurate — the hold lives in the orchestrator and never uses that verb.
+
+### Where the hold is wired
+
+Orchestrator, gated on `sync_jobs.snap_sync` and skipped in dry-run: set in `run()` immediately before `_execute_jobs(jobs)`; released in `_cleanup()` (always-run) before connection teardown. Prior hold captured per host and restored exactly.
+
+### New validation flag
+
+Setting the hold on the SOURCE needs passwordless `sudo snap set` on the source, which was not previously validated (snap_sync only validated target sudo; folder_sync validates `sudo rsync` on source, a different binary). I added a source `sudo -n true` check to `snap_sync.validate()` (Rule 2 — without it the source hold would fail mid-run). Note this is a genuinely new source-side requirement introduced by decision 4.
+
+## Tests
+
+`tests/unit/jobs/test_snap_sync.py` — replaced `TestExcludePaths` with: `test_excludes_old_revisions_keeps_current_common_and_current_symlink`, `test_dangling_current_falls_back_to_excluding_all_revisions`, `test_missing_current_symlink_falls_back_to_excluding_all_revisions`, kept `test_no_snap_directory_returns_empty`; added `test_source_without_passwordless_sudo_yields_validation_error`.
+
+`tests/unit/jobs/test_folder_sync.py` — replaced the snap filter test with `test_old_revision_excluded_current_kept`.
+
+`tests/unit/orchestrator/test_snap_autorefresh_hold.py` (new) — hold set on both hosts when enabled; capture is read-only and precedes set; not set when disabled; skipped in dry-run; restore unsets when no prior; restore preserves exact prior per host (timestamp + `forever`); restore no-op when not engaged; restore idempotent; hold issues no `snap install/refresh` command.
+
+## Check results (my files only)
+
+- `ruff format`: 6 files unchanged.
+- `ruff check`: All checks passed.
+- `basedpyright`: 0 errors, 0 warnings, 0 notes.
+- `pytest` (test_snap_sync, test_folder_sync, tests/unit/orchestrator/): 267 passed; scoped WP-B run 144 passed.
+
+## Deviations / flags
+
+1. Used `snap set/get system refresh.hold` instead of `snap refresh --hold`/`--unhold` (rationale above) — flagged for review.
+2. Added source-side passwordless-sudo validation to `snap_sync.validate()` (new requirement from the source hold).
+3. Full `tests/unit` run shows 2 pre-existing failures in `test_manual_installs_sync.py` and `test_package_review.py` (decision 10 / WP-D — `review.py`, `manual_installs_sync.py`). These files are owned by a concurrent agent and are mid-flight in the shared worktree; I did not touch them and they are out of WP-B scope. All WP-B files pass.</result>
+<usage><subagent_tokens>179076</subagent_tokens><tool_uses>53</tool_uses><duration_ms>817512</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a72dac371c5461795</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/a72dac371c5461795.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-D snippet overwrite + unresolved refactor" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 16 targeted tests pass. WP-D is complete.
+
+## Summary
+
+Implemented decisions 9 and 10 for WP-D. All checks pass on every touched file.
+
+### TASK 1 — Snippet registry overwrite confirmation (decision 9)
+
+`src/pcswitcher/jobs/manual_installs_sync.py`
+- `_push_snippet_registry` (now ~237): inserted `await self._guard_registry_overwrite(source_path)` between the `source_path.exists()` gate and the `send_file` transfer. The transfer stays a whole-file `send_file` (no per-entry merge) — only the guard is new.
+- `_guard_registry_overwrite` (new): reads the source's on-disk file (the exact bytes to be sent, via `load_snippets_from_text`) and the target's current registry (`SnippetRegistry(self.target).load()`). Computes per-`item_id` `lost` (target entry absent from source) and `changed` (present but body differs). Purely additive (source ⊇ target) → returns silently. Otherwise calls `self.context.confirmer.confirm(..., allow=False, ...)`; declines/non-interactive → raises `SyncAbortedByUser` (aborts the run). `allow=False` is what makes a non-interactive run refuse-and-abort (no override flag exists).
+- `_render_overwrite_diff` (new, static): builds a markup-safe diff message listing LOST/CHANGED entries with bodies, each field `rich.markup.escape`d (T-02-02 guard).
+
+`src/pcswitcher/jobs/packages/state.py`
+- Added `load_snippets_from_text(raw)` (exported) — parses registry file content with the same absent/empty/malformed degrade rule as `SnippetRegistry.load`; used to read the file actually being sent (consistent with the transfer, not a possibly-lagging executor re-query).
+
+Reused mechanism: the existing `Confirmer` seam (`self.context.confirmer`), same gate `folder_sync`/orchestrator use. Abort propagates as `SyncAbortedByUser` — the existing clean-stop exception caught once at WARNING by both orchestrator and CLI.
+
+### TASK 2 — Make "unresolved" unrepresentable (decision 10)
+
+`src/pcswitcher/jobs/packages/review.py`
+- `_review_unreproducible_group`: dropped the `unresolved` param; wrapped each entry in a `while True` re-prompt loop. Select `None` (Ctrl-C/EOF) → `raise SyncAbortedByUser` (aborts whole sync). `add_snippet` with empty/abandoned body (`""`/`None`) → prints a notice and re-prompts the three-way choice (never accepts, never falls through). Removed the fall-through that recorded SKIP_ONCE + appended to `unresolved`.
+- `review_items` (top-level checkbox flow ~417): the `if selected is None:` branch now `raise SyncAbortedByUser` instead of skip-and-mark-unresolved-remaining. Removed the interactive `unresolved` list; interactive return is now `unresolved=()`. Non-interactive path unchanged (still populates `unresolved` for D-26 reporting — kept because apt_sync carries it through verbatim and the integration test asserts it).
+
+`src/pcswitcher/jobs/manual_installs_sync.py`
+- Removed the `_unresolved_as_failures` override (replaced with an explanatory comment). Rationale traced: it only ever produced failures for interactive-unresolved (now impossible); non-interactive was already exempt (`not was_interactive → []`) and non-interactive "nothing applied" is surfaced by `review_items`' `log.warning`, not this hook. The base no-op `[]` is now correct. Did not touch `sync_core.py` (its base hook + call site remain; base returns `[]`). Updated module/class docstrings accordingly.
+
+### Abort propagation
+Both abort paths raise `pcswitcher.models.SyncAbortedByUser`, the established control-flow exception the orchestrator and CLI already catch separately at WARNING (not CRITICAL) — the same clean-stop the collateral group's abort uses.
+
+### Empty-snippet re-prompt
+The `while True` per-entry loop re-issues the three-way `questionary.select`; an empty body loops back to the choice, so the user must supply a non-empty snippet or pick skip-once/skip-always. Ctrl-C on the select (not the text editor) aborts.
+
+### Tests
+`tests/unit/jobs/test_manual_installs_sync.py`: added `FakeConfirmer` + `confirmer` param to `make_context`; new `TestSnippetRegistryOverwriteGuard` (additive-proceeds-silently, identical-entry-additive, lost-entry-prompts-and-proceeds-on-confirm, lost-entry-aborts-on-decline, changed-body-prompts, non-interactive-non-additive-aborts). Updated `TestSkipOnceResolution::test_interactive_unresolved_no_longer_fails_the_run`. Made `test_on_the_fly_snippet_is_replayed_the_same_run` hermetic (monkeypatch `Path.home` → empty tmp so the guard can't trip on a dev machine's real registry).
+`tests/unit/jobs/test_package_review.py`: `test_checkbox_ctrl_c_aborts_the_entire_sync`, `test_cancelled_select_aborts_the_entire_sync`, `test_empty_snippet_body_reprompts_until_a_real_choice`, `test_empty_snippet_then_real_snippet_is_captured`; renamed `TestUnresolvedFailsTheJob` → `TestUnresolvedNeverFailsTheJob` with `test_interactive_unresolved_does_not_raise`; removed now-unused `PackageItemFailures` import.
+
+### Checks (all pass, on all touched files)
+- `ruff format --check`: 5 files already formatted
+- `ruff check`: All checks passed
+- `basedpyright`: 0 errors, 0 warnings, 0 notes
+- `pytest tests/unit/`: 961 passed (targeted 16 new/changed: all pass)
+
+### Deviations / notes
+- `_unresolved_as_failures` was **removed** (not kept-and-simplified). Traced: dead for its purpose after decision 10, and non-interactive reporting never used it. Two obsolete tests asserting the old interactive-unresolved-fails-the-job contract were repurposed to assert the new no-fail behavior.
+- The confirmer's non-interactive message references `allow_flag`; since no override flag exists I pass `allow_flag="manual registry consolidation"` so the fallback text reads sensibly. This is the one cosmetic wart of reusing the confirmer, accepted per the "reuse existing mechanism" instruction (jobs have no direct console/UI handle — the confirmer is the only seam).
+- Integration test `tests/integration/jobs/test_package_sync.py` (VM-gated, not run here) still asserts non-interactive "unresolved" reporting, which I deliberately preserved.</result>
+<usage><subagent_tokens>202358</subagent_tokens><tool_uses>57</tool_uses><duration_ms>930525</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a31cfcc1c2d51aee5</task-id>
+<tool-use-id>toolu_01PyumzCogNnUDj5fY67U6EC</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/a31cfcc1c2d51aee5.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-F README fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All edits complete. The recurring hard-wrap hook flag points to a pre-existing paragraph in the "AI Agent workflow" section (the "However, still much overhead…" line following the GSD sentence) — it predates my changes and is outside decision 13's scope, so I left it. Flagging it for you.
+
+Changes made:
+
+README.md (`/home/janfr/dev/pc-switcher/README.md`)
+1. Status line rewritten: package sync (apt, snap, flatpak, manual installs) and folder sync implemented and under active hardening; application/system-config sync on the roadmap.
+2. Removed the "Key Design Principles" section (moved to dev guide).
+3. Rate-limit section: kept the 403 example (correct — GitHub's primary limit), added a sentence noting the secondary/abuse limit may appear as HTTP 429.
+4. Documentation "Key documents" list refreshed — added Configuration Reference, Package Sync, Folder Sync, VS Code State Sync, Reading Sync Logs; kept it curated.
+5. Fixed double negative: "don't have no configurable options" → "have no configurable options except for enabling/disabling them".
+
+docs/dev/development-guide.md (`/home/janfr/dev/pc-switcher/docs/dev/development-guide.md`)
+- Added a `## Design Principles` section (the five principles, priority order) before `## Code Expectations`, which already references project principles.
+
+All listed doc paths verified to exist: `docs/jobs/package-sync.md`, `docs/jobs/folder-sync.md`, `docs/jobs/vscode-state-sync.md`, `docs/configuration.md`, `docs/reading-sync-logs.md`, plus the retained `docs/planning/High level requirements.md`, `docs/system/architecture.md`, `docs/adr/_index.md`, `docs/dev/development-guide.md`.</result>
+<usage><subagent_tokens>45613</subagent_tokens><tool_uses>10</tool_uses><duration_ms>62954</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa96f4f720f4634bc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/aa96f4f720f4634bc.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-G config+docstring state sweep" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All checks pass. Report below.
+
+WP-G complete. Only comments/docstrings and YAML-comments changed; no code logic touched.
+
+TASK 1 — "state" → "config" sweep (decision 6). All hits were in `src/pcswitcher/jobs/apt_sync.py` (grep confirmed no other src files carry the phrases; `default-config.yaml` had none). All six refer to `/etc/apt` config files (sources/keys/pins); none are the excluded genuinely-stateful phrases.
+
+- L1238 (docstring): `leave /etc/apt in a state nobody reviewed` → `leave /etc/apt in a configuration nobody reviewed`
+- L1322-1323 (comment): `the pre-run state and this reprobe … run against that state` → `the pre-run configuration and this reprobe … run against that config`
+- L1510 (comment): `capturing /etc/apt state runs sudo find` → `capturing /etc/apt config runs sudo find`
+- L1512 (comment): `replicated no repository state at all` → `replicated no repository configuration at all`
+- L1520 (validation-error string): `required to read /etc/apt repository, keyring and pin state` → `…keyring and pin config`
+- L1531 (validation-error string): `required to install packages and write /etc/apt state` → `…write /etc/apt config`
+
+Note: L1520/L1531 are user-facing validation-error message text (string literals, not code logic) — the "state" wording there is the same mislabel decision 6 targets, so changed alongside the comments.
+
+TASK 2 — drop flatpak-ordering example (decision 12), `src/pcswitcher/default-config.yaml` L46-49:
+- old: `(decisive for flatpak, where flatpak install creates ~/.local/share/flatpak before folder_sync would otherwise land ~/.var/app on top)`
+- new: `(installing software writes default config/data files; running folder_sync afterward lets the user's synced versions land on top of those defaults)`
+
+Verification (all pass):
+- `uv run ruff check src/pcswitcher/jobs/apt_sync.py` — All checks passed
+- `uv run basedpyright src/pcswitcher/jobs/apt_sync.py` — 0 errors, 0 warnings
+- `uv run pytest tests/unit/jobs/test_apt_sync.py -q` — 65 passed
+- YAML load of `default-config.yaml` — ok
+
+No Python identifiers renamed; no code logic changed.</result>
+<usage><subagent_tokens>50033</subagent_tokens><tool_uses>14</tool_uses><duration_ms>106491</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac245cc6008f64adb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/ac245cc6008f64adb.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-E rewrite package-sync.md" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. `docs/jobs/package-sync.md` rewritten as one coherent piece.
+
+Section-by-section changes:
+
+- Intro + yaml + "What each job covers": "repository state"/"/etc/apt state" → "repository configuration"/"/etc/apt config". Dropped snap's "never held or otherwise blocked from auto-refresh" (no longer true — auto-refresh is paused during sync).
+- New "Job ordering is enforced": states the MUST, names `orchestrator._check_package_jobs_precede_folder_sync`, config-error-on-violation, general defaults-then-user-data rationale. Dropped the illogical flatpak example.
+- "Batched review": full user-facing rewrite leading with what the review is; grouped-by-action, removals unticked, three-way choice as a bullet list. Deep tech (simulate/classify plumbing) cut.
+- "apt collateral": reworded — no "naming"; apply/skip-once/skip-always on detected diffs; collateral protects union of source ∪ target manual sets → install-anyway/skip/abort item; apt's own dependency churn not shown.
+- "Machine-specific packages": restructured, "this specific machine" stated once up front (never synced out, never applied inbound), decision file never synced; repetitive second statement removed.
+- "Versions": apt/flatpak float; snap converges revision+channel with the revision-numbered-dir rationale; snap data now follows via folder_sync (current-rev dir + common, old revs excluded); auto-refresh paused both machines, restored after.
+- New "Deletions": apt/snap/flatpak propagate removals as unticked items; manual_installs install-only (deferred).
+- "Install snippets": added unprivileged `bash -c` as target user, sudo is author's job; new "Registry push and consolidation" subsection (wholesale overwrite, additive silent, lossy/changed → diff+confirm, decline/non-interactive aborts).
+- "Resolving unreproducible items": corrected — Ctrl-C/EOF aborts whole sync, empty snippet rejected/re-prompts, non-interactive marks skip-once; removed the false "unresolved only on non-interactive" framing (folded the non-interactive behavior into this section and dropped the redundant standalone "Non-interactive runs" section).
+- "Prerequisites": snap_sync now lists source passwordless sudo (for `snap set system refresh.hold`), noted best-effort.
+
+Places the code disagreed with the old doc (reconcile if needed):
+
+- Snippet prompt behavior: old doc said a prompting snippet "hangs the sync rather than failing cleanly." Code (`state.py::replay`, line 413-415) says no stdin is supplied so it "fails rather than hanging." I wrote "fails rather than hanging." Confirm which is the intended user-facing claim.
+- Snap source sudo is best-effort: `orchestrator._set_snap_hold` logs (not raises) on failure, and `snap_sync._TARGET_SUDO_COMMANDS` still only declares target sudo — the source hold requirement lives in the orchestrator, not snap_sync's own validate. So a source lacking passwordless sudo won't fail validation; the hold just silently won't engage. I documented that nuance rather than stating a hard requirement. Flag if you'd prefer validate() to hard-require it.
+
+No GSD marker added (file had none; not a GSD-managed doc).</result>
+<usage><subagent_tokens>64140</subagent_tokens><tool_uses>18</tool_uses><duration_ms>154679</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aeee949b65eb5d25b</task-id>
+<tool-use-id>toolu_01X1NCioiMjc8N216w2zE6LH</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/aeee949b65eb5d25b.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-H ADR-020 + planning update" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All edits are coherent and verified against the code. Summary of what I did.
+
+Changes to `docs/adr/adr-020-declarative-package-convergence.md`
+
+How the amendment was recorded (per ADR-001): ADR-001 prescribes immutability-via-supersession, but my scope forbids creating a new ADR or touching `_index.md`, so supersession was impossible. I recorded the change the ADR-001-compatible way that fits a single-file edit: a dated `Amended: 2026-07-24` line in the header block (a natural extension of ADR-001's `Date:` convention) listing the scope and pointing to `02-UAT-REVIEW-FIXES.md`, plus a two-way traceability entry in References. The amendment note states explicitly that these refinements clarify/extend rather than reverse the decision, which is why they were recorded in place rather than as a superseding ADR. Decision bodies and Implementation Rules were then edited to match the implemented behavior.
+
+Decisions updated:
+- D-04/D-05: snap named the explicit exception to the float-only version policy (it converges revision+channel because only snap embeds the version in its data path).
+- D-06: extended — current-revision data dir now mirrored by folder_sync; orchestrator pauses snapd automatic refresh on both hosts via a timed system `snap set system refresh.hold` restored in cleanup; new consequence that snap_sync requires passwordless sudo on the SOURCE too.
+- D-29: changed — snap_sync excludes all `~/snap/&lt;app&gt;/&lt;rev&gt;` dirs EXCEPT the current-revision dir; older retained revs stay excluded; safe-default when `current` is missing/dangling.
+- D-11/12/13: heading "Repository state as items" → "Repository configuration as items"; added flatpak remote-URL diff converged with `remote-modify`.
+- D-30 + transactional-convergence: apt source-manual set now unioned into collateral protection; one `apt-get update` before the first install even with no repo-group change, aborting the job on failure, sharing one at-most-once flag.
+- D-18–D-23 + run-termination sections: snippet-registry wholesale overwrite gated on being non-additive (confirm-or-abort); interactive "unresolved" outcome removed — empty snippet re-prompts, Ctrl-C/EOF aborts the whole sync.
+- Forbidden rule on `snap refresh --hold` clarified to permit the transient timed race-guard while still forbidding the standing-hold verb.
+- Terminology "state" → "config" applied only to `/etc/apt`-config phrasings (Context, validate() rule, D-11 heading); genuinely-stateful uses left untouched.
+
+`.planning/` files touched
+- `.planning/phases/02-package-management-sync/02-UAT-REVIEW-FIXES.md`: marked Status: Implemented (2026-07-24) and added an "Accepted deviations" section for the two accepted deviations (hold mechanism is `snap set system refresh.hold` not `snap refresh --hold`; new source-side sudo requirement).
+- `.planning/phases/02-package-management-sync/02-08-SUMMARY.md`: annotated the now-false D5 exclude-paths description with a superseding note pointing to the fixes doc.
+- `.planning/phases/02-package-management-sync/02-08-PLAN.md`: annotated the now-false `snap_sync_exclude_paths()` spec with a superseding note.
+
+Note: the `snap refresh --hold` references in RESEARCH/PLAN/SUMMARY/VERIFICATION files are still accurate (the research pitfall about the no-arg mutating form, and its rejection as the convergence mechanism — the new hold uses a different verb), so I left them. Two markdown hard-wrap hook warnings fired on pre-existing lines in `02-08-SUMMARY.md` (204, 222) and `02-08-PLAN.md` (42, 47–51) that are unrelated to my single-line edits; I did not modify them.</result>
+<usage><subagent_tokens>100941</subagent_tokens><tool_uses>41</tool_uses><duration_ms>422359</duration_ms></usage>
+</task-notification>
+
+---
+
+do #208 as well
+
+---
+
+<task-notification>
+<task-id>ae1779ab78ff3cf16</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/ae1779ab78ff3cf16.output</output-file>
+<status>completed</status>
+<summary>Agent "Research apt hold replication" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed: the only occurrences are `showhold` reads plus docstrings — no `apt-mark hold`/`unhold`/`set-selections` write exists anywhere in `src/`. I have everything needed.
+
+# Design report: replicating apt hold state as synced Items (issue #208, apt scope)
+
+## 1. CURRENT behavior — holds are read-only reports, never written
+
+Confirmed exactly. `AptSyncJob.collect_hold_pin_facts` (`src/pcswitcher/jobs/apt_sync.py:586-621`) runs `apt-mark showhold` on **both** source and target and emits one `HoldPinFact(mechanism="hold", ...)` per line from each (lines 597-607). Those facts flow through `PackageSyncJob.plan()` (`sync_core.py:365`) into `diff_items` → `_diff_apt_packages`.
+
+The guard that turns a hold into a report is `sync_core.py:248-258`:
+
+```python
+if target_item is not None and target_item.name in held_or_pinned:
+    diffs.append(ItemDiff(item_class=APT_PACKAGE, diff_class=HELD_OR_PINNED,
+                          action=REPORT_ONLY, ...))
+```
+
+Precedence: this branch is checked **first** for each item_id, so a held package never becomes INSTALL/REMOVE/VERSION_MISMATCH. Two important facts about the current guard:
+- It keys on `target_item.name in held_or_pinned` and requires `target_item is not None` — so **a package held only on the source, absent on the target, produces no diff at all** (source-only holds are silently dropped; the source `showhold` read at line 597-601 is effectively dead for anything not also installed+present on the target).
+- `REPORT_ONLY` diffs are excluded from converge in `apply()` (`sync_core.py:441`) regardless of decision, and skipped by `_record_permanent_skips` (`sync_core.py:523`).
+
+Does hold state ever get written to the target? **No.** `grep` over `src/` finds only `showhold` (read). There is no `apt-mark hold`/`unhold`/`set-selections` anywhere. Expected result confirmed.
+
+## 2. CLI facts — `apt-mark showhold` / hold semantics
+
+Verified from `man apt-mark` (apt 2.8.3) on this machine:
+- **`showhold`** — "print a list of packages on hold in the same way as for the other show commands." Output is **one package name per line**, no version, no priority. `showhold` exits 0 with empty output when nothing is held (verified live: `apt-mark showhold` → empty, exit 0).
+- **`hold`** — "changes dpkg selections such as hold" — i.e. it is **dpkg selection state stored under `/var/lib/dpkg`**, not an apt-config file. It blocks automatic install/upgrade/**removal** of the package.
+- **Arch/scope nuance:** the "same way as other show commands" means, on multiarch systems, foreign-arch packages are printed as `name:arch` (native arch printed bare). This is consistent with `apt-mark showmanual`, which the package manifest already parses the same way (`_resolve_versions`, `apt_sync.py:559-583`) — so `HoldPinFact.package` and `AptPackageItem.name` use the same `name[:arch]` spelling and will match. (Verified the spelling *convention* against the man wording; no foreign-arch hold existed live to observe directly.)
+- **Hold on an uninstalled package:** hold is a dpkg *selection*, and dpkg selections can exist for not-currently-installed packages (this is how one pre-holds). Whether `apt-mark hold &lt;pkg&gt;` succeeds when the target has **no dpkg record and no apt-cache entry** for that name is the one fact I could **not verify without mutating state** (I did not run any hold). Documented behavior: it works for any package apt/dpkg knows (installed, or known-but-removed, or available in the cache); a wholly-unknown name is likely to error. **Flagged as a design question in §7.**
+
+## 3. CONVERGE commands
+
+- Add a hold: `sudo apt-mark hold &lt;pkg&gt;`
+- Remove a hold: `sudo apt-mark unhold &lt;pkg&gt;`
+
+**Sudo: yes** — hold/unhold write dpkg selection state under `/var/lib/dpkg`. (Contrast `showhold`, which needs no sudo; the existing `collect_hold_pin_facts` reads run without sudo, `apt_sync.py:597/603`.) The target already validates passwordless sudo (`validate()`, `apt_sync.py:1525`); `/usr/bin/apt-mark` would need adding to `_TARGET_SUDO_COMMANDS` (`apt_sync.py:75-82`).
+
+**Idempotent: yes.** `apt-mark hold` on an already-held package is a no-op ("already hold"); `apt-mark unhold` on a not-held package is a no-op. Both exit 0. Safe to re-run.
+
+## 4. DESIGN — hold as a first-class synced Item
+
+Proposed item model, fitting the existing item→diff→review→converge pipeline:
+
+**New item dataclass** in `packages/items.py` (a new `ItemClass.APT_HOLD = "apt_hold"`):
+```
+AptHoldItem(name: str)
+  item_id -&gt; f"apt:hold:{name}"
+  label() -&gt; f"{name} (hold)"
+```
+`item_id` scheme `apt:hold:&lt;pkg&gt;` is distinct from `apt:package:&lt;pkg&gt;` — critical so a package's install/version item and its hold item are two separate identities in the same review (de-dupe handled in §5).
+
+**Capture (source) / query (target):** the *presence* of a name in `apt-mark showhold` is the item's existence. Model it exactly like a set-membership item: source-held names → source items, target-held names → target items. This slots into the existing diff engine, where existence-on-one-side-only is the whole signal.
+
+**Diff directions** (both mean "make target match source"):
+- source-held &amp; target-not-held → **add hold on target**
+- target-held &amp; source-not-held → **remove hold on target**
+- held on both, or held on neither → no diff.
+
+**DiffAction:** Do **not** reuse INSTALL/REMOVE (those read as "install/remove the package" in `_ACTION_VOCABULARY`, `sync_core.py:113-120`, and would land in the package install/removal review groups — exactly the destructive-bulk-tick confusion D-07 guards against). Two clean options:
+- **(a)** Use `DiffAction.CHANGE` for **both** directions (converging a flag to match source is a "change", and CHANGE is already treated as install-direction/checked-by-default, not a removal — `review.py:92` comment). Direction is then derived at converge time from which side holds it. Add vocabulary entries `(APT_HOLD, CHANGE): "hold"` and present add-vs-remove via the `detail` string.
+- **(b)** Use INSTALL for add-hold and REMOVE for remove-hold, so remove-hold correctly lands in the separated removal group (unchecked by default — a good fit, since *removing* a user's deliberate hold is the direction that deserves the extra friction).
+
+**(b) is the better fit for the existing grouping/default-checked machinery**: `_build_review_groups` (`sync_core.py:308`) already separates removals, and `_record_permanent_skips` (`sync_core.py:499-536`) already routes INSTALL/CHANGE→source-held-file and REMOVE→target-held-file for skip-always — which is exactly right for holds (an add-hold is source-held → skip-always recorded on source; a remove-hold is target-held → recorded on target). Add `(APT_HOLD, INSTALL): "hold"` and `(APT_HOLD, REMOVE): "unhold"` to `_ACTION_VOCABULARY`.
+
+**Converge:** extend `AptSyncJob.converge` (`apt_sync.py:1062`) to dispatch `ItemClass.APT_HOLD`:
+- INSTALL/add → `sudo apt-mark hold &lt;name&gt;`
+- REMOVE/remove → `sudo apt-mark unhold &lt;name&gt;`
+
+using `shlex.quote(name)` and `self.target.run_command(..., login_shell=False)`, returning the `CommandResult` (exit code decides pass/fail, D-27). No apt-get simulation needed — hold/unhold touch only selection state, not a transaction, so they bypass the collateral-guard machinery entirely.
+
+**Three-way review:** falls out for free. Holds go through the ordinary checkbox `ReviewGroup` (not the collateral/unreproducible special flows). apply = overwrite source&gt;target (runs the apt-mark command), skip-once = `SKIP_ONCE`, skip-always = `SKIP_ALWAYS` → `_record_permanent_skips` writes the machine-local `DecisionFile` under manager `"apt"` keyed by `apt:hold:&lt;pkg&gt;` (`state.py`, `DECISION_FILE_RELPATH_TEMPLATE`). `filter_inert` (`sync_core.py:363-364`) then drops that hold item from future runs on the holding machine. All existing.
+
+## 5. INTEGRATION HAZARD — coexistence with the HELD_OR_PINNED→REPORT_ONLY guard (the crux)
+
+They are **orthogonal and must both stay**, but the current guard needs a scoping change to avoid a double-report and to stop swallowing the hold diff.
+
+The concern: the two concepts live at different layers. The **package** item (`apt:package:&lt;pkg&gt;`) answers "should the package be installed / at what version" — and while it is held on the target, that answer must remain **REPORT_ONLY** (D-04: never force-downgrade/upgrade a package the user pinned in place; apt would refuse anyway). The **hold** item (`apt:hold:&lt;pkg&gt;`) answers a different question — "should the hold flag itself exist on the target". Converging the hold flag as its own item is correct and does not touch the package's install/version.
+
+Concrete conflict to de-dupe: today a package held **on the source** and installed-but-not-held **on the target** would (once holds are proper diffs) produce *both* a `HELD_OR_PINNED` REPORT_ONLY on `apt:package:&lt;pkg&gt;` **and** an add-hold `apt:hold:&lt;pkg&gt;` item — the user sees the same package twice, once as an un-actionable report and once as the real actionable hold. That is redundant noise.
+
+Recommended reshape of `_diff_apt_packages` (`sync_core.py:235-258`):
+- **Split the fact stream by mechanism.** Pins stay exactly as they are: `HELD_OR_PINNED`/REPORT_ONLY is still the right presentation for a pin (a pin is a `preferences.d` *file*, already synced as an `AptPinItem` by `config`-style file diff — the REPORT_ONLY on the package is the informational echo). **Holds move out** of the `held_or_pinned` dict entirely and are diffed as `AptHoldItem`s.
+- With holds removed from the guard, the `HELD_OR_PINNED` branch keys **only on pins**. A held-on-target package's install/version item then needs a *separate* suppression: keep a REPORT_ONLY (or simply suppress the package's install/version diff) when `target_item.name` is in the target's hold set, so a held package is never proposed for install/upgrade — but the *hold itself* is now carried by the `apt:hold:` item, not the `apt:package:` report. In other words: the hold set still suppresses package-level action on the target (its original job), but no longer masquerades as the review-worthy fact — the `apt:hold:` item is that fact.
+
+**De-dupe rule, stated plainly:** for a given package name, the `apt:package:` item governs the package's presence/version (REPORT_ONLY while target-held), and the `apt:hold:` item governs the flag. They never both *act*; at most the package item reports and the hold item acts. To avoid showing the name twice in the review, suppress the package-level `HELD_OR_PINNED` **report** for the hold mechanism whenever an `apt:hold:` diff for the same name is being emitted (pins keep their report, since pins have no separate actionable item on the package axis — only the `AptPinItem` file).
+
+**Ordering concern (real):** apply hold changes relative to installs matters.
+- **Add-hold vs install:** if the same run both installs a package and holds it, the hold must be applied **after** the install (you cannot hold what dpkg has no record of, per §2's open question — and even if you can, holding first would make apt refuse the very install). But in practice a package needs *installing* only when absent on target, and a *hold* on it is only meaningful once present — so **hold after install**.
+- **Remove-hold vs upgrade/change:** a target-held package whose hold the user wants removed must be **unheld before** any package-level change that the hold would block. Since package version changes are REPORT_ONLY today (never converged), this is not yet a live conflict — but if it ever becomes one, unhold must precede it.
+
+This is the same "convergence order is an apt FACT" situation the repo group already handles via `_ITEM_CLASS_ORDER` and `plan()`'s stable sort (`apt_sync.py:102-107, 672-677`). Give `APT_HOLD` a rank that places **add-holds after packages** and **remove-holds before packages** — which, because add-hold and remove-hold would want opposite ranks, is the one wrinkle: either split them by action into two ranks, or (simpler) run all hold converges in a dedicated pass after package installs (add-holds are the common case; remove-hold-before-change is moot while versions are REPORT_ONLY). Recommend: rank holds **last** (after packages) for v1, documented as safe because the only package-level action that co-occurs is install, and hold-after-install is the correct order.
+
+**Does `collect_hold_pin_facts` reading BOTH machines still make sense?** For **pins**, yes (unchanged — it reads the target's `preferences.d`). For **holds**, it should become a proper **source-vs-target diff** rather than a merged "either machine" fact list. The current "read from both, key on target" design is precisely what silently drops source-only holds (§1) and what would double-report. Split it: keep the pin read as a target-only fact for the REPORT_ONLY echo; convert the two `showhold` reads into source-hold-set and target-hold-set feeding the new `AptHoldItem` diff.
+
+## 6. Pin case — holds are the only unreplicated apt block-mechanism
+
+Confirmed. Pins are `/etc/apt/preferences.d/*` files, and those already travel as `AptPinItem`s via the whole-file-digest sync in `_plan_repo_diffs`/`_diff_apt_pins` (`apt_sync.py:712-747, 834-869`), converged by `_write_or_remove_repo_item` (D-13). apt's two block mechanisms are pins (preferences.d) and holds (dpkg selection); pins replicate today, holds do not. So **#208's apt scope is holds only**. (The issue is broader across managers — snap per-snap `--hold`, flatpak `mask` — but those are separate jobs; within apt, holds are the sole gap.)
+
+## 7. Genuine design questions needing a human decision
+
+1. **Hold on a package the target does not have installed / does not know.** `apt-mark showhold` can list a held-but-uninstalled package; whether `sudo apt-mark hold &lt;pkg&gt;` succeeds on a target with no dpkg record and no apt-cache entry for that name is unverified (I did not mutate state). Decision needed: (a) only replicate holds for packages that co-exist as installed items on the target and let the rest be no-ops/skips, or (b) attempt the hold unconditionally and treat an error as a normal per-item failure (D-27). This also interacts with add-hold-after-install ordering.
+2. **DiffAction choice: CHANGE-both (§4a) vs INSTALL/REMOVE-by-direction (§4b).** Recommend (b) so remove-hold lands in the unchecked removal group and skip-always routing (`_record_permanent_skips`) already records add-hold on source / remove-hold on target correctly — but this reuses INSTALL/REMOVE for a non-package action, so confirm that is acceptable versus adding hold-specific vocabulary.
+3. **De-dupe presentation:** confirm the rule that a target-held package shows only the actionable `apt:hold:` item (not also a `HELD_OR_PINNED` package report), while a **pinned** package keeps its REPORT_ONLY echo. This changes what the review shows for held packages versus today.
+
+Key files: item model `src/pcswitcher/jobs/packages/items.py`; diff pipeline `src/pcswitcher/jobs/packages/sync_core.py:194-306`; apt job hooks/converge `src/pcswitcher/jobs/apt_sync.py:586-621` (hold/pin capture), `:1062-1085` (converge dispatch), `:75-82` (`_TARGET_SUDO_COMMANDS`), `:102-107` (ordering); machine-local decisions `src/pcswitcher/jobs/packages/state.py`; review flow `src/pcswitcher/jobs/packages/review.py`.</result>
+<usage><subagent_tokens>113645</subagent_tokens><tool_uses>10</tool_uses><duration_ms>149374</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1df6131ab4de09f8</task-id>
+<tool-use-id>toolu_01SnU68o2erFbvSkivhsXroh</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/a1df6131ab4de09f8.output</output-file>
+<status>completed</status>
+<summary>Agent "Research flatpak mask replication" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have all the facts. Here's the design report.
+
+## #208 flatpak scope: replicate `flatpak mask` state source→target
+
+### 1. CURRENT state — flatpak_sync syncs refs + remotes only (no masks/pins)
+
+Verified by reading the whole module. It captures/diffs/converges exactly two item classes and nothing else:
+
+- Refs: `_FLATPAK_LIST_CMD = "flatpak list --app --columns=application,version,origin,installation"` (`flatpak_sync.py:83`), diffed by `_diff_flatpak_refs` (:224), converged via `flatpak install/uninstall` (`_converge_ref` :522).
+- Remotes: `_FLATPAK_REMOTES_CMD_TEMPLATE = "flatpak remotes {flag} --columns=name,url"` (:88), diffed by `_diff_flatpak_remotes` (:298), converged via `remote-add/remote-modify/remote-delete` (`_converge_remote` :477).
+- `converge()` dispatches only `FLATPAK_REMOTE` and `FLATPAK_REF`, raising on anything else (:469-475). No `flatpak mask`/`pin` string appears anywhere in the module.
+
+So the flatpak part of #208 = replicating **masks**. (Pins — `flatpak pin` of runtimes — are out of #208's stated scope; the issue names apt-hold, snap-hold, flatpak-mask.)
+
+### 2. ENUMERATE — `flatpak mask` CLI facts (verified live, Flatpak 1.14.6)
+
+- **List:** `flatpak mask` with no patterns lists masks. Masks are **per-installation** (like remotes), so you must query each scope explicitly: `flatpak --user mask` and `flatpak --system mask`. Known upstream quirk: bare `flatpak mask` historically does not include `--user` masks ([flatpak#4216](https://github.com/flatpak/flatpak/issues/4216)), and the help shows `--system` is the **default** scope for this verb (unlike `flatpak list`) — another reason to always pass an explicit scope flag.
+- **Output format (verified live):** one pattern per line, each prefixed with **two leading spaces**, no header, no scope column:
+  ```
+    org.broken.App
+    org.domain.*
+  ```
+  Parsing = strip leading whitespace per non-blank line. Scope is known from the flag you passed, not parsed (identical to how `_parse_flatpak_remotes` takes scope as a param, :169).
+- **Patterns, not exact refs:** a mask is a *partial ref* with `*` wildcards, e.g. `org.some.App`, `app/org.domain.*`, `org.some.App/arm`. Patterns contain `/` and `*` but **no `:`** (flatpak refs are `/`-separated), so the existing 3-colon `item_id` split (`_split_flatpak_item_id`, :126, `split(":", 3)`) stays exact for a `flatpak:mask:&lt;scope&gt;:&lt;pattern&gt;` id.
+
+### 3. CONVERGE commands (verified live)
+
+- Add: `flatpak --user mask &lt;pattern&gt;` / `flatpak --system mask &lt;pattern&gt;`
+- Remove: `flatpak --user mask --remove &lt;pattern&gt;` / `flatpak --system mask --remove &lt;pattern&gt;`
+- **Sudo:** system scope writes into `/var/lib/flatpak` → needs root; user scope needs none. Mirror the existing `_sudo_prefix(scope)` (:116) exactly — `sudo ` iff scope == "system".
+- **Idempotency (verified live):**
+  - Adding an already-present mask → **exit 0, no error** (idempotent). ✅
+  - Removing a **non-existent** pattern → **exit 1**, `error: No current masked pattern matching &lt;p&gt;` (NOT idempotent). Not a problem here: converge only removes patterns the target-scope query actually reported, and `--remove` matches by exact listed pattern string.
+
+### 4. DESIGN — proposed item model (mirrors the remote-per-scope analog)
+
+New `ItemClass.FLATPAK_MASK = "flatpak_mask"` in `items.py`, plus a frozen `FlatpakMaskItem`:
+
+- Fields: `pattern: str`, `scope: Literal["user","system"]`.
+- `item_id` → `f"flatpak:mask:{self.scope}:{self.pattern}"` (scope-in-identity, same rationale as `FlatpakItem`/`FlatpakRemoteItem` at `items.py:400,426`).
+- `label()` → e.g. `f"{pattern} mask ({scope})"`.
+
+Capture/diff (add to `flatpak_sync.plan()`, mirroring the remotes path at :446-455):
+
+- `_capture_all_source_masks()` / `_query_all_target_masks()` — one `flatpak {flag} mask` per scope, parsed like remotes.
+- `_diff_flatpak_masks(source, target)`: a mask is a boolean membership per `item_id` (no "value" field to change, unlike a remote's URL), so **only two diff directions** — never a CHANGE:
+  - source-has, target-lacks → `MISSING_ON_TARGET` / `DiffAction.INSTALL` → converge `flatpak {scope} mask &lt;pattern&gt;`.
+  - target-has, source-lacks → `EXTRA_ON_TARGET` / `DiffAction.REMOVE` → converge `flatpak {scope} mask --remove &lt;pattern&gt;`.
+  - present both sides (same scope+pattern) → no diff.
+
+This drops cleanly into the existing pipeline with **no changes to review.py or `_build_review_groups`**: `INSTALL`→default-checked install group, `REMOVE`→its own removal group (unchecked), and the three-way apply / skip-once / skip-always flow is inherited unchanged. One small addition: an `_ACTION_VOCABULARY` entry `(ItemClass.FLATPAK_MASK, DiffAction.INSTALL): "mask"` and `(…, DiffAction.REMOVE): "unmask"` (`sync_core.py:113`) so the review reads "Mask …" / "Unmask …" instead of the raw "install"/"remove" fallback. `converge()` gains a `FLATPAK_MASK` branch delegating to a new `_converge_mask(diff)` (parse scope+pattern via `_split_flatpak_item_id(id, "mask")`, `sudo` via `_sudo_prefix`, `shlex.quote` the pattern). No source-side lookup dict needed (unlike refs/remotes) — the pattern is fully recoverable from `item_id`, so no `_source_masks_by_id` cache is required.
+
+### 5. INTEGRATION / ordering
+
+- Masks are patterns independent of whether a matching ref is installed, so they carry **no hard ordering dependency** on ref/remote convergence the way a ref depends on its remote (D-14). They can be appended to `plan()`'s `diffs` tuple after the ref diffs.
+- **Real interaction (partially verified):** a mask blocks *automatic* update/installation of matching refs (incl. auto-pulled extensions/dependencies), per Flatpak docs — it does **not** short-circuit an explicit `flatpak install` at the pre-remote stage (verified live: an explicit install of a masked ref proceeded to the remote-summary fetch and failed there on the remote, not on the mask). Practical guidance: if the same run both installs a ref AND adds a mask that could match it or its extensions, **install refs first, apply masks last**, so a mask can't suppress an auto-pulled dependency of a ref we're installing in the same run. Concretely: order `diffs` as remotes → refs → masks.
+
+### 6. SUDO / scope-validation implication
+
+Adding system-scope masks **does** widen `validate()`'s sudo trigger. `_system_scope_in_play()` (`flatpak_sync.py:563`) currently returns True only for system-scope refs/remotes; it must also return True when a **system-scope mask exists on either machine** (add `if await self._query_target_masks("system"): return True` and the source equivalent). `flatpak --system mask` writes to `/var/lib/flatpak`, so it requires passwordless target sudo just like system install/remote-add — the existing `sudo -n true` gate (:610) and `_TARGET_SUDO_COMMANDS = ("/usr/bin/flatpak",)` (:96) already cover the binary; only the "is system scope in play" predicate needs the extra check. A run with only **user-scope** masks stays root-free.
+
+### Genuine design questions for a human
+
+1. **Mask pattern vs. installed-ref coupling — intended independence?** A source mask like `org.foo.*` may match refs that don't exist on the target at all. Confirm masks should replicate as pure patterns regardless of installed refs (recommended, matches flatpak's own model and #208's "one per masked package"), rather than being filtered to only patterns matching an installed ref.
+2. **`filter_inert`/decision-file identity churn from wildcards.** Because identity is the literal pattern string, editing a mask from `org.foo.App` to `org.foo.*` reads as remove-old + add-new (two review items), and a skip-always decision is recorded against the exact pattern text. Acceptable (same behavior remotes/sources already have), but worth an explicit OK since mask patterns are more prone to hand-edits than remote names.
+3. **Scope-split of the same pattern** (a pattern masked `--user` on source but `--system` on target) surfaces as one add + one remove, exactly like the ref/remote scope-split the module already documents as out-of-scope (`flatpak_sync.py:6-14`). Confirm that same "report as found, don't normalize" stance applies to masks.
+
+Key files: `src/pcswitcher/jobs/flatpak_sync.py`, `src/pcswitcher/jobs/packages/items.py`, `src/pcswitcher/jobs/packages/sync_core.py` (`_ACTION_VOCABULARY` :113, `_build_review_groups` :308), `src/pcswitcher/jobs/packages/review.py`.
+
+Sources:
+- [flatpak-mask(1) man page](https://man7.org/linux/man-pages/man1/flatpak-mask.1.html)
+- [Flatpak Tips and Tricks — masking](https://docs.flatpak.org/en/latest/tips-and-tricks.html)
+- [flatpak#4216 — bare `flatpak mask` omits --user masks](https://github.com/flatpak/flatpak/issues/4216)</result>
+<usage><subagent_tokens>75837</subagent_tokens><tool_uses>14</tool_uses><duration_ms>162543</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7519a7ce11c52625</task-id>
+<tool-use-id>toolu_01D25VEGVjSF4e3bMiPGY3V5</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/a7519a7ce11c52625.output</output-file>
+<status>completed</status>
+<summary>Agent "Research snap hold replication" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything needed. Compiling the report.
+
+## Report: Design for replicating per-snap hold state (issue #208)
+
+### 1. THE CRUX — two independent mechanisms, separate storage/namespaces
+
+There are two distinct "hold" mechanisms, and #208's per-snap work can safely coexist with the sync-window hold the orchestrator just added:
+
+| | (a) Sync-window hold (orchestrator) | (b) Per-snap hold (#208) |
+|---|---|---|
+| Command | `sudo snap set system refresh.hold=&lt;RFC3339&gt;` | `sudo snap refresh --hold[=forever\|&lt;dur&gt;] &lt;snap&gt;` |
+| Namespace | system **config option** | per-snap **snapstate** |
+| Read via | `snap get system refresh.hold` → timestamp or `forever`; also `snap refresh --time` "hold:" line | `snap list &lt;snap&gt;` → `held` in **Notes** column |
+| Scope | all snaps, **auto-refresh only** (does NOT block explicit `snap refresh &lt;snap&gt;`) | that snap's auto-refresh + general `snap refresh`; explicit `snap refresh &lt;snap&gt;` still bypasses |
+
+Verified facts:
+- Per-snap holds are stored/queried **separately** from `snap set system refresh.hold`. The snapcraft "Manage updates" doc states per-snap holds via `snap refresh --hold &lt;snap&gt;` are separate from the system-wide `refresh.hold` option; held snaps surface as `held` in `snap list` Notes, the system option surfaces via `snap get system refresh.hold` / `snap refresh --time`.
+- A per-snap hold does **NOT** appear in `snap get system refresh.hold` (that query returns only the config option's value — confirmed by the orchestrator's own read at `orchestrator.py:1279-1288` and `snap_sync.py:452-455`, both treating it as a single system value).
+- Setting `refresh.hold` during the sync does **NOT** clobber per-snap holds — different namespace. This is exactly what the author already asserted in-code at `orchestrator.py:1337-1339`: restore "set[s] `refresh.hold` empty … leaving any unrelated per-snap holds untouched." The orchestrator restores via `snap set system refresh.hold=""` (config namespace), never `snap refresh --unhold` (which WOULD touch per-snap holds). So convergence in (b) survives cleanup.
+
+One item genuinely needing empirical confirmation (label: inferred, not doc-verified): whether setting the **config option** `refresh.hold=&lt;timestamp&gt;` causes individual snaps to render `held` in `snap list` Notes. Reasoning strongly says NO — the `held` note derives from per-snap snapstate, and the docs only ever tie `held`-in-Notes to `snap refresh --hold &lt;snap&gt;` — but no doc states it explicitly, and it matters because snap_sync's capture (`snap list --all`) runs *inside* the sync window, i.e. after the orchestrator engaged the system hold (`_hold_snap_autorefresh` runs before jobs). Test to confirm on a real machine: `sudo snap set system refresh.hold="$(date -d '+1 hour' -Iseconds)"; snap list | grep held` — expect no snap flipped to `held`. If it DID, per-snap capture would need to run before the sync-window hold is engaged.
+
+### 2. Enumerate per-snap holds
+
+- Read command: `snap list --all` (already used) — the **Notes** column contains `held` for a per-snap-held snap. Example line: `yt-dlp 18 212 latest/edge morrisong held`.
+- The existing parser already reads the Notes column: `snap_sync.py:104-121` indexes `Notes` and splits on `,` (`if "disabled" in fields[notes_idx].split(",")`). Extending it to also detect `held` is a one-line addition — no new command, no extra round-trip.
+- Expiry/`forever` distinction: `snap list` Notes shows only the boolean `held`, not the expiry. Per-snap detail (until-when) would need `snap refresh --time` or the API; for #208's purpose (replicating the user's *deliberate indefinite* hold) the boolean is sufficient.
+
+### 3. Converge commands (per-snap)
+
+- Hold indefinitely: `sudo snap refresh --hold=forever &lt;snap&gt;` (doc-confirmed). Bare `snap refresh --hold &lt;snap&gt;` also holds, but the **`--hold=forever` form is explicit and safe** — critically, never emit bare `snap refresh --hold` with NO snap name (that is the mutating global-hold pitfall in `snap_sync.py:4-13`).
+- Unhold: `sudo snap refresh --unhold &lt;snap&gt;` → `Removed general refresh hold of "&lt;snap&gt;"`.
+- Sudo: **yes**, both hold/unhold mutate and need root — passwordless sudo for `/usr/bin/snap` is already validated on the target (`snap_sync.py:437-446`).
+- Duration: **not relevant to #208** — replicate only the user's deliberate indefinite hold. Use `--hold=forever` / `--unhold`. (Time-boxed holds would drift/expire and aren't a stable state worth replicating.)
+- Requires the snap **installed** on the target — you cannot hold an absent snap.
+
+### 4. Proposed item model + diff + converge
+
+Item identity (new, distinct from the presence item `snap:&lt;name&gt;`):
+- `item_id = "snap:hold:&lt;name&gt;"` — a separate id so it flows through the diff/review/DecisionFile pipeline as its own reviewable item, independent of the snap's install/revision diff.
+- Add a `held: bool` field to the frozen `SnapItem` (`items.py:356-379`), populated by `_parse_snap_list`. Note: `items.py:23-31` says plan 02-06 was "last permitted to modify this module" — that's a historical parallel-wave constraint, not a permanent freeze; #208 is a new phase and may extend it.
+
+Diff (a second pass in `_diff_snap_items`, emitted **after** the presence diffs):
+- source-held ∧ ¬target-held → converge = **hold** on target.
+- target-held ∧ ¬source-held → converge = **unhold** on target.
+- both-held or neither-held → no diff.
+- Only emit a hold diff when the snap is present on the source (source is authoritative for the desired state).
+
+Converge: `SnapSyncJob.converge` (`snap_sync.py:324-347`) currently dispatches on `diff.action`. A hold item must be routed by **item_id prefix** (`snap:hold:`), not action, so it doesn't collide with the revision/channel `CHANGE` branch. Command per direction as in §3.
+
+### 5. Integration / ordering — and the design question
+
+Ordering (verified): `apply()` builds `apply_diffs` by filtering `plan.diffs` **in original order** (`sync_core.py:438-442`) — it does NOT re-sort by the review-group order. So if `_diff_snap_items` emits all presence diffs (install/change/remove) first and all `snap:hold:*` diffs second, then within snap_sync's own `apply()` **install always lands before its hold** for the same snap. Good.
+
+Cross-job ordering is fine too: snap_sync runs as one sequential job; the hold operates on the same target `snap` the install just created, all inside snap_sync.
+
+Edge case to handle: if the user APPLYs a `snap:hold:&lt;foo&gt;` but SKIPs the `snap:&lt;foo&gt;` install, the hold command hits an absent snap and fails (a tolerable per-item D-27 failure, but noisy). Recommend converge skip/short-circuit the hold when `&lt;name&gt;` isn't in the target's captured items.
+
+No conflict with the sync-window system hold: cleanup restores via `snap set system refresh.hold=""` (config namespace, `orchestrator.py:1333-1344`) — it never runs `snap refresh --unhold`, so a per-snap hold converged during the job is untouched by cleanup. Confirmed by the author's own code comment.
+
+Genuine design question for a human — the review verb / direction:
+The task proposes a single `DiffAction.CHANGE` for holds. But hold and unhold are **opposite directions**, and the review pipeline groups purely by `DiffAction` and default-checks by direction (`sync_core.py:308-343`, `review.py:92,424-431`). Under one `CHANGE`:
+- hold and unhold land in the *same* group, both default-**checked**, both labeled "change" (no vocabulary entry for `(SNAP, CHANGE)`, so `_ACTION_VOCABULARY` at `sync_core.py:113-120` falls back to `"change"`), and mixed in with same-revision retracks.
+- That violates the spirit of D-07 ("removal-direction in its own group, unchecked") for an *unhold*, which removes a protection the user deliberately set on the target.
+
+Two options to resolve — recommend deciding before planning:
+- (A) Keep `DiffAction.CHANGE`, converge inspects direction. Simplest, but review can't visually distinguish hold vs unhold and unhold is default-checked.
+- (B, recommended) Add `ItemClass.SNAP_HOLD` and map **hold → `DiffAction.INSTALL`-direction**, **unhold → `DiffAction.REMOVE`-direction**, with `_ACTION_VOCABULARY` entries `(SNAP_HOLD, INSTALL)→"hold"`, `(SNAP_HOLD, REMOVE)→"unhold"`. This puts unhold in its own removal group (unchecked by default) and gives correct review verbs, at the cost of two small enum/vocabulary additions.
+
+Sources:
+- [Manage updates — Snap documentation (snapcraft.io)](https://snapcraft.io/docs/how-to-guides/manage-snaps/manage-updates/)
+- [Hold your horses, I mean snaps! (snapcraft.io blog)](https://snapcraft.io/blog/hold-your-horses-i-mean-snaps-new-feature-lets-you-stop-snap-updates-for-as-long-as-you-need)
+- [How to manage snap updates (snapcraft.io blog)](https://snapcraft.io/blog/how-to-manage-snap-updates)
+- [How to Manage Snap Refresh Timers and Schedules on Ubuntu (oneuptime)](https://oneuptime.com/blog/post/2026-03-02-how-to-manage-snap-refresh-timers-and-schedules-on-ubuntu/view)
+
+Key files: `src/pcswitcher/jobs/snap_sync.py` (docstring pitfall 4-13; parser 90-122; diff 167-195; converge 324-347; validate 448-455), `src/pcswitcher/orchestrator.py` (1265-1362, esp. 1337-1339), `src/pcswitcher/jobs/packages/items.py` (SnapItem 356-379; ItemClass 67-85), `src/pcswitcher/jobs/packages/sync_core.py` (apply order 438-442; groups 308-343; vocabulary 113-120), `src/pcswitcher/jobs/packages/review.py` (direction/default-check 92, 424-431).</result>
+<usage><subagent_tokens>86749</subagent_tokens><tool_uses>15</tool_uses><duration_ms>244281</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a304428eed42db026</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/a304428eed42db026.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-1 core + apt hold" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All checks pass. WP-1 is complete.
+
+## Summary
+
+Implemented WP-1 of issue #208 (block-state replication): shared-core scaffolding for all three managers plus the full apt hold implementation. All shared-core edits are owned here so the snap (WP-2) and flatpak (WP-3) agents touch only their own job files.
+
+### Shared symbols added (what WP-2/WP-3 rely on)
+
+`src/pcswitcher/jobs/packages/items.py`:
+- `ItemClass.APT_HOLD = "apt_hold"`, `ItemClass.SNAP_HOLD = "snap_hold"`, `ItemClass.FLATPAK_MASK = "flatpak_mask"`
+- `AptHoldItem(name: str)` → `item_id == "apt:hold:&lt;name&gt;"`, `label()` → `"&lt;name&gt; (hold)"`
+- `FlatpakMaskItem(pattern: str, scope: Literal["user","system"])` → `item_id == "flatpak:mask:&lt;scope&gt;:&lt;pattern&gt;"`, `label()`
+- `SnapItem.held: bool = False` (new field, defaulted so existing sites and the snap agent both work)
+- Exported `AptHoldItem`, `FlatpakMaskItem` in `__all__`
+
+`src/pcswitcher/jobs/packages/sync_core.py`:
+- Six `_ACTION_VOCABULARY` entries: `(APT_HOLD,INSTALL)="hold"/(…,REMOVE)="unhold"`, `(SNAP_HOLD,…)="hold"/"unhold"`, `(FLATPAK_MASK,…)="mask"/"unmask"`
+- New `collect_hold_sets()` hook (default `(frozenset(), frozenset())`) wired into base `plan()` → `diff_items` → `_diff_apt_packages`
+
+### HELD_OR_PINNED reshape / de-dup (D5)
+
+`_diff_apt_packages` now keys its `held_or_pinned` guard on **pins only** (`fact.mechanism == "pin"`), keeping the pin's `REPORT_ONLY` echo. A **target-held** package (via `target_hold_names`) has its install/version action suppressed with no package-level report emitted — the hold travels solely as a separate `apt:hold:` membership item (extracted into `_diff_apt_holds`). So a held package yields exactly one artifact (the `apt:hold:` item), never both a `HELD_OR_PINNED` package report and a hold item. Hold diffs are emitted after package diffs (D8).
+
+### Group titles/verbs for hold items
+
+`_build_review_groups` now keys groups by `(action, item_class)` instead of `action` alone, and derives both the group title and each entry's `action_label` from `_ACTION_VOCABULARY` by the group's own item class. A hold `INSTALL` (sharing the `INSTALL` action with a package) renders under "Hold apt packages", not "Install apt packages"; the group's `action` value stays the raw `DiffAction` so add-direction stays default-checked and remove-direction (unhold) lands in its own unticked group.
+
+### apt (apt_sync.py)
+
+- `collect_hold_pin_facts` reads pins only; new `collect_hold_sets` reads `apt-mark showhold` on both machines
+- `converge` routes `apt:hold:` by item_id prefix (before the action dispatch) to `_converge_hold` → `sudo apt-mark hold|unhold &lt;name&gt;` with `shlex.quote`, `login_shell=False`, returning the `CommandResult` (exit code decides pass/fail; no simulation, no gating — D6)
+- `/usr/bin/apt-mark` added to `_TARGET_SUDO_COMMANDS`; `ItemClass.APT_HOLD` ranked 4 in `_ITEM_CLASS_ORDER` (after packages)
+- Fixed two integration bugs the reshape exposed: `_collect_plan_time_collateral` and `_approved_removal_names` filtered INSTALL/REMOVE diffs and called `_package_name` — they now restrict to `ItemClass.APT_PACKAGE` so hold items no longer crash them; `accept_review`'s diff reordering pulls holds out to converge last (install-before-hold).
+
+### apt test names (all pass)
+
+`TestHoldPinCapture`: `test_hold_sets_from_both_machines_surface`, `test_collect_hold_pin_facts_returns_pins_only_no_holds`, `test_preferences_d_pin_surfaces_with_pin_mechanism_and_filename`. `TestAptHold`: `test_source_held_yields_install_hold_item_and_converge_runs_apt_mark_hold`, `test_target_held_only_yields_remove_unhold_item`, `test_held_on_both_yields_no_hold_diff`, `test_held_package_yields_hold_item_not_duplicate_held_or_pinned_report`, `test_pin_still_yields_report_only_echo_alongside_a_hold_item`, `test_skip_always_on_a_hold_writes_the_decision_file`, `test_apt_mark_is_in_the_target_sudo_command_list`. Plus reshaped sync_core tests (`test_source_hold_only_yields_apt_hold_install`, `test_target_hold_only_yields_apt_hold_remove_and_suppresses_package_action`, `test_held_on_both_yields_no_diff`, `test_pin_fact_yields_held_or_pinned_distinguishable_from_a_hold_item`).
+
+### Verification (all pass)
+
+- `ruff format` + `ruff check`: clean on all touched source and test files
+- `basedpyright` on the three source files: 0 errors, 0 warnings, 0 notes
+- `pytest tests/unit -q`: **970 passed**
+
+### Deviations
+
+- Two shared-core test cases in `test_package_sync_core.py` that asserted the **old** behavior (a `HoldPinFact(mechanism="hold")` producing `HELD_OR_PINNED`) were rewritten to the new #208 model, since D5 deliberately changes that behavior. This is within the shared-core mandate.
+- The group-keying change (`action` → `(action, item_class)`) also affects flatpak's review presentation (it can now split ref-install and remote-install into separate same-action groups). This is correct/consistent behavior, is confined to shared core (I did not touch `flatpak_sync.py`), and all existing flatpak tests still pass.
+
+Files touched (all absolute):
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/packages/items.py`
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/packages/sync_core.py`
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/apt_sync.py`
+- `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_apt_sync.py`
+- `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_package_sync_core.py`
+
+`snap_sync.py` and `flatpak_sync.py` were not modified.</result>
+<usage><subagent_tokens>194551</subagent_tokens><tool_uses>69</tool_uses><duration_ms>805842</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8e9fd0795f737da8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/a8e9fd0795f737da8.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-2 snap per-snap hold" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>WP-2 (per-snap hold replication) is complete. All checks pass.
+
+## Changes (both files only)
+
+`src/pcswitcher/jobs/snap_sync.py`:
+- New constant `_SNAP_HOLD_ID_PREFIX = "snap:hold:"` (~line 70), with a note that it also matches `snap:` so converge must test it first.
+- `_parse_snap_list` (~line 115-135): parses Notes into `notes` tokens once; sets `SnapItem.held = "held" in notes`. Includes the D9 code comment: per-snap `held` is separate snapstate from the orchestrator's system-wide `snap set system refresh.hold`, so in-window capture does not mask per-snap holds; if a VM test disproves this, capture must move before the sync-window hold (orchestrator untouched).
+- New `_hold_diff` + `_diff_snap_holds` helpers, and `_diff_snap_items` now appends `_diff_snap_holds(...)` AFTER the presence diffs (D8 install-before-hold). Hold diffs only consider snaps present on the SOURCE (source authoritative); source-held/not-target → INSTALL, target-held/not-source → REMOVE, both/neither → no diff.
+- `converge` (~line 396): routes `snap:hold:` by item_id prefix FIRST, before the action-based revision/channel/remove dispatch.
+- New `_converge_hold` method.
+
+`tests/unit/jobs/test_snap_sync.py`: added `TestParseHeld` and `TestHolds` (6 new tests).
+
+## Exact converge commands per direction
+- INSTALL (hold): `sudo snap refresh --hold=forever &lt;name&gt;`
+- REMOVE (unhold): `sudo snap refresh --unhold &lt;name&gt;`
+
+Both via `self.target.run_command(..., login_shell=False)`, `name` = `shlex.quote(diff.item_id.removeprefix("snap:hold:"))`, returning the `CommandResult` (exit code decides pass/fail, D-27). No gating for absent snaps (D6).
+
+## No-bare-`--hold` guarantee
+The name is always interpolated from the item_id's `snap:hold:` suffix, which `_diff_snap_holds` only ever builds from a concrete source/target snap name — never empty. The command string is always `sudo snap refresh {flag} {name}`, so `--hold=forever`/`--unhold` is always followed by a name. Test `test_hold_converge_never_emits_bare_hold` asserts no emitted command is a bare `--hold`.
+
+## Test names
+`TestParseHeld::test_held_note_sets_item_held`; `TestHolds::{test_source_held_yields_install_hold_diff_and_converges_hold_forever, test_target_held_only_yields_remove_hold_diff_and_converges_unhold, test_both_held_yields_no_hold_diff, test_hold_diff_emitted_after_presence_diffs, test_hold_converge_never_emits_bare_hold}`.
+
+## Verify results (all pass)
+- `ruff format` + `ruff check` on both files: passed (2 files unchanged, all checks passed).
+- `basedpyright src/pcswitcher/jobs/snap_sync.py`: 0 errors, 0 warnings, 0 notes.
+- `uv run pytest tests/unit -q`: 976 passed.
+
+No deviations. I did not touch items.py, sync_core.py, apt_sync.py, or flatpak_sync.py (read apt_sync.py's `_converge_hold` and sync_core's `_diff_apt_holds` only for pattern consistency). Note: there is no dedicated `SnapHoldItem` dataclass in WP-1, so per the task the hold `ItemDiff` is constructed directly with item_id `snap:hold:&lt;name&gt;` and label `&lt;name&gt; (hold)`, mirroring the `AptHoldItem` diff shape.</result>
+<usage><subagent_tokens>94647</subagent_tokens><tool_uses>22</tool_uses><duration_ms>196978</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6377969f5fcee002</task-id>
+<tool-use-id>toolu_01KViyfxKYQUuoHe1YfHH896</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/a6377969f5fcee002.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-3 flatpak mask" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>WP-3 (flatpak mask replication) implemented. All verification passed.
+
+## Changes — `src/pcswitcher/jobs/flatpak_sync.py`
+
+- L64 import `FlatpakMaskItem`.
+- L96 `_FLATPAK_MASK_CMD_TEMPLATE = "flatpak {flag} mask"` — scope flag precedes `mask` (bare `flatpak mask` omits --user).
+- L132 `_split_flatpak_item_id` Literal extended to `"ref" | "remote" | "mask"`; `split(":", 3)` keeps `/`-bearing patterns intact.
+- L206 `_parse_flatpak_masks(output, scope)` — strips leading whitespace per non-blank line, one `FlatpakMaskItem` each.
+- L343 `_install_mask_diff` / `_remove_mask_diff` / `_diff_flatpak_masks` — pure membership, no CHANGE.
+- L459 capture methods `_capture_source_masks`/`_query_target_masks` (per scope) + `_capture_all_source_masks`/`_query_all_target_masks` (both scopes), mirroring the remotes path.
+- L515 `plan()` — captures masks (filtered through `filter_inert`) and assembles `diffs = (*remote_diffs, *ref_diffs, *mask_diffs)` (D-08 order remotes → refs → masks); masks need no source cache.
+- L556 `converge()` dispatch adds a `FLATPAK_MASK` branch → `_converge_mask`.
+- L613 `_converge_mask` — recovers scope+pattern from item_id, builds INSTALL/REMOVE commands, `login_shell=False`, returns `CommandResult`.
+- L676 `_system_scope_in_play` — now also returns True on a system-scope mask on either machine.
+- Docstrings updated (module: THREE item classes; `plan()`, `validate()`, `describe_first_sync_scope`).
+
+## Converge commands per direction + scope
+
+- user INSTALL: `flatpak --user mask &lt;pattern&gt;`
+- system INSTALL: `sudo flatpak --system mask &lt;pattern&gt;`
+- user REMOVE: `flatpak --user mask --remove &lt;pattern&gt;`
+- system REMOVE: `sudo flatpak --system mask --remove &lt;pattern&gt;`
+
+Every pattern is `shlex.quote`d; `sudo ` prefix iff system scope via `_sudo_prefix`.
+
+## Scope parse-back from item_id
+
+`_split_flatpak_item_id(diff.item_id, "mask")` does `item_id.split(":", 3)` → `["flatpak","mask",scope,pattern]`. Patterns contain `/` and `*` but never `:`, so the fixed 3-colon split is exact and the `maxsplit=3` cap preserves any `/` in the pattern.
+
+## Tests — `tests/unit/jobs/test_flatpak_sync.py`
+
+- `TestMaskParse`: two-leading-space + wildcard patterns; blank-line skipping + scope-from-arg + item_id; empty output.
+- `TestMaskDiff`: source user-mask → INSTALL; target-only system-mask → REMOVE (in removal group); present-both → no diff; masks ordered after refs.
+- `TestMaskConverge`: user INSTALL → `flatpak --user mask &lt;pattern&gt;` no sudo; system REMOVE → `sudo flatpak --system mask --remove &lt;pattern&gt;`.
+- `TestMaskSystemScopeGate`: system mask flips `_system_scope_in_play` (sudo error); user-only mask never checks sudo.
+
+Executors mocked via the existing `respond_to` substring matcher; converge commands are selected by filtering `all_calls(target)` on the pattern (the capture call carries no pattern).
+
+## Verification (all pass)
+
+- `ruff format` / `ruff check` on both files: clean.
+- `basedpyright src/pcswitcher/jobs/flatpak_sync.py`: 0 errors, 0 warnings, 0 notes.
+- `pytest tests/unit -q`: 987 passed (11 new mask tests included).
+
+No deviations. Did not touch `items.py`, `sync_core.py`, `apt_sync.py`, or `snap_sync.py`. WP-1's `FlatpakMaskItem`, `ItemClass.FLATPAK_MASK`, and vocabulary entries were relied on as given.
+
+Note: this is documentation/design work under `.planning/`; per project design docs, a docs pass (package-sync.md "Holds and masks", ADR-020 note) and the `Closes #208` labeling remain as the separate follow-up step listed in the design's WP wrap-up — outside WP-3's code scope.</result>
+<usage><subagent_tokens>98542</subagent_tokens><tool_uses>27</tool_uses><duration_ms>320812</duration_ms></usage>
+</task-notification>
