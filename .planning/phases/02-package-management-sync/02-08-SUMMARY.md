@@ -93,6 +93,7 @@ coverage:
     human_judgment: false
   - id: D5
     description: "snap_sync_exclude_paths() returns the per-revision ~/snap/<app>/<revision> directories and excludes ~/snap/<app>/common and ~/snap/<app>/current"
+    # Superseded 2026-07-24 (02-UAT-REVIEW-FIXES.md decision 3): the CURRENT revision's dir is no longer returned/excluded — folder_sync now mirrors it so the active revision's per-user data travels. Only retained OLDER revision dirs are excluded.
     requirement: REQ-sync-scope-packages
     verification:
       - kind: unit
