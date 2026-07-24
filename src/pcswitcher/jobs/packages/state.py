@@ -60,6 +60,7 @@ __all__ = [
     "Snippet",
     "SnippetRegistry",
     "filter_inert",
+    "load_snippets_from_text",
 ]
 
 _logger = logging.getLogger("pcswitcher.jobs.packages.state")
@@ -309,6 +310,26 @@ def _deserialize_snippets(raw: str) -> dict[str, Snippet]:
             authored_on=fields["authored_on"],
         )
     return entries
+
+
+def load_snippets_from_text(raw: str) -> dict[str, Snippet]:
+    """Parse snippet-registry file content into `{item_id: Snippet}`, degrading to an
+    empty mapping on empty or malformed input (the same rule `SnippetRegistry.load`
+    applies to executor-read content).
+
+    `manual_installs_sync` uses this to read the SOURCE's on-disk registry — the exact
+    bytes `_push_snippet_registry` is about to `send_file` to the target — when deciding
+    whether a wholesale overwrite is purely additive (decision 9). Reading the file that
+    is actually sent keeps the additive check consistent with the transfer, rather than
+    re-querying the source executor which may lag the just-finalized on-disk file.
+    """
+    if not raw.strip():
+        return {}
+    try:
+        return _deserialize_snippets(raw)
+    except (yaml.YAMLError, KeyError, TypeError, ValueError, AttributeError) as exc:
+        _logger.warning("Malformed snippet registry (%s); treating as no snippets", exc)
+        return {}
 
 
 class SnippetRegistry:

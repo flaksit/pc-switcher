@@ -29,9 +29,13 @@ interaction shape from every other group (D-21): instead of a checkbox tick, eac
 is resolved one at a time with a three-way choice — add an install snippet, record it as
 machine-specific (skip always), or skip for now — because "should this apply" is not the
 question for an item no package manager can reproduce; "how does this get resolved" is.
-`ReviewOutcome.snippets`/`unresolved` carry that group's results back to the caller
-(`PackageSyncJob.apply()`), which persists snippets/decisions and fails the job when
-anything is left unresolved after an interactive review (D-21, D-27).
+`ReviewOutcome.snippets` carries that group's authored snippets back to the caller
+(`PackageSyncJob.apply()`), which persists them. An interactive review always resolves
+every entry (decision 10): an empty snippet capture re-prompts rather than falling through
+to an "unresolved" state, and Ctrl-C / EOF anywhere in the review aborts the whole sync
+(`SyncAbortedByUser`) rather than skipping items. `ReviewOutcome.unresolved` is therefore
+populated only on the non-interactive path, where it reports (never fails) the items no
+one was present to resolve (D-26).
 
 A `ReviewGroup` whose `action` is `COLLATERAL_REVIEW_ACTION` likewise gets its own
 interaction shape (D-30): each entry is a manually-installed package the pending apt
@@ -162,10 +166,13 @@ class Decision(StrEnum):
 class ReviewOutcome:
     """The result of a review: every entry's decision, plus how it was reached.
 
-    `snippets` (item_id -> body, D-20) and `unresolved` (item ids, D-21) are populated
-    only by an `UNREPRODUCIBLE_REVIEW_ACTION` group's per-entry resolution; every other
-    group leaves both at their empty defaults, so callers constructing a `ReviewOutcome`
-    by hand (tests, and `PackageSyncJob.apply()`'s decision handling) are unaffected.
+    `snippets` (item_id -> body, D-20) is populated by an `UNREPRODUCIBLE_REVIEW_ACTION`
+    group's per-entry resolution. `unresolved` (item ids, D-21) is populated ONLY on a
+    non-interactive run, listing the unreproducible items no one was present to resolve
+    (D-26 reporting); an interactive review always resolves every entry (decision 10), so
+    it leaves `unresolved` empty. Every other group leaves both at their empty defaults, so
+    callers constructing a `ReviewOutcome` by hand (tests, and `PackageSyncJob.apply()`'s
+    decision handling) are unaffected.
     """
 
     decisions: Mapping[str, Decision]
@@ -234,7 +241,6 @@ async def _review_unreproducible_group(
     console: Console,
     decisions: dict[str, Decision],
     snippets: dict[str, str],
-    unresolved: list[str],
 ) -> None:
     """Resolve one `UNREPRODUCIBLE_REVIEW_ACTION` group's entries, one at a time, with
     the three-way choice D-21 requires: add an install snippet, record as
@@ -243,13 +249,19 @@ async def _review_unreproducible_group(
     get resolved", which is not a yes/no.
 
     All three choices are VALID resolutions (D-21): a snippet, a skip-always, and an
-    explicit skip-once. Skip-once is a real decision — the user may be declining something
-    temporary — so a run where they made that choice is clean; it records `SKIP_ONCE` and
-    is NOT appended to `unresolved`. Only a genuinely undecided item is unresolved: a
-    cancelled select (`None`) or a snippet capture the user abandoned decided nothing, so
-    those record `SKIP_ONCE` AND append to `unresolved`. The caller
-    (`ManualInstallsSyncJob._unresolved_as_failures`) fails the job for every unresolved
-    item after an interactive review (D-21, D-27).
+    explicit skip-once. There is no fourth "genuinely undecided" outcome (decision 10 —
+    unresolved must be unrepresentable in an interactive flow):
+
+    - Ctrl-C / EOF at the resolution choice (`select` returns `None`) means the user wants
+      to stop, so it aborts the ENTIRE sync with `SyncAbortedByUser` — never a per-item
+      skip-and-mark-unresolved.
+    - Choosing "add an install snippet" and then submitting an empty body (or abandoning
+      the editor) is NOT accepted and does NOT fall through: the three-way choice is
+      re-prompted so the user must supply a real snippet or pick an explicit skip.
+
+    The body is stored verbatim, never stripped — D-20 forbids reasoning about it, and
+    leading whitespace/newlines are the user's own formatting choice; "empty" means only a
+    completely blank submission.
     """
     for entry in group.entries:
         console.print()
@@ -257,43 +269,53 @@ async def _review_unreproducible_group(
         if entry.detail:
             console.print(Text(entry.detail, style="dim"))
 
-        choice_prompt = questionary.select(
-            f"How should {entry.label} be resolved?",
-            choices=[
-                questionary.Choice(title="Add an install snippet", value="add_snippet"),
-                questionary.Choice(title="Record as machine-specific (skip always)", value="skip_always"),
-                questionary.Choice(title="Skip for now", value="skip_once"),
-            ],
-        )
-        selected = await asyncio.to_thread(choice_prompt.ask)
+        # Re-prompt until the entry is resolved by a real snippet or an explicit skip. An
+        # empty snippet capture loops back here rather than manufacturing an unresolved
+        # item (decision 10); a cancelled choice breaks out by aborting the whole sync.
+        while True:
+            choice_prompt = questionary.select(
+                f"How should {entry.label} be resolved?",
+                choices=[
+                    questionary.Choice(title="Add an install snippet", value="add_snippet"),
+                    questionary.Choice(title="Record as machine-specific (skip always)", value="skip_always"),
+                    questionary.Choice(title="Skip for now", value="skip_once"),
+                ],
+            )
+            selected = await asyncio.to_thread(choice_prompt.ask)
 
-        if selected == "skip_always":
-            decisions[entry.item_id] = Decision.SKIP_ALWAYS
-            continue
+            if selected is None:
+                # Ctrl-C / EOF: the user wants to abort, not skip this one item (decision
+                # 10). Raise the clean-stop control-flow exception the orchestrator and CLI
+                # already catch once at WARNING, so the whole sync stops here.
+                raise SyncAbortedByUser(
+                    f"package review aborted while resolving unreproducible item {entry.label!r} (Ctrl-C/EOF)"
+                )
 
-        if selected == "skip_once":
-            # An explicit "Skip for now" is a real decision (D-21): the item is resolved
-            # for this run and does NOT count as unresolved.
-            decisions[entry.item_id] = Decision.SKIP_ONCE
-            continue
+            if selected == "skip_always":
+                decisions[entry.item_id] = Decision.SKIP_ALWAYS
+                break
 
-        if selected == "add_snippet":
+            if selected == "skip_once":
+                # An explicit "Skip for now" is a real decision (D-21): the item is
+                # resolved for this run.
+                decisions[entry.item_id] = Decision.SKIP_ONCE
+                break
+
+            # selected == "add_snippet"
             console.print(Text(_SNIPPET_AUTHORING_NOTE, style="dim"))
             body_prompt = questionary.text(
                 f"Install snippet for {entry.label} (Esc then Enter to finish):", multiline=True
             )
-            # Stored verbatim, never stripped — D-20 forbids reasoning about the body,
-            # and leading whitespace/newlines are the user's own formatting choice.
             body = await asyncio.to_thread(body_prompt.ask)
             if body:
                 snippets[entry.item_id] = body
-                continue
+                break
 
-        # selected is None (the select was cancelled) or the snippet capture came back
-        # empty/None (the user abandoned it) — nothing was actually decided, so the item
-        # is genuinely unresolved (D-21), distinct from the explicit skip-once above.
-        decisions[entry.item_id] = Decision.SKIP_ONCE
-        unresolved.append(entry.item_id)
+            # Empty submission or an abandoned editor (`""`/`None`): not a resolution and
+            # not an unresolved fall-through — re-prompt the three-way choice (decision 10).
+            console.print(
+                Text("An install snippet cannot be empty — enter a real snippet or choose a skip.", style="yellow")
+            )
 
 
 async def _review_collateral_group(
@@ -386,16 +408,13 @@ async def review_items(
     ui.pause()
     decisions: dict[str, Decision] = {}
     snippets: dict[str, str] = {}
-    unresolved: list[str] = []
     try:
-        for index, group in enumerate(groups):
+        for group in groups:
             console.print()
             console.print(_render_group_panel(group))
 
             if _is_unreproducible_group(group.action):
-                await _review_unreproducible_group(
-                    group, console=console, decisions=decisions, snippets=snippets, unresolved=unresolved
-                )
+                await _review_unreproducible_group(group, console=console, decisions=decisions, snippets=snippets)
                 continue
 
             if _is_collateral_group(group.action):
@@ -415,17 +434,11 @@ async def review_items(
             selected = await asyncio.to_thread(prompt.ask)
 
             if selected is None:
-                # Aborted (e.g. Ctrl-C): everything not yet decided, including the rest
-                # of this group AND every later group, comes back SKIP_ONCE and later
-                # groups are not shown — any unreproducible group among them is
-                # unresolved too, since it never got its own resolution prompt.
-                for remaining_group in groups[index:]:
-                    unreproducible = _is_unreproducible_group(remaining_group.action)
-                    for entry in remaining_group.entries:
-                        decisions.setdefault(entry.item_id, Decision.SKIP_ONCE)
-                        if unreproducible:
-                            unresolved.append(entry.item_id)
-                break
+                # Ctrl-C / EOF at a checkbox screen means the user wants to abort, not
+                # silently skip the rest of the review (decision 10). Raise the clean-stop
+                # control-flow exception so the whole sync stops here rather than leaving
+                # this and every later group's items undecided.
+                raise SyncAbortedByUser("package review aborted at a checkbox screen (Ctrl-C/EOF)")
 
             selected_ids = set(selected)
             for entry in group.entries:
@@ -433,7 +446,11 @@ async def review_items(
     finally:
         ui.resume()
 
-    return ReviewOutcome(decisions=decisions, was_interactive=True, snippets=snippets, unresolved=tuple(unresolved))
+    # An interactive review can no longer leave anything unresolved (decision 10): the
+    # unreproducible flow re-prompts or aborts, and a checkbox abort raises above — so
+    # `unresolved` is always empty here. It stays populated only on the non-interactive
+    # path (D-26 reporting).
+    return ReviewOutcome(decisions=decisions, was_interactive=True, snippets=snippets, unresolved=())
 
 
 @runtime_checkable

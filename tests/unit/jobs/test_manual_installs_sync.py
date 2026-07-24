@@ -28,7 +28,7 @@ from pcswitcher.jobs.packages.review import (
 )
 from pcswitcher.jobs.packages.state import SNIPPET_REGISTRY_RELPATH
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
-from pcswitcher.models import CommandResult, Host, ValidationError
+from pcswitcher.models import CommandResult, Host, SyncAbortedByUser, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
 # A `package-snippets.yaml` registry holding one snippet for the brscan3 no-candidate item.
@@ -63,6 +63,7 @@ def make_context(
     target_responses: dict[str, CommandResult] | None = None,
     dry_run: bool = False,
     reviewer: object | None = None,
+    confirmer: object | None = None,
     enabled_sync_jobs: dict[str, bool] | None = None,
 ) -> tuple[JobContext, MagicMock, MagicMock]:
     source = MagicMock()
@@ -79,10 +80,37 @@ def make_context(
         source_hostname="source-host",
         target_hostname="target-host",
         dry_run=dry_run,
+        confirmer=confirmer,  # pyright: ignore[reportArgumentType]
         reviewer=reviewer,  # pyright: ignore[reportArgumentType]
         enabled_sync_jobs=enabled_sync_jobs,
     )
     return context, source, target
+
+
+class FakeConfirmer:
+    """A `Confirmer` returning a preset answer (or mimicking the real non-interactive
+    behavior of returning `allow`), recording every call for assertions."""
+
+    def __init__(self, *, approve: bool | None = None, return_allow: bool = False) -> None:
+        self._approve = approve
+        self._return_allow = return_allow
+        self.calls: list[dict[str, object]] = []
+
+    async def confirm(
+        self,
+        *,
+        title: str,
+        message: str,
+        allow: bool,
+        allow_flag: str,
+        log_extra: dict[str, object] | None = None,
+    ) -> bool:
+        self.calls.append({"title": title, "message": message, "allow": allow, "allow_flag": allow_flag})
+        if self._return_allow:
+            # Mirror TerminalUIConfirmer's non-interactive branch: the answer IS `allow`.
+            return allow
+        assert self._approve is not None, "FakeConfirmer needs either approve= or return_allow=True"
+        return self._approve
 
 
 def all_calls(mock: MagicMock) -> list[str]:
@@ -401,7 +429,13 @@ class TestSameRunApplication:
     state."""
 
     @pytest.mark.asyncio
-    async def test_on_the_fly_snippet_is_replayed_the_same_run(self) -> None:
+    async def test_on_the_fly_snippet_is_replayed_the_same_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Point Path.home at an empty dir so no on-disk source registry exists: the push
+        # early-returns (its overwrite guard never runs) and the replay reads the seeded
+        # target registry below, which stands in for what the push would have delivered.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
         item_id = "unreproducible:apt-no-candidate:falco-app"
         body = "sudo dpkg -i /tmp/falco.deb"
         # Post-push target registry: the mocked send_file transports nothing, so seed the
@@ -519,8 +553,9 @@ class TestClassificationAuthority:
 
 
 class TestSkipOnceResolution:
-    """D-21: skip-once is a valid resolution — a run whose only items were skipped-once
-    is clean; a genuinely undecided item still fails an interactive run."""
+    """D-21: skip-once is a valid resolution — a run whose only items were skipped-once is
+    clean. Decision 10: an interactive review can no longer leave an item genuinely
+    undecided, so `unresolved` never fails an interactive run."""
 
     @pytest.mark.asyncio
     async def test_run_whose_only_items_were_skipped_once_passes(self) -> None:
@@ -543,7 +578,10 @@ class TestSkipOnceResolution:
         await job.apply()  # must not raise
 
     @pytest.mark.asyncio
-    async def test_genuinely_undecided_item_fails_the_run(self) -> None:
+    async def test_interactive_unresolved_no_longer_fails_the_run(self) -> None:
+        """Decision 10: the `_unresolved_as_failures` override is gone — an interactive
+        outcome carrying an unresolved id (now unreachable through the real review) applies
+        cleanly rather than failing the job."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
@@ -554,16 +592,12 @@ class TestSkipOnceResolution:
 
         plan = await job.plan()
         item_id = "unreproducible:apt-no-candidate:brscan3"
-        # Cancelled/abandoned in review: genuinely unresolved (D-21/D-27).
         job.accept_review(
             plan,
             ReviewOutcome(decisions={item_id: Decision.SKIP_ONCE}, was_interactive=True, unresolved=(item_id,)),
         )
 
-        with pytest.raises(PackageItemFailures) as exc_info:
-            await job.apply()
-
-        assert {d.item_id for d, _stderr in exc_info.value.failures} == {item_id}
+        await job.apply()  # must not raise
 
 
 class TestContinueOnFailure:
@@ -785,6 +819,168 @@ class TestSnippetPush:
         await job.execute()
 
         assert events == ["push", "replay"]
+
+
+# A target registry holding brscan3 PLUS an extra entry the source does not have.
+TARGET_WITH_EXTRA_YAML = BRSCAN3_REGISTRY_YAML + (
+    "  unreproducible:apt-no-candidate:cnpg:\n"
+    "    label: cnpg (no apt candidate)\n"
+    "    body: sudo dpkg -i /tmp/cnpg.deb\n"
+    "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+    "    authored_on: workstation\n"
+)
+
+# A target registry whose brscan3 body DIFFERS from the source's.
+TARGET_CHANGED_BODY_YAML = (
+    "snippets:\n"
+    "  unreproducible:apt-no-candidate:brscan3:\n"
+    "    label: brscan3 (no apt candidate)\n"
+    "    body: sudo dpkg -i /tmp/brscan3-OLD.deb\n"
+    "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+    "    authored_on: workstation\n"
+)
+
+
+class TestSnippetRegistryOverwriteGuard:
+    """Decision 9: the wholesale `package-snippets.yaml` push is guarded. A purely additive
+    overwrite (source superset of target) proceeds silently; one that would lose or change a
+    target entry needs explicit confirmation, and otherwise aborts the whole run."""
+
+    def _write_source_registry(self, tmp_path: Path, content: str = BRSCAN3_REGISTRY_YAML) -> Path:
+        registry = tmp_path / SNIPPET_REGISTRY_RELPATH
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(content)
+        return registry
+
+    @pytest.mark.asyncio
+    async def test_additive_overwrite_proceeds_without_confirming(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Target is a subset of the source (here empty): additive -> push, no prompt."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=False)  # would abort if ever consulted
+        context, _source, target = make_context(
+            target_responses={"echo $HOME": CommandResult(0, "/home/user\n", "")},
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert confirmer.calls == []
+        target.send_file.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_identical_target_entry_is_additive(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Target holds exactly the same brscan3 body the source has: additive -> no prompt."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=False)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert confirmer.calls == []
+        target.send_file.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_lost_target_entry_prompts_and_proceeds_on_confirm(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Target holds an entry (cnpg) absent from the source: non-additive -> confirm.
+        On approval the wholesale push proceeds."""
+        self._write_source_registry(tmp_path)  # source has brscan3 only
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=True)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, TARGET_WITH_EXTRA_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert len(confirmer.calls) == 1
+        # The prompt names the entry that would be lost, and passes allow=False (no override).
+        assert "cnpg" in str(confirmer.calls[0]["message"])
+        assert confirmer.calls[0]["allow"] is False
+        target.send_file.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_lost_target_entry_aborts_on_decline(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Declining the non-additive overwrite aborts the whole run and sends nothing."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=False)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, TARGET_WITH_EXTRA_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(SyncAbortedByUser):
+            await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert len(confirmer.calls) == 1
+        target.send_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_changed_body_is_non_additive_and_prompts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Target holds brscan3 with a DIFFERENT body than the source: non-additive."""
+        self._write_source_registry(tmp_path)  # source brscan3 body
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=True)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, TARGET_CHANGED_BODY_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert len(confirmer.calls) == 1
+        assert "CHANGED" in str(confirmer.calls[0]["message"])
+        target.send_file.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_non_interactive_non_additive_aborts(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-interactive run cannot confirm: the confirmer returns its `allow` (False,
+        since no override flag exists), so a non-additive overwrite aborts."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(return_allow=True)  # mimic non-interactive: answer == allow
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, TARGET_WITH_EXTRA_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(SyncAbortedByUser):
+            await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        target.send_file.assert_not_called()
 
 
 class TestJobDiscovery:

@@ -35,7 +35,7 @@ from pcswitcher.jobs.packages.review import (
     TerminalUIReviewer,
     review_items,
 )
-from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
+from pcswitcher.jobs.packages.sync_core import PackagePlan
 from pcswitcher.models import CommandResult, SyncAbortedByUser
 
 
@@ -176,7 +176,9 @@ class TestInteractive:
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
 
-    async def test_abort_skips_current_and_remaining_groups(self) -> None:
+    async def test_checkbox_ctrl_c_aborts_the_entire_sync(self) -> None:
+        """Decision 10: Ctrl-C / EOF at a checkbox screen means the user wants to abort the
+        whole sync, not silently skip the rest of the review."""
         console = _interactive_console()
         ui = MagicMock()
         groups = [
@@ -192,12 +194,13 @@ class TestInteractive:
                 "pcswitcher.jobs.packages.review.questionary.checkbox",
                 side_effect=[aborted_prompt, never_prompt],
             ) as checkbox,
+            pytest.raises(SyncAbortedByUser),
         ):
-            outcome = await review_items(groups, console=console, ui=ui)
+            await review_items(groups, console=console, ui=ui)
 
         # Only the first group's prompt is ever constructed; the second is never reached.
         checkbox.assert_called_once()
-        assert outcome.decisions == {"a": Decision.SKIP_ONCE, "b": Decision.SKIP_ONCE}
+        # The live display is always handed back, even on abort.
         ui.resume.assert_called_once()
 
     async def test_install_group_defaults_checked_removal_group_defaults_unchecked(self) -> None:
@@ -440,9 +443,9 @@ class TestUnreproducibleGroupResolution:
         assert outcome.decisions["u1"] == Decision.SKIP_ONCE
         assert "u1" not in outcome.unresolved
 
-    async def test_cancelled_select_leaves_the_item_unresolved(self) -> None:
-        """D-21: a cancelled select (`None`) decided nothing — distinct from an explicit
-        skip-once — so the item is genuinely unresolved."""
+    async def test_cancelled_select_aborts_the_entire_sync(self) -> None:
+        """Decision 10: a cancelled select (`None`, i.e. Ctrl-C / EOF) means the user wants
+        to abort the whole sync, not skip this one item."""
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
@@ -451,18 +454,23 @@ class TestUnreproducibleGroupResolution:
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            pytest.raises(SyncAbortedByUser, match="brscan3"),
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui)
 
-        assert outcome.decisions["u1"] == Decision.SKIP_ONCE
-        assert outcome.unresolved == ("u1",)
+        ui.resume.assert_called_once()
 
-    async def test_declining_an_empty_snippet_body_leaves_the_item_unresolved(self) -> None:
+    async def test_empty_snippet_body_reprompts_until_a_real_choice(self) -> None:
+        """Decision 10: an empty snippet capture is NOT accepted and does NOT fall through
+        to 'unresolved' — the three-way choice is re-prompted until the user gives a real
+        snippet or an explicit skip. Here the user submits an empty body, then chooses
+        skip-once on the re-prompt."""
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
-        select_prompt = _fake_prompt(ask_return="add_snippet")
-        text_prompt = _fake_prompt(ask_return=None)  # capture cancelled
+        # First select -> add_snippet (empty body), second select -> skip_once.
+        select_prompt = _fake_prompt(ask_side_effect=["add_snippet", "skip_once"])
+        text_prompt = _fake_prompt(ask_return="")  # empty submission
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
@@ -471,8 +479,30 @@ class TestUnreproducibleGroupResolution:
         ):
             outcome = await review_items([group], console=console, ui=ui)
 
+        # The empty body was rejected; the re-prompted skip-once is the real resolution.
         assert outcome.snippets == {}
-        assert outcome.unresolved == ("u1",)
+        assert outcome.decisions["u1"] == Decision.SKIP_ONCE
+        assert outcome.unresolved == ()
+
+    async def test_empty_snippet_then_real_snippet_is_captured(self) -> None:
+        """Decision 10: after an empty submission the user may re-choose add-snippet and
+        supply a real body, which is then captured verbatim."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        body = "sudo dpkg -i /tmp/x.deb"
+        select_prompt = _fake_prompt(ask_side_effect=["add_snippet", "add_snippet"])
+        text_prompt = _fake_prompt(ask_side_effect=["", body])  # empty, then real
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        assert outcome.snippets == {"u1": body}
+        assert outcome.unresolved == ()
 
     async def test_ui_resumed_when_snippet_capture_raises(self) -> None:
         console = _interactive_console()
@@ -634,12 +664,11 @@ class TestCollateralGroupResolution:
 
 
 # ---------------------------------------------------------------------------------
-# D-21/D-27: mandatory registration terminates — an unresolved unreproducible item
-# fails the job after an interactive review; non-interactive and dry-run are exempt.
-#
-# `apply()`'s raise on a non-empty unresolved list is driven by the
-# `_unresolved_as_failures` hook, which `ManualInstallsSyncJob` implements (D-18); a
-# thin subclass fixes name/manager_id so these apply()-only tests use the real hook.
+# Decision 10: `unresolved` is unrepresentable in an interactive flow, so
+# `ManualInstallsSyncJob` no longer overrides `_unresolved_as_failures` — an interactive
+# review always resolves every item (or aborts the whole sync). These apply()-only tests
+# pin that a `ReviewOutcome` carrying `unresolved` (only ever produced non-interactively
+# now) never fails the job on that basis. A thin subclass fixes name/manager_id.
 # ---------------------------------------------------------------------------------
 
 
@@ -677,19 +706,18 @@ def _unreproducible_diff(item_id: str) -> ItemDiff:
 
 
 @pytest.mark.asyncio
-class TestUnresolvedFailsTheJob:
-    async def test_interactive_unresolved_raises_naming_the_item_even_with_no_converge_failure(self) -> None:
+class TestUnresolvedNeverFailsTheJob:
+    async def test_interactive_unresolved_does_not_raise(self) -> None:
+        """Decision 10: an interactive review can no longer produce `unresolved`, so the
+        job no longer fails on it — even a hand-built interactive outcome carrying an
+        unresolved id applies cleanly (the override that used to fail it is gone)."""
         context = _unresolved_job_context()
         job = _FakeUnreproducibleJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
         plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
         job.accept_review(plan, ReviewOutcome(decisions={}, was_interactive=True, unresolved=(diff.item_id,)))
 
-        with pytest.raises(PackageItemFailures) as exc_info:
-            await job.apply()
-
-        failed_ids = {d.item_id for d, _stderr in exc_info.value.failures}
-        assert failed_ids == {diff.item_id}
+        await job.apply()  # must not raise
 
     async def test_interactive_resolved_does_not_raise(self) -> None:
         context = _unresolved_job_context()

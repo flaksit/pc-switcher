@@ -17,18 +17,20 @@ silently disabled manual-install detection with nothing telling the user. This j
 its OWN `dpkg`/`apt-cache` queries rather than sharing `apt_sync`'s, so ownership stays
 clean — it never imports `apt_sync` (D-18).
 
-An unreproducible item ends a run resolved in one of three ways (D-21): it has an install
-snippet in the shared, synced registry (`SnippetRegistry`, D-20/D-23), it is recorded
-machine-specific (skip-always) in this job's machine-local decision file, or the user
-skipped it once — skip-once is a real decision, not an unresolved state. Only a genuinely
-undecided item leaves an interactive run unclean.
+An unreproducible item ends an interactive run resolved in one of three ways (D-21,
+decision 10): it has an install snippet in the shared, synced registry (`SnippetRegistry`,
+D-20/D-23), it is recorded machine-specific (skip-always) in this job's machine-local
+decision file, or the user skipped it once — skip-once is a real decision. There is no
+fourth "genuinely undecided" outcome an interactive review can reach: an empty snippet
+capture re-prompts rather than falling through, and Ctrl-C/EOF aborts the whole sync
+(`SyncAbortedByUser`) instead of leaving an item unresolved.
 
 `ManualInstallsSyncJob` subclasses `PackageSyncJob` and overrides `plan()`, `converge()`,
 `validate()` and `describe_first_sync_scope()`, following `SnapSyncJob`'s shape (a
 non-apt item type driving an overridden `plan()` rather than the inherited apt-package
-diff). The unreproducible-specific finalize and unresolved-as-failure logic lives here as
-overrides of the base's now-no-op hooks, so the base `apply()` stays generic for the
-three managers that produce no unreproducible items.
+diff). The unreproducible-specific finalize logic lives here as an override of the base's
+now-no-op hook, so the base `apply()` stays generic for the three managers that produce no
+unreproducible items.
 """
 
 from __future__ import annotations
@@ -40,6 +42,8 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, override
+
+from rich.markup import escape
 
 from pcswitcher.config_sync import CONFIG_REMOTE_DIR
 from pcswitcher.jobs.context import JobContext
@@ -64,9 +68,16 @@ from pcswitcher.jobs.packages.state import (
     Snippet,
     SnippetRegistry,
     filter_inert,
+    load_snippets_from_text,
 )
 from pcswitcher.jobs.packages.sync_core import PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
+from pcswitcher.models import (
+    CommandResult,
+    FirstSyncScope,
+    Host,
+    SyncAbortedByUser,
+    ValidationError,
+)
 
 __all__ = ["ManualInstallsSyncJob"]
 
@@ -138,8 +149,8 @@ class ManualInstallsSyncJob(PackageSyncJob):
 
     Overrides `plan()` with an unreproducible-specific detect -> filter -> diff pipeline
     (the inherited apt-package-shaped `diff_items` does not apply); `converge()` replays a
-    registered install snippet verbatim (D-20); the unreproducible finalize and
-    unresolved-as-failure hooks the base leaves as no-ops are implemented here.
+    registered install snippet verbatim (D-20); the unreproducible finalize hook the base
+    leaves as a no-op is implemented here.
     """
 
     name: ClassVar[str] = "manual_installs_sync"
@@ -234,6 +245,12 @@ class ManualInstallsSyncJob(PackageSyncJob):
         belongs, so no `sudo install` staging is needed. A no-op if the source has no
         registry file yet (a user who has never authored a snippet) and under dry-run
         (ADR-014: a rehearsal transfers nothing).
+
+        The push is a WHOLE-FILE overwrite (no per-entry merge). Before it runs,
+        `_guard_registry_overwrite` compares the target's current registry against the
+        source's on-disk file (decision 9): a purely additive push (source superset of
+        target) proceeds silently, while one that would lose or change a target entry
+        requires explicit confirmation and otherwise aborts the run.
         """
         if self.context.dry_run:
             return
@@ -241,6 +258,8 @@ class ManualInstallsSyncJob(PackageSyncJob):
         source_path = Path.home() / SNIPPET_REGISTRY_RELPATH
         if not source_path.exists():
             return
+
+        await self._guard_registry_overwrite(source_path)
 
         mkdir = await self.target.run_command(f"mkdir -p {CONFIG_REMOTE_DIR}")
         if not mkdir.success:
@@ -252,6 +271,81 @@ class ManualInstallsSyncJob(PackageSyncJob):
             raise RuntimeError("Failed to get home directory on target")
         absolute_remote_path = f"{home.stdout.strip()}/{SNIPPET_REGISTRY_RELPATH}"
         await self.target.send_file(source_path, absolute_remote_path)
+
+    async def _guard_registry_overwrite(self, source_path: Path) -> None:
+        """Gate the wholesale `package-snippets.yaml` overwrite on the loss/change of any
+        target entry (decision 9).
+
+        The source's on-disk file (the exact bytes about to be sent) is compared against
+        the target's current registry per `item_id`. The push is purely additive when the
+        source is a superset of the target — every target entry is present in the source
+        with an identical body — in which case it proceeds silently, as before. Otherwise
+        the target holds an entry that a wholesale overwrite would LOSE (absent from the
+        source) or CHANGE (a differing body); the user is shown exactly which entries and
+        must confirm. Declining, or a non-interactive run that cannot confirm, aborts the
+        whole sync (`SyncAbortedByUser`) so the user can consolidate the two registries by
+        hand and re-run — the tool never silently discards a snippet only the target has.
+        """
+        source_snippets = load_snippets_from_text(source_path.read_text(encoding="utf-8"))
+        target_snippets = await SnippetRegistry(self.target).load()
+
+        lost = [snippet for item_id, snippet in target_snippets.items() if item_id not in source_snippets]
+        changed = [
+            (snippet, source_snippets[item_id])
+            for item_id, snippet in target_snippets.items()
+            if item_id in source_snippets and source_snippets[item_id].body != snippet.body
+        ]
+        if not lost and not changed:
+            return  # purely additive — source is a superset of the target
+
+        assert self.context.confirmer is not None, (
+            "a non-additive snippet registry overwrite needs a confirmer to gate it"
+        )
+        approved = await self.context.confirmer.confirm(
+            title="Snippet registry overwrite is not purely additive",
+            message=self._render_overwrite_diff(lost, changed),
+            # No override flag exists: a lossy overwrite is only ever approved by a human
+            # answering the prompt, so `allow=False` makes any non-interactive run refuse
+            # (and thus abort) rather than silently overwrite.
+            allow=False,
+            allow_flag="manual registry consolidation",
+            log_extra={"job": self.name, "host": "source"},
+        )
+        if not approved:
+            raise SyncAbortedByUser(
+                "snippet registry overwrite declined: the target holds snippet entries "
+                "absent from or differing in the source that a wholesale push would lose "
+                "or change; consolidate the two registries by hand and re-run"
+            )
+
+    @staticmethod
+    def _render_overwrite_diff(lost: list[Snippet], changed: list[tuple[Snippet, Snippet]]) -> str:
+        """Rich-markup body naming every target entry a wholesale push would lose or change.
+
+        Every snippet field is untrusted package-manager/user text, so each is
+        `rich.markup.escape`d before it reaches the confirmer's `Panel` — a body or label
+        containing `[...]` must not be parsed as console markup (T-02-02).
+        """
+
+        def body_lines(body: str, indent: str) -> list[str]:
+            return [f"{indent}{escape(line)}" for line in (body.splitlines() or [""])]
+
+        lines = ["The target's snippet registry holds entries this overwrite would discard or replace:", ""]
+        for snippet in lost:
+            lines.append(f"  LOST     {escape(snippet.label)}  ({escape(snippet.item_id)})")
+            lines.extend(body_lines(snippet.body, "             "))
+        for target_snippet, source_snippet in changed:
+            lines.append(f"  CHANGED  {escape(target_snippet.label)}  ({escape(target_snippet.item_id)})")
+            lines.append("             target (to be replaced):")
+            lines.extend(body_lines(target_snippet.body, "               "))
+            lines.append("             source (incoming):")
+            lines.extend(body_lines(source_snippet.body, "               "))
+        lines += [
+            "",
+            "Continuing overwrites the target's registry wholesale. Decline to abort and "
+            "consolidate the two registries by hand.",
+        ]
+        return "\n".join(lines)
 
     # -- Detection (D-18/D-19), all on the source ---------------------------------------
 
@@ -406,7 +500,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         """
         return await SnippetRegistry(self.target).replay(diff.item_id, self.target)
 
-    # -- Unreproducible finalize / unresolved hooks (moved off the base, D-18) -----------
+    # -- Unreproducible finalize hook (moved off the base, D-18) -------------------------
 
     @override
     async def _finalize_unreproducible(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
@@ -471,36 +565,15 @@ class ManualInstallsSyncJob(PackageSyncJob):
                 )
             )
 
-    @override
-    def _unresolved_as_failures(self, plan: PackagePlan, outcome: ReviewOutcome) -> list[tuple[ItemDiff, str]]:
-        """D-21/D-27: after an INTERACTIVE, non-dry-run review, an unreproducible item
-        left with neither a snippet nor a recorded decision makes this job's result a
-        failure — the run is visibly not clean, and stays that way every run until the
-        item is resolved. Overrides the base no-op hook (D-18).
-
-        Two exemptions, both governed by a decision more specific than D-21 for their
-        case: a non-interactive run (D-26 — skip all, record nothing, report everything,
-        never fail on that basis alone, since the user was never offered a resolution) and
-        a dry-run (ADR-014 — a preview that fails would make `--dry-run` unusable as a
-        check). A deliberate skip-once is NOT in `outcome.unresolved` (D-21, decided in
-        `packages.review._review_unreproducible_group`), so it never reaches this method.
-        Converge failures (`failures` in `apply()`) are NOT covered by either exemption;
-        they fail the job unconditionally.
-        """
-        if not outcome.unresolved or not outcome.was_interactive or self.context.dry_run:
-            return []
-
-        by_id = {diff.item_id: diff for diff in plan.diffs}
-        failures: list[tuple[ItemDiff, str]] = []
-        for item_id in outcome.unresolved:
-            diff = by_id[item_id]
-            message = (
-                f"{diff.label} has no install snippet and no recorded machine-specific decision (D-21); "
-                "author a snippet or choose 'skip always' on a future sync to resolve it"
-            )
-            self._log(Host.SOURCE, LogLevel.ERROR, message)
-            failures.append((diff, message))
-        return failures
+    # No `_unresolved_as_failures` override (decision 10): an interactive review can no
+    # longer leave an unreproducible item genuinely undecided. Every entry ends resolved
+    # (snippet, skip-once or skip-always), an empty snippet re-prompts rather than falling
+    # through, and Ctrl-C/EOF aborts the whole sync (`SyncAbortedByUser`) instead of
+    # manufacturing an unresolved SKIP_ONCE — so `outcome.unresolved` is empty after any
+    # interactive run. The base no-op hook (`[]`) is therefore correct here: nothing an
+    # interactive review produces needs failing on this basis. A non-interactive run still
+    # populates `outcome.unresolved` for reporting (D-26), but that path was always exempt
+    # from failing the job, so removing the override changes no behavior.
 
     @override
     async def validate(self) -> list[ValidationError]:
