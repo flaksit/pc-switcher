@@ -36,6 +36,7 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, override
@@ -167,19 +168,61 @@ class ManualInstallsSyncJob(PackageSyncJob):
     @override
     async def after_review(self) -> None:
         """Push the install-snippet registry to the target after this job's review and
-        before `apply()` replays any snippet (D-23), so a snippet authored on the fly in
-        the just-finished review reaches the target THIS run rather than the next one.
+        before `apply()` replays any snippet (D-23), then promote each on-the-fly-authored
+        item so it is APPLIED — not merely transported — the same run.
 
-        Finalize-then-push: `_finalize_unreproducible` persists this run's authored
-        snippets into the SOURCE registry first (idempotent — `apply()` calls it again as
-        a no-op), then `_push_snippet_registry` copies that file to the target. The push
-        depends on no other job: it moves the file itself and reads neither `config_sync`
-        nor `folder_sync` state, so disabling either cannot break snippet delivery.
+        Finalize-then-push-then-promote: `_finalize_unreproducible` persists this run's
+        authored snippets into the SOURCE registry first (idempotent — `apply()` calls it
+        again as a no-op), then `_push_snippet_registry` copies that file to the target,
+        and finally `_promote_authored_snippets_to_install` reclassifies each authored
+        item's diff `REPORT_ONLY -> INSTALL` decided `APPLY` so the unchanged base
+        `apply()` converges it this run rather than the next one. Promotion runs AFTER the
+        push so the target already holds the snippet the replay reads. The push depends on
+        no other job: it moves the file itself and reads neither `config_sync` nor
+        `folder_sync` state, so disabling either cannot break snippet delivery.
         """
         assert self._accepted_plan is not None
         assert self._accepted_outcome is not None
         await self._finalize_unreproducible(self._accepted_plan, self._accepted_outcome)
         await self._push_snippet_registry()
+        self._promote_authored_snippets_to_install()
+
+    def _promote_authored_snippets_to_install(self) -> None:
+        """Reclassify every on-the-fly-authored item's diff `REPORT_ONLY -> INSTALL` and
+        force its decision to `APPLY`, so the unchanged base `apply()` — which converges
+        only APPLY-decided, non-`REPORT_ONLY` diffs (`sync_core.py` apply_diffs filter) —
+        replays the freshly authored snippet THIS run, closing the one-run-too-late gap.
+
+        Called from `after_review()` only after the authored snippets are persisted to the
+        source registry and pushed to the target, so the target holds the snippet by the
+        time the promoted diff converges. The add-snippet review path records no decision
+        for the item (`packages.review._review_unreproducible_group`), so the decision must
+        be forced here in addition to reclassifying the action.
+
+        Mutates only in-memory accepted state (a `dataclasses.replace` of the frozen plan
+        and outcome), so it is safe under dry-run: `apply()`'s dry-run branch previews a
+        would-install line and issues no converge, preserving ADR-014.
+        """
+        assert self._accepted_plan is not None
+        assert self._accepted_outcome is not None
+        outcome = self._accepted_outcome
+        if not outcome.snippets:
+            return
+
+        plan = self._accepted_plan
+        authored = frozenset(outcome.snippets)
+        new_diffs = tuple(
+            replace(diff, action=DiffAction.INSTALL)
+            if diff.item_id in authored and diff.action is DiffAction.REPORT_ONLY
+            else diff
+            for diff in plan.diffs
+        )
+        new_decisions = dict(outcome.decisions)
+        for item_id in authored:
+            new_decisions[item_id] = Decision.APPLY
+
+        self._accepted_plan = replace(plan, diffs=new_diffs)
+        self._accepted_outcome = replace(outcome, decisions=new_decisions)
 
     async def _push_snippet_registry(self) -> None:
         """Copy the source's `~/.config/pc-switcher/package-snippets.yaml` to the target's
@@ -283,19 +326,24 @@ class ManualInstallsSyncJob(PackageSyncJob):
 
     @override
     async def plan(self) -> PackagePlan:
-        """Detect -> filter inert -> diff against the target's snippet registry. Read-only.
+        """Detect -> filter inert -> diff against the SOURCE's snippet registry. Read-only.
 
         An item already recorded machine-specific on the SOURCE is dropped by
         `filter_inert` before it becomes a diff (D-08/D-19: a finding produces noise
         exactly once, then never again). Unreproducible items are always source-held, so
-        only the source's decision file is consulted. An item with a target-side registry
-        snippet plans `INSTALL` (a snippet makes it reproducible); one without plans
-        `REPORT_ONLY` and surfaces in its own review group for resolution.
+        only the source's decision file is consulted.
+
+        Reproducibility is judged from the SOURCE — the machine being replicated (corrected
+        D-23): an item with a source-side registry snippet plans `INSTALL` (a snippet makes
+        it reproducible), one without plans `REPORT_ONLY` and surfaces in its own review
+        group for resolution. `after_review()`'s `send_file()` push places that snippet on
+        the target before `converge()` reads it, so convergence still replays from the
+        target's copy — only the classification authority moved to the source.
         """
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         items = await filter_inert(await self.capture_source_items(), source_decisions)
 
-        registry = SnippetRegistry(self.target)
+        registry = SnippetRegistry(self.source)
         diffs: list[ItemDiff] = []
         for item in items:
             snippet = await registry.get(item.item_id)

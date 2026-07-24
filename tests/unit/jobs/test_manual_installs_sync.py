@@ -384,6 +384,53 @@ class TestTracerEndToEnd:
         assert "/tmp/brscan3.deb" in replay_calls[0]
 
 
+class TestSameRunApplication:
+    """Corrected D-23: a snippet authored on the fly during review is APPLIED (replayed) on
+    the target the SAME run, not one run too late. An item REPORT_ONLY at plan time (no
+    source snippet) whose id the review returns in `outcome.snippets` is promoted to an
+    INSTALL diff decided APPLY by `after_review()`, so the unchanged base `apply()`
+    converges it this run — driven end to end through `execute()`, never by forcing private
+    state."""
+
+    @pytest.mark.asyncio
+    async def test_on_the_fly_snippet_is_replayed_the_same_run(self) -> None:
+        item_id = "unreproducible:apt-no-candidate:falco-app"
+        body = "sudo dpkg -i /tmp/falco.deb"
+        # Post-push target registry: the mocked send_file transports nothing, so seed the
+        # snippet the replay reads directly on the target (simulates after_review's push).
+        target_registry_yaml = (
+            "snippets:\n"
+            f"  {item_id}:\n"
+            "    label: falco-app (no apt candidate)\n"
+            f"    body: {body}\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: laptop\n"
+        )
+        reviewer = FakeReviewer(snippets={item_id: body})
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "falco-app\n", ""),
+                "apt-cache policy": CommandResult(0, "falco-app:\n  Candidate: (none)\n", ""),
+                # Empty source registry -> plan classifies REPORT_ONLY (no source snippet).
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
+            },
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, target_registry_yaml, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+                f"bash -c '{body}'": CommandResult(0, "falco installed\n", ""),
+            },
+            reviewer=reviewer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        # execute() must not raise: the promoted item converges successfully this run.
+        await job.execute()
+
+        replay_calls = [c.args[0] for c in target.run_command.call_args_list if c.args[0].startswith("bash -c")]
+        assert len(replay_calls) == 1
+        assert body in replay_calls[0]
+
+
 class TestSkipOnceResolution:
     """D-21: skip-once is a valid resolution — a run whose only items were skipped-once
     is clean; a genuinely undecided item still fails an interactive run."""

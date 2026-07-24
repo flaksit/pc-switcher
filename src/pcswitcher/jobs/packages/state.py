@@ -89,7 +89,7 @@ _FILE_HEADER = (
     "# never pushed to a peer when this machine is the source, never installed or\n"
     "# removed here when this machine is the target.\n"
     "#\n"
-    "# This file is machine-local and is never synced to any peer (D-09). Remove\n"
+    "# This file is machine-local and is never synced to any peerfilter_inert. Remove\n"
     "# an entry (or delete the whole file) to make that item eligible again on the\n"
     "# next sync.\n"
 )
@@ -319,10 +319,11 @@ class SnippetRegistry:
     Unlike `DecisionFile`, the registry is not machine-scoped data — both machines may
     hold different copies of the SAME file until `manual_installs_sync` reconciles them
     by pushing the source's copy to the target (D-23). Construct with
-    `SnippetRegistry(self.source)` to read/write the source's own copy (e.g. when a
-    freshly authored snippet is recorded, before that run's push carries it to the
-    target) or `SnippetRegistry(self.target)` to read the target's copy (e.g. at
-    plan/converge time, after this run's push has already placed it there).
+    `SnippetRegistry(self.source)` to read/write the source's own copy — the reproducibility
+    authority `plan()` classifies against (corrected D-23), and where a freshly authored
+    snippet is recorded before that run's push carries it to the target — or
+    `SnippetRegistry(self.target)` to read the target's copy at converge time, after this
+    run's push has already placed it there.
     """
 
     def __init__(self, executor: Executor) -> None:
