@@ -96,7 +96,7 @@ Plans:
   2. Manually-installed .debs, custom PPAs, and install-script-sourced packages are reproduced on the target.
   3. Package conflicts and version mismatches between source and target are detected and reported before any destructive change; machine-specific packages are not forced onto the target.
 
-**Plans**: 21/23 plans executed
+**Plans**: 22/23 plans executed
 
 Plans:
 **Wave 1**
@@ -147,7 +147,7 @@ Plans:
 **Correction** *(fixes a real defect the VM integration suite caught in the delta: `manual_installs_sync` applied a source-authored snippet one run too late; corrected D-23 — snippets are applied, not merely transported, the same run)*
 
 - [x] 02-22-PLAN.md — plan() classifies reproducibility from the SOURCE registry; after_review() promotes on-the-fly snippets so apply() converges them the same run (corrected D-23); unit pins + ADR-020/package-sync.md consistency [wave 1]
-- [ ] 02-23-PLAN.md — retarget integration suite: continue-on-failure enables manual_installs_sync (D-27), manual-installs push test authors source-only, apt-repository-state test sets up a synthetic repo+key divergence (no longer skips) [wave 2, depends on 02-22]
+- [x] 02-23-PLAN.md — retarget integration suite: continue-on-failure enables manual_installs_sync (D-27), manual-installs push test authors source-only, apt-repository-state test sets up a synthetic repo+key divergence (no longer skips) [wave 2, depends on 02-22]
 
 ### Phase 3: System & Application Configuration Sync
 
@@ -223,7 +223,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 | ----- | -------------- | ------ | --------- |
 | 1. Folder Sync MVP (User Data Sync) | 18/18 | Complete    | 2026-07-03 |
-| 2. Package Management Sync | 21/23 | In Progress|  |
+| 2. Package Management Sync | 22/23 | In Progress|  |
 | 3. System & Application Configuration Sync | 0/TBD | Not started | - |
 | 4. Docker State Sync | 0/TBD | Not started | - |
 | 5. VM State Sync | 0/TBD | Not started | - |
