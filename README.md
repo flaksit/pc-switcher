@@ -7,15 +7,20 @@ A synchronization system for seamless switching between Linux desktop machines. 
 PC-switcher enables a simple workflow: work on one machine, sync before switching, resume on the other—without manual file management or cloud sync overhead.
 
 ```plain
-Work on source machine → Trigger sync → Resume on target machine
+Work on source machine → Sync → Resume on target machine
 ```
 
-**Status**: Core infrastructure complete. Core sync functionality in development.
+**Status**: Core infrastructure complete. Package sync (apt, snap, flatpak, manual installs) and folder sync are implemented and under active hardening. Application and system-configuration sync are on the roadmap.
 
 ## What Gets Synced
 
+### Implemented
+
 - **User data**: `/home`, `/root` with all documents, code, configs, and selective caches
 - **Packages**: apt, snap, flatpak, PPAs, manual installs
+
+### Roadmap
+
 - **Application configurations**: GNOME, cloud mounts, systemd services
 - **System configurations**: Machine-independent `/etc` files, users, groups
 - **File metadata**: Owner, permissions, ACLs, timestamps
@@ -25,6 +30,8 @@ Work on source machine → Trigger sync → Resume on target machine
 **Never synced**: SSH keys, Tailscale config, GPU/hardware caches, machine-specific packages
 
 ## Installation
+
+The installation will install the [uv package manager](https://docs.astral.sh/uv/) if not already present.
 
 Install using the installation script:
 ```bash
@@ -73,27 +80,29 @@ After sync completes, power off the source machine and resume work on target.
 
 ## What Happens During a Sync
 
-`pc-switcher sync <target>` runs a fixed sequence of steps. The order matters: each step sets up the environment the next one depends on. All steps run on the **source** machine, acting on the **target** over SSH.
+`pc-switcher sync <target>` runs a fixed sequence of steps. The order matters: each step sets up the environment the next one may depend on. All steps run on the **source** machine, acting on the **target** over SSH.
 
 The sequence stops at the first failure, and cleanup always runs: release locks, kill remote processes, close the connection.
 
-The twelve steps are listed below. Every sync shows a fixed count of twelve — the on-screen "Step N/12" denominator never depends on how many jobs are enabled. Step 10 (run jobs) is a single logical step; when several jobs run, the UI sub-labels them `10a`, `10b`, … (e.g. `Step 10a/12 — folder_sync`, then `Step 10b/12 — vscode_state_sync`) rather than inflating the total.
+The twelve steps are listed below. Step 10 (run jobs) is a single logical step. When several jobs run, they are sub-labeled `10a`, `10b`, …
 
 1. **Acquire source lock.** Local lock file; this machine cannot join any other sync (as source or target) while this one runs.
 2. **Establish SSH connection.** Creates the local and remote executors every later step uses. Nothing touches the target before this point.
 3. **Acquire target lock.** A persistent remote process holds the same unified lock on the target; released during cleanup.
-4. **Out-of-order / target-state check.** Runs after the target lock so it can read the target's sync-history over SSH. Detects cases where the target may hold independent state — no prior sync history, the target last synced with a different machine, or this machine pushing again without a back-sync first. Warns and asks for confirmation (never a hard abort, since re-syncing the same direction is a legitimate workflow). Skip with `--allow-out-of-order`; in `--dry-run` the warning is logged and the sync continues.
+4. **Out-of-order / target-state check.** Read the target's sync-history over SSH. Detects cases where the target may hold independent state — no prior sync history, the target last synced with a different machine, or this machine pushing again without a back-sync first. Warns and prompts for proceed or abort. Skip with `--allow-out-of-order`. In `--dry-run` the warning is logged and the sync continues.
 5. **Discover & validate jobs.**
    - Load enabled jobs from config
    - Validate their config
-   - Run each job's `validate()` against live system state: checks `sudo rsync` availability, `acl` package installation, and source folder existence. Nothing has been mutated yet.
-6. **Disk-space preflight.** Check free space on both hosts in parallel against `preflight_minimum`; abort if either is short — so snapshots and rsync don't run a disk into ENOSPC.
+   - Run each job's validation checks against live system state: are all prerequisites for that job met? Nothing has been mutated yet.
+6. **Disk-space preflight.** Check free space on both hosts against `preflight_minimum`; abort if either is short.
 7. **Pre-sync snapshots.** Create btrfs snapshots on both hosts. This is the rollback point; every mutating step below happens after it.
-8. **Install/upgrade pc-switcher on target.** Ensures the target has a compatible version to run its side of later jobs. After snapshots, so a bad install is recoverable.
-9. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs with identical settings.
-10. **Run sync jobs sequentially.** The actual data movement, one UI step per enabled job. If enabled, `apt_sync`, `snap_sync` and `flatpak_sync` run first — one batched review covers all enabled package jobs before any of them changes anything (see [Configuration Reference](docs/configuration.md#package-sync)) — then `folder_sync` (rsync-over-SSH as root on both ends), then `vscode_state_sync` (a selective, SQLite-aware merge of each editor's `state.vscdb` that keeps the target's machine-bound `secret://` keys). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
+8. **Install/upgrade pc-switcher on target.** Ensures the target has a compatible version to back-sync later.
+9. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs and future back-sync with identical settings.
+10. **Run sync jobs sequentially.** The actual data movement. Which jobs are run is defined in `config.yaml`. See [Configuration Reference](docs/configuration.md#package-sync). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
 11. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state.
-12. **Record sync history.** Write the sync-history record on both machines (source: `last_role=SOURCE`, target: `last_role=TARGET`), enabling step 4's out-of-order check next time. The write is skipped in `--dry-run`, but the step still runs. This is the last step — `Step 12/12`.
+12. **Record sync history.** Write the sync-history record on both machines, enabling step 4's out-of-order check next time.
+
+Non-blocking errors and warnings are logged but do not stop the sync. They are reported during the run and listed again at the end of the run.
 
 With `--dry-run`, the workflow previews without writing state (no history update, no snapshots, no mutations). rsync `--dry-run` lists the exact files and deletions that would occur; deletions are recorded in the FULL-level log so you can audit what would be destroyed before committing to a live sync. `--allow-out-of-order` skips the out-of-order / target-state confirmation.
 
@@ -107,19 +116,17 @@ Top-level sections:
 - `sync_jobs` — which sync jobs are enabled
 - `disk_space_monitor` — free-space thresholds checked before and during a sync
 - `btrfs_snapshots` — subvolumes to snapshot and retention policy
-- `apt_sync` — installs apt packages missing on the target (the manually-installed set, plus repositories/keys/pins/config), after a batched review shared with `snap_sync`/`flatpak_sync`; opt-in, disabled by default
-- `snap_sync` — converges installed snaps to the source's exact revision and tracking channel, after the same batched review; opt-in, disabled by default
-- `flatpak_sync` — converges installed flatpak refs and remotes per user/system scope, after the same batched review; opt-in, disabled by default
 - `folder_sync` — folders to mirror via rsync, filtered by a per-folder filter file (native rsync `+`/`-` rules) plus optional per-directory `.pcswitcher-filter` files. Filter rules can exclude a subtree and re-include selected children (e.g. drop `~/.cache` but keep `~/.cache/uv`)
-- `vscode_state_sync` — SQLite-aware selective sync of each editor's `state.vscdb`, preserving the target's machine-bound `secret://` keys (no settings; enable/disable only)
 
-See the **[Package Sync](docs/configuration.md#package-sync)** section of the Configuration Reference for the full detail on all three package jobs: the batched cross-manager review, marking a package machine-specific, and install snippets for items no package manager can reproduce.
+The **[Package Syncs](docs/jobs/package-sync.md)** and **[VS Code State Sync](docs/jobs/vscode-state-sync.md)** have no configurable options except for enabling/disabling them.
 
-See the **[Configuration Reference](docs/configuration.md)** for every option, defaults, the folder-sync filter-rule syntax, and a "coming from `.gitignore`" guide.
+See the **[Configuration Reference](docs/configuration.md)** for every option, defaults, the folder-sync filter-rule syntax, ...
 
-## Available Commands
+## Most used commands
 
 ```bash
+pc-switcher --help            # Show help and list commands
+
 # Initialize configuration file
 pc-switcher init [--force]    # Create default config at ~/.config/pc-switcher/config.yaml
 
@@ -130,14 +137,11 @@ pc-switcher sync <target-hostname> [--config PATH]
 pc-switcher logs              # Show logs directory and list recent logs
 pc-switcher logs --last       # Show path to most recent log file
 
-# Clean up old snapshots
+# Clean up old btrfs snapshots
 pc-switcher cleanup-snapshots --older-than 7d [--dry-run]
 
-# Self-update pc-switcher
+# Update pc-switcher
 pc-switcher self update [VERSION] [--prerelease]
-
-# Skip the startup version check (applies to any command, e.g. pc-switcher --no-version-check sync <target>)
-pc-switcher --no-version-check <command>
 ```
 
 ### Startup version check
@@ -147,17 +151,9 @@ In an interactive terminal, pc-switcher checks for a newer release and offers to
 ## Requirements
 
 - Ubuntu 24.04 LTS on all machines
-- Single btrfs filesystem (all synced data on one filesystem per machine)
-- SSH access between machines (LAN, VPN such as Tailscale, or other network)
+- Single btrfs filesystem (all synced data on one filesystem per machine), possibly with multiple subvolumes
+- SSH access between machines
 - Only one machine actively used at a time
-
-## Key Design Principles
-
-1. **Reliability**: No data loss, conflict detection, consistent state, full auditability
-2. **Smooth UX**: Single command to launch entire sync; minimal manual intervention
-3. **Use standard tools**: Well-supported, maintainable approach
-4. **Minimize disk wear**: NVMe SSDs—avoid unnecessary writes
-5. **Simplicity**: Easy to understand, modify, and maintain
 
 ## Troubleshooting
 
@@ -169,7 +165,7 @@ When running `pc-switcher --version`, `self update`, sync (which installs pc-swi
 RuntimeError: Failed to fetch GitHub releases: 403 {"message": "API rate limit exceeded..."}
 ```
 
-This happens because pc-switcher queries the GitHub API to check for releases. Unauthenticated requests are limited to 60/hour.
+This happens because pc-switcher queries the GitHub API to check for releases. Unauthenticated requests are limited to 60/hour. GitHub's primary rate limit returns HTTP 403 as shown above; the secondary (abuse) limit may instead appear as HTTP 429.
 
 **Solution**: Add a GitHub personal access token with public read-only permissions to your `~/.profile` on both source and target machines:
 
@@ -188,6 +184,11 @@ Key documents:
 - **[High level requirements](docs/planning/High%20level%20requirements.md)** - Project vision, scope, workflow
 - **[Architecture](docs/system/architecture.md)** - System architecture and design
 - **[Architecture Decision Records](docs/adr/_index.md)** - Design decisions and rationale
+- **[Configuration Reference](docs/configuration.md)** - Every config option, defaults, filter-rule syntax
+- **[Package Sync](docs/jobs/package-sync.md)** - How apt, snap, flatpak, and manual installs are synced
+- **[Folder Sync](docs/jobs/folder-sync.md)** - How folders are mirrored via rsync and filtered
+- **[VS Code State Sync](docs/jobs/vscode-state-sync.md)** - How VS Code state is synced
+- **[Reading Sync Logs](docs/reading-sync-logs.md)** - How to read and interpret sync logs
 - **[Development Guide](docs/dev/development-guide.md)** - Development workflow and guidelines
 
 ## Development
@@ -232,7 +233,9 @@ uv run basedpyright     # Type check
 uv run pytest           # Run tests
 ```
 
-This project uses **SpecKit**—a specification-driven workflow via custom slash commands:
+### AI Agent workflow
+
+This project used **[SpecKit](https://github.com/github/spec-kit)**—a specification-driven workflow via custom slash commands:
 
 ```bash
 /speckit.specify "feature description"  # Create feature spec
@@ -243,4 +246,7 @@ This project uses **SpecKit**—a specification-driven workflow via custom slash
 /speckit.implement                      # Execute implementation
 ```
 
-See [CLAUDE.md](CLAUDE.md) for complete development workflow details.
+After that, we switched to **[GSD (Get Shit Done)](https://github.com/open-gsd/gsd-core)**, a bit more lightweight and with stricter validation that the implementation matches the spec.
+However, still much overhead, with research, planning and execution steps taking much more time and not necessarily more reliable than pure claude code with Opus or Fable.
+
+Now, considering more simple workflow: **[Matt Pocock's Skills](https://github.com/mattpocock/skills)**: keeping the essentials spec, TDD, validation, but leaving more to the AI agents that are really capable now.

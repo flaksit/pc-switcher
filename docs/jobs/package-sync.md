@@ -1,6 +1,6 @@
 # Package Sync
 
-The package jobs replicate *what is installed* — apt packages plus the `/etc/apt` repository state they depend on, snaps, flatpaks, and the things no package manager can reproduce — rather than user data. Package *data* (`~/.var/app`, `~/snap/<app>/common`, dotfiles) stays `folder_sync`'s territory; these jobs are about the presence, version and provenance of the packages themselves.
+The package jobs replicate *what is installed* — apt packages plus the `/etc/apt` repository configuration they depend on, snaps, flatpaks, and the things no package manager can reproduce — rather than user data. Package *data* (`~/.var/app`, `~/snap/<app>/common`, dotfiles) stays `folder_sync`'s territory. The package sync jobs are about the presence, version and provenance of the packages themselves.
 
 Configuration for these jobs is limited to their `sync_jobs` enable flags; see the [configuration reference](../configuration.md#sync_jobs). There are no per-job config keys.
 
@@ -10,64 +10,99 @@ Four independent jobs share one item -> diff -> review -> converge model. Each h
 
 ```yaml
 sync_jobs:
-  apt_sync: false             # apt packages plus the /etc/apt repository state they depend on
+  apt_sync: false             # apt packages plus the /etc/apt repository configuration they depend on
   snap_sync: false            # installed snaps, converged to the source's revision and channel
   flatpak_sync: false         # installed flatpak refs and their remotes, per scope
   manual_installs_sync: false # things no package manager can reproduce, plus the install-snippet registry
 ```
 
-All four ship **disabled**: enabling any of them lets pc-switcher change installed software on the target, so it is opt-in. The three package-manager jobs run **before** `folder_sync`, so applications exist on the target before their data lands on top of them — decisive for flatpak, where `flatpak install` must create `~/.local/share/flatpak` before `folder_sync` would otherwise place `~/.var/app` content there.
+All four ship **disabled**: enabling any of them lets pc-switcher change installed software on the target, so it is opt-in.
 
 ### What each job covers
 
-- **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), plus the repository state that governs where packages come from: sources under `/etc/apt/sources.list.d`, signing keys (`/etc/apt/keyrings`, legacy `/etc/apt/trusted.gpg.d`), pins (`/etc/apt/preferences.d`) and apt config (`/etc/apt/apt.conf.d`).
-- **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel, never held or otherwise blocked from auto-refresh.
+- **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), plus the repository configuration that governs where packages come from: sources under `/etc/apt/sources.list.d`, signing keys (`/etc/apt/keyrings`, legacy `/etc/apt/trusted.gpg.d`), pins (`/etc/apt/preferences.d`) and apt config (`/etc/apt/apt.conf.d`).
+- **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
 - **`flatpak_sync`** — installed flatpak refs and their remotes, per user/system installation scope.
-- **`manual_installs_sync`** — everything no package manager can reproduce: apt packages with no repository candidate, plus unowned files under `/usr/local` and `/opt`. It also owns the install-snippet registry. It runs its own `dpkg-query` and `apt-cache policy` queries rather than sharing `apt_sync`'s, and carries its own enable flag, so disabling `apt_sync` never silently disables manual-install detection.
+- **`manual_installs_sync`** — everything no package manager can reproduce: apt packages with no repository candidate, plus unowned files under `/usr/local` and `/opt`. It also owns the [install-snippet registry](#install-snippets).
 
-## The per-manager batched review
+## Job ordering is enforced
 
-Each enabled package job shows its **own** batched review before it applies anything, and only that job's items appear in it — there is no single review spanning every manager, and nothing sits between the jobs merging their reviews into one. If you enable all four, each job presents its own review as it runs, and each applies nothing until its own review returns.
+The three package-manager jobs **must** be listed before `folder_sync` in `sync_jobs`. This is not a convention: pc-switcher validates the order and aborts the run with a config error if any of `apt_sync`, `snap_sync` or `flatpak_sync` is enabled but sits after `folder_sync` (`orchestrator._check_package_jobs_precede_folder_sync`).
 
-The review appears before any change that job makes and shows every difference it found, grouped by action. Installs and removals are always separate groups: a group proposing to remove software is never mixed into a group proposing to install it, and its title names the removal explicitly (for example "Remove packages"), never the word "apply". Removal entries start **unticked**, so a bulk tick can never silently delete something. Every item offers a three-way choice: apply it, skip it for this run only, or skip it always (making it machine-specific — see below).
+The reason is the "defaults, then your data" layering. Installing software usually writes its own default config and data files on first appearance. If `folder_sync` ran first, the target would have your synced versions of those files, and then the fresh install would overwrite them with stock defaults. Running the package jobs first means the software (and its defaults) already exists when `folder_sync` lands your versions on top — so your tweaks win, not the installer's defaults.
+
+## Batched review
+
+Because an enabled package job can install or remove software on the target, each one shows you a review and waits for your approval before it changes anything.
+
+The review lists every difference the job found between source and target, grouped by action, and installs are always kept separate from removals: a group that would install software is never mixed with one that would remove it, and a removal group names the removal explicitly (for example "Remove packages") rather than saying "apply". Removal groups start **unticked**, so a bulk approval can never silently delete something.
+
+Every item offers the same three-way choice:
+
+- **Apply** it — make this change on the target.
+- **Skip this run** — leave it alone for now; it comes back next sync.
+- **Skip always** — mark it as belonging to this machine only, so no future sync touches it (see [Machine-specific packages](#machine-specific-packages)).
 
 ### apt collateral
 
-apt may need to remove or change packages other than the one you named in order to satisfy a request, so the item you ticked is not always the whole transaction apt would run. `apt_sync` simulates every approved change with `apt-get -s` at plan time and classifies the collateral before anything is refused. Collateral that is **auto-installed** — a dependency apt itself pulled in, absent from the target's `apt-mark showmanual` set — is apt doing its job and proceeds without asking. Collateral that is **manually installed** — a package the user chose to have — becomes its own reviewable item offering install-anyway, skip or abort. The classification is decided in the review, never mid-apply: a prompt during apply would reintroduce exactly the prompt-flooding the batched review exists to prevent.
+When you approve an apt change, apt sometimes has to remove or downgrade *other* packages to satisfy it — so the package you approved is not always the whole transaction. `apt_sync` simulates every approved change with `apt-get -s` before applying anything and inspects that collateral. Dependencies apt pulls in or drops on its own are apt doing its job and are not shown to you. But if the collateral would remove or downgrade a package you installed by hand — one in either machine's `apt-mark showmanual` set, the source's or the target's — that becomes its own review item with an install-anyway / skip / abort choice. Protecting the union of both manual sets closes the case where a package is hand-installed on one machine but auto-resolved on the other. The classification happens during the review, never mid-apply, so you are never prompted while changes are landing.
 
 ## Machine-specific packages
 
-Some packages belong to one machine only — a hardware driver, a vendor tool tied to a peripheral. Marking a package **machine-specific** (choosing "skip always" in the review) is the way to tell pc-switcher: *don't touch that package on that machine*. This is deliberately not called an "exclusion" — the file records what belongs to this machine, not what to hide from it.
+Choosing **skip always** on a review item marks that package as belonging to *this specific machine* — the one running as source or target right now. A machine-specific package is never synced out to peers when this machine is the source, and never installed or removed here by a sync arriving from another machine. Use it for things tied to one box: a hardware driver, a vendor tool for an attached peripheral.
 
-Marking an item machine-specific writes an entry to that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one file per manager, for example `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`). This file is **never synced** — it stays local to the machine it describes, in both roles: the marked item is never pushed from this machine when it is the source, and never installed or removed on this machine when it is the target. An annotated example lives at [`src/pcswitcher/machine-packages.example.yaml`](../../src/pcswitcher/machine-packages.example.yaml).
+The mark is recorded in this machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes. An annotated example lives at [`src/pcswitcher/machine-packages.example.yaml`](../../src/pcswitcher/machine-packages.example.yaml).
 
-To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again.
+To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again and re-offers it in the review.
 
 ## Install snippets
 
-Some installed things no package manager can reproduce — a bare `.deb` someone downloaded and installed by hand, or a manual install under `/usr/local` or `/opt`. `manual_installs_sync` detects these (apt packages with no repository candidate, and files under `/usr/local`/`/opt` that no package owns) and surfaces them in its review as items needing a resolution. For each one, the review offers three choices: add an install snippet, mark it machine-specific (see above), or skip for now.
+Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, or software dropped under `/usr/local` or `/opt` by an install script. `manual_installs_sync` detects these and surfaces them in its review as items needing a resolution. For each one the review offers three choices: add an install snippet, mark it machine-specific (skip always), or skip for now.
 
-An install snippet is a shell command that reproduces the item — the tool never parses, interprets, or reasons about it. It is **stored and replayed verbatim**, and it must run **non-interactively**: no stdin is supplied during replay, so a command that prompts (for example a debconf question) hangs the sync rather than failing cleanly. A typical shape:
+An install snippet is a shell command that reproduces the item — the tool never parses, interprets, or reasons about it. It is **stored and replayed verbatim**, and it runs **non-interactively**: no stdin is supplied during replay, so a command that prompts (for example a debconf question) fails rather than hanging the sync. A typical shape:
 
 ```bash
 sudo DEBIAN_FRONTEND=noninteractive dpkg -i /path/to/package.deb || \
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -f
 ```
 
-The snippet registry lives at `~/.config/pc-switcher/package-snippets.yaml`. Unlike the machine-local decision files, it **does** reach the target: how to install something is knowledge about the *package*, not about the machine, so a snippet authored on one machine should be usable to reproduce the same item on any peer. Whether an item is treated as reproducible is decided by whether the **source** — the machine being replicated — holds a snippet; a snippet present only on the target does not make the item reproducible. `manual_installs_sync` pushes the registry to the target **itself** with `send_file()`, immediately after its own review, and then replays it — so a snippet already in the source registry, or one you add on the fly during that review, is applied (replayed) on the target in the same run rather than merely transported. It does not ride `config_sync` (which runs before any review, and so could not carry a snippet you have not authored yet), and it does not rely on `folder_sync` (a user-controlled job that can be disabled or filtered — no job's correctness may depend on another job running).
+Snippets run **unprivileged**. On the target the body is replayed as `bash -c '<body>'` as the target user, with no outer `sudo` wrapped around it. Any privilege a snippet needs must be written inside the snippet by its author — that is why the example above calls `sudo` itself.
+
+The snippet registry lives at `~/.config/pc-switcher/package-snippets.yaml`. Unlike the machine-local decision files, it **does** reach the target: how to install something is knowledge about the *package*, not the machine, so a snippet authored on one machine reproduces the same item on any peer. Whether an item counts as reproducible is decided by whether the **source** holds a snippet for it; a snippet present only on the target does not make the item reproducible.
+
+### Registry push and consolidation
+
+`manual_installs_sync` pushes the source's registry to the target as a **whole-file overwrite** — the source's `package-snippets.yaml` replaces the target's wholesale, no per-entry merge. Before the push, pc-switcher compares the two. A purely additive push (the source is a superset of the target) proceeds silently. But if the overwrite would **lose** an entry the target holds (absent from the source) or **change** one (a differing body), pc-switcher shows you exactly which entries and asks you to confirm. Declining aborts the run, and a non-interactive run that cannot ask aborts too — so you can consolidate the two registries by hand and re-run rather than silently dropping the target's snippets.
 
 ## Resolving unreproducible items
 
-An unreproducible item ends a run resolved in one of three ways: it gets a snippet, it is marked machine-specific (skip-always), or you skip it once. Skip-once is a real decision, not an unresolved state — you may be declining something temporary, and a run where you made that choice is clean. The intended workflow for skip-once is that you install the thing yourself on the target after the sync finishes, so the next sync shows no difference at all. Only an item nobody decided on leaves a run visibly unclean, and that happens only on a non-interactive run, where you were never given the chance to resolve it (see below).
+Every unreproducible item is resolved before the run continues: it gets a snippet, it is marked machine-specific (skip always), or you skip it once. There is no fourth "unresolved" outcome on an interactive run.
+
+- **Ctrl-C / EOF** at the review means you want to stop, so it aborts the whole sync — never a silent per-item skip.
+- Choosing "add an install snippet" and then submitting an **empty** body is not accepted: the review re-prompts the three-way choice rather than falling through. You must enter a real snippet or pick skip-once / skip-always.
+- A **non-interactive** run (no TTY) cannot ask, so it marks every undecided item skip-once and reports them; it never records a snippet or a machine-specific mark. Re-run interactively to actually resolve anything.
 
 ## Versions
 
-pc-switcher installs packages **by name** and lets versions float to whatever each machine's own repositories currently offer — it never pins the source's exact version. A version difference between source and target is detected and reported in the review, never silently forced. Deliberate version pinning does replicate, because `/etc/apt/preferences.d` pin files are synced as items like any other apt state.
+apt and flatpak let versions **float**. pc-switcher installs by name and takes whatever each machine's own repositories currently offer; a version difference between source and target is detected and reported in the review, never silently forced. (Deliberate pinning still replicates, because `/etc/apt/preferences.d` pin files sync as items like any other apt configuration.)
 
-## Non-interactive runs
+snap is the exception: it converges the source's exact **revision and channel**. The reason is where snap keeps per-user application data. snap stores it in revision-number-named directories, `~/snap/<app>/<rev>/`, whereas apt uses stable paths and flatpak uses id-named ones (`~/.var/app/<id>`). Only snap's data path embeds the version, so for `folder_sync` to mirror a snap's data cleanly both machines must be on the same revision — hence convergence.
 
-A sync run without a TTY (for example from a script or CI) changes **nothing**: every item that needed a decision is treated as skipped for this run only, nothing is recorded permanently (no machine-specific marks, no snippets), and everything left unresolved is reported. A non-interactive run does not fail on undecided items alone, because you were never given the chance to resolve them. Re-run interactively to actually apply or resolve anything.
+With both machines on the same revision, snap application data now follows you: `folder_sync` mirrors the current-revision data directory (`~/snap/<app>/<current-rev>/`, resolved through snapd's `current` symlink) plus the revision-independent `~/snap/<app>/common`. Retained older-revision directories — revisions the target's snapd never installed — stay excluded to avoid leaving orphan data behind.
+
+To keep the revision from changing mid-sync, snapd's **automatic** refresh is briefly paused on both machines for the duration of the run (snapd auto-refreshes several times a day, even for closed apps). The pause blocks only automatic refreshes; snap_sync's own `--revision` convergence still works. Each machine's prior refresh policy is captured and restored when the run ends.
+
+## Deletions
+
+Removals propagate for the three package managers. A package removed from the source's `apt-mark showmanual` set, a snap uninstalled on the source, or a flatpak ref or remote removed on the source becomes a removal review item on the target — unticked by default, so you approve deletions deliberately.
+
+`manual_installs_sync` is **install-only**: it has no target-side manifest of what it installed, so it never proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
 
 ## Prerequisites: passwordless sudo
 
-Each enabled package job needs passwordless sudo for a handful of binaries — `apt_sync` on both source (to read `/etc/apt` state) and target (to install packages and write `/etc/apt` state); `snap_sync` and `flatpak_sync` on the target only, and only when the diff involves a system-scope item; `manual_installs_sync` on the target to replay snippets. `validate()` checks this before anything runs and, on failure, prints the exact `visudo` command and sudoers line to add. The binaries it names are a **lower bound** on what must be permitted, not an exact scope to lock the grant down to — a broader existing grant is fine.
+Each enabled package job needs passwordless sudo for a handful of binaries:
+
+- **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages and write `/etc/apt` configuration).
+- **`snap_sync`** — on both the **source** and the **target**; validation fails if either lacks it. The target needs it to install, refresh and remove snaps, and both hosts need it to pause snapd's auto-refresh for the sync window (`sudo snap set system refresh.hold`). The runtime pause itself tolerates a transient failure without aborting the sync, but the sudo grant is checked up front on both machines.
+- **`flatpak_sync`** — on the target only, and only when the diff involves a system-scope item.
+- **`manual_installs_sync`** — a snippet author decides its own privilege needs; the replay itself runs unprivileged, so the job requires no sudo beyond what a given snippet writes for itself.

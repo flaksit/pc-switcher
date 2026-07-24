@@ -62,6 +62,16 @@ A GitHub Action enforces this rule:
 
 **Always create PRs as draft** initially. Integration tests only run on ready (non-draft) PRs to save CI resources.
 
+## Design Principles
+
+These principles guide every design and implementation decision, in priority order:
+
+1. **Reliability**: No data loss, conflict detection, consistent state, full auditability
+2. **Smooth UX**: Single command to launch entire sync; minimal manual intervention
+3. **Use standard tools**: Well-supported, maintainable approach
+4. **Minimize disk wear**: NVMe SSDs — avoid unnecessary writes
+5. **Simplicity**: Easy to understand, modify, and maintain
+
 ## Code Expectations
 
 ### Follow Existing Patterns
