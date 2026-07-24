@@ -37,7 +37,6 @@ import re
 import shlex
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
@@ -521,78 +520,48 @@ async def _find_flatpak_ref_and_remote(
     return None
 
 
-# -- apt repository-state helpers (D-11/D-12): find a real repo+key pair to diverge -----
+# -- apt repository-state helpers (D-11/D-12): synthesize a repo+key divergence -----
 #
 # The two `/etc/apt` directories the apt-repository-state test touches (apt_sync.py owns
 # the full five-directory set).
 _APT_SOURCES_DIR = "/etc/apt/sources.list.d"
 _APT_KEYRINGS_DIR = "/etc/apt/keyrings"
 
-# signed-by parsing, kept independent of apt_sync's private regexes (same discipline as
-# the snap/flatpak parsers above) -- used only to pair a source file with the keyring it
-# names so the divergence is a real "one vendor repo" (ledger entry #2), not two unrelated
-# files. deb822 `.sources` uses a `Signed-By:` field; legacy `.list` names the key inside
-# the options bracket as `signed-by=<path>`.
-_SIGNED_BY_DEB822_RE = re.compile(r"^Signed-By:\s*(?P<path>\S+)", re.IGNORECASE)
-_SIGNED_BY_LIST_RE = re.compile(r"signed-by=(?P<path>[^\]\s,]+)")
 
+async def _create_synthetic_repo_and_key(executor: BashLoginRemoteExecutor) -> tuple[str, str]:
+    """Create a synthetic vendor apt repository the target lacks on `executor` (the source):
+    a deb822 `.sources` file under `/etc/apt/sources.list.d/` whose `Signed-By:` names a
+    signing-key file under `/etc/apt/keyrings/`, plus that key file with dummy bytes.
+    Returns `(source_filename, key_filename)`.
 
-def parse_signed_by_refs(content: str) -> set[str]:
-    """Every keyring BASENAME a source file references via `Signed-By:`/`signed-by=`.
-
-    Basename, not path: item identity for a key is its filename (packages/items.py), so
-    both `/etc/apt/keyrings/foo.gpg` and a bare `foo.gpg` reference resolve to the same
-    key item.
+    Both directories are root-owned and `/etc/apt/keyrings` is absent on a fresh Ubuntu
+    24.04, so `mkdir -p` runs first (the shipped invariant) and every write goes through
+    `sudo tee`. Filenames are uuid-suffixed so the pair is unique and the fresh target
+    provably lacks it. Dummy key bytes are fine: D-12 copies keys verbatim without
+    validating, and the sync under test is `--dry-run`, so nothing is ever applied and the
+    unreachable repo URI never triggers an `apt-get update`.
     """
-    refs: set[str] = set()
-    for line in content.splitlines():
-        deb822 = _SIGNED_BY_DEB822_RE.match(line.strip())
-        if deb822:
-            refs.add(Path(deb822.group("path")).name)
-        refs.update(Path(match.group("path")).name for match in _SIGNED_BY_LIST_RE.finditer(line))
-    return refs
-
-
-async def _list_apt_dir_files(executor: BashLoginRemoteExecutor, directory: str) -> set[str]:
-    """The basenames of every regular file directly under `directory` on `executor` (or
-    an empty set when the directory is absent/empty). `sudo` because `/etc/apt/keyrings`
-    files can be root-only readable; one batched `find`, never one command per file.
-    """
-    result = await executor.run_command(
-        f"sudo find {shlex.quote(directory)} -maxdepth 1 -type f -printf '%f\\n' 2>/dev/null",
-        login_shell=False,
-        timeout=15.0,
+    uniq = uuid4().hex[:12]
+    source_filename = f"pcswitcher-it-repo-{uniq}.sources"
+    key_filename = f"pcswitcher-it-key-{uniq}.gpg"
+    source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
+    key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
+    source_body = (
+        "Types: deb\n"
+        "URIs: https://pcswitcher-it.invalid/repo\n"
+        "Suites: stable\n"
+        "Components: main\n"
+        f"Signed-By: {key_dest}\n"
     )
-    return set(nonblank_lines(result.stdout))
-
-
-async def _find_repo_and_key_pair(
-    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
-) -> tuple[str, str] | None:
-    """`(source_filename, key_filename)` for a repository on pc1 whose `signed-by` key
-    lives in `/etc/apt/keyrings`, where BOTH the source file and the key file also exist
-    on pc2 -- so removing both from pc2 produces a target missing exactly one vendor repo,
-    whose source and key diff as two SEPARATE `INSTALL` review entries (ledger entry #2).
-    `None` when the VM has no such pair (a fresh Ubuntu image with no third-party repo in
-    `/etc/apt/keyrings`), which the test turns into a clear `pytest.skip`.
-    """
-    pc1_sources = await _list_apt_dir_files(pc1_executor, _APT_SOURCES_DIR)
-    pc2_sources = await _list_apt_dir_files(pc2_executor, _APT_SOURCES_DIR)
-    pc1_keys = await _list_apt_dir_files(pc1_executor, _APT_KEYRINGS_DIR)
-    pc2_keys = await _list_apt_dir_files(pc2_executor, _APT_KEYRINGS_DIR)
-    shared_keys = pc1_keys & pc2_keys
-    if not shared_keys:
-        return None
-
-    for source_filename in sorted(pc1_sources & pc2_sources):
-        content = await pc1_executor.run_command(
-            f"sudo cat {shlex.quote(f'{_APT_SOURCES_DIR}/{source_filename}')}",
-            login_shell=False,
-            timeout=15.0,
-        )
-        for key_filename in sorted(parse_signed_by_refs(content.stdout) & shared_keys):
-            return source_filename, key_filename
-    return None
+    result = await executor.run_command(
+        f"sudo mkdir -p {shlex.quote(_APT_KEYRINGS_DIR)} && "
+        f"printf %s {shlex.quote(source_body)} | sudo tee {shlex.quote(source_dest)} > /dev/null && "
+        f"printf %s {shlex.quote(f'pcswitcher-it-dummy-key-{uniq}')} | sudo tee {shlex.quote(key_dest)} > /dev/null",
+        login_shell=False,
+        timeout=20.0,
+    )
+    assert result.success, f"Failed to create synthetic repo+key on source: {result.stderr}"
+    return source_filename, key_filename
 
 
 class TestAptSyncEndToEnd:
@@ -715,39 +684,33 @@ class TestAptSyncEndToEnd:
         preview IS the review): apply()'s dry-run branch logs `[dry-run] Would install
         <label>` per approved item and `[dry-run] Would change Refresh apt package
         metadata (apt-get update)` for the marker (`accept_review` inserts it once any
-        repository-group item is approved). Because it is `--dry-run` nothing on pc2
-        changes, but the removed repo file and key are restored in a `finally` regardless.
+        repository-group item is approved).
+
+        A fresh runner VM has no vendor repo whose signing key lives in
+        `/etc/apt/keyrings` on both machines, so this test SETS UP its own divergence
+        instead of skipping: a synthetic deb822 `.sources` + keyring pair is written on
+        the SOURCE (pc1) that the target lacks, giving the diff exactly one missing repo
+        whose source and key are two separate INSTALL entries (ledger entry #2). Because
+        it is `--dry-run` nothing on pc2 changes; the synthetic files are removed from pc1
+        in a `finally` regardless of outcome.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        pair = await _find_repo_and_key_pair(pc1_executor, pc2_executor)
-        if pair is None:
-            pytest.skip(
-                "No apt repository on pc1 whose signed-by key lives in /etc/apt/keyrings "
-                "with both the source file and the key present on pc2: searched the "
-                "intersection of both machines' sources.list.d and keyrings directories."
-            )
-        source_filename, key_filename = pair
-        source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
-        key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
-        backup_dir = f"/tmp/pcswitcher-it-apt-repo-{uuid4().hex}"
-
+        source_filename = ""
+        key_filename = ""
         try:
-            backup = await pc2_executor.run_command(
-                f"mkdir -p {shlex.quote(backup_dir)} && "
-                f"sudo cp -a {shlex.quote(source_dest)} {shlex.quote(f'{backup_dir}/source')} && "
-                f"sudo cp -a {shlex.quote(key_dest)} {shlex.quote(f'{backup_dir}/key')}",
-                login_shell=False,
-                timeout=20.0,
-            )
-            assert backup.success, f"Failed to back up {source_dest}/{key_dest} on pc2: {backup.stderr}"
+            source_filename, key_filename = await _create_synthetic_repo_and_key(pc1_executor)
+            source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
+            key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
 
-            remove = await pc2_executor.run_command(
-                f"sudo rm -f {shlex.quote(source_dest)} {shlex.quote(key_dest)}",
+            # The fresh target provably lacks the uuid-suffixed synthetic pair, so the diff
+            # is exactly one missing vendor repo (defensive, cheap: --dry-run writes nothing).
+            absent = await pc2_executor.run_command(
+                f"test ! -e {shlex.quote(source_dest)} && test ! -e {shlex.quote(key_dest)}",
                 login_shell=False,
-                timeout=15.0,
+                timeout=10.0,
             )
-            assert remove.success, f"Failed to remove repo files from pc2: {remove.stderr}"
+            assert absent.success, "synthetic repo/key unexpectedly already present on pc2 before the run"
 
             await _write_apt_sync_config(pc1_executor)
 
@@ -777,17 +740,23 @@ class TestAptSyncEndToEnd:
                 f"intended apt-get update (metadata refresh) not reported.\n{combined_output}"
             )
         finally:
-            await pc2_executor.run_command(
-                f"if [ -f {shlex.quote(f'{backup_dir}/source')} ]; then "
-                f"sudo install -o root -g root -m 0644 {shlex.quote(f'{backup_dir}/source')} "
-                f"{shlex.quote(source_dest)}; fi; "
-                f"if [ -f {shlex.quote(f'{backup_dir}/key')} ]; then "
-                f"sudo install -o root -g root -m 0644 {shlex.quote(f'{backup_dir}/key')} "
-                f"{shlex.quote(key_dest)}; fi; "
-                f"rm -rf {shlex.quote(backup_dir)}",
-                login_shell=False,
-                timeout=30.0,
+            # Remove the synthetic files from pc1 (where they were created) regardless of
+            # outcome; defensively from pc2 too, though --dry-run writes nothing there.
+            cleanup_paths = " ".join(
+                shlex.quote(f"{directory}/{filename}")
+                for directory, filename in (
+                    (_APT_SOURCES_DIR, source_filename),
+                    (_APT_KEYRINGS_DIR, key_filename),
+                )
+                if filename
             )
+            if cleanup_paths:
+                await pc1_executor.run_command(
+                    f"sudo rm -f {cleanup_paths}", login_shell=False, timeout=15.0
+                )
+                await pc2_executor.run_command(
+                    f"sudo rm -f {cleanup_paths}", login_shell=False, timeout=15.0
+                )
 
 
 class TestPackageSyncWholeRunContracts:
