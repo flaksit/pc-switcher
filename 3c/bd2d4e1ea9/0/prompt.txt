@@ -1109,3 +1109,34 @@ No deviations. Did not touch `items.py`, `sync_core.py`, `apt_sync.py`, or `snap
 Note: this is documentation/design work under `.planning/`; per project design docs, a docs pass (package-sync.md "Holds and masks", ADR-020 note) and the `Closes #208` labeling remain as the separate follow-up step listed in the design's WP wrap-up — outside WP-3's code scope.</result>
 <usage><subagent_tokens>98542</subagent_tokens><tool_uses>27</tool_uses><duration_ms>320812</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a08cc92bba45e87c9</task-id>
+<tool-use-id>toolu_017NWmoERAgzfjW1f8KRXRA1</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/a08cc92bba45e87c9.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-4 docs for #208" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. All three files edited; every claim checked against the implemented code.
+
+`docs/jobs/package-sync.md`
+- Added a new `## Holds and masks` section (between `## Versions` and `## Deletions`) explaining, for the user: pc-switcher replicates deliberate blocks (apt `apt-mark hold`, snap `snap refresh --hold`, flatpak `flatpak mask`), that apt version pins already travel as `/etc/apt/preferences.d` files, that each block is its own review item with the three-way apply/skip-once/skip-always choice, that adding is default-checked while removing lands in its own unticked removal group, that a held apt package is still never installed/upgraded (version left alone) with the hold now traveling as its own item, and the mask-pattern semantics.
+- Extended `## Prerequisites` in place: apt sudo line now names `apt-mark` for holds; flatpak sudo line now clarifies system-scope covers refs/remotes/masks and user-scope masks need no sudo.
+
+`docs/adr/adr-020-declarative-package-convergence.md`
+- Added a second `Amended: 2026-07-24 (#208, …)` note alongside the existing one (same in-place, non-reversing rationale per ADR-001). States: apt holds, snap per-snap holds, flatpak masks replicate source→target as boolean-membership items (add → INSTALL-direction, remove → REMOVE-direction, no CHANGE; verbs hold/unhold/mask/unmask; add default-checked, remove unticked); holds split out of the `HELD_OR_PINNED` report into `apt:hold:` items with the package's install/upgrade still suppressed; pins keep their REPORT_ONLY echo and already travelled as files; and this is DISTINCT from D-06's transient system `refresh.hold`.
+
+`.planning/phases/02-package-management-sync/02-208-HOLD-MASK-REPLICATION.md`
+- Added `Status: Implemented (2026-07-24)` and a Notes/deviations line: apt uses a dedicated `AptHoldItem` dataclass; snap's `_diff_snap_holds` builds the `ItemDiff` inline with `item_id=snap:hold:&lt;name&gt;` and no `SnapHoldItem` — a minor, consistent shape difference, not a behavior change.
+
+Claims verified against code:
+- apt: `_converge_hold` runs `sudo apt-mark hold|unhold`; `collect_hold_sets` reads `apt-mark showhold` on both machines; `/usr/bin/apt-mark` in `_TARGET_SUDO_COMMANDS`; `AptHoldItem` with `apt:hold:&lt;name&gt;` id; `collect_hold_pin_facts` reads pins-only and holds moved to their own items; target hold set suppresses the package's install/upgrade action.
+- sync_core: `_ACTION_VOCABULARY` hold/unhold/hold/unhold/mask/unmask; `_diff_apt_holds` pure-membership INSTALL/REMOVE; `_build_review_groups` keyed on `(action, item_class)`.
+- snap: `held` parsed from `snap list` Notes; `snap refresh --hold=forever` / `--unhold`; inline `ItemDiff`, no `SnapHoldItem`.
+- flatpak: `_diff_flatpak_masks` membership-only; `_converge_mask` uses `[sudo] flatpak --user|--system mask [--remove]`; `_system_scope_in_play` returns true when a system-scope mask exists on either machine.
+
+Markdown style respected: no `---` separators, real headings only, one paragraph per physical line.</result>
+<usage><subagent_tokens>72609</subagent_tokens><tool_uses>20</tool_uses><duration_ms>130088</duration_ms></usage>
+</task-notification>
