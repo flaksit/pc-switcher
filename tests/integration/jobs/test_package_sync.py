@@ -328,7 +328,7 @@ def _automation_env_assignment(item_id: str) -> str:
 # ---------------------------------------------------------------------------------
 # test_continue_on_item_failure: three "unowned install" snippets authored directly
 # into pc1's registry (D-18/D-20/D-21) -- two that genuinely `apt-get install` a real
-# package, one that deliberately exits non-zero. `AptSyncJob.scan_unowned_installs`
+# package, one that deliberately exits non-zero. `ManualInstallsSyncJob._scan_unowned_installs`
 # sorts its findings alphabetically by path, which is what places the failing item
 # strictly BETWEEN the two installs in convergence order (a < b < c below), so
 # "the item after the failure was still processed" is a real, ordered claim.
@@ -346,7 +346,7 @@ _CONTINUE_TEST_MARKERS = (
 
 
 def _unowned_item_id(path: str) -> str:
-    """The `UnreproducibleItem.item_id` a `scan_unowned_installs`-detected path at
+    """The `UnreproducibleItem.item_id` a `_scan_unowned_installs`-detected path at
     `path` would produce (module docstring: identity is `unreproducible:<origin>:
     <identifier>`, independent of `label`).
     """
@@ -355,7 +355,7 @@ def _unowned_item_id(path: str) -> str:
 
 async def _create_unowned_marker(executor: BashLoginRemoteExecutor, path: str) -> None:
     """Create an empty, dpkg-unowned directory at `path` (requires root: `/opt` is
-    root-owned) so `AptSyncJob.scan_unowned_installs` detects it as an UNREPRODUCIBLE
+    root-owned) so `ManualInstallsSyncJob._scan_unowned_installs` detects it as an UNREPRODUCIBLE
     item on the next `plan()`.
     """
     result = await executor.run_command(f"sudo mkdir -p {shlex.quote(path)}", login_shell=False, timeout=15.0)
@@ -896,7 +896,7 @@ class TestPackageSyncWholeRunContracts:
         D-27. Instead this test authors three "unowned install" snippets (D-18/D-20)
         directly into pc1's registry -- two that genuinely `apt-get install` a real
         package, one that deliberately exits non-zero -- relying on
-        `AptSyncJob.scan_unowned_installs`'s alphabetical sort to place the failing one
+        `ManualInstallsSyncJob._scan_unowned_installs`'s alphabetical sort to place the failing one
         strictly between the two installs (`_CONTINUE_TEST_MARKERS`).
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
@@ -941,7 +941,12 @@ class TestPackageSyncWholeRunContracts:
                 f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {shlex.quote(pkg_second)}",
             )
 
-            await _write_apt_sync_config(pc1_executor)
+            # The three unowned-install snippets are owned by manual_installs_sync (D-18),
+            # not apt_sync: enabling apt_sync alone leaves them inert, the sync exits 0, and
+            # the D-27 `assert not sync_result.success` below never fires (the defect CI
+            # caught on PR #206). With manual_installs_sync enabled they converge the same
+            # run, and the deliberately-failing middle item makes the sync exit non-zero.
+            await _write_package_sync_config(pc1_executor, manual_installs_sync=True)
 
             decisions = {
                 item_id_first: Decision.APPLY,
@@ -1376,25 +1381,24 @@ class TestManualInstallsSyncEndToEnd:
         and is replayed there, all in one run (D-23), proven against pc2's own filesystem
         and registry file.
 
-        `manual_installs_sync.plan()` classifies an unreproducible item `INSTALL` only when
-        the item's snippet is in the TARGET registry, and `after_review()` pushes the
-        SOURCE registry to the target before `apply()` replays. To witness BOTH the push
-        and the replay-of-the-pushed-content in a single run, the SAME item is seeded with
-        DIFFERENT bodies on each machine: pc2's pre-existing snippet drops an OLD marker,
-        pc1's source snippet drops a NEW marker. The run must push pc1's registry over
-        pc2's (so the replay reads the NEW body) and then replay it -- so a NEW marker on
-        pc2 and NO OLD marker proves the push overwrote the target registry AND that the
-        replay used the pushed source version, in order. An unowned `/opt` path on pc1
-        makes the item detectable (`_scan_unowned_installs`).
+        Under the corrected source-based classification (02-22), `manual_installs_sync.plan()`
+        judges reproducibility from the SOURCE registry: a snippet present on pc1 classifies
+        the item `INSTALL` regardless of whether pc2 already holds one. `after_review()` then
+        pushes the source registry to the target before `apply()` replays it. So the snippet
+        is authored on the SOURCE (pc1) ONLY -- no target seeding is needed, and the old
+        item-on-both-machines trick (an OLD body on pc2 to force the pre-correction
+        target-registry classification) is gone. pc2 has no registry before the run, so its
+        presence afterwards witnesses the push, and the NEW marker witnesses the pushed
+        source snippet being replayed the same run. An unowned `/opt` path on pc1 makes the
+        item detectable (`_scan_unowned_installs`).
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
         uniq = uuid4().hex[:12]
         unowned_path = f"/opt/pcswitcher-it-manual-{uniq}"
         item_id = _unowned_item_id(unowned_path)
-        # Home-relative markers so the snippet needs no sudo: replay runs `bash -c <body>`
+        # Home-relative marker so the snippet needs no sudo: replay runs `bash -c <body>`
         # as the SSH user on pc2, and $HOME expands there.
-        old_marker = f"$HOME/.cache/pcswitcher-it-manual-old-{uniq}"
         new_marker = f"$HOME/.cache/pcswitcher-it-manual-new-{uniq}"
         registry_relpath = "~/.config/pc-switcher/package-snippets.yaml"
 
@@ -1402,12 +1406,9 @@ class TestManualInstallsSyncEndToEnd:
             # The source item to detect (unowned, so root-owned /opt needs sudo to create).
             await _create_unowned_marker(pc1_executor, unowned_path)
 
-            # Same item_id, different bodies: pc2 (target) gets the OLD-marker snippet so
-            # plan() sees a target snippet and classifies INSTALL; pc1 (source) gets the
-            # NEW-marker snippet so the post-review push overwrites pc2's copy.
-            await _author_snippet(
-                pc2_executor, item_id, unowned_path, f'mkdir -p "$(dirname {old_marker})" && touch {old_marker}'
-            )
+            # Author on the SOURCE (pc1) ONLY: plan() classifies reproducibility from the
+            # source registry (corrected D-23), so a source snippet plans INSTALL without
+            # pc2 holding anything. The post-review push then places it on pc2 before replay.
             await _author_snippet(
                 pc1_executor, item_id, unowned_path, f'mkdir -p "$(dirname {new_marker})" && touch {new_marker}'
             )
@@ -1421,8 +1422,8 @@ class TestManualInstallsSyncEndToEnd:
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
 
-            # The push placed the source registry on pc2 (D-23) -- the registry file exists
-            # on pc2 after the run.
+            # The push placed the source registry on pc2 (D-23): pc2 held no registry before
+            # the run, so its presence afterwards witnesses the push landing.
             registry_exists = await pc2_executor.run_command(
                 f"test -f {registry_relpath}", login_shell=False, timeout=10.0
             )
@@ -1430,22 +1431,16 @@ class TestManualInstallsSyncEndToEnd:
                 f"snippet registry not present on pc2 at {registry_relpath} after the run -- the push did not land"
             )
 
-            # The replay ran the PUSHED (source) snippet body: the NEW marker exists and
-            # the OLD (pre-seeded target) marker does not -- proving the push overwrote the
-            # target registry before the replay read it.
+            # The replay ran the pushed source snippet body: the NEW marker exists on pc2 --
+            # proving the pushed source snippet was replayed the same run (D-23).
             new_exists = await pc2_executor.run_command(f"test -f {new_marker}", login_shell=False, timeout=10.0)
             assert new_exists.success, (
                 f"NEW marker {new_marker} absent on pc2 -- the pushed snippet was not replayed.\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
-            old_exists = await pc2_executor.run_command(f"test -f {old_marker}", login_shell=False, timeout=10.0)
-            assert not old_exists.success, (
-                f"OLD marker {old_marker} present on pc2 -- the pre-seeded target snippet ran instead of the "
-                "pushed source one, so the push did not overwrite the target registry before replay"
-            )
         finally:
             await _remove_unowned_marker(pc1_executor, unowned_path)
             await pc2_executor.run_command(
-                f"rm -f {new_marker} {old_marker} {registry_relpath}", login_shell=False, timeout=15.0
+                f"rm -f {new_marker} {registry_relpath}", login_shell=False, timeout=15.0
             )
             await pc1_executor.run_command(f"rm -f {registry_relpath}", login_shell=False, timeout=15.0)
