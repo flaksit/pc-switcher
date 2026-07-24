@@ -610,3 +610,37 @@ Places the code disagreed with the old doc (reconcile if needed):
 No GSD marker added (file had none; not a GSD-managed doc).</result>
 <usage><subagent_tokens>64140</subagent_tokens><tool_uses>18</tool_uses><duration_ms>154679</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>aeee949b65eb5d25b</task-id>
+<tool-use-id>toolu_01X1NCioiMjc8N216w2zE6LH</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dcaeb7c1-933d-49f6-b7d6-5a9f9247098a/tasks/aeee949b65eb5d25b.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-H ADR-020 + planning update" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All edits are coherent and verified against the code. Summary of what I did.
+
+Changes to `docs/adr/adr-020-declarative-package-convergence.md`
+
+How the amendment was recorded (per ADR-001): ADR-001 prescribes immutability-via-supersession, but my scope forbids creating a new ADR or touching `_index.md`, so supersession was impossible. I recorded the change the ADR-001-compatible way that fits a single-file edit: a dated `Amended: 2026-07-24` line in the header block (a natural extension of ADR-001's `Date:` convention) listing the scope and pointing to `02-UAT-REVIEW-FIXES.md`, plus a two-way traceability entry in References. The amendment note states explicitly that these refinements clarify/extend rather than reverse the decision, which is why they were recorded in place rather than as a superseding ADR. Decision bodies and Implementation Rules were then edited to match the implemented behavior.
+
+Decisions updated:
+- D-04/D-05: snap named the explicit exception to the float-only version policy (it converges revision+channel because only snap embeds the version in its data path).
+- D-06: extended — current-revision data dir now mirrored by folder_sync; orchestrator pauses snapd automatic refresh on both hosts via a timed system `snap set system refresh.hold` restored in cleanup; new consequence that snap_sync requires passwordless sudo on the SOURCE too.
+- D-29: changed — snap_sync excludes all `~/snap/&lt;app&gt;/&lt;rev&gt;` dirs EXCEPT the current-revision dir; older retained revs stay excluded; safe-default when `current` is missing/dangling.
+- D-11/12/13: heading "Repository state as items" → "Repository configuration as items"; added flatpak remote-URL diff converged with `remote-modify`.
+- D-30 + transactional-convergence: apt source-manual set now unioned into collateral protection; one `apt-get update` before the first install even with no repo-group change, aborting the job on failure, sharing one at-most-once flag.
+- D-18–D-23 + run-termination sections: snippet-registry wholesale overwrite gated on being non-additive (confirm-or-abort); interactive "unresolved" outcome removed — empty snippet re-prompts, Ctrl-C/EOF aborts the whole sync.
+- Forbidden rule on `snap refresh --hold` clarified to permit the transient timed race-guard while still forbidding the standing-hold verb.
+- Terminology "state" → "config" applied only to `/etc/apt`-config phrasings (Context, validate() rule, D-11 heading); genuinely-stateful uses left untouched.
+
+`.planning/` files touched
+- `.planning/phases/02-package-management-sync/02-UAT-REVIEW-FIXES.md`: marked Status: Implemented (2026-07-24) and added an "Accepted deviations" section for the two accepted deviations (hold mechanism is `snap set system refresh.hold` not `snap refresh --hold`; new source-side sudo requirement).
+- `.planning/phases/02-package-management-sync/02-08-SUMMARY.md`: annotated the now-false D5 exclude-paths description with a superseding note pointing to the fixes doc.
+- `.planning/phases/02-package-management-sync/02-08-PLAN.md`: annotated the now-false `snap_sync_exclude_paths()` spec with a superseding note.
+
+Note: the `snap refresh --hold` references in RESEARCH/PLAN/SUMMARY/VERIFICATION files are still accurate (the research pitfall about the no-arg mutating form, and its rejection as the convergence mechanism — the new hold uses a different verb), so I left them. Two markdown hard-wrap hook warnings fired on pre-existing lines in `02-08-SUMMARY.md` (204, 222) and `02-08-PLAN.md` (42, 47–51) that are unrelated to my single-line edits; I did not modify them.</result>
+<usage><subagent_tokens>100941</subagent_tokens><tool_uses>41</tool_uses><duration_ms>422359</duration_ms></usage>
+</task-notification>
