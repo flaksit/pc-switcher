@@ -1,0 +1,38 @@
+<task-notification>
+<task-id>b63bfy5wd</task-id>
+<tool-use-id>toolu_01TCkEQJYLyx6UkNm6oLkzMb</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dc0e8f1e-00d1-4f1b-a26c-1f8e598aaa5d/tasks/b63bfy5wd.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for PR #206 CI to reach terminal state" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+"apply-next-run" was intended design? Not at all. You must have made that up!
+Apparently, D-23 is not formulated clearly enough. Fix that: "snippets added on the fly during that review (D-21) are included" are OF COURSE not only about syncing the snippets, but as well about applying them. I can't even imagine how bad the software design is, that this would not be a natural behavior that flows right off the code as well. It's as simple as the following:
+1. detect manual installs
+2. detect if there are snippets
+3. ask user skip-once / skip-always / add-snippet
+4. save skip-always to the machine-local list
+5. save snippets and send snippets to target
+6. execute snippets for the items that the user didn't decide skip-once/always
+
+---
+
+<task-notification>
+<task-id>brxl0el68</task-id>
+<tool-use-id>toolu_01TRGw112QYGph2Q6NW9LLLN</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dc0e8f1e-00d1-4f1b-a26c-1f8e598aaa5d/tasks/brxl0el68.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for PR #206 CI (correction) to reach terminal state" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>buwsvxlmj</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dc0e8f1e-00d1-4f1b-a26c-1f8e598aaa5d/tasks/buwsvxlmj.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR #206 CI (post lint-fix) to reach terminal state" completed (exit code 0)</summary>
+</task-notification>
