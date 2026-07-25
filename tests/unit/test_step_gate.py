@@ -7,16 +7,21 @@ read is never mistaken for a write.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from rich.console import Console
 
-from pcswitcher.executor import LocalExecutor, RemoteExecutor, active_job
+from pcswitcher.executor import Executor, LocalExecutor, RemoteExecutor, active_job
+from pcswitcher.jobs.packages.items import ItemClass
+from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, Snippet, SnippetRegistry
 from pcswitcher.models import Host, SyncAbortedByUser
-from pcswitcher.step_gate import TerminalUIStepGate
+from pcswitcher.step_gate import StepGate, TerminalUIStepGate
 
 
 def _make_gate() -> tuple[TerminalUIStepGate, MagicMock]:
@@ -36,6 +41,25 @@ def _remote(gate: object | None = None) -> tuple[RemoteExecutor, MagicMock]:
     conn = MagicMock()
     conn.run = AsyncMock(return_value=MagicMock(exit_status=0, stdout="", stderr=""))
     return RemoteExecutor(conn, gate), conn  # pyright: ignore[reportArgumentType] — mock stands in for asyncssh
+
+
+@contextmanager
+def _executor_on(host: Host, gate: StepGate | None) -> Generator[Executor]:
+    """The REAL executor for `host`, gated, with nothing actually reaching a machine.
+
+    The local side patches `create_subprocess_shell` rather than swapping in a fake
+    executor, so the announce-then-gate path under test is the production one on both
+    ends — the point being that the same store code is correct through either.
+    """
+    if host is Host.TARGET:
+        executor, _conn = _remote(gate)
+        yield executor
+        return
+
+    proc = MagicMock(returncode=0)
+    proc.communicate = AsyncMock(return_value=(b"", b""))
+    with patch.object(asyncio, "create_subprocess_shell", AsyncMock(return_value=proc)):
+        yield LocalExecutor(gate)
 
 
 @pytest.mark.asyncio
@@ -186,3 +210,87 @@ class TestExecutorDebugTrace:
             await executor.run_command("sudo rm -rf /etc/apt/x", login_shell=False, mutates="delete x")
 
         assert any("sudo rm -rf /etc/apt/x" in record.getMessage() for record in caplog.records)
+
+
+def _entry() -> DecisionEntry:
+    return DecisionEntry(
+        item_id="apt:firefox",
+        item_class=ItemClass.APT_PACKAGE,
+        label="firefox",
+        reason=None,
+        recorded_at="2026-01-01T00:00:00Z",
+    )
+
+
+def _snippet() -> Snippet:
+    return Snippet(
+        item_id="manual:zoom",
+        label="zoom",
+        body="curl -fsSL https://example.invalid/zoom.deb -o /tmp/z.deb && sudo apt-get install -y /tmp/z.deb",
+        authored_at="2026-01-01T00:00:00Z",
+        authored_on="laptop",
+    )
+
+
+@pytest.mark.asyncio
+class TestStateWritesReachTheGate:
+    """The two package-sync state files are modifications like any other.
+
+    `docs/jobs/package-sync.md` promises the gate covers the machine-local decision files
+    on BOTH machines and the snippet registry, and both stores are constructed with either
+    executor depending on which machine holds the item (D-08a) — so the assertion has to be
+    made per role, not once. A read of either file must not prompt: the whole store would
+    become unusable at the gate if `load()` asked too.
+    """
+
+    @pytest.mark.parametrize("host", [Host.SOURCE, Host.TARGET])
+    async def test_recording_a_decision_is_gated(self, host: Host) -> None:
+        gate = _stub_gate()
+        with _executor_on(host, gate) as executor:
+            await DecisionFile("apt", executor).record(_entry())
+
+        gate.confirm_action.assert_awaited_once()  # the preceding `cat` read is not a prompt
+        kwargs = gate.confirm_action.await_args.kwargs
+        assert kwargs["host"] is host
+        assert "firefox" in kwargs["description"]
+        assert "apt.decisions.yaml" in kwargs["command"]
+
+    @pytest.mark.parametrize("host", [Host.SOURCE, Host.TARGET])
+    async def test_adding_a_snippet_is_gated(self, host: Host) -> None:
+        gate = _stub_gate()
+        with _executor_on(host, gate) as executor:
+            await SnippetRegistry(executor).add(_snippet())
+
+        gate.confirm_action.assert_awaited_once()
+        kwargs = gate.confirm_action.await_args.kwargs
+        assert kwargs["host"] is host
+        assert "zoom" in kwargs["description"]
+        assert "package-snippets.yaml" in kwargs["command"]
+
+    @pytest.mark.parametrize("host", [Host.SOURCE, Host.TARGET])
+    async def test_aborting_leaves_the_file_untouched(self, host: Host) -> None:
+        """Declining must stop the write, not record it and then complain."""
+        gate = _stub_gate(SyncAbortedByUser("declined"))
+        with _executor_on(host, gate) as executor, pytest.raises(SyncAbortedByUser):
+            await DecisionFile("apt", executor).record(_entry())
+
+    async def test_pushing_the_registry_to_the_target_is_gated(self) -> None:
+        """The push itself is a modification of the target, distinct from the local write."""
+        gate = _stub_gate()
+        executor, conn = _remote(gate)
+        await executor.send_file(
+            Path("/home/u/.config/pc-switcher/package-snippets.yaml"),
+            "/home/u/.config/pc-switcher/package-snippets.yaml",
+            mutates="push the install-snippet registry",
+        )
+        assert gate.confirm_action.await_args.kwargs["host"] is Host.TARGET
+        assert "package-snippets.yaml" in gate.confirm_action.await_args.kwargs["command"]
+        conn.start_sftp_client.assert_called_once()
+
+    @pytest.mark.parametrize("host", [Host.SOURCE, Host.TARGET])
+    async def test_reading_either_store_never_prompts(self, host: Host) -> None:
+        gate = _stub_gate()
+        with _executor_on(host, gate) as executor:
+            await DecisionFile("apt", executor).load()
+            await SnippetRegistry(executor).load()
+        gate.confirm_action.assert_not_awaited()

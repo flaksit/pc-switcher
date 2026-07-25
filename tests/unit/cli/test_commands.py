@@ -211,3 +211,51 @@ class TestInitCommand:
         assert result.exit_code == 0, f"init --force failed: {result.stdout}"
         assert "+ .cache/uv/***" in (tmp_path / "home.filter").read_text()
         assert "stale root filter" not in (tmp_path / "root.filter").read_text()
+
+
+class TestConfirmEachCommandFlag:
+    """`--confirm-each-command` has no non-interactive fallback, by design.
+
+    Every other gate degrades when nobody is watching: the confirmer falls back to an
+    `--allow-*` flag, the review auto-declines. This one cannot — auto-proceeding on a
+    prompt nobody can answer is precisely the failure it exists to prevent — so a run that
+    could never ask must be refused before it loads config, connects or touches anything.
+    """
+
+    def test_refused_without_a_tty(self) -> None:
+        with (
+            patch("pcswitcher.cli.is_interactive", return_value=False),
+            patch("pcswitcher.cli._load_configuration") as load_config,
+            patch("pcswitcher.cli._run_sync") as run_sync,
+        ):
+            result = runner.invoke(app, ["sync", "test-target", "--confirm-each-command"])
+
+        assert result.exit_code == 1, f"Expected exit code 1, got {result.exit_code}\n{result.output}"
+        assert "--confirm-each-command" in result.output, f"Error must name the flag.\nOutput: {result.output}"
+        # Refused before the run begins: nothing is loaded and no sync is started.
+        load_config.assert_not_called()
+        run_sync.assert_not_called()
+
+    def test_accepted_and_forwarded_on_a_tty(self) -> None:
+        """The flag must actually reach the orchestrator, not be validated and dropped."""
+        with (
+            patch("pcswitcher.cli.is_interactive", return_value=True),
+            patch("pcswitcher.cli._load_configuration", return_value=MagicMock(spec=Configuration)),
+            patch("pcswitcher.cli._run_sync", return_value=0) as run_sync,
+        ):
+            result = runner.invoke(app, ["sync", "test-target", "--confirm-each-command"])
+
+        assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}\n{result.output}"
+        assert run_sync.call_args.kwargs["confirm_each_command"] is True
+
+    def test_a_non_interactive_run_without_the_flag_is_not_refused(self) -> None:
+        """The refusal is scoped to the flag: ordinary non-interactive syncs still run."""
+        with (
+            patch("pcswitcher.cli.is_interactive", return_value=False),
+            patch("pcswitcher.cli._load_configuration", return_value=MagicMock(spec=Configuration)),
+            patch("pcswitcher.cli._run_sync", return_value=0) as run_sync,
+        ):
+            result = runner.invoke(app, ["sync", "test-target"])
+
+        assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}\n{result.output}"
+        assert run_sync.call_args.kwargs["confirm_each_command"] is False
