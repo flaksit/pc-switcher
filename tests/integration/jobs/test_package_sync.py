@@ -37,6 +37,16 @@ The pure parsing/selection helpers below (`nonblank_lines`, `parse_dpkg_installe
 `parse_reverse_depends`, `parse_batched_rdepends`, `pick_safe_removal_candidate`) have no
 I/O of their own and are unit-tested directly in
 `tests/unit/jobs/test_package_sync_candidate_selection.py`, independent of VM access.
+
+Subjects: every test here needs a package it may hold, diverge, remove and reinstall, and
+a stock Ubuntu 24.04 VM offers none for snap (only `_SNAP_REMOVAL_DENYLIST` members) and
+none at all for flatpak (which is not installed). Those subjects are therefore CREATED --
+`tests/integration/scripts/internal/vm-test-fixtures.sh`, baked into the baseline snapshot
+by provisioning and re-applied by the module-scoped `vm_test_fixtures` fixture. No test in
+this module declines to run for want of a subject: a missing subject is a broken machine
+and fails naming what is missing and which script creates it. apt subjects are still
+selected by querying the machines (any Debian system has hundreds), but an empty selection
+is likewise an assertion failure, never a skip.
 """
 
 from __future__ import annotations
@@ -66,6 +76,15 @@ from pcswitcher.models import CommandResult
 
 # Prefix marking each candidate's reverse-dependency block in the batched pc2 probe below.
 RDEPENDS_MARKER = "@@RDEPENDS_FOR@@"
+
+
+@pytest.fixture(scope="module", autouse=True)
+async def _package_sync_subjects(vm_test_fixtures: None) -> None:  # pyright: ignore[reportUnusedFunction]
+    """Every test in this module operates on a real snap or flatpak, so both VMs must own
+    one before any of them runs (`conftest.vm_test_fixtures`).
+    """
+    _ = vm_test_fixtures
+
 
 # How many shared packages to probe for reverse dependencies when looking for one safe
 # to remove. Each probe is a separate `apt-cache rdepends` process on the target, so the
@@ -174,7 +193,12 @@ def pick_safe_removal_candidate(
     return picked[0] if picked else None
 
 
-def _skip_message() -> str:
+def _no_apt_candidate_message() -> str:
+    """Why an apt subject could not be selected, for the assertion that fires if one
+    ever cannot be: every Debian system has hundreds of manually-installed packages with
+    no manually-installed reverse dependency, so an empty result means the machine is not
+    what these tests assume, not that the test is inapplicable.
+    """
     return (
         "No safe apt package candidate found: searched pc1's `apt-mark showmanual` "
         "intersected with pc2's installed set (`dpkg-query`), filtered to packages whose "
@@ -223,34 +247,58 @@ async def _find_removable_candidates(
     return pick_safe_removal_candidates(pc1_manual, pc2_installed, pc2_manual, reverse_deps_by_candidate, count)
 
 
-async def _find_removable_candidate(
-    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
-) -> str | None:
+async def _removable_candidate(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> str:
     """Query both VMs and pick a package safe to remove from pc2 for this test (see
-    `pick_safe_removal_candidate`), or `None` if nothing qualifies.
+    `pick_safe_removal_candidate`).
     """
     found = await _find_removable_candidates(pc1_executor, pc2_executor, count=1)
-    return found[0] if found else None
+    assert found, _no_apt_candidate_message()
+    return found[0]
 
 
-async def _find_extra_on_target_candidate(
+async def _create_extra_on_target_apt_package(
     pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
-) -> str | None:
-    """A package manually installed on pc2 but absent from pc1's `apt-mark showmanual` --
-    a naturally-occurring EXTRA_ON_TARGET (removal-direction) diff needing no setup
-    mutation at all. Used by `test_non_interactive_skip_all`, which must never actually
-    remove anything: the whole point of the test is that a non-interactive run skips
-    every decision, so the candidate has to already exist rather than be created by
-    removing something from pc1.
+) -> str:
+    """Give pc2 an apt package pc1 does not have, so a removal-direction
+    (EXTRA_ON_TARGET) diff exists, and return its name.
+
+    The two VMs are provisioned from one baseline, so their manual sets are identical
+    and no such package exists until a test makes one. It is made by promoting one of
+    pc2's automatically-installed packages to manual (`apt-mark manual`) rather than by
+    installing or removing anything: `test_non_interactive_skip_all` must be able to
+    assert pc2's installed set is untouched by the run, and a selection-state flip
+    changes what apt_sync captures without changing what is on the disk. Reversed with
+    `_restore_auto_marked_package`.
     """
     pc1_manual_result = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
     pc2_manual_result = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
+    pc2_dpkg_result = await pc2_executor.run_command(
+        "dpkg-query -W -f='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+    )
     pc1_manual = set(nonblank_lines(pc1_manual_result.stdout))
-    pc2_manual = nonblank_lines(pc2_manual_result.stdout)
-    for name in sorted(pc2_manual):
-        if name not in pc1_manual:
-            return name
-    return None
+    pc2_manual = set(nonblank_lines(pc2_manual_result.stdout))
+    pc2_installed = parse_dpkg_installed(pc2_dpkg_result.stdout)
+
+    candidates = sorted(pc2_installed - pc2_manual - pc1_manual)
+    assert candidates, (
+        "No automatically-installed package on pc2 is absent from pc1's `apt-mark "
+        "showmanual`, so no removal-direction subject can be made. Every Debian system "
+        "carries hundreds of auto-installed dependencies; an empty set means pc2 is not "
+        "the machine these tests assume."
+    )
+    name = candidates[0]
+    result = await pc2_executor.run_command(
+        f"sudo apt-mark manual {shlex.quote(name)}", login_shell=False, timeout=30.0
+    )
+    assert result.success, f"Failed to mark {name} manual on pc2: {result.stderr}"
+    return name
+
+
+async def _restore_auto_marked_package(executor: BashLoginRemoteExecutor, name: str) -> None:
+    """Put a package promoted by `_create_extra_on_target_apt_package` back to automatic."""
+    result = await executor.run_command(f"sudo apt-mark auto {shlex.quote(name)}", login_shell=False, timeout=30.0)
+    if not result.success:
+        print(f"[cleanup] failed to mark {name} auto again on pc2: {result.stderr}")
 
 
 def _package_sync_test_config(**enabled_jobs: bool) -> str:
@@ -406,6 +454,13 @@ _SNAP_INFO_REVISION_RE = re.compile(r"\((\d+)\)")
 # depends on -- never a safe divergence/removal candidate for a VM test (T-02-28).
 _SNAP_REMOVAL_DENYLIST = frozenset({"snapd", "core", "core16", "core18", "core20", "core22", "core24", "bare"})
 
+# The snaps `tests/integration/scripts/internal/vm-test-fixtures.sh` puts on BOTH VMs,
+# alphabetically -- the subjects every snap test below operates on. A stock Ubuntu 24.04
+# VM carries only `_SNAP_REMOVAL_DENYLIST` members, so without these there is nothing a
+# test may hold, diverge or remove. `hello` leads the list because it is the one with
+# distinct revisions across its channels, which is what `_alternate_snap_revision` needs.
+_FIXTURE_SNAPS = ("hello", "hello-world")
+
 
 def parse_snap_list_names_revisions(output: str) -> dict[str, str]:
     """Parse `snap list --all` into `{name: revision}` by HEADER column names (RESEARCH
@@ -440,43 +495,53 @@ def parse_snap_info_revisions(output: str) -> set[str]:
     return set(_SNAP_INFO_REVISION_RE.findall(output))
 
 
-async def _find_divergeable_snap(
-    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
-) -> tuple[str, str, str] | None:
-    """`(name, pc1_revision, alternate_revision)` for a snap installed on both machines
-    where `snap info` names an installable revision distinct from pc1's current one --
-    used to deliberately diverge pc2 before proving D-06 reconverges it. `None` if no
-    such snap exists.
+async def _snap_subjects(
+    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor, count: int = 1
+) -> list[str]:
+    """The first `count` fixture snaps (`_FIXTURE_SNAPS`) confirmed installed on BOTH
+    machines and outside `_SNAP_REMOVAL_DENYLIST` (T-02-28: never a base/snapd runtime
+    everything else depends on).
+
+    Confirmed rather than assumed: the fixture script guarantees they are there, and
+    this reads both machines' `snap list --all` so a machine that somehow lacks one
+    fails naming it instead of failing later inside the sync under test.
     """
     pc1_list = await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
     pc2_list = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    pc1_revisions = parse_snap_list_names_revisions(pc1_list.stdout)
-    pc2_revisions = parse_snap_list_names_revisions(pc2_list.stdout)
+    installed_on_both = (
+        set(parse_snap_list_names_revisions(pc1_list.stdout)) & set(parse_snap_list_names_revisions(pc2_list.stdout))
+    ) - _SNAP_REMOVAL_DENYLIST
+    subjects = [name for name in _FIXTURE_SNAPS if name in installed_on_both][:count]
+    assert len(subjects) == count, (
+        f"Need {count} of the fixture snaps {_FIXTURE_SNAPS} installed on both machines, "
+        f"found {sorted(installed_on_both)}. They are created by "
+        "tests/integration/scripts/internal/vm-test-fixtures.sh."
+    )
+    return subjects
 
-    for name in sorted(set(pc1_revisions) & set(pc2_revisions)):
-        info = await pc2_executor.run_command(f"snap info {shlex.quote(name)}", login_shell=False, timeout=20.0)
-        alternates = sorted(rev for rev in parse_snap_info_revisions(info.stdout) if rev != pc1_revisions[name])
-        if alternates:
-            return name, pc1_revisions[name], alternates[0]
-    return None
+
+async def _snap_subject(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> str:
+    """The single fixture snap every one-subject snap test operates on."""
+    return (await _snap_subjects(pc1_executor, pc2_executor, count=1))[0]
 
 
-async def _find_removable_snap_candidate(
-    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
-) -> str | None:
-    """A snap installed on both pc1 and pc2, excluding `_SNAP_REMOVAL_DENYLIST`
-    (T-02-28: never a base/snapd runtime everything else depends on) -- used by
-    `test_each_manager_reviews_before_its_own_mutation` to diverge a second manager
-    alongside apt without needing an exact-revision match the way `_find_divergeable_snap`
-    does.
+async def _alternate_snap_revision(executor: BashLoginRemoteExecutor, name: str, current_revision: str) -> str:
+    """An installable revision of `name` distinct from `current_revision`, read from
+    `snap info`'s channel table -- what a test moves the target to so the sync has a real
+    revision divergence to converge (D-06).
+
+    Read rather than hardcoded: pinning a revision number would rot the moment the store
+    published a new one. `_FIXTURE_SNAPS[0]` is chosen precisely because it carries
+    distinct revisions across its channels, so this always has something to return.
     """
-    pc1_list = await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    pc2_list = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    pc1_names = set(parse_snap_list_names_revisions(pc1_list.stdout))
-    pc2_names = set(parse_snap_list_names_revisions(pc2_list.stdout))
-    for name in sorted((pc1_names & pc2_names) - _SNAP_REMOVAL_DENYLIST):
-        return name
-    return None
+    info = await executor.run_command(f"snap info {shlex.quote(name)}", login_shell=False, timeout=20.0)
+    alternates = sorted(rev for rev in parse_snap_info_revisions(info.stdout) if rev != current_revision)
+    assert alternates, (
+        f"`snap info {name}` names no installable revision other than {current_revision}, so no revision "
+        f"divergence can be created. The fixture snap is chosen for having several; check `snap info {name}`:\n"
+        f"{info.stdout}"
+    )
+    return alternates[0]
 
 
 def parse_snap_list_notes(output: str) -> dict[str, set[str]]:
@@ -556,29 +621,40 @@ async def _restore_system_refresh_hold(executor: BashLoginRemoteExecutor, prior:
         print(f"[cleanup] failed to restore system refresh.hold: {result.stderr}")
 
 
-async def _find_holdable_snaps(executor: BashLoginRemoteExecutor, count: int = 1) -> list[str]:
-    """Up to `count` snaps installed on `executor`'s machine outside
-    `_SNAP_REMOVAL_DENYLIST`, alphabetically for determinism -- safe subjects for a
-    per-snap `--hold`/`--unhold` round trip (which, unlike a removal, leaves the snap
-    itself untouched).
+async def _holdable_snaps(executor: BashLoginRemoteExecutor, count: int = 1) -> list[str]:
+    """The first `count` fixture snaps confirmed on `executor`'s machine and outside
+    `_SNAP_REMOVAL_DENYLIST` -- safe subjects for a per-snap `--hold`/`--unhold` round
+    trip (which, unlike a removal, leaves the snap itself untouched).
+
+    One-machine variant of `_snap_subjects`, for the tests that never run a sync.
     """
     result = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    names = sorted(set(parse_snap_list_names_revisions(result.stdout)) - _SNAP_REMOVAL_DENYLIST)
-    return names[:count]
+    installed = set(parse_snap_list_names_revisions(result.stdout)) - _SNAP_REMOVAL_DENYLIST
+    subjects = [name for name in _FIXTURE_SNAPS if name in installed][:count]
+    assert len(subjects) == count, (
+        f"Need {count} of the fixture snaps {_FIXTURE_SNAPS} installed, found {sorted(installed)}. "
+        "They are created by tests/integration/scripts/internal/vm-test-fixtures.sh."
+    )
+    return subjects
 
 
-async def _find_common_apt_package(
-    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
-) -> str | None:
+async def _common_apt_package(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> str:
     """The first (alphabetically) package manually installed on BOTH machines -- a safe
     subject for a hold round trip, which changes only dpkg selection state and never
     installs or removes anything, so it needs none of `pick_safe_removal_candidates`'
     reverse-dependency vetting.
+
+    Both VMs come from one baseline, so their manual sets are identical and non-empty;
+    an empty intersection means the machines are not what these tests assume.
     """
     pc1_manual = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
     pc2_manual = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
     shared = sorted(set(nonblank_lines(pc1_manual.stdout)) & set(nonblank_lines(pc2_manual.stdout)))
-    return shared[0] if shared else None
+    assert shared, (
+        "No package is manually installed on both pc1 and pc2: searched the intersection "
+        "of both machines' `apt-mark showmanual` output."
+    )
+    return shared[0]
 
 
 # -- flatpak helpers: independent of flatpak_sync's private parsers ------------------
@@ -601,42 +677,79 @@ def parse_flatpak_list_lines(output: str) -> list[tuple[str, str, str, str]]:
     return rows
 
 
-async def _find_flatpak_ref_and_remote(
+# The flatpak subject `tests/integration/scripts/internal/vm-test-fixtures.sh` puts on
+# BOTH VMs: a user-scope ref installed from a local, GPG-signed OSTree repository served
+# over `file://`. Ubuntu 24.04 ships no flatpak at all, and Flathub's smallest app still
+# drags in a ~270 MB runtime, so the fixture builds its own ~270 kB one.
+_FIXTURE_FLATPAK_APP = "org.pcswitcher.TestApp"
+_FIXTURE_FLATPAK_REMOTE = "pcswitcher-test"
+_FIXTURE_FLATPAK_SCOPE: Literal["user", "system"] = "user"
+_FIXTURE_FLATPAK_REPO_URL = "file:///opt/pcswitcher-test-flatpak/repo"
+_FIXTURE_FLATPAK_PUBKEY = "/opt/pcswitcher-test-flatpak/key.gpg"
+
+
+async def _flatpak_subject(
     executor: BashLoginRemoteExecutor,
-) -> tuple[str, str, Literal["user", "system"], str, str] | None:
-    """`(application, version, scope, remote_name, remote_url)` for the first installed
-    flatpak ref found on `executor` (source) whose origin remote is also configured
-    there, used to prove D-06/D-14 convergence for a real ref+remote pair. `None` if no
-    ref with a resolvable origin remote is installed at all.
+) -> tuple[str, str, Literal["user", "system"], str, str]:
+    """`(application, version, scope, remote_name, remote_url)` for the fixture flatpak
+    ref installed on `executor` (the source), used to prove D-06/D-14 convergence for a
+    real ref+remote pair.
+
+    Read off `flatpak list`/`flatpak remotes` rather than assembled from the constants
+    above so the tuple carries the machine's own idea of the ref (notably `version`,
+    which the diff compares) and so a machine missing the fixture fails naming it.
     """
     list_result = await executor.run_command(
         "flatpak list --app --columns=application,version,origin,installation",
         login_shell=False,
         timeout=20.0,
     )
-    rows = sorted(parse_flatpak_list_lines(list_result.stdout))
-    for application, version, origin, installation in rows:
-        scope: Literal["user", "system"]
-        if installation == "user":
-            scope = "user"
-        elif installation == "system":
-            scope = "system"
-        else:
-            continue
-        scope_flag = "--user" if scope == "user" else "--system"
-        remotes_result = await executor.run_command(
-            f"flatpak remotes {scope_flag} --columns=name,url", login_shell=False, timeout=20.0
-        )
-        for line in remotes_result.stdout.splitlines():
-            if not line.strip():
-                continue
-            fields = line.split("\t")
-            if len(fields) != 2:
-                continue
-            name, url = fields
-            if name == origin:
-                return application, version, scope, name, url
-    return None
+    rows = [row for row in parse_flatpak_list_lines(list_result.stdout) if row[0] == _FIXTURE_FLATPAK_APP]
+    assert rows, (
+        f"The fixture flatpak {_FIXTURE_FLATPAK_APP} is not installed. It is created by "
+        f"tests/integration/scripts/internal/vm-test-fixtures.sh.\n{list_result.stdout}"
+    )
+    application, version, origin, installation = rows[0]
+    assert installation == _FIXTURE_FLATPAK_SCOPE, (
+        f"{application} is installed in scope {installation!r}, expected {_FIXTURE_FLATPAK_SCOPE!r}"
+    )
+
+    scope_flag = "--user" if _FIXTURE_FLATPAK_SCOPE == "user" else "--system"
+    remotes_result = await executor.run_command(
+        f"flatpak remotes {scope_flag} --columns=name,url", login_shell=False, timeout=20.0
+    )
+    for line in remotes_result.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) == 2 and fields[0] == origin:
+            return application, version, _FIXTURE_FLATPAK_SCOPE, fields[0], fields[1]
+    raise AssertionError(
+        f"{application}'s origin remote {origin!r} is not configured in scope "
+        f"{_FIXTURE_FLATPAK_SCOPE}:\n{remotes_result.stdout}"
+    )
+
+
+async def _restore_flatpak_subject(executor: BashLoginRemoteExecutor) -> None:
+    """Put the fixture remote and ref back on `executor` after a test removed them.
+
+    The remote is re-added with its signing key imported, exactly as the fixture script
+    does: pc-switcher's own `flatpak remote-add` carries only name and url, and a remote
+    without its key is usable here only because the machine trusts that key system-wide.
+    Restoring the fixture's own shape keeps the next test's starting point identical to
+    a freshly provisioned machine.
+    """
+    scope_flag = "--user" if _FIXTURE_FLATPAK_SCOPE == "user" else "--system"
+    sudo = "" if _FIXTURE_FLATPAK_SCOPE == "user" else "sudo "
+    result = await executor.run_command(
+        f"{sudo}flatpak remote-add {scope_flag} --if-not-exists "
+        f"--gpg-import={shlex.quote(_FIXTURE_FLATPAK_PUBKEY)} "
+        f"{shlex.quote(_FIXTURE_FLATPAK_REMOTE)} {shlex.quote(_FIXTURE_FLATPAK_REPO_URL)} && "
+        f"{sudo}flatpak install {scope_flag} -y --noninteractive "
+        f"{shlex.quote(_FIXTURE_FLATPAK_REMOTE)} {shlex.quote(_FIXTURE_FLATPAK_APP)}",
+        login_shell=False,
+        timeout=120.0,
+    )
+    if not result.success:
+        print(f"[cleanup] failed to restore the fixture flatpak: {result.stderr}")
 
 
 # -- apt repository-state helpers (D-11/D-12): synthesize a repo+key divergence -----
@@ -712,16 +825,21 @@ def apt_update_lines_naming(result: CommandResult, host: str) -> list[str]:
     return [line for line in nonblank_lines(f"{result.stdout}\n{result.stderr}") if host in line]
 
 
-async def _flatpak_available(executor: BashLoginRemoteExecutor) -> bool:
-    """Whether flatpak can run on `executor`'s machine, probed exactly the way
+async def _assert_flatpak_available(executor: BashLoginRemoteExecutor) -> None:
+    """flatpak can run on `executor`'s machine, probed exactly the way
     `FlatpakSyncJob.validate()` probes it.
 
-    flatpak is in no default Ubuntu 24.04 install, and enabling `flatpak_sync` on a
+    flatpak is in no default Ubuntu 24.04 install and enabling `flatpak_sync` on a
     machine that lacks it is a validation error that aborts the whole sync before any job
-    executes -- so a test that enables the job unconditionally tests nothing at all there.
+    executes -- which is why the fixture script installs it on both VMs. Checked here so
+    that absence reports itself as "the machine is not provisioned" rather than as an
+    unrelated-looking validation failure inside the sync under test.
     """
     result = await executor.run_command("flatpak --version", login_shell=False, timeout=15.0)
-    return result.success
+    assert result.success, (
+        "flatpak is not installed. It is installed by "
+        f"tests/integration/scripts/internal/vm-test-fixtures.sh.\n{result.stderr}"
+    )
 
 
 # -- whole-machine package state, for "this run changed nothing" assertions ----------
@@ -788,9 +906,7 @@ class TestAptSyncEndToEnd:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        candidate = await _find_removable_candidate(pc1_executor, pc2_executor)
-        if candidate is None:
-            pytest.skip(_skip_message())
+        candidate = await _removable_candidate(pc1_executor, pc2_executor)
 
         try:
             remove_result = await pc2_executor.run_command(
@@ -837,9 +953,7 @@ class TestAptSyncEndToEnd:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        candidate = await _find_removable_candidate(pc1_executor, pc2_executor)
-        if candidate is None:
-            pytest.skip(_skip_message())
+        candidate = await _removable_candidate(pc1_executor, pc2_executor)
 
         try:
             remove_result = await pc2_executor.run_command(
@@ -983,16 +1097,8 @@ class TestPackageSyncWholeRunContracts:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        install_candidate = await _find_removable_candidate(pc1_executor, pc2_executor)
-        if install_candidate is None:
-            pytest.skip(_skip_message())
-        removal_candidate = await _find_extra_on_target_candidate(pc1_executor, pc2_executor)
-        if removal_candidate is None:
-            pytest.skip(
-                "No package manually installed on pc2 but absent from pc1's apt-mark "
-                "showmanual: searched pc2's showmanual minus pc1's, for a naturally-"
-                "occurring EXTRA_ON_TARGET (removal-direction) candidate."
-            )
+        install_candidate = await _removable_candidate(pc1_executor, pc2_executor)
+        removal_candidate = await _create_extra_on_target_apt_package(pc1_executor, pc2_executor)
 
         try:
             remove_result = await pc2_executor.run_command(
@@ -1045,6 +1151,7 @@ class TestPackageSyncWholeRunContracts:
             assert "unresolved" in combined_output.lower(), "run did not report unresolved items (D-26)"
         finally:
             await _restore_package(pc2_executor, install_candidate)
+            await _restore_auto_marked_package(pc2_executor, removal_candidate)
 
     async def test_continue_on_item_failure(
         self,
@@ -1071,8 +1178,9 @@ class TestPackageSyncWholeRunContracts:
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
         candidates = await _find_removable_candidates(pc1_executor, pc2_executor, count=2)
-        if len(candidates) < 2:
-            pytest.skip(f"{_skip_message()} Needed 2 independent candidates, found {len(candidates)}.")
+        assert len(candidates) == 2, (
+            f"{_no_apt_candidate_message()} Needed 2 independent candidates, found {len(candidates)}."
+        )
         pkg_first, pkg_second = candidates
 
         try:
@@ -1166,14 +1274,10 @@ class TestPackageSyncWholeRunContracts:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        found = await _find_divergeable_snap(pc1_executor, pc2_executor)
-        if found is None:
-            pytest.skip(
-                "No snap installed on both pc1 and pc2 with an alternate installable "
-                "revision found via `snap info`: searched the intersection of both "
-                "machines' `snap list --all` output."
-            )
-        name, source_revision, alternate_revision = found
+        name = await _snap_subject(pc1_executor, pc2_executor)
+        pc1_list = await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
+        source_revision = parse_snap_list_names_revisions(pc1_list.stdout)[name]
+        alternate_revision = await _alternate_snap_revision(pc2_executor, name, source_revision)
 
         pc2_list_before = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
         original_pc2_revision = parse_snap_list_names_revisions(pc2_list_before.stdout)[name]
@@ -1243,16 +1347,18 @@ class TestPackageSyncWholeRunContracts:
         """flatpak convergence installs into the scope the source item carries and
         provisions the remote first (D-06, D-14): `flatpak install` refuses outright
         when its remote is not yet configured in that scope.
+
+        The subject is the fixture ref and its local signed repository
+        (`vm-test-fixtures.sh`). pc-switcher replicates a remote as name+url only, so the
+        remote it re-adds on pc2 carries no signing key of its own; the install below
+        succeeds because the fixture's key is a machine-level trust anchor on both VMs
+        (ostree's system-wide trusted keyring), not because the remote brought trust with
+        it. Against a remote whose key the target does not already trust — Flathub on a
+        machine that never had it — the ref install would fail GPG verification.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        found = await _find_flatpak_ref_and_remote(pc1_executor)
-        if found is None:
-            pytest.skip(
-                "No installed flatpak ref found on pc1 with a matching configured "
-                "remote: searched `flatpak list --app` and `flatpak remotes` in both scopes."
-            )
-        application, version, scope, remote_name, remote_url = found
+        application, version, scope, remote_name, remote_url = await _flatpak_subject(pc1_executor)
         scope_flag = "--user" if scope == "user" else "--system"
         sudo = "sudo " if scope == "system" else ""
 
@@ -1322,6 +1428,10 @@ class TestPackageSyncWholeRunContracts:
             assert ref_index != -1, f"ref converge log line not found: {ref_marker!r}"
             assert remote_index < ref_index, "remote must be provisioned before the ref installs (D-14)"
         finally:
+            # Put pc2 back to a freshly provisioned machine's state rather than leaving
+            # it stripped: the later tests in this module compare the two machines, and a
+            # target permanently missing a ref the source has is a divergence they would
+            # then have to reason about.
             await pc2_executor.run_command(
                 f"{sudo}flatpak uninstall -y {scope_flag} {shlex.quote(application)}",
                 login_shell=False,
@@ -1332,6 +1442,7 @@ class TestPackageSyncWholeRunContracts:
                 login_shell=False,
                 timeout=30.0,
             )
+            await _restore_flatpak_subject(pc2_executor)
 
     async def test_skip_always_is_inert_in_both_roles(
         self,
@@ -1355,9 +1466,7 @@ class TestPackageSyncWholeRunContracts:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        candidate = await _find_removable_candidate(pc1_executor, pc2_executor)
-        if candidate is None:
-            pytest.skip(_skip_message())
+        candidate = await _removable_candidate(pc1_executor, pc2_executor)
         item_id = AptPackageItem(name=candidate, version="").item_id
 
         try:
@@ -1457,15 +1566,8 @@ class TestPackageSyncWholeRunContracts:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        apt_candidate = await _find_removable_candidate(pc1_executor, pc2_executor)
-        if apt_candidate is None:
-            pytest.skip(_skip_message())
-        snap_candidate = await _find_removable_snap_candidate(pc1_executor, pc2_executor)
-        if snap_candidate is None:
-            pytest.skip(
-                "No snap installed on both pc1 and pc2 outside the system/snapd "
-                "denylist: searched the intersection of both machines' `snap list --all` output."
-            )
+        apt_candidate = await _removable_candidate(pc1_executor, pc2_executor)
+        snap_candidate = await _snap_subject(pc1_executor, pc2_executor)
 
         pc2_snap_list_before = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
         original_snap_revision = parse_snap_list_names_revisions(pc2_snap_list_before.stdout)[snap_candidate]
@@ -1638,16 +1740,15 @@ class TestPackageSyncIdempotency:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """Run 1 converges a real apt divergence; run 2, with every package-manager job
-        the two machines can actually run enabled, changes NO package-manager state on
-        the target and no longer presents the converged item at all.
+        """Run 1 converges a real apt divergence; run 2, with all three package-manager
+        jobs enabled, changes NO package-manager state on the target and no longer
+        presents the converged item at all.
 
-        `flatpak_sync` is enabled only when flatpak is installed on both machines: it
-        fails validation where flatpak is absent, and a validation error aborts the whole
-        sync before any job executes, which would make this test prove nothing rather
-        than prove more. apt and snap are always present on Ubuntu 24.04 and always
-        enabled. Witness 1 below reads all three managers either way, so a machine
-        without flatpak simply has no flatpak state to hold still.
+        All three managers run, none conditionally: apt and snap ship with Ubuntu 24.04,
+        and flatpak is installed on both VMs by the fixture script. `flatpak_sync` fails
+        validation where flatpak is absent, and a validation error aborts the whole sync
+        before any job executes, so its absence is checked up front rather than quietly
+        narrowing what this test covers.
 
         Two independent witnesses, both read off pc2's own package managers rather than
         pc-switcher's output:
@@ -1672,9 +1773,7 @@ class TestPackageSyncIdempotency:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        candidate = await _find_removable_candidate(pc1_executor, pc2_executor)
-        if candidate is None:
-            pytest.skip(_skip_message())
+        candidate = await _removable_candidate(pc1_executor, pc2_executor)
         item_id = AptPackageItem(name=candidate, version="").item_id
 
         pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
@@ -1691,8 +1790,9 @@ class TestPackageSyncIdempotency:
             )
             assert remove_result.success, f"Failed to remove {candidate} from pc2: {remove_result.stderr}"
 
-            flatpak_on_both = await _flatpak_available(pc1_executor) and await _flatpak_available(pc2_executor)
-            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True, flatpak_sync=flatpak_on_both)
+            await _assert_flatpak_available(pc1_executor)
+            await _assert_flatpak_available(pc2_executor)
+            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True, flatpak_sync=True)
 
             first_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
             first_result = await pc1_executor.run_command(first_cmd, timeout=300.0, login_shell=True)
@@ -1769,14 +1869,7 @@ class TestSnapHoldCaptureTiming:
         Runs no sync, so it needs neither a pc-switcher install nor the state reset: the
         subject is snapd's own semantics, read straight off `snap list`.
         """
-        names = await _find_holdable_snaps(pc2_executor, count=2)
-        if not names:
-            pytest.skip(
-                "No snap installed on pc2 outside the system/snapd denylist: searched "
-                "`snap list --all` for a snap safe to hold and unhold."
-            )
-        held_name = names[0]
-        unheld_name = names[1] if len(names) > 1 else None
+        held_name, unheld_name = await _holdable_snaps(pc2_executor, count=2)
 
         prior_hold = await _capture_system_refresh_hold(pc2_executor)
         try:
@@ -1807,13 +1900,12 @@ class TestSnapHoldCaptureTiming:
                 "the capture must move BEFORE the sync-window hold is applied."
             )
 
-            if unheld_name is not None:
-                unheld_notes = await _snap_notes(pc2_executor, unheld_name)
-                assert "held" not in unheld_notes, (
-                    f"#208 D9 IS FALSE in the other direction: a system-wide refresh.hold ({engaged}) put `held` "
-                    f"into {unheld_name}'s Notes even though no per-snap hold was set on it "
-                    f"(notes: {sorted(unheld_notes)}) -- capture inside the sync window would invent holds."
-                )
+            unheld_notes = await _snap_notes(pc2_executor, unheld_name)
+            assert "held" not in unheld_notes, (
+                f"#208 D9 IS FALSE in the other direction: a system-wide refresh.hold ({engaged}) put `held` "
+                f"into {unheld_name}'s Notes even though no per-snap hold was set on it "
+                f"(notes: {sorted(unheld_notes)}) -- capture inside the sync window would invent holds."
+            )
         finally:
             await pc2_executor.run_command(
                 f"sudo snap refresh --unhold {shlex.quote(held_name)}", login_shell=False, timeout=60.0
@@ -1839,12 +1931,7 @@ class TestSnapHoldCaptureTiming:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        name = await _find_removable_snap_candidate(pc1_executor, pc2_executor)
-        if name is None:
-            pytest.skip(
-                "No snap installed on both pc1 and pc2 outside the system/snapd "
-                "denylist: searched the intersection of both machines' `snap list --all` output."
-            )
+        name = await _snap_subject(pc1_executor, pc2_executor)
 
         try:
             hold_result = await pc1_executor.run_command(
@@ -1908,12 +1995,7 @@ class TestBlockStateDecisionRoundTrip:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        candidate = await _find_common_apt_package(pc1_executor, pc2_executor)
-        if candidate is None:
-            pytest.skip(
-                "No package manually installed on both pc1 and pc2: searched the "
-                "intersection of both machines' `apt-mark showmanual` output."
-            )
+        candidate = await _common_apt_package(pc1_executor, pc2_executor)
         item_id = AptHoldItem(name=candidate).item_id
 
         try:
@@ -1977,12 +2059,7 @@ class TestBlockStateDecisionRoundTrip:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        name = await _find_removable_snap_candidate(pc1_executor, pc2_executor)
-        if name is None:
-            pytest.skip(
-                "No snap installed on both pc1 and pc2 outside the system/snapd "
-                "denylist: searched the intersection of both machines' `snap list --all` output."
-            )
+        name = await _snap_subject(pc1_executor, pc2_executor)
         item_id = _snap_hold_item_id(name)
 
         try:
@@ -2064,9 +2141,7 @@ class TestCrossDirectionRoundTrips:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        candidate = await _find_removable_candidate(pc1_executor, pc2_executor)
-        if candidate is None:
-            pytest.skip(_skip_message())
+        candidate = await _removable_candidate(pc1_executor, pc2_executor)
         item_id = AptPackageItem(name=candidate, version="").item_id
 
         try:

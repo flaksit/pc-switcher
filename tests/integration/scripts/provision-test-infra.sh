@@ -56,7 +56,8 @@ Provisions the complete pc-switcher test infrastructure:
 1. Creates two VMs (pc1, pc2) in parallel
 2. Configures both VMs in parallel
 3. Sets up inter-VM networking
-4. Creates baseline snapshots
+4. Installs the test fixtures (internal/vm-test-fixtures.sh)
+5. Creates baseline snapshots
 
 Prerequisites:
   - HCLOUD_TOKEN environment variable must be set
@@ -65,7 +66,9 @@ Prerequisites:
   - ssh available
   - Must be run from GitHub CI (CI environment variable set)
 
-The script is idempotent - skips if VMs already exist and are configured.
+The script is idempotent - skips if VMs already exist, are configured, and carry the
+current test fixtures. A baseline that predates the fixtures (or carries an older
+version of them) is refreshed in place: reset, install fixtures, re-snapshot.
 
 Example (CI only):
   export HCLOUD_TOKEN=your_token_here
@@ -117,7 +120,42 @@ if [[ -n "$PC1_IP" && -n "$PC2_IP" ]]; then
     wait $pid2 && pc2_ready=true || pc2_ready=false
 
     if [[ "$pc1_ready" == "true" && "$pc2_ready" == "true" ]]; then
-        log_info "VMs have baseline snapshots. Skipping provisioning."
+        log_info "VMs have baseline snapshots. Checking test fixtures..."
+
+        # The baseline must also carry the package-manager subjects the suite operates
+        # on (internal/vm-test-fixtures.sh). A baseline predating them — or built from
+        # an older fixture version — is refreshed in place here rather than requiring
+        # the VMs to be deleted and rebuilt from scratch.
+        if vm_test_fixtures_current "testuser@$PC1_IP" && vm_test_fixtures_current "testuser@$PC2_IP"; then
+            log_info "Test fixtures are current. Skipping provisioning."
+            log_step "VMs ready for testing"
+            exit 0
+        fi
+
+        log_info "Test fixtures missing or outdated; refreshing them into the baseline."
+        acquire_lock "provision-test-infra"
+
+        # Reset first: the baseline must capture a clean machine plus the fixtures, not
+        # whatever the previous test run left behind.
+        log_step "Resetting VMs to baseline before refreshing fixtures..."
+        LOG_PREFIX="pc1:" "$SCRIPT_DIR/reset-vm.sh" "$PC1_IP" &
+        RESET_PID1=$!
+        LOG_PREFIX="pc2:" "$SCRIPT_DIR/reset-vm.sh" "$PC2_IP" &
+        RESET_PID2=$!
+        wait $RESET_PID1
+        wait $RESET_PID2
+
+        log_step "Installing test fixtures..."
+        install_vm_test_fixtures "$PC1_IP" &
+        FIXTURE_PID1=$!
+        install_vm_test_fixtures "$PC2_IP" &
+        FIXTURE_PID2=$!
+        wait $FIXTURE_PID1
+        wait $FIXTURE_PID2
+
+        log_step "Recreating baseline snapshots with the test fixtures..."
+        "$SCRIPT_DIR/internal/create-baseline-snapshots.sh"
+
         log_step "VMs ready for testing"
         exit 0
     fi
@@ -268,6 +306,17 @@ log_info "VM configuration completed"
 log_step "Configuring inter-VM networking..."
 "$SCRIPT_DIR/internal/configure-hosts.sh"
 log_info "Inter-VM networking configured"
+
+# Create the package-manager subjects the integration suite operates on, BEFORE the
+# baseline snapshot, so every test run gets them for free (internal/vm-test-fixtures.sh).
+log_step "Installing test fixtures on both VMs..."
+install_vm_test_fixtures "$PC1_IP" &
+PID1=$!
+install_vm_test_fixtures "$PC2_IP" &
+PID2=$!
+wait $PID1
+wait $PID2
+log_info "Test fixtures installed"
 
 # Create baseline snapshots
 log_step "Creating baseline snapshots..."

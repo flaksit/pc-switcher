@@ -210,6 +210,16 @@ check_vm_ready() {
     local exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
+        # A baseline alone is not enough: the suite operates on package-manager
+        # subjects the baseline must already carry (internal/vm-test-fixtures.sh).
+        # Checked here rather than discovered mid-test, so a stale baseline reports
+        # itself once with a fix instead of failing tests one by one.
+        if ! vm_test_fixtures_current "${user}@${vm_host}"; then
+            log_error "${vm_host} has a baseline snapshot but not the current test fixtures"
+            log_error "Refresh them (resets the VMs and rebuilds the baseline):"
+            log_error "  tests/integration/scripts/provision-test-infra.sh"
+            return 1
+        fi
         return 0
     fi
 

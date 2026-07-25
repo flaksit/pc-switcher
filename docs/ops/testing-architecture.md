@@ -158,7 +158,8 @@ The baseline snapshots capture the following VM state (as configured during prov
 | Component | State | Notes |
 | --------- | ----- | ----- |
 | **OS** | Ubuntu 24.04 LTS | Installed via Hetzner `installimage` |
-| **Packages** | btrfs-progs, qemu-guest-agent, fail2ban, ufw, sudo | Basic system tools only |
+| **Packages** | btrfs-progs, qemu-guest-agent, fail2ban, ufw, sudo, flatpak, gnupg | Basic system tools plus what the package-sync tests need |
+| **Test fixtures** | `hello` and `hello-world` snaps; a local signed flatpak repository at `/opt/pcswitcher-test-flatpak` with `org.pcswitcher.TestApp` installed in user scope | Created by `vm-test-fixtures.sh`; the subjects the package-sync integration tests hold, diverge, remove and reinstall |
 | **Filesystem** | btrfs with flat subvolume layout (`@`, `@home`, `@snapshots`) | Root mounted as `@`, home as `@home` |
 | **Users** | `testuser` with passwordless sudo | All developer SSH keys injected |
 | **SSH** | Hardened (root login disabled, password auth disabled) | Only key-based auth allowed |
@@ -167,6 +168,14 @@ The baseline snapshots capture the following VM state (as configured during prov
 | **Python tools** | `uv` installed in testuser's ~/.local/bin | For installing pc-switcher |
 
 **Important**: The baseline does NOT include pc-switcher. Tests that need pc-switcher must install it explicitly or use fixtures that handle installation.
+
+### Test Fixtures in the Baseline
+
+The package-sync integration tests need packages they may hold, diverge, remove and reinstall. A stock Ubuntu 24.04 VM offers none: `snap list` shows only `snapd`, `core*` and `bare` — every other snap depends on those, so none is a safe subject — and flatpak is not installed at all. `internal/vm-test-fixtures.sh` creates the subjects, and provisioning runs it before the baseline snapshot so every test run inherits them at no cost.
+
+The flatpak subject is a self-contained, GPG-signed OSTree repository under `/opt/pcswitcher-test-flatpak`, served over `file://`, holding one minimal runtime and one minimal app. It is ~270 kB; the smallest Flathub app would drag in a 268 MB runtime and a network dependency at test time. Its public key is installed into ostree's system-wide trusted keyring (`/usr/share/ostree/trusted.gpg.d/`), which is what lets the target install from the remote after pc-switcher re-adds it — pc-switcher replicates a remote as name and URL only, so the re-added remote carries no signing key of its own.
+
+The script writes its version to `/etc/pcswitcher-test-fixtures`. `provision-test-infra.sh` compares that marker against `PCSWITCHER_TEST_FIXTURES_VERSION` in `internal/common.sh`: on a mismatch — including a baseline that predates the fixtures entirely — it resets both VMs, reinstalls the fixtures and retakes the baseline, so no VM has to be deleted and rebuilt. `run-integration-tests.sh` checks the same marker and refuses to run against a stale baseline. Bumping the version in both places is how a fixture change reaches the fleet.
 
 ### Reset Process
 
@@ -405,8 +414,14 @@ flowchart TD
         AA --> AB[Setup known_hosts]
     end
 
+    subgraph fixtures["Install Test Fixtures"]
+        AB --> ABA[Install fixture snaps]
+        ABA --> ABB[Install flatpak + build local signed repo]
+        ABB --> ABC[Install fixture flatpak, write version marker]
+    end
+
     subgraph snapshots["Create Baselines"]
-        AB --> AC[Create btrfs snapshots]
+        ABC --> AC[Create btrfs snapshots]
         AC --> AD[Done]
     end
 
@@ -422,6 +437,7 @@ flowchart TD
 | **create-vm.sh** | Creates VM with btrfs via Hetzner rescue mode and installimage |
 | **configure-vm.sh** | Configures OS with testuser account, packages, SSH hardening, firewall |
 | **configure-hosts.sh** | Sets up inter-VM networking, generates SSH keypairs, establishes SSH trust |
+| **vm-test-fixtures.sh** | Creates the package-manager subjects the integration suite operates on (snaps, flatpak, a local signed flatpak repository), then writes `/etc/pcswitcher-test-fixtures` with its version |
 | **create-baseline-snapshots.sh** | Creates btrfs snapshots at clean baseline state |
 | **reset-vm.sh** | Restores VM to baseline state via btrfs snapshot rollback |
 

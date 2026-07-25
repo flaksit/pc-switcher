@@ -16,6 +16,7 @@ Fixtures provided:
 - pc2_without_pcswitcher_fn: pc2 executor with pc-switcher uninstalled (clean target)
 - pc2_with_old_pcswitcher_fn: pc2 executor with old pc-switcher version (upgrade testing)
 - reset_pcswitcher_state: resets pc-switcher state on both VMs (config + data, for test isolation)
+- vm_test_fixtures: both VMs carry the package-manager subjects the package-sync tests operate on
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import asyncio
 import os
 import subprocess
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import overload
 
 import asyncssh
@@ -149,6 +151,44 @@ async def pc2_executor(_pc2_connection: asyncssh.SSHClientConnection) -> BashLog
     executor = BashLoginRemoteExecutor(_pc2_connection)
     await set_github_token_env_var(executor)
     return executor
+
+
+_VM_TEST_FIXTURES_SCRIPT = Path(__file__).parent / "scripts" / "internal" / "vm-test-fixtures.sh"
+_VM_TEST_FIXTURES_REMOTE_PATH = "/tmp/pcswitcher-vm-test-fixtures.sh"
+
+
+async def ensure_vm_test_fixtures(executor: BashLoginRemoteExecutor) -> None:
+    """Create the package-manager subjects the suite operates on (`vm-test-fixtures.sh`).
+
+    Tests that need a snap or a flatpak to hold, diverge, remove or reinstall must own
+    one; a stock Ubuntu 24.04 VM owns neither. Provisioning bakes these into the baseline
+    snapshot, so on a current baseline this is a handful of presence checks. Running it
+    from here as well is what makes the suite independent of when the baseline was last
+    built: against an older one it creates the subjects itself rather than leaving tests
+    without a subject to work on.
+    """
+    await executor.send_file(_VM_TEST_FIXTURES_SCRIPT, _VM_TEST_FIXTURES_REMOTE_PATH)
+    result = await executor.run_command(
+        f"bash {_VM_TEST_FIXTURES_REMOTE_PATH}",
+        login_shell=False,
+        timeout=900.0,
+    )
+    assert result.success, (
+        f"Failed to create the VM test fixtures ({_VM_TEST_FIXTURES_SCRIPT.name}).\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.fixture(scope="module")
+async def vm_test_fixtures(
+    pc1_executor: BashLoginRemoteExecutor,
+    pc2_executor: BashLoginRemoteExecutor,
+) -> None:
+    """Both VMs carry the current package-manager test fixtures before the module runs."""
+    await asyncio.gather(
+        ensure_vm_test_fixtures(pc1_executor),
+        ensure_vm_test_fixtures(pc2_executor),
+    )
 
 
 @pytest.fixture(scope="session")

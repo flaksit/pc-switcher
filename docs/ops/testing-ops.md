@@ -387,6 +387,10 @@ hcloud server describe pc1 -o json | jq '.labels'
 - Another test run is in progress (wait for completion)
 - Lock is stuck (see "Stuck Lock Cleanup" runbook)
 
+**"has a baseline snapshot but not the current test fixtures"**
+- The baseline predates the package-sync test subjects, or `PCSWITCHER_TEST_FIXTURES_VERSION` was bumped
+- Refresh them (resets both VMs and retakes the baseline): `tests/integration/scripts/provision-test-infra.sh`
+
 ## Troubleshooting Quick Reference
 
 | Problem | Quick Fix |
@@ -395,6 +399,7 @@ hcloud server describe pc1 -o json | jq '.labels'
 | Lock stuck | `hcloud server remove-label pc1 lock_holder lock_acquired` |
 | VM unreachable | `hcloud server reboot pc1` |
 | Baseline corrupt | Delete VMs, reprovision |
+| Test fixtures missing/outdated | `tests/integration/scripts/provision-test-infra.sh` (resets VMs, retakes baseline) |
 | CI secrets missing | Add to Settings > Secrets and variables > Actions |
 | SSH permission denied | Add public key as `SSH_AUTHORIZED_KEY_*` secret, reprovision |
 | Reset timeout | Check VM status, manually reboot if needed |
