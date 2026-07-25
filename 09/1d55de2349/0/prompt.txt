@@ -1,0 +1,34 @@
+I need to validate the new functionality of this PR. This is critical and risky functionality. There are a lot of scenarios that could/should be tested. I want to know what is already covered by pytests. List all possible scenarios/cases (based on "branches" in the requirements logic; not necessarily code paths) and which pytest covers it (or none).
+
+Example of a complicated scenario (not well structured; I hope you structure the scenario's better; maybe it can be broken up into multiple independent sub-scenarios; all well; just to illustrate what I mean by "scenario"):
+- Machines A and B
+- Package Q was installed with apt on A. On sync A>B, user selected skip-always. So Q is in the machine-specific list of A.
+- We are on B. User installs package P. Package P depends on Q. Was not installed on B before. So apt installs automatically as dependency.
+- Sync B>A installs package P on A and does nothing with package Q (leaves it as machine-specific).
+- (Work on A)
+- Sync A>B does nothing: leaves package Q on B even though it is machine-specific to A, because it is a dependence of package P that B has and is kept on B.
+- We are on B. User uninstalls package P. The dependent package Q is auto-removed from B.
+- Sync B>A removes package P from A. I expect package Q to be automatically kept on A by apt, because it was in apt's list of user-installed packages.
+  But even if apt would not have it in its list of user-installed packages, sync B>A keeps it installed on A because it is in A's list of machine-specific packages.
+
+Simpler example
+- Machine A: User installed package P from a new apt source. So user added the apt source and the key and installed the package.
+- Sync A>B: In review, user chooses "install" for P. Sync adds source, key and installs P.
+- On B,
+  - User uninstall package P
+  - User removes source and key
+- Sync B>A: In review, user chooses "delete" for P. Sync uninstalls package P from A and asks the user if sync should remove source and key as well because P was the only package from that source.
+
+Simpler example variant
+- Machine B: User installed package R from a new apt source S. So user added the apt source and the key and installed the package.
+- Sync B>A: In review, user chooses "skip-always" for R. Sync adds it to the machine-specific list of B.
+- Machine A: User installed package P from that same apt source S (which is not yet registered on A). So user adds S and the key and installs the package.
+- Sync A>B: In review, user chooses "install" for P. Sync sees source is already there and installs P.
+- (Work on B)
+- Sync B>A
+- On A,
+  - User uninstalls package P
+  - User removes source and key
+- Sync A>B: In review, user chooses "delete" for P. Sync uninstalls package P from B. It leaves source S and the key as is, because needed for machine-specific package R on B.
+
+You see I want to have covered EVERY possible path in the logic of the 4 package sync jobs.
