@@ -62,6 +62,7 @@ from pcswitcher.jobs.packages.items import (
 )
 from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
 from pcswitcher.jobs.packages.state import DECISION_FILE_RELPATH_TEMPLATE, DecisionFile, Snippet, SnippetRegistry
+from pcswitcher.models import CommandResult
 
 # Prefix marking each candidate's reverse-dependency block in the batched pc2 probe below.
 RDEPENDS_MARKER = "@@RDEPENDS_FOR@@"
@@ -645,6 +646,11 @@ async def _find_flatpak_ref_and_remote(
 _APT_SOURCES_DIR = "/etc/apt/sources.list.d"
 _APT_KEYRINGS_DIR = "/etc/apt/keyrings"
 
+# Host the synthetic repository points at. `.invalid` is reserved by RFC 2606 and can
+# never resolve, so apt reaches this repo only to fail, and the name appears in
+# `apt-get update`'s output for exactly as long as the repo is configured.
+_SYNTHETIC_REPO_HOST = "pcswitcher-it.invalid"
+
 
 async def _create_synthetic_repo_and_key(executor: BashLoginRemoteExecutor) -> tuple[str, str]:
     """Create a synthetic vendor apt repository the target lacks on `executor` (the source):
@@ -656,8 +662,9 @@ async def _create_synthetic_repo_and_key(executor: BashLoginRemoteExecutor) -> t
     24.04, so `mkdir -p` runs first (the shipped invariant) and every write goes through
     `sudo tee`. Filenames are uuid-suffixed so the pair is unique and the fresh target
     provably lacks it. Dummy key bytes are fine: D-12 copies keys verbatim without
-    validating, and the sync under test is `--dry-run`, so nothing is ever applied and the
-    unreachable repo URI never triggers an `apt-get update`.
+    validating, and `_SYNTHETIC_REPO_HOST` never resolves, so an `apt-get update` that
+    sees this repo can only fail to fetch its index -- it can never install anything from
+    it, on a dry run or a real one.
     """
     uniq = uuid4().hex[:12]
     source_filename = f"pcswitcher-it-repo-{uniq}.sources"
@@ -666,7 +673,7 @@ async def _create_synthetic_repo_and_key(executor: BashLoginRemoteExecutor) -> t
     key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
     source_body = (
         "Types: deb\n"
-        "URIs: https://pcswitcher-it.invalid/repo\n"
+        f"URIs: https://{_SYNTHETIC_REPO_HOST}/repo\n"
         "Suites: stable\n"
         "Components: main\n"
         f"Signed-By: {key_dest}\n"
@@ -680,6 +687,41 @@ async def _create_synthetic_repo_and_key(executor: BashLoginRemoteExecutor) -> t
     )
     assert result.success, f"Failed to create synthetic repo+key on source: {result.stderr}"
     return source_filename, key_filename
+
+
+async def _apt_get_update(executor: BashLoginRemoteExecutor) -> CommandResult:
+    """Run `apt-get update` on `executor` with the output locale pinned to C, so the
+    `Err:` prefix `apt_update_lines_naming`'s callers key on is apt's untranslated one
+    whatever locale the machine is configured with.
+    """
+    return await executor.run_command(
+        "sudo LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get update", login_shell=False, timeout=180.0
+    )
+
+
+def apt_update_lines_naming(result: CommandResult, host: str) -> list[str]:
+    """Every line of an `apt-get update` run (stdout and stderr together) that names
+    `host`.
+
+    The exit code cannot witness whether an unreachable repository is configured:
+    `apt-get update` exits 0 when an index fails to fetch, downgrading it to a `W:`
+    warning and reusing the cached list. The output can -- apt prints `Ign:`/`Err:` lines
+    naming the URI it could not reach, and prints nothing at all about a repository that
+    is no longer configured -- which makes the same reading a witness in both directions.
+    """
+    return [line for line in nonblank_lines(f"{result.stdout}\n{result.stderr}") if host in line]
+
+
+async def _flatpak_available(executor: BashLoginRemoteExecutor) -> bool:
+    """Whether flatpak can run on `executor`'s machine, probed exactly the way
+    `FlatpakSyncJob.validate()` probes it.
+
+    flatpak is in no default Ubuntu 24.04 install, and enabling `flatpak_sync` on a
+    machine that lacks it is a validation error that aborts the whole sync before any job
+    executes -- so a test that enables the job unconditionally tests nothing at all there.
+    """
+    result = await executor.run_command("flatpak --version", login_shell=False, timeout=15.0)
+    return result.success
 
 
 # -- whole-machine package state, for "this run changed nothing" assertions ----------
@@ -1596,9 +1638,16 @@ class TestPackageSyncIdempotency:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """Run 1 converges a real apt divergence; run 2, with all three package managers
-        enabled, changes NO package-manager state on the target and no longer presents
-        the converged item at all.
+        """Run 1 converges a real apt divergence; run 2, with every package-manager job
+        the two machines can actually run enabled, changes NO package-manager state on
+        the target and no longer presents the converged item at all.
+
+        `flatpak_sync` is enabled only when flatpak is installed on both machines: it
+        fails validation where flatpak is absent, and a validation error aborts the whole
+        sync before any job executes, which would make this test prove nothing rather
+        than prove more. apt and snap are always present on Ubuntu 24.04 and always
+        enabled. Witness 1 below reads all three managers either way, so a machine
+        without flatpak simply has no flatpak state to hold still.
 
         Two independent witnesses, both read off pc2's own package managers rather than
         pc-switcher's output:
@@ -1642,7 +1691,8 @@ class TestPackageSyncIdempotency:
             )
             assert remove_result.success, f"Failed to remove {candidate} from pc2: {remove_result.stderr}"
 
-            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True, flatpak_sync=True)
+            flatpak_on_both = await _flatpak_available(pc1_executor) and await _flatpak_available(pc2_executor)
+            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True, flatpak_sync=flatpak_on_both)
 
             first_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
             first_result = await pc1_executor.run_command(first_cmd, timeout=300.0, login_shell=True)
@@ -2096,15 +2146,21 @@ class TestCrossDirectionRoundTrips:
         reset_pcswitcher_state: None,
     ) -> None:
         """C24: a vendor repository file and its signing key that exist only on the
-        TARGET are both removed in one run, leaving pc2 with a working `apt-get update`.
+        TARGET are both removed in one run, leaving pc2 with an `apt-get update` that
+        works and no longer reaches for the removed repository at all.
 
-        The synthetic repo points at an unresolvable host, so pc2's `apt-get update` is
-        BROKEN while the pair exists -- asserted before the run, which is what makes the
-        same command succeeding afterwards a real witness rather than a tautology. It
-        also makes the ordering claim observable: the repository group runs its single
-        `apt-get update` after its writes, so if the source file survived while its key
-        was deleted, that update would fail against a repo with no usable key and the
-        group would roll both files back.
+        The witness is apt's own account of which repositories it tried, not its exit
+        code: `apt-get update` exits 0 when an index fails to fetch (it downgrades the
+        failure to a `W:` warning and reuses the cached list), so the exit code says the
+        same thing before and after. What differs is the output. While the pair exists
+        apt prints an `Err:` line naming the unresolvable synthetic host -- asserted
+        before the run, which is what makes that host's total absence from the run
+        afterwards a real witness rather than a tautology, and non-vacuous in both
+        directions: had the removal not happened, the `Err:` line would still be there.
+
+        The post-removal exit code is asserted too, for the failure the output check
+        cannot see: an `/etc/apt` left syntactically unreadable, which apt does treat as
+        a hard error.
 
         Unlike this module's other repo test this one is NOT a dry run: the removals are
         real, which is the only way `/etc/apt` and a live `apt-get update` can be the
@@ -2119,12 +2175,13 @@ class TestCrossDirectionRoundTrips:
             source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
             key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
 
-            broken_update = await pc2_executor.run_command(
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get update", login_shell=False, timeout=180.0
-            )
-            assert not broken_update.success, (
-                "pc2's `apt-get update` unexpectedly succeeded with the unreachable synthetic repo configured; "
-                "the post-removal success below would then prove nothing.\n"
+            broken_update = await _apt_get_update(pc2_executor)
+            reached_for_repo = apt_update_lines_naming(broken_update, _SYNTHETIC_REPO_HOST)
+            assert any(line.startswith("Err:") for line in reached_for_repo), (
+                f"pc2's `apt-get update` reported no `Err:` line naming {_SYNTHETIC_REPO_HOST} while the unreachable "
+                "synthetic repo was configured, so apt is not actually reaching for that repo and its absence from "
+                "the post-removal run below would prove nothing.\n"
+                f"lines naming the host: {reached_for_repo}\n"
                 f"stdout: {broken_update.stdout}\nstderr: {broken_update.stderr}"
             )
 
@@ -2151,12 +2208,17 @@ class TestCrossDirectionRoundTrips:
                 f"were approved.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
 
-            working_update = await pc2_executor.run_command(
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get update", login_shell=False, timeout=180.0
+            working_update = await _apt_get_update(pc2_executor)
+            still_reaching = apt_update_lines_naming(working_update, _SYNTHETIC_REPO_HOST)
+            assert not still_reaching, (
+                f"pc2's `apt-get update` still names {_SYNTHETIC_REPO_HOST} after the repo file and its key were "
+                "removed -- apt is still configured with the repository, so the pair did not actually leave "
+                f"/etc/apt.\nlines naming the host: {still_reaching}\n"
+                f"stdout: {working_update.stdout}\nstderr: {working_update.stderr}"
             )
             assert working_update.success, (
-                "pc2's `apt-get update` still fails after the repo file and its key were removed -- /etc/apt was "
-                f"left in a broken state.\nstdout: {working_update.stdout}\nstderr: {working_update.stderr}"
+                "pc2's `apt-get update` exits non-zero after the repo file and its key were removed -- /etc/apt was "
+                f"left unreadable.\nstdout: {working_update.stdout}\nstderr: {working_update.stderr}"
             )
         finally:
             cleanup_paths = " ".join(
