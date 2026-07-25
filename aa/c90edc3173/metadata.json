@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "aac90edc3173",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-SCENARIO-COVERAGE.md",
+    "tests/unit/jobs/test_apt_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/aa/c90edc3173/0/metadata.json",
+      "transcript": "/aa/c90edc3173/0/full.jsonl",
+      "compact_transcript": "/aa/c90edc3173/0/transcript.jsonl",
+      "content_hash": "/aa/c90edc3173/0/content_hash.txt",
+      "prompt": "/aa/c90edc3173/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 93,
+    "cache_creation_tokens": 694452,
+    "cache_read_tokens": 13421171,
+    "output_tokens": 89900,
+    "api_call_count": 51
+  }
+}
