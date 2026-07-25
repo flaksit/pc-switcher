@@ -14,8 +14,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from pcswitcher.config import Configuration
-from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.flatpak_sync import FlatpakSyncJob, _parse_flatpak_masks, flatpak_sync_exclude_paths
+from pcswitcher.jobs import JobContext, flatpak_sync
+from pcswitcher.jobs.flatpak_sync import (
+    FlatpakSyncJob,
+    _parse_flatpak_masks,  # pyright: ignore[reportPrivateUsage]
+    _parse_flatpak_remotes,  # pyright: ignore[reportPrivateUsage]
+    _parse_keyring_digests,  # pyright: ignore[reportPrivateUsage]
+    flatpak_sync_exclude_paths,
+)
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
 from pcswitcher.jobs.packages.review import (
     ReviewGroup,
@@ -86,6 +92,9 @@ def make_context(
     source.run_command = AsyncMock(side_effect=respond_to(source_responses or {}))
     target = MagicMock()
     target.run_command = AsyncMock(side_effect=respond_to(target_responses or {}))
+    # Awaited by the signing-key staging path (#215); a bare MagicMock attribute is not
+    # awaitable, so it has to be an AsyncMock even where a test asserts it is unused.
+    target.send_file = AsyncMock()
     context = JobContext(
         config={},
         source=source,
@@ -339,6 +348,466 @@ class TestRemoteUrlChange:
         modify_cmd = next(c for c in all_calls(target) if "remote-modify" in c)
         assert modify_cmd.startswith("sudo ")
         assert "--system" in modify_cmd
+
+
+_USER_KEYRING_DIR = "$HOME/.local/share/flatpak/repo"
+_SYSTEM_KEYRING_DIR = "/var/lib/flatpak/repo"
+_SOURCE_KEY_DIGEST = "1111111111111111111111111111111111111111111111111111111111111111"
+_TARGET_KEY_DIGEST = "2222222222222222222222222222222222222222222222222222222222222222"
+
+
+def keyring_line(digest: str, directory: str, remote: str) -> str:
+    """One `sha256sum` output line, exactly as the batched per-scope read produces it."""
+    return f"{digest}  {directory}/{remote}.trustedkeys.gpg\n"
+
+
+def write_source_keyring(installation: Path, remote: str) -> Path:
+    """Create the source machine's own keyring file for `remote` under `installation`."""
+    path = installation / "repo" / f"{remote}.trustedkeys.gpg"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ = path.write_bytes(b"fake source key bytes")
+    return path
+
+
+class TestRemoteTrustCapture:
+    """#215 — a remote's trust travels as part of the item: GPG verification read from
+    the `options` column, the signing key as the sha256 of that scope's own
+    `<repo>/<remote>.trustedkeys.gpg` (RESEARCH: verified live against Flatpak 1.14.6 /
+    libostree 2024.5 — no flatpak command prints a remote's key).
+    """
+
+    def test_absent_options_column_means_a_verified_remote(self) -> None:
+        # A remote with no options prints two fields and NO trailing tab (verified live).
+        items = _parse_flatpak_remotes("flathub\thttps://dl.flathub.org/repo/\n", "user", {})
+
+        assert len(items) == 1
+        assert items[0].gpg_verify is True
+        assert items[0].key_digest is None
+
+    def test_no_gpg_verify_token_marks_the_remote_unverified_and_keyless(self) -> None:
+        items = _parse_flatpak_remotes(
+            "local\tfile:///srv/repo\tno-enumerate,no-gpg-verify\n", "user", {"local": _SOURCE_KEY_DIGEST}
+        )
+
+        assert items[0].gpg_verify is False
+        assert items[0].key_digest is None
+
+    def test_other_options_do_not_read_as_no_gpg_verify(self) -> None:
+        items = _parse_flatpak_remotes("mirror\thttps://example.org/repo/\tno-enumerate\n", "user", {})
+
+        assert items[0].gpg_verify is True
+
+    def test_key_digest_joins_the_scope_map_by_remote_name(self) -> None:
+        items = _parse_flatpak_remotes(
+            "flathub\thttps://dl.flathub.org/repo/\n", "system", {"flathub": _SOURCE_KEY_DIGEST}
+        )
+
+        assert items[0].key_digest == _SOURCE_KEY_DIGEST
+        assert items[0].item_id == "flatpak:remote:system:flathub"
+
+    def test_keyring_digests_strip_only_the_fixed_suffix(self) -> None:
+        """A remote name may contain dots, so only `.trustedkeys.gpg` comes off."""
+        output = keyring_line(_SOURCE_KEY_DIGEST, _SYSTEM_KEYRING_DIR, "my.remote.name")
+
+        assert _parse_keyring_digests(output) == {"my.remote.name": _SOURCE_KEY_DIGEST}
+
+    def test_no_keyring_files_yields_no_digests(self) -> None:
+        """The glob matches nothing, `sha256sum` prints nothing and exits 1 — a scope
+        whose remotes all rely on a machine-level trust anchor, not an error.
+        """
+        assert _parse_keyring_digests("") == {}
+
+    @pytest.mark.asyncio
+    async def test_each_scope_reads_its_own_repo_directory_on_both_machines(self) -> None:
+        context, source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
+        job = FlatpakSyncJob(context)
+
+        await job.plan()
+
+        for calls in (all_calls(source), all_calls(target)):
+            assert any(f"sha256sum {_USER_KEYRING_DIR}/*.trustedkeys.gpg" in c for c in calls)
+            assert any(f"sha256sum {_SYSTEM_KEYRING_DIR}/*.trustedkeys.gpg" in c for c in calls)
+
+    @pytest.mark.asyncio
+    async def test_same_name_remote_in_each_scope_carries_its_own_key(self) -> None:
+        """Scope stays identity: only the scope whose key actually differs diffs."""
+        context, _source, _target = make_context(
+            source_responses={
+                "flatpak list --app": CommandResult(0, "", ""),
+                "flatpak remotes --user": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+                "flatpak remotes --system": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+                f"sha256sum {_USER_KEYRING_DIR}": CommandResult(
+                    0, keyring_line(_SOURCE_KEY_DIGEST, _USER_KEYRING_DIR, "flathub"), ""
+                ),
+                f"sha256sum {_SYSTEM_KEYRING_DIR}": CommandResult(
+                    0, keyring_line(_SOURCE_KEY_DIGEST, _SYSTEM_KEYRING_DIR, "flathub"), ""
+                ),
+            },
+            target_responses={
+                "flatpak list --app": CommandResult(0, "", ""),
+                "flatpak remotes --user": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+                "flatpak remotes --system": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+                f"sha256sum {_USER_KEYRING_DIR}": CommandResult(
+                    0, keyring_line(_SOURCE_KEY_DIGEST, _USER_KEYRING_DIR, "flathub"), ""
+                ),
+                f"sha256sum {_SYSTEM_KEYRING_DIR}": CommandResult(
+                    0, keyring_line(_TARGET_KEY_DIGEST, _SYSTEM_KEYRING_DIR, "flathub"), ""
+                ),
+            },
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        remote_diffs = [d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE]
+        assert [d.item_id for d in remote_diffs] == ["flatpak:remote:system:flathub"]
+        assert remote_diffs[0].action == DiffAction.CHANGE
+
+
+def trust_responses(
+    *,
+    remote_line: str,
+    key_digest: str | None,
+    keyring_dir: str = _USER_KEYRING_DIR,
+    scope_flag: str = "--user",
+) -> dict[str, CommandResult]:
+    """One machine's flatpak responses for a single remote in a single scope."""
+    digest_output = keyring_line(key_digest, keyring_dir, remote_line.split("\t", maxsplit=1)[0]) if key_digest else ""
+    return {
+        "flatpak list --app": CommandResult(0, "", ""),
+        f"flatpak remotes {scope_flag}": CommandResult(0, remote_line, ""),
+        f"sha256sum {keyring_dir}": CommandResult(0, digest_output, ""),
+        "echo $HOME": CommandResult(0, "/home/tester\n", ""),
+    }
+
+
+class TestRemoteTrustDiff:
+    """#215 — a remote whose key or verification setting differs is the same `CHANGE`
+    class a differing URL already was: same identity, differing value, converged in
+    place by `flatpak remote-modify`.
+    """
+
+    _SIGNED = f"flathub\t{TestRemoteUrlChange._SRC_URL}\n"  # pyright: ignore[reportPrivateUsage]
+    _UNVERIFIED = f"flathub\t{TestRemoteUrlChange._SRC_URL}\tno-gpg-verify\n"  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_differing_key_yields_one_change_diff_naming_both_digests(self) -> None:
+        context, _source, _target = make_context(
+            source_responses=trust_responses(remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST),
+            target_responses=trust_responses(remote_line=self._SIGNED, key_digest=_TARGET_KEY_DIGEST),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        remote_diffs = [d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE]
+        assert len(remote_diffs) == 1
+        change = remote_diffs[0]
+        assert change.action == DiffAction.CHANGE
+        assert change.diff_class == DiffClass.VERSION_MISMATCH
+        assert change.detail is not None
+        assert _SOURCE_KEY_DIGEST in change.detail
+        assert _TARGET_KEY_DIGEST in change.detail
+        # The URL is identical on both sides, so it is not named as a difference.
+        assert "url:" not in change.detail
+
+    @pytest.mark.asyncio
+    async def test_target_lost_its_key_is_a_change_not_a_silent_pass(self) -> None:
+        context, _source, _target = make_context(
+            source_responses=trust_responses(remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST),
+            target_responses=trust_responses(remote_line=self._SIGNED, key_digest=None),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        change = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
+        assert change.action == DiffAction.CHANGE
+        assert change.detail is not None
+        assert "none" in change.detail
+
+    @pytest.mark.asyncio
+    async def test_differing_verification_setting_is_a_change_naming_both_states(self) -> None:
+        context, _source, _target = make_context(
+            source_responses=trust_responses(remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST),
+            target_responses=trust_responses(remote_line=self._UNVERIFIED, key_digest=None),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        change = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
+        assert change.action == DiffAction.CHANGE
+        assert change.detail is not None
+        assert "gpg verification: enabled vs disabled" in change.detail
+
+    @pytest.mark.asyncio
+    async def test_identical_url_and_trust_yields_no_diff(self) -> None:
+        context, _source, _target = make_context(
+            source_responses=trust_responses(remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST),
+            target_responses=trust_responses(remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_class == ItemClass.FLATPAK_REMOTE for d in plan.diffs)
+
+
+class TestRemoteTrustConverge:
+    """#215 — provisioning a remote carries its key, so the ref installs that follow can
+    actually verify their signatures. `--no-gpg-verify` is emitted only for a remote the
+    SOURCE itself does not verify.
+    """
+
+    _URL = "https://dl.flathub.org/repo/"
+    _SIGNED = f"flathub\t{_URL}\n"
+    _UNVERIFIED = f"flathub\t{_URL}\tno-gpg-verify\n"
+    _STAGED = "/home/tester/.cache/pc-switcher/flatpak-staging/flatpak_remote_user_flathub.gpg"
+
+    @staticmethod
+    def _job_with_source_key(
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        remote_line: str,
+        key_digest: str | None,
+        target_responses: dict[str, CommandResult] | None = None,
+        scope: str = "user",
+    ) -> tuple[FlatpakSyncJob, MagicMock]:
+        scope_flag = "--user" if scope == "user" else "--system"
+        if scope == "user":
+            monkeypatch.setattr(Path, "home", lambda: tmp_path)
+            installation = tmp_path / ".local" / "share" / "flatpak"
+            # The user-scope read is a shell expression the remote shell expands, so it
+            # is unaffected by the patched `Path.home()` the local file lookup uses.
+            keyring_dir = _USER_KEYRING_DIR
+        else:
+            installation = tmp_path / "var-lib-flatpak"
+            monkeypatch.setattr(flatpak_sync, "_FLATPAK_SYSTEM_INSTALLATION", installation)
+            keyring_dir = f"{installation}/repo"
+        if key_digest is not None:
+            _ = write_source_keyring(installation, remote_line.split("\t", maxsplit=1)[0])
+        context, _source, target = make_context(
+            source_responses=trust_responses(
+                remote_line=remote_line, key_digest=key_digest, keyring_dir=keyring_dir, scope_flag=scope_flag
+            ),
+            target_responses=target_responses or {"echo $HOME": CommandResult(0, "/home/tester\n", "")},
+        )
+        return FlatpakSyncJob(context), target
+
+    @pytest.mark.asyncio
+    async def test_signed_remote_is_added_with_the_sources_own_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        job, target = self._job_with_source_key(
+            tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST
+        )
+        plan = await job.plan()
+        diff = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
+
+        result = await job.converge(diff)
+
+        assert result.success
+        add_cmd = next(c for c in all_calls(target) if "remote-add" in c)
+        assert f"--gpg-import={self._STAGED}" in add_cmd
+        assert "--no-gpg-verify" not in add_cmd
+        # The key travels as bytes from the source's own keyring file (ADR-020 D-12).
+        sent_local, sent_remote = target.send_file.call_args.args
+        assert sent_local == tmp_path / ".local" / "share" / "flatpak" / "repo" / "flathub.trustedkeys.gpg"
+        assert sent_remote == self._STAGED
+
+    @pytest.mark.asyncio
+    async def test_staging_stays_under_the_targets_own_home(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`send_file` is plain SFTP as the SSH user, so every staged byte lands under
+        that user's home — never `/etc`, never the flatpak store.
+        """
+        job, target = self._job_with_source_key(
+            tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST
+        )
+        plan = await job.plan()
+
+        await job.converge(next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE))
+
+        _sent_local, sent_remote = target.send_file.call_args.args
+        assert sent_remote.startswith("/home/tester/.cache/pc-switcher/")
+        assert any("mkdir -p /home/tester/.cache/pc-switcher/flatpak-staging" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_every_staging_write_carries_mutates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        job, target = self._job_with_source_key(
+            tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST
+        )
+        plan = await job.plan()
+
+        await job.converge(next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE))
+
+        assert target.send_file.call_args.kwargs["mutates"]
+        for call in target.run_command.call_args_list:
+            command = call.args[0]
+            if "mkdir -p" in command or "rm -f" in command or "remote-add" in command:
+                assert call.kwargs.get("mutates"), f"ungated write: {command}"
+
+    @pytest.mark.asyncio
+    async def test_staged_key_is_discarded_even_when_remote_add_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        job, target = self._job_with_source_key(
+            tmp_path,
+            monkeypatch,
+            remote_line=self._SIGNED,
+            key_digest=_SOURCE_KEY_DIGEST,
+            target_responses={
+                "echo $HOME": CommandResult(0, "/home/tester\n", ""),
+                "remote-add": CommandResult(1, "", "boom"),
+            },
+        )
+        plan = await job.plan()
+
+        result = await job.converge(next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE))
+
+        assert not result.success
+        assert any(f"rm -f {self._STAGED}" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_unverified_source_remote_replicates_as_unverified(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        job, target = self._job_with_source_key(tmp_path, monkeypatch, remote_line=self._UNVERIFIED, key_digest=None)
+        plan = await job.plan()
+
+        await job.converge(next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE))
+
+        add_cmd = next(c for c in all_calls(target) if "remote-add" in c)
+        assert "--no-gpg-verify" in add_cmd
+        assert "--gpg-import" not in add_cmd
+        target.send_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_verified_source_remote_is_never_downgraded_even_if_the_target_is_unverified(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _ = write_source_keyring(tmp_path / ".local" / "share" / "flatpak", "flathub")
+        context, _source, target = make_context(
+            source_responses=trust_responses(remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST),
+            target_responses=trust_responses(remote_line=self._UNVERIFIED, key_digest=None),
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        change = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
+
+        await job.converge(change)
+
+        modify_cmd = next(c for c in all_calls(target) if "remote-modify" in c)
+        assert "--no-gpg-verify" not in modify_cmd
+        # Explicit re-enable: `remote-modify` is the only verb that accepts it, and
+        # without it the target stays on `no-gpg-verify` (verified live).
+        assert "--gpg-verify" in modify_cmd
+        assert f"--gpg-import={self._STAGED}" in modify_cmd
+        assert f"--url={self._URL}" in modify_cmd
+
+    @pytest.mark.asyncio
+    async def test_change_to_an_unverified_source_remote_disables_verification(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The source's own state is what replicates: an unverified source remote lands
+        unverified, stated in the review's detail rather than converged into a lie.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        context, _source, target = make_context(
+            source_responses=trust_responses(remote_line=self._UNVERIFIED, key_digest=None),
+            target_responses=trust_responses(remote_line=self._SIGNED, key_digest=_TARGET_KEY_DIGEST),
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        change = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
+        assert change.detail is not None
+        assert "gpg verification: disabled vs enabled" in change.detail
+
+        await job.converge(change)
+
+        modify_cmd = next(c for c in all_calls(target) if "remote-modify" in c)
+        assert "--no-gpg-verify" in modify_cmd
+        assert "--gpg-import" not in modify_cmd
+
+    @pytest.mark.asyncio
+    async def test_system_scope_add_uses_sudo_and_still_stages_in_the_user_home(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        job, target = self._job_with_source_key(
+            tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST, scope="system"
+        )
+        plan = await job.plan()
+
+        await job.converge(next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE))
+
+        add_cmd = next(c for c in all_calls(target) if "remote-add" in c)
+        assert add_cmd.startswith("sudo ")
+        assert "--system" in add_cmd
+        _sent_local, sent_remote = target.send_file.call_args.args
+        assert sent_remote == "/home/tester/.cache/pc-switcher/flatpak-staging/flatpak_remote_system_flathub.gpg"
+        assert "--gpg-import=/home/tester/.cache/pc-switcher/" in add_cmd
+
+    @pytest.mark.asyncio
+    async def test_missing_source_keyring_refuses_rather_than_provisioning_a_dead_remote(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The digest was captured at plan time, so the file disappearing before
+        converge is a real inconsistency — never an install-anyway.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)  # no keyring file written
+        context, _source, target = make_context(
+            source_responses=trust_responses(remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST),
+            target_responses={"echo $HOME": CommandResult(0, "/home/tester\n", "")},
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        diff = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
+
+        with pytest.raises(ConvergeItemFailed, match="signing key"):
+            await job.converge(diff)
+
+        assert not any("remote-add" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_verified_remote_without_a_key_of_its_own_adds_plainly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A remote trusted through a machine-level anchor has no per-remote key to
+        carry: nothing is invented for it, and verification is left on.
+        """
+        job, target = self._job_with_source_key(tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=None)
+        plan = await job.plan()
+
+        await job.converge(next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE))
+
+        add_cmd = next(c for c in all_calls(target) if "remote-add" in c)
+        assert "--gpg-import" not in add_cmd
+        assert "--no-gpg-verify" not in add_cmd
+        target.send_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_removal_transfers_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`remote-delete` takes the per-remote keyring with it (verified live), so the
+        removal direction stages no key and needs no source lookup at all.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        context, _source, target = make_context(
+            source_responses=trust_responses(remote_line="", key_digest=None),
+            target_responses=trust_responses(remote_line=self._SIGNED, key_digest=_TARGET_KEY_DIGEST),
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        diff = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
+        assert diff.action == DiffAction.REMOVE
+
+        await job.converge(diff)
+
+        assert any("flatpak remote-delete --user flathub" in c for c in all_calls(target))
+        target.send_file.assert_not_awaited()
 
 
 class TestPlanReadOnly:

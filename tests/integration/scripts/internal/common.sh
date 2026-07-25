@@ -153,7 +153,7 @@ acquire_lock() {
 # the baseline snapshot. Keep this number in sync with FIXTURES_VERSION in that script:
 # a mismatch between the number here and the marker file on a VM is what tells
 # provisioning the baseline has to be rebuilt.
-readonly PCSWITCHER_TEST_FIXTURES_VERSION=1
+readonly PCSWITCHER_TEST_FIXTURES_VERSION=2
 readonly PCSWITCHER_TEST_FIXTURES_MARKER=/etc/pcswitcher-test-fixtures
 
 # Whether <user@host> already carries this version of the test fixtures.

@@ -28,11 +28,25 @@ that same scope — deleting a remote whose refs are being removed too is legiti
 cleanup, so the decision stays in the review where D-30 puts apt's collateral, never as
 a mid-apply refusal.
 
+A remote carries its TRUST as part of the item, not as a property of the machine that
+happens to hold it (#215): `FlatpakRemoteItem` records the remote's GPG-verification
+setting and the digest of its own ostree keyring, and convergence replicates both —
+`flatpak remote-add --gpg-import=<staged key>` for a signed remote, `--no-gpg-verify`
+only when the SOURCE remote is itself unverified. Without this a replicated remote is
+configured but unusable: flatpak refuses every install from it with `Can't check
+signature: public key not found`. The key bytes travel byte-for-byte from the source
+machine and are never re-fetched from a vendor (ADR-020 D-12's rule for apt signing
+keys), staged under the target's `~/.cache/pc-switcher/` exactly as `apt_sync` stages
+`/etc/apt` content, because SFTP reaches only the SSH user's own home.
+
 The flatpak OSTree store stays authoritative for its own state (D-01): this job never
-touches `/var/lib/flatpak` or `~/.local/share/flatpak` directly, only shells out to
-`flatpak` itself. `flatpak_sync_exclude_paths()` exports `~/.local/share/flatpak` so
-`folder_sync` stops mirroring the store this job owns (D-29, ADR-018) — but NOT
-`~/.var/app`, which is per-application USER DATA that stays folder_sync's territory;
+WRITES into `/var/lib/flatpak` or `~/.local/share/flatpak`, only shells out to `flatpak`
+itself. It does READ one file there, `<installation>/repo/<remote>.trustedkeys.gpg`,
+because no flatpak command prints or exports a remote's key and libostree's own CLI is
+not installed alongside flatpak on Ubuntu. `flatpak_sync_exclude_paths()` exports
+`~/.local/share/flatpak` so `folder_sync` stops mirroring the store this job owns
+(D-29, ADR-018) — but NOT `~/.var/app`, which is per-application USER DATA that stays
+folder_sync's territory;
 D-17's job-before-folder_sync ordering exists precisely so `flatpak install` creates
 the store first and folder_sync's data lands on top of it, never the reverse.
 
@@ -61,7 +75,7 @@ is a `REPORT_ONLY` diff, never something this job installs or removes to force.
 from __future__ import annotations
 
 import shlex
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, ClassVar, Literal, override
 
@@ -92,8 +106,37 @@ _FLATPAK_LIST_CMD = "flatpak list --app --columns=application,version,origin,ins
 
 # Same reasoning for `flatpak remotes`, but flatpak tracks remotes PER INSTALLATION —
 # even a byte-identical `flathub` URL is two separate configuration entries — so this
-# is run once per scope rather than once combined (module docstring, D-14).
-_FLATPAK_REMOTES_CMD_TEMPLATE = "flatpak remotes {flag} --columns=name,url"
+# is run once per scope rather than once combined (module docstring, D-14). `options` is
+# the only place flatpak exposes a remote's GPG-verification state (#215): it carries a
+# comma-separated token list in which `no-gpg-verify` appears exactly when the remote's
+# `gpg-verify` is false, and the column is EMPTY (no trailing tab) for a remote with no
+# options at all — RESEARCH: verified live against Flatpak 1.14.6, so the parser accepts
+# both a two-field and a three-field line.
+_FLATPAK_REMOTES_CMD_TEMPLATE = "flatpak remotes {flag} --columns=name,url,options"
+
+# The token `flatpak remotes --columns=options` prints for a remote with GPG
+# verification turned off.
+_NO_GPG_VERIFY_OPTION = "no-gpg-verify"
+
+# ostree stores a remote's own trusted public keys in one file per remote inside the
+# installation's repo, named `<remote>.trustedkeys.gpg` (verified live, libostree
+# 2024.5). Nothing in flatpak's CLI prints or exports that key, and the `ostree` binary
+# is not installed by a flatpak install on Ubuntu — so the digest is read straight off
+# the file. This is the one place this job looks INSIDE the OSTree store, and it is a
+# read: D-01's "flatpak stays authoritative for its own state" bars WRITING there, which
+# convergence still does exclusively through `flatpak remote-add`/`remote-modify`.
+_TRUSTEDKEYS_SUFFIX = ".trustedkeys.gpg"
+
+# One batched `sha256sum` per scope over that glob, mirroring `apt_sync`'s
+# `_capture_dir_digests` — never one command per remote. A scope with no keyring at all
+# makes the glob match nothing, so `sha256sum` prints nothing on stdout and exits 1;
+# stderr is discarded and the empty stdout parses to an empty map (verified live).
+_FLATPAK_KEYRING_DIGESTS_CMD_TEMPLATE = "sha256sum {directory}/*{suffix} 2>/dev/null"
+
+# The system installation's fixed location. Its `repo/` is 0755 root with 0644 keyring
+# files (verified live), so reading a digest there needs no sudo even though writing to
+# it does.
+_FLATPAK_SYSTEM_INSTALLATION = Path("/var/lib/flatpak")
 
 # Masks are ALSO per-installation (#208, D-10), listed one pattern per line with no
 # header — but the scope flag MUST precede the `mask` subcommand: bare `flatpak mask`
@@ -135,6 +178,62 @@ def _sudo_prefix(scope: str) -> str:
     guess — so a user-scope item can never silently escalate to a root-run command.
     """
     return "sudo " if scope == "system" else ""
+
+
+def _repo_dir_expression(scope: str) -> str:
+    """The scope's ostree repo directory, as a SHELL EXPRESSION for `run_command`.
+
+    `$HOME` is left for the remote shell to expand rather than resolved here: the user
+    installation lives under the invoking user's own home on each machine, and the two
+    machines' usernames differ. Both ends therefore compute the same relative location
+    (`~/.local/share/flatpak`, the very path `flatpak_sync_exclude_paths()` already
+    claims) in their own environment. `$XDG_DATA_HOME` is deliberately NOT consulted: it
+    is typically set in a desktop session and unset over a non-interactive SSH exec
+    channel, so honouring it would make the source and the target disagree about where
+    the same user's remotes live and manufacture a phantom key diff.
+    """
+    if scope == "system":
+        return f"{_FLATPAK_SYSTEM_INSTALLATION}/repo"
+    return f"$HOME/{_FLATPAK_DATA_RELPATH}/repo"
+
+
+def _keyring_digests_cmd(scope: str) -> str:
+    return _FLATPAK_KEYRING_DIGESTS_CMD_TEMPLATE.format(
+        directory=_repo_dir_expression(scope), suffix=_TRUSTEDKEYS_SUFFIX
+    )
+
+
+def _source_keyring_path(item: FlatpakRemoteItem) -> Path:
+    """The LOCAL path of the source machine's own keyring file for `item`.
+
+    `send_file` transfers from the local filesystem, and the source executor runs on
+    this machine as this user (the same assumption `AptSyncJob._write_or_remove_repo_item`
+    makes for `/etc/apt`), so `Path.home()` resolves the very directory
+    `_repo_dir_expression("user")`'s `$HOME` expands to on the source side.
+    """
+    installation = _FLATPAK_SYSTEM_INSTALLATION if item.scope == "system" else Path.home() / _FLATPAK_DATA_RELPATH
+    return installation / "repo" / f"{item.name}{_TRUSTEDKEYS_SUFFIX}"
+
+
+def _parse_keyring_digests(output: str) -> dict[str, str]:
+    """`{remote name: sha256}` from one scope's batched `sha256sum` output.
+
+    `<digest>  <path>` lines, mapped by stripping the `.trustedkeys.gpg` suffix off the
+    basename — a remote name may contain dots (`my.remote.name.trustedkeys.gpg`,
+    verified live), so only the fixed suffix is removed, never everything after the
+    first dot.
+    """
+    digests: dict[str, str] = {}
+    for line in _lines(output):
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        digest, path = parts
+        name = Path(path.strip()).name
+        if not name.endswith(_TRUSTEDKEYS_SUFFIX):
+            continue
+        digests[name[: -len(_TRUSTEDKEYS_SUFFIX)]] = digest
+    return digests
 
 
 def _split_flatpak_item_id(item_id: str, expected_kind: Literal["ref", "remote", "mask"]) -> tuple[str, str]:
@@ -183,20 +282,41 @@ def _parse_flatpak_list(output: str) -> list[FlatpakItem]:
     return items
 
 
-def _parse_flatpak_remotes(output: str, scope: Literal["user", "system"]) -> list[FlatpakRemoteItem]:
-    """Parse one scope's `flatpak remotes --columns=name,url` output.
+def _parse_flatpak_remotes(
+    output: str, scope: Literal["user", "system"], key_digests: Mapping[str, str]
+) -> list[FlatpakRemoteItem]:
+    """Parse one scope's `flatpak remotes --columns=name,url,options` output.
 
     `scope` is a parameter, not a parsed column: unlike `flatpak list`, this command
     has no scope column of its own — the caller already knows which scope it asked
     about, because it chose the `--user`/`--system` flag (module docstring).
+    `key_digests` is the same scope's `_parse_keyring_digests` map, joined here by
+    remote name so a remote's trust arrives as part of the item rather than as a
+    second lookup at converge time (#215).
+
+    A remote with no options at all prints only two fields (no trailing tab), so both
+    widths are accepted; a remote absent from `key_digests` keeps `key_digest=None`,
+    which is the honest reading of "verification is on but this remote carries no key of
+    its own" — trust then comes from a machine-level anchor this job neither reads nor
+    replicates.
     """
     items: list[FlatpakRemoteItem] = []
     for line in _lines(output):
         fields = line.split("\t")
-        if len(fields) != 2:
+        if len(fields) not in (2, 3):
             continue
-        name, url = fields
-        items.append(FlatpakRemoteItem(name=name, url=url, scope=scope))
+        name, url = fields[0], fields[1]
+        options = fields[2] if len(fields) == 3 else ""
+        gpg_verify = _NO_GPG_VERIFY_OPTION not in options.split(",")
+        items.append(
+            FlatpakRemoteItem(
+                name=name,
+                url=url,
+                scope=scope,
+                gpg_verify=gpg_verify,
+                key_digest=key_digests.get(name) if gpg_verify else None,
+            )
+        )
     return items
 
 
@@ -318,17 +438,81 @@ def _remove_remote_diff(item: FlatpakRemoteItem, dependent_applications: Sequenc
     )
 
 
-def _change_remote_diff(source_item: FlatpakRemoteItem, target_item: FlatpakRemoteItem) -> ItemDiff:
-    """A remote present on both sides with the same name AND scope but a DIFFERING URL:
-    converge the target's remote to the source's URL (decision 7).
+def _remote_change_detail(source_item: FlatpakRemoteItem, target_item: FlatpakRemoteItem) -> str:
+    """Name every facet in which the two sides' same-identity remotes differ.
 
-    A URL edit is a config change, so this is a `DiffAction.CHANGE` (default-ticked
-    review group, install-direction), not a REMOVE+INSTALL churn — `_converge_remote`
-    prefers `flatpak remote-modify --url`, which edits the entry in place and preserves
-    the remote's other configuration (gpg key, filter, priority). Tagged
+    Only the differing facets appear, so a plain URL edit still reads exactly as it did
+    before trust joined the item (#215) and a trust-only divergence never mentions a URL
+    both machines agree on.
+    """
+    facets: list[str] = []
+    if source_item.url != target_item.url:
+        facets.append(f"url: {source_item.url} vs {target_item.url}")
+    if source_item.gpg_verify != target_item.gpg_verify:
+        facets.append(f"gpg verification: {_verification_word(source_item)} vs {_verification_word(target_item)}")
+    if source_item.key_digest != target_item.key_digest:
+        facets.append(f"signing key: {source_item.key_digest or 'none'} vs {target_item.key_digest or 'none'}")
+    return f"remote {source_item.name} " + "; ".join(facets)
+
+
+def _verification_word(item: FlatpakRemoteItem) -> str:
+    return "enabled" if item.gpg_verify else "disabled"
+
+
+def _remote_trust_flags(item: FlatpakRemoteItem, staged_key: str | None, *, restore_verification: bool) -> str:
+    """The `flatpak remote-add`/`remote-modify` flags that replicate `item`'s trust
+    (#215), as a string that begins with a space or is empty.
+
+    `--no-gpg-verify` is emitted if and only if the SOURCE remote is itself unverified:
+    a remote the source verifies can never be silently downgraded on the target, and an
+    unverified one is replicated as unverified rather than as a verified remote that
+    would then refuse every install. `restore_verification` adds the explicit
+    `--gpg-verify` that only `remote-modify` accepts (`remote-add` has no such flag —
+    verification is its default), so a CHANGE can lift a target-side remote back out of
+    `no-gpg-verify` instead of leaving the divergence half-converged.
+
+    A verified remote with `staged_key is None` carries no per-remote key at all: nothing
+    is invented for it, and its trust stays whatever machine-level anchor the target has.
+    """
+    if not item.gpg_verify:
+        return " --no-gpg-verify"
+    flags = " --gpg-verify" if restore_verification else ""
+    if staged_key is not None:
+        flags += f" --gpg-import={shlex.quote(staged_key)}"
+    return flags
+
+
+def _trust_mutation_phrase(item: FlatpakRemoteItem) -> str:
+    """Trailing clause for the `mutates=` phrase, so the confirm-each-command prompt and
+    the trace state what a remote command does to TRUST, not only to the URL.
+    """
+    if not item.gpg_verify:
+        return ", with gpg verification disabled (as on the source)"
+    if item.key_digest is None:
+        return ""
+    return ", importing the source's signing key"
+
+
+def _change_remote_diff(source_item: FlatpakRemoteItem, target_item: FlatpakRemoteItem) -> ItemDiff:
+    """A remote present on both sides with the same name AND scope but a DIFFERING URL,
+    GPG-verification setting or signing key: converge the target's remote to the
+    source's configuration (decision 7, #215).
+
+    A trust difference is a `CHANGE` for exactly the reason a URL difference is: the two
+    machines hold the same remote with a different value, and `flatpak remote-modify`
+    converges it in place — `--url`, `--gpg-verify`/`--no-gpg-verify` and `--gpg-import`
+    combine in ONE command (verified live), so a differing key needs no REMOVE+INSTALL
+    churn and never disturbs the refs whose origin the remote is. Tagged
     `VERSION_MISMATCH` for the same reason apt config/source edits and snap
     revision/channel changes are (`apt_sync`/`snap_sync`): it is the "same identity,
     differing value" conflict class, the only `DiffClass` a CHANGE ever carries.
+
+    A key CHANGE converges by IMPORT, and ostree's import merges rather than replaces
+    (verified live): a target that already trusted a different key for this remote ends
+    up trusting both, so the digests stay unequal and the item is offered again on the
+    next run. That is reported-as-found, consistent with the rest of this job — trust the
+    user established locally is never deleted to make a digest match, and the usual
+    skip-always decision (D-08) is the way to silence it.
     """
     return ItemDiff(
         item_class=ItemClass.FLATPAK_REMOTE,
@@ -336,7 +520,7 @@ def _change_remote_diff(source_item: FlatpakRemoteItem, target_item: FlatpakRemo
         action=DiffAction.CHANGE,
         item_id=source_item.item_id,
         label=source_item.label(),
-        detail=f"remote {source_item.name} url: {source_item.url} vs {target_item.url}",
+        detail=_remote_change_detail(source_item, target_item),
     )
 
 
@@ -362,12 +546,14 @@ def _diff_flatpak_remotes(
 ) -> list[ItemDiff]:
     """One diff per remote `item_id` (name + scope) present on either side.
 
-    A remote present on both sides with the SAME name and scope but a DIFFERING URL is
-    a `CHANGE` diff that converges the target to the source's URL (decision 7 /
-    T-02-22): a same-name remote whose URL was silently not propagated is exactly the
-    gap this closes. URL is the only field compared here — name and scope ARE the
-    identity, so a difference in either produces two separate install/remove diffs, not
-    a change (module docstring's scope-as-identity rule).
+    A remote present on both sides with the SAME name and scope but a DIFFERING URL,
+    GPG-verification setting or signing key is a `CHANGE` diff that converges the target
+    to the source's configuration (decision 7 / T-02-22, #215): a same-name remote whose
+    URL or trust was silently not propagated is exactly the gap this closes. The
+    comparison is whole-item equality — name and scope ARE the identity and are equal by
+    construction here, so every remaining field is a value the two machines can
+    legitimately disagree about, and a difference in name or scope produces two separate
+    install/remove diffs rather than a change (module docstring's scope-as-identity rule).
 
     `target_refs` is the SAME queried ref list the ref diff is built from — it is what
     lets a REMOVE diff name the refs its removal would orphan (#214) without a
@@ -390,9 +576,9 @@ def _diff_flatpak_remotes(
             diffs.append(_install_remote_diff(source_item))
         elif target_item is not None and source_item is None:
             diffs.append(_remove_remote_diff(target_item, dependents_by_remote_id.get(item_id, [])))
-        elif source_item is not None and target_item is not None and source_item.url != target_item.url:
+        elif source_item is not None and target_item is not None and source_item != target_item:
             diffs.append(_change_remote_diff(source_item, target_item))
-        # else: present on both, same url -> no diff.
+        # else: present on both, identical url and trust -> no diff.
 
     return diffs
 
@@ -500,6 +686,9 @@ class FlatpakSyncJob(PackageSyncJob):
         # present in the plan-time target query (D-14's whole point: it converges
         # first, in the SAME run, not in a prior one).
         self._converged_remote_scope_names: set[tuple[str, str]] = set()
+        # Resolved once by `_target_home_dir()`: where a remote's signing key is staged
+        # before `flatpak remote-add --gpg-import` reads it (#215).
+        self._target_home: str | None = None
 
     @override
     async def capture_source_items(self) -> Sequence[FlatpakItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
@@ -521,14 +710,19 @@ class FlatpakSyncJob(PackageSyncJob):
         return _parse_flatpak_list(result.stdout)
 
     async def _capture_source_remotes(self, scope: Literal["user", "system"]) -> list[FlatpakRemoteItem]:
-        cmd = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope))
-        result = await self.source.run_command(cmd)
-        return _parse_flatpak_remotes(result.stdout, scope)
+        """One scope's remotes plus their per-remote keyring digests (#215): two reads,
+        one listing and one batched `sha256sum`, never a command per remote.
+        """
+        keys = await self.source.run_command(_keyring_digests_cmd(scope))
+        result = await self.source.run_command(_FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope)))
+        return _parse_flatpak_remotes(result.stdout, scope, _parse_keyring_digests(keys.stdout))
 
     async def _query_target_remotes(self, scope: Literal["user", "system"]) -> list[FlatpakRemoteItem]:
-        cmd = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope))
-        result = await self.target.run_command(cmd, login_shell=False)
-        return _parse_flatpak_remotes(result.stdout, scope)
+        keys = await self.target.run_command(_keyring_digests_cmd(scope), login_shell=False)
+        result = await self.target.run_command(
+            _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope)), login_shell=False
+        )
+        return _parse_flatpak_remotes(result.stdout, scope, _parse_keyring_digests(keys.stdout))
 
     async def _capture_all_source_remotes(self) -> list[FlatpakRemoteItem]:
         """Both scopes, one call each (D-14): flatpak tracks remotes per-installation
@@ -650,43 +844,64 @@ class FlatpakSyncJob(PackageSyncJob):
         scope_flag = _scope_flag(scope)
         sudo = _sudo_prefix(scope)
 
-        if diff.action == DiffAction.INSTALL:
+        if diff.action in (DiffAction.INSTALL, DiffAction.CHANGE):
             source_item = self._source_remotes_by_id.get(diff.item_id)
             if source_item is None:
                 raise ConvergeItemFailed(
                     f"no captured source remote for {diff.label} (item_id={diff.item_id!r}); "
                     "was plan() run before converge()?"
                 )
-            cmd = (
-                f"{sudo}flatpak remote-add --if-not-exists {scope_flag} "
-                f"{shlex.quote(name)} {shlex.quote(source_item.url)}"
-            )
-            result = await self.target.run_command(
-                cmd, login_shell=False, mutates=f"add {scope} flatpak remote {name} ({source_item.url})"
-            )
-            if result.success:
-                self._converged_remote_scope_names.add((scope, name))
-            return result
+            # The source's own key bytes are staged on the target first, so ONE command
+            # (D-27) then carries url and trust together.
+            staged_key = await self._stage_source_key(source_item, diff)
+            try:
+                trust = _remote_trust_flags(
+                    source_item, staged_key, restore_verification=diff.action == DiffAction.CHANGE
+                )
+                if diff.action == DiffAction.INSTALL:
+                    cmd = (
+                        f"{sudo}flatpak remote-add --if-not-exists {scope_flag}{trust} "
+                        f"{shlex.quote(name)} {shlex.quote(source_item.url)}"
+                    )
+                    result = await self.target.run_command(
+                        cmd,
+                        login_shell=False,
+                        mutates=(
+                            f"add {scope} flatpak remote {name} ({source_item.url})"
+                            f"{_trust_mutation_phrase(source_item)}"
+                        ),
+                    )
+                    if result.success:
+                        self._converged_remote_scope_names.add((scope, name))
+                    return result
 
-        if diff.action == DiffAction.CHANGE:
-            source_item = self._source_remotes_by_id.get(diff.item_id)
-            if source_item is None:
-                raise ConvergeItemFailed(
-                    f"no captured source remote for {diff.label} (item_id={diff.item_id!r}); "
-                    "was plan() run before converge()?"
+                # `remote-modify` edits the existing entry in place (the remote is
+                # present on both sides by construction of a CHANGE diff), preserving its
+                # other config and avoiding the ref-origin disruption a delete+re-add
+                # would cause. No need to record it in `_converged_remote_scope_names`:
+                # the remote already exists on the target, so ref-readiness
+                # (`_remote_ready_on_target`) is already satisfied via the plan-time
+                # target query.
+                cmd = (
+                    f"{sudo}flatpak remote-modify {scope_flag} --url={shlex.quote(source_item.url)}"
+                    f"{trust} {shlex.quote(name)}"
                 )
-            # `remote-modify --url` edits the existing entry in place (the remote is
-            # present on both sides by construction of a CHANGE diff), preserving its
-            # other config and avoiding the ref-origin disruption a delete+re-add would
-            # cause. No need to record it in `_converged_remote_scope_names`: the remote
-            # already exists on the target, so ref-readiness (`_remote_ready_on_target`)
-            # is already satisfied via the plan-time target query.
-            cmd = f"{sudo}flatpak remote-modify {scope_flag} --url={shlex.quote(source_item.url)} {shlex.quote(name)}"
-            return await self.target.run_command(
-                cmd, login_shell=False, mutates=f"repoint {scope} flatpak remote {name} at {source_item.url}"
-            )
+                return await self.target.run_command(
+                    cmd,
+                    login_shell=False,
+                    mutates=(
+                        f"repoint {scope} flatpak remote {name} at {source_item.url}"
+                        f"{_trust_mutation_phrase(source_item)}"
+                    ),
+                )
+            finally:
+                await self._discard_staged_key(staged_key)
 
         if diff.action == DiffAction.REMOVE:
+            # Takes the remote's per-remote keyring with it (verified live): trust is not
+            # separable from the remote on the delete side, which is why the removal
+            # review's `detail` names the refs it orphans (#214) rather than pretending
+            # the configuration could be restored piecemeal afterwards.
             cmd = f"{sudo}flatpak remote-delete {scope_flag} {shlex.quote(name)}"
             return await self.target.run_command(
                 cmd, login_shell=False, mutates=f"delete {scope} flatpak remote {name}"
@@ -762,6 +977,71 @@ class FlatpakSyncJob(PackageSyncJob):
         raise ConvergeItemFailed(
             f"FlatpakSyncJob.converge: unsupported action {diff.action.value!r} for a flatpak mask ({diff.label})"
         )
+
+    async def _stage_source_key(self, item: FlatpakRemoteItem, diff: ItemDiff) -> str | None:
+        """Copy the source remote's own keyring onto the target and return its staged
+        path, or `None` when the remote has no key to carry (#215).
+
+        `RemoteExecutor.send_file` is plain SFTP as the ordinary SSH user with no sudo
+        path, so it can only write under that user's home — the same constraint
+        `AptSyncJob._write_or_remove_repo_item` solves by staging under
+        `~/.cache/pc-switcher/`, reused here rather than reinvented. No `install`
+        promotion follows it, unlike apt's: `flatpak remote-add --gpg-import` only READS
+        the file, and a system-scope converge runs under sudo, where root reads the
+        staged copy in the user's cache without it ever being moved into a root-owned
+        directory. The bytes are the source's own (ADR-020 D-12) — never re-fetched from
+        a vendor — and `_discard_staged_key` removes the copy afterwards.
+        """
+        if not item.gpg_verify or item.key_digest is None:
+            return None
+
+        local_path = _source_keyring_path(item)
+        if not local_path.is_file():
+            raise ConvergeItemFailed(
+                f"signing key for {item.label()} is missing on the source at {local_path} "
+                "(it existed when the plan was captured); refusing to provision a remote whose key cannot travel"
+            )
+
+        home = await self._target_home_dir()
+        staging_dir = f"{home}/.cache/pc-switcher/flatpak-staging"
+        mkdir = await self.target.run_command(
+            f"mkdir -p {shlex.quote(staging_dir)}",
+            login_shell=False,
+            mutates="create the flatpak signing-key staging directory",
+        )
+        if not mkdir.success:
+            raise ConvergeItemFailed(f"failed to create {staging_dir} on the target: {mkdir.stderr.strip()}")
+
+        staged = f"{staging_dir}/{diff.item_id.replace(':', '_').replace('/', '_')}.gpg"
+        await self.target.send_file(
+            local_path,
+            staged,
+            mutates=f"stage the signing key for {item.label()} into the target's cache",
+        )
+        return staged
+
+    async def _discard_staged_key(self, staged_key: str | None) -> None:
+        """Remove a staged key copy once flatpak has imported it — the same `finally`
+        cleanup apt's staging does, so a failed remote-add never leaves transferred key
+        material sitting in the target's cache.
+        """
+        if staged_key is None:
+            return
+        await self.target.run_command(
+            f"rm -f {shlex.quote(staged_key)}",
+            login_shell=False,
+            mutates="discard the staged flatpak signing key",
+        )
+
+    async def _target_home_dir(self) -> str:
+        """The target user's home directory, resolved once per run via `echo $HOME` and
+        cached (`AptSyncJob._target_home_dir`'s established pattern) — every staged key
+        needs the same absolute path.
+        """
+        if self._target_home is None:
+            result = await self.target.run_command("echo $HOME", login_shell=False)
+            self._target_home = result.stdout.strip()
+        return self._target_home
 
     def _remote_ready_on_target(self, scope: str, origin: str) -> bool:
         """Whether `origin` is usable as a ref's remote in `scope`: already present on

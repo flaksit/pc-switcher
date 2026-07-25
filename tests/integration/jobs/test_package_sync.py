@@ -732,10 +732,9 @@ async def _restore_flatpak_subject(executor: BashLoginRemoteExecutor) -> None:
     """Put the fixture remote and ref back on `executor` after a test removed them.
 
     The remote is re-added with its signing key imported, exactly as the fixture script
-    does: pc-switcher's own `flatpak remote-add` carries only name and url, and a remote
-    without its key is usable here only because the machine trusts that key system-wide.
-    Restoring the fixture's own shape keeps the next test's starting point identical to
-    a freshly provisioned machine.
+    does — a remote without its key can install nothing, since the repository is trusted
+    per-remote and nowhere else. Restoring the fixture's own shape keeps the next test's
+    starting point identical to a freshly provisioned machine.
     """
     scope_flag = "--user" if _FIXTURE_FLATPAK_SCOPE == "user" else "--system"
     sudo = "" if _FIXTURE_FLATPAK_SCOPE == "user" else "sudo "
@@ -1349,12 +1348,11 @@ class TestPackageSyncWholeRunContracts:
         when its remote is not yet configured in that scope.
 
         The subject is the fixture ref and its local signed repository
-        (`vm-test-fixtures.sh`). pc-switcher replicates a remote as name+url only, so the
-        remote it re-adds on pc2 carries no signing key of its own; the install below
-        succeeds because the fixture's key is a machine-level trust anchor on both VMs
-        (ostree's system-wide trusted keyring), not because the remote brought trust with
-        it. Against a remote whose key the target does not already trust — Flathub on a
-        machine that never had it — the ref install would fail GPG verification.
+        (`vm-test-fixtures.sh`). Nothing on pc2 trusts that repository once the teardown
+        below deletes the remote — `flatpak remote-delete` takes the per-remote keyring
+        with it and the fixture installs no machine-level anchor — so the ref install
+        after the sync can only succeed if pc-switcher carried the remote's signing key
+        across (#215), which is exactly the claim this makes.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 

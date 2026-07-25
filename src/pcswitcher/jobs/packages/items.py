@@ -482,11 +482,30 @@ class FlatpakRemoteItem:
     with a byte-identical URL, yet the two are separate configuration the target must
     provision separately. `scope` inside `item_id` (same reasoning as `FlatpakItem`)
     is what keeps those two facts distinct rather than colliding on the shared name.
+
+    `gpg_verify` and `key_digest` are the remote's TRUST configuration (#215). A remote
+    replicated as name+url alone is configured but unusable — flatpak refuses every
+    install from it with `Can't check signature: public key not found` — so trust is
+    part of the item, not an incidental of the machine. `gpg_verify` is read from
+    `flatpak remotes --columns=options` (the `no-gpg-verify` token) and `key_digest` is
+    the sha256 of the remote's own ostree keyring, `<installation>/repo/<name>.
+    trustedkeys.gpg`; it is `None` for an unverified remote and for a verified one whose
+    trust comes from a machine-level anchor under `/usr/share/ostree/trusted.gpg.d`
+    rather than from a per-remote key.
+
+    The DIGEST lives on the item, not the key bytes — the same split `AptKeyItem` makes.
+    An item is carried through the diff, the review and the decision file, all of which
+    want an identity and a comparison, never a payload; the bytes themselves travel
+    separately and byte-for-byte (`flatpak_sync` stages the source's keyring file and
+    passes it to `flatpak remote-add --gpg-import`), which is ADR-020 D-12's rule that
+    key material is copied from the source machine and never re-fetched from a vendor.
     """
 
     name: str
     url: str
     scope: Literal["user", "system"]
+    gpg_verify: bool = True
+    key_digest: str | None = None
 
     ITEM_CLASS: ClassVar[ItemClass] = ItemClass.FLATPAK_REMOTE
 

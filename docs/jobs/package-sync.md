@@ -106,6 +106,14 @@ A snap installed from a local `.snap` file (`snap install --dangerous`, `snap tr
 
 To keep the revision from changing mid-sync, snapd's **automatic** refresh is briefly paused on both machines for the duration of the run (snapd auto-refreshes several times a day, even for closed apps). The pause blocks only automatic refreshes; snap_sync's own `--revision` convergence still works. Each machine's prior refresh policy is captured and restored when the run ends.
 
+## Flatpak remotes
+
+A flatpak remote is replicated as its own review item, per installation scope: `flathub` in the user installation and `flathub` in the system installation are two separate items, because flatpak configures them separately. Remotes always converge before the refs that come from them — `flatpak install` refuses outright when its remote is not configured in that scope.
+
+A remote travels with its **trust**, not only its name and URL. pc-switcher captures whether the source verifies the remote's signatures and, when it does, the remote's own signing key, and re-adds the remote on the target with that key imported (`flatpak remote-add --gpg-import`). The key is copied byte-for-byte from the source machine and never fetched from a vendor — the same rule apt signing keys follow. Without it a replicated remote would be configured but unusable: every install from it fails with `Can't check signature: public key not found`. A remote the source itself does not verify is replicated unverified, stated as such in the review; a verified remote is never turned into an unverified one.
+
+A remote that already exists on both machines but whose URL, verification setting or signing key differs is a **change** item that converges the target in place, keeping the refs that name it as their origin intact. A target that already trusted a different key for that remote ends up trusting both — flatpak merges imported keys rather than replacing them — so the difference is reported again on the next sync rather than the target's own trust being deleted.
+
 ## Holds and masks
 
 Beyond *what is installed*, pc-switcher also replicates the deliberate **blocks** you set to stop a package from updating: apt holds (`apt-mark hold`), per-snap refresh holds (`snap refresh --hold`), and flatpak masks (`flatpak mask`). (apt version *pins* already travel — they are `/etc/apt/preferences.d` files that sync as apt configuration items.)
@@ -120,7 +128,7 @@ The review verbs match the mechanism: apt and snap holds read *hold* / *unhold*,
 
 Removals propagate for the three package managers. A package removed from the source's `apt-mark showmanual` set, a snap uninstalled on the source, or a flatpak ref or remote removed on the source becomes a removal review item on the target — unticked by default, so you approve deletions deliberately.
 
-A flatpak remote offered for removal names, in the review item's detail, the refs installed on the target that still have it as their origin in that same scope. The removal is still offered — deleting a remote whose refs are going in the same run is normal cleanup — but you see what it would orphan before approving it.
+A flatpak remote offered for removal names, in the review item's detail, the refs installed on the target that still have it as their origin in that same scope. The removal is still offered — deleting a remote whose refs are going in the same run is normal cleanup — but you see what it would orphan before approving it. Deleting a remote also drops its signing key, since flatpak stores that key with the remote.
 
 `manual_installs_sync` is **install-only**: it has no target-side manifest of what it installed, so it never proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
 

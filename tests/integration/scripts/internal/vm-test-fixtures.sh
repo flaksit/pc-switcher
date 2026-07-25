@@ -23,7 +23,7 @@ set -euo pipefail
 # Bumping this forces provisioning to rebuild the baseline: provision-test-infra.sh and
 # run-integration-tests.sh compare the marker file's contents against their own copy of
 # this number (PCSWITCHER_TEST_FIXTURES_VERSION in internal/common.sh — keep in sync).
-readonly FIXTURES_VERSION=1
+readonly FIXTURES_VERSION=2
 readonly MARKER=/etc/pcswitcher-test-fixtures
 
 # Two snaps, because `test_system_refresh_hold_does_not_mask_a_per_snap_held_note` needs
@@ -42,24 +42,51 @@ readonly -a FIXTURE_SNAPS=(hello hello-world)
 # test time, and exercises byte-for-byte the same `flatpak remote-add` / `flatpak
 # install` path a real remote would.
 #
-# The public key is ALSO installed into ostree's system-wide trusted keyring. That is
-# what makes the replicated remote usable on the target: pc-switcher replicates a remote
-# as name+url (`flatpak remote-add --if-not-exists <name> <url>`), which produces a
-# remote with GPG verification on and no key of its own, and `flatpak remote-delete`
-# takes the per-remote keyring with it. A machine-level trust anchor is the normal way a
-# fleet trusts its own repository, and it is a property of the machine rather than of
-# the remote, so it survives the delete/re-add the flatpak test performs.
+# Nothing about the repository is trusted machine-wide: the ONLY way a machine can
+# install from it is the per-remote key, which is what makes
+# `test_flatpak_installs_into_source_scope_after_remote` prove that pc-switcher carries
+# a remote's signing key to the target (#215) rather than leaning on a pre-seeded
+# anchor. Both VMs sign their own local repository with the SAME embedded key below, so
+# the key the source replicates verifies the target's own copy of the repository.
 readonly FLATPAK_ROOT=/opt/pcswitcher-test-flatpak
 readonly FLATPAK_REPO_DIR="${FLATPAK_ROOT}/repo"
 readonly FLATPAK_PUBKEY="${FLATPAK_ROOT}/key.gpg"
 readonly FLATPAK_GNUPGHOME="${FLATPAK_ROOT}/gnupg"
-readonly OSTREE_TRUSTED_KEY=/usr/share/ostree/trusted.gpg.d/pcswitcher-test.gpg
+# Machines provisioned before #215 carry a system-wide trust anchor for this key; the
+# version bump above drops it, so the flatpak test can no longer pass without the key
+# actually travelling.
+readonly LEGACY_OSTREE_TRUSTED_KEY=/usr/share/ostree/trusted.gpg.d/pcswitcher-test.gpg
 readonly FLATPAK_REMOTE=pcswitcher-test
 readonly FLATPAK_APP=org.pcswitcher.TestApp
 readonly FLATPAK_APP_BRANCH=stable
 readonly FLATPAK_RUNTIME=org.pcswitcher.TestRuntime
 readonly FLATPAK_RUNTIME_BRANCH=1
 readonly FLATPAK_ARCH=x86_64
+
+# The signing key both VMs use, embedded rather than generated per machine: a
+# per-machine key would make the source's key useless against the target's own copy of
+# the repository, and the flatpak test's whole point is that the source's key is what
+# unlocks the target's remote. Passphrase-less and shared with the world by construction
+# — it signs one throwaway test repository on two disposable VMs and grants nothing else.
+readonly FLATPAK_KEY_FINGERPRINT=24DE0AA04BB04634BF07566854F16E15A37C920A
+read -r -d '' FLATPAK_SECRET_KEY <<'KEY' || true
+-----BEGIN PGP PRIVATE KEY BLOCK-----
+
+lFgEamUHOxYJKwYBBAHaRw8BAQdAfp7Eh6Vm2xnddvMFwXzl/9ZBvZ//3+pMm/WS
+XD1z5MAAAQCJFUZAjtpnTeqzLdKZYwrEMG9CvIJbs84jItAgbHFmnw65tDtwYy1z
+d2l0Y2hlciBpbnRlZ3JhdGlvbiB0ZXN0IHJlcG8gPHRlc3RAcGNzd2l0Y2hlci5p
+bnZhbGlkPoiTBBMWCgA7FiEEJN4KoEuwRjS/B1ZoVPFuFaN8kgoFAmplBzsCGwMF
+CwkIBwICIgIGFQoJCAsCBBYCAwECHgcCF4AACgkQVPFuFaN8kgo+4gEA6IuyVLQo
+7wGtv5uHS4sraY91lR/BycE0tyJvlYQbm5QBAJobRo82+cLTnSfC9GFEKNxKQsK9
+UK/osyCNR6QSXmEDnF0EamUHOxIKKwYBBAGXVQEFAQEHQNx1Ov3eDrAOcnU7pYvv
+8wTH4C+ZQgFODkjlhBxN8WMBAwEIBwAA/0JlttavOJZ1gAagSHw0wC+Ch1Ud5Fqz
+E11CvM6pVuzIEIyIeAQYFgoAIBYhBCTeCqBLsEY0vwdWaFTxbhWjfJIKBQJqZQc7
+AhsMAAoJEFTxbhWjfJIKRvkBAIZOvoOYQwktqHi4eEcG3BPy37PJ5D/vI65o1ef2
+2SycAQCRXPYYxjiVn7BpZJpH+hyg/Ajy5tML3DiV7uNsBbXNDA==
+=zLdb
+-----END PGP PRIVATE KEY BLOCK-----
+KEY
+readonly FLATPAK_SECRET_KEY
 
 log() { echo "[vm-test-fixtures] $*"; }
 
@@ -103,7 +130,7 @@ install_flatpak_packages() {
 }
 
 build_flatpak_repo() {
-    if [[ -d "$FLATPAK_REPO_DIR" && -f "$FLATPAK_PUBKEY" && -f "$OSTREE_TRUSTED_KEY" ]]; then
+    if [[ -d "$FLATPAK_REPO_DIR" && -f "$FLATPAK_PUBKEY" ]]; then
         log "flatpak fixture repository already built"
         return
     fi
@@ -125,13 +152,14 @@ mkdir -p "${FLATPAK_GNUPGHOME}" "${FLATPAK_REPO_DIR}"
 chmod 700 "${FLATPAK_GNUPGHOME}"
 export GNUPGHOME="${FLATPAK_GNUPGHOME}"
 
-# Passphrase-less signing key, generated per machine: each VM verifies against its own
-# local repository, so the two machines need no shared key material.
-gpg --batch --quiet --passphrase '' --quick-gen-key \
-    'pc-switcher integration test repo <test@pcswitcher.invalid>' default default never
-KEY_FINGERPRINT=\$(gpg --batch --with-colons --list-keys | awk -F: '/^fpr:/{print \$10; exit}')  # codespell:ignore fpr
-if [[ -z "\$KEY_FINGERPRINT" ]]; then
-    echo "failed to generate a signing key for the flatpak fixture repository" >&2
+# The shared, passphrase-less signing key (see FLATPAK_SECRET_KEY above): both VMs sign
+# with it, so a remote replicated from one verifies the other's own repository.
+gpg --batch --quiet --import <<'SECRETKEY'
+${FLATPAK_SECRET_KEY}
+SECRETKEY
+KEY_FINGERPRINT=${FLATPAK_KEY_FINGERPRINT}
+if ! gpg --batch --list-secret-keys "\$KEY_FINGERPRINT" >/dev/null 2>&1; then
+    echo "the embedded signing key for the flatpak fixture repository did not import" >&2
     exit 1
 fi
 
@@ -167,8 +195,6 @@ flatpak build-export --arch="${FLATPAK_ARCH}" \
 flatpak build-update-repo --gpg-sign="\$KEY_FINGERPRINT" --gpg-homedir="${FLATPAK_GNUPGHOME}" "${FLATPAK_REPO_DIR}"
 
 gpg --batch --export "\$KEY_FINGERPRINT" > "${FLATPAK_PUBKEY}"
-install -d -m 755 "\$(dirname "${OSTREE_TRUSTED_KEY}")"
-install -m 644 "${FLATPAK_PUBKEY}" "${OSTREE_TRUSTED_KEY}"
 
 # The repository is served over file:// to an unprivileged user.
 chmod 644 "${FLATPAK_PUBKEY}"
@@ -204,7 +230,7 @@ if [[ -f "$MARKER" ]] && [[ "$(cat "$MARKER")" != "$FIXTURES_VERSION" ]]; then
     log "marker reports version $(cat "$MARKER"), rebuilding for version $FIXTURES_VERSION"
     flatpak uninstall --user -y "$FLATPAK_APP" >/dev/null 2>&1 || true
     flatpak remote-delete --user --force "$FLATPAK_REMOTE" >/dev/null 2>&1 || true
-    sudo rm -rf "$FLATPAK_ROOT" "$OSTREE_TRUSTED_KEY"
+    sudo rm -rf "$FLATPAK_ROOT" "$LEGACY_OSTREE_TRUSTED_KEY"
 fi
 
 install_snaps
