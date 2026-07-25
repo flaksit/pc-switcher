@@ -125,7 +125,7 @@ Test file shorthand: `apt` = tests/unit/jobs/test_apt_sync.py · `snap` = test_s
 | E14 | Hold recorded for a snap the source no longer has | not proposed (source is hold authority) | U | snap:`TestHoldIntentIsSourceAuthoritative::test_hold_on_a_snap_the_source_does_not_have_yields_no_hold_diff` |
 | E15 | skip-always on `snap:hold:<name>`, next run | item inert, no diff | U V | blk:`TestSnapHoldDecisions` (3, incl. that the snap's own presence diff stays live), INT:`test_skip_always_on_a_snap_hold_is_inert_next_run`. Same `_drop_inert_diffs` pass as B9: the id first exists on the `ItemDiff`, so `filter_inert` cannot reach it |
 | E16 | Classic- or devmode-confinement snap (`Notes: classic`/`devmode`) | `--classic`/`--devmode` threaded from the SOURCE item, on install and on refresh; confinement alone is never a diff | U | snap:`TestParseConfinement` (3), `TestConvergeConfinement` (5). The flag is passed unconditionally from the source because `snap refresh` preserves the TARGET's confinement — a strict target would otherwise stay strict forever |
-| E17 | Sideloaded snap (revision `x<N>`, `Notes: try/devmode`) | `--revision=x1` is not fetchable from the store | ‼ | open by decision: needs a product call on which diff class an unfetchable revision gets. Today it is diffed like any revision and dies at converge as a per-item failure (the shape E22 pins) |
+| E17 | Sideloaded snap on the source (revision `x<N>`, `Notes: try`) | dropped from the diff input — no install, change or `snap:hold:` diff — and named in one WARNING; a target-only sideloaded snap is still a removal candidate | U | snap:`TestSideloadedSnaps` (6). Reproducing a sideloaded snap is deliberately not implemented (no mechanism carries the `.snap` bytes); the target's copy of a source-sideloaded snap is withheld too, so the drop cannot turn into a removal proposal |
 | E18 | Snap absent on target but hold approved (D6) | per-item failure, loop continues | U | snap:`test_hold_for_a_snap_absent_on_target_fails_only_that_item` |
 | E19 | `~/snap/<app>/<rev>` exclusion export | old revisions excluded, current-rev dir + `common` + `current` kept | U | snap:`test_excludes_old_revisions_keeps_current_common_and_current_symlink`, fold:`test_old_revision_excluded_current_kept` |
 | E20 | `current` dangling or missing | all revision dirs excluded (safe default) | U | snap:`test_dangling_current_falls_back_to_excluding_all_revisions`, `test_missing_current_symlink_falls_back_to_excluding_all_revisions` |
@@ -335,7 +335,6 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 
 ### Open defects and unimplemented requirements
 
-- E17 — a sideloaded snap sits at revision `x<N>`, which no store can serve. Open by decision: the diff class such a revision should get is a product call not yet made. Today it is diffed like any revision and dies at converge.
 - C26/N7 — a repo or key removal has no awareness of a target-side machine-specific package that still needs it. No linkage exists between the decision store and the repo diff. Example narrative 3 is not implemented.
 - N6 — no "this was the last package from that source, remove it too?" prompt. Source and key removals propagate only because the source machine's own files disappeared, as independent unticked items. Example narrative 2 is not implemented.
 

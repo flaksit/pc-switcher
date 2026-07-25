@@ -6,6 +6,7 @@ All executor interactions are mocked; no real snap/snapd commands run.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -784,6 +785,128 @@ class TestConvergeConfinement:
         plan = await job.plan()
 
         assert plan.diffs == ()
+
+
+# Sideloaded fixtures: a snap installed from a local `.snap` file gets a store-less
+# revision, rendered `x<N>`, and typically tracks no channel (`-`).
+SNAP_LIST_SOURCE_SIDELOADED = (
+    _HEADER
+    + "homemade  1.0        x1     -               -            try\n"
+    + "beta      2.0        20     latest/stable   pub✓         -\n"
+)
+SNAP_LIST_SOURCE_SIDELOADED_HELD = (
+    _HEADER
+    + "homemade  1.0        x1     -               -            try,held\n"
+    + "beta      2.0        20     latest/stable   pub✓         -\n"
+)
+
+
+class TestSideloadedSnaps:
+    """E17 — a snap installed from a local file (`snap install --dangerous`, `snap try`)
+    sits at a store-less `x<N>` revision no store can serve. Reproducing it is not
+    implemented, so every source-side diff it could produce is dropped at plan time and
+    reported once as a warning instead of failing at converge on every run.
+    """
+
+    @pytest.mark.asyncio
+    async def test_sideloaded_source_snap_produces_no_diff(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_SIDELOADED, "")},
+            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [d.item_id for d in plan.diffs] == ["snap:beta"]
+
+    @pytest.mark.asyncio
+    async def test_one_warning_names_the_skipped_sideloaded_snaps(self, caplog: pytest.LogCaptureFixture) -> None:
+        source = SNAP_LIST_SOURCE_SIDELOADED + "workshop  2.0        x2     -               -            try\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+        )
+        job = SnapSyncJob(context)
+
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
+            await job.plan()
+
+        assert len(caplog.records) == 1
+        message = caplog.records[0].message
+        assert "homemade" in message
+        assert "workshop" in message
+
+    @pytest.mark.asyncio
+    async def test_sideloaded_snap_that_is_held_produces_no_hold_diff_either(self) -> None:
+        """The hold diff derives from the SOURCE snap (`_diff_snap_holds`), so dropping the
+        snap must drop its hold with it — otherwise the run would propose holding a snap it
+        just declined to install.
+        """
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_SIDELOADED_HELD, "")},
+            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_id.startswith("snap:hold:") for d in plan.diffs)
+        assert [d.item_id for d in plan.diffs] == ["snap:beta"]
+
+    @pytest.mark.asyncio
+    async def test_store_snaps_in_the_same_listing_still_diff_and_converge(self) -> None:
+        """The filter is surgical: beta's revision difference still converges normally
+        alongside the dropped sideloaded snap.
+        """
+        target = _HEADER + "beta      1.5        15     latest/stable   pub✓         -\n"
+        context, _source, target_mock = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_SIDELOADED, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+
+        beta = next(d for d in plan.diffs if d.item_id == "snap:beta")
+        assert beta.action == DiffAction.CHANGE
+        await job.converge(beta)
+
+        commands = all_calls(target_mock)
+        assert any("sudo snap refresh --revision=20 beta" in c for c in commands)
+        assert not any("homemade" in c for c in commands)
+
+    @pytest.mark.asyncio
+    async def test_target_only_sideloaded_snap_is_still_offered_for_removal(self) -> None:
+        """Only the SOURCE side is filtered: a sideloaded snap the source does not have is
+        an ordinary extra-on-target removal candidate, which `snap remove` handles fine.
+        """
+        target = _HEADER + "orphan    9.0        x3     -               -            try\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        orphan = next(d for d in plan.diffs if d.item_id == "snap:orphan")
+        assert orphan.action == DiffAction.REMOVE
+
+    @pytest.mark.asyncio
+    async def test_sideloaded_snap_present_on_both_is_not_proposed_for_removal(self) -> None:
+        """Dropping the source snap must not orphan the target's copy into an
+        EXTRA_ON_TARGET removal — "cannot reproduce this" must never become "delete it".
+        """
+        target = _HEADER + "homemade  1.0        x1     -               -            try\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_SIDELOADED, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_id == "snap:homemade" for d in plan.diffs)
 
 
 class TestConvergeRemoval:

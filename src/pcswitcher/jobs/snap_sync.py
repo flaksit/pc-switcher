@@ -175,6 +175,26 @@ def _confinement_flags(item: SnapItem) -> str:
     return ""
 
 
+def _is_sideloaded(item: SnapItem) -> bool:
+    """Whether this snap's bytes came from a local `.snap` file rather than the store.
+
+    snapd assigns a store-less revision to a snap installed from a file (`snap install
+    --dangerous ./foo.snap`, `snap try`) and `snap list` renders it with an `x` prefix —
+    `x1`, `x2`, … — where a store revision is a plain integer. No store can serve an
+    `x<N>` revision, so `snap install --revision=x1 <name>` can never succeed; and such a
+    snap usually tracks no channel either, which makes the channel switch that follows
+    meaningless too.
+    """
+    return item.revision.startswith("x")
+
+
+def _partition_sideloaded(items: Sequence[SnapItem]) -> tuple[list[SnapItem], list[SnapItem]]:
+    """Split a captured listing into (store-installed, sideloaded), preserving order."""
+    store_items = [item for item in items if not _is_sideloaded(item)]
+    sideloaded = [item for item in items if _is_sideloaded(item)]
+    return store_items, sideloaded
+
+
 def _install_diff(item: SnapItem) -> ItemDiff:
     return ItemDiff(
         item_class=ItemClass.SNAP,
@@ -405,12 +425,36 @@ class SnapSyncJob(PackageSyncJob):
         run here — no `snap install`/`refresh`/`switch`/`remove` before this returns.
         Caches the filtered source/target items by id for `converge()` (see
         `__init__`), since `ItemDiff.item_id` alone carries no revision/channel data.
+
+        Sideloaded source snaps are reported once and dropped from the diff input:
+        reproducing them is not implemented (there is no mechanism to carry the `.snap`
+        bytes to the target), so every diff they could produce — install, revision/channel
+        change, and the `snap:hold:` diff `_diff_snap_holds` derives from a source snap —
+        would be an item that can only fail at converge, every run. A warning states that
+        once; no review item is emitted, since the user has no action to take on it.
         """
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
 
         source_items = await filter_inert(await self.capture_source_items(), source_decisions)
         target_items = await filter_inert(await self.query_target_items(), target_decisions)
+
+        source_items, sideloaded = _partition_sideloaded(source_items)
+        if sideloaded:
+            self._log(
+                Host.SOURCE,
+                LogLevel.WARNING,
+                "Skipping snap(s) installed from a local file: their revision exists in no store, so they "
+                "cannot be reproduced on the target — "
+                + ", ".join(f"{item.name} (revision {item.revision})" for item in sideloaded),
+            )
+            # The target's own entry for those names goes with them. Dropping only the
+            # source side would leave the target's copy unmatched, and an unmatched target
+            # snap is an EXTRA_ON_TARGET removal — turning "cannot reproduce this" into
+            # "propose deleting it there". A sideloaded snap the source does NOT have stays
+            # an ordinary removal candidate: its name is not in this set.
+            withheld = {item.name for item in sideloaded}
+            target_items = [item for item in target_items if item.name not in withheld]
 
         self._source_items_by_id = {item.item_id: item for item in source_items}
         self._target_items_by_id = {item.item_id: item for item in target_items}

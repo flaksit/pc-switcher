@@ -102,6 +102,8 @@ snap is the exception: it converges the source's exact **revision and channel**.
 
 With both machines on the same revision, snap application data now follows you: `folder_sync` mirrors the current-revision data directory (`~/snap/<app>/<current-rev>/`, resolved through snapd's `current` symlink) plus the revision-independent `~/snap/<app>/common`. Retained older-revision directories — revisions the target's snapd never installed — stay excluded to avoid leaving orphan data behind.
 
+A snap installed from a local `.snap` file (`snap install --dangerous`, `snap try`) is the one thing snap sync leaves alone. Such a snap has a revision no store can serve — `snap list` shows it with an `x` prefix, `x1`, `x2` — and pc-switcher has no way to carry the file itself to the other machine. Sideloaded snaps on the source are therefore named in a warning and skipped: they produce no review item, and neither does a hold set on one. Reproducing one on the other machine is manual work. A sideloaded snap that exists only on the *target* is unaffected — it is still offered for removal like any other snap the source does not have.
+
 To keep the revision from changing mid-sync, snapd's **automatic** refresh is briefly paused on both machines for the duration of the run (snapd auto-refreshes several times a day, even for closed apps). The pause blocks only automatic refreshes; snap_sync's own `--revision` convergence still works. Each machine's prior refresh policy is captured and restored when the run ends.
 
 ## Holds and masks
