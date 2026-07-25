@@ -6,7 +6,6 @@ accept the correct arguments as specified in docs/system/core.md.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +15,7 @@ from typer.testing import CliRunner
 from pcswitcher.cli import _async_run_sync, app
 from pcswitcher.config import Configuration
 from pcswitcher.models import SyncAbortedByUser
+from pcswitcher.version import Release, Version
 
 runner = CliRunner()
 
@@ -214,6 +214,13 @@ class TestInitCommand:
         assert "stale root filter" not in (tmp_path / "root.filter").read_text()
 
 
+# Pins both sides of the startup update check to one version, so no test here depends on
+# the live GitHub API or on which release is current (`test_version_check.py` covers the
+# check itself).
+_STUB_VERSION = Version.parse("1.0.0")
+_STUB_RELEASE = Release(_STUB_VERSION, is_prerelease=False, tag="v1.0.0")
+
+
 class TestConfirmEachCommandFlag:
     """`--confirm-each-command` has no non-interactive fallback, by design.
 
@@ -240,13 +247,14 @@ class TestConfirmEachCommandFlag:
     def test_accepted_and_forwarded_on_a_tty(self) -> None:
         """The flag must actually reach the orchestrator, not be validated and dropped.
 
-        `PCSWITCHER_SKIP_VERSION_CHECK` is set because faking a TTY also arms the startup
-        update check, which would reach the real GitHub API and then block on its own
-        `Upgrade now?` prompt — an outcome that depends on whether a newer release exists,
-        not on the flag under test.
+        The two version functions are stubbed for the same reason every TTY-faking test in
+        `test_version_check.py` stubs them: faking a TTY also arms the startup update check,
+        and a unit test must not depend on the live GitHub API or on which release happens
+        to be current. Pinning both sides to the same version means no upgrade is offered.
         """
         with (
-            patch.dict(os.environ, {"PCSWITCHER_SKIP_VERSION_CHECK": "1"}),
+            patch("pcswitcher.cli.get_this_version", return_value=_STUB_VERSION),
+            patch("pcswitcher.cli.get_highest_release", return_value=_STUB_RELEASE),
             patch("pcswitcher.cli.is_interactive", return_value=True),
             patch("pcswitcher.cli._load_configuration", return_value=MagicMock(spec=Configuration)),
             patch("pcswitcher.cli._run_sync", return_value=0) as run_sync,
