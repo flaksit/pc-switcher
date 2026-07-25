@@ -78,7 +78,7 @@ Test file shorthand: `apt` = tests/unit/jobs/test_apt_sync.py · `snap` = test_s
 | C24 | Source file *and* its key both extra on target, both approved | both deleted, one `apt-get update` after both writes | U V | apt:`test_source_and_its_key_both_removed_with_one_update_after_both`, INT:`test_apt_source_and_its_key_removed_together` (proven against `/etc/apt` and a working `apt-get update` afterwards) |
 | C25 | Content reads for hydration use sudo | matches the `sudo find … sha256sum` privilege | U | apt:`test_content_hydration_reads_use_sudo_matching_the_digest_capture` |
 | C26 | Target has a repo/key the source lacks, still needed by a target-side machine-specific package | removal offered with no awareness of that dependency | ‼ | no linkage exists in the code (user example 3, see N7) |
-| C27 | skip-always on a digest-derived repo item (`apt:source:`/`apt:key:`/`apt:pin:`/`apt:config:`), next run | item inert, no diff | P | apt's `plan()` runs `_drop_inert_diffs` over its own repo diffs for exactly this reason; every test of that pass names a hold item, none names a repo item |
+| C27 | skip-always on a digest-derived repo item (`apt:source:`/`apt:key:`/`apt:pin:`/`apt:config:`), next run | item inert, no diff | U | blk:`TestAptRepoItemDecisions` (2) |
 
 ## D. apt collateral (D-30) and metadata refresh (decision 1)
 
@@ -266,7 +266,7 @@ Test file shorthand: `apt` = tests/unit/jobs/test_apt_sync.py · `snap` = test_s
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
 | K1 | apt: `apt-mark` missing on either end | validation error | U | apt:`test_apt_mark_unavailable_yields_validation_error` |
-| K2 | apt: no passwordless sudo on target | error naming the binaries | P | `AptSyncJob.validate` runs the check and builds the hint from `_TARGET_SUDO_COMMANDS`, but `TestValidate` only covers the SOURCE side (K3); no test drives a target sudo failure |
+| K2 | apt: no passwordless sudo on target | error naming the binaries | U | apt:`test_target_without_passwordless_sudo_yields_validation_error_naming_the_binaries` |
 | K3 | apt: no passwordless sudo on **source** | error (else capture silently degrades) | U | apt:`test_source_without_passwordless_sudo_yields_validation_error` |
 | K4 | apt: dpkg frontend lock held | distinct error | U | apt:`test_dpkg_lock_held_yields_distinct_validation_error` |
 | K5 | snap: binary missing on either end | error | U | snap:`test_snap_unavailable_on_source/target_yields_validation_error` |
@@ -342,8 +342,6 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 
 ### Coverage gaps in behaviour believed correct
 
-- K2 — `AptSyncJob.validate` checks target-side passwordless sudo and builds a hint from `_TARGET_SUDO_COMMANDS`, but no test drives that failure; only the source side (K3) is asserted.
-- C27 — no test names a repo item when asserting that a recorded skip-always keeps a digest-derived diff from being re-emitted. The apt `plan()` override exists for that case; every test of it uses a hold item.
 - A11 — one package that is unreproducible on the source and missing on the target is described twice, in two managers' reviews. Untested.
 - C5 — a repo described by both a `.list` and a `.sources` file on one machine. Identity-by-filename is asserted; the coexistence case is not.
 - K7 — snap `validate()` logs a pre-existing system `refresh.hold` informationally and never mutates it. No test asserts the read-only path.

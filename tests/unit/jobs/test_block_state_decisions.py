@@ -25,11 +25,17 @@ from pcswitcher.jobs.packages.review import Decision, ReviewOutcome
 from pcswitcher.jobs.packages.sync_core import PackagePlan, PackageSyncJob
 from pcswitcher.jobs.snap_sync import SnapSyncJob
 from pcswitcher.models import CommandResult
-from tests.unit.jobs.test_apt_sync import all_calls, make_context
+from tests.unit.jobs.test_apt_sync import all_calls, make_context, sha256_line
 
 _SNAP_HEADER = "Name      Version    Rev    Tracking        Publisher    Notes\n"
 SNAP_ALPHA_HELD = _SNAP_HEADER + "alpha     1.0        10     latest/stable   pub✓         held\n"
 SNAP_ALPHA_UNHELD = _SNAP_HEADER + "alpha     1.0        10     latest/stable   pub✓         -\n"
+
+# A deb822 repo file naming the keyring it is signed by, so the source item captures a
+# resolvable `keyring_refs` entry and lands as a plain install rather than a dangling one.
+DEB822_FOO = (
+    "Types: deb\nURIs: https://example.com\nSuites: stable\nComponents: main\nSigned-By: /etc/apt/keyrings/foo.gpg\n"
+)
 
 # `apt-mark showhold` on a machine with no holds, so a hold stub only has to name the
 # machine that DOES hold something.
@@ -199,6 +205,57 @@ class TestAptHeldPackageSuppression:
         assert "apt:hold:pkg-c" not in item_ids
         assert "apt:hold:pkg-b" in item_ids
         assert "apt:package:pkg-b" not in item_ids
+
+
+class TestAptRepoItemDecisions:
+    """`apt:source:` / `apt:key:` — digest-derived like the block-state items, so they
+    reach `plan()` with no input item to filter and depend on the same post-diff pass.
+    """
+
+    @pytest.mark.asyncio
+    async def test_declined_source_install_is_recorded_on_source_and_never_re_offered(self) -> None:
+        source_responses = {
+            "apt-mark showmanual": CommandResult(0, "", ""),
+            "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+            "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, DEB822_FOO, ""),
+            "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+        }
+
+        context, source, target = make_context(source_responses=source_responses)
+        await record_skip_always(AptSyncJob(context), "apt:source:foo.sources")
+        assert wrote_decision_file(source)
+        assert not wrote_decision_file(target)
+        recorded = recorded_decision_file(source)
+
+        context, _source, _target = make_context(
+            source_responses={**source_responses, decision_cat("apt"): CommandResult(0, recorded, "")}
+        )
+        plan = await AptSyncJob(context).plan()
+
+        assert "apt:source:foo.sources" not in {diff.item_id for diff in plan.diffs}
+        assert "apt:source:foo.sources" not in review_item_ids(plan)
+
+    @pytest.mark.asyncio
+    async def test_declined_key_removal_is_recorded_on_target_and_never_re_offered(self) -> None:
+        key_id = "apt:key:per-repo:orphan.gpg"
+        target_responses = {
+            "apt-mark showmanual": CommandResult(0, "", ""),
+            "find /etc/apt/keyrings": CommandResult(0, sha256_line("k9", "orphan.gpg"), ""),
+        }
+
+        context, source, target = make_context(target_responses=target_responses)
+        await record_skip_always(AptSyncJob(context), key_id)
+        assert wrote_decision_file(target)
+        assert not wrote_decision_file(source)
+        recorded = recorded_decision_file(target)
+
+        context, _source, _target = make_context(
+            target_responses={**target_responses, decision_cat("apt"): CommandResult(0, recorded, "")}
+        )
+        plan = await AptSyncJob(context).plan()
+
+        assert key_id not in {diff.item_id for diff in plan.diffs}
+        assert key_id not in review_item_ids(plan)
 
 
 class TestSnapHoldDecisions:

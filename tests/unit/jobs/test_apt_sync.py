@@ -1485,6 +1485,26 @@ class TestValidate:
 
         assert any(e.host is Host.SOURCE and "sudo" in e.message for e in errors)
 
+    @pytest.mark.asyncio
+    async def test_target_without_passwordless_sudo_yields_validation_error_naming_the_binaries(self) -> None:
+        """The target error must carry the sudoers remediation, not just a diagnosis:
+        every binary the job escalates for has to appear so the user can paste one
+        working grant rather than discover the missing paths one failed run at a time.
+        """
+        context, _source, _target = make_context(
+            target_responses={
+                "sudo -n true": CommandResult(1, "", "sudo: a password is required"),
+                "fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        errors = await job.validate()
+
+        target_sudo_errors = [e for e in errors if e.host is Host.TARGET and "sudo" in e.message]
+        assert len(target_sudo_errors) == 1
+        assert all(command in target_sudo_errors[0].message for command in _TARGET_SUDO_COMMANDS)
+
 
 class TestJobDiscovery:
     @pytest.mark.asyncio
