@@ -9,10 +9,15 @@ review-before-any-change ordering checkable and testable per job:
 - `plan()` captures the source manifest, queries the target, diffs, and builds this job's
   own `ReviewGroup`s. It issues READ commands only — nothing here may mutate either
   machine, because a job plans and reviews before it converges. Before capturing anything,
-  it loads both machines' machine-local decision files (D-08, D-09, `packages/state.py`) and
-  filters an inert item out of the side that holds it, so an item recorded "skip always"
-  never becomes an `ItemDiff` in the first place — D-08's "inert on M in both roles" made
-  real at the diff-input boundary rather than as a later filter on the review.
+  it loads both machines' machine-local decision files (D-08, D-09, `packages/state.py`)
+  and filters an inert item out of the side that holds it, so an item recorded "skip
+  always" never becomes an `ItemDiff` (`filter_inert`). Inertness is then enforced a
+  SECOND time on the resulting diffs (`_drop_inert_diffs`), because block-state
+  membership items (`apt:hold:`, `snap:hold:`) derive their identity from set membership
+  over package state and carry no input item to filter on the way in — their `item_id`
+  first exists on the `ItemDiff`. For apt the post-diff pass is also the only CORRECT
+  place: the target hold set additionally suppresses a held package's own install/upgrade
+  action, so filtering that input set would re-propose upgrading a held package.
 - `accept_review()` stores this job's plan plus the outcome its own review returned, so
   `apply()` and the apt guards read a consistent pair.
 - `apply()` converges the `APPLY`-decided diffs, one item at a time, catching and
@@ -157,6 +162,11 @@ class PackageSyncJob(SyncJob):
         super().__init__(context)
         self._accepted_plan: PackagePlan | None = None
         self._accepted_outcome: ReviewOutcome | None = None
+        # Both machines' decision files as the last `plan()` call read them, so a subclass
+        # that EXTENDS the base plan (only `apt_sync`, with its collateral and repo diffs)
+        # can run `_drop_inert_diffs` over its own extra diffs without a second pair of
+        # remote reads. Re-assigned on every `plan()`, never cached across calls.
+        self._plan_decisions: tuple[Mapping[str, DecisionEntry], Mapping[str, DecisionEntry]] = ({}, {})
 
     # -- Abstract hooks subclasses implement -------------------------------------------
 
@@ -392,6 +402,48 @@ class PackageSyncJob(SyncJob):
             )
         return diffs
 
+    @staticmethod
+    def _decision_holder_is_source(action: DiffAction) -> bool:
+        """D-08a's holder rule: an `INSTALL`/`CHANGE` diff is source-held (the source has
+        the item, or the version it should converge to), a `REMOVE` diff target-held.
+
+        One definition shared by the WRITE path (`_record_permanent_skips` picks the
+        executor whose file gets the entry) and the READ path (`_drop_inert_diffs` picks
+        the file to look the item up in), so the machine a skip-always lands on is by
+        construction the machine it is read back from.
+        """
+        return action in (DiffAction.INSTALL, DiffAction.CHANGE)
+
+    def _drop_inert_diffs(
+        self,
+        diffs: Sequence[ItemDiff],
+        source_decisions: Mapping[str, DecisionEntry],
+        target_decisions: Mapping[str, DecisionEntry],
+    ) -> tuple[ItemDiff, ...]:
+        """Drop every diff whose `item_id` is recorded "skip always" on the machine that
+        holds it (D-08/D-08a) — the post-diff counterpart to `filter_inert`.
+
+        Required for any diff whose identity does not exist on an input item and so cannot
+        be filtered at the diff-input boundary: the block-state membership items
+        (`apt:hold:<name>`, `snap:hold:<name>`) are derived from hold-set membership, and
+        apt's repo/collateral diffs are derived from directory digests. Without this pass
+        a permanently-declined hold is re-emitted every run — and in the add direction it
+        comes back default-checked, so a bulk accept applies the very hold the user
+        declined.
+
+        `REPORT_ONLY` diffs pass through untouched: they carry no converge verb, so
+        `_record_permanent_skips` never records one and there is no holder to match.
+        """
+        kept: list[ItemDiff] = []
+        for diff in diffs:
+            if diff.action not in (DiffAction.INSTALL, DiffAction.CHANGE, DiffAction.REMOVE):
+                kept.append(diff)
+                continue
+            holder = source_decisions if self._decision_holder_is_source(diff.action) else target_decisions
+            if diff.item_id not in holder:
+                kept.append(diff)
+        return tuple(kept)
+
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
         """One `ReviewGroup` per `(action, item_class)` present in `diffs`, keyed on
         `(manager, action)` for the reviewer's removal-direction test (D-24) so removals
@@ -457,9 +509,14 @@ class PackageSyncJob(SyncJob):
         is dropped from the target query so it is never proposed for
         install/remove/change again — either way it produces no `ItemDiff` and never
         reaches the review.
+
+        The finished diffs go through `_drop_inert_diffs` as well, which catches the
+        recorded items no input-side filter can see (the `apt:hold:` membership items, and
+        apt's own extra diffs once its override has appended them).
         """
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
+        self._plan_decisions = (source_decisions, target_decisions)
 
         source_items = await filter_inert(await self.capture_source_items(), source_decisions)
         target_items = await filter_inert(await self.query_target_items(), target_decisions)
@@ -469,13 +526,17 @@ class PackageSyncJob(SyncJob):
             item.item_id for item in target_items
         )
         unavailable_item_ids = await self.collect_unavailable_item_ids(missing_item_ids)
-        diffs = self.diff_items(
-            source_items,
-            target_items,
-            hold_pin_facts=hold_pin_facts,
-            unavailable_item_ids=unavailable_item_ids,
-            source_hold_names=source_hold_names,
-            target_hold_names=target_hold_names,
+        diffs = self._drop_inert_diffs(
+            self.diff_items(
+                source_items,
+                target_items,
+                hold_pin_facts=hold_pin_facts,
+                unavailable_item_ids=unavailable_item_ids,
+                source_hold_names=source_hold_names,
+                target_hold_names=target_hold_names,
+            ),
+            source_decisions,
+            target_decisions,
         )
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
@@ -628,7 +689,7 @@ class PackageSyncJob(SyncJob):
             if diff.action not in (DiffAction.INSTALL, DiffAction.CHANGE, DiffAction.REMOVE):
                 continue
 
-            executor = self.source if diff.action in (DiffAction.INSTALL, DiffAction.CHANGE) else self.target
+            executor = self.source if self._decision_holder_is_source(diff.action) else self.target
             await DecisionFile(self.manager_id, executor).record(
                 DecisionEntry(
                     item_id=diff.item_id,

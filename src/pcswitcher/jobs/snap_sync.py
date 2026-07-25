@@ -382,7 +382,12 @@ class SnapSyncJob(PackageSyncJob):
         self._source_items_by_id = {item.item_id: item for item in source_items}
         self._target_items_by_id = {item.item_id: item for item in target_items}
 
-        diffs = tuple(_diff_snap_items(source_items, target_items))
+        # `_drop_inert_diffs` after the diff, not `filter_inert` before it: a hold's
+        # identity is `snap:hold:<name>`, which no `SnapItem` carries (its own id is
+        # `snap:<name>`), so a recorded hold decision can only be matched on the ItemDiff.
+        diffs = self._drop_inert_diffs(
+            _diff_snap_items(source_items, target_items), source_decisions, target_decisions
+        )
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
 

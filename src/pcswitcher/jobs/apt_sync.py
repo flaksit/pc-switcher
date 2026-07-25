@@ -682,11 +682,16 @@ class AptSyncJob(PackageSyncJob):
         # rank (e.g. every APT_PACKAGE diff, or every APT_PIN/APT_CONFIG diff) the
         # original relative order — base diff, then collateral, then repo diffs — is
         # preserved.
-        all_diffs = tuple(
+        # This job's OWN extra diffs (repo files) also need the D-08a inertness pass the
+        # base `plan()` already ran over its diffs — they are derived from directory
+        # digests, so no input item carried their id into `filter_inert`. The decision
+        # files `super().plan()` just read are reused rather than re-read.
+        all_diffs = self._drop_inert_diffs(
             sorted(
                 (*base_plan.diffs, *collateral_diffs, *repo_diffs),
                 key=lambda diff: _ITEM_CLASS_ORDER.get(diff.item_class, 3),
-            )
+            ),
+            *self._plan_decisions,
         )
         groups = self._build_review_groups(all_diffs)
         return PackagePlan(manager=self.manager_id, diffs=all_diffs, groups=groups)

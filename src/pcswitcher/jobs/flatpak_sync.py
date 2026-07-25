@@ -571,7 +571,10 @@ class FlatpakSyncJob(PackageSyncJob):
         # it can never suppress an auto-pulled dependency of a ref being installed the
         # same run; converge() carries the pattern fully in the item_id, so masks (unlike
         # refs) need no source-side cache.
-        diffs = (*remote_diffs, *ref_diffs, *mask_diffs)
+        # Every flatpak item class carries its own id into `filter_inert` above, so this
+        # pass is a no-op backstop here — kept so all four `plan()`s end the same way and
+        # the read path can never drift from `_record_permanent_skips`'s write path.
+        diffs = self._drop_inert_diffs((*remote_diffs, *ref_diffs, *mask_diffs), source_decisions, target_decisions)
 
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
