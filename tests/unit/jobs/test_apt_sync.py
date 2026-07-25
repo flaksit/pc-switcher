@@ -10,15 +10,21 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.apt_sync import _TARGET_SUDO_COMMANDS, AptSyncJob, simulate_apt_transaction
+from pcswitcher.jobs.apt_sync import (
+    _METADATA_REFRESH_ITEM_ID,
+    _TARGET_SUDO_COMMANDS,
+    AptSyncJob,
+    simulate_apt_transaction,
+)
 from pcswitcher.jobs.packages.items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
-from pcswitcher.jobs.packages.review import COLLATERAL_REVIEW_ACTION, Decision, ReviewOutcome
+from pcswitcher.jobs.packages.review import _REMOVAL_ACTIONS, COLLATERAL_REVIEW_ACTION, Decision, ReviewOutcome
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFailures, PackagePlan
 from pcswitcher.models import CommandResult, Host
 from pcswitcher.orchestrator import Orchestrator
@@ -159,6 +165,61 @@ class TestDiff:
         assert diffs[0].item_id == "apt:package:pkg-extra"
         assert diffs[0].diff_class == DiffClass.EXTRA_ON_TARGET
         assert diffs[0].action == DiffAction.REMOVE
+
+
+class TestManifestIsShowmanualOnly:
+    """A-10/A-12: the manifest is `apt-mark showmanual` and nothing else. Every other
+    guarantee this job makes rests on that — an auto-installed dependency is invisible to
+    the model, and an empty source manifest is a mass removal that must stay visible.
+    """
+
+    @pytest.mark.asyncio
+    async def test_auto_installed_dependency_produces_no_diff_of_any_kind(self) -> None:
+        """`libdep` is installed on the source (dpkg knows it) but is not in either
+        machine's `showmanual` set, so it is never an item: never installed on the target,
+        never removed, never reported. `_resolve_versions` builds items from the
+        `showmanual` names alone, which is exactly the mechanism this pins.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nlibdep\t5.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+        assert not any("libdep" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_empty_source_manifest_offers_every_target_package_as_an_unticked_removal(self) -> None:
+        """An empty `apt-mark showmanual` on the source means every target package is
+        extra. That mass removal must surface as ordinary EXTRA_ON_TARGET/REMOVE items in
+        a removal-direction group (unticked by default, D-07), never silently and never
+        pre-approved.
+        """
+        context, _source, _target = make_context(
+            source_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t2.0\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert {d.item_id for d in plan.diffs} == {"apt:package:pkg-a", "apt:package:pkg-b"}
+        assert all(d.diff_class == DiffClass.EXTRA_ON_TARGET and d.action == DiffAction.REMOVE for d in plan.diffs)
+        assert len(plan.groups) == 1
+        assert plan.groups[0].action in _REMOVAL_ACTIONS
+        assert plan.groups[0].title == "Remove apt packages"
 
 
 class TestPlanApplySplit:
@@ -678,6 +739,229 @@ class TestAptHold:
 
     def test_apt_mark_is_in_the_target_sudo_command_list(self) -> None:
         assert "/usr/bin/apt-mark" in _TARGET_SUDO_COMMANDS
+
+
+class TestHoldReviewVerbs:
+    """#208 D3 — the single behavioural promise of hold replication: a hold item reads
+    "hold"/"unhold" in its group title AND in every entry's `action_label`, and never
+    appears under an install/remove packages group, even when ordinary package installs
+    and removals share the same `DiffAction` in the same plan.
+    """
+
+    @pytest.mark.asyncio
+    async def test_hold_items_get_their_own_group_with_hold_and_unhold_verbs(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-install\npkg-common\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-install\t1.0\npkg-common\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "hold-add\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-extra\npkg-common\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-extra\t9.9\npkg-common\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "hold-drop\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        group_of = {entry.item_id: group for group in plan.groups for entry in group.entries}
+        label_of = {entry.item_id: entry.action_label for group in plan.groups for entry in group.entries}
+
+        # The package diffs still read as install/remove — the hold verbs are not a
+        # blanket rename, they are per item class.
+        assert group_of["apt:package:pkg-install"].title == "Install apt packages"
+        assert group_of["apt:package:pkg-extra"].title == "Remove apt packages"
+
+        assert group_of["apt:hold:hold-add"].title == "Hold apt packages"
+        assert group_of["apt:hold:hold-drop"].title == "Unhold apt packages"
+        assert label_of["apt:hold:hold-add"] == "hold"
+        assert label_of["apt:hold:hold-drop"] == "unhold"
+
+    @pytest.mark.asyncio
+    async def test_unhold_group_is_removal_direction_and_the_hold_group_is_not(self) -> None:
+        """`ReviewGroup.action` is what `review._REMOVAL_ACTIONS` tests to decide whether a
+        group's checkboxes default to unticked. Undoing a block the user deliberately set
+        needs that friction; adding one does not (#208 D3).
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "hold-add\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "hold-drop\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        group_of = {entry.item_id: group for group in plan.groups for entry in group.entries}
+        assert group_of["apt:hold:hold-drop"].action in _REMOVAL_ACTIONS
+        assert group_of["apt:hold:hold-add"].action not in _REMOVAL_ACTIONS
+
+
+class TestInstallBeforeHoldOrdering:
+    """#208 D8: a package missing on the target and held on the source converges its
+    `apt-mark hold` AFTER its `apt-get install` — dpkg selection state for a package that
+    is not there yet is not a state apt can set. Both ordering code paths are covered:
+    `plan()`'s `_ITEM_CLASS_ORDER` sort, and `accept_review`'s marker-insertion rebuild.
+    """
+
+    @pytest.mark.asyncio
+    async def test_hold_follows_install_on_the_plain_plan_sort_path(self) -> None:
+        """A repo diff exists (so `plan()` runs its `_ITEM_CLASS_ORDER` sort) but is left
+        unapproved, so `accept_review` inserts no metadata-refresh marker and never
+        rebuilds the diff order.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "a.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                    CommandResult(0, "", "")
+                ),
+                "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:hold:pkg-a": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        install_idx = _index_of(commands, lambda c: "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c)
+        hold_idx = _index_of(commands, lambda c: c == "sudo apt-mark hold pkg-a")
+        assert install_idx < hold_idx
+
+    @pytest.mark.asyncio
+    async def test_hold_follows_install_on_the_accept_review_reorder_path(self) -> None:
+        """An approved repo-group item makes `accept_review` rebuild the plan around the
+        metadata-refresh marker (repo items, marker, packages, holds) — the hold must stay
+        behind its package install through that rebuild too.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "a.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+                "test -f /etc/apt/keyrings/a.gpg": CommandResult(1, "", ""),
+                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                    CommandResult(0, "", "")
+                ),
+                "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(
+            job,
+            {
+                "apt:key:per-repo:a.gpg": Decision.APPLY,
+                "apt:package:pkg-a": Decision.APPLY,
+                "apt:hold:pkg-a": Decision.APPLY,
+            },
+        )
+
+        await job.execute()
+
+        commands = all_calls(target)
+        key_idx = _index_of(commands, lambda c: "sudo install" in c and "keyrings/a.gpg" in c)
+        update_idx = _index_of(commands, lambda c: c == "sudo apt-get update")
+        install_idx = _index_of(commands, lambda c: "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c)
+        hold_idx = _index_of(commands, lambda c: c == "sudo apt-mark hold pkg-a")
+        assert key_idx < update_idx < install_idx < hold_idx
+
+
+class TestHoldOnAnAbsentPackage:
+    """#208 D6: a hold approved for a package the target does not have hits `apt-mark`'s
+    own error. That is a normal per-item failure (D-27 continue-and-report) — no gating
+    machinery, no crash, no aborted run.
+    """
+
+    @pytest.mark.asyncio
+    async def test_failed_apt_mark_hold_fails_only_that_item(self) -> None:
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-good\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-good\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "ghost-pkg\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+                "apt-get -s install -y --no-install-recommends pkg-good": CommandResult(
+                    0, "Inst pkg-good (1.0)\n", ""
+                ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-good": (
+                    CommandResult(0, "", "")
+                ),
+                "sudo apt-mark hold ghost-pkg": CommandResult(1, "", "E: Unable to locate package ghost-pkg"),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-good": Decision.APPLY, "apt:hold:ghost-pkg": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        assert [diff.item_id for diff, _ in exc_info.value.failures] == ["apt:hold:ghost-pkg"]
+        # The unrelated item in the same run still converged.
+        assert any(
+            "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-good" in c for c in all_calls(target)
+        )
+
+
+class TestHoldsDriveNoSimulation:
+    """#208 D4: a hold is dpkg selection state, not an apt transaction — so it drives no
+    `apt-get -s` preview at plan time and none at converge time.
+    """
+
+    @pytest.mark.asyncio
+    async def test_hold_only_run_issues_zero_apt_get_simulations(self) -> None:
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+                "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        assert [d.item_class for d in plan.diffs] == [ItemClass.APT_HOLD]
+
+        _install_reviewer(job, {"apt:hold:pkg-a": Decision.APPLY})
+        await job.execute()
+
+        commands = all_calls(target)
+        assert any(c == "sudo apt-mark hold pkg-a" for c in commands)
+        assert not any("apt-get -s" in c for c in commands)
 
 
 class TestUnavailableCapture:
@@ -1722,6 +2006,87 @@ class TestRepoGroupOrdering:
             assert "/etc" not in dest
 
 
+class TestRepoGroupRemovalAndKeyChange:
+    """C-24 and C-8: the two repository-group shapes the ordering tests above do not
+    exercise — a source file and its key removed together, and a key whose bytes differ
+    on the two machines.
+    """
+
+    @pytest.mark.asyncio
+    async def test_source_and_its_key_both_removed_with_one_update_after_both(self) -> None:
+        """Both files are extra on the target and both approved: each gets its own
+        `sudo rm -f`, and the run's single `apt-get update` runs after both writes — apt's
+        metadata must never be refreshed against a half-removed repository.
+        """
+        context, _source, target = _repo_context(
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d9", "extra.list"), ""),
+                "cat /etc/apt/sources.list.d/extra.list": CommandResult(0, _LEGACY_BAR, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k9", "bar.gpg"), ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(
+            job,
+            {"apt:key:per-repo:bar.gpg": Decision.APPLY, "apt:source:extra.list": Decision.APPLY},
+        )
+
+        await job.execute()
+
+        commands = all_calls(target)
+        removals = [c for c in commands if c.startswith("sudo rm -f")]
+        assert len(removals) == 2
+        assert any("keyrings/bar.gpg" in c for c in removals)
+        assert any("sources.list.d/extra.list" in c for c in removals)
+
+        assert sum(1 for c in commands if c == "sudo apt-get update") == 1
+        update_idx = _index_of(commands, lambda c: c == "sudo apt-get update")
+        assert update_idx > max(commands.index(c) for c in removals)
+
+    @pytest.mark.asyncio
+    async def test_changed_per_repo_key_is_staged_then_promoted_with_the_source_bytes(self) -> None:
+        """A key whose digest differs on both machines is a VERSION_MISMATCH/CHANGE that
+        actually converges (D-12): the SOURCE's file is staged under the target's home and
+        promoted with `sudo install -o root -g root -m 0644` — never re-fetched, never
+        parsed, never written from the target's own copy.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k-new", "x.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k-old", "x.gpg"), ""),
+                "test -f /etc/apt/keyrings/x.gpg": CommandResult(0, "", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        key_diff = next(d for d in plan.diffs if d.item_id == "apt:key:per-repo:x.gpg")
+        assert key_diff.diff_class == DiffClass.VERSION_MISMATCH
+        assert key_diff.action == DiffAction.CHANGE
+        assert "k-new" in (key_diff.detail or "") and "k-old" in (key_diff.detail or "")
+
+        _install_reviewer(job, {"apt:key:per-repo:x.gpg": Decision.APPLY})
+        await job.execute()
+
+        transfers = [(call.args[0], call.args[1]) for call in target.send_file.call_args_list]
+        assert len(transfers) == 1
+        local_path, staged_dest = transfers[0]
+        assert local_path == Path("/etc/apt/keyrings/x.gpg")
+        assert staged_dest.startswith("/home/target-user")
+
+        promotions = [
+            c for c in all_calls(target) if c.startswith("sudo install -o root -g root -m 0644") and "x.gpg" in c
+        ]
+        assert len(promotions) == 1
+        assert promotions[0] == f"sudo install -o root -g root -m 0644 {staged_dest} /etc/apt/keyrings/x.gpg"
+
+
 class TestRepoGroupTransaction:
     @pytest.mark.asyncio
     async def test_failed_update_restores_changed_deletes_created_records_group_failures(self) -> None:
@@ -1858,6 +2223,44 @@ class TestRepoGroupTransaction:
 
         commands = all_calls(target)
         assert any("sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-a" in c for c in commands)
+
+    @pytest.mark.asyncio
+    async def test_post_rollback_install_issues_no_further_apt_get_update(self) -> None:
+        """D-18: the rollback's re-probe `apt-get update` succeeded, so `/etc/apt` is the
+        pre-run configuration with fresh metadata. The package items that still run after
+        the rollback (D-27) must issue no third refresh — the run's single-refresh
+        guarantee (decision 1) holds across the rollback path too.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_side_effect=respond_with_update_sequence(
+                mapping={
+                    "echo $HOME": CommandResult(0, "/home/target-user", ""),
+                    "apt-mark showmanual": CommandResult(0, "", ""),
+                    "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                    "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                    "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                        CommandResult(0, "", "")
+                    ),
+                },
+                update_results=[CommandResult(1, "", "update failed"), CommandResult(0, "", "")],
+            ),
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures):
+            await job.execute()
+
+        commands = all_calls(target)
+        # Exactly two: the group's own failing refresh, and the rollback's re-probe.
+        assert sum(1 for c in commands if c == "sudo apt-get update") == 2
+        install_idx = _index_of(commands, lambda c: "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c)
+        assert not any(c == "sudo apt-get update" for c in commands[install_idx:])
 
 
 class TestRepoGroupBackupFailure:
@@ -2070,6 +2473,48 @@ class TestMetadataRefreshBeforeInstall:
             lambda c: "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-a" in c,
         )
         assert update_idx < install_idx
+
+
+class TestReportOnlyRepoItemDecidedApply:
+    """D-19: the untested edge of `accept_review`'s `approved_group` test — the only
+    approved repository item is one the diff already downgraded to REPORT_ONLY (a source
+    file whose keyring reference dangles on the source, D-12).
+
+    End to end that means: the marker IS inserted (the `approved_group` test keys on the
+    decision, not the action), the REPORT_ONLY diff itself never reaches `converge()`
+    (`apply()` excludes REPORT_ONLY regardless of decision), and the repository group
+    therefore has no actionable item — so nothing is written under `/etc/apt` and no
+    `apt-get update` runs. Ticking an item the review already flagged as informational is
+    a no-op, not a half-applied repository.
+    """
+
+    @pytest.mark.asyncio
+    async def test_apply_on_a_report_only_source_writes_nothing_and_refreshes_nothing(self) -> None:
+        context, _source, target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d2", "bar.list"), ""),
+                "cat /etc/apt/sources.list.d/bar.list": CommandResult(0, _LEGACY_BAR, ""),
+            },
+            target_responses={**_NO_PACKAGES},
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:bar.list": Decision.APPLY})
+
+        await job.execute()
+
+        assert job._accepted_plan is not None
+        assert job._accepted_outcome is not None
+        by_id = {d.item_id: d for d in job._accepted_plan.diffs}
+        assert by_id["apt:source:bar.list"].action == DiffAction.REPORT_ONLY
+        # The marker is inserted and decided APPLY, then converges as a no-op.
+        assert _METADATA_REFRESH_ITEM_ID in by_id
+        assert job._accepted_outcome.decisions[_METADATA_REFRESH_ITEM_ID] == Decision.APPLY
+
+        commands = all_calls(target)
+        assert not any("sudo apt-get update" in c for c in commands)
+        assert not any(c.startswith("sudo install") or c.startswith("sudo rm -f") for c in commands)
+        target.send_file.assert_not_called()
 
 
 # -- Decision 8: collateral protects the SOURCE manual set too (union of target, source) -
