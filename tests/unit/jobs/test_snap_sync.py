@@ -15,6 +15,13 @@ import pytest
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass
+from pcswitcher.jobs.packages.review import (
+    Decision,
+    ReviewGroup,
+    ReviewOutcome,
+    _is_removal_direction,  # pyright: ignore[reportPrivateUsage]
+)
+from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
 from pcswitcher.jobs.snap_sync import SnapSyncJob, snap_sync_exclude_paths
 from pcswitcher.models import CommandResult, Host, ValidationError
 from pcswitcher.orchestrator import Orchestrator
@@ -310,6 +317,25 @@ SNAP_LIST_TARGET_HELD_ALPHA = (
 # and a hold diff, exercising the D8 install-before-hold ordering guarantee.
 SNAP_LIST_SOURCE_HELD_ONLY_ALPHA = _HEADER + "alpha     1.0        10     latest/stable   pub✓         held\n"
 
+# One plan carrying BOTH ordinary presence diffs and both hold directions, so the review
+# vocabulary is exercised where a hold shares its DiffAction with a snap (#208 D3):
+#   alpha   -> source only            -> snap:alpha        INSTALL
+#   delta   -> target only            -> snap:delta        REMOVE
+#   epsilon -> identical, source-held -> snap:hold:epsilon INSTALL
+#   zeta    -> identical, target-held -> snap:hold:zeta    REMOVE
+SNAP_LIST_SOURCE_MIXED_HOLDS = (
+    _HEADER
+    + "alpha     1.0        10     latest/stable   pub✓         -\n"
+    + "epsilon   1.0        50     latest/stable   pub✓         held\n"
+    + "zeta      1.0        60     latest/stable   pub✓         -\n"
+)
+SNAP_LIST_TARGET_MIXED_HOLDS = (
+    _HEADER
+    + "delta     4.0        40     latest/stable   pub✓         -\n"
+    + "epsilon   1.0        50     latest/stable   pub✓         -\n"
+    + "zeta      1.0        60     latest/stable   pub✓         held\n"
+)
+
 
 class TestParseHeld:
     """`held` in the Notes column sets `SnapItem.held` (#208)."""
@@ -419,6 +445,195 @@ class TestHolds:
             # A bare `snap refresh --hold` with no snap name is the global-hold pitfall.
             assert cmd.strip() != "sudo snap refresh --hold"
             assert not cmd.rstrip().endswith("--hold")
+
+
+class TestHoldReviewVerbs:
+    """#208 D3 — a hold item NEVER displays under an install/remove snap group.
+
+    `_build_review_groups` keys the group title AND every entry's `action_label` off
+    `_ACTION_VOCABULARY` by the group's own item class, so a `SNAP_HOLD` INSTALL reads
+    "hold" and a `SNAP_HOLD` REMOVE reads "unhold" even when ordinary `SNAP` INSTALL and
+    REMOVE diffs share those very actions in the same plan.
+    """
+
+    @staticmethod
+    async def _mixed_plan() -> PackagePlan:
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_MIXED_HOLDS, "")},
+            target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_MIXED_HOLDS, "")},
+        )
+        return await SnapSyncJob(context).plan()
+
+    @staticmethod
+    def _group_holding(plan: PackagePlan, item_id: str) -> ReviewGroup:
+        return next(g for g in plan.groups if any(e.item_id == item_id for e in g.entries))
+
+    @pytest.mark.asyncio
+    async def test_hold_install_group_reads_hold_never_install(self) -> None:
+        plan = await self._mixed_plan()
+
+        group = self._group_holding(plan, "snap:hold:epsilon")
+
+        assert group.title == "Hold snap packages"
+        assert [e.action_label for e in group.entries] == ["hold"]
+        # The hold has its own group: it never joins the snap install group.
+        assert {e.item_id for e in group.entries} == {"snap:hold:epsilon"}
+
+    @pytest.mark.asyncio
+    async def test_hold_remove_group_reads_unhold_and_is_removal_direction(self) -> None:
+        """The unhold group must be removal-direction so the checkbox screen leaves it
+        unticked — the right friction for undoing a block the user deliberately set. That
+        classification is `packages/review._is_removal_direction` applied to
+        `ReviewGroup.action`, so this asserts against the real classifier rather than
+        restating the string.
+        """
+        plan = await self._mixed_plan()
+
+        group = self._group_holding(plan, "snap:hold:zeta")
+
+        assert group.title == "Unhold snap packages"
+        assert [e.action_label for e in group.entries] == ["unhold"]
+        assert _is_removal_direction(group.action)
+
+    @pytest.mark.asyncio
+    async def test_snap_groups_keep_their_own_verbs_and_exclude_hold_items(self) -> None:
+        plan = await self._mixed_plan()
+
+        install_group = self._group_holding(plan, "snap:alpha")
+        remove_group = self._group_holding(plan, "snap:delta")
+
+        assert install_group.title == "Install snap packages"
+        assert [e.action_label for e in install_group.entries] == ["install"]
+        assert remove_group.title == "Remove snap packages"
+        assert [e.action_label for e in remove_group.entries] == ["remove"]
+        # Neither presence group absorbed a hold item despite sharing its DiffAction.
+        assert not any(e.item_id.startswith("snap:hold:") for e in (*install_group.entries, *remove_group.entries))
+        # No entry anywhere reads a package verb for a hold item.
+        for group in plan.groups:
+            for entry in group.entries:
+                if entry.item_id.startswith("snap:hold:"):
+                    assert entry.action_label in {"hold", "unhold"}
+
+
+class TestHoldIntentIsSourceAuthoritative:
+    @pytest.mark.asyncio
+    async def test_hold_on_a_snap_the_source_does_not_have_yields_no_hold_diff(self) -> None:
+        """E14 — `_diff_snap_holds` iterates SOURCE snaps only: a hold recorded on the
+        target for a snap the source no longer has at all is not the user's current
+        intent, so no `snap:hold:` diff is proposed (the snap itself is still offered
+        for removal as an ordinary presence diff).
+        """
+        source = _HEADER + "alpha     1.0        10     latest/stable   pub✓         -\n"
+        target = (
+            _HEADER
+            + "alpha     1.0        10     latest/stable   pub✓         -\n"
+            + "orphan    9.0        90     latest/stable   pub✓         held\n"
+        )
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_id.startswith("snap:hold:") for d in plan.diffs)
+        assert [d.item_id for d in plan.diffs] == ["snap:orphan"]
+
+
+class TestHoldAndRevisionFailuresArePerItem:
+    """D-27/D6: a hold or refresh command that snapd rejects fails exactly that item —
+    the loop still completes and every other approved item still converges.
+    """
+
+    @pytest.mark.asyncio
+    async def test_hold_for_a_snap_absent_on_target_fails_only_that_item(self) -> None:
+        """E18 — the user skipped alpha's install but applied its hold, so
+        `snap refresh --hold=forever alpha` hits an absent snap and exits non-zero. That
+        is a normal per-item failure (D6: no gating machinery), and the epsilon hold that
+        follows it still converges.
+        """
+        source = (
+            _HEADER
+            + "alpha     1.0        10     latest/stable   pub✓         held\n"
+            + "epsilon   1.0        50     latest/stable   pub✓         held\n"
+        )
+        target = _HEADER + "epsilon   1.0        50     latest/stable   pub✓         -\n"
+        context, _source, target_mock = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={
+                "snap list --all": CommandResult(0, target, ""),
+                "snap refresh --hold=forever alpha": CommandResult(1, "", 'snap "alpha" is not installed'),
+            },
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={
+                    "snap:alpha": Decision.SKIP_ONCE,
+                    "snap:hold:alpha": Decision.APPLY,
+                    "snap:hold:epsilon": Decision.APPLY,
+                },
+                was_interactive=True,
+            ),
+        )
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.apply()
+
+        assert [diff.item_id for diff, _stderr in exc_info.value.failures] == ["snap:hold:alpha"]
+        commands = all_calls(target_mock)
+        # The failing item precedes the succeeding one, so this proves the loop continued.
+        assert any("snap refresh --hold=forever epsilon" in c for c in commands)
+        assert not any("snap install" in c for c in commands)
+
+    @pytest.mark.asyncio
+    async def test_unfetchable_revision_is_a_clean_per_item_failure_not_a_crash(self) -> None:
+        """E22 — the D-06 assumption that the source's `--revision=N` is fetchable by the
+        target's snapd can fail (a revision that never reached this machine's store). The
+        refusal surfaces as a per-item `PackageItemFailures`, the channel switch for the
+        failed snap is skipped, and gamma's own retrack still runs.
+        """
+        source = (
+            _HEADER
+            + "beta      2.0        20     latest/stable   pub✓         -\n"
+            + "gamma     3.0        30     latest/stable   pub✓         -\n"
+        )
+        target = (
+            _HEADER
+            + "beta      1.5        15     latest/stable   pub✓         -\n"
+            + "gamma     3.0        30     latest/edge     pub✓         -\n"
+        )
+        context, _source, target_mock = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={
+                "snap list --all": CommandResult(0, target, ""),
+                "snap refresh --revision=20 beta": CommandResult(
+                    1, "", 'error: cannot perform the following tasks:\n- Download snap "beta" (20)'
+                ),
+            },
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={"snap:beta": Decision.APPLY, "snap:gamma": Decision.APPLY},
+                was_interactive=True,
+            ),
+        )
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.apply()
+
+        assert [diff.item_id for diff, _stderr in exc_info.value.failures] == ["snap:beta"]
+        commands = all_calls(target_mock)
+        # A failed revision refresh short-circuits its own channel switch...
+        assert not any("snap switch" in c and " beta" in c for c in commands)
+        # ...but gamma's same-revision retrack still converged.
+        assert any("sudo snap switch --channel=latest/stable gamma" in c for c in commands)
 
 
 class TestConvergeRemoval:

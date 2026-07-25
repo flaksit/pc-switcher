@@ -17,7 +17,11 @@ from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.flatpak_sync import FlatpakSyncJob, _parse_flatpak_masks, flatpak_sync_exclude_paths
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
-from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed
+from pcswitcher.jobs.packages.review import (
+    ReviewGroup,
+    _is_removal_direction,  # pyright: ignore[reportPrivateUsage]
+)
+from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan
 from pcswitcher.models import CommandResult, Host, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
@@ -541,6 +545,237 @@ class TestMaskDiff:
         assert ref_indices
         assert mask_indices
         assert max(ref_indices) < min(mask_indices)
+
+
+class TestMaskEditsAndScopeMoves:
+    """#208 D-10 — masks are pure membership, so neither an edited pattern nor a moved
+    scope is ever normalised into a single CHANGE: both read as remove-old + add-new and
+    are reported exactly as found (the same rule refs and remotes already follow).
+    """
+
+    @pytest.mark.asyncio
+    async def test_edited_pattern_reads_as_two_membership_diffs_never_a_change(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={"flatpak --user mask": CommandResult(0, "  org.example.Blocked/x86_64/24.08\n", "")},
+            target_responses={"flatpak --user mask": CommandResult(0, "  org.example.Blocked/x86_64/23.08\n", "")},
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        mask_diffs = [d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_MASK]
+        assert {(d.item_id, d.action) for d in mask_diffs} == {
+            ("flatpak:mask:user:org.example.Blocked/x86_64/24.08", DiffAction.INSTALL),
+            ("flatpak:mask:user:org.example.Blocked/x86_64/23.08", DiffAction.REMOVE),
+        }
+        assert not any(d.action == DiffAction.CHANGE for d in mask_diffs)
+
+    @pytest.mark.asyncio
+    async def test_scope_move_reads_as_add_system_plus_remove_user(self) -> None:
+        """Scope is identity (module docstring), so the same pattern masked `system` on
+        the source and `user` on the target is two independent items, not one move.
+        """
+        pattern = "org.freedesktop.Platform.ffmpeg-full"
+        context, _source, _target = make_context(
+            source_responses={"flatpak --system mask": CommandResult(0, f"  {pattern}\n", "")},
+            target_responses={"flatpak --user mask": CommandResult(0, f"  {pattern}\n", "")},
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        mask_diffs = [d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_MASK]
+        assert {(d.item_id, d.action) for d in mask_diffs} == {
+            (f"flatpak:mask:system:{pattern}", DiffAction.INSTALL),
+            (f"flatpak:mask:user:{pattern}", DiffAction.REMOVE),
+        }
+
+    @pytest.mark.asyncio
+    async def test_mask_replicates_even_when_its_pattern_matches_no_installed_ref(self) -> None:
+        """#208 D-10 — masks are captured from `flatpak mask`, never filtered against
+        `flatpak list`: a pattern matching nothing installed on EITHER machine is still
+        replicated, because it encodes the user's intent about future installs.
+        """
+        installed = "org.gnome.Podcasts\t1.0\tflathub\tuser\n"
+        context, _source, _target = make_context(
+            source_responses={
+                "flatpak list --app": CommandResult(0, installed, ""),
+                "flatpak --user mask": CommandResult(0, "  org.example.NeverInstalledAnywhere\n", ""),
+            },
+            target_responses={"flatpak list --app": CommandResult(0, installed, "")},
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_class == ItemClass.FLATPAK_REF for d in plan.diffs)
+        mask_diffs = [d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_MASK]
+        assert len(mask_diffs) == 1
+        assert mask_diffs[0].item_id == "flatpak:mask:user:org.example.NeverInstalledAnywhere"
+        assert mask_diffs[0].action == DiffAction.INSTALL
+
+
+class TestMaskSkipAlways:
+    @pytest.mark.asyncio
+    async def test_recorded_mask_produces_no_diff_on_the_next_run(self) -> None:
+        """A `skip always` recorded for a mask in the machine-local decision file makes it
+        inert on the next run: masks reach `filter_inert` under the SAME item_id the
+        decision was written against, so `plan()` never re-emits the diff.
+        """
+        pattern = "org.example.Blocked"
+        item_id = f"flatpak:mask:user:{pattern}"
+        decision_file = (
+            "machine_specific:\n"
+            f'  "{item_id}":\n'
+            "    item_class: flatpak_mask\n"
+            f'    label: "{pattern} (mask, user)"\n'
+            "    reason: null\n"
+            "    recorded_at: '2026-07-25T00:00:00Z'\n"
+        )
+        context, _source, _target = make_context(
+            source_responses={
+                "flatpak.decisions.yaml": CommandResult(0, decision_file, ""),
+                "flatpak --user mask": CommandResult(0, f"  {pattern}\n", ""),
+            },
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_class == ItemClass.FLATPAK_MASK for d in plan.diffs)
+
+
+class TestMaskReviewVerbs:
+    """#208 D3 — a mask item NEVER displays under an install/remove flatpak group.
+
+    `_build_review_groups` keys the group title AND every entry's `action_label` off
+    `_ACTION_VOCABULARY` by the group's own item class, so a `FLATPAK_MASK` INSTALL reads
+    "mask" and a REMOVE reads "unmask" even when ref and remote diffs share those very
+    actions in the same plan.
+    """
+
+    @staticmethod
+    async def _mixed_plan() -> PackagePlan:
+        context, _source, _target = make_context(
+            source_responses={
+                "flatpak list --app": CommandResult(0, "org.example.SourceOnly\t1.0\tflathub\tuser\n", ""),
+                "flatpak remotes --user --columns=name,url": CommandResult(
+                    0, _FLATHUB_REMOTE_LINE + "srcremote\thttps://src.example.org/repo/\n", ""
+                ),
+                "flatpak --user mask": CommandResult(0, "  org.example.MaskNew\n", ""),
+            },
+            target_responses={
+                "flatpak list --app": CommandResult(0, "org.example.TargetOnly\t1.0\tflathub\tuser\n", ""),
+                "flatpak remotes --user --columns=name,url": CommandResult(
+                    0, _FLATHUB_REMOTE_LINE + "tgtremote\thttps://tgt.example.org/repo/\n", ""
+                ),
+                "flatpak --user mask": CommandResult(0, "  org.example.MaskOld\n", ""),
+            },
+        )
+        return await FlatpakSyncJob(context).plan()
+
+    @staticmethod
+    def _group_holding(plan: PackagePlan, item_id: str) -> ReviewGroup:
+        return next(g for g in plan.groups if any(e.item_id == item_id for e in g.entries))
+
+    @pytest.mark.asyncio
+    async def test_mask_install_group_reads_mask_never_install(self) -> None:
+        plan = await self._mixed_plan()
+
+        group = self._group_holding(plan, "flatpak:mask:user:org.example.MaskNew")
+
+        assert group.title == "Mask flatpak packages"
+        assert [e.action_label for e in group.entries] == ["mask"]
+        assert {e.item_id for e in group.entries} == {"flatpak:mask:user:org.example.MaskNew"}
+
+    @pytest.mark.asyncio
+    async def test_mask_remove_group_reads_unmask_and_is_removal_direction(self) -> None:
+        plan = await self._mixed_plan()
+
+        group = self._group_holding(plan, "flatpak:mask:user:org.example.MaskOld")
+
+        assert group.title == "Unmask flatpak packages"
+        assert [e.action_label for e in group.entries] == ["unmask"]
+        assert _is_removal_direction(group.action)
+
+    @pytest.mark.asyncio
+    async def test_ref_and_remote_groups_keep_their_own_verbs_and_exclude_masks(self) -> None:
+        plan = await self._mixed_plan()
+
+        ref_install = self._group_holding(plan, "flatpak:ref:user:org.example.SourceOnly")
+        ref_remove = self._group_holding(plan, "flatpak:ref:user:org.example.TargetOnly")
+        remote_install = self._group_holding(plan, "flatpak:remote:user:srcremote")
+        remote_remove = self._group_holding(plan, "flatpak:remote:user:tgtremote")
+
+        assert ref_install.title == "Install flatpak packages"
+        assert ref_remove.title == "Remove flatpak packages"
+        # Refs and remotes have no vocabulary entry of their own, so they fall back to the
+        # bare DiffAction verb — which is exactly the verb a mask must NOT inherit.
+        assert {e.action_label for e in (*ref_install.entries, *remote_install.entries)} == {"install"}
+        assert {e.action_label for e in (*ref_remove.entries, *remote_remove.entries)} == {"remove"}
+        for group in (ref_install, ref_remove, remote_install, remote_remove):
+            assert not any(e.item_id.startswith("flatpak:mask:") for e in group.entries)
+
+
+class TestRemoteRemovalOrphansRefs:
+    """F21 — pins the ACTUAL behaviour: nothing guards the REMOVE direction.
+
+    `_remote_ready_on_target` guards only the ref-INSTALL direction (a ref is refused
+    when its origin remote is neither on the target nor added this run). There is no
+    equivalent on the removal side: `_converge_remote`'s REMOVE branch issues
+    `flatpak remote-delete` unconditionally, with no check for target-side refs that
+    still name that remote as their origin, and `_diff_flatpak_remotes` offers the
+    removal with no awareness of them either. The ref below stays installed on both
+    machines (so it produces no diff of its own) and is silently orphaned.
+    """
+
+    _REF_LINE = "org.example.NeedsRemote\t1.0\tcustomremote\tuser\n"
+
+    def _responses(self) -> tuple[dict[str, CommandResult], dict[str, CommandResult]]:
+        source = {
+            "flatpak list --app": CommandResult(0, self._REF_LINE, ""),
+            "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+        }
+        target = {
+            "flatpak list --app": CommandResult(0, self._REF_LINE, ""),
+            "flatpak remotes --user --columns=name,url": CommandResult(
+                0, _FLATHUB_REMOTE_LINE + "customremote\thttps://custom.example.org/repo/\n", ""
+            ),
+        }
+        return source, target
+
+    @pytest.mark.asyncio
+    async def test_remote_still_used_by_a_target_ref_is_offered_for_removal(self) -> None:
+        source_responses, target_responses = self._responses()
+        context, _source, _target = make_context(source_responses=source_responses, target_responses=target_responses)
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        # The ref exists identically on both machines, so it is never reviewed...
+        assert not any(d.item_class == ItemClass.FLATPAK_REF for d in plan.diffs)
+        # ...yet the remote it depends on is offered for removal, unticked, with no
+        # mention of the dependency in the diff.
+        remote_diffs = [d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE]
+        assert len(remote_diffs) == 1
+        assert remote_diffs[0].item_id == "flatpak:remote:user:customremote"
+        assert remote_diffs[0].action == DiffAction.REMOVE
+        assert remote_diffs[0].detail is None
+        remove_group = next(g for g in plan.groups if _is_removal_direction(g.action))
+        assert "flatpak:remote:user:customremote" in {e.item_id for e in remove_group.entries}
+
+    @pytest.mark.asyncio
+    async def test_converge_deletes_the_remote_without_checking_dependent_refs(self) -> None:
+        source_responses, target_responses = self._responses()
+        context, _source, target = make_context(source_responses=source_responses, target_responses=target_responses)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        diff = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
+
+        result = await job.converge(diff)
+
+        assert result.success
+        assert any("flatpak remote-delete --user customremote" in c for c in all_calls(target))
 
 
 class TestMaskConverge:
