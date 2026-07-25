@@ -718,54 +718,126 @@ class TestMaskReviewVerbs:
 
 
 class TestRemoteRemovalOrphansRefs:
-    """F21 — pins the ACTUAL behaviour: nothing guards the REMOVE direction.
+    """F21 (#214) — a remote offered for removal names the target refs it would orphan.
 
-    `_remote_ready_on_target` guards only the ref-INSTALL direction (a ref is refused
-    when its origin remote is neither on the target nor added this run). There is no
-    equivalent on the removal side: `_converge_remote`'s REMOVE branch issues
-    `flatpak remote-delete` unconditionally, with no check for target-side refs that
-    still name that remote as their origin, and `_diff_flatpak_remotes` offers the
-    removal with no awareness of them either. The ref below stays installed on both
-    machines (so it produces no diff of its own) and is silently orphaned.
+    The removal itself is NOT guarded and is not meant to be: `_converge_remote`'s
+    REMOVE branch still issues `flatpak remote-delete` for any approved diff, because
+    deleting a remote whose refs are being removed in the same run is legitimate
+    cleanup. What plan() adds is disclosure — the REMOVE diff's `detail` names the
+    target-side refs whose origin the remote is, in that same scope, so the review
+    states the consequence before approval (D-30's placement, unlike the ref-INSTALL
+    direction's `_remote_ready_on_target` hard refusal). The ref below is installed
+    identically on both machines, so it produces no diff of its own and would otherwise
+    never appear in the review at all.
     """
 
-    _REF_LINE = "org.example.NeedsRemote\t1.0\tcustomremote\tuser\n"
+    _USER_REF_LINE = "org.example.NeedsRemote\t1.0\tcustomremote\tuser\n"
+    _SYSTEM_REF_LINE = "org.example.SystemOnly\t1.0\tcustomremote\tsystem\n"
+    _CUSTOM_REMOTE_LINE = "customremote\thttps://custom.example.org/repo/\n"
 
     def _responses(self) -> tuple[dict[str, CommandResult], dict[str, CommandResult]]:
+        """User-scope `customremote` is target-only (so: one REMOVE diff), while the
+        system-scope remote of the same name exists on both sides (so: no diff). Both
+        refs are installed identically on both machines.
+        """
         source = {
-            "flatpak list --app": CommandResult(0, self._REF_LINE, ""),
+            "flatpak list --app": CommandResult(0, self._USER_REF_LINE + self._SYSTEM_REF_LINE, ""),
             "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+            "flatpak remotes --system --columns=name,url": CommandResult(
+                0, _FLATHUB_REMOTE_LINE + self._CUSTOM_REMOTE_LINE, ""
+            ),
         }
         target = {
-            "flatpak list --app": CommandResult(0, self._REF_LINE, ""),
+            "flatpak list --app": CommandResult(0, self._USER_REF_LINE + self._SYSTEM_REF_LINE, ""),
             "flatpak remotes --user --columns=name,url": CommandResult(
-                0, _FLATHUB_REMOTE_LINE + "customremote\thttps://custom.example.org/repo/\n", ""
+                0, _FLATHUB_REMOTE_LINE + self._CUSTOM_REMOTE_LINE, ""
+            ),
+            "flatpak remotes --system --columns=name,url": CommandResult(
+                0, _FLATHUB_REMOTE_LINE + self._CUSTOM_REMOTE_LINE, ""
             ),
         }
         return source, target
 
     @pytest.mark.asyncio
-    async def test_remote_still_used_by_a_target_ref_is_offered_for_removal(self) -> None:
+    async def test_dependent_target_ref_is_named_in_the_removal_detail(self) -> None:
         source_responses, target_responses = self._responses()
         context, _source, _target = make_context(source_responses=source_responses, target_responses=target_responses)
         job = FlatpakSyncJob(context)
 
         plan = await job.plan()
 
-        # The ref exists identically on both machines, so it is never reviewed...
+        # Both refs exist identically on both machines, so neither is reviewed itself.
         assert not any(d.item_class == ItemClass.FLATPAK_REF for d in plan.diffs)
-        # ...yet the remote it depends on is offered for removal, unticked, with no
-        # mention of the dependency in the diff.
         remote_diffs = [d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE]
         assert len(remote_diffs) == 1
         assert remote_diffs[0].item_id == "flatpak:remote:user:customremote"
         assert remote_diffs[0].action == DiffAction.REMOVE
-        assert remote_diffs[0].detail is None
-        remove_group = next(g for g in plan.groups if _is_removal_direction(g.action))
-        assert "flatpak:remote:user:customremote" in {e.item_id for e in remove_group.entries}
+        assert remote_diffs[0].detail is not None
+        assert "org.example.NeedsRemote" in remote_diffs[0].detail
 
     @pytest.mark.asyncio
-    async def test_converge_deletes_the_remote_without_checking_dependent_refs(self) -> None:
+    async def test_same_name_remote_in_the_other_scope_contributes_no_dependents(self) -> None:
+        """A remote is per-installation, so only same-scope refs depend on it: the
+        system-scope ref whose origin is also named `customremote` must not be named in
+        the USER-scope removal's detail.
+        """
+        source_responses, target_responses = self._responses()
+        context, _source, _target = make_context(source_responses=source_responses, target_responses=target_responses)
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
+        assert diff.detail is not None
+        assert "org.example.SystemOnly" not in diff.detail
+
+    @pytest.mark.asyncio
+    async def test_remote_with_no_dependent_refs_keeps_detail_none(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "flatpak list --app": CommandResult(0, self._USER_REF_LINE, ""),
+                "flatpak remotes --user --columns=name,url": CommandResult(
+                    0, _FLATHUB_REMOTE_LINE + self._CUSTOM_REMOTE_LINE, ""
+                ),
+            },
+            target_responses={
+                "flatpak list --app": CommandResult(0, self._USER_REF_LINE, ""),
+                "flatpak remotes --user --columns=name,url": CommandResult(
+                    0,
+                    _FLATHUB_REMOTE_LINE
+                    + self._CUSTOM_REMOTE_LINE
+                    + "unusedremote\thttps://unused.example.org/repo/\n",
+                    "",
+                ),
+            },
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "flatpak:remote:user:unusedremote")
+        assert diff.action == DiffAction.REMOVE
+        assert diff.detail is None
+
+    @pytest.mark.asyncio
+    async def test_review_entry_carries_the_dependent_refs_to_the_user(self) -> None:
+        source_responses, target_responses = self._responses()
+        context, _source, _target = make_context(source_responses=source_responses, target_responses=target_responses)
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        remove_group = next(g for g in plan.groups if _is_removal_direction(g.action))
+        entry = next(e for e in remove_group.entries if e.item_id == "flatpak:remote:user:customremote")
+        assert entry.detail is not None
+        assert "org.example.NeedsRemote" in entry.detail
+        assert "customremote" in entry.detail
+
+    @pytest.mark.asyncio
+    async def test_approved_removal_still_deletes_the_remote(self) -> None:
+        """Disclosure, not refusal: converge is unchanged, so an approved removal of a
+        remote with dependents still runs `flatpak remote-delete`.
+        """
         source_responses, target_responses = self._responses()
         context, _source, target = make_context(source_responses=source_responses, target_responses=target_responses)
         job = FlatpakSyncJob(context)

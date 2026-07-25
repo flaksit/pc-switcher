@@ -156,7 +156,7 @@ Test file shorthand: `apt` = tests/unit/jobs/test_apt_sync.py · `snap` = test_s
 | F18 | System-scope mask on either machine | target sudo required | U | flat:`test_system_scope_mask_requires_target_sudo` |
 | F19 | User-scope-only diff | sudo never checked | U | flat:`test_user_scope_only_mask_never_checks_sudo`, `test_user_scope_only_never_checks_sudo` |
 | F20 | skip-always on a mask, next run | inert | U | flat:`TestMaskSkipAlways::test_recorded_mask_produces_no_diff_on_the_next_run`, blk:`TestFlatpakMaskDecisions` (2) |
-| F21 | Remote removed while a target ref still uses it | removal offered, orphaning that ref | ‼ | flat:`TestRemoteRemovalOrphansRefs` (2) pins the actual behaviour: `_remote_ready_on_target` gates the install direction only; `remote-delete` runs with no check for target-side refs naming that origin, and the diff carries no detail about them |
+| F21 | Remote removed while a target ref still uses it | removal offered with the dependent target refs named in its `detail` (same scope only); not refused | U | flat:`TestRemoteRemovalOrphansRefs` (5), items:`test_build_orphaned_refs_detail_names_the_remote_and_every_dependent` |
 | F22 | `~/.local/share/flatpak` exclusion, `~/.var/app` never excluded | store owned by the job, data by folder_sync | U | flat:`test_returns_flatpak_data_dir_excludes_var_app`, fold:`test_flatpak_data_dir_included_var_app_never_mentioned` |
 
 ## G. manual installs and snippets (D-18…D-23, decision 9, corrected D-23)
@@ -336,7 +336,6 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 ### Open defects and unimplemented requirements
 
 - E17 — a sideloaded snap sits at revision `x<N>`, which no store can serve. Open by decision: the diff class such a revision should get is a product call not yet made. Today it is diffed like any revision and dies at converge.
-- F21 — `flatpak remote-delete` runs with no check for target-side refs whose origin is that remote, and the removal item carries no detail naming them. `_remote_ready_on_target` guards the install direction only. Behaviour is pinned by a test so a future guard has something to change.
 - C26/N7 — a repo or key removal has no awareness of a target-side machine-specific package that still needs it. No linkage exists between the decision store and the repo diff. Example narrative 3 is not implemented.
 - N6 — no "this was the last package from that source, remove it too?" prompt. Source and key removals propagate only because the source machine's own files disappeared, as independent unticked items. Example narrative 2 is not implemented.
 

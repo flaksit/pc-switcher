@@ -39,6 +39,8 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar, Literal
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from pcswitcher.executor import Executor
 
 __all__ = [
@@ -60,6 +62,7 @@ __all__ = [
     "UnreproducibleItem",
     "build_dangling_keyring_detail",
     "build_held_or_pinned_detail",
+    "build_orphaned_refs_detail",
     "build_repo_unavailable_detail",
     "build_version_mismatch_detail",
     "compare_deb_versions",
@@ -241,6 +244,18 @@ def build_dangling_keyring_detail(filename: str, missing_ref: str) -> str:
     as an opaque apt-get failure on the target.
     """
     return f"{filename} references keyring {missing_ref!r}, which does not exist on the source"
+
+
+def build_orphaned_refs_detail(remote: str, applications: Sequence[str]) -> str:
+    """Detail string for a flatpak remote REMOVE diff whose removal would leave
+    target-side refs without their origin (#214).
+
+    Names the consequence in the review the user approves from, the same place D-30 puts
+    apt's transaction collateral — deleting the remote is still offered, because a
+    legitimate cleanup removes the refs too, but it is never offered as a bare presence
+    difference with nothing said about what depends on it.
+    """
+    return f"target refs still using {remote}: {', '.join(applications)} (removal orphans them)"
 
 
 @dataclass(frozen=True)

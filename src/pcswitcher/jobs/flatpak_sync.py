@@ -21,7 +21,12 @@ before the plan's `diffs` tuple ever reaches `apply()`'s per-diff loop. Before
 converging a ref, its origin remote is checked against what already exists on the
 target in that scope OR what this SAME run has already successfully added — a ref
 whose remote is missing from both is skipped with a per-item failure naming the
-remote, rather than issuing an install flatpak will reject (T-02-24).
+remote, rather than issuing an install flatpak will reject (T-02-24). The removal
+direction is disclosure rather than refusal (#214): a remote offered for deletion
+carries, in its review `detail`, the target refs that still name it as their origin in
+that same scope — deleting a remote whose refs are being removed too is legitimate
+cleanup, so the decision stays in the review where D-30 puts apt's collateral, never as
+a mid-apply refusal.
 
 The flatpak OSTree store stays authoritative for its own state (D-01): this job never
 touches `/var/lib/flatpak` or `~/.local/share/flatpak` directly, only shells out to
@@ -69,6 +74,7 @@ from pcswitcher.jobs.packages.items import (
     FlatpakRemoteItem,
     ItemClass,
     ItemDiff,
+    build_orphaned_refs_detail,
     build_version_mismatch_detail,
 )
 from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
@@ -292,14 +298,23 @@ def _install_remote_diff(item: FlatpakRemoteItem) -> ItemDiff:
     )
 
 
-def _remove_remote_diff(item: FlatpakRemoteItem) -> ItemDiff:
+def _remove_remote_diff(item: FlatpakRemoteItem, dependent_applications: Sequence[str]) -> ItemDiff:
+    """Deleting a remote the target's own refs still name as their origin orphans them
+    (#214), so the dependents are named in `detail` — the review states the consequence
+    before the user approves it, D-30's placement for apt's transaction collateral.
+
+    Not a refusal, unlike the ref-install direction's `_remote_ready_on_target` guard:
+    removing a remote whose refs are being removed in the same run is a legitimate
+    cleanup, and the decision belongs in the review rather than mid-apply. A remote with
+    no dependents keeps `detail=None` — no noise on the common case.
+    """
     return ItemDiff(
         item_class=ItemClass.FLATPAK_REMOTE,
         diff_class=DiffClass.EXTRA_ON_TARGET,
         action=DiffAction.REMOVE,
         item_id=item.item_id,
         label=item.label(),
-        detail=None,
+        detail=build_orphaned_refs_detail(item.name, dependent_applications) if dependent_applications else None,
     )
 
 
@@ -325,8 +340,25 @@ def _change_remote_diff(source_item: FlatpakRemoteItem, target_item: FlatpakRemo
     )
 
 
+def _target_refs_by_origin_remote(target_refs: Sequence[FlatpakItem]) -> dict[str, list[str]]:
+    """Target ref application ids keyed by the `item_id` of the remote they name as
+    origin, IN THEIR OWN SCOPE (#214).
+
+    A remote is per-installation (module docstring), so `flathub` in `user` and
+    `flathub` in `system` are two entries and only same-scope refs depend on either —
+    keying by the full remote item_id rather than the bare name is what keeps a
+    user-scope ref out of the system-scope remote's dependent list.
+    """
+    by_remote: dict[str, list[str]] = {}
+    for ref in target_refs:
+        by_remote.setdefault(f"flatpak:remote:{ref.scope}:{ref.origin}", []).append(ref.application)
+    return by_remote
+
+
 def _diff_flatpak_remotes(
-    source_items: Sequence[FlatpakRemoteItem], target_items: Sequence[FlatpakRemoteItem]
+    source_items: Sequence[FlatpakRemoteItem],
+    target_items: Sequence[FlatpakRemoteItem],
+    target_refs: Sequence[FlatpakItem],
 ) -> list[ItemDiff]:
     """One diff per remote `item_id` (name + scope) present on either side.
 
@@ -336,9 +368,14 @@ def _diff_flatpak_remotes(
     gap this closes. URL is the only field compared here — name and scope ARE the
     identity, so a difference in either produces two separate install/remove diffs, not
     a change (module docstring's scope-as-identity rule).
+
+    `target_refs` is the SAME queried ref list the ref diff is built from — it is what
+    lets a REMOVE diff name the refs its removal would orphan (#214) without a
+    per-remote query of its own.
     """
     source_by_id = {item.item_id: item for item in source_items}
     target_by_id = {item.item_id: item for item in target_items}
+    dependents_by_remote_id = _target_refs_by_origin_remote(target_refs)
 
     seen: dict[str, None] = {}
     for item in (*source_items, *target_items):
@@ -352,7 +389,7 @@ def _diff_flatpak_remotes(
         if source_item is not None and target_item is None:
             diffs.append(_install_remote_diff(source_item))
         elif target_item is not None and source_item is None:
-            diffs.append(_remove_remote_diff(target_item))
+            diffs.append(_remove_remote_diff(target_item, dependents_by_remote_id.get(item_id, [])))
         elif source_item is not None and target_item is not None and source_item.url != target_item.url:
             diffs.append(_change_remote_diff(source_item, target_item))
         # else: present on both, same url -> no diff.
@@ -554,7 +591,8 @@ class FlatpakSyncJob(PackageSyncJob):
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
 
         source_refs = await filter_inert(await self.capture_source_items(), source_decisions)
-        target_refs = await filter_inert(await self.query_target_items(), target_decisions)
+        installed_target_refs = await self.query_target_items()
+        target_refs = await filter_inert(installed_target_refs, target_decisions)
         source_remotes = await filter_inert(await self._capture_all_source_remotes(), source_decisions)
         target_remotes = await filter_inert(await self._query_all_target_remotes(), target_decisions)
         source_masks = await filter_inert(await self._capture_all_source_masks(), source_decisions)
@@ -564,7 +602,16 @@ class FlatpakSyncJob(PackageSyncJob):
         self._source_remotes_by_id = {item.item_id: item for item in source_remotes}
         self._target_remotes_by_id = {item.item_id: item for item in target_remotes}
 
-        remote_diffs = _diff_flatpak_remotes(source_remotes, target_remotes)
+        # Target refs feed the remote diff too: a remote offered for REMOVE names the
+        # refs whose origin it is (#214), read off the ref query already in hand rather
+        # than a per-remote lookup. The UNFILTERED list, deliberately: a ref recorded
+        # skip-always is excluded from the diff (D-08) but is still installed, so
+        # deleting its remote still orphans it. Refs whose own REMOVE diff is proposed
+        # this run are NOT excluded either — the review has not happened at plan time, a
+        # proposal is not an approval, and the user may untick the ref removal while
+        # ticking the remote's; the detail states the target's current state, which holds
+        # either way.
+        remote_diffs = _diff_flatpak_remotes(source_remotes, target_remotes, installed_target_refs)
         ref_diffs = _diff_flatpak_refs(source_refs, target_refs)
         mask_diffs = _diff_flatpak_masks(source_masks, target_masks)
         # Ordering (D-08): remotes -> refs -> masks. A mask must land AFTER the refs so

@@ -26,6 +26,7 @@ from pcswitcher.jobs.packages.items import (
     SnapItem,
     UnreproducibleItem,
     build_held_or_pinned_detail,
+    build_orphaned_refs_detail,
     build_repo_unavailable_detail,
     build_version_mismatch_detail,
     compare_deb_versions,
@@ -162,6 +163,13 @@ class TestHoldPinFactAndBuildDetail:
         detail = build_repo_unavailable_detail("brscan3")
 
         assert "brscan3" in detail
+
+    def test_build_orphaned_refs_detail_names_the_remote_and_every_dependent(self) -> None:
+        detail = build_orphaned_refs_detail("customremote", ["org.example.One", "org.example.Two"])
+
+        assert "customremote" in detail
+        assert "org.example.One" in detail
+        assert "org.example.Two" in detail
 
 
 class TestSnapItem:
