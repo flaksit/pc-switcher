@@ -129,3 +129,53 @@ Verified non-vacuous — with `src/` stashed, 7 of the 10 fail (all apt + snap c
 Note: one `uv run ruff format .` ran repo-wide before I narrowed scope, so it may have reformatted (not semantically changed) other agents' uncommitted test files.</result>
 <usage><subagent_tokens>124529</subagent_tokens><tool_uses>37</tool_uses><duration_ms>380239</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a2bb24ab9af01520e</task-id>
+<tool-use-id>toolu_01Whyb4htzbSa88tbATNAkvh</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/dd42e8d2-bab5-45db-8c92-4a34a7aab7d4/tasks/a2bb24ab9af01520e.output</output-file>
+<status>completed</status>
+<summary>Agent "CLI gate + mutates audit tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Commit `43a66586`, three files, all green (`ruff format`/`check`, `basedpyright` 0 errors).
+
+## Tests added
+
+**M12** — `tests/unit/cli/test_commands.py::TestConfirmEachCommandFlag` (3 tests): the flag is refused when `is_interactive` is false — exit code 1, error text contains `--confirm-each-command`, and neither `_load_configuration` nor `_run_sync` is called (refused before the run starts); on a TTY it is forwarded as `confirm_each_command=True`; a non-interactive run *without* the flag is not refused (scopes the refusal).
+
+**M13** — new file `tests/unit/test_mutates_audit.py` (3 tests). AST walk of every `src/pcswitcher/**/*.py`, matching `run_command`/`start_process`/`send_file`/`get_file` by method name only (no receiver filter, so renaming a handle cannot dodge it). Read-vs-write is never inferred from the command string: each ungated call site is accounted for by key `&lt;relpath&gt;::&lt;enclosing qualname&gt;::&lt;method&gt;` (line-number-free, so unrelated edits don't churn it) in either `_READ_ONLY_CALLS` (count per function) or `_UNGATED_WRITES` (one entry per write, with what it changes and the issue tracking it). Failure message prints file:line and the unparsed call for every offender. Also fails on stale entries, and a guard test asserts the walk still finds call sites at all. Documented blind spots: calls reached via a callable passed by reference (`_capture_dir_digests(source_run, …)` — reads only today) and `declare_modification` (where `mutates` is required).
+
+**M14** — `tests/unit/test_step_gate.py::TestStateWritesReachTheGate` (8 tests): `DecisionFile.record` and `SnippetRegistry.add` each trigger exactly one `confirm_action`, parametrized over both roles using the **real** `LocalExecutor` (with `create_subprocess_shell` patched) and the real `RemoteExecutor`; host is SOURCE/TARGET respectively, description names the item, command names the file. Plus: abort stops the write, the registry `send_file` push is gated on the target, and `load()` on either store never prompts.
+
+## xfail (strict) — report this
+
+`test_every_ungated_write_is_tracked` is `xfail(strict=True)`. **16 modifications reach a machine without `mutates=`**; 1 is tracked (#209), **12 entries covering 15 writes are untracked**:
+
+| file:line | what it changes |
+| --- | --- |
+| `src/pcswitcher/btrfs_snapshots.py:81` | creates a read-only btrfs snapshot subvolume |
+| `src/pcswitcher/btrfs_snapshots.py:105` | creates `/.snapshots` subvolume + `/.snapshots/pc-switcher` |
+| `src/pcswitcher/btrfs_snapshots.py:266` | `btrfs subvolume delete` of a snapshot |
+| `src/pcswitcher/btrfs_snapshots.py:278` | `rmdir` of the emptied session folder |
+| `src/pcswitcher/btrfs_snapshots.py:338` | deletes EVERY pc-switcher snapshot on the machine |
+| `src/pcswitcher/config_sync.py:349` | creates `~/.config/pc-switcher` on the target |
+| `src/pcswitcher/config_sync.py:363` | `send_file` overwriting the target's `config.yaml` |
+| `src/pcswitcher/jobs/btrfs.py:151` / `:186` | creates the session snapshot folder on source / target |
+| `src/pcswitcher/jobs/install_on_target.py:65` | runs the installer script on the target (installs/upgrades pc-switcher) |
+| `src/pcswitcher/jobs/vscode_state_sync.py:364` | creates the target's editor state dir |
+| `src/pcswitcher/jobs/vscode_state_sync.py:369` | `send_file` of the merged `state.vscdb` |
+| `src/pcswitcher/jobs/vscode_state_sync.py:373` | target-inject SQL against the staged DB |
+| `src/pcswitcher/jobs/vscode_state_sync.py:381` | `mv -f` over the user's live `state.vscdb` |
+| `src/pcswitcher/lock.py:138` | creates `~/.local/share/pc-switcher` and writes the lock holder file on the target |
+
+Tracked exemption: `src/pcswitcher/jobs/folder_sync.py:826` — the rsync mirror pass (`#209`), listed in `_UNGATED_WRITES` with `tracked_by="#209"` so it does not fail the audit.
+
+Judged read-only and allowlisted rather than flagged: `apt-get -s` (simulation), `lock.py:152`'s `flock -n … -c read` (advisory lock on a file already written), and the `dummy_success`/`dummy_fail` demo `seq`/`echo`/`sleep` loops.
+
+## Note
+
+`uv run pytest tests/unit -q` reports **4 pre-existing failures in `tests/unit/jobs/test_package_review.py`** (`TestInteractive::…`) from another agent's in-flight work on `src/pcswitcher/jobs/packages/review.py`. Not caused by and not touched by this commit; my three files are 39 passed, 1 xfailed.</result>
+<usage><subagent_tokens>133209</subagent_tokens><tool_uses>30</tool_uses><duration_ms>487986</duration_ms></usage>
+</task-notification>
