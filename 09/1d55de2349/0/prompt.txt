@@ -32,3 +32,11 @@ Simpler example variant
 - Sync A>B: In review, user chooses "delete" for P. Sync uninstalls package P from B. It leaves source S and the key as is, because needed for machine-specific package R on B.
 
 You see I want to have covered EVERY possible path in the logic of the 4 package sync jobs.
+
+---
+
+I want
+- the bugs you found to be challenged and fixed if needed
+- tests to be implemented for the gaps for which an automated test is possible
+
+Best you do that now with your already 30% full context (delegating to sub-agents of-course), or handover to two new sessions (1 for the bugs and 1 for the test-gaps)?
