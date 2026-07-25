@@ -34,8 +34,6 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
-import pytest
-
 import pcswitcher
 
 _SRC = Path(pcswitcher.__file__).parent
@@ -168,48 +166,11 @@ _READ_ONLY_CALLS: dict[str, int] = {
 # Modifications that reach a machine today without passing through the gate. Every entry
 # is a defect: with `--confirm-each-command` the user is not shown these and is not asked.
 _UNGATED_WRITES: dict[str, tuple[_UngatedWrite, ...]] = {
-    "btrfs_snapshots.py::create_snapshot::run_command": (
-        _UngatedWrite("creates a read-only btrfs snapshot subvolume (`btrfs subvolume snapshot -r`)"),
-    ),
-    "btrfs_snapshots.py::validate_snapshots_directory::run_command": (
-        _UngatedWrite("creates the `/.snapshots` subvolume and `/.snapshots/pc-switcher`"),
-    ),
-    "btrfs_snapshots.py::cleanup_snapshots::run_command": (
-        _UngatedWrite("deletes a btrfs snapshot subvolume (`btrfs subvolume delete`)"),
-        _UngatedWrite("removes the emptied session folder (`rmdir`)"),
-    ),
-    "btrfs_snapshots.py::delete_all_snapshots::run_command": (
-        _UngatedWrite("deletes EVERY pc-switcher snapshot subvolume on the machine"),
-    ),
-    "config_sync.py::_copy_config_to_target::run_command": (
-        _UngatedWrite("creates `~/.config/pc-switcher` on the target"),
-    ),
-    "config_sync.py::_copy_config_to_target::send_file": (
-        _UngatedWrite("overwrites the target's `~/.config/pc-switcher/config.yaml`"),
-    ),
-    "jobs/btrfs.py::BtrfsSnapshotJob.execute::run_command": (
-        _UngatedWrite("creates the session snapshot folder under `/.snapshots/pc-switcher` on the source"),
-        _UngatedWrite("creates the same folder on the target"),
-    ),
     "jobs/folder_sync.py::FolderSyncJob._run_rsync_pass::start_process": (
         _UngatedWrite(
             "runs the rsync pass that mirrors (and with --delete removes) the synced folders",
             tracked_by="#209",
         ),
-    ),
-    "jobs/install_on_target.py::InstallOnTargetJob._run_install::run_command": (
-        _UngatedWrite("runs the installer script on the target, installing or upgrading pc-switcher"),
-    ),
-    "jobs/vscode_state_sync.py::VscodeStateSyncJob._sync_editor::run_command": (
-        _UngatedWrite("creates the target's editor state directory"),
-        _UngatedWrite("runs the target-inject SQL against the staged `state.vscdb` copy"),
-        _UngatedWrite("replaces the target's live `state.vscdb` (`mv -f`)"),
-    ),
-    "jobs/vscode_state_sync.py::VscodeStateSyncJob._sync_editor::send_file": (
-        _UngatedWrite("uploads the merged `state.vscdb` to the target"),
-    ),
-    "lock.py::start_persistent_remote_lock::run_command": (
-        _UngatedWrite("creates `~/.local/share/pc-switcher` on the target and writes the lock holder file"),
     ),
 }
 
@@ -259,25 +220,13 @@ class TestMutatesCoverage:
 
         assert not problems, "`mutates=` audit failed:\n\n" + "\n\n".join(problems)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "12 modifications bypass the gate with no issue tracking them: "
-            "btrfs_snapshots.create_snapshot / validate_snapshots_directory / cleanup_snapshots (x2) / "
-            "delete_all_snapshots, config_sync._copy_config_to_target (mkdir + the config.yaml send_file), "
-            "jobs/btrfs.BtrfsSnapshotJob.execute (x2), jobs/install_on_target._run_install, "
-            "jobs/vscode_state_sync._sync_editor (mkdir, send_file, target-inject SQL, mv -f over the live "
-            "state.vscdb), and lock.start_persistent_remote_lock. Each is a change made to a machine that "
-            "--confirm-each-command never shows and never asks about. See _UNGATED_WRITES for the full list."
-        ),
-    )
     def test_every_ungated_write_is_tracked(self) -> None:
         """The requirement: a write either carries `mutates=` or has an issue saying why not.
 
         Kept separate from the ratchet above so the two failures read differently — that one
         says "you added something unaccounted for", this one says "the codebase still has
-        ungated writes". It passes only when `_UNGATED_WRITES` holds nothing but entries an
-        issue already covers, at which point the `xfail` marker must be deleted.
+        ungated writes". It holds today: the only ungated write left is the rsync pass under
+        #209, so adding a `_UNGATED_WRITES` entry without an issue fails here.
         """
         untracked = sorted(
             f"{key}: {write.what}"

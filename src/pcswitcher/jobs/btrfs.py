@@ -148,7 +148,10 @@ class BtrfsSnapshotJob(SystemJob):
 
             if not self.context.dry_run:
                 # Create session folder if it doesn't exist
-                await self.source.run_command(f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}")
+                await self.source.run_command(
+                    f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}",
+                    mutates=f"create the snapshot session folder /.snapshots/pc-switcher/{session_folder}",
+                )
 
                 result = await create_snapshot(self.source, mount_point, snap_path)
 
@@ -183,7 +186,10 @@ class BtrfsSnapshotJob(SystemJob):
 
             if not self.context.dry_run:
                 # Create session folder if it doesn't exist
-                await self.target.run_command(f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}")
+                await self.target.run_command(
+                    f"sudo mkdir -p /.snapshots/pc-switcher/{session_folder}",
+                    mutates=f"create the snapshot session folder /.snapshots/pc-switcher/{session_folder}",
+                )
 
                 result = await create_snapshot(self.target, mount_point, snap_path)
 

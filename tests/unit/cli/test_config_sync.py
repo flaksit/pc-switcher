@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -197,7 +197,7 @@ class TestCopyConfigToTarget:
 
         # Verify send_file was called with correct paths
         mock_remote_executor.send_file.assert_called_once_with(
-            config_file, "/home/user/.config/pc-switcher/config.yaml"
+            config_file, "/home/user/.config/pc-switcher/config.yaml", mutates=ANY
         )
 
     async def test_copies_the_caller_supplied_file_even_when_not_named_config_yaml(
@@ -222,7 +222,7 @@ class TestCopyConfigToTarget:
         await _copy_config_to_target(mock_remote_executor, source_file)
 
         mock_remote_executor.send_file.assert_called_once_with(
-            source_file, "/home/user/.config/pc-switcher/config.yaml"
+            source_file, "/home/user/.config/pc-switcher/config.yaml", mutates=ANY
         )
 
     async def test_raises_on_mkdir_failure(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:

@@ -362,24 +362,31 @@ class VscodeStateSyncJob(SyncJob):
             # target that never ran the editor would otherwise leave the SFTP put with no
             # parent directory. mkdir -p is a no-op when it already exists.
             mkdir = await self.target.run_command(
-                f"mkdir -p {shlex.quote(Path(target_db).parent.as_posix())}", login_shell=False
+                f"mkdir -p {shlex.quote(Path(target_db).parent.as_posix())}",
+                login_shell=False,
+                mutates=f"create the editor state directory for {label} on the target",
             )
             if not mkdir.success:
                 self._raise(Host.TARGET, label, "mkdir target dir", mkdir.stderr)
-            await self.target.send_file(local_tmp, remote_tmp)
+            await self.target.send_file(
+                local_tmp, remote_tmp, mutates=f"upload this machine's {label} to a staging file beside the live one"
+            )
 
             # Step C — target-inject the target's own preserved rows, only when it has a live DB.
             if target_exists:
                 inject = await self.target.run_command(
                     target_sql_command(remote_tmp, target_inject_sql(target_db, globs)),
                     login_shell=False,
+                    mutates=f"write the target's own preserved {label} keys into the staged copy",
                 )
                 if not inject.success:
                     self._raise(Host.TARGET, label, "target-inject", inject.stderr)
 
             # Atomic replace within the same directory.
             move = await self.target.run_command(
-                f"mv -f {shlex.quote(remote_tmp)} {shlex.quote(target_db)}", login_shell=False
+                f"mv -f {shlex.quote(remote_tmp)} {shlex.quote(target_db)}",
+                login_shell=False,
+                mutates=f"replace the target's live {label} with the merged database, discarding the current file",
             )
             if not move.success:
                 self._raise(Host.TARGET, label, "atomic mv", move.stderr)

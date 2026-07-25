@@ -377,7 +377,7 @@ class TestBtrfsSnapshotJobValidation:
         job = BtrfsSnapshotJob(context)
 
         # Mock /.snapshots exists but creation fails (because it's a directory)
-        def run_command_not_subvolume(cmd: str) -> CommandResult:
+        def run_command_not_subvolume(cmd: str, **_kwargs: object) -> CommandResult:
             if "show /.snapshots" in cmd:
                 # Not a subvolume
                 return CommandResult(exit_code=1, stdout="", stderr="not a subvolume")
@@ -487,7 +487,7 @@ class TestBtrfsSnapshotJobEdgeCases:
         # First subvolume succeeds, second fails due to space
         call_count = [0]
 
-        def run_command_space_error(cmd: str) -> CommandResult:
+        def run_command_space_error(cmd: str, **_kwargs: object) -> CommandResult:
             call_count[0] += 1
             if "mkdir" in cmd:
                 return CommandResult(exit_code=0, stdout="", stderr="")

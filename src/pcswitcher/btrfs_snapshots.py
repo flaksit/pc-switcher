@@ -78,7 +78,7 @@ async def create_snapshot(
         CommandResult with exit code, stdout, stderr
     """
     cmd = f"sudo btrfs subvolume snapshot -r {source_path} {snapshot_path}"
-    return await executor.run_command(cmd)
+    return await executor.run_command(cmd, mutates=f"create read-only snapshot {snapshot_path} of {source_path}")
 
 
 async def validate_snapshots_directory(
@@ -103,7 +103,8 @@ async def validate_snapshots_directory(
 
     # /.snapshots doesn't exist or isn't a subvolume - try to create it
     create_result = await executor.run_command(
-        "sudo btrfs subvolume create /.snapshots && sudo mkdir -p /.snapshots/pc-switcher"
+        "sudo btrfs subvolume create /.snapshots && sudo mkdir -p /.snapshots/pc-switcher",
+        mutates="create the /.snapshots subvolume and its pc-switcher folder on this machine",
     )
 
     if create_result.exit_code != 0:
@@ -263,7 +264,10 @@ async def cleanup_snapshots(
     deleted_session_ids: set[str] = set()
 
     for snap in snapshots_to_delete:
-        delete_result = await executor.run_command(f"sudo btrfs subvolume delete {snap.path}")
+        delete_result = await executor.run_command(
+            f"sudo btrfs subvolume delete {snap.path}",
+            mutates=f"permanently delete snapshot {snap.path} and everything it preserves",
+        )
         if delete_result.exit_code == 0:
             deleted.append(snap)
             deleted_session_ids.add(snap.session_id)
@@ -275,7 +279,10 @@ async def cleanup_snapshots(
         if all(s in deleted for s in session_snaps):
             # Extract folder path from first snapshot path
             folder_path = "/".join(session_snaps[0].path.split("/")[:-1])
-            await executor.run_command(f"rmdir {folder_path} 2>/dev/null || true")
+            await executor.run_command(
+                f"rmdir {folder_path} 2>/dev/null || true",
+                mutates=f"remove the emptied snapshot session folder {folder_path}",
+            )
 
     return deleted
 
@@ -335,7 +342,10 @@ async def delete_all_snapshots(executor: Executor) -> CommandResult:
     Returns:
         CommandResult with exit code, stdout, stderr
     """
-    return await executor.run_command(f"sudo bash -c {_DELETE_ALL_SNAPSHOTS_SCRIPT!r}")
+    return await executor.run_command(
+        f"sudo bash -c {_DELETE_ALL_SNAPSHOTS_SCRIPT!r}",
+        mutates="permanently delete EVERY pc-switcher snapshot on this machine, losing all rollback points",
+    )
 
 
 def parse_older_than(value: str) -> int:

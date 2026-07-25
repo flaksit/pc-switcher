@@ -62,7 +62,17 @@ class InstallOnTargetJob(SystemJob):
     async def _run_install(self, v: Release | Version | str | None = None, /) -> CommandResult:
         """Run install script on target."""
         cmd = get_install_with_script_command_line(v)
-        return await self.target.run_command(cmd, login_shell=False)
+        if isinstance(v, Release):
+            label = v.tag
+        elif isinstance(v, Version):
+            label = f"v{v.semver_str()}"
+        else:
+            label = v or "main"
+        return await self.target.run_command(
+            cmd,
+            login_shell=False,
+            mutates=f"install pc-switcher {label} on the target, replacing any existing installation",
+        )
 
     async def execute(self) -> None:
         """Install or upgrade pc-switcher on target if needed."""

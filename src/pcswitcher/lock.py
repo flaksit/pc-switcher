@@ -136,7 +136,8 @@ async def start_persistent_remote_lock(
     # First create directory and write holder info to lock file
     # Note: Use $HOME instead of ~ because ~ doesn't expand inside double quotes
     setup_result = await executor.run_command(
-        f'mkdir -p "$HOME/.local/share/pc-switcher" && echo "{holder_info}" > "{lock_path}"'
+        f'mkdir -p "$HOME/.local/share/pc-switcher" && echo "{holder_info}" > "{lock_path}"',
+        mutates="claim the target's sync lock file, overwriting any previous holder record",
     )
     if not setup_result.success:
         return None

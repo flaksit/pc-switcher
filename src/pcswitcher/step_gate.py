@@ -24,7 +24,8 @@ Generic on purpose, and invoked from exactly one place: `pcswitcher.executor`. A
 — job, orchestrator, helper — gates a write by passing `mutates="..."` to the executor
 method it already uses, so there is no second API to remember and no per-job wiring. The
 executor supplies `job` (from its `active_job` context variable) and `host` (from which
-executor it is). Today only the package sync jobs pass `mutates`; `folder_sync` is #209.
+executor it is). Every write passes `mutates` except `folder_sync`'s rsync pass (#209);
+`tests/unit/test_mutates_audit.py` holds that line.
 """
 
 from __future__ import annotations
