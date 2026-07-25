@@ -7,7 +7,7 @@ Requirement-derived scenario enumeration for the four package jobs, mapped to py
 | Mark | Meaning |
 | --- | --- |
 | U | covered by a unit test that asserts this branch |
-| V | a VM integration test asserts this branch — written, never executed (see Findings); `V` is a claim about the test, not about a passing run |
+| V | a VM integration test asserts this branch — claimed, never observed to pass (see Findings); `V` is a claim about the test, not about a passing run |
 | P | partial — a neighbouring test exists, this branch is not asserted |
 | — | no coverage |
 | ‼ | open defect, or a requirement that is not implemented |
@@ -347,8 +347,18 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 - N8 — the round trip in which apt's own bookkeeping keeps or drops a dependency-only package. The single-run half is covered (A10).
 - I22/N11 — real-TTY review rendering and the two-machine walkthrough are UAT-only by nature.
 
+### Snap and flatpak end-to-end coverage was vacuous
+
+Every snap and flatpak `V` in this matrix was, until now, a test that could not run at all. Each one searched the VMs for a subject — a snap outside the removal denylist, a snap with an alternate installable revision, an installed flatpak ref with a configured remote — and called `pytest.skip` when it found none. The VM baseline contained only `snapd`, `core*` and `bare` (every one of them denylisted) and no flatpak whatsoever, so the search never succeeded and the tests skipped on every run. A skip is green, so nothing reported this: the last integration run passed 68 and skipped 8, seven of them for exactly this reason.
+
+Rows E1, E6, E15, F1, I11, I17 and L9 therefore claimed VM evidence that had never been produced, and L10's #208 D9 verdict was blocked by it.
+
+The fix is provisioning, not weaker tests: `tests/integration/scripts/internal/vm-test-fixtures.sh` creates two snaps (`hello`, `hello-world`) and a flatpak ref served from a local signed repository on BOTH VMs, baked into the baseline snapshot by `provision-test-infra.sh` and re-applied by the `vm_test_fixtures` conftest fixture. The discover-or-skip convention is gone from the module entirely: a missing subject is now an assertion failure naming the script that creates it, never a skip. Nothing in this matrix may reintroduce a skip as a way of tolerating an unprovisioned machine — that is what made these rows unfalsifiable in the first place.
+
 ### Unverified pending CI
 
-Every `V` row is a written test that has never run. `integration-tests.yml` triggers only on PRs targeting `main`, so a stacked PR skips the VM suite entirely and these execute for the first time when this work reaches a PR against `main`.
+Every `V` row is a claim no passing run has confirmed. `integration-tests.yml` triggers only on PRs targeting `main`, so a stacked PR skips the VM suite entirely and these execute for the first time when this work reaches a PR against `main`. For the snap and flatpak rows above this is their first execution of any kind.
 
 L10 carries a verdict that only that run can settle: whether a system-wide `refresh.hold` masks per-snap `held` notes (#208 D9) is UNDETERMINED. `TestSnapHoldCaptureTiming` encodes the premise that the two live in different snapd namespaces, and the capture is ordered before the hold set on that basis; real snapd has not yet answered.
+
+F1's run additionally depends on a machine-level trust anchor rather than on remote replication: pc-switcher replicates a flatpak remote as name+url only, so the remote it re-adds on the target carries no signing key. Verified against flatpak 1.14.6: a remote added that way cannot install anything (`GPG verification enabled, but no summary signatures found`, and for a signed repository `Can't check signature: public key not found`), and `flatpak remote-delete` removes the per-remote keyring, so a target that once had the remote does not retain trust. The fixture works around this for the test by installing its public key into ostree's system-wide trusted keyring on both VMs. The underlying gap is real and user-facing — replicating Flathub to a machine that never had it produces an unusable remote — and is not covered by any row here.
