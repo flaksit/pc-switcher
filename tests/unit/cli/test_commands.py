@@ -6,6 +6,7 @@ accept the correct arguments as specified in docs/system/core.md.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -237,8 +238,15 @@ class TestConfirmEachCommandFlag:
         run_sync.assert_not_called()
 
     def test_accepted_and_forwarded_on_a_tty(self) -> None:
-        """The flag must actually reach the orchestrator, not be validated and dropped."""
+        """The flag must actually reach the orchestrator, not be validated and dropped.
+
+        `PCSWITCHER_SKIP_VERSION_CHECK` is set because faking a TTY also arms the startup
+        update check, which would reach the real GitHub API and then block on its own
+        `Upgrade now?` prompt — an outcome that depends on whether a newer release exists,
+        not on the flag under test.
+        """
         with (
+            patch.dict(os.environ, {"PCSWITCHER_SKIP_VERSION_CHECK": "1"}),
             patch("pcswitcher.cli.is_interactive", return_value=True),
             patch("pcswitcher.cli._load_configuration", return_value=MagicMock(spec=Configuration)),
             patch("pcswitcher.cli._run_sync", return_value=0) as run_sync,

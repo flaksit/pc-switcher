@@ -2002,9 +2002,9 @@ class TestCrossDirectionRoundTrips:
 
         The middle run is the point. A removal-direction item lands in its own unticked
         group (D-07/I3), so leaving it undecided must leave pc1's package installed --
-        proven by decidingit SKIP_ONCE explicitly and reading pc1's own
-        `apt-mark showmanual`. Only the third run, with the same item APPLYed, may remove
-        it.
+        proven by deciding it SKIP_ONCE explicitly and reading pc1's own
+        `apt-mark showmanual`. Only the third run, which approves the same item, may
+        remove it.
 
         Candidate safety is vetted against pc2's reverse dependencies
         (`pick_safe_removal_candidates`); the final run removes the package from pc1
