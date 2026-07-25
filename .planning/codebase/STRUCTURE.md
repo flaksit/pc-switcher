@@ -37,7 +37,7 @@ pc-switcher/
 
 **`src/pcswitcher/`:**
 - Purpose: the whole application; flat module layout with one nested `jobs/` package
-- Key files: `cli.py`, `orchestrator.py`, `config.py`, `executor.py`, `connection.py`, `events.py`, `logger.py`, `ui.py`, `models.py`, `lock.py`, `sync_history.py`, `btrfs_snapshots.py`, `version.py`, `confirmer.py`, `disk.py`, `sudoers.py`, `terminal.py`, `install.py`, `config_sync.py`
+- Key files: `cli.py`, `orchestrator.py`, `config.py`, `executor.py`, `connection.py`, `events.py`, `logger.py`, `ui.py`, `models.py`, `lock.py`, `sync_history.py`, `btrfs_snapshots.py`, `version.py`, `confirmer.py`, `step_gate.py`, `disk.py`, `sudoers.py`, `terminal.py`, `install.py`, `config_sync.py`
 
 **`src/pcswitcher/jobs/`:**
 - Purpose: one module per job, plus shared job infrastructure

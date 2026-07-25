@@ -757,7 +757,7 @@ class TestSnippetPush:
 
         source.run_command = AsyncMock(side_effect=_rec_source)
 
-        async def _rec_send(_local: Path, _remote: str) -> None:
+        async def _rec_send(_local: Path, _remote: str, **_: object) -> None:
             events.append("push")
 
         target.send_file = AsyncMock(side_effect=_rec_send)
@@ -811,7 +811,7 @@ class TestSnippetPush:
 
         target.run_command = AsyncMock(side_effect=_rec_run)
 
-        async def _rec_send(_local: Path, _remote: str) -> None:
+        async def _rec_send(_local: Path, _remote: str, **_: object) -> None:
             events.append("push")
 
         target.send_file = AsyncMock(side_effect=_rec_send)

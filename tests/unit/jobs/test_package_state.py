@@ -41,7 +41,7 @@ from pcswitcher.jobs.packages.state import (
     filter_inert,
 )
 from pcswitcher.jobs.packages.sync_core import PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, ValidationError
+from pcswitcher.models import CommandResult, Host, ValidationError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -72,11 +72,13 @@ class FakeShellExecutor:
     load()/record() round trip without shelling out to a real subprocess.
     """
 
+    host: ClassVar[Host] = Host.SOURCE
+
     def __init__(self) -> None:
         self.files: dict[str, str] = {}
         self.commands: list[str] = []
 
-    async def run_command(self, cmd: str, timeout: float | None = None) -> CommandResult:
+    async def run_command(self, cmd: str, timeout: float | None = None, **_: object) -> CommandResult:
         self.commands.append(cmd)
         if cmd.startswith("cat "):
             path = shlex.split(cmd.removeprefix("cat ").removesuffix(" 2>/dev/null"))[0]
@@ -650,7 +652,9 @@ class TestSnippetRegistry:
 
         result = await SnippetRegistry(shell).replay("x", target)
 
-        target.run_command.assert_called_once_with("bash -c 'echo hello world'", login_shell=False)
+        target.run_command.assert_called_once_with(
+            "bash -c 'echo hello world'", login_shell=False, mutates="replay install snippet for x"
+        )
         assert result.success
 
     @pytest.mark.asyncio

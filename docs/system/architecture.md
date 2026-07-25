@@ -365,6 +365,8 @@ Each package job runs plan then review then apply inside its own `execute()`, an
 - **review** — present this job's own batched review, grouped by action, batched per manager and never across managers. Installs and removals show as separate groups with removals labelled as removals, so a bulk tick can never silently delete.
 - **apply** — converge only the diffs the user approved, one item at a time, collecting per-item failures rather than stopping at the first one.
 
+`--confirm-each-command` adds a second, finer gate underneath this one: every individual modification is shown verbatim and needs an explicit proceed or abort. It lives in `executor.py`, not in the jobs — any call that passes `mutates="..."` is gated — so it applies to every caller on either machine without per-job wiring. The same seam emits the verbatim DEBUG trace of every command, reads included.
+
 There is no cross-manager review owner and no coordinator between the jobs. The jobs are deliberately independent — separate enable flags, config, validation, failure isolation and progress — so a single owner reviewing every enabled manager at once would contradict that independence, and the intended UX is one batched review per manager rather than one review for the whole fleet of managers. Each job owning its own review between its own plan and its own apply achieves review-before-any-change without coupling one job's ordering or failure surface to another's. The orchestrator's job loop runs the jobs sequentially, and each job's review-before-apply is self-contained, so `apt_sync` reviewing and converging before `snap_sync` even starts is correct behaviour, not a violation: each job's own review still precedes every change that job makes.
 
 ### Source/target split

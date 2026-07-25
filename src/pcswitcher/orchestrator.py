@@ -23,7 +23,7 @@ from pcswitcher.confirmer import Confirmer, TerminalUIConfirmer
 from pcswitcher.connection import Connection
 from pcswitcher.disk import DiskSpace, check_disk_space, format_bytes, parse_threshold
 from pcswitcher.events import EventBus
-from pcswitcher.executor import LocalExecutor, RemoteExecutor, RemoteProcess
+from pcswitcher.executor import LocalExecutor, RemoteExecutor, RemoteProcess, active_job
 from pcswitcher.jobs.base import Job, SyncJob
 from pcswitcher.jobs.btrfs import BtrfsSnapshotJob
 from pcswitcher.jobs.context import JobContext
@@ -58,6 +58,7 @@ from pcswitcher.models import (
     SyncSession,
     ValidationError,
 )
+from pcswitcher.step_gate import StepGate, TerminalUIStepGate
 from pcswitcher.sync_history import (
     HISTORY_PATH,
     SyncRole,
@@ -232,6 +233,7 @@ class Orchestrator:
         allow_out_of_order: bool = False,
         allow_first_sync: bool = False,
         dry_run: bool = False,
+        confirm_each_command: bool = False,
     ) -> None:
         """Initialize orchestrator with target and validated configuration.
 
@@ -243,12 +245,16 @@ class Orchestrator:
             allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
                 issued by FolderSyncJob when the target has no sync history (ADR-015)
             dry_run: If True, preview sync without making changes
+            confirm_each_command: If True, prompt before every individual modification a job
+                makes (`--confirm-each-command`). Requires a TTY; `cli.sync` refuses the flag
+                without one, so the orchestrator can assume the prompt is answerable.
         """
         self._config = config
         self._auto_accept = auto_accept
         self._allow_out_of_order = allow_out_of_order
         self._allow_first_sync = allow_first_sync
         self._dry_run = dry_run
+        self._confirm_each_command = confirm_each_command
         self._session_id = secrets.token_hex(4)
         self._session_folder = session_folder_name(self._session_id)
         self._source_hostname = get_local_hostname()
@@ -291,6 +297,9 @@ class Orchestrator:
         self._ui_task: asyncio.Task[None] | None = None
         self._confirmer: Confirmer | None = None
         self._reviewer: Reviewer | None = None
+        # Stays None unless --confirm-each-command was passed; a None gate on the executors
+        # is what makes every `mutates=` call site a plain pass-through.
+        self._step_gate: StepGate | None = None
 
     def _create_job_context(self, config: dict[str, Any]) -> JobContext:
         """Create JobContext with current orchestrator state.
@@ -373,6 +382,8 @@ class Orchestrator:
         # and any job-level prompt (e.g. FolderSyncJob first-sync overwrite, ADR-015).
         self._confirmer = TerminalUIConfirmer(self._console, self._ui, logger=self._logger)
         self._reviewer = TerminalUIReviewer(self._console, self._ui, logger=self._logger)
+        if self._confirm_each_command:
+            self._step_gate = TerminalUIStepGate(self._console, self._ui, logger=self._logger)
 
         # Create log file path and set up stdlib logging infrastructure.
         # Passing ui + console lets setup_logging pick the UI-routed TUI
@@ -556,8 +567,10 @@ class Orchestrator:
         await self._connection.connect()
 
         # Create executors
-        self._local_executor = LocalExecutor()
-        self._remote_executor = RemoteExecutor(self._connection.ssh_connection)
+        # The step gate rides on the executors (`executor.py`), which is what makes every
+        # mutating call site — job, orchestrator or helper — gate through one funnel.
+        self._local_executor = LocalExecutor(self._step_gate)
+        self._remote_executor = RemoteExecutor(self._connection.ssh_connection, self._step_gate)
 
         self._logger.info("Connected to target", extra={"job": "orchestrator", "host": "target"})
 
@@ -903,14 +916,24 @@ class Orchestrator:
         Raises:
             RuntimeError: If history update fails on either machine.
         """
-        # Update local (source) history
+        # Update local (source) history. The write itself is in-process (atomic temp +
+        # rename in `sync_history`), so unlike its target twin below there is no command
+        # for the executor to trace — `declare_modification` announces it explicitly so the
+        # two ends of the same logical change are equally visible (#210) and equally gated.
+        if self._local_executor is not None:
+            await self._local_executor.declare_modification(
+                f"write {HISTORY_PATH} (last_role=source, last_peer={self._target_canonical_hostname})",
+                mutates="record this machine's role in the sync history",
+            )
         record_role(SyncRole.SOURCE, peer=self._target_canonical_hostname)
         self._logger.debug("Updated sync history: role=source", extra={"job": "orchestrator", "host": "source"})
 
         # Update remote (target) history via SSH
         if self._remote_executor is not None:
             cmd = get_record_role_command(SyncRole.TARGET, peer=self._source_hostname)
-            result = await self._remote_executor.run_command(cmd)
+            result = await self._remote_executor.run_command(
+                cmd, mutates="record the target's role in the sync history"
+            )
             if not result.success:
                 raise RuntimeError(f"Failed to update sync history on target: {result.stderr}")
             self._logger.debug("Updated sync history: role=target", extra={"job": "orchestrator", "host": "target"})
@@ -1188,7 +1211,11 @@ class Orchestrator:
                     self._ui.set_current_step(SyncStep.RUN_JOBS, job.name, substep=substep)
                     started_at = datetime.now(UTC)
                     try:
-                        await job.execute()
+                        # Labels this job's executor traffic in the debug trace (#210) and
+                        # in the --confirm-each-command prompt. Set per job rather than per
+                        # executor because the executors are shared by every job.
+                        with active_job(job.name):
+                            await job.execute()
                         ended_at = datetime.now(UTC)
                         results.append(
                             JobResult(
@@ -1262,19 +1289,23 @@ class Orchestrator:
                 source_monitor_task.cancel()
                 target_monitor_task.cancel()
 
-    async def _run_snap_hold_command(self, host: Host, cmd: str) -> CommandResult:
+    async def _run_snap_hold_command(self, host: Host, cmd: str, *, mutates: str | None = None) -> CommandResult:
         """Run a snap-hold command on `host`, honoring each executor's shell contract.
 
         The source is the local executor (no login-shell notion — its `run_command` takes
         no `login_shell`); the target is the remote executor, invoked with
         `login_shell=False` to match snap_sync's own target calls. Callers only reach here
         after the hold is engaged, which happens post-connect, so both executors are set.
+
+        `mutates` is passed straight through: the capture (`snap get`) is a read and leaves
+        it None, while applying and restoring the hold are system writes on both machines
+        and name themselves, so `--confirm-each-command` shows them like any other change.
         """
         if host is Host.SOURCE:
             assert self._local_executor is not None
-            return await self._local_executor.run_command(cmd)
+            return await self._local_executor.run_command(cmd, mutates=mutates)
         assert self._remote_executor is not None
-        return await self._remote_executor.run_command(cmd, login_shell=False)
+        return await self._remote_executor.run_command(cmd, login_shell=False, mutates=mutates)
 
     async def _capture_snap_hold(self, host: Host) -> str | None:
         """Read `host`'s current system-wide snap `refresh.hold` (read-only).
@@ -1297,7 +1328,7 @@ class Orchestrator:
         confirmed snap + passwordless sudo on both hosts).
         """
         cmd = f'sudo snap set system refresh.hold="$({_SNAP_HOLD_TIMESTAMP_CMD})"'
-        result = await self._run_snap_hold_command(host, cmd)
+        result = await self._run_snap_hold_command(host, cmd, mutates="pause snapd auto-refresh for the sync window")
         if not result.success:
             self._logger.warning(
                 "Could not pause snapd auto-refresh on %s: %s",
@@ -1335,15 +1366,26 @@ class Orchestrator:
 
         When a prior hold was captured it is written back verbatim (an RFC3339 timestamp or
         `forever`); when there was none, `refresh.hold` is set empty, which snapd treats as
-        no hold — leaving any unrelated per-snap holds untouched. Never raises: this runs
-        from `_cleanup`, which must complete every teardown step regardless.
+        no hold — leaving any unrelated per-snap holds untouched.
+
+        Gated by `--confirm-each-command` like every other modification. Restoring is not
+        merely lifting: when a prior hold was captured, skipping this write means the timed
+        hold pc-switcher set expires and the user's OWN hold is gone with it — which is why
+        the gate description names the value being written back.
+
+        Swallows a FAILED restore (teardown must complete every step regardless — the timed
+        hold self-expires) but never a DECLINED one: `SyncAbortedByUser` is re-raised ahead
+        of the broad handler, because a user answering "abort" is a decision to honor, not
+        an error to absorb. `_cleanup` decides how far that abort travels.
         """
         if prior is not None:
             cmd = f"sudo snap set system refresh.hold={shlex.quote(prior)}"
+            description = f"restore this machine's own snapd refresh.hold ({prior}), which this run overwrote"
         else:
             cmd = 'sudo snap set system refresh.hold=""'
+            description = "clear the snapd refresh.hold this run set"
         try:
-            result = await self._run_snap_hold_command(host, cmd)
+            result = await self._run_snap_hold_command(host, cmd, mutates=description)
             if not result.success:
                 self._logger.warning(
                     "Could not restore snapd refresh.hold on %s: %s",
@@ -1351,6 +1393,8 @@ class Orchestrator:
                     result.stderr.strip(),
                     extra={"job": "orchestrator", "host": host.value},
                 )
+        except SyncAbortedByUser:
+            raise
         except Exception as e:
             # Teardown must not be derailed by a failed restore (e.g. the connection is
             # already tearing down). The timed hold self-expires regardless.
@@ -1380,7 +1424,22 @@ class Orchestrator:
 
         # Restore snapd auto-refresh FIRST, while the connection the target restore needs is
         # still up (decision 4). Best-effort and idempotent — a no-op when no hold was set.
-        await self._restore_snap_autorefresh()
+        try:
+            await self._restore_snap_autorefresh()
+        except SyncAbortedByUser as e:
+            # Declining the restore at the --confirm-each-command gate is honored: the write
+            # does not happen. It stops there and nowhere else — everything below this point
+            # RELEASES resources (target lock, SSH connection, source lock, event bus, UI)
+            # rather than modifying either machine, and no confirmation prompt should be
+            # able to leak a lock or a connection. Logged at WARNING so the end-of-run
+            # summary resurfaces what was left in place.
+            self._logger.warning(
+                "snapd auto-refresh not restored (%s). The timed hold set by this run expires %s "
+                "after it was applied; any pre-existing hold of your own was not written back.",
+                e,
+                _SNAP_AUTOREFRESH_HOLD_DURATION.lstrip("+"),
+                extra={"job": "orchestrator", "host": "source"},
+            )
 
         # Release target lock first (before terminating other processes)
         if self._target_lock_process is not None:

@@ -611,7 +611,9 @@ class FlatpakSyncJob(PackageSyncJob):
                 f"{sudo}flatpak remote-add --if-not-exists {scope_flag} "
                 f"{shlex.quote(name)} {shlex.quote(source_item.url)}"
             )
-            result = await self.target.run_command(cmd, login_shell=False)
+            result = await self.target.run_command(
+                cmd, login_shell=False, mutates=f"add {scope} flatpak remote {name} ({source_item.url})"
+            )
             if result.success:
                 self._converged_remote_scope_names.add((scope, name))
             return result
@@ -630,11 +632,15 @@ class FlatpakSyncJob(PackageSyncJob):
             # already exists on the target, so ref-readiness (`_remote_ready_on_target`)
             # is already satisfied via the plan-time target query.
             cmd = f"{sudo}flatpak remote-modify {scope_flag} --url={shlex.quote(source_item.url)} {shlex.quote(name)}"
-            return await self.target.run_command(cmd, login_shell=False)
+            return await self.target.run_command(
+                cmd, login_shell=False, mutates=f"repoint {scope} flatpak remote {name} at {source_item.url}"
+            )
 
         if diff.action == DiffAction.REMOVE:
             cmd = f"{sudo}flatpak remote-delete {scope_flag} {shlex.quote(name)}"
-            return await self.target.run_command(cmd, login_shell=False)
+            return await self.target.run_command(
+                cmd, login_shell=False, mutates=f"delete {scope} flatpak remote {name}"
+            )
 
         raise ConvergeItemFailed(
             f"FlatpakSyncJob.converge: unsupported action {diff.action.value!r} for a flatpak remote ({diff.label})"
@@ -647,7 +653,9 @@ class FlatpakSyncJob(PackageSyncJob):
 
         if diff.action == DiffAction.REMOVE:
             cmd = f"{sudo}flatpak uninstall -y {scope_flag} {shlex.quote(application)}"
-            return await self.target.run_command(cmd, login_shell=False)
+            return await self.target.run_command(
+                cmd, login_shell=False, mutates=f"uninstall {scope} flatpak {application}"
+            )
 
         if diff.action == DiffAction.INSTALL:
             source_item = self._source_refs_by_id.get(diff.item_id)
@@ -664,7 +672,9 @@ class FlatpakSyncJob(PackageSyncJob):
                     "remotes (D-14)"
                 )
             cmd = f"{sudo}flatpak install -y {scope_flag} {shlex.quote(source_item.origin)} {shlex.quote(application)}"
-            return await self.target.run_command(cmd, login_shell=False)
+            return await self.target.run_command(
+                cmd, login_shell=False, mutates=f"install {scope} flatpak {application} from {source_item.origin}"
+            )
 
         raise ConvergeItemFailed(
             f"FlatpakSyncJob.converge: unsupported action {diff.action.value!r} for a flatpak ref ({diff.label}) "
@@ -689,11 +699,15 @@ class FlatpakSyncJob(PackageSyncJob):
 
         if diff.action == DiffAction.INSTALL:
             cmd = f"{sudo}flatpak {scope_flag} mask {shlex.quote(pattern)}"
-            return await self.target.run_command(cmd, login_shell=False)
+            return await self.target.run_command(
+                cmd, login_shell=False, mutates=f"mask {scope} flatpak pattern {pattern}"
+            )
 
         if diff.action == DiffAction.REMOVE:
             cmd = f"{sudo}flatpak {scope_flag} mask --remove {shlex.quote(pattern)}"
-            return await self.target.run_command(cmd, login_shell=False)
+            return await self.target.run_command(
+                cmd, login_shell=False, mutates=f"unmask {scope} flatpak pattern {pattern}"
+            )
 
         raise ConvergeItemFailed(
             f"FlatpakSyncJob.converge: unsupported action {diff.action.value!r} for a flatpak mask ({diff.label})"

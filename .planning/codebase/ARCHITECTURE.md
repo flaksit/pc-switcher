@@ -54,7 +54,8 @@
 | EventBus | Per-consumer `asyncio.Queue` fan-out of `LogEvent`/`ProgressEvent`/`ConnectionEvent` | `src/pcswitcher/events.py` |
 | Logger | stdlib logging setup: `JsonFormatter` file handler, `UILogHandler`, `WarningCaptureHandler` | `src/pcswitcher/logger.py` |
 | TerminalUI | Rich `Live` display: progress bars, log panel, status | `src/pcswitcher/ui.py` |
-| Confirmer | Interactive destructive-action gate (`Confirmer` Protocol, `TerminalUIConfirmer`) | `src/pcswitcher/confirmer.py` |
+| Confirmer | Interactive destructive-action gate, one coarse decision per run (`Confirmer` Protocol, `TerminalUIConfirmer`) | `src/pcswitcher/confirmer.py` |
+| StepGate | Per-action confirmation gate behind `--confirm-each-command` (`StepGate` Protocol, `TerminalUIStepGate`); invoked from `Executor`, never from jobs | `src/pcswitcher/step_gate.py` |
 | Jobs | Self-contained sync units under a `Job` ABC hierarchy | `src/pcswitcher/jobs/` |
 | PackagePhaseCoordinator | Runs all package jobs' `plan()`, merges into one batched review, distributes outcome before any `apply()` | `src/pcswitcher/jobs/package_phase.py` |
 | Lock | fcntl advisory lock locally, remote `flock` process over SSH | `src/pcswitcher/lock.py` |

@@ -231,7 +231,9 @@ class DecisionFile:
             f"printf '%s' {shlex.quote(content)} > {tmp_expr} && "
             f"mv -f {tmp_expr} {self._path_expr}"
         )
-        result = await self._executor.run_command(cmd)
+        result = await self._executor.run_command(
+            cmd, mutates=f"record permanent skip for {entry.label} in {self._display_path}"
+        )
         if not result.success:
             raise RuntimeError(
                 f"failed to record decision for {entry.item_id!r} in {self._display_path}: {result.stderr.strip()}"
@@ -396,7 +398,9 @@ class SnippetRegistry:
             f"printf '%s' {shlex.quote(content)} > {tmp_expr} && "
             f"mv -f {tmp_expr} {self._path_expr}"
         )
-        result = await self._executor.run_command(cmd)
+        result = await self._executor.run_command(
+            cmd, mutates=f"record install snippet for {snippet.label} in {self._display_path}"
+        )
         if not result.success:
             raise RuntimeError(
                 f"failed to add snippet for {snippet.item_id!r} in {self._display_path}: {result.stderr.strip()}"
@@ -417,10 +421,16 @@ class SnippetRegistry:
         snippet registered", instead returning a failed `CommandResult` so a stale plan
         (the registry changed between `plan()` and `apply()`) is a per-item failure
         like any other, not a crash that stops the whole job (D-27).
+
+        The exact `bash -c <quoted body>` command is what `--confirm-each-command` shows:
+        an opaque snippet is the one thing in a sync whose content pc-switcher cannot vouch
+        for, so it is displayed verbatim before it runs.
         """
         snippet = await self.get(item_id)
         if snippet is None:
             return CommandResult(exit_code=1, stdout="", stderr=f"no snippet registered for {item_id!r}")
 
         cmd = f"bash -c {shlex.quote(snippet.body)}"
-        return await executor.run_command(cmd, login_shell=False)
+        return await executor.run_command(
+            cmd, login_shell=False, mutates=f"replay install snippet for {snippet.label}"
+        )

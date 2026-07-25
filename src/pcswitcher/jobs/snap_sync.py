@@ -432,7 +432,9 @@ class SnapSyncJob(PackageSyncJob):
         name = shlex.quote(source_item.name)
         revision = shlex.quote(source_item.revision)
         install_result = await self.target.run_command(
-            f"sudo snap install --revision={revision} {name}", login_shell=False
+            f"sudo snap install --revision={revision} {name}",
+            login_shell=False,
+            mutates=f"install snap {source_item.name} at revision {source_item.revision}",
         )
         if not install_result.success:
             return install_result
@@ -452,7 +454,9 @@ class SnapSyncJob(PackageSyncJob):
             name = shlex.quote(source_item.name)
             revision = shlex.quote(source_item.revision)
             result = await self.target.run_command(
-                f"sudo snap refresh --revision={revision} {name}", login_shell=False
+                f"sudo snap refresh --revision={revision} {name}",
+                login_shell=False,
+                mutates=f"move snap {source_item.name} to revision {source_item.revision}",
             )
             if not result.success:
                 return result
@@ -466,14 +470,22 @@ class SnapSyncJob(PackageSyncJob):
     async def _switch_channel(self, source_item: SnapItem) -> CommandResult:
         name = shlex.quote(source_item.name)
         channel = shlex.quote(source_item.channel)
-        return await self.target.run_command(f"sudo snap switch --channel={channel} {name}", login_shell=False)
+        return await self.target.run_command(
+            f"sudo snap switch --channel={channel} {name}",
+            login_shell=False,
+            mutates=f"track channel {source_item.channel} for snap {source_item.name}",
+        )
 
     async def _converge_remove(self, diff: ItemDiff) -> CommandResult:
         """`snap remove`, never `--purge`: purge discards snapd's own pre-removal
         snapshot, which is the user's only recovery path if the removal was a mistake.
         """
         name = shlex.quote(_snap_name(diff.item_id))
-        return await self.target.run_command(f"sudo snap remove {name}", login_shell=False)
+        return await self.target.run_command(
+            f"sudo snap remove {name}",
+            login_shell=False,
+            mutates=f"remove snap {_snap_name(diff.item_id)}",
+        )
 
     async def _converge_hold(self, diff: ItemDiff) -> CommandResult:
         """Converge one `snap:hold:<name>` membership item (#208, D4/D6): INSTALL ->
@@ -490,9 +502,15 @@ class SnapSyncJob(PackageSyncJob):
         installing this run hits an absent snap and fails — that is a normal per-item
         failure (D-27, the exit code alone decides pass/fail), not a gated abort.
         """
-        name = shlex.quote(diff.item_id.removeprefix(_SNAP_HOLD_ID_PREFIX))
+        raw_name = diff.item_id.removeprefix(_SNAP_HOLD_ID_PREFIX)
+        name = shlex.quote(raw_name)
         flag = "--hold=forever" if diff.action == DiffAction.INSTALL else "--unhold"
-        return await self.target.run_command(f"sudo snap refresh {flag} {name}", login_shell=False)
+        verb = "hold" if diff.action == DiffAction.INSTALL else "unhold"
+        return await self.target.run_command(
+            f"sudo snap refresh {flag} {name}",
+            login_shell=False,
+            mutates=f"{verb} snap {raw_name}",
+        )
 
     @override
     async def validate(self) -> list[ValidationError]:

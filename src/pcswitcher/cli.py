@@ -236,13 +236,35 @@ def sync(
             ),
         ),
     ] = False,
+    confirm_each_command: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-each-command",
+            help=(
+                "Show the exact command or file transfer before EVERY modification a package "
+                "sync job makes, and require an explicit proceed or abort for each one. "
+                "Requires an interactive terminal. Slow by design — for auditing a risky sync."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Sync to target machine.
 
     Loads configuration, creates orchestrator, and runs the complete sync workflow.
     Use --allow-out-of-order to bypass the out-of-order topology check after manual review.
     Use --allow-first-sync to auto-approve the first-sync overwrite of a target with no history.
+    Use --confirm-each-command to step through every individual modification.
     """
+    # Refused here rather than mid-run: the gate has no non-interactive fallback by design
+    # (a gate nobody can answer would have to auto-proceed, which is what it exists to
+    # prevent), so a run that could never prompt must fail before it touches anything.
+    if confirm_each_command and not is_interactive(console):
+        console.print(
+            "[red]--confirm-each-command requires an interactive terminal[/red] (both stdin and stdout must be TTYs)."
+        )
+        console.print("Re-run it attached to a terminal, or drop the flag.")
+        raise typer.Exit(1)
+
     # Determine config path
     config_path = config or Configuration.get_default_config_path()
 
@@ -257,6 +279,7 @@ def sync(
         allow_out_of_order=allow_out_of_order,
         allow_first_sync=allow_first_sync,
         dry_run=dry_run,
+        confirm_each_command=confirm_each_command,
     )
     sys.exit(exit_code)
 
@@ -269,6 +292,7 @@ def _run_sync(
     allow_out_of_order: bool = False,
     allow_first_sync: bool = False,
     dry_run: bool = False,
+    confirm_each_command: bool = False,
 ) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
 
@@ -279,6 +303,7 @@ def _run_sync(
         allow_out_of_order: If True, skip the out-of-order target-state confirmation
         allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
         dry_run: If True, preview sync without making changes
+        confirm_each_command: If True, prompt before every individual modification
 
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
@@ -291,6 +316,7 @@ def _run_sync(
             allow_out_of_order=allow_out_of_order,
             allow_first_sync=allow_first_sync,
             dry_run=dry_run,
+            confirm_each_command=confirm_each_command,
         )
     )
 
@@ -303,6 +329,7 @@ async def _async_run_sync(
     allow_out_of_order: bool = False,
     allow_first_sync: bool = False,
     dry_run: bool = False,
+    confirm_each_command: bool = False,
 ) -> int:
     """Async implementation of sync with interrupt handling.
 
@@ -313,6 +340,7 @@ async def _async_run_sync(
         allow_out_of_order: If True, skip the out-of-order target-state confirmation
         allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
         dry_run: If True, preview sync without making changes
+        confirm_each_command: If True, prompt before every individual modification
 
     Interrupt behavior:
     - First SIGINT: Cancel sync task; cleanup runs in orchestrator's finally block
@@ -347,6 +375,7 @@ async def _async_run_sync(
             allow_out_of_order=allow_out_of_order,
             allow_first_sync=allow_first_sync,
             dry_run=dry_run,
+            confirm_each_command=confirm_each_command,
         )
         main_task = asyncio.create_task(orchestrator.run())
 

@@ -695,6 +695,7 @@ In return, the base class guarantees:
 - **Each job's review precedes its own changes.** A job's `execute()` runs its own plan, review and apply in order and applies nothing before its own review returns — a structural property of the single `execute()`, not a convention, and not owned by any outside component.
 - **Per-item continue-on-failure.** `apply()` attempts every approved diff, collects failures rather than stopping at the first one, and raises once at the end (`PackageItemFailures`) naming every item that failed, so one bad item never blocks the rest of the same job's approved work.
 - **Dry-run.** `--dry-run` produces the same plan and review as a real run but issues zero mutating commands (ADR-014).
+- **Per-action confirmation.** With `--confirm-each-command`, every modification a job makes is shown verbatim — the literal shell command, or the source and destination of a file transfer — and requires an explicit proceed or abort before it runs. See [Per-action confirmation](#per-action-confirmation).
 - **FULL/INFO logging split.** Per-item convergence detail logs at `FULL`; per-job summaries (counts, overall result) log at `INFO` — the same split `folder_sync` already follows.
 
 A job whose convergence semantics don't fit the shared `plan()` (apt-package-shaped diffing, one item class) overrides `plan()` entirely while still reusing the manager-agnostic pieces (`DecisionFile`/`filter_inert` for machine-specific items, `_build_review_groups` for the review presentation). `snap_sync` and `flatpak_sync` both do this; `apt_sync` calls the base `plan()` and extends it, since apt packages genuinely are the shape the base pipeline expects.
@@ -704,7 +705,7 @@ A job whose convergence semantics don't fit the shared `plan()` (apt-package-sha
 - **Responsibilities**: the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target), plus the repository state that governs where packages come from: sources (`/etc/apt/sources.list.d`), signing keys (`/etc/apt/keyrings`, legacy `/etc/apt/trusted.gpg.d`), pins (`/etc/apt/preferences.d`) and apt config (`/etc/apt/apt.conf.d`). Also detects unreproducible items: apt packages with no repository candidate, and unowned installs under `/usr/local`/`/opt`.
 - **`validate()` checks**: `apt-mark` availability on both source and target; passwordless sudo on the source (needed to read `/etc/apt` state — the source is read-only but the read itself needs root) and on the target (needed to install packages and write `/etc/apt` state); the dpkg frontend lock is free on the target (a held lock, e.g. from `unattended-upgrades`, is reported rather than raced against).
 - **Item classes**: `APT_PACKAGE`, `APT_SOURCE`, `APT_KEY`, `APT_PIN`, `APT_CONFIG`, plus `UNREPRODUCIBLE` for items neither apt nor any package owns.
-- **Convergence verbs**: `apt-get install`/`apt-get remove` for packages (never `purge`), each preceded by an `apt-get -s` transaction simulation that refuses the real command if it would touch an unapproved package; `sudo install` (staged under the target's own `~/.cache/pc-switcher/`, never a direct SFTP write into `/etc`) for repository/key/pin/config files, followed by a single `apt-get update` and a full rollback of the whole repository-file group if that update fails; a snippet replay (see the data model doc) for a resolved unreproducible item.
+- **Convergence verbs**: `apt-get install`/`apt-get remove` for packages (never `purge`), each preceded by an `apt-get -s` transaction simulation that refuses the real command if it would touch an unapproved package; `sudo install` (staged under the target's own `~/.cache/pc-switcher/`, never a direct SFTP write into `/etc`) for repository/key/pin/config files, followed by a single `apt-get update` and a full rollback of the whole repository-file group if that update fails (each restore is a separate command whose result is checked, so a step that fails is reported by file name; when any step fails the backup directory is kept rather than discarded, since it then holds the only copy of that file's pre-run content, and the group's failure text reads `ROLLBACK INCOMPLETE` regardless of what the re-probe says); a snippet replay (see the data model doc) for a resolved unreproducible item.
 - **First-sync scope** (ADR-015): "apt packages (manually-installed set)", via `apt-get install/remove per item, after review`.
 
 ### `snap_sync`
@@ -729,6 +730,31 @@ A job whose convergence semantics don't fit the shared `plan()` (apt-package-sha
 - **Item classes**: `UNREPRODUCIBLE` for the detected items.
 - **Resolution**: an unreproducible item ends a run resolved by a snippet, a machine-specific mark, or a deliberate skip-once — skip-once is a valid resolution, not an unresolved state. A non-interactive run records nothing and does not fail on undecided items alone (D-21/D-26).
 - **Snippet transport**: after its own review, the job pushes the registry (`~/.config/pc-switcher/package-snippets.yaml`) to the target itself with `send_file()`, so a snippet authored on the fly during that review reaches the target in the same run. The registry never travels via `config_sync` (which runs before any review) or `folder_sync` (a user-controlled job).
+
+### Per-action confirmation
+
+`--confirm-each-command` inserts one prompt before every individual modification. It exists because a batched review approves items, not commands: one ticked line can expand into an `apt-get -s` simulation, an `apt-get install`, an `apt-mark hold`, or — for a repository file — a backup, an SFTP stage, a `sudo install` promotion and an `apt-get update`. The flag is for the run where that expansion itself needs auditing.
+
+What the prompt shows is the operation verbatim: the literal string handed to the shell, or `send_file <local> -> <remote>` for a transfer. Nothing is paraphrased, because a display string that can differ from what executes is worse than no display.
+
+Two outcomes, no default — the user types one:
+
+- **proceed** — run this operation, then continue to the next prompt.
+- **abort sync** — raise `SyncAbortedByUser` and stop the whole run.
+
+There is deliberately no "skip this one". A single reviewed item can span several commands (an apt source's stage-then-promote, a snap's install-then-switch-channel), so skipping one leaves that item half-applied — worse than either finishing it or stopping. An unanswerable prompt (EOF, Ctrl-C) is an abort, never an approval.
+
+The flag requires a TTY on both stdin and stdout and is refused at startup without one: a gate with a non-interactive fallback would have to auto-proceed, which is exactly what it exists to prevent. It has no config-file equivalent — it is a per-run decision.
+
+Coverage today is every write the four package sync jobs make: each manager's converge commands, apt's repository-file backup/stage/promote/rollback sequence, the machine-local decision files on both machines, the install-snippet registry and its push, and the orchestrator's snapd auto-refresh pause and its restoration.
+
+One consequence of "no skip" shapes the code beyond the gate itself:
+
+- **Declining the snapd restore is honoured, and stops exactly there.** `_restore_snap_hold` re-raises `SyncAbortedByUser` ahead of its best-effort handler, so an abort is not absorbed the way a failed restore is. `_cleanup` catches it around that one call and continues: everything after it releases resources (target lock, SSH connection, source lock, event bus, UI) rather than modifying a machine, and no confirmation prompt should be able to leak a lock. What was left in place is logged at `WARNING`, so the end-of-run summary resurfaces it. This matters because restoring is not merely lifting — when the machine already had a hold of its own, declining means pc-switcher's timed hold expires and that prior hold is gone with it, which is why the prompt names the value being written back.
+
+The mechanism lives in `executor.py`, the one funnel every command, transfer and background process already passes through, so it is caller-agnostic rather than job-specific: any call that passes `mutates="<phrase>"` declares itself a modification and is gated, on either machine. Reads pass no `mutates` and are never gated — that is what keeps the prompts worth reading. The trade-off is that the marker is opt-in, so a forgotten `mutates=` is an unannounced write; that is the invariant to preserve when adding one. `folder_sync` has not yet been marked up (#209).
+
+The same seam carries the verbatim `DEBUG` trace of every executor operation — reads included, since a trace that omits them cannot answer "what did the tool actually do". The job a line belongs to comes from the `active_job` context variable the orchestrator sets around each job, which `asyncio` copies per task so a concurrently running background job cannot clobber the label.
 
 ## Assumptions
 

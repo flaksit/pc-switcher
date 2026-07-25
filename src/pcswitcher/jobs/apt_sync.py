@@ -1136,7 +1136,11 @@ class AptSyncJob(PackageSyncJob):
         if self._metadata_refresh_error is not None:
             raise ConvergeItemFailed(self._metadata_refresh_error)
 
-        result = await self.target.run_command("sudo apt-get update", login_shell=False)
+        result = await self.target.run_command(
+            "sudo apt-get update",
+            login_shell=False,
+            mutates="refresh apt package lists before the first install of this run",
+        )
         if not result.success:
             self._metadata_refresh_error = (
                 f"apt-get update failed before installing {self.manager_id} packages; refusing to install "
@@ -1185,7 +1189,7 @@ class AptSyncJob(PackageSyncJob):
                 )
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {install_args}"
-        return await self.target.run_command(real_cmd, login_shell=False)
+        return await self.target.run_command(real_cmd, login_shell=False, mutates=f"install apt package {name}")
 
     async def _converge_remove(self, diff: ItemDiff) -> CommandResult:
         """Simulate, then apply, one apt remove — the same last line of defence the
@@ -1218,7 +1222,7 @@ class AptSyncJob(PackageSyncJob):
             )
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {remove_args}"
-        return await self.target.run_command(real_cmd, login_shell=False)
+        return await self.target.run_command(real_cmd, login_shell=False, mutates=f"remove apt package {name}")
 
     async def _converge_hold(self, diff: ItemDiff) -> CommandResult:
         """Converge one `apt:hold:<name>` membership item (#208, D4/D5): `apt-mark hold`
@@ -1231,7 +1235,9 @@ class AptSyncJob(PackageSyncJob):
         name = diff.item_id.removeprefix(_APT_HOLD_ID_PREFIX)
         quoted = shlex.quote(name)
         verb = "hold" if diff.action == DiffAction.INSTALL else "unhold"
-        return await self.target.run_command(f"sudo apt-mark {verb} {quoted}", login_shell=False)
+        return await self.target.run_command(
+            f"sudo apt-mark {verb} {quoted}", login_shell=False, mutates=f"{verb} apt package {name}"
+        )
 
     # -- Repository-group convergence (Task 2: D-11, D-12, D-13, D-27, T-02-34/35) -----
     #
@@ -1309,7 +1315,11 @@ class AptSyncJob(PackageSyncJob):
         home = await self._target_home_dir()
         staging_dir = f"{home}/.cache/pc-switcher/apt-staging"
         backup_dir = f"{staging_dir}/backup-{uuid4().hex}"
-        await self.target.run_command(f"mkdir -p {shlex.quote(staging_dir)}", login_shell=False)
+        await self.target.run_command(
+            f"mkdir -p {shlex.quote(staging_dir)}",
+            login_shell=False,
+            mutates="create the apt repository-group staging directory",
+        )
 
         existed_before: dict[str, bool] = {}
         try:
@@ -1335,13 +1345,21 @@ class AptSyncJob(PackageSyncJob):
             except ConvergeItemFailed as exc:
                 self._repo_group_outcome[diff.item_id] = (False, str(exc))
 
-        update_result = await self.target.run_command("sudo apt-get update", login_shell=False)
+        update_result = await self.target.run_command(
+            "sudo apt-get update",
+            login_shell=False,
+            mutates="refresh apt package lists against the newly written repository configuration",
+        )
         if update_result.success:
             # This IS the run's single metadata refresh (decision 1): flag it so the
             # install path's `_ensure_metadata_refreshed` is a no-op and never issues a
             # second `apt-get update`.
             self._metadata_refreshed = True
-            await self.target.run_command(f"rm -rf {shlex.quote(backup_dir)}", login_shell=False)
+            await self.target.run_command(
+                f"rm -rf {shlex.quote(backup_dir)}",
+                login_shell=False,
+                mutates="discard the repository-group backup after a successful refresh",
+            )
             if marker_present:
                 self._repo_group_outcome[_METADATA_REFRESH_ITEM_ID] = (True, "apt-get update succeeded")
             return
@@ -1350,28 +1368,7 @@ class AptSyncJob(PackageSyncJob):
         # the group created, discard the backup directory, then re-probe apt so the
         # failure summary can tell the user whether the target recovered rather than
         # leaving them to guess.
-        for dest, existed in existed_before.items():
-            if existed:
-                backup_path = _backup_path_for(backup_dir, dest)
-                await self.target.run_command(
-                    f"sudo install -o root -g root -m 0644 {shlex.quote(backup_path)} {shlex.quote(dest)}",
-                    login_shell=False,
-                )
-            else:
-                await self.target.run_command(f"sudo rm -f {shlex.quote(dest)}", login_shell=False)
-        await self.target.run_command(f"rm -rf {shlex.quote(backup_dir)}", login_shell=False)
-
-        reprobe = await self.target.run_command("sudo apt-get update", login_shell=False)
-        if reprobe.success:
-            # After rollback `/etc/apt` is the pre-run configuration and this reprobe refreshed
-            # metadata for it; package installs that still run against that config (D-27 —
-            # a repo-group rollback does not cancel package items) then need no further
-            # `apt-get update`. If the reprobe itself failed, the flag stays unset and the
-            # install path's own refresh attempt will surface the still-broken apt.
-            self._metadata_refreshed = True
-        recovery = (
-            "target apt recovered after rollback" if reprobe.success else "target apt still broken after rollback"
-        )
+        recovery = await self._rollback_repo_group(existed_before, backup_dir)
         self._log(
             Host.TARGET,
             LogLevel.ERROR,
@@ -1388,6 +1385,88 @@ class AptSyncJob(PackageSyncJob):
             marker_present,
             f"repository group rolled back after apt-get update failure ({recovery}): {update_result.stderr.strip()}",
         )
+
+    async def _rollback_repo_group(self, existed_before: dict[str, bool], backup_dir: str) -> str:
+        """Undo the repository group's writes and re-probe apt; return a short phrase
+        describing how the target ended up, for the caller's failure summary (T-02-34).
+
+        Restores every file that existed before the group ran, deletes every file the
+        group created, discards the backup, then runs `apt-get update` so the summary can
+        state whether the target recovered rather than leaving the user to guess.
+
+        One command per file, each result inspected. A single `;`-joined command would
+        present the `--confirm-each-command` gate one all-or-nothing prompt, but it
+        collapses N exit codes into one and makes "which file failed to restore"
+        unanswerable — and a failing rollback step is exactly when the user needs that
+        file named. Every step is attempted regardless of earlier failures, so one
+        unwritable destination cannot strand the remaining files in their post-run state.
+        """
+        rollback_failures: list[str] = []
+        for dest, existed in existed_before.items():
+            if existed:
+                backup_path = _backup_path_for(backup_dir, dest)
+                action = f"restore {dest} from {backup_path}"
+                result = await self.target.run_command(
+                    f"sudo install -o root -g root -m 0644 {shlex.quote(backup_path)} {shlex.quote(dest)}",
+                    login_shell=False,
+                    mutates=f"ROLLBACK: restore {dest} from backup",
+                )
+            else:
+                action = f"delete {dest}, which this run created"
+                result = await self.target.run_command(
+                    f"sudo rm -f {shlex.quote(dest)}",
+                    login_shell=False,
+                    mutates=f"ROLLBACK: delete {dest}, which this run created",
+                )
+            if not result.success:
+                rollback_failures.append(f"could not {action}: {result.stderr.strip()}")
+                self._log(
+                    Host.TARGET,
+                    LogLevel.WARNING,
+                    f"Rollback step failed — could not {action}: {result.stderr.strip()}",
+                    stderr=result.stderr,
+                )
+
+        if rollback_failures:
+            # The backup directory is deliberately NOT discarded: a failed restore means it
+            # holds the only remaining copy of that file's pre-run content, so deleting it
+            # would destroy exactly what manual recovery depends on. Name the path — the
+            # user has to finish this by hand.
+            self._log(
+                Host.TARGET,
+                LogLevel.WARNING,
+                f"Repository-group rollback incomplete; the backup is kept at {backup_dir} on the target "
+                f"so the affected file(s) can be restored by hand: {'; '.join(rollback_failures)}",
+            )
+        else:
+            await self.target.run_command(
+                f"rm -rf {shlex.quote(backup_dir)}",
+                login_shell=False,
+                mutates="ROLLBACK: discard the repository-group backup directory",
+            )
+
+        reprobe = await self.target.run_command(
+            "sudo apt-get update",
+            login_shell=False,
+            mutates="ROLLBACK: re-probe apt against the restored repository configuration",
+        )
+        if reprobe.success:
+            # After rollback `/etc/apt` is the pre-run configuration and this reprobe refreshed
+            # metadata for it; package installs that still run against that config (D-27 —
+            # a repo-group rollback does not cancel package items) then need no further
+            # `apt-get update`. If the reprobe itself failed, the flag stays unset and the
+            # install path's own refresh attempt will surface the still-broken apt.
+            self._metadata_refreshed = True
+
+        if rollback_failures:
+            # Takes precedence over the reprobe's verdict: an incomplete rollback leaves
+            # /etc/apt as neither the pre-run nor the post-run configuration, which a green
+            # `apt-get update` would otherwise mask.
+            return (
+                f"ROLLBACK INCOMPLETE, {len(rollback_failures)} file(s) left unrestored "
+                f"(backup kept at {backup_dir}): {'; '.join(rollback_failures)}"
+            )
+        return "target apt recovered after rollback" if reprobe.success else "target apt still broken after rollback"
 
     def _record_group_failure(self, group_diffs: list[ItemDiff], marker_present: bool, message: str) -> None:
         """Mark every `group_diffs` item (and the metadata-refresh marker, if present)
@@ -1411,10 +1490,16 @@ class AptSyncJob(PackageSyncJob):
         if not exists.success:
             return False
 
-        await self.target.run_command(f"mkdir -p {shlex.quote(backup_dir)}", login_shell=False)
+        await self.target.run_command(
+            f"mkdir -p {shlex.quote(backup_dir)}",
+            login_shell=False,
+            mutates="create the repository-group backup directory",
+        )
         backup_path = _backup_path_for(backup_dir, dest)
         result = await self.target.run_command(
-            f"sudo cp -a {quoted_dest} {shlex.quote(backup_path)}", login_shell=False
+            f"sudo cp -a {quoted_dest} {shlex.quote(backup_path)}",
+            login_shell=False,
+            mutates=f"back up {dest} before the repository group is written",
         )
         if not result.success:
             raise ConvergeItemFailed(
@@ -1436,7 +1521,11 @@ class AptSyncJob(PackageSyncJob):
         dest = _repo_item_destination(diff)
 
         if diff.action == DiffAction.REMOVE:
-            result = await self.target.run_command(f"sudo rm -f {shlex.quote(dest)}", login_shell=False)
+            result = await self.target.run_command(
+                f"sudo rm -f {shlex.quote(dest)}",
+                login_shell=False,
+                mutates=f"delete repository file {dest}",
+            )
             if not result.success:
                 raise ConvergeItemFailed(f"failed to remove {dest}: {result.stderr.strip()}")
             return
@@ -1454,7 +1543,9 @@ class AptSyncJob(PackageSyncJob):
         # the one directory this project actually needs to create.
         dest_dir = str(Path(dest).parent)
         mkdir_result = await self.target.run_command(
-            f"sudo mkdir -p -m 0755 {shlex.quote(dest_dir)}", login_shell=False
+            f"sudo mkdir -p -m 0755 {shlex.quote(dest_dir)}",
+            login_shell=False,
+            mutates=f"create directory {dest_dir} for {dest}",
         )
         if not mkdir_result.success:
             raise ConvergeItemFailed(
@@ -1465,15 +1556,22 @@ class AptSyncJob(PackageSyncJob):
         staged_name = diff.item_id.replace(":", "_").replace("/", "_")
         staged_dest = f"{staging_dir}/{staged_name}"
         try:
-            await self.target.send_file(local_path, staged_dest)
+            await self.target.send_file(
+                local_path, staged_dest, mutates=f"stage {dest} into the target's cache before promotion"
+            )
             promote = await self.target.run_command(
                 f"sudo install -o root -g root -m 0644 {shlex.quote(staged_dest)} {shlex.quote(dest)}",
                 login_shell=False,
+                mutates=f"promote the staged file into {dest} as root:root 0644",
             )
             if not promote.success:
                 raise ConvergeItemFailed(f"failed to install {dest}: {promote.stderr.strip()}")
         finally:
-            await self.target.run_command(f"rm -f {shlex.quote(staged_dest)}", login_shell=False)
+            await self.target.run_command(
+                f"rm -f {shlex.quote(staged_dest)}",
+                login_shell=False,
+                mutates=f"remove the staging copy of {dest}",
+            )
 
     async def _require_keyrings_ready(self, diff: ItemDiff) -> None:
         """Refuse to write a source file whose keyring reference is neither already

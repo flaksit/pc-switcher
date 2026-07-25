@@ -43,6 +43,14 @@ Every item offers the same three-way choice:
 - **Skip this run** — leave it alone for now; it comes back next sync.
 - **Skip always** — mark it as belonging to this machine only, so no future sync touches it (see [Machine-specific packages](#machine-specific-packages)).
 
+### Confirming every individual command
+
+The batched review approves *items*, not commands. One ticked line can expand into several: an apt package is an `apt-get -s` simulation then an `apt-get install`; an apt repository file is a backup, an upload, a `sudo install` promotion and an `apt-get update`.
+
+`pc-switcher sync <target> --confirm-each-command` inserts one prompt before every one of them, showing the exact command (or, for a file transfer, the source and destination paths) and waiting for **p** to proceed or **a** to abort the whole sync. There is no "skip this one": a single reviewed item can span several commands, so skipping one would leave that item half-applied. An unanswerable prompt (Ctrl-C, EOF) aborts.
+
+It covers every write the four jobs make, plus the machine-local decision files on both machines, the snippet registry and its push, the snapd auto-refresh pause and restore, and the sync-history update on both ends. Read-only commands are never gated. The flag needs a real terminal and is refused without one. It is meant for auditing or debugging a run you do not trust yet, not for everyday syncs.
+
 ### apt collateral
 
 When you approve an apt change, apt sometimes has to remove or downgrade *other* packages to satisfy it — so the package you approved is not always the whole transaction. `apt_sync` simulates every approved change with `apt-get -s` before applying anything and inspects that collateral. Dependencies apt pulls in or drops on its own are apt doing its job and are not shown to you. But if the collateral would remove or downgrade a package you installed by hand — one in either machine's `apt-mark showmanual` set, the source's or the target's — that becomes its own review item with an install-anyway / skip / abort choice. Protecting the union of both manual sets closes the case where a package is hand-installed on one machine but auto-resolved on the other. The classification happens during the review, never mid-apply, so you are never prompted while changes are landing.

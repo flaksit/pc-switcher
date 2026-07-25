@@ -133,6 +133,9 @@ pc-switcher init [--force]    # Create default config at ~/.config/pc-switcher/c
 # Sync to target machine
 pc-switcher sync <target-hostname> [--config PATH]
 
+# Step through every individual modification, confirming each one (needs a terminal)
+pc-switcher sync <target-hostname> --confirm-each-command
+
 # View logs
 pc-switcher logs              # Show logs directory and list recent logs
 pc-switcher logs --last       # Show path to most recent log file

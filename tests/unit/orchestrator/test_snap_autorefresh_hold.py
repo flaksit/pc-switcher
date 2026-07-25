@@ -16,12 +16,12 @@ All executor interactions are mocked; no real snap/snapd commands run.
 from __future__ import annotations
 
 from collections.abc import Callable
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from pcswitcher.config import Configuration
-from pcswitcher.models import CommandResult
+from pcswitcher.models import CommandResult, SyncAbortedByUser
 from pcswitcher.orchestrator import Orchestrator
 
 
@@ -191,3 +191,89 @@ class TestHoldDoesNotBlockConvergence:
             for c in all_calls(ex):
                 assert "snap install" not in c
                 assert "snap refresh" not in c
+
+
+class TestConfirmEachCommandGate:
+    """The snapd hold declares itself a modification on both machines, and an abort at the
+    restore is honoured rather than absorbed by the best-effort handler.
+
+    The gate itself lives on the executors (`executor.py`), so what the orchestrator owns —
+    and what these assert — is that it passes `mutates=` for the two writes and NOT for the
+    read-only capture. That the executor then prompts is covered in `test_step_gate.py`.
+    """
+
+    @staticmethod
+    def _mutating_calls(mock: MagicMock) -> list[tuple[str, str]]:
+        """(command, mutates) for every call that declared itself a modification."""
+        return [
+            (call.args[0], call.kwargs["mutates"])
+            for call in mock.run_command.call_args_list
+            if call.kwargs.get("mutates") is not None
+        ]
+
+    @staticmethod
+    def _refuse_mutations(cmd: str, **kwargs: object) -> CommandResult:
+        """Stand in for a user answering "abort" at the gate."""
+        if kwargs.get("mutates") is not None:
+            raise SyncAbortedByUser("declined")
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    @pytest.mark.asyncio
+    async def test_apply_and_restore_declare_mutations_on_both_hosts(self) -> None:
+        orchestrator, source, target = make_orchestrator(snap_sync_enabled=True)
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+        await orchestrator._restore_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        for ex in (source, target):
+            declared = self._mutating_calls(ex)
+            # Apply plus restore, and nothing else: the `snap get` capture is a read.
+            assert len(declared) == 2
+            assert all("snap set system refresh.hold" in cmd for cmd, _ in declared)
+            assert not any("snap get" in cmd for cmd, _ in declared)
+
+    @pytest.mark.asyncio
+    async def test_restore_names_the_prior_value_it_is_writing_back(self) -> None:
+        """Skipping the restore loses a hold the user set themselves, so the prompt has to
+        say which value is at stake — not just "restore".
+        """
+        orchestrator, source, _target = make_orchestrator(
+            snap_sync_enabled=True,
+            source_responses={"snap get system refresh.hold": CommandResult(0, "forever\n", "")},
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+        await orchestrator._restore_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        assert any("forever" in mutates for _cmd, mutates in self._mutating_calls(source))
+
+    @pytest.mark.asyncio
+    async def test_abort_at_restore_is_not_swallowed_by_the_best_effort_handler(self) -> None:
+        orchestrator, source, _target = make_orchestrator(snap_sync_enabled=True)
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        source.run_command = AsyncMock(side_effect=self._refuse_mutations)
+        with pytest.raises(SyncAbortedByUser):
+            await orchestrator._restore_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_cleanup_honours_the_abort_but_still_releases_resources(self) -> None:
+        """An abort at the restore stops the write and nothing else: a confirmation prompt
+        must never be able to leak the target lock or the SSH connection.
+        """
+        orchestrator, source, target = make_orchestrator(snap_sync_enabled=True)
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+        source.run_command = AsyncMock(side_effect=self._refuse_mutations)
+        source.terminate_all_processes = AsyncMock()
+        target.terminate_all_processes = AsyncMock()
+
+        lock_process = MagicMock()
+        orchestrator._target_lock_process = lock_process  # pyright: ignore[reportPrivateUsage]
+        source_lock = MagicMock()
+        orchestrator._source_lock = source_lock  # pyright: ignore[reportPrivateUsage]
+
+        with patch("pcswitcher.orchestrator.release_remote_lock", new=AsyncMock()) as release:
+            await orchestrator._cleanup()  # pyright: ignore[reportPrivateUsage]
+
+        release.assert_awaited_once_with(lock_process)
+        source_lock.release.assert_called_once()

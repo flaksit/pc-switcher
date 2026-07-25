@@ -1758,8 +1758,51 @@ class TestRepoGroupTransaction:
         assert any("sudo install" in c and "backup-" in c and "preferences.d/curl-pin" in c for c in commands)
         # Delete: the brand-new key file this run created is removed.
         assert any("sudo rm -f" in c and "keyrings/foo.gpg" in c for c in commands)
+        # A clean rollback discards the backup.
+        assert any(c.startswith("rm -rf") and "backup-" in c for c in commands)
         # Two `apt-get update` calls: the failing one and the post-rollback reprobe.
         assert sum(1 for c in commands if c == "sudo apt-get update") == 2
+
+    @pytest.mark.asyncio
+    async def test_failed_rollback_step_warns_and_keeps_the_backup(self) -> None:
+        """A restore that fails must be named, and its backup must survive: that directory
+        holds the only remaining copy of the file's pre-run content.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "curl-pin"), ""),
+                "cat /etc/apt/preferences.d/curl-pin": CommandResult(0, "Package: curl\n", ""),
+            },
+            target_side_effect=respond_with_update_sequence(
+                mapping={
+                    "echo $HOME": CommandResult(0, "/home/target-user", ""),
+                    **_NO_PACKAGES,
+                    "test -f /etc/apt/preferences.d/curl-pin": CommandResult(0, "", ""),
+                    "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p2", "curl-pin"), ""),
+                    # The restore itself fails — the case this test exists for.
+                    "sudo install -o root -g root -m 0644 /home/target-user/.cache": CommandResult(
+                        1, "", "Read-only file system"
+                    ),
+                },
+                update_results=[CommandResult(1, "", "update failed"), CommandResult(0, "", "")],
+            ),
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:pin:curl-pin": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        # The incomplete rollback reaches the user through every group item's failure text,
+        # naming the file and where its backup was kept.
+        messages = " ".join(stderr for _diff, stderr in exc_info.value.failures)
+        assert "ROLLBACK INCOMPLETE" in messages
+        assert "preferences.d/curl-pin" in messages
+        assert "backup-" in messages
+
+        # The backup is NOT discarded — it is the only copy of the pre-run file left.
+        assert not any(c.startswith("rm -rf") and "backup-" in c for c in all_calls(target))
 
     @pytest.mark.asyncio
     async def test_successful_update_issues_no_restore_command(self) -> None:

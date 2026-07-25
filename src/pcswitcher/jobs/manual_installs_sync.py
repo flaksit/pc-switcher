@@ -261,7 +261,9 @@ class ManualInstallsSyncJob(PackageSyncJob):
 
         await self._guard_registry_overwrite(source_path)
 
-        mkdir = await self.target.run_command(f"mkdir -p {CONFIG_REMOTE_DIR}")
+        mkdir = await self.target.run_command(
+            f"mkdir -p {CONFIG_REMOTE_DIR}", mutates="create the pc-switcher config directory on the target"
+        )
         if not mkdir.success:
             raise RuntimeError(f"Failed to create config directory on target: {mkdir.stderr}")
 
@@ -270,7 +272,9 @@ class ManualInstallsSyncJob(PackageSyncJob):
         if not home.success:
             raise RuntimeError("Failed to get home directory on target")
         absolute_remote_path = f"{home.stdout.strip()}/{SNIPPET_REGISTRY_RELPATH}"
-        await self.target.send_file(source_path, absolute_remote_path)
+        await self.target.send_file(
+            source_path, absolute_remote_path, mutates="push the install-snippet registry to the target"
+        )
 
     async def _guard_registry_overwrite(self, source_path: Path) -> None:
         """Gate the wholesale `package-snippets.yaml` overwrite on the loss/change of any
