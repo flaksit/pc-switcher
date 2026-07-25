@@ -636,6 +636,156 @@ class TestHoldAndRevisionFailuresArePerItem:
         assert any("sudo snap switch --channel=latest/stable gamma" in c for c in commands)
 
 
+# Confinement fixtures: `classic`/`devmode` in the Notes column. `zellij` is the real
+# classic snap on this project's own machine; `snap list --all` shows it as
+# "zellij 43 disabled,classic" plus an active "classic" line.
+SNAP_LIST_SOURCE_CLASSIC = (
+    _HEADER
+    + "zellij    0.44.1     65     latest/stable   dominz88     classic\n"
+    + "beta      2.0        20     latest/stable   pub✓         -\n"
+)
+SNAP_LIST_SOURCE_DEVMODE = _HEADER + "toy       1.0        7      latest/edge     pub✓         devmode\n"
+
+
+class TestParseConfinement:
+    """`classic`/`devmode` in the Notes column set the confinement fields."""
+
+    @pytest.mark.asyncio
+    async def test_classic_note_sets_item_classic(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_CLASSIC, "")}
+        )
+        job = SnapSyncJob(context)
+
+        items = await job.capture_source_items()
+
+        by_name = {item.name: item for item in items}
+        assert by_name["zellij"].classic is True
+        assert by_name["zellij"].devmode is False
+        assert by_name["beta"].classic is False
+
+    @pytest.mark.asyncio
+    async def test_devmode_note_sets_item_devmode(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_DEVMODE, "")}
+        )
+        job = SnapSyncJob(context)
+
+        items = await job.capture_source_items()
+
+        assert items[0].devmode is True
+        assert items[0].classic is False
+
+    @pytest.mark.asyncio
+    async def test_disabled_classic_line_is_still_skipped(self) -> None:
+        """The real `snap list --all` shape for a classic snap with a retained older
+        revision: `disabled,classic` shares one Notes list, and `disabled` still wins.
+        """
+        listing = (
+            _HEADER
+            + "zellij    0.43.0     43     latest/stable   dominz88     disabled,classic\n"
+            + "zellij    0.44.1     65     latest/stable   dominz88     classic\n"
+        )
+        context, _source, _target = make_context(source_responses={"snap list --all": CommandResult(0, listing, "")})
+        job = SnapSyncJob(context)
+
+        items = await job.capture_source_items()
+
+        assert len(items) == 1
+        assert items[0].revision == "65"
+        assert items[0].classic is True
+
+
+class TestConvergeConfinement:
+    """snapd refuses a classic/devmode revision without the matching confirmation flag,
+    per-revision — `--revision=N` does not bypass it — so the converge commands must
+    carry the SOURCE item's confinement.
+    """
+
+    @pytest.mark.asyncio
+    async def test_install_of_classic_snap_passes_classic(self) -> None:
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_CLASSIC, "")},
+            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        zellij = next(d for d in plan.diffs if d.item_id == "snap:zellij")
+
+        await job.converge(zellij)
+
+        assert any("sudo snap install --classic --revision=65 zellij" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_install_of_strict_snap_passes_no_confinement_flag(self) -> None:
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_CLASSIC, "")},
+            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        beta = next(d for d in plan.diffs if d.item_id == "snap:beta")
+
+        await job.converge(beta)
+
+        commands = all_calls(target)
+        assert any("sudo snap install --revision=20 beta" in c for c in commands)
+        assert not any("--classic" in c or "--devmode" in c for c in commands)
+
+    @pytest.mark.asyncio
+    async def test_install_of_devmode_snap_passes_devmode_and_never_classic(self) -> None:
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_DEVMODE, "")},
+            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        toy = next(d for d in plan.diffs if d.item_id == "snap:toy")
+
+        await job.converge(toy)
+
+        commands = all_calls(target)
+        assert any("sudo snap install --devmode --revision=7 toy" in c for c in commands)
+        assert not any("--classic" in c for c in commands)
+
+    @pytest.mark.asyncio
+    async def test_refresh_passes_classic_when_target_is_strict(self) -> None:
+        """Source classic, target strict, same snap: a plain `snap refresh` preserves the
+        TARGET's confinement, which is the wrong one here — snapd would refuse the source's
+        classic revision. The flag follows the SOURCE item.
+        """
+        target_listing = _HEADER + "zellij    0.43.0     43     latest/stable   dominz88     -\n"
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_CLASSIC, "")},
+            target_responses={"snap list --all": CommandResult(0, target_listing, "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        zellij = next(d for d in plan.diffs if d.item_id == "snap:zellij")
+
+        await job.converge(zellij)
+
+        assert any("sudo snap refresh --classic --revision=65 zellij" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_confinement_difference_alone_produces_no_diff(self) -> None:
+        """Confinement is a FIELD, never identity and never a diff of its own: same name,
+        channel and revision on both sides yields nothing to converge even when the Notes
+        column disagrees (there is no command that would resolve it).
+        """
+        source = _HEADER + "zellij    0.44.1     65     latest/stable   dominz88     classic\n"
+        target = _HEADER + "zellij    0.44.1     65     latest/stable   dominz88     -\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+
+
 class TestConvergeRemoval:
     @pytest.mark.asyncio
     async def test_removal_never_passes_purge(self) -> None:

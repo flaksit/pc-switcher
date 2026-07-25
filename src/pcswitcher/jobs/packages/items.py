@@ -399,12 +399,25 @@ class SnapItem:
     sites and the shared diff never have to name it. `snap_sync` populates it and diffs it
     into a separate `snap:hold:<name>` membership item (`ItemClass.SNAP_HOLD`), keeping the
     hold a distinct review item from the snap itself.
+
+    `classic` and `devmode` are the snap's CONFINEMENT, likewise parsed from the Notes
+    column and likewise FIELDS rather than identity, defaulted so existing construction
+    sites and the shared diff never have to name them. They are not identity because
+    confinement is a property snapd derives from the revision the store published, not a
+    user choice the two machines can legitimately disagree about for the same revision:
+    making it identity would split one snap into two items, and diffing on it would emit a
+    `CHANGE` proposing a "convergence" with no command behind it. They exist solely so
+    `snap_sync` can pass `--classic`/`--devmode` to `snap install`/`snap refresh`, which
+    snapd requires as explicit per-revision confirmation before it will install a
+    classic-confinement or devmode revision at all.
     """
 
     name: str
     channel: str
     revision: str
     held: bool = False
+    classic: bool = False
+    devmode: bool = False
 
     ITEM_CLASS: ClassVar[ItemClass] = ItemClass.SNAP
 

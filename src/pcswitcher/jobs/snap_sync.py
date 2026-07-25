@@ -136,10 +136,43 @@ def _parse_snap_list(output: str) -> list[SnapItem]:
         # sync-window hold is applied. Fail-safe even then: a system hold flips both
         # hosts symmetrically -> both-held -> no spurious diff.
         held = "held" in notes
+        # Confinement, from the same Notes list: snapd refuses to install a classic or a
+        # devmode revision without the matching flag as explicit confirmation, so the
+        # capture has to carry it or `_converge_install` cannot build a working command.
         items.append(
-            SnapItem(name=fields[name_idx], channel=fields[tracking_idx], revision=fields[rev_idx], held=held)
+            SnapItem(
+                name=fields[name_idx],
+                channel=fields[tracking_idx],
+                revision=fields[rev_idx],
+                held=held,
+                classic="classic" in notes,
+                devmode="devmode" in notes,
+            )
         )
     return items
+
+
+def _confinement_flags(item: SnapItem) -> str:
+    """The `--classic`/`--devmode` confirmation flag `snap install`/`snap refresh` need
+    for this item's confinement, as a leading-space command fragment ("" for a strictly
+    confined snap).
+
+    At most ONE flag is ever emitted, classic winning. The two mean different, mutually
+    incompatible things — `--classic` confirms a revision the store published with classic
+    confinement, `--devmode` (per `snap install --help`) "relax[es] confinement for strict
+    snaps" — so a snap is one or the other, never both. The `snap` CLI only rejects one
+    mode-flag pair outright (`cannot use devmode and jailmode flags together`, verified in
+    the 2.76.1 binary); a nonsensical `--classic --devmode` pair would be accepted
+    silently, which is exactly why this never emits it.
+
+    Passing `--classic` where it is not needed is safe: `snap` warns `flag --classic
+    ignored for strictly confined snap %s` rather than failing.
+    """
+    if item.classic:
+        return " --classic"
+    if item.devmode:
+        return " --devmode"
+    return ""
 
 
 def _install_diff(item: SnapItem) -> ItemDiff:
@@ -433,11 +466,17 @@ class SnapSyncJob(PackageSyncJob):
         alone (only installed snaps appear in it), and re-running `switch` to a
         channel the install already landed on is a harmless no-op, so always
         switching is simpler and no less correct than conditioning on that unknown.
+
+        The SOURCE item's confinement flag is interpolated because snapd requires it as
+        explicit per-revision confirmation: without `--classic`, installing a
+        classic-confinement snap fails with "repeat the command including --classic" on
+        every run, forever. `--revision=N` does NOT bypass that check — snapd's own
+        wording is "This revision of snap %q was published using classic confinement".
         """
         name = shlex.quote(source_item.name)
         revision = shlex.quote(source_item.revision)
         install_result = await self.target.run_command(
-            f"sudo snap install --revision={revision} {name}",
+            f"sudo snap install{_confinement_flags(source_item)} --revision={revision} {name}",
             login_shell=False,
             mutates=f"install snap {source_item.name} at revision {source_item.revision}",
         )
@@ -450,6 +489,22 @@ class SnapSyncJob(PackageSyncJob):
         switch when the channel also differs (or is the only thing that differs) —
         `converge()` only reaches here for a diff `_diff_snap_items` built because at
         least one of the two was true.
+
+        The refresh carries the SOURCE item's confinement flag for the same reason the
+        install does. `snap refresh --help` says a plain refresh preserves the snap's
+        existing confinement options, but that describes the TARGET's current confinement,
+        which is the wrong one whenever the two hosts disagree: source classic + target
+        strict is a real case (a snap that changed confinement between the two installed
+        revisions), and refreshing onto the source's classic revision without `--classic`
+        hits the same per-revision refusal an install would. The flag is therefore always
+        passed rather than conditioned on the target — the safe direction, since `--classic`
+        on a snap that does not need it is only a warning ("flag --classic ignored for
+        strictly confined snap"), whereas omitting it where it IS needed is a hard failure
+        on every run.
+
+        The reverse skew (source strict, target classic) emits no flag and leaves the
+        target's confinement as-is: confinement is not part of item identity and never
+        produces a diff of its own, so there is nothing here proposing to converge it.
         """
         revision_differs = target_item is None or source_item.revision != target_item.revision
         channel_differs = target_item is None or source_item.channel != target_item.channel
@@ -459,7 +514,7 @@ class SnapSyncJob(PackageSyncJob):
             name = shlex.quote(source_item.name)
             revision = shlex.quote(source_item.revision)
             result = await self.target.run_command(
-                f"sudo snap refresh --revision={revision} {name}",
+                f"sudo snap refresh{_confinement_flags(source_item)} --revision={revision} {name}",
                 login_shell=False,
                 mutates=f"move snap {source_item.name} to revision {source_item.revision}",
             )
