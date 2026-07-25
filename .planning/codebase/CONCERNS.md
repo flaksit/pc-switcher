@@ -203,7 +203,6 @@ Baseline is healthy: `uv run ruff check .` passes, `uv run basedpyright` reports
 - **Job DAG / dependencies** (#28): job ordering is a hardcoded sequence in the orchestrator.
 - **Warning visibility during a run** (#181) and a real log viewer (#182).
 - **System configuration sync** (#119): Feature 7 is not started.
-- **SKIP_ALWAYS from the interactive UI**: `PackageSyncJob._record_permanent_skips`/`filter_inert` implement D-08, but the checkbox UI has no path to produce a `SKIP_ALWAYS` outcome for a regular (non-unreproducible) item. Exercised today only via `PACKAGE_REVIEW_AUTOMATION_ENV`. Files: `src/pcswitcher/jobs/package_review.py`, `src/pcswitcher/jobs/package_sync_core.py`.
 
 ## Test Coverage Gaps
 
