@@ -18,6 +18,14 @@ exists to prevent. Which of a caller's `ReviewGroup`s are "removal-direction" is
 manager+action) is Claude's Discretion for plan 02-05, which owns the real item model; this
 module only consumes already-grouped input.
 
+D-07's three-way decision is completed by a second checkbox per actionable group (install /
+change / remove direction, which includes the block-state items): whatever the apply list
+left UNTICKED is offered once more, and a tick there records `Decision.SKIP_ALWAYS` —
+"never offer this again on this machine". Ticking nothing is the status quo (skip once).
+`REPORT_ONLY` groups never get that offer: an informational item has no machine that holds
+it, so a permanent mark would silently stop the underlying package syncing rather than stop
+reporting the condition.
+
 `PACKAGE_REVIEW_AUTOMATION_ENV`: undocumented escape hatch for integration tests, which run
 without a TTY and cannot drive a real terminal prompt. When set, its value is trusted JSON
 (no schema validation) mapping item_id -> decision, applied instead of prompting. It never
@@ -91,6 +99,14 @@ PACKAGE_REVIEW_AUTOMATION_ENV = "PCSWITCHER_PACKAGE_REVIEW_AUTOMATION"
 # item to match the source is not the destructive branch a bulk tick must guard against).
 _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable"})
 
+# `ReviewGroup.action` values whose items carry a converge verb, and are therefore the only
+# ones offered the "never offer again" promotion below (D-07). A `REPORT_ONLY` group is
+# excluded on purpose: a version mismatch, a missing repo candidate or a pin echo has no
+# machine that HOLDS the item for D-08a to record against, and recording one would stop the
+# package syncing altogether rather than stop reporting the condition. Those are resolved by
+# fixing the underlying condition, not by a machine-specific mark.
+_ACTIONABLE_ACTIONS = _REMOVAL_ACTIONS | frozenset({"install", "add", "enable", "change"})
+
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of unreproducible items (D-18/D-21) as needing the three-way per-entry resolution flow
 # below, rather than the ordinary checkbox tick. Not a `DiffAction` value — this is a
@@ -154,11 +170,10 @@ class Decision(StrEnum):
 
     APPLY = "apply"
     SKIP_ONCE = "skip_once"
-    # Reachable two ways: the unreproducible group's "record as machine-specific" choice
-    # below (plan 02-07), and hand-constructed `ReviewOutcome`s elsewhere (plan 02-04's
-    # `PackageSyncJob.apply()`/`_record_permanent_skips`). No ordinary checkbox tick
-    # produces this value — D-07's three-way decision needs its own dedicated prompt to
-    # promote a skip to permanent, not a fourth checkbox state.
+    # A skip is promoted to permanent by its own prompt, never by a fourth checkbox state on
+    # the apply list: the "never offer again" pass over an actionable group's UNTICKED
+    # entries (`_offer_permanent_skips`), and the unreproducible group's "record as
+    # machine-specific" choice.
     SKIP_ALWAYS = "skip_always"
 
 
@@ -191,6 +206,10 @@ def _is_unreproducible_group(action: str) -> bool:
 
 def _is_collateral_group(action: str) -> bool:
     return action == COLLATERAL_REVIEW_ACTION
+
+
+def _is_actionable_group(action: str) -> bool:
+    return action in _ACTIONABLE_ACTIONS
 
 
 # Printed once before the multi-line capture, so a user does not author a snippet that
@@ -318,6 +337,55 @@ async def _review_unreproducible_group(
             )
 
 
+async def _offer_permanent_skips(
+    group: ReviewGroup,
+    unticked: Sequence[ReviewEntry],
+    *,
+    console: Console,
+    decisions: dict[str, Decision],
+) -> None:
+    """Offer D-07's third outcome over one actionable group's UNTICKED entries: a second
+    checkbox whose ticks promote a skip-once to `Decision.SKIP_ALWAYS`.
+
+    A second list rather than a per-item question (D-24): the user ticks items off a list,
+    and turning the apply screen into a queue of three-way prompts is exactly the shape the
+    batched review exists to avoid. It is also not a fourth state on the apply checkbox —
+    "apply" and "never offer again" are opposite answers, so one list cannot carry both
+    without an unticked item being ambiguous.
+
+    Everything already ticked for apply is excluded, so a fully-ticked group prompts
+    nothing. Leaving this list empty is the status quo (skip once, re-offered next run), so
+    a bare Enter keeps the pre-existing behaviour.
+
+    Ctrl-C / EOF (`ask` returns `None`) aborts the WHOLE sync like every other review
+    screen — never a silent per-item fallthrough.
+    """
+    console.print(
+        Text(
+            "Tick anything that should never be offered again on this machine; Enter leaves them for next run.",
+            style="dim",
+        )
+    )
+    prompt = questionary.checkbox(
+        f"{group.title} — never offer again on this machine?",
+        choices=[
+            questionary.Choice(title=f"{entry.action_label} {entry.label}", value=entry.item_id, checked=False)
+            for entry in unticked
+        ],
+    )
+    selected = await asyncio.to_thread(prompt.ask)
+
+    if selected is None:
+        raise SyncAbortedByUser("package review aborted at a never-offer-again screen (Ctrl-C/EOF)")
+
+    # Scoped to the entries actually offered, so a promotion can never reach back and
+    # overwrite an APPLY decision the apply list already recorded.
+    promoted = set(selected)
+    for entry in unticked:
+        if entry.item_id in promoted:
+            decisions[entry.item_id] = Decision.SKIP_ALWAYS
+
+
 async def _review_collateral_group(
     group: ReviewGroup,
     *,
@@ -384,7 +452,9 @@ async def review_items(
     item comes back `SKIP_ONCE`, nothing is recorded permanently, and a warning names how
     many items went unresolved (D-26). Interactive runs pause `ui` around each group's
     blocking `questionary` checkbox (dispatched via `asyncio.to_thread`) and resume it in
-    a `finally`, so the live display is always handed back even if the prompt raises.
+    a `finally`, so the live display is always handed back even if the prompt raises. An
+    actionable group whose apply list left anything unticked then gets `_offer_permanent_skips`,
+    which turns a tick into `SKIP_ALWAYS` (D-07).
     """
     log = logger if logger is not None else _logger
 
@@ -443,6 +513,11 @@ async def review_items(
             selected_ids = set(selected)
             for entry in group.entries:
                 decisions[entry.item_id] = Decision.APPLY if entry.item_id in selected_ids else Decision.SKIP_ONCE
+
+            if _is_actionable_group(group.action):
+                unticked = [entry for entry in group.entries if entry.item_id not in selected_ids]
+                if unticked:
+                    await _offer_permanent_skips(group, unticked, console=console, decisions=decisions)
     finally:
         ui.resume()
 
