@@ -10,6 +10,7 @@ and snippet-replay coverage that previously lived against `AptSyncJob` in
 from __future__ import annotations
 
 import logging
+import shlex
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -289,6 +290,90 @@ class TestSnippetResolution:
         result = await job.converge(diff)
 
         assert result.success is False
+
+
+class TestPromptingSnippetCannotHang:
+    """G30: a snippet that would need stdin must FAIL rather than hang the sync. The
+    mechanism is the replay command's shape — the body passed as ONE quoted argument to
+    `bash -c`, `login_shell=False`, and no stdin supplied under any name — so a command
+    that waits for input reads EOF and exits non-zero, becoming an ordinary per-item
+    failure (D-27). Asserted on the command shape; nothing here actually blocks.
+    """
+
+    @pytest.mark.asyncio
+    async def test_replay_supplies_no_stdin_and_a_prompting_snippet_is_a_plain_item_failure(self) -> None:
+        item_id = "unreproducible:apt-no-candidate:brother-driver"
+        body = "apt-get install brother-driver"  # a debconf prompt with nothing behind it
+        registry_yaml = (
+            "snippets:\n"
+            f"  {item_id}:\n"
+            "    label: brother-driver (no apt candidate)\n"
+            f"    body: {body}\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: laptop\n"
+        )
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
+                f"bash -c {shlex.quote(body)}": CommandResult(1, "", "debconf: EOF on stdin at conffile prompt"),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        result = await job.converge(job_diff(item_id, DiffAction.INSTALL))
+
+        assert result.success is False
+        replay_calls = [c for c in target.run_command.call_args_list if c.args[0].startswith("bash -c")]
+        assert len(replay_calls) == 1
+        assert replay_calls[0].args[0] == f"bash -c {shlex.quote(body)}"
+        assert replay_calls[0].kwargs["login_shell"] is False
+        # No stdin reaches the command under any name the executor could accept.
+        assert not {"stdin", "input", "input_data"} & set(replay_calls[0].kwargs)
+
+
+class TestInstallOnly:
+    """G24: `manual_installs_sync` is install-only. Unreproducible items describe what the
+    SOURCE has installed; there is no target-side manifest to be "extra" against, so no
+    input can make this job propose a removal.
+    """
+
+    @pytest.mark.asyncio
+    async def test_target_query_is_empty_by_design(self) -> None:
+        context, _source, _target = make_context(
+            target_responses={"apt-mark showmanual": CommandResult(0, "target-only-tool\n", "")}
+        )
+        job = ManualInstallsSyncJob(context)
+
+        assert await job.query_target_items() == []
+
+    @pytest.mark.asyncio
+    async def test_no_removal_diff_or_group_even_when_the_target_holds_items(self) -> None:
+        """The target is stocked with everything the source has plus its own extras — the
+        shape that produces `EXTRA_ON_TARGET`/REMOVE in every other manager — and still no
+        removal is proposed, nor is the target ever asked for a manifest.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
+                "find /usr/local": CommandResult(0, "/usr/local/flux\n", ""),
+                "dpkg -S": CommandResult(0, "", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\ntarget-only-tool\n", ""),
+                "find /usr/local": CommandResult(0, "/usr/local/flux\n/usr/local/target-only\n", ""),
+                "dpkg -S": CommandResult(0, "", ""),
+            },
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs  # the source-side findings are present...
+        assert all(diff.action != DiffAction.REMOVE for diff in plan.diffs)
+        assert all(group.action != DiffAction.REMOVE.value for group in plan.groups)
+        # ...and no target-side detection ran at all, so nothing target-only can surface.
+        assert not [cmd for cmd in all_calls(target) if "showmanual" in cmd or cmd.startswith("find ")]
 
 
 class TestInertFiltering:
@@ -960,6 +1045,37 @@ class TestSnippetRegistryOverwriteGuard:
         assert len(confirmer.calls) == 1
         assert "CHANGED" in str(confirmer.calls[0]["message"])
         target.send_file.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_non_additive_push_without_a_confirmer_fails_and_sends_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G22 — the requirement is that a non-additive push NEVER silently overwrites; the
+        two acceptable outcomes are a confirmed push or a failed run. With no confirmer on
+        the context there is nothing to ask, and this pins the actual failure mode: the
+        bare `assert self.context.confirmer is not None` in
+        `manual_installs_sync._guard_registry_overwrite` (manual_installs_sync.py:305)
+        raises `AssertionError` and the run fails.
+
+        A misconfigured injection surfacing as a bare `AssertionError` is a rough message
+        for a user, but it IS a loud, transfer-free failure — which is the property that
+        matters here. Nothing is sent.
+        """
+        self._write_source_registry(tmp_path)  # source has brscan3 only
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, TARGET_WITH_EXTRA_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=None,  # nothing injected
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(AssertionError, match="confirmer"):
+            await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        target.send_file.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_non_interactive_non_additive_aborts(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

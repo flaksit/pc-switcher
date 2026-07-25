@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
-from typing import ClassVar
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -68,6 +68,17 @@ def _fake_prompt(*, ask_return: object = None, ask_side_effect: object = None) -
     else:
         prompt.ask = MagicMock(return_value=ask_return)
     return prompt
+
+
+def _apply_screens(checkbox: MagicMock) -> list[Any]:
+    """The APPLY checkbox calls only — one per group, identified by the message being the
+    group's own title.
+
+    An actionable group that leaves anything unticked is followed by a second checkbox
+    screen offering D-07's permanent skip ("never offer again on this machine?"). Tests
+    about the apply list itself filter that screen out rather than indexing call positions.
+    """
+    return [call for call in checkbox.call_args_list if "never offer again" not in call.args[0]]
 
 
 def _unreproducible_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
@@ -142,15 +153,21 @@ class TestInteractive:
                 entries=[_entry("a"), _entry("b"), _entry("c")],
             )
         ]
-        prompt = _fake_prompt(ask_return=["a", "c"])
+        apply_prompt = _fake_prompt(ask_return=["a", "c"])
+        # The follow-up "never offer again" screen over the unticked entry: nothing ticked,
+        # so every unticked item keeps its skip-once decision.
+        keep_for_next_run = _fake_prompt(ask_return=[])
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
+            patch(
+                "pcswitcher.jobs.packages.review.questionary.checkbox",
+                side_effect=[apply_prompt, keep_for_next_run],
+            ) as checkbox,
         ):
             outcome = await review_items(groups, console=console, ui=ui)
 
-        checkbox.assert_called_once()
+        assert len(_apply_screens(checkbox)) == 1
         assert outcome.was_interactive is True
         assert outcome.decisions == {
             "a": Decision.APPLY,
@@ -218,9 +235,10 @@ class TestInteractive:
         ):
             await review_items([install_group, removal_group], console=console, ui=ui)
 
-        assert checkbox.call_count == 2
-        install_choices = checkbox.call_args_list[0].kwargs["choices"]
-        removal_choices = checkbox.call_args_list[1].kwargs["choices"]
+        apply_calls = _apply_screens(checkbox)
+        assert len(apply_calls) == 2
+        install_choices = apply_calls[0].kwargs["choices"]
+        removal_choices = apply_calls[1].kwargs["choices"]
         assert install_choices[0].checked is True
         assert removal_choices[0].checked is False
 
@@ -245,10 +263,11 @@ class TestInteractive:
         ):
             outcome = await review_items([install_group, removal_group, change_group], console=console, ui=ui)
 
-        assert checkbox.call_count == 3
+        assert len(_apply_screens(checkbox)) == 3
         for call in checkbox.call_args_list:
             values = {choice.value for choice in call.kwargs["choices"]}
-            # Every prompt's entries come from exactly one input group.
+            # Every prompt's entries come from exactly one input group — the apply screens
+            # and the follow-up permanent-skip screens alike.
             assert values in ({"a", "c"}, {"b"}, {"d"})
         assert set(outcome.decisions) == {"a", "b", "c", "d"}
 
@@ -266,7 +285,7 @@ class TestInteractive:
         ):
             await review_items([group], console=console, ui=ui)
 
-        message = checkbox.call_args.args[0]
+        message = _apply_screens(checkbox)[0].args[0]
         assert message == "Remove packages"
         assert message != "Apply"
 
@@ -373,6 +392,53 @@ class TestAutomationEnv:
         checkbox.assert_not_called()
         ui.pause.assert_not_called()
         assert outcome.decisions == {"a": Decision.APPLY, "b": Decision.SKIP_ONCE}
+
+    @pytest.mark.asyncio
+    async def test_malformed_automation_json_fails_loudly_and_prompts_nothing(self) -> None:
+        """I15 — pins the ACTUAL behaviour: `_decisions_from_automation` hands the raw
+        value straight to `json.loads` (review.py:230), so malformed JSON surfaces as
+        `json.JSONDecodeError` out of `review_items`.
+
+        A loud failure is the acceptable outcome here: the variable is a hidden, test-only
+        hook (D-26), so the only ways to get it wrong are a broken test harness or a user
+        who found it and mis-set it — both of which must stop the run rather than silently
+        degrade into prompting (a TTY-less integration run would then hang or skip
+        everything) or into applying a half-parsed decision map.
+        """
+        console = _non_interactive_console()
+        ui = MagicMock()
+        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+
+        with (
+            patch.dict("os.environ", {PACKAGE_REVIEW_AUTOMATION_ENV: "{not json"}),
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
+            pytest.raises(json.JSONDecodeError),
+        ):
+            await review_items(groups, console=console, ui=ui)
+
+        # Nothing was prompted, and the live display was never touched: the automation
+        # branch fails before `ui.pause()`, so there is no paused UI left behind.
+        checkbox.assert_not_called()
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unknown_decision_value_in_automation_json_fails_loudly(self) -> None:
+        """Same contract for well-formed JSON naming a decision that does not exist: the
+        `Decision(...)` lookup raises `ValueError` rather than defaulting to a skip.
+        """
+        console = _non_interactive_console()
+        ui = MagicMock()
+        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+
+        with (
+            patch.dict("os.environ", {PACKAGE_REVIEW_AUTOMATION_ENV: json.dumps({"a": "apply_everything"})}),
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
+            pytest.raises(ValueError, match="apply_everything"),
+        ):
+            await review_items(groups, console=console, ui=ui)
+
+        checkbox.assert_not_called()
 
     def test_env_var_not_mentioned_in_cli_help(self) -> None:
         result = subprocess.run(

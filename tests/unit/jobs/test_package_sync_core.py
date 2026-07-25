@@ -30,7 +30,12 @@ from pcswitcher.jobs.packages.items import (
     ItemDiff,
 )
 from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome
-from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan, PackageSyncJob
+from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivateUsage]
+    _ACTION_VOCABULARY,
+    PackageItemFailures,
+    PackagePlan,
+    PackageSyncJob,
+)
 from pcswitcher.models import CommandResult, JobStatus, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
@@ -144,12 +149,14 @@ class FakeSyncJobWithFacts(FakeSyncJob):
         target_items: list[AptPackageItem] = [],  # noqa: B006
         hold_pin_facts: list[HoldPinFact] = [],  # noqa: B006
         unavailable_ids: frozenset[str] = frozenset(),
+        hold_sets: tuple[frozenset[str], frozenset[str]] = (frozenset(), frozenset()),
     ) -> None:
         super().__init__(context)
         self._source_items = source_items
         self._target_items = target_items
         self._hold_pin_facts = hold_pin_facts
         self._unavailable_ids = unavailable_ids
+        self._hold_sets = hold_sets
 
     async def capture_source_items(self) -> list[AptPackageItem]:
         return self._source_items
@@ -159,6 +166,9 @@ class FakeSyncJobWithFacts(FakeSyncJob):
 
     async def collect_hold_pin_facts(self) -> list[HoldPinFact]:
         return self._hold_pin_facts
+
+    async def collect_hold_sets(self) -> tuple[frozenset[str], frozenset[str]]:
+        return self._hold_sets
 
     async def collect_unavailable_item_ids(self, missing_item_ids: frozenset[str]) -> frozenset[str]:
         return self._unavailable_ids & missing_item_ids
@@ -362,6 +372,45 @@ class TestReviewGroupsByAction:
         assert "report_only" not in groups[0].title.lower()
         assert "report" in groups[0].title.lower()
 
+    def test_every_pair_without_a_vocabulary_entry_still_produces_a_usable_group(self) -> None:
+        """I5b: `_ACTION_VOCABULARY` covers only the (item_class, action) pairs the four
+        managers produce today. The backstop the pipeline promises is that ANY other pair
+        still reaches the review with a usable verb — no diff class may silently vanish
+        because nobody added a vocabulary row for it. Asserted over every uncovered pair
+        rather than one sampled class, since the failure mode is exactly "the new class
+        nobody thought about".
+        """
+        job = FakeSyncJob(make_context())
+        uncovered = [
+            (item_class, action)
+            for item_class in ItemClass
+            for action in DiffAction
+            if (item_class, action) not in _ACTION_VOCABULARY
+        ]
+        assert uncovered, "every pair is in the vocabulary — the fallback backstop is untested"
+
+        for item_class, action in uncovered:
+            diffs = [
+                ItemDiff(
+                    item_class=item_class,
+                    diff_class=DiffClass.MISSING_ON_TARGET,
+                    action=action,
+                    item_id="x1",
+                    label="x1",
+                    detail=None,
+                )
+            ]
+
+            groups = job._build_review_groups(diffs)
+
+            assert len(groups) == 1, f"{item_class}/{action} produced no review group"
+            verb = groups[0].entries[0].action_label
+            assert verb, f"{item_class}/{action} produced an empty verb"
+            # A raw enum value ("report_only") is not a verb; the fallback must read as one.
+            assert "_" not in verb
+            assert verb in groups[0].title.lower()
+            assert [entry.item_id for entry in groups[0].entries] == ["x1"]
+
     def test_removal_group_title_names_a_removal_verb_never_apply(self) -> None:
         job = FakeSyncJob(make_context())
         diffs = [_diff("i1", DiffAction.INSTALL), _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET)]
@@ -437,6 +486,47 @@ class TestConvergeDispatchByAction:
         await job.apply()
 
         assert job.converge_calls == []
+
+
+class TestIdempotency:
+    """J10/N2: a run over an ALREADY-converged pair is a no-op end to end.
+
+    Asserted on the shared pipeline (`FakeSyncJobWithFacts`) so it holds for every
+    manager rather than for one manager's capture code: identical item sets and identical
+    hold sets must produce zero diffs, zero review groups, no converge and no command
+    carrying `mutates=`. Pins that the diff engine has no "always re-propose" branch —
+    the property a real second sync depends on.
+
+    A PIN fact is deliberately absent: D-25 requires the `HELD_OR_PINNED` echo on every
+    run, so a pinned package is a standing REPORT_ONLY diff by design, not a convergence
+    failure.
+    """
+
+    @pytest.mark.asyncio
+    async def test_identical_source_and_target_produce_no_diff_no_group_and_no_mutation(self) -> None:
+        reviewer = FakeReviewer()
+        context = make_context(reviewer=reviewer)
+        items = [AptPackageItem(name="pkg-a", version="1.0"), AptPackageItem(name="pkg-b", version="2.0")]
+        job = FakeSyncJobWithFacts(
+            context,
+            source_items=items,
+            target_items=list(items),
+            hold_sets=(frozenset({"pkg-a"}), frozenset({"pkg-a"})),
+        )
+
+        plan = await job.plan()
+        assert plan.diffs == ()
+        assert plan.groups == ()
+
+        await job.execute()
+
+        assert job.converge_calls == []
+        # The review still runs once (I18), with nothing to show.
+        assert reviewer.call_count == 1
+        assert reviewer.groups_seen == ()
+        for executor in (context.source, context.target):
+            for call in executor.run_command.call_args_list:  # pyright: ignore[reportAttributeAccessIssue]
+                assert "mutates" not in call.kwargs
 
 
 def _unreproducible_diff(item_id: str, action: DiffAction = DiffAction.REPORT_ONLY) -> ItemDiff:

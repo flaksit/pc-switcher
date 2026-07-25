@@ -18,8 +18,10 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 
 from pcswitcher.config_sync import CONFIG_REMOTE_PATH, _copy_config_to_target  # pyright: ignore[reportPrivateUsage]
+from pcswitcher.jobs.apt_sync import AptSyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages import state as package_state
 from pcswitcher.jobs.packages.items import (
@@ -29,7 +31,7 @@ from pcswitcher.jobs.packages.items import (
     ItemClass,
     ItemDiff,
 )
-from pcswitcher.jobs.packages.review import Decision, ReviewOutcome
+from pcswitcher.jobs.packages.review import COLLATERAL_REVIEW_ACTION, Decision, ReviewOutcome
 from pcswitcher.jobs.packages.state import (
     DECISION_FILE_GLOB_RELPATH,
     DECISION_FILE_RELPATH_TEMPLATE,
@@ -414,6 +416,17 @@ def _install_diff(item_id: str) -> ItemDiff:
     )
 
 
+def _change_diff(item_id: str) -> ItemDiff:
+    return ItemDiff(
+        item_class=ItemClass.APT_PACKAGE,
+        diff_class=DiffClass.VERSION_MISMATCH,
+        action=DiffAction.CHANGE,
+        item_id=item_id,
+        label=item_id,
+        detail="1.0 -> 2.0",
+    )
+
+
 class TestPipelineWiring:
     @pytest.mark.asyncio
     async def test_source_held_inert_item_absent_from_the_plans_diffs(self) -> None:
@@ -501,6 +514,25 @@ class TestPipelineWiring:
         assert not any("mv -f" in cmd for cmd in target_cmds)
 
     @pytest.mark.asyncio
+    async def test_skip_always_on_change_writes_to_source_not_target(self) -> None:
+        """D-08a routes CHANGE with INSTALL, not with REMOVE: the SOURCE holds the value
+        the item would be converged TO, so the source is the machine that must stop
+        offering it. Sibling of the INSTALL and REMOVE cases above.
+        """
+        context = make_context()
+        job = _FakePackageJob(context)
+        diff = _change_diff("apt:package:drifting-tool")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
+
+        await job.apply()
+
+        target_cmds = [call.args[0] for call in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        source_cmds = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        assert any("mv -f" in cmd for cmd in source_cmds)
+        assert not any("mv -f" in cmd for cmd in target_cmds)
+
+    @pytest.mark.asyncio
     async def test_no_record_call_when_dry_run(self) -> None:
         context = make_context(dry_run=True)
         job = _FakePackageJob(context)
@@ -525,6 +557,157 @@ class TestPipelineWiring:
 
         for cmd in [call.args[0] for call in context.target.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
             assert "mv -f" not in cmd
+
+
+class TestHandEditedDecisionFile:
+    """H18: the un-mark workflow docs/jobs/package-sync.md promises — "delete its entry
+    from the decision file (or delete the whole file) ... the next sync treats the item as
+    live again". The file IS the state: `plan()` re-reads it every run and feeds it to
+    `filter_inert`, so nothing remembers an entry the user removed by hand.
+    """
+
+    @pytest.mark.asyncio
+    async def test_entry_deleted_by_hand_makes_that_item_live_again_next_run(self) -> None:
+        shell = FakeShellExecutor()
+        # The manager name only picks the path; the fake read below answers any `cat`.
+        store = DecisionFile("apt", shell)
+        await store.record(_entry(item_id="apt:package:brscan3"))
+        await store.record(_entry(item_id="apt:package:legacy-tool"))
+        recorded = next(iter(shell.files.values()))
+
+        # The user opens the file and deletes ONE entry, leaving the other in place.
+        data: dict[str, dict[str, object]] = yaml.safe_load(recorded)
+        del data["machine_specific"]["apt:package:brscan3"]
+        hand_edited = yaml.safe_dump(data)
+
+        context = make_context()
+        context.source.run_command = AsyncMock(side_effect=_respond_cat_with(hand_edited))  # pyright: ignore[reportAttributeAccessIssue]
+        job = _FakePackageJob(
+            context,
+            source_items=[
+                AptPackageItem(name="brscan3", version="1.0"),
+                AptPackageItem(name="legacy-tool", version="1.0"),
+                AptPackageItem(name="vim", version="9.0"),
+            ],
+        )
+
+        plan = await job.plan()
+
+        # brscan3 is live again; the entry the user kept stays inert.
+        assert {d.item_id for d in plan.diffs} == {"apt:package:brscan3", "apt:package:vim"}
+
+    @pytest.mark.asyncio
+    async def test_deleting_the_whole_file_makes_every_item_live_again(self) -> None:
+        """The coarse half of the same workflow: an absent file degrades to "no decisions"
+        (H13), so removing it re-offers every previously-recorded item."""
+        context = make_context()
+        context.source.run_command = AsyncMock(return_value=CommandResult(1, "", ""))  # pyright: ignore[reportAttributeAccessIssue]
+        job = _FakePackageJob(
+            context,
+            source_items=[AptPackageItem(name="brscan3", version="1.0"), AptPackageItem(name="vim", version="9.0")],
+        )
+
+        plan = await job.plan()
+
+        assert {d.item_id for d in plan.diffs} == {"apt:package:brscan3", "apt:package:vim"}
+
+
+def _respond_by_substring(mapping: dict[str, CommandResult]) -> Callable[..., CommandResult]:
+    """A `run_command` side_effect matching commands by substring, first match wins, with
+    an empty success as the fallback (the shape `test_apt_sync.py` uses)."""
+
+    def _side_effect(cmd: str, **_: object) -> CommandResult:
+        for pattern, result in mapping.items():
+            if pattern in cmd:
+                return result
+        return CommandResult(0, "", "")
+
+    return _side_effect
+
+
+def _apt_context(
+    *, source_responses: dict[str, CommandResult], target_responses: dict[str, CommandResult]
+) -> JobContext:
+    source = MagicMock()
+    source.run_command = AsyncMock(side_effect=_respond_by_substring(source_responses))
+    target = MagicMock()
+    target.run_command = AsyncMock(side_effect=_respond_by_substring(target_responses))
+    return JobContext(
+        config={},
+        source=source,
+        target=target,
+        event_bus=MagicMock(),
+        session_id="test-1234",
+        source_hostname="source-host",
+        target_hostname="target-host",
+    )
+
+
+class TestDecisionScopeIsDiffFilteringOnly:
+    """D20 / decision 8: a machine-local decision makes an item inert in the DIFF, and
+    nothing else. It is deliberately NOT consulted by apt's collateral protection, whose
+    protected set is the union of the two machines' `apt-mark showmanual` sets — an
+    accepted limitation, on the grounds that a package a user records "skip always" is
+    normally in `showmanual` anyway, so the extra lookup would buy nothing.
+
+    Both tests share one decision file and differ only in the target's manual set, which
+    is what makes the limitation visible: membership of `showmanual` decides protection,
+    the decision file never does.
+    """
+
+    _DECISIONS = _decision_file_contents("apt:package:ghost-tool")
+
+    @pytest.mark.asyncio
+    async def test_recorded_item_outside_both_manual_sets_gets_no_collateral_protection(self) -> None:
+        context = _apt_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                # ghost-tool is recorded machine-specific below but is manual on NEITHER
+                # machine — apt considers it an auto-installed package.
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt.decisions.yaml": CommandResult(0, self._DECISIONS, ""),
+                "apt-get -s install": CommandResult(0, "Inst pkg-a (1.0)\nRemv ghost-tool [1.0]\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not [d for d in plan.diffs if d.item_id == "apt:collateral:ghost-tool"]
+        assert not [g for g in plan.groups if g.action == COLLATERAL_REVIEW_ACTION]
+        # The install proceeds silently despite the recorded decision on its collateral.
+        assert "apt:package:pkg-a" in {d.item_id for d in plan.diffs}
+
+    @pytest.mark.asyncio
+    async def test_manual_set_membership_alone_decides_protection_even_for_a_recorded_item(self) -> None:
+        """Control for the limitation above: the SAME recorded item IS protected once it
+        is in the target's manual set — so the decision file changes nothing in either
+        direction, and `showmanual` is the only input.
+        """
+        context = _apt_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "ghost-tool\n", ""),
+                "dpkg-query": CommandResult(0, "ghost-tool\t1.0\n", ""),
+                "apt.decisions.yaml": CommandResult(0, self._DECISIONS, ""),
+                "apt-get -s install": CommandResult(0, "Inst pkg-a (1.0)\nRemv ghost-tool [1.0]\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [d.item_id for d in plan.diffs if d.item_id == "apt:collateral:ghost-tool"] == [
+            "apt:collateral:ghost-tool"
+        ]
+        # The decision file still does its own job: no removal diff for the inert item.
+        assert not [d for d in plan.diffs if d.item_id == "apt:package:ghost-tool"]
 
 
 # ---------------------------------------------------------------------------
