@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "df2d8dad1feb",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/integration/conftest.py",
+    "tests/integration/scripts/internal/common.sh",
+    "tests/integration/scripts/internal/vm-test-fixtures.sh",
+    "tests/integration/scripts/provision-test-infra.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/df/2d8dad1feb/0/metadata.json",
+      "transcript": "/df/2d8dad1feb/0/full.jsonl",
+      "compact_transcript": "/df/2d8dad1feb/0/transcript.jsonl",
+      "content_hash": "/df/2d8dad1feb/0/content_hash.txt",
+      "prompt": "/df/2d8dad1feb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 72924,
+    "cache_read_tokens": 1219370,
+    "output_tokens": 14046,
+    "api_call_count": 22
+  }
+}

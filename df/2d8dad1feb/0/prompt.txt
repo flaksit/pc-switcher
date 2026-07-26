@@ -1,0 +1,7 @@
+What is best way to skip a part of the integration tests on CI. Mark tests? How?
+
+---
+
+off in CI.
+
+List the integration tests with their execution time from the last time they ran (find in history of gh job runs). I'll pick which ones to mark.
