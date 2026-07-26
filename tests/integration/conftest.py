@@ -24,7 +24,10 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import sys
+import time
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import overload
 
@@ -53,6 +56,65 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     for item in items:
         if "/integration/" in str(item.fspath):
             item.add_marker(integration_marker)
+
+
+# ---------------------------------------------------------------------------------
+# Live progress and failure reporting.
+#
+# This suite runs inside a CI step with a wall-clock timeout, and pytest writes its
+# FAILURES section and its durations table only when the whole session ENDS. A step killed
+# mid-suite therefore loses the diagnosis of every failure that had already happened --
+# which is how the #208 D9 verdict was lost: the test had failed, but the uploaded log held
+# only the live progress tail. The hooks below emit each failure, and each test's start and
+# elapsed time, at the moment they exist, so whatever the log holds when the process dies
+# is already the full story up to that point.
+#
+# stderr, not stdout: the workflow merges the two (`2>&1 | tee`), and stderr is unbuffered
+# in Python regardless of whether the destination is a pipe, so nothing sits in a buffer
+# waiting for a flush that a SIGKILL will never allow. (run-integration-tests.sh also sets
+# PYTHONUNBUFFERED=1, which covers pytest's own stdout writes.)
+# ---------------------------------------------------------------------------------
+
+_TEST_START_MONOTONIC: dict[str, float] = {}
+
+
+def _clock() -> str:
+    return datetime.now(UTC).strftime("%H:%M:%S")
+
+
+def pytest_runtest_logstart(nodeid: str, location: tuple[str, int | None, str]) -> None:
+    """Name the test that is STARTING, timestamped, so a killed run still identifies
+    exactly which test was in flight when the clock ran out.
+    """
+    _ = location
+    _TEST_START_MONOTONIC[nodeid] = time.monotonic()
+    # Leading newline: pytest's own `-v` progress line is written without one and would
+    # otherwise be glued to this.
+    print(f"\n[it {_clock()}] START {nodeid}", file=sys.stderr, flush=True)
+
+
+def pytest_runtest_logfinish(nodeid: str, location: tuple[str, int | None, str]) -> None:
+    """Per-test elapsed time as it completes -- the same information `--durations` gives,
+    except this survives a session that never reaches its summary.
+    """
+    _ = location
+    started = _TEST_START_MONOTONIC.pop(nodeid, None)
+    elapsed = f"{time.monotonic() - started:.1f}s" if started is not None else "?"
+    print(f"\n[it {_clock()}] END   {nodeid} ({elapsed})", file=sys.stderr, flush=True)
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Dump a failure's full detail immediately instead of waiting for the FAILURES
+    section. Covers setup, call and teardown phases; duplicating the end-of-run summary
+    when the session does finish is a deliberate, cheap trade for never losing it.
+    """
+    if not report.failed:
+        return
+    banner = "=" * 30
+    print(f"\n{banner} FAILURE ({report.when}) {banner}", file=sys.stderr)
+    print(f"{report.nodeid}", file=sys.stderr)
+    print(report.longreprtext or "<no traceback available>", file=sys.stderr)
+    print("=" * 79, file=sys.stderr, flush=True)
 
 
 @pytest.fixture(scope="session", autouse=True)

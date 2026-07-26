@@ -301,8 +301,21 @@ fi
 # We disable errexit temporarily to capture pytest's exit code.
 log_info "Running pytest..."
 cd "$PROJECT_ROOT"
+
+# CI pipes this script's output through `tee`, which makes Python's stdout a PIPE and
+# therefore block-buffered: up to 8 kB of pytest's most recent output would sit in a
+# buffer that a killed step never flushes. This suite runs under a wall-clock CI step
+# timeout, so that lost tail is exactly the part worth having.
+export PYTHONUNBUFFERED=1
+
+# -ra        : end-of-run summary of everything that was not a plain pass. Unlike -rA it
+#              adds no line per passing test.
+# --durations: which tests cost the wall clock. Per-test timings also stream live from
+#              tests/integration/conftest.py, which is what survives a killed step.
+# `-v` is already in pyproject's addopts, so the nodeid is written before each test runs.
+# Placed before "${PYTEST_ARGS[@]}" so a caller's own flags win.
 set +e
-uv run pytest -m "integration and not benchmark" -s "${PYTEST_ARGS[@]}"
+uv run pytest -m "integration and not benchmark" -s -ra --durations=25 "${PYTEST_ARGS[@]}"
 pytest_exit_code=$?
 set -e
 
