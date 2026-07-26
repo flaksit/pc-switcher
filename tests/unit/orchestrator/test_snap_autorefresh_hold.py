@@ -4,9 +4,14 @@ the RUN_JOBS window (decision 4, 02-UAT-REVIEW-FIXES).
 Covers:
 - The hold is set on BOTH hosts when `snap_sync` is enabled, and captures the prior
   `refresh.hold` first (read-only `snap get` before any `snap set`).
+- The capture runs under sudo, because snapd admin-gates READING snap config: unprivileged
+  the read fails, every host looks hold-free, and the restore then clears a hold the user
+  set themselves. That is a silent data-loss bug, so the sudo is pinned here.
 - The hold is NOT set when `snap_sync` is disabled, nor in dry-run.
-- Cleanup restores an unset state when there was no prior hold, and restores the exact
-  prior value when there was one (the "prior hold preserved" case).
+- Cleanup restores an unset state when there was no prior hold, restores the exact prior
+  value when there was one, and leaves the option ALONE when the capture could not read it.
+- Applying the hold is verified by reading it back; a hold that did not stick is a WARNING
+  and never a failure.
 - Restore is a no-op when no hold was engaged, and never blocks the manual `--revision`
   convergence (the hold command only writes the system-wide `refresh.hold` option).
 
@@ -16,6 +21,7 @@ All executor interactions are mocked; no real snap/snapd commands run.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -46,6 +52,51 @@ def make_executor(responses: dict[str, CommandResult] | None = None) -> MagicMoc
     return ex
 
 
+# What `snap get` prints for an option that was never set (the orchestrator tells this
+# apart from a failed read; see `_SNAP_HOLD_UNSET_MARKER`), and what it prints when the
+# read was not privileged.
+HOLD_UNSET_STDERR = 'error: snap "core" has no "refresh.hold" configuration option'
+HOLD_DENIED_STDERR = "error: access denied (try with sudo)"
+# The value the fake snapd below records for the orchestrator's `date`-computed timestamp.
+APPLIED_HOLD = "2026-07-26T21:50:19Z"
+
+
+def make_snapd(initial_hold: str | None = None) -> MagicMock:
+    """Executor whose `snap get`/`snap set` share one `refresh.hold`, like snapd's own.
+
+    A single fixed response cannot express what the read-back verification is about — the
+    value has to change when it is written — so this fake stores it. `snap set` to the
+    orchestrator's `date` expression records `APPLIED_HOLD`, to `""` records "no hold".
+    """
+    state: dict[str, str | None] = {"hold": initial_hold}
+
+    def _side_effect(cmd: str, **_: object) -> CommandResult:
+        if "snap set system refresh.hold=" in cmd:
+            written = cmd.split("refresh.hold=", 1)[1].strip().strip('"').strip("'")
+            state["hold"] = APPLIED_HOLD if "date -u -d" in written else (written or None)
+            return CommandResult(exit_code=0, stdout="", stderr="")
+        if "snap get system refresh.hold" in cmd:
+            hold = state["hold"]
+            if hold is None:
+                return CommandResult(exit_code=1, stdout="", stderr=HOLD_UNSET_STDERR)
+            return CommandResult(exit_code=0, stdout=hold + "\n", stderr="")
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    ex = MagicMock()
+    ex.run_command = AsyncMock(side_effect=_side_effect)
+    ex.hold_state = state
+    return ex
+
+
+def warnings_of(orchestrator: Orchestrator) -> list[str]:
+    """Every WARNING the orchestrator logged, rendered with its args."""
+    logger = cast(MagicMock, orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+    return [
+        str(call.args[0]) % tuple(call.args[1:]) if len(call.args) > 1 else str(call.args[0])
+        for call in logger.warning.call_args_list
+    ]
+
+
 def all_calls(mock: MagicMock) -> list[str]:
     return [call.args[0] for call in mock.run_command.call_args_list]
 
@@ -56,13 +107,15 @@ def make_orchestrator(
     dry_run: bool = False,
     source_responses: dict[str, CommandResult] | None = None,
     target_responses: dict[str, CommandResult] | None = None,
+    source_executor: MagicMock | None = None,
+    target_executor: MagicMock | None = None,
 ) -> tuple[Orchestrator, MagicMock, MagicMock]:
     config = MagicMock(spec=Configuration)
     config.sync_jobs = {"snap_sync": snap_sync_enabled}
     orchestrator = Orchestrator(target="target-host", config=config, dry_run=dry_run)
     orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
-    source = make_executor(source_responses)
-    target = make_executor(target_responses)
+    source = source_executor if source_executor is not None else make_executor(source_responses)
+    target = target_executor if target_executor is not None else make_executor(target_responses)
     orchestrator._local_executor = source  # pyright: ignore[reportPrivateUsage]
     orchestrator._remote_executor = target  # pyright: ignore[reportPrivateUsage]
     return orchestrator, source, target
@@ -114,6 +167,163 @@ class TestHoldEngaged:
         assert not any("refresh.hold" in c for c in all_calls(source))
         assert not any("refresh.hold" in c for c in all_calls(target))
         assert orchestrator._snap_hold_engaged is False  # pyright: ignore[reportPrivateUsage]
+
+
+class TestCaptureIsPrivileged:
+    """snapd admin-gates READING snap config (`/v2/snaps/{name}/conf` sits behind
+    `io.snapcraft.snapd.manage-configuration`, `auth_admin_keep` in the shipped polkit
+    policy), so an unprivileged `snap get system refresh.hold` does not report "no hold" —
+    it exits non-zero with "access denied".
+
+    Drop the sudo and nothing breaks loudly: the capture returns None on BOTH hosts every
+    run, and cleanup then writes `refresh.hold=""`, destroying whatever hold the user had
+    set (including `forever`) on both machines, silently. That is why the privilege is
+    asserted here rather than left to the docstring.
+    """
+
+    @pytest.mark.asyncio
+    async def test_capture_reads_under_sudo_on_both_hosts(self) -> None:
+        orchestrator, source, target = make_orchestrator(snap_sync_enabled=True)
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        for ex in (source, target):
+            reads = [c for c in all_calls(ex) if "snap get system refresh.hold" in c]
+            assert reads, "the prior refresh.hold was never read"
+            assert all(c.startswith("sudo ") for c in reads), f"unprivileged refresh.hold read: {reads}"
+
+    @pytest.mark.asyncio
+    async def test_a_denied_read_is_not_reported_as_no_hold(self) -> None:
+        """An "access denied" read must not collapse into the same None a genuinely unset
+        option produces — the two lead to opposite restore behaviour.
+        """
+        denied = {"snap get system refresh.hold": CommandResult(1, "", HOLD_DENIED_STDERR)}
+        unset = {"snap get system refresh.hold": CommandResult(1, "", HOLD_UNSET_STDERR)}
+        orchestrator, _source, _target = make_orchestrator(
+            snap_sync_enabled=True, source_responses=denied, target_responses=unset
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        assert orchestrator._snap_hold_readable_source is False  # pyright: ignore[reportPrivateUsage]
+        assert orchestrator._snap_hold_readable_target is True  # pyright: ignore[reportPrivateUsage]
+
+
+class TestUserHoldIsNeverDestroyed:
+    """The end state of a hold the user set themselves, across a full engage/restore cycle
+    against a fake that stores the value `snap set` writes (`make_snapd`).
+
+    Asserting the end state, not just the commands: the destructive bug this guards against
+    was a capture that could not read, so a test that only checks "the restore wrote the
+    captured value back" would have passed while the machine lost its hold.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("prior", ["2026-07-24T18:00:00Z", "forever"])
+    async def test_a_prior_hold_survives_the_sync_window(self, prior: str) -> None:
+        orchestrator, source, target = make_orchestrator(
+            snap_sync_enabled=True, source_executor=make_snapd(prior), target_executor=make_snapd(prior)
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+        for ex in (source, target):
+            assert ex.hold_state["hold"] == APPLIED_HOLD, "the sync-window hold did not replace the prior one"
+
+        await orchestrator._restore_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        for ex in (source, target):
+            assert ex.hold_state["hold"] == prior
+
+    @pytest.mark.asyncio
+    async def test_only_a_genuinely_absent_hold_is_cleared(self) -> None:
+        orchestrator, source, _target = make_orchestrator(snap_sync_enabled=True, source_executor=make_snapd(None))
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+        await orchestrator._restore_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        assert source.hold_state["hold"] is None
+        assert any('snap set system refresh.hold=""' in c for c in all_calls(source))
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_hold_is_left_alone_rather_than_cleared(self) -> None:
+        """When the pre-sync value could not be read, clearing would destroy an unknown
+        hold; leaving it costs at most the timed hold this run set, which self-expires.
+        """
+        denied = {"snap get system refresh.hold": CommandResult(1, "", HOLD_DENIED_STDERR)}
+        orchestrator, source, target = make_orchestrator(
+            snap_sync_enabled=True, source_responses=denied, target_responses=denied
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+        await orchestrator._restore_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        for ex in (source, target):
+            assert not any('snap set system refresh.hold=""' in c for c in all_calls(ex))
+        assert any("Leaving snapd refresh.hold alone" in w for w in warnings_of(orchestrator))
+        assert orchestrator._snap_hold_engaged is False  # pyright: ignore[reportPrivateUsage]
+
+
+class TestApplyIsVerified:
+    """`snap set` exiting 0 says the command ran, not that the option changed — the failure
+    mode that hid an unprivileged capture for as long as it lived. The hold is read back.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_the_hold_took_effect(self) -> None:
+        orchestrator, _source, _target = make_orchestrator(
+            snap_sync_enabled=True, source_executor=make_snapd(None), target_executor=make_snapd(None)
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        assert warnings_of(orchestrator) == []
+
+    @pytest.mark.asyncio
+    async def test_warns_when_the_hold_did_not_stick(self) -> None:
+        """`snap set` succeeds, yet the option still reads unset afterwards."""
+        never_set = {"snap get system refresh.hold": CommandResult(1, "", HOLD_UNSET_STDERR)}
+        orchestrator, _source, _target = make_orchestrator(
+            snap_sync_enabled=True, source_responses=never_set, target_responses=never_set
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        stuck = [w for w in warnings_of(orchestrator) if "auto-refresh is NOT paused" in w]
+        assert len(stuck) == 2, f"expected one warning per host, got {warnings_of(orchestrator)}"
+        assert all("snap refresh --time" in w for w in stuck)
+
+    @pytest.mark.asyncio
+    async def test_warns_when_the_read_back_is_denied(self) -> None:
+        denied = {"snap get system refresh.hold": CommandResult(1, "", HOLD_DENIED_STDERR)}
+        orchestrator, _source, _target = make_orchestrator(
+            snap_sync_enabled=True, source_responses=denied, target_responses=denied
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        assert any("Could not confirm snapd auto-refresh is paused" in w for w in warnings_of(orchestrator))
+
+    @pytest.mark.asyncio
+    async def test_a_read_back_that_raises_never_fails_the_sync(self) -> None:
+        """The pause is a race guard; a check on it must not be able to end the run."""
+        calls = {"n": 0}
+
+        def _raise_after_the_set(cmd: str, **_: object) -> CommandResult:
+            if "snap get system refresh.hold" in cmd:
+                calls["n"] += 1
+                if calls["n"] > 1:  # the capture succeeds, the read-back explodes
+                    raise ConnectionResetError("connection lost")
+                return CommandResult(1, "", HOLD_UNSET_STDERR)
+            return CommandResult(exit_code=0, stdout="", stderr="")
+
+        source = MagicMock()
+        source.run_command = AsyncMock(side_effect=_raise_after_the_set)
+        orchestrator, _source, _target = make_orchestrator(snap_sync_enabled=True, source_executor=source)
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        assert any("connection lost" in w for w in warnings_of(orchestrator))
+        assert orchestrator._snap_hold_engaged is True  # pyright: ignore[reportPrivateUsage]
 
 
 class TestRestore:

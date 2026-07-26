@@ -85,11 +85,17 @@ __all__ = ["Orchestrator"]
 # _cleanup (D-06: no standing block left behind). Deliberately NOT the `snap refresh --hold`
 # verb, whose no-snap form sets an INDEFINITE global hold (snap_sync module docstring, Pitfall
 # 1) and whose `--unhold` would also clear unrelated per-snap holds; `snap set system
-# refresh.hold` touches only the general option and is fully symmetric with `snap get`.
+# refresh.hold` touches only the general option and is fully symmetric with `snap get` —
+# including its privilege, since snapd admin-gates reading snap config too (_capture_snap_hold).
 _SNAP_AUTOREFRESH_HOLD_DURATION = "+6 hours"
 # Shell snippet computing an RFC3339-UTC "now + hold duration" timestamp ON THE HOST (correct
 # against each host's own clock, and parseable by snapd's refresh.hold RFC3339 validator).
 _SNAP_HOLD_TIMESTAMP_CMD = f"date -u -d '{_SNAP_AUTOREFRESH_HOLD_DURATION}' +%Y-%m-%dT%H:%M:%SZ"
+# snapd's error for an option that was never set (`snap "core" has no "refresh.hold"
+# configuration option`), as opposed to any other `snap get` failure. It is what separates
+# "there is no hold" from "the hold could not be read" — a distinction the value alone cannot
+# carry, and the one that decides whether the option may be cleared (`_restore_snap_hold`).
+_SNAP_HOLD_UNSET_MARKER = 'has no "refresh.hold"'
 
 
 class SyncStep(IntEnum):
@@ -285,10 +291,14 @@ class Orchestrator:
         # Snap auto-refresh hold state (decision 4). Engaged only when snap_sync is enabled
         # on a non-dry-run; the captured prior `refresh.hold` per host is restored (or unset)
         # in _cleanup. `_snap_hold_engaged` gates the restore so it is a no-op on runs that
-        # never set a hold, and idempotent if _cleanup were entered twice.
+        # never set a hold, and idempotent if _cleanup were entered twice. `_readable_` records
+        # whether the pre-sync READ succeeded, which "no prior hold" (None) alone cannot express;
+        # it defaults False so an unread host is never cleared (see `_restore_snap_hold`).
         self._snap_hold_engaged = False
         self._snap_hold_prior_source: str | None = None
         self._snap_hold_prior_target: str | None = None
+        self._snap_hold_readable_source = False
+        self._snap_hold_readable_target = False
 
         # Logging infrastructure (initialized in run())
         self._queue_listener: QueueListener | None = None
@@ -1297,9 +1307,11 @@ class Orchestrator:
         `login_shell=False` to match snap_sync's own target calls. Callers only reach here
         after the hold is engaged, which happens post-connect, so both executors are set.
 
-        `mutates` is passed straight through: the capture (`snap get`) is a read and leaves
-        it None, while applying and restoring the hold are system writes on both machines
-        and name themselves, so `--confirm-each-command` shows them like any other change.
+        `mutates` is passed straight through: the capture and the post-apply read-back are
+        reads and leave it None, while applying and restoring the hold are system writes on
+        both machines and name themselves, so `--confirm-each-command` shows them like any
+        other change. Privilege is orthogonal — the reads run under sudo too (see
+        `_capture_snap_hold`) and still declare nothing, because they change nothing.
         """
         if host is Host.SOURCE:
             assert self._local_executor is not None
@@ -1307,19 +1319,28 @@ class Orchestrator:
         assert self._remote_executor is not None
         return await self._remote_executor.run_command(cmd, login_shell=False, mutates=mutates)
 
-    async def _capture_snap_hold(self, host: Host) -> str | None:
-        """Read `host`'s current system-wide snap `refresh.hold` (read-only).
+    async def _capture_snap_hold(self, host: Host) -> tuple[str | None, bool]:
+        """Read `host`'s system-wide snap `refresh.hold` as `(value, readable)`.
 
-        Returns the raw value — an RFC3339 timestamp or the literal `forever` — when a hold
-        is set, or None when none is (snap exits non-zero, or prints nothing, for an unset
-        option). Never mutates: `snap get` is the same read-only verb snap_sync.validate uses.
+        `value` is the raw hold — an RFC3339 timestamp or the literal `forever` — or None
+        when no hold is set: snap exits 0 printing nothing for an option set empty, and
+        non-zero with `_SNAP_HOLD_UNSET_MARKER` for one never set. `readable` is False when
+        the READ ITSELF failed, a state None cannot express and which callers must not treat
+        as "no hold" (`_restore_snap_hold`).
+
+        Runs under sudo because reading snap configuration is admin-gated: snapd serves
+        `/v2/snaps/{name}/conf` behind `io.snapcraft.snapd.manage-configuration`, which the
+        shipped polkit policy sets to `auth_admin_keep`, so an unprivileged `snap get system
+        refresh.hold` does not return empty — it fails with "access denied" on every machine.
+        Still a read, so no `mutates=`: it inspects the option and changes nothing.
         """
-        result = await self._run_snap_hold_command(host, "snap get system refresh.hold")
-        value = result.stdout.strip()
-        return value if result.success and value else None
+        result = await self._run_snap_hold_command(host, "sudo snap get system refresh.hold")
+        if result.success:
+            return (result.stdout.strip() or None, True)
+        return (None, _SNAP_HOLD_UNSET_MARKER in result.stderr)
 
-    async def _apply_snap_hold(self, host: Host) -> None:
-        """Set a timed system-wide `refresh.hold` on `host` (best-effort).
+    async def _apply_snap_hold(self, host: Host, prior: str | None) -> None:
+        """Set a timed system-wide `refresh.hold` on `host` and confirm it took (best-effort).
 
         Writes `now + _SNAP_AUTOREFRESH_HOLD_DURATION` (computed on the host) via
         `sudo snap set system refresh.hold=...`. A failure is logged, not raised: pausing
@@ -1336,6 +1357,49 @@ class Orchestrator:
                 result.stderr.strip(),
                 extra={"job": "orchestrator", "host": host.value},
             )
+            return
+        await self._verify_snap_hold(host, prior)
+
+    async def _verify_snap_hold(self, host: Host, prior: str | None) -> None:
+        """Read the hold back on `host` and warn when it did not stick.
+
+        `snap set` exiting 0 says the command ran, not that the option changed — so an exit
+        code alone cannot catch a hold that was never applied. The read-back can: the value
+        must now be present and different from `prior`, which the freshly computed
+        "now + duration" timestamp always is.
+
+        Diagnostic only. Every outcome is a WARNING and errors from the read are absorbed,
+        because the sync is correct without the pause (it is a race guard against snapd
+        auto-refreshing mid-run), and a check on a best-effort measure must not be able to
+        end the run. The warning points at `snap refresh --time`, which works unprivileged
+        and shows the hold to a human; its value is localized prose rather than RFC3339, so
+        it is useful in a log line and useless as a capture value.
+        """
+        try:
+            observed, readable = await self._capture_snap_hold(host)
+        except Exception as e:
+            self._logger.warning(
+                "Could not confirm snapd auto-refresh is paused on %s: %s",
+                host.value,
+                e,
+                extra={"job": "orchestrator", "host": host.value},
+            )
+            return
+        if not readable:
+            self._logger.warning(
+                "Could not confirm snapd auto-refresh is paused on %s: refresh.hold is unreadable "
+                "(check `snap refresh --time` on that machine)",
+                host.value,
+                extra={"job": "orchestrator", "host": host.value},
+            )
+        elif observed is None or observed == prior:
+            self._logger.warning(
+                "snapd auto-refresh is NOT paused on %s: refresh.hold still reads %s after being set "
+                "(check `snap refresh --time` on that machine). The sync continues unpaused.",
+                host.value,
+                observed if observed is not None else "(unset)",
+                extra={"job": "orchestrator", "host": host.value},
+            )
 
     async def _hold_snap_autorefresh(self) -> None:
         """Pause snapd AUTOMATIC refreshes on both hosts for the sync window (decision 4).
@@ -1350,23 +1414,30 @@ class Orchestrator:
         if self._dry_run or not self._config.sync_jobs.get("snap_sync", False):
             return
 
-        self._snap_hold_prior_source = await self._capture_snap_hold(Host.SOURCE)
-        self._snap_hold_prior_target = await self._capture_snap_hold(Host.TARGET)
+        self._snap_hold_prior_source, self._snap_hold_readable_source = await self._capture_snap_hold(Host.SOURCE)
+        self._snap_hold_prior_target, self._snap_hold_readable_target = await self._capture_snap_hold(Host.TARGET)
         # Engage BEFORE applying so a partially-applied hold is still restored in _cleanup.
         self._snap_hold_engaged = True
         self._logger.info(
             "Pausing snapd auto-refresh on both hosts for the sync window",
             extra={"job": "orchestrator", "host": "source"},
         )
-        await self._apply_snap_hold(Host.SOURCE)
-        await self._apply_snap_hold(Host.TARGET)
+        await self._apply_snap_hold(Host.SOURCE, self._snap_hold_prior_source)
+        await self._apply_snap_hold(Host.TARGET, self._snap_hold_prior_target)
 
-    async def _restore_snap_hold(self, host: Host, prior: str | None) -> None:
+    async def _restore_snap_hold(self, host: Host, prior: str | None, *, readable: bool) -> None:
         """Restore `host`'s `refresh.hold` to its pre-sync value, or unset it (best-effort).
 
         When a prior hold was captured it is written back verbatim (an RFC3339 timestamp or
         `forever`); when there was none, `refresh.hold` is set empty, which snapd treats as
         no hold — leaving any unrelated per-snap holds untouched.
+
+        A failed capture (`readable=False`) is NOT treated as "there was no hold": the option
+        is left alone instead of cleared. The two outcomes are not comparable — clearing an
+        option whose pre-sync value is unknown permanently destroys a hold the user may have
+        set (including `forever`), while skipping the clear leaves at worst the timed hold
+        this run set, which expires on its own after `_SNAP_AUTOREFRESH_HOLD_DURATION`. That
+        self-expiry is the same crash backstop the mechanism already relies on.
 
         Gated by `--confirm-each-command` like every other modification. Restoring is not
         merely lifting: when a prior hold was captured, skipping this write means the timed
@@ -1381,6 +1452,15 @@ class Orchestrator:
         if prior is not None:
             cmd = f"sudo snap set system refresh.hold={shlex.quote(prior)}"
             description = f"restore this machine's own snapd refresh.hold ({prior}), which this run overwrote"
+        elif not readable:
+            self._logger.warning(
+                "Leaving snapd refresh.hold alone on %s: its pre-sync value could not be read, so clearing it "
+                "could destroy a hold set on that machine. Any hold this run set expires after %s.",
+                host.value,
+                _SNAP_AUTOREFRESH_HOLD_DURATION,
+                extra={"job": "orchestrator", "host": host.value},
+            )
+            return
         else:
             cmd = 'sudo snap set system refresh.hold=""'
             description = "clear the snapd refresh.hold this run set"
@@ -1415,8 +1495,12 @@ class Orchestrator:
         if not self._snap_hold_engaged:
             return
         self._snap_hold_engaged = False
-        await self._restore_snap_hold(Host.SOURCE, self._snap_hold_prior_source)
-        await self._restore_snap_hold(Host.TARGET, self._snap_hold_prior_target)
+        await self._restore_snap_hold(
+            Host.SOURCE, self._snap_hold_prior_source, readable=self._snap_hold_readable_source
+        )
+        await self._restore_snap_hold(
+            Host.TARGET, self._snap_hold_prior_target, readable=self._snap_hold_readable_target
+        )
 
     async def _cleanup(self) -> None:
         """Clean up resources (connection, locks, executors)."""

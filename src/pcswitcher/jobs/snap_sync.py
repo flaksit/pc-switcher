@@ -5,8 +5,9 @@ WARNING — `snap refresh --hold` with NO snap name is a MUTATING command: calle
 way it silently sets an INDEFINITE GLOBAL hold on auto-refresh for every snap on the
 machine (RESEARCH Pitfall 1 — discovered live against a real machine during Phase 2
 research, and only undone with a manual `snap refresh --unhold`). This module never
-calls it. Hold state is inspected only through the read-only `snap get system
-refresh.hold` (`validate()`, informational only, never acted on). Convergence uses
+calls it. Hold state is inspected only through the read-only `sudo snap get system
+refresh.hold` (`validate()`, informational only, never acted on; sudo because snapd
+admin-gates reading snap config, not because the read changes anything). Convergence uses
 only `snap install --revision=<N>` and `snap refresh --revision=<N>`, which land the
 target on the source's exact revision without touching the standing auto-refresh
 policy at all — the mechanism D-06 requires: both machines converge on the same
@@ -664,9 +665,12 @@ class SnapSyncJob(PackageSyncJob):
         # --hold` with no arguments to check this — that form mutates. A pre-existing
         # hold is not itself an error here; it only explains why a revision might not
         # converge, so it is logged, never appended to `errors`.
-        source_hold = await self.source.run_command("snap get system refresh.hold")
+        # Under sudo: snapd admin-gates READING snap config (`io.snapcraft.snapd.manage-
+        # configuration`, `auth_admin_keep`), so unprivileged this does not report "no hold",
+        # it fails with "access denied" and the line below would say `(none)` unconditionally.
+        source_hold = await self.source.run_command("sudo snap get system refresh.hold")
         self._log(Host.SOURCE, LogLevel.FULL, f"source snap refresh.hold: {source_hold.stdout.strip() or '(none)'}")
-        target_hold = await self.target.run_command("snap get system refresh.hold", login_shell=False)
+        target_hold = await self.target.run_command("sudo snap get system refresh.hold", login_shell=False)
         self._log(Host.TARGET, LogLevel.FULL, f"target snap refresh.hold: {target_hold.stdout.strip() or '(none)'}")
 
         return errors

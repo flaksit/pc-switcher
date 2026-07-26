@@ -601,8 +601,12 @@ _SYSTEM_REFRESH_HOLD_SET_CMD = "sudo snap set system refresh.hold=\"$(date -u -d
 async def _capture_system_refresh_hold(executor: BashLoginRemoteExecutor) -> str | None:
     """`executor`'s current system-wide `refresh.hold`, or `None` when unset (`snap get`
     exits non-zero, or prints nothing, for an unset option). Read-only.
+
+    Under sudo like the orchestrator's own capture: snapd admin-gates READING snap config,
+    so unprivileged this never returns a value -- it fails with "access denied", and every
+    machine reads as hold-free.
     """
-    result = await executor.run_command("snap get system refresh.hold", login_shell=False, timeout=15.0)
+    result = await executor.run_command("sudo snap get system refresh.hold", login_shell=False, timeout=15.0)
     value = result.stdout.strip()
     return value if result.success and value else None
 
@@ -1296,12 +1300,8 @@ class TestPackageSyncWholeRunContracts:
 
         pc2_list_before = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
         original_pc2_revision = parse_snap_list_names_revisions(pc2_list_before.stdout)[name]
-        pc1_hold_before = await pc1_executor.run_command(
-            "snap get system refresh.hold", login_shell=False, timeout=10.0
-        )
-        pc2_hold_before = await pc2_executor.run_command(
-            "snap get system refresh.hold", login_shell=False, timeout=10.0
-        )
+        pc1_hold_before = await _capture_system_refresh_hold(pc1_executor)
+        pc2_hold_before = await _capture_system_refresh_hold(pc2_executor)
 
         try:
             diverge_result = await pc2_executor.run_command(
@@ -1334,14 +1334,10 @@ class TestPackageSyncWholeRunContracts:
                 f"pc2's {name} did not converge to source revision {source_revision}.\n{converged.stdout}"
             )
 
-            pc1_hold_after = await pc1_executor.run_command(
-                "snap get system refresh.hold", login_shell=False, timeout=10.0
-            )
-            pc2_hold_after = await pc2_executor.run_command(
-                "snap get system refresh.hold", login_shell=False, timeout=10.0
-            )
-            assert pc1_hold_after.stdout == pc1_hold_before.stdout, "sync mutated pc1's refresh.hold"
-            assert pc2_hold_after.stdout == pc2_hold_before.stdout, (
+            pc1_hold_after = await _capture_system_refresh_hold(pc1_executor)
+            pc2_hold_after = await _capture_system_refresh_hold(pc2_executor)
+            assert pc1_hold_after == pc1_hold_before, "sync mutated pc1's refresh.hold"
+            assert pc2_hold_after == pc2_hold_before, (
                 "sync mutated pc2's refresh.hold -- D-06 forbids the convergence mechanism from blocking auto-refresh"
             )
         finally:
