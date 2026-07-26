@@ -23,6 +23,8 @@ User Stories covered:
 
 from __future__ import annotations
 
+import pytest
+
 from pcswitcher.events import EventBus
 from pcswitcher.executor import BashLoginRemoteExecutor, LocalExecutor
 from pcswitcher.jobs.context import JobContext
@@ -30,6 +32,9 @@ from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.version import Release, find_one_version, get_this_version
 
 from ..conftest import get_installed_version
+
+# Excluded from CI (still runs locally); see docs/dev/testing-guide.md "Markers".
+pytestmark = pytest.mark.ci_skip
 
 
 async def _create_integration_job_context(

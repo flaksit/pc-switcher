@@ -415,6 +415,7 @@ hcloud server describe pc1 -o json | jq '.labels'
 | `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM IP address or hostname | - |
 | `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM IP address or hostname | - |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
+| `PC_SWITCHER_TEST_MARKERS` | pytest `-m` expression for `run-integration-tests.sh`; CI sets it to also drop `ci_skip` | `integration and not benchmark` |
 
 ### Setting for Local Runs
 

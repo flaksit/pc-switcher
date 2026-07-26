@@ -14,7 +14,12 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 
+import pytest
+
 from pcswitcher.executor import RemoteExecutor
+
+# Excluded from CI (still runs locally); see docs/dev/testing-guide.md "Markers".
+pytestmark = pytest.mark.ci_skip
 
 
 async def test_core_fr_target_term(

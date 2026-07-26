@@ -29,6 +29,9 @@ from pcswitcher.btrfs_snapshots import (
 from pcswitcher.executor import RemoteExecutor
 from pcswitcher.models import Host, SnapshotPhase
 
+# Excluded from CI (still runs locally); see docs/dev/testing-guide.md "Markers".
+pytestmark = pytest.mark.ci_skip
+
 
 @pytest.fixture(scope="module")
 async def test_subvolume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:

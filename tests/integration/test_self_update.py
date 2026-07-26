@@ -12,6 +12,9 @@ from pcswitcher.version import Release, Version
 
 from .conftest import get_installed_version, install_pcswitcher_with_script, install_pcswitcher_with_uv
 
+# Excluded from CI (still runs locally); see docs/dev/testing-guide.md "Markers".
+pytestmark = pytest.mark.ci_skip
+
 _MIN_VERSION_WITH_SELF_UPDATE = Version.parse("0.1.0-alpha.4")
 
 

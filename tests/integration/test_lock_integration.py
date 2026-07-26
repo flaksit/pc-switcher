@@ -17,7 +17,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
+import pytest
+
 from pcswitcher.executor import BashLoginRemoteExecutor
+
+# Excluded from CI (still runs locally); see docs/dev/testing-guide.md "Markers".
+pytestmark = pytest.mark.ci_skip
 
 _LOCK = "$HOME/.local/share/pc-switcher/pc-switcher.lock"
 

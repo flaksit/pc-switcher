@@ -360,6 +360,7 @@ concurrency:
 | `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM hostname/IP | `pc1` |
 | `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM hostname/IP | `pc2` |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
+| `PC_SWITCHER_TEST_MARKERS` | pytest `-m` expression; CI sets it to also drop `ci_skip` | `integration and not benchmark` |
 | `CI_JOB_ID` | CI job ID for lock identification | `$USER` |
 
 ### pytest Configuration
@@ -375,6 +376,7 @@ markers = [
     "integration: Integration tests (require VM infrastructure)",
     "slow: Tests that take >5 seconds",
     "benchmark: Performance benchmarks (not run by default)",
+    "ci_skip: Integration tests excluded from CI runs (still run in local/manual integration runs)",
 ]
 ```
 

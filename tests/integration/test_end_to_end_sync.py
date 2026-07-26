@@ -883,6 +883,7 @@ chmod 700 "$T/f755.txt"
         finally:
             await _remove_test_artifacts(pc1_executor, pc2_executor, tree)
 
+    @pytest.mark.ci_skip  # excluded from CI (still runs locally); see testing-guide.md "Markers"
     async def test_core_us_job_arch_as7_interrupt_terminates_job(
         self,
         sync_ready_source_long_duration: BashLoginRemoteExecutor,
@@ -988,6 +989,7 @@ chmod 700 "$T/f755.txt"
         # Clean up temp files
         await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
 
+    @pytest.mark.ci_skip  # excluded from CI (still runs locally); see testing-guide.md "Markers"
     async def test_core_edge_target_unreachable_mid_sync(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
@@ -1140,6 +1142,7 @@ chmod 700 "$T/f755.txt"
         # Note: pc1_to_pc2_traffic_blocker fixture handles unblocking automatically
 
 
+@pytest.mark.ci_skip  # excluded from CI (still runs locally); see testing-guide.md "Markers"
 class TestInstallOnTargetIntegration:
     """Integration tests verifying InstallOnTargetJob effects through full sync."""
 
@@ -1274,6 +1277,7 @@ class TestInstallOnTargetIntegration:
             await pc1_with_pcswitcher_mod.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
 
 
+@pytest.mark.ci_skip  # excluded from CI (still runs locally); see testing-guide.md "Markers"
 class TestConsecutiveSyncWarning:
     """Integration tests for first-sync (W1) gate and consecutive-push (W3) warning (ADR-015).
 
