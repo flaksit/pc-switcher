@@ -112,3 +112,7 @@ test_end_to_end_sync.py: TestConsecutiveSyncWarning, TestInstallOnTargetIntegrat
 ---
 
 Why not markers directly on tests instead of separate lists?
+
+---
+
+fully inline
