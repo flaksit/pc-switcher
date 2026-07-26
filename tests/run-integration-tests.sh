@@ -315,7 +315,10 @@ export PYTHONUNBUFFERED=1
 # `-v` is already in pyproject's addopts, so the nodeid is written before each test runs.
 # Placed before "${PYTEST_ARGS[@]}" so a caller's own flags win.
 set +e
-uv run pytest -m "integration and not benchmark" -s -ra --durations=25 "${PYTEST_ARGS[@]}"
+# The marker expression is overridable so CI can additionally deselect `ci_skip`
+# (PC_SWITCHER_TEST_MARKERS in integration-tests.yml). A later -m in PYTEST_ARGS
+# still wins, so local ad-hoc selection is unaffected.
+uv run pytest -m "${PC_SWITCHER_TEST_MARKERS:-integration and not benchmark}" -s -ra --durations=25 "${PYTEST_ARGS[@]}"
 pytest_exit_code=$?
 set -e
 

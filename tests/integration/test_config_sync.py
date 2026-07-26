@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from pcswitcher.config_sync import (
     ConfigSyncAction,
     _copy_config_to_target,
@@ -13,6 +15,9 @@ from pcswitcher.config_sync import (
     sync_config_to_target,
 )
 from pcswitcher.executor import RemoteExecutor
+
+# Excluded from CI (still runs locally); see docs/dev/testing-guide.md "Markers".
+pytestmark = pytest.mark.ci_skip
 
 
 class TestConfigSyncIntegration:

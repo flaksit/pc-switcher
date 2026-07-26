@@ -139,6 +139,9 @@ jobs:
           PC_SWITCHER_TEST_PC1_HOST: ${{ steps.vm_ips.outputs.pc1_ip || steps.provision.outputs.pc1_ip }}
           PC_SWITCHER_TEST_PC2_HOST: ${{ steps.vm_ips.outputs.pc2_ip || steps.provision.outputs.pc2_ip }}
           PC_SWITCHER_TEST_USER: testuser
+          # Exclude ci_skip-marked integration tests here only; local/manual runs
+          # still execute them (default expression in run-integration-tests.sh).
+          PC_SWITCHER_TEST_MARKERS: "integration and not benchmark and not ci_skip"
           CI_JOB_ID: ${{ github.run_id }}
           # Long-lived read-only PAT, not the ephemeral Actions token, so reused
           # or pre-provisioned VMs (conftest injection path) stay authenticated.

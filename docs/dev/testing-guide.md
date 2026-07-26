@@ -272,7 +272,10 @@ tests/integration/
 @pytest.mark.integration  # Requires VM infrastructure (auto-applied in tests/integration/)
 @pytest.mark.slow         # Takes >5 seconds
 @pytest.mark.benchmark    # Performance benchmarks (in benchmarks/ folder, not run by default)
+@pytest.mark.ci_skip      # Integration test excluded from CI (still runs locally); see below
 ```
+
+`ci_skip` is applied inline where the test lives: a module-level `pytestmark = pytest.mark.ci_skip` excludes a whole file, and a `@pytest.mark.ci_skip` decorator on a class or test excludes just that class or test. CI deselects the marker by setting `PC_SWITCHER_TEST_MARKERS="integration and not benchmark and not ci_skip"` (in `.github/workflows/integration-tests.yml`); local and manual runs use the default expression in `run-integration-tests.sh` and therefore still execute these tests. To exclude more from CI, add the marker at the file, class, or test level.
 
 ## Common Pitfalls
 
@@ -321,8 +324,11 @@ print(mock_executor.run_command.call_args_list)
 # Unit tests only (fast, no VMs)
 uv run pytest tests/unit tests/contract -v
 
-# Integration tests (requires VMs and env vars)
+# Integration tests (requires VMs and env vars) — runs everything, including ci_skip files
 uv run pytest tests/integration -v -m "integration and not benchmark"
+
+# Reproduce the CI selection (drops the ci_skip-marked files)
+uv run pytest tests/integration -v -m "integration and not benchmark and not ci_skip"
 
 # Specific test
 uv run pytest tests/unit/test_config.py::TestConfig::test_load_default -v
