@@ -146,7 +146,8 @@ if [[ -n "$PC1_IP" && -n "$PC2_IP" ]]; then
         wait $RESET_PID2
 
         log_step "Installing test fixtures..."
-        install_vm_test_fixtures "$PC1_IP" &
+        # --with-app for pc1 only (the sync source) — see the call at the end of this file.
+        install_vm_test_fixtures "$PC1_IP" --with-app &
         FIXTURE_PID1=$!
         install_vm_test_fixtures "$PC2_IP" &
         FIXTURE_PID2=$!
@@ -309,8 +310,10 @@ log_info "Inter-VM networking configured"
 
 # Create the package-manager subjects the integration suite operates on, BEFORE the
 # baseline snapshot, so every test run gets them for free (internal/vm-test-fixtures.sh).
+# --with-app for pc1 only: the flatpak APPLICATION belongs on the sync source alone, so a
+# real source->target ref divergence exists without a test manufacturing one.
 log_step "Installing test fixtures on both VMs..."
-install_vm_test_fixtures "$PC1_IP" &
+install_vm_test_fixtures "$PC1_IP" --with-app &
 PID1=$!
 install_vm_test_fixtures "$PC2_IP" &
 PID2=$!

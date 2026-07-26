@@ -13,18 +13,35 @@
 #   - tests/integration/conftest.py, which re-runs it before the package-sync module so
 #     the suite works against a VM whose baseline predates this script.
 #
+# The two machines get DIFFERENT flatpak fixtures: `--with-app` installs the test
+# application, and is passed for pc1 (the source) only, so a genuine source->target ref
+# divergence exists for `test_flatpak_installs_into_source_scope_after_remote` without
+# any test having to manufacture one. Both machines get the remote and the runtime.
+#
 # Idempotent and cheap on the satisfied path: every step is guarded by a presence check,
 # so a re-run over a baseline that already has everything is a handful of local queries.
 #
-# Usage: ssh testuser@vm 'bash -s' < vm-test-fixtures.sh
-#        (or: send the file and run `bash vm-test-fixtures.sh`)
+# Usage: ssh testuser@vm 'bash -s -- [--with-app]' < vm-test-fixtures.sh
+#        (or: send the file and run `bash vm-test-fixtures.sh [--with-app]`)
 set -euo pipefail
 
 # Bumping this forces provisioning to rebuild the baseline: provision-test-infra.sh and
 # run-integration-tests.sh compare the marker file's contents against their own copy of
 # this number (PCSWITCHER_TEST_FIXTURES_VERSION in internal/common.sh — keep in sync).
-readonly FIXTURES_VERSION=2
+readonly FIXTURES_VERSION=3
 readonly MARKER=/etc/pcswitcher-test-fixtures
+
+INSTALL_APP=false
+for arg in "$@"; do
+    case "$arg" in
+        --with-app) INSTALL_APP=true ;;
+        *)
+            echo "vm-test-fixtures.sh: unknown argument '$arg' (only --with-app is accepted)" >&2
+            exit 2
+            ;;
+    esac
+done
+readonly INSTALL_APP
 
 # Two snaps, because `test_system_refresh_hold_does_not_mask_a_per_snap_held_note` needs
 # one snap held and a second one provably NOT held in the same `snap list` output.
@@ -36,57 +53,43 @@ readonly MARKER=/etc/pcswitcher-test-fixtures
 # reinstall; neither is a base snap anything else depends on.
 readonly -a FIXTURE_SNAPS=(hello hello-world)
 
-# A self-contained, GPG-signed OSTree repository served over file://, rather than
-# Flathub: it is ~270 kB instead of ~270 MB (Flathub's smallest app still pulls
-# org.freedesktop.Platform, 268 MB download / 688 MB installed), needs no network at
-# test time, and exercises byte-for-byte the same `flatpak remote-add` / `flatpak
-# install` path a real remote would.
-#
-# Nothing about the repository is trusted machine-wide: the ONLY way a machine can
-# install from it is the per-remote key, which is what makes
-# `test_flatpak_installs_into_source_scope_after_remote` prove that pc-switcher carries
-# a remote's signing key to the target (#215) rather than leaning on a pre-seeded
-# anchor. Both VMs sign their own local repository with the SAME embedded key below, so
-# the key the source replicates verifies the target's own copy of the repository.
-readonly FLATPAK_ROOT=/opt/pcswitcher-test-flatpak
-readonly FLATPAK_REPO_DIR="${FLATPAK_ROOT}/repo"
-readonly FLATPAK_PUBKEY="${FLATPAK_ROOT}/key.gpg"
-readonly FLATPAK_GNUPGHOME="${FLATPAK_ROOT}/gnupg"
-# Machines provisioned before #215 carry a system-wide trust anchor for this key; the
-# version bump above drops it, so the flatpak test can no longer pass without the key
-# actually travelling.
+# THE REAL FLATHUB, deliberately, not a local stand-in. A synthetic signed OSTree
+# repository is cheap (~270 kB against Flathub's ~270 MB runtime) but it only ever tests
+# this project's MODEL of a flatpak remote: our own repo layout, our own key, our own
+# `gpg-verify` state. The remote under test has to carry Flathub's real trust
+# configuration for `flatpak_sync`'s GPG-trust replication (#215) to be proven rather
+# than assumed — a `flatpak remotes --columns=options` field that is genuinely empty, a
+# real `flathub.trustedkeys.gpg` in the installation's repo, and a real `--gpg-import`
+# round trip. The baseline download is paid ONCE, when the baseline btrfs snapshot is
+# built, and never per test run.
+readonly FLATPAK_REMOTE=flathub
+readonly FLATHUB_REPOFILE=https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# The subject application, and the runtime it declares. Measured live against Flathub
+# (flatpak 1.14.6, x86_64):
+#   io.github.fragglet.sdl_sopwith  146 kB download / 448 kB installed, one `stable`
+#                                   branch only, so `flatpak install flathub <id>` with
+#                                   no branch is unambiguous;
+#   org.freedesktop.Platform/25.08  pulled together with its related refs (GL.default and
+#                                   its -extra, GL.nvidia-*, Locale, VAAPI.nvidia,
+#                                   codecs-extra) — 95 s and 2.8 GB on disk.
+# The runtime is why it is installed HERE rather than left to the test: with it already
+# present, installing the app itself takes under a second, so the sync under test pays no
+# download at all. Installing the runtime with `--no-related` does not help — the app
+# install then pulls those same related refs (measured: +72 s, +2.2 GB), so the runtime
+# has to be seeded exactly the way an app install would seed it.
+readonly FLATPAK_APP=io.github.fragglet.sdl_sopwith
+readonly FLATPAK_RUNTIME_REF=org.freedesktop.Platform/x86_64/25.08
+
+# Machines provisioned before FIXTURES_VERSION=3 carry the synthetic repository this
+# script used to build, its system-wide trust anchor (pre-#215) and the refs installed
+# from it. The version bump drops all of it, so nothing that used to make the flatpak
+# test pass can still be lying around.
+readonly LEGACY_FLATPAK_ROOT=/opt/pcswitcher-test-flatpak
 readonly LEGACY_OSTREE_TRUSTED_KEY=/usr/share/ostree/trusted.gpg.d/pcswitcher-test.gpg
-readonly FLATPAK_REMOTE=pcswitcher-test
-readonly FLATPAK_APP=org.pcswitcher.TestApp
-readonly FLATPAK_APP_BRANCH=stable
-readonly FLATPAK_RUNTIME=org.pcswitcher.TestRuntime
-readonly FLATPAK_RUNTIME_BRANCH=1
-readonly FLATPAK_ARCH=x86_64
-
-# The signing key both VMs use, embedded rather than generated per machine: a
-# per-machine key would make the source's key useless against the target's own copy of
-# the repository, and the flatpak test's whole point is that the source's key is what
-# unlocks the target's remote. Passphrase-less and shared with the world by construction
-# — it signs one throwaway test repository on two disposable VMs and grants nothing else.
-readonly FLATPAK_KEY_FINGERPRINT=24DE0AA04BB04634BF07566854F16E15A37C920A
-read -r -d '' FLATPAK_SECRET_KEY <<'KEY' || true
------BEGIN PGP PRIVATE KEY BLOCK-----
-
-lFgEamUHOxYJKwYBBAHaRw8BAQdAfp7Eh6Vm2xnddvMFwXzl/9ZBvZ//3+pMm/WS
-XD1z5MAAAQCJFUZAjtpnTeqzLdKZYwrEMG9CvIJbs84jItAgbHFmnw65tDtwYy1z
-d2l0Y2hlciBpbnRlZ3JhdGlvbiB0ZXN0IHJlcG8gPHRlc3RAcGNzd2l0Y2hlci5p
-bnZhbGlkPoiTBBMWCgA7FiEEJN4KoEuwRjS/B1ZoVPFuFaN8kgoFAmplBzsCGwMF
-CwkIBwICIgIGFQoJCAsCBBYCAwECHgcCF4AACgkQVPFuFaN8kgo+4gEA6IuyVLQo
-7wGtv5uHS4sraY91lR/BycE0tyJvlYQbm5QBAJobRo82+cLTnSfC9GFEKNxKQsK9
-UK/osyCNR6QSXmEDnF0EamUHOxIKKwYBBAGXVQEFAQEHQNx1Ov3eDrAOcnU7pYvv
-8wTH4C+ZQgFODkjlhBxN8WMBAwEIBwAA/0JlttavOJZ1gAagSHw0wC+Ch1Ud5Fqz
-E11CvM6pVuzIEIyIeAQYFgoAIBYhBCTeCqBLsEY0vwdWaFTxbhWjfJIKBQJqZQc7
-AhsMAAoJEFTxbhWjfJIKRvkBAIZOvoOYQwktqHi4eEcG3BPy37PJ5D/vI65o1ef2
-2SycAQCRXPYYxjiVn7BpZJpH+hyg/Ajy5tML3DiV7uNsBbXNDA==
-=zLdb
------END PGP PRIVATE KEY BLOCK-----
-KEY
-readonly FLATPAK_SECRET_KEY
+readonly LEGACY_FLATPAK_REMOTE=pcswitcher-test
+readonly LEGACY_FLATPAK_APP=org.pcswitcher.TestApp
+readonly LEGACY_FLATPAK_RUNTIME=org.pcswitcher.TestRuntime
 
 log() { echo "[vm-test-fixtures] $*"; }
 
@@ -117,126 +120,124 @@ install_snaps() {
 # -- flatpak -----------------------------------------------------------------------
 
 install_flatpak_packages() {
-    local -a missing=()
-    command -v flatpak >/dev/null 2>&1 || missing+=(flatpak)
-    command -v gpg >/dev/null 2>&1 || missing+=(gnupg)
-    if [[ ${#missing[@]} -eq 0 ]]; then
-        log "flatpak and gnupg already installed"
+    if command -v flatpak >/dev/null 2>&1; then
+        log "flatpak already installed"
         return
     fi
-    log "installing apt packages: ${missing[*]}"
+    log "installing apt package: flatpak"
     sudo apt-get update
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y flatpak
 }
 
-build_flatpak_repo() {
-    if [[ -d "$FLATPAK_REPO_DIR" && -f "$FLATPAK_PUBKEY" ]]; then
-        log "flatpak fixture repository already built"
+add_flathub_remote() {
+    if flatpak remotes --user --columns=name | grep -qx "$FLATPAK_REMOTE"; then
+        log "flatpak remote $FLATPAK_REMOTE already configured"
         return
     fi
-
-    log "building signed flatpak fixture repository at $FLATPAK_REPO_DIR"
-    # One root shell for the whole build: every path written here is root-owned.
-    # Variables are expanded by THIS shell (unquoted heredoc delimiter) so the remote
-    # script needs no argument plumbing.
-    sudo bash -s <<EOF
-set -euo pipefail
-
-# sudo leaves HOME pointing at the invoking user on Ubuntu; without this, root-run
-# flatpak and gpg would drop root-owned files into the test user's ~/.cache and break
-# that user's own flatpak later.
-export HOME=/root
-
-rm -rf "${FLATPAK_ROOT}"
-mkdir -p "${FLATPAK_GNUPGHOME}" "${FLATPAK_REPO_DIR}"
-chmod 700 "${FLATPAK_GNUPGHOME}"
-export GNUPGHOME="${FLATPAK_GNUPGHOME}"
-
-# The shared, passphrase-less signing key (see FLATPAK_SECRET_KEY above): both VMs sign
-# with it, so a remote replicated from one verifies the other's own repository.
-gpg --batch --quiet --import <<'SECRETKEY'
-${FLATPAK_SECRET_KEY}
-SECRETKEY
-KEY_FINGERPRINT=${FLATPAK_KEY_FINGERPRINT}
-if ! gpg --batch --list-secret-keys "\$KEY_FINGERPRINT" >/dev/null 2>&1; then
-    echo "the embedded signing key for the flatpak fixture repository did not import" >&2
-    exit 1
-fi
-
-# A runtime tree flatpak accepts for export needs metadata, usr/ (its payload), and the
-# empty files/ and export/ directories `flatpak build-init` would have created.
-RT="${FLATPAK_ROOT}/build/runtime"
-mkdir -p "\$RT/usr/bin" "\$RT/files" "\$RT/export"
-cat > "\$RT/metadata" <<'META'
-[Runtime]
-name=${FLATPAK_RUNTIME}
-META
-printf '#!/bin/sh\nexit 0\n' > "\$RT/usr/bin/pcsw-runtime-noop"
-chmod +x "\$RT/usr/bin/pcsw-runtime-noop"
-
-APP="${FLATPAK_ROOT}/build/app"
-mkdir -p "\$APP/files/bin" "\$APP/export"
-cat > "\$APP/metadata" <<'META'
-[Application]
-name=${FLATPAK_APP}
-runtime=${FLATPAK_RUNTIME}/${FLATPAK_ARCH}/${FLATPAK_RUNTIME_BRANCH}
-sdk=${FLATPAK_RUNTIME}/${FLATPAK_ARCH}/${FLATPAK_RUNTIME_BRANCH}
-command=pcsw-hello
-META
-printf '#!/bin/sh\necho "hello from the pc-switcher integration fixture"\n' > "\$APP/files/bin/pcsw-hello"
-chmod +x "\$APP/files/bin/pcsw-hello"
-
-flatpak build-export --runtime --arch="${FLATPAK_ARCH}" \
-    --gpg-sign="\$KEY_FINGERPRINT" --gpg-homedir="${FLATPAK_GNUPGHOME}" \
-    "${FLATPAK_REPO_DIR}" "\$RT" "${FLATPAK_RUNTIME_BRANCH}"
-flatpak build-export --arch="${FLATPAK_ARCH}" \
-    --gpg-sign="\$KEY_FINGERPRINT" --gpg-homedir="${FLATPAK_GNUPGHOME}" \
-    "${FLATPAK_REPO_DIR}" "\$APP" "${FLATPAK_APP_BRANCH}"
-flatpak build-update-repo --gpg-sign="\$KEY_FINGERPRINT" --gpg-homedir="${FLATPAK_GNUPGHOME}" "${FLATPAK_REPO_DIR}"
-
-gpg --batch --export "\$KEY_FINGERPRINT" > "${FLATPAK_PUBKEY}"
-
-# The repository is served over file:// to an unprivileged user.
-chmod 644 "${FLATPAK_PUBKEY}"
-chmod -R a+rX "${FLATPAK_REPO_DIR}"
-chmod 755 "${FLATPAK_ROOT}"
-EOF
+    # Added from Flathub's own `.flatpakrepo`, exactly as a user would: that is what
+    # brings the real URL, the real `gpg-verify=true` and the real signing key into
+    # `~/.local/share/flatpak/repo/flathub.trustedkeys.gpg`. Replicating it with
+    # `--gpg-import` (what flatpak_sync does) reproduces that keyring byte-for-byte
+    # (verified live), so the two machines never show a spurious trust divergence.
+    log "adding user-scope flatpak remote $FLATPAK_REMOTE from $FLATHUB_REPOFILE"
+    flatpak remote-add --user --if-not-exists "$FLATPAK_REMOTE" "$FLATHUB_REPOFILE"
 }
 
-install_flatpak_app() {
-    if ! flatpak remotes --user --columns=name | grep -qx "$FLATPAK_REMOTE"; then
-        log "adding user-scope flatpak remote $FLATPAK_REMOTE"
-        flatpak remote-add --user --gpg-import="$FLATPAK_PUBKEY" \
-            "$FLATPAK_REMOTE" "file://${FLATPAK_REPO_DIR}"
-    else
-        log "flatpak remote $FLATPAK_REMOTE already configured"
+# Whether `ref` is installed in the user installation.
+flatpak_user_ref_installed() {
+    flatpak list --user --columns=ref | grep -qx "$1"
+}
+
+assert_app_runtime_unchanged() {
+    # Flathub decides which runtime it builds the subject app against, and it moves the
+    # app to a newer runtime major roughly once a year. FLATPAK_RUNTIME_REF is what this
+    # script seeds, so a drift has to be caught here — loudly, with the fix — rather than
+    # as an unexplained timeout when the sync under test suddenly has to download 2.8 GB.
+    #
+    # Tolerant of an unreachable Flathub (the query needs the network): only an answer
+    # that actually disagrees is an error.
+    local declared
+    if ! declared=$(flatpak remote-info --user "$FLATPAK_REMOTE" "$FLATPAK_APP" --show-runtime 2>/dev/null); then
+        log "WARNING: could not ask $FLATPAK_REMOTE which runtime $FLATPAK_APP needs; skipping the drift check"
+        return
+    fi
+    declared="${declared//[[:space:]]/}"
+    if [[ "$declared" != "$FLATPAK_RUNTIME_REF" ]]; then
+        cat >&2 <<EOF
+[vm-test-fixtures] Flathub now builds $FLATPAK_APP against $declared,
+not the $FLATPAK_RUNTIME_REF this fixture seeds. Leaving it would make
+test_flatpak_installs_into_source_scope_after_remote download a whole runtime inside the
+sync it is timing. Fix, in tests/integration/scripts/internal/vm-test-fixtures.sh:
+  1. set FLATPAK_RUNTIME_REF=$declared
+  2. bump FIXTURES_VERSION (and PCSWITCHER_TEST_FIXTURES_VERSION in internal/common.sh)
+     so the baseline is rebuilt with the new runtime
+EOF
+        exit 1
+    fi
+}
+
+install_flatpak_runtime() {
+    if flatpak_user_ref_installed "$FLATPAK_RUNTIME_REF"; then
+        log "flatpak runtime $FLATPAK_RUNTIME_REF already installed"
+        return
+    fi
+    # No --no-related: the related refs (GL, VAAPI, codecs, Locale) have to be seeded
+    # here, or the app install inside the test pulls them instead.
+    log "installing flatpak runtime $FLATPAK_RUNTIME_REF (a few hundred MB, once per baseline)"
+    flatpak install --user -y --noninteractive "$FLATPAK_REMOTE" "$FLATPAK_RUNTIME_REF"
+}
+
+converge_flatpak_app() {
+    local installed=false
+    if flatpak list --user --app --columns=application | grep -qx "$FLATPAK_APP"; then
+        installed=true
     fi
 
-    if ! flatpak list --user --app --columns=application | grep -qx "$FLATPAK_APP"; then
+    if [[ "$INSTALL_APP" == "true" ]]; then
+        if [[ "$installed" == "true" ]]; then
+            log "flatpak $FLATPAK_APP already installed"
+            return
+        fi
         log "installing user-scope flatpak $FLATPAK_APP"
         flatpak install --user -y --noninteractive "$FLATPAK_REMOTE" "$FLATPAK_APP"
+        return
+    fi
+
+    # No --with-app: this machine is the sync TARGET and must not hold the app, or the
+    # source->target ref divergence the flatpak test needs does not exist. Removed rather
+    # than merely not installed, so a test that crashed mid-run cannot leave it behind.
+    if [[ "$installed" == "true" ]]; then
+        log "removing user-scope flatpak $FLATPAK_APP (this machine is the sync target)"
+        flatpak uninstall --user -y "$FLATPAK_APP"
     else
-        log "flatpak $FLATPAK_APP already installed"
+        log "flatpak $FLATPAK_APP correctly absent"
     fi
 }
 
 # -- main --------------------------------------------------------------------------
 
 # A marker from an older version means the fixtures on this machine are not the ones
-# this script now describes. Drop the built artifacts so they are rebuilt rather than
-# skipped by the presence checks below (snaps need no such reset — they are checked
-# name by name, so a newly added one is installed and an existing one left alone).
+# this script now describes. Drop the artifacts of the synthetic-repo era so nothing left
+# over from it can satisfy a presence check or show up as a flatpak item the tests do not
+# know about (snaps need no such reset — they are checked name by name, so a newly added
+# one is installed and an existing one left alone).
+#
+# `flatpak uninstall` WITHOUT --unused, deliberately: --unused would sweep runtimes this
+# script deliberately keeps installed.
 if [[ -f "$MARKER" ]] && [[ "$(cat "$MARKER")" != "$FIXTURES_VERSION" ]]; then
     log "marker reports version $(cat "$MARKER"), rebuilding for version $FIXTURES_VERSION"
-    flatpak uninstall --user -y "$FLATPAK_APP" >/dev/null 2>&1 || true
-    flatpak remote-delete --user --force "$FLATPAK_REMOTE" >/dev/null 2>&1 || true
-    sudo rm -rf "$FLATPAK_ROOT" "$LEGACY_OSTREE_TRUSTED_KEY"
+    flatpak uninstall --user -y "$LEGACY_FLATPAK_APP" >/dev/null 2>&1 || true
+    flatpak uninstall --user -y "$LEGACY_FLATPAK_RUNTIME" >/dev/null 2>&1 || true
+    flatpak remote-delete --user --force "$LEGACY_FLATPAK_REMOTE" >/dev/null 2>&1 || true
+    sudo rm -rf "$LEGACY_FLATPAK_ROOT" "$LEGACY_OSTREE_TRUSTED_KEY"
 fi
 
 install_snaps
 install_flatpak_packages
-build_flatpak_repo
-install_flatpak_app
+add_flathub_remote
+assert_app_runtime_unchanged
+install_flatpak_runtime
+converge_flatpak_app
 
 printf '%s\n' "$FIXTURES_VERSION" | sudo tee "$MARKER" >/dev/null
 log "test fixtures ready (version $FIXTURES_VERSION)"

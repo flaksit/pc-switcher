@@ -47,6 +47,12 @@ this module declines to run for want of a subject: a missing subject is a broken
 and fails naming what is missing and which script creates it. apt subjects are still
 selected by querying the machines (any Debian system has hundreds), but an empty selection
 is likewise an assertion failure, never a skip.
+
+The flatpak subject is the REAL Flathub, and its app is provisioned on pc1 only, so the
+source->target divergence the convergence test needs is part of the baseline rather than
+something a test manufactures. A locally built stand-in repository would only ever test
+this project's model of a remote; #215's key replication is about a real remote's real
+trust configuration (`_FIXTURE_FLATPAK_APP`).
 """
 
 from __future__ import annotations
@@ -677,15 +683,22 @@ def parse_flatpak_list_lines(output: str) -> list[tuple[str, str, str, str]]:
     return rows
 
 
-# The flatpak subject `tests/integration/scripts/internal/vm-test-fixtures.sh` puts on
-# BOTH VMs: a user-scope ref installed from a local, GPG-signed OSTree repository served
-# over `file://`. Ubuntu 24.04 ships no flatpak at all, and Flathub's smallest app still
-# drags in a ~270 MB runtime, so the fixture builds its own ~270 kB one.
-_FIXTURE_FLATPAK_APP = "org.pcswitcher.TestApp"
-_FIXTURE_FLATPAK_REMOTE = "pcswitcher-test"
+# The flatpak subject `tests/integration/scripts/internal/vm-test-fixtures.sh` provisions:
+# THE REAL FLATHUB, user scope. Both VMs carry the remote and the app's runtime; only pc1
+# (the sync source) carries the APP, which is the source->target ref divergence the
+# convergence test needs — it is part of the baseline, not something a test manufactures.
+#
+# Real, not a local stand-in, because a synthetic repository only ever tests this
+# project's model of a remote. Flathub's own trust configuration is what makes the #215
+# key-replication claim below mean anything: an `options` column that is genuinely empty,
+# a real `flathub.trustedkeys.gpg`, a real `--gpg-import` round trip.
+_FIXTURE_FLATPAK_APP = "io.github.fragglet.sdl_sopwith"
+_FIXTURE_FLATPAK_REMOTE = "flathub"
 _FIXTURE_FLATPAK_SCOPE: Literal["user", "system"] = "user"
-_FIXTURE_FLATPAK_REPO_URL = "file:///opt/pcswitcher-test-flatpak/repo"
-_FIXTURE_FLATPAK_PUBKEY = "/opt/pcswitcher-test-flatpak/key.gpg"
+# Flathub's `.flatpakrepo`, i.e. how a user adds the remote — it carries the URL, the
+# `gpg-verify=true` and the signing key together. Used only to put the remote back after
+# a test deleted it; `_flatpak_subject` reads the resulting URL off the machine itself.
+_FIXTURE_FLATPAK_REPOFILE = "https://dl.flathub.org/repo/flathub.flatpakrepo"
 
 
 async def _flatpak_subject(
@@ -728,27 +741,30 @@ async def _flatpak_subject(
     )
 
 
-async def _restore_flatpak_subject(executor: BashLoginRemoteExecutor) -> None:
-    """Put the fixture remote and ref back on `executor` after a test removed them.
+async def _restore_flatpak_target_baseline(executor: BashLoginRemoteExecutor) -> None:
+    """Put `executor` (the sync TARGET) back to what the fixture script leaves behind:
+    the Flathub remote configured, the app's runtime installed, and the app itself ABSENT.
 
-    The remote is re-added with its signing key imported, exactly as the fixture script
-    does — a remote without its key can install nothing, since the repository is trusted
-    per-remote and nowhere else. Restoring the fixture's own shape keeps the next test's
-    starting point identical to a freshly provisioned machine.
+    Not symmetric with the source: the app's absence here IS the fixture (see
+    `_FIXTURE_FLATPAK_APP`), so a test that made the sync install it must undo that or the
+    next run starts from a converged pair and proves nothing. The remote is re-added from
+    Flathub's own `.flatpakrepo`, which restores its real trust configuration — the same
+    keyring bytes, so no spurious trust divergence is left behind (verified live).
+
+    The runtime is deliberately left installed: `flatpak uninstall --unused` would sweep
+    it and turn every later app install into a multi-hundred-MB download.
     """
     scope_flag = "--user" if _FIXTURE_FLATPAK_SCOPE == "user" else "--system"
     sudo = "" if _FIXTURE_FLATPAK_SCOPE == "user" else "sudo "
     result = await executor.run_command(
+        f"{sudo}flatpak uninstall {scope_flag} -y {shlex.quote(_FIXTURE_FLATPAK_APP)} || true; "
         f"{sudo}flatpak remote-add {scope_flag} --if-not-exists "
-        f"--gpg-import={shlex.quote(_FIXTURE_FLATPAK_PUBKEY)} "
-        f"{shlex.quote(_FIXTURE_FLATPAK_REMOTE)} {shlex.quote(_FIXTURE_FLATPAK_REPO_URL)} && "
-        f"{sudo}flatpak install {scope_flag} -y --noninteractive "
-        f"{shlex.quote(_FIXTURE_FLATPAK_REMOTE)} {shlex.quote(_FIXTURE_FLATPAK_APP)}",
+        f"{shlex.quote(_FIXTURE_FLATPAK_REMOTE)} {shlex.quote(_FIXTURE_FLATPAK_REPOFILE)}",
         login_shell=False,
-        timeout=120.0,
+        timeout=180.0,
     )
     if not result.success:
-        print(f"[cleanup] failed to restore the fixture flatpak: {result.stderr}")
+        print(f"[cleanup] failed to restore the target's flatpak baseline: {result.stderr}")
 
 
 # -- apt repository-state helpers (D-11/D-12): synthesize a repo+key divergence -----
@@ -1347,12 +1363,15 @@ class TestPackageSyncWholeRunContracts:
         provisions the remote first (D-06, D-14): `flatpak install` refuses outright
         when its remote is not yet configured in that scope.
 
-        The subject is the fixture ref and its local signed repository
-        (`vm-test-fixtures.sh`). Nothing on pc2 trusts that repository once the teardown
-        below deletes the remote — `flatpak remote-delete` takes the per-remote keyring
-        with it and the fixture installs no machine-level anchor — so the ref install
-        after the sync can only succeed if pc-switcher carried the remote's signing key
-        across (#215), which is exactly the claim this makes.
+        The subject is a real Flathub app, present on pc1 only (`vm-test-fixtures.sh`), and
+        the real Flathub remote. Nothing on pc2 trusts Flathub once this test deletes the
+        remote there — `flatpak remote-delete` takes `flathub.trustedkeys.gpg` with it and
+        Ubuntu ships no machine-level anchor for it (both verified live) — so the ref
+        install after the sync can only succeed if pc-switcher carried the remote's real
+        signing key across (#215), which is exactly the claim this makes.
+
+        pc2 keeps the app's runtime throughout, so the install the sync performs is the
+        146 kB app and nothing else.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
@@ -1364,6 +1383,10 @@ class TestPackageSyncWholeRunContracts:
         ref_item_id = FlatpakItem(application=application, version=version, origin=remote_name, scope=scope).item_id
 
         try:
+            # The app is already absent on pc2 (it is installed on pc1 only), so this is
+            # defensive: it keeps the test independent of anything an earlier failure left
+            # behind. Deleting the remote is NOT defensive — it is what removes pc2's only
+            # trust in Flathub and makes the key replication load-bearing.
             await pc2_executor.run_command(
                 f"{sudo}flatpak uninstall -y {scope_flag} {shlex.quote(application)}",
                 login_shell=False,
@@ -1392,7 +1415,12 @@ class TestPackageSyncWholeRunContracts:
 
             decisions = {remote_item_id: Decision.APPLY, ref_item_id: Decision.APPLY}
             sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
+            # Longer than the other syncs in this module: with pc2's runtime in place the
+            # app install takes about a second, but if Flathub has moved the app onto a
+            # newer runtime major since the baseline was built, this install pulls that
+            # runtime. The fixture script fails loudly on that drift; the headroom here is
+            # what keeps the failure legible instead of a timeout.
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=900.0, login_shell=True)
             assert sync_result.success, (
                 f"pc-switcher sync exited {sync_result.exit_code}.\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
@@ -1426,21 +1454,11 @@ class TestPackageSyncWholeRunContracts:
             assert ref_index != -1, f"ref converge log line not found: {ref_marker!r}"
             assert remote_index < ref_index, "remote must be provisioned before the ref installs (D-14)"
         finally:
-            # Put pc2 back to a freshly provisioned machine's state rather than leaving
-            # it stripped: the later tests in this module compare the two machines, and a
-            # target permanently missing a ref the source has is a divergence they would
-            # then have to reason about.
-            await pc2_executor.run_command(
-                f"{sudo}flatpak uninstall -y {scope_flag} {shlex.quote(application)}",
-                login_shell=False,
-                timeout=60.0,
-            )
-            await pc2_executor.run_command(
-                f"{sudo}flatpak remote-delete --force {scope_flag} {shlex.quote(remote_name)}",
-                login_shell=False,
-                timeout=30.0,
-            )
-            await _restore_flatpak_subject(pc2_executor)
+            # Put pc2 back to a freshly provisioned TARGET's state: Flathub configured
+            # with its real trust, the runtime kept, the app gone again. Leaving the app
+            # installed would converge the pair and silently make a re-run of this test
+            # prove nothing.
+            await _restore_flatpak_target_baseline(pc2_executor)
 
     async def test_skip_always_is_inert_in_both_roles(
         self,

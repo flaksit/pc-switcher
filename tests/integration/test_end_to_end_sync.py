@@ -375,6 +375,14 @@ def _tree(user: str) -> str:
 def _make_e2e_home_filter() -> str:
     """Central `merge` filter for the /home folder_sync entry (#166).
 
+    `- .local/share/flatpak` is here purely for cost. The shipped `home.filter` ships no
+    such rule on purpose (D-29: enabling `sync_jobs.flatpak_sync` excludes that store
+    non-overridably, and a user who does not enable it legitimately wants it mirrored), but
+    this config does NOT enable flatpak_sync, and the test VMs carry a ~2.8 GB Flathub
+    runtime under it (`vm-test-fixtures.sh`). Mirroring it would add gigabytes to a test
+    whose subject is filter mechanics on a small seeded tree, and would prove nothing —
+    the strict manifests below cover only that tree.
+
     Exercises, end-to-end through the real rsync command, every central filter surface:
     the machine-identity/regenerable excludes (as before); the #166 include-override idiom
     (keep the dev caches under pcsw-filter/cache while dropping the rest, via `+` re-includes
@@ -395,6 +403,7 @@ def _make_e2e_home_filter() -> str:
 - .config/Code/GPUCache
 - .cache
 - .local/share/uv/python
+- .local/share/flatpak
 + {_FILTER_TREE}/cache/
 + {_FILTER_TREE}/cache/keep-uv/***
 + {_FILTER_TREE}/cache/keep-pip/***

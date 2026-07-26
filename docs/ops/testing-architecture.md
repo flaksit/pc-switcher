@@ -158,8 +158,8 @@ The baseline snapshots capture the following VM state (as configured during prov
 | Component | State | Notes |
 | --------- | ----- | ----- |
 | **OS** | Ubuntu 24.04 LTS | Installed via Hetzner `installimage` |
-| **Packages** | btrfs-progs, qemu-guest-agent, fail2ban, ufw, sudo, flatpak, gnupg | Basic system tools plus what the package-sync tests need |
-| **Test fixtures** | `hello` and `hello-world` snaps; a local signed flatpak repository at `/opt/pcswitcher-test-flatpak` with `org.pcswitcher.TestApp` installed in user scope | Created by `vm-test-fixtures.sh`; the subjects the package-sync integration tests hold, diverge, remove and reinstall |
+| **Packages** | btrfs-progs, qemu-guest-agent, fail2ban, ufw, sudo, flatpak | Basic system tools plus what the package-sync tests need |
+| **Test fixtures** | `hello` and `hello-world` snaps; the real Flathub remote plus `org.freedesktop.Platform/x86_64/25.08` in user scope on **both** VMs; `io.github.fragglet.sdl_sopwith` in user scope on **pc1 only** | Created by `vm-test-fixtures.sh`; the subjects the package-sync integration tests hold, diverge, remove and reinstall |
 | **Filesystem** | btrfs with flat subvolume layout (`@`, `@home`, `@snapshots`) | Root mounted as `@`, home as `@home` |
 | **Users** | `testuser` with passwordless sudo | All developer SSH keys injected |
 | **SSH** | Hardened (root login disabled, password auth disabled) | Only key-based auth allowed |
@@ -173,7 +173,16 @@ The baseline snapshots capture the following VM state (as configured during prov
 
 The package-sync integration tests need packages they may hold, diverge, remove and reinstall. A stock Ubuntu 24.04 VM offers none: `snap list` shows only `snapd`, `core*` and `bare` — every other snap depends on those, so none is a safe subject — and flatpak is not installed at all. `internal/vm-test-fixtures.sh` creates the subjects, and provisioning runs it before the baseline snapshot so every test run inherits them at no cost.
 
-The flatpak subject is a self-contained, GPG-signed OSTree repository under `/opt/pcswitcher-test-flatpak`, served over `file://`, holding one minimal runtime and one minimal app. It is ~270 kB; the smallest Flathub app would drag in a 268 MB runtime and a network dependency at test time. Both VMs sign their own copy with the same key, embedded in the fixture script, and that key is trusted **only** through the flatpak remote itself — nothing machine-wide. That is what makes the flatpak convergence test falsifiable: once the test deletes the remote on the target, the key is gone with it, so the ref installs afterwards only if pc-switcher carried the remote's signing key across.
+The flatpak subject is **the real Flathub**, not a locally built stand-in. A synthetic repository is far cheaper, but it only ever tests pc-switcher's model of a remote: our own repo layout, our own key, our own `gpg-verify` state. The GPG-trust replication `flatpak_sync` performs (issue #215) is a claim about a real remote's real trust configuration, so the remote under test carries Flathub's.
+
+The fixture is asymmetric on purpose:
+
+- **Both VMs** get the `flathub` remote (added from Flathub's own `.flatpakrepo`, so the URL, `gpg-verify=true` and signing key are the real ones) and the app's runtime, `org.freedesktop.Platform/x86_64/25.08` — pulled with its related refs (GL, VAAPI, codecs, Locale), which is 95 s and ~2.8 GB deployed, paid once when the baseline is built and never per test run.
+- **pc1 only** gets the application, `io.github.fragglet.sdl_sopwith` (146 kB download, 448 kB installed, single `stable` branch). That asymmetry *is* the source→target ref divergence the convergence test needs, so no test has to manufacture one; and because pc2 already holds the runtime, the install the sync performs takes about a second.
+
+That keeps the convergence test falsifiable: the test deletes the `flathub` remote on the target, which takes `flathub.trustedkeys.gpg` with it, and Ubuntu ships no machine-level anchor for Flathub — so the ref installs afterwards only if pc-switcher carried the remote's real signing key across.
+
+Flathub decides which runtime it builds the app against and moves apps to a new runtime major roughly yearly. The fixture script therefore asks Flathub which runtime the app declares and **fails with the two-line fix** (update `FLATPAK_RUNTIME_REF`, bump the fixture version) if it no longer matches what the baseline seeds — a loud, actionable failure instead of a sync that silently has to download a runtime.
 
 The script writes its version to `/etc/pcswitcher-test-fixtures`. `provision-test-infra.sh` compares that marker against `PCSWITCHER_TEST_FIXTURES_VERSION` in `internal/common.sh`: on a mismatch — including a baseline that predates the fixtures entirely — it resets both VMs, reinstalls the fixtures and retakes the baseline, so no VM has to be deleted and rebuilt. `run-integration-tests.sh` checks the same marker and refuses to run against a stale baseline. Bumping the version in both places is how a fixture change reaches the fleet.
 
@@ -437,7 +446,7 @@ flowchart TD
 | **create-vm.sh** | Creates VM with btrfs via Hetzner rescue mode and installimage |
 | **configure-vm.sh** | Configures OS with testuser account, packages, SSH hardening, firewall |
 | **configure-hosts.sh** | Sets up inter-VM networking, generates SSH keypairs, establishes SSH trust |
-| **vm-test-fixtures.sh** | Creates the package-manager subjects the integration suite operates on (snaps, flatpak, a local signed flatpak repository), then writes `/etc/pcswitcher-test-fixtures` with its version |
+| **vm-test-fixtures.sh** | Creates the package-manager subjects the integration suite operates on (snaps; the real Flathub remote, its runtime, and — with `--with-app`, for pc1 only — the test application), then writes `/etc/pcswitcher-test-fixtures` with its version |
 | **create-baseline-snapshots.sh** | Creates btrfs snapshots at clean baseline state |
 | **reset-vm.sh** | Restores VM to baseline state via btrfs snapshot rollback |
 

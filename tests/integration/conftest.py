@@ -157,7 +157,7 @@ _VM_TEST_FIXTURES_SCRIPT = Path(__file__).parent / "scripts" / "internal" / "vm-
 _VM_TEST_FIXTURES_REMOTE_PATH = "/tmp/pcswitcher-vm-test-fixtures.sh"
 
 
-async def ensure_vm_test_fixtures(executor: BashLoginRemoteExecutor) -> None:
+async def ensure_vm_test_fixtures(executor: BashLoginRemoteExecutor, *, install_app: bool) -> None:
     """Create the package-manager subjects the suite operates on (`vm-test-fixtures.sh`).
 
     Tests that need a snap or a flatpak to hold, diverge, remove or reinstall must own
@@ -166,12 +166,20 @@ async def ensure_vm_test_fixtures(executor: BashLoginRemoteExecutor) -> None:
     from here as well is what makes the suite independent of when the baseline was last
     built: against an older one it creates the subjects itself rather than leaving tests
     without a subject to work on.
+
+    `install_app` maps to the script's `--with-app` and belongs to the SOURCE machine
+    only: the flatpak application is what makes source and target genuinely diverge, so
+    the target must not carry it (the script actively removes it there).
     """
     await executor.send_file(_VM_TEST_FIXTURES_SCRIPT, _VM_TEST_FIXTURES_REMOTE_PATH)
+    args = " --with-app" if install_app else ""
     result = await executor.run_command(
-        f"bash {_VM_TEST_FIXTURES_REMOTE_PATH}",
+        f"bash {_VM_TEST_FIXTURES_REMOTE_PATH}{args}",
         login_shell=False,
-        timeout=900.0,
+        # Generous: on a baseline that predates the current fixture version this installs
+        # snaps and a Flathub runtime (~2.8 GB deployed) from scratch. On a current
+        # baseline it is a handful of local queries and returns in under a second.
+        timeout=1800.0,
     )
     assert result.success, (
         f"Failed to create the VM test fixtures ({_VM_TEST_FIXTURES_SCRIPT.name}).\n"
@@ -186,8 +194,8 @@ async def vm_test_fixtures(
 ) -> None:
     """Both VMs carry the current package-manager test fixtures before the module runs."""
     await asyncio.gather(
-        ensure_vm_test_fixtures(pc1_executor),
-        ensure_vm_test_fixtures(pc2_executor),
+        ensure_vm_test_fixtures(pc1_executor, install_app=True),
+        ensure_vm_test_fixtures(pc2_executor, install_app=False),
     )
 
 
