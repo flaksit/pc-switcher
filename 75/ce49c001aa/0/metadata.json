@@ -1,0 +1,74 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "75ce49c001aa",
+  "session_id": "1626d4a7-7489-4002-99e5-3a043f04dae0",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-26T09:55:58.261457924Z",
+  "branch": "pc-mark-tests",
+  "checkpoints_count": 3,
+  "save_step_count": 3,
+  "files_touched": [
+    ".github/workflows/integration-tests.yml",
+    "docs/dev/testing-guide.md",
+    "docs/ops/testing-architecture.md",
+    "docs/ops/testing-ops.md",
+    "pyproject.toml",
+    "tests/run-integration-tests.sh"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4ce0a8748027",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 151,
+    "cache_creation_tokens": 208611,
+    "cache_read_tokens": 7243205,
+    "output_tokens": 60019,
+    "api_call_count": 83
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-26T09:55:58.227110813Z",
+    "agent_lines": 16,
+    "agent_removed": 2,
+    "human_added": 38,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 56,
+    "total_lines_changed": 58,
+    "agent_percentage": 31.03448275862069,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 41,
+      "agent_lines_removed": 4
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 54,
+      "agent_lines_removed": 4
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 54,
+      "agent_lines_removed": 4
+    }
+  ]
+}

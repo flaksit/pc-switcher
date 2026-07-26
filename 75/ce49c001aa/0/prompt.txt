@@ -1,0 +1,114 @@
+Do everything needed for marking the tests: code, doc, CI, ...
+
+Following tests should be skipped:
+test_snapshot_infrastructure.py
+
+---
+
+Do everything needed for marking the tests: code, doc, CI, ...
+
+Following tests should be skipped:
+test_snapshot_infrastructure.py
+test_self_update.py
+
+---
+
+Do everything needed for marking the tests: code, doc, CI, ...
+
+Following tests should be skipped:
+test_snapshot_infrastructure.py
+test_self_update.py
+
+---
+
+Do everything needed for marking the tests: code, doc, CI, ...
+
+Following tests should be skipped:
+test_snapshot_infrastructure.py
+test_self_update.py
+jobs/test_install_on_target_job.py
+test_logging_integration.py
+
+---
+
+Do everything needed for marking the tests: code, doc, CI, ...
+
+Following tests should be skipped:
+test_snapshot_infrastructure.py
+test_self_update.py
+jobs/test_install_on_target_job.py
+test_logging_integration.py
+test_config_sync.py
+test_installation_script.py
+test_interrupt_integration.py
+test_init_command.py
+test_lock_integration.py
+
+---
+
+Do everything needed for marking the tests: code, doc, CI, ...
+
+Following tests should be skipped:
+test_snapshot_infrastructure.py
+test_self_update.py
+jobs/test_install_on_target_job.py
+test_logging_integration.py
+test_config_sync.py
+test_installation_script.py
+test_interrupt_integration.py
+test_init_command.py
+test_lock_integration.py
+
+---
+
+Do everything needed for marking the tests: code, doc, CI, ...
+
+Following tests should be skipped:
+test_snapshot_infrastructure.py
+test_self_update.py
+jobs/test_install_on_target_job.py
+test_logging_integration.py
+test_config_sync.py
+test_installation_script.py
+test_interrupt_integration.py
+test_init_command.py
+test_lock_integration.py
+
+---
+
+Do everything needed for marking the tests: code, doc, CI, ...
+
+Following tests should be skipped:
+test_snapshot_infrastructure.py
+test_self_update.py
+jobs/test_install_on_target_job.py
+test_logging_integration.py
+test_config_sync.py
+test_installation_script.py
+test_interrupt_integration.py
+test_init_command.py
+test_lock_integration.py
+
+---
+
+Do everything needed for marking the tests: code, doc, CI, ...
+
+Following tests should be skipped:
+test_snapshot_infrastructure.py
+test_self_update.py
+jobs/test_install_on_target_job.py
+test_logging_integration.py
+test_config_sync.py
+test_installation_script.py
+test_interrupt_integration.py
+test_init_command.py
+test_lock_integration.py
+
+---
+
+and more to skip:
+test_end_to_end_sync.py: TestConsecutiveSyncWarning, TestInstallOnTargetIntegration, test_core_us_job_arch_as7_interrupt_terminates_job(), test_core_edge_target_unreachable_mid_sync()
+
+---
+
+Why not markers directly on tests instead of separate lists?

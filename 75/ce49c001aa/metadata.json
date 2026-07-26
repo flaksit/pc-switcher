@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "75ce49c001aa",
+  "strategy": "manual-commit",
+  "branch": "pc-mark-tests",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".github/workflows/integration-tests.yml",
+    "docs/dev/testing-guide.md",
+    "docs/ops/testing-architecture.md",
+    "docs/ops/testing-ops.md",
+    "pyproject.toml",
+    "tests/run-integration-tests.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/75/ce49c001aa/0/metadata.json",
+      "transcript": "/75/ce49c001aa/0/full.jsonl",
+      "compact_transcript": "/75/ce49c001aa/0/transcript.jsonl",
+      "content_hash": "/75/ce49c001aa/0/content_hash.txt",
+      "prompt": "/75/ce49c001aa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 151,
+    "cache_creation_tokens": 208611,
+    "cache_read_tokens": 7243205,
+    "output_tokens": 60019,
+    "api_call_count": 83
+  }
+}
