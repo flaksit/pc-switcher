@@ -1,0 +1,57 @@
+Read .planning/phases/02-package-management-sync/02-HANDOVER-package-review.md first —
+it has the detail behind everything below. Then read docs/adr/adr-020-declarative-
+package-convergence.md.
+
+DO NOT PUSH until I say so. Do not touch the pc1/pc2 VMs or the Hetzner lock unasked. Ask when using pc1/pc2 would be useful for analysis.
+
+OPEN WORK, in priority order:
+
+1. CI failed: 2 integration tests failed.
+
+2. The batched review has never been driven by a human. Unit tests inject a FakeReviewer
+    (tests/unit/jobs/test_package_sync_core.py:72 and test_manual_installs_sync.py:132);
+    the VM suite bypasses prompting entirely via PCSWITCHER_PACKAGE_REVIEW_AUTOMATION
+    (src/pcswitcher/jobs/packages/review.py:94). So decisions are proven; prompts are not.
+    Nothing has ever rendered a questionary checkbox, paused/resumed the Rich Live panel
+    around one, driven the multi-line snippet editor, or hit Ctrl-C at a prompt.
+    Worst case: commit 089ea985 added a SECOND review that fires mid-execute(), after
+    /etc/apt converges (apt_sync.py:1410-1441). Untested at every level.
+    02-UAT.md test 1 covers this and is still pending. I want to run it myself — give me
+    copy-paste commands, don't drive it for me.
+
+3. Derived repos — designed and approved by me, not started. apt sources stop being
+    independently reviewable, exactly as keys did in d27337da: adding a repo is derived
+    from the packages approved from it, the repo is named in the package's review detail,
+    removal stays reviewed, and /etc/apt/sources.list + ubuntu.sources are NEVER collected.
+    Follow d27337da for shape and 43a52fa3 for naming consequences in `detail`.
+
+4. The apt no-candidate detector has never fired. _packages_with_no_candidate (copies in
+    manual_installs_sync.py and apt_sync.py) tests for literal "Candidate: (none)", which
+    apt does NOT print for a hand-installed .deb — dpkg's status entry supplies the
+    candidate. Verified: code, brscan3, cnpg, falco-app, brother-udev-rule-type1 all report
+    a version. Correct test is already in the codebase: installed version whose only origin
+    is /var/lib/dpkg/status (reuse _installed_origins_by_package from 43a52fa3).
+
+RULES THAT COST US PREVIOUS SESSIONS:
+- Insist on RED. A test that cannot fail is not a test. Treat SKIPPED as not-a-test. When
+  retrofitting tests onto existing code (no red phase available), mutation-check instead:
+  break the implementation, confirm the test fails, restore.
+- Tests create the environment they need. No discover-or-skip. No pytest.skip in
+  tests/integration/jobs/test_package_sync.py. Fixtures live in
+  tests/integration/scripts/internal/vm-test-fixtures.sh.
+- Subagents experiment in docker or on pc1/pc2, never on this dev machine.
+- Verify before asserting. Check this machine rather than describing how software
+  "usually" behaves.
+
+DO NOT RE-LITIGATE (verified on real VMs): #208 D9 holds; the #215 flatpak GPG trust fix
+survives real Flathub; keyring resolution went 11 dangling -> 0; snap refresh.hold needs
+sudo to read (5e6a9a4c, pushed).
+
+---
+
+"because the VM clock runs 2h ahead of the runner": bullshit. Do you have timezone problems? Use UTC!
+"sweep's shell logic has literally never executed on btrfs since January 2026": What do you mean? On which machine?
+
+Yes, do the items.py cleanup.
+
+Simply remove test_no_stable_release_error: makes no sense anymore: will always skip
