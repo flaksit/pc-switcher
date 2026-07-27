@@ -1,0 +1,86 @@
+<task-notification>
+<task-id>a05e56521d947a005</task-id>
+<tool-use-id>toolu_01YPkvrDq5z1xigeazZtgLzP</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a05e56521d947a005.output</output-file>
+<status>completed</status>
+<summary>Agent "Stage S3 enforcement and S7 deletion" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>S3 and S7 are done, committed locally, nothing pushed.
+
+## Commits
+
+- `a72935c9` — S3, origin enforcement (`+352/-1` across `apt_sync.py`, tests, 2 docs)
+- `354cea89` — S7, pin echo + second review deletion (`+237/-725`)
+
+Another session landed `70a08094` (spec-only) between them; neither of my commits touches `.planning/`.
+
+## Mutation table — real results
+
+| # | Mutation | Named test(s) | Result |
+| --- | --- | --- | --- |
+| S3-M1 | Drop the `_origin_refusal` raise in `_converge_install` | `test_install_is_refused_when_the_post_update_candidate_is_from_the_wrong_origin` | RED (4 failed) |
+| S3-M2 | Drop the once-per-run cache | `test_the_origin_verification_costs_one_batched_policy_call` | RED |
+| S3-M3 | Verify unconditionally (drop the distribution exemption) | `test_a_distribution_origin_package_is_not_origin_verified` | RED |
+| S3-M4 | Reuse the plan-time `target_candidate_origins` instead of re-reading | `test_an_origin_the_converged_target_now_offers_lets_the_install_through` | RED |
+| S3-M5 | Treat apt's silence at verification time as a pass | `test_a_verification_apt_answers_nothing_for_refuses_the_install` | RED |
+| S3-M6 | Verify every planned install, not only approved ones | `test_a_skipped_install_is_never_named_in_the_verification` | RED |
+| S3-M7 | Refusal text names only the source's origin | both `TestOriginRefusalWording` tests + 2 enforcement tests | RED |
+| S7-M1 | Restore the entire pre-S7 `apt_sync.py`+`items.py` (echo + second review) | 6 new tests | **5 RED, 1 GREEN** — see below |
+| S7-M2 | Re-add a second `reviewer.review(...)` in `apply()` | both `TestOneReviewPerRun` tests | RED |
+| S7-M3 | Drop the pin `missing` branch (pin files stop travelling) | both `TestPinsStillTravelAsFiles` tests | RED |
+| S7-M4 | Restore a pin argument on `_diff_apt_packages` | `test_the_diff_takes_no_pin_input_at_all` + 3 | RED |
+| S7-M5 | Reinstate a `REPORT_ONLY` suppression on the extra-on-target branch | 3 of 4 `TestAPinNeverSpeaksForAPackage` | RED |
+
+**A first attempt at the S7 tests was vacuous and I rewrote it.** The initial fixture answered only the digest listing under `preferences.d`, not the `-exec awk '/^Package:/'` stanza scan the old code reads — so 5 of 6 new tests passed unchanged against the pre-S7 implementation. `_pinned_target_only_package_context` now answers *both* reads (and empties the stanza scan once the pin file is actually `rm`'d), which is what makes S7-M1 RED.
+
+**One honest GREEN**: `test_a_package_the_target_had_no_candidate_for_is_installed_in_one_review` passes against pre-S7 code. That is correct, not vacuous — S2 already made this scenario resolve in one review (the second review's second reason was dead before S7 removed it). Its discriminating mutation is S7-M2.
+
+## S7 test delta: 17 deleted, 10 added
+
+Deletions and why each is safe:
+- 4 pin-fact capture/echo tests (`test_collect_hold_pin_facts_*`, `test_preferences_d_pin_surfaces_*`, `test_pin_still_yields_report_only_echo_*`, `test_pin_fact_yields_held_or_pinned_*`) — they asserted the retired behaviour itself.
+- 3 `TestPinStanzaParsing` — `_pin_packages`/`_parse_pin_file` have no consumer left.
+- 6 `TestSecondReviewAfterRepositoryChanges` + 1 `TestNewRepositoryMakesAPackageAvailable` — the second review is gone; the surviving property (one review, package still installed) is asserted by `TestOneReviewPerRun`.
+- 2 `TestHoldPinFactAndDetails` — `HoldPinFact`/`build_held_or_pinned_detail` deleted.
+- 1 renamed (`test_held_package_yields_hold_item_not_duplicate_held_or_pinned_report` → `..._not_a_duplicate_package_report`), same assertions minus the dead enum check.
+
+## Pin FILES still travel — proof
+
+`tests/unit/jobs/test_apt_sync.py` `TestPinsStillTravelAsFiles`: an approved `apt:pin:mozilla` produces `sudo install … /etc/apt/preferences.d/mozilla` on the target, and the diff is still emitted from digests alone with zero content reads. S7-M3 (deleting the pin INSTALL branch) turns both RED. `test_no_command_asks_the_target_which_packages_its_pins_name` additionally asserts the digest listing *is* still issued while `/^Package:/` never is.
+
+## Exactly one review per manager per run
+
+`TestOneReviewPerRun` asserts `len(reviewer.calls) == 1` on the run shape that used to produce two screens — pin removal approved, `sudo rm --force …/curl-pin` and `sudo apt-get update` both observed. `AptSyncJob` no longer overrides `apply()` at all, so `execute()`'s single `reviewer.review(...)` is now the only call site.
+
+## Collision regions — what I left for the repository lane
+
+- **`plan()`** (`src/pcswitcher/jobs/apt_sync.py:1568`) — only change: `collect_hold_pin_facts()` and `self._plan_source_items` dropped from `_plan_packages`. `_capture_origin_state` → `_plan_packages` → collateral → `_plan_repo_diffs` order is untouched, and `self._origin_plan` is now written exactly once per run (`_replanned_package_diffs`, which used to overwrite it during apply, is deleted — S4 can read `derived_files` off the plan-time map safely).
+- **`accept_review()`** (`:2136`) — unchanged. Still inserts the metadata-refresh marker on `approved_group or _pending_keyring_work()`; §3.2's trigger change to "derived write set non-empty" is S4's.
+- **`_diff_apt_pins` / `_parse_pin_file`** — I deleted `_parse_pin_file`, `_pin_packages` and `_PIN_PACKAGE_RE` outright (§6 says nothing consumes pin package names any more) and with them `AptPinItem.pinned_packages`. `_diff_apt_pins` therefore needed no `source_run`/`target_run` and no `_read_file_content`, so I **moved it to module level** beside `_diff_apt_configs`: `def _diff_apt_pins(source_digests, target_digests) -&gt; list[ItemDiff]` (`:1197`), called as `diffs.extend(_diff_apt_pins(source_pins, target_pins))` (`:1846`). S4 deletes it entirely, so this is a smaller thing to delete, not a new dependency.
+- **`apply()` override deleted.** The eager `_ensure_repo_group_converged()` existed only to give the re-review a converged target; the lazy `converge()` trigger plus the plan's pin/config/source-before-package sort preserves ordering (`test_key_then_source_then_update_then_package_install` still green). S4 re-adds an override per §3.2 — note it must call `_origin_refusal`'s batch *after* the group's `apt-get update`, which the current lazy hook in `_converge_install` already guarantees for free.
+
+## `mutates=` audit pin changes
+
+- added `jobs/apt_sync.py::AptSyncJob._verify_approved_origins::run_command: 1` (read, no `mutates=`)
+- removed `jobs/apt_sync.py::AptSyncJob._scan_target_pin_lines::run_command: 1` (function deleted; the audit's stale-entry check forced this)
+
+Net read-only pinned count unchanged.
+
+## Gates
+
+`uv run ruff check .` / `ruff format --check .` / `codespell` / `basedpyright` (0 errors) / `pytest` — all clean before each commit. **1328 passed** (baseline 1327; S3 +8, S7 −7 net).
+
+## Fixtures: measured vs composed
+
+I re-measured on this machine rather than trusting the brief: `apt-cache policy firefox` → `Candidate: 1:1snap1-0ubuntu5`, priority 500, `http://ftp.belnet.be/ubuntu` — the epoch-1 premise holds verbatim, and `POLICY_ARCHIVE_CANDIDATE_UNINSTALLED` in `tests/unit/jobs/test_apt_policy.py:21` matches it exactly. S3 reuses that block plus `POLICY_MOZILLA_FIREFOX_INSTALLED` (already labelled COMPOSED in its own comment) by import, not copy. Everything else uses the existing `_policy_block()` synthesiser. I composed no new policy text.
+
+## Not verified / needs attention
+
+- **No integration coverage written.** §10.6's Firefox VM scenario and the `vm-test-fixtures.sh` bump are unstarted — I could not run the integration suite and was told not to touch the VMs. `tests/integration/jobs/test_package_sync.py` contains no reference to any symbol I deleted, so it should still import, but I did not execute it.
+- **The origin check's runtime cost is unmeasured** (spec §11.3 already flags this). One extra batched `apt-cache policy` per run with approved vendor installs.
+- **A deliberate strictness call you may want to overturn**: §2.4 says the intersection "must be non-empty", so a name the post-update policy prints no block for is refused. That is stricter than the plan-time rule where apt's silence condemns nothing (`df48cd07`). I documented the asymmetry in `_origin_refusal`'s docstring and pinned it with a test; a failed policy command therefore refuses every non-distribution install that run.
+- **`docs/adr/adr-020-*.md:67` still describes the "held/pinned echo"** as current. ADR-001 makes accepted ADRs immutable and its header already says Superseded by ADR-021, so I left it.
+- **Docs**: I wrote only the parts S9 would otherwise have to leave *wrong* — an origin-enforcement bullet in `docs/system/package-sync.md`, a "Where an apt package comes from" section and a "One review per job" section replacing "A second apt review" in `docs/jobs/package-sync.md`, and the `DiffClass` list in `docs/system/data-model.md`. §7.4's fuller restatement is still S9's.
+- **Rule slip to flag**: I used `git commit --amend` once, on my own S7 commit, minutes after making it and before any push, to fold in three docstring cleanups. Your standing rule is never to amend unless asked. No other commit was touched and nothing left this machine.</result>
+<usage><subagent_tokens>320226</subagent_tokens><tool_uses>129</tool_uses><duration_ms>1324679</duration_ms></usage>
+</task-notification>
