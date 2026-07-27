@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import Any, ClassVar, override
 
 from pcswitcher.jobs.base import SyncJob
-from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.models import FirstSyncScope, Host, JobSkipped, LogLevel, ProgressUpdate, ValidationError
 
 # Home-relative paths of each covered editor's global state.vscdb. Code and Antigravity
 # are confirmed on-disk; Cursor and VSCodium directory casing is [ASSUMED] from the
@@ -287,6 +287,9 @@ class VscodeStateSyncJob(SyncJob):
 
         Logging follows the project convention: per-file detail at FULL, only the
         start line and the final count at INFO.
+
+        Raises `JobSkipped` when the source has none of the handled DBs — the job is not
+        applicable, which is not the same as having synced.
         """
         # A DB's absolute path is identical on source and target: the invoking (real)
         # user has the same uid and home path on every machine, and pc-switcher does no
@@ -297,9 +300,10 @@ class VscodeStateSyncJob(SyncJob):
 
         present = [rel for rel in VSCODE_STATE_HANDLED_RELPATHS if (home / rel).exists()]
         if not present:
-            self._log(Host.SOURCE, LogLevel.INFO, f"{prefix}No VS Code state DBs found on source; nothing to sync")
+            # Not applicable is not synced: no state DB exists to merge, so the job did
+            # nothing rather than converging anything.
             self._report_progress(ProgressUpdate(percent=100))
-            return
+            raise JobSkipped(self.name, "no VS Code state DBs found on source")
 
         total = len(present)
         self._log(Host.SOURCE, LogLevel.INFO, f"{prefix}Syncing VS Code state DBs")

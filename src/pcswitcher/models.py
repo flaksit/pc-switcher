@@ -142,6 +142,25 @@ class SyncAbortedByUser(Exception):
         super().__init__(message)
 
 
+class JobSkipped(Exception):
+    """Raised by a job that did nothing, so the run records SKIPPED instead of SUCCESS.
+
+    "Nothing to do because the target already matches the source" is success; this is
+    for the other kind of nothing — nobody was present to decide, or the job had
+    nothing applicable to work on. The orchestrator catches it beside
+    PackageItemFailures: it records a SKIPPED JobResult, logs once at WARNING and does
+    NOT re-raise, so the remaining jobs still run and the session stays COMPLETED.
+
+    MUST only be raised BEFORE the job's first mutating command — raised later, the
+    partial state the job already wrote would go unreported.
+    """
+
+    def __init__(self, job_name: str, reason: str) -> None:
+        self.job_name = job_name
+        self.reason = reason
+        super().__init__(f"{job_name}: {reason}")
+
+
 class SyncLockedError(Exception):
     """Raised when a lock is already held — this or the target machine is busy.
 
@@ -257,7 +276,14 @@ class SessionStatus(StrEnum):
 
 
 class JobStatus(StrEnum):
-    """Result status for an individual job execution."""
+    """Result status for an individual job execution.
+
+    SKIPPED means the job did nothing because nobody could decide or nothing was
+    applicable — never because the target already matched the source, which is the
+    goal met and therefore SUCCESS. Jobs signal it by raising `JobSkipped`; the
+    orchestrator also records it directly for an enabled job whose class will not
+    resolve. `_summarize_job_outcomes` treats it as a non-failure.
+    """
 
     SUCCESS = "success"
     SKIPPED = "skipped"

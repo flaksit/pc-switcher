@@ -33,7 +33,7 @@ from pcswitcher.jobs.vscode_state_sync import (
     target_sql_command,
     vscode_state_exclude_paths,
 )
-from pcswitcher.models import CommandResult
+from pcswitcher.models import CommandResult, JobSkipped
 
 # ---------------------------------------------------------------------------
 # DB helpers (real stdlib sqlite3 against the locked ItemTable schema)
@@ -468,14 +468,17 @@ class TestExecuteOrchestration:
         # Source live DB is unchanged (source-strip never ran against it).
         assert set(_read(source_db)) == {"secret://a", "keep"}
 
-    async def test_no_editors_present_is_a_noop(self, tmp_path: Path) -> None:
-        """A home with no editor DBs performs no transfers."""
+    async def test_a_source_with_no_editor_state_dbs_is_skipped(self, tmp_path: Path) -> None:
+        """Not applicable is not synced: with no DB to merge the job transfers nothing,
+        so the run must not record it as a successful state sync.
+        """
         home = tmp_path / "home" / "alice"
         home.mkdir(parents=True)
         ctx = _make_context(target_db_present=True)
         job = VscodeStateSyncJob(ctx)
-        with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=home):
+        with patch("pcswitcher.jobs.vscode_state_sync.Path.home", return_value=home), pytest.raises(JobSkipped) as exc:
             await job.execute()
+        assert exc.value.job_name == "vscode_state_sync"
         ctx.target.send_file.assert_not_awaited()  # type: ignore[union-attr]
 
 

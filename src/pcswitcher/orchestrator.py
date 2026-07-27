@@ -50,6 +50,7 @@ from pcswitcher.models import (
     FirstSyncScope,
     Host,
     JobResult,
+    JobSkipped,
     JobStatus,
     SessionStatus,
     SnapshotPhase,
@@ -458,7 +459,7 @@ class Orchestrator:
 
             # SyncStep 5: Discover and validate jobs
             self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator", "host": "source"})
-            jobs = await self._discover_and_validate_jobs()
+            jobs, unresolved_job_results = await self._discover_and_validate_jobs()
             self._ui.set_current_step(SyncStep.DISCOVER_JOBS, "Discover jobs")
 
             # SyncStep 6: Disk-space preflight check
@@ -488,7 +489,7 @@ class Orchestrator:
             # Pause snapd auto-refresh on both hosts across the whole RUN_JOBS window
             # (snap convergence → folder_sync); released in _cleanup (decision 4).
             await self._hold_snap_autorefresh()
-            job_results = await self._execute_jobs(jobs)
+            job_results = await self._execute_jobs(jobs, unresolved_job_results)
             session.job_results = job_results
 
             # SyncStep 11: Post-sync snapshots
@@ -948,19 +949,24 @@ class Orchestrator:
                 raise RuntimeError(f"Failed to update sync history on target: {result.stderr}")
             self._logger.debug("Updated sync history: role=target", extra={"job": "orchestrator", "host": "target"})
 
-    async def _discover_and_validate_jobs(self) -> list[Job]:
+    async def _discover_and_validate_jobs(self) -> tuple[list[Job], list[JobResult]]:
         """Discover enabled jobs from config and validate their configuration.
 
         Dynamically imports job modules based on enabled jobs in config.
         Convention: job_name == module_name (e.g., "dummy_success" → pcswitcher.jobs.dummy_success)
 
         Returns:
-            List of job instances ready for execution
+            The job instances ready for execution, and a SKIPPED `JobResult` for every
+            enabled job name that resolved to no class. Those never become job instances,
+            so there is nothing to raise `JobSkipped` from; the result is built here
+            instead and seeded into the run's results, rather than the job the user
+            enabled leaving no record at all.
 
         Raises:
             RuntimeError: If any job config validation fails
         """
         jobs: list[Job] = []
+        unresolved: list[JobResult] = []
         config_errors: list[ConfigError] = []
 
         # Log entire config at DEBUG level
@@ -995,6 +1001,17 @@ class Orchestrator:
 
             job_class = self._resolve_sync_job_class(job_name)
             if job_class is None:
+                # _resolve_sync_job_class already logged why, at WARNING.
+                now = datetime.now(UTC)
+                unresolved.append(
+                    JobResult(
+                        job_name=job_name,
+                        status=JobStatus.SKIPPED,
+                        started_at=now,
+                        ended_at=now,
+                        error_message=f"No SyncJob class resolved for enabled job {job_name}",
+                    )
+                )
                 continue
 
             # Validate job config (Phase 2)
@@ -1024,7 +1041,7 @@ class Orchestrator:
             error_msgs = [f"  - {e.job} ({e.host.value}): {e.message}" for e in validation_errors]
             raise RuntimeError("System state validation failed:\n" + "\n".join(error_msgs))
 
-        return jobs
+        return jobs, unresolved
 
     def _check_package_jobs_precede_folder_sync(self) -> list[ConfigError]:
         """D-17: apt_sync/snap_sync/flatpak_sync must run before folder_sync — apps are
@@ -1154,7 +1171,7 @@ class Orchestrator:
         # Execute
         await snapshot_job.execute()
 
-    async def _execute_jobs(self, jobs: list[Job]) -> list[JobResult]:
+    async def _execute_jobs(self, jobs: list[Job], seed_results: list[JobResult] | None = None) -> list[JobResult]:
         """Execute sync jobs sequentially with background disk monitoring.
 
         Each package job reviews its own diffs inside its own ``execute()`` (D-24): it
@@ -1166,11 +1183,13 @@ class Orchestrator:
 
         Args:
             jobs: List of validated jobs to execute
+            seed_results: Results decided before the loop — the SKIPPED entries discovery
+                produced for enabled job names that resolved to no class.
 
         Returns:
-            List of JobResult for each executed job
+            List of JobResult for each executed job, `seed_results` first
         """
-        results: list[JobResult] = []
+        results: list[JobResult] = list(seed_results) if seed_results else []
 
         try:
             await self._run_jobs_in_task_group(jobs, results)
@@ -1249,6 +1268,27 @@ class Orchestrator:
                         # records an ABORTED session, rather than a spurious
                         # FAILED job result plus a duplicate CRITICAL log.
                         raise
+                    except JobSkipped as e:
+                        # The job did nothing and said so before touching anything
+                        # (see JobSkipped). Record the honest status and carry on with
+                        # the next job — deliberately NOT re-raised, like the item-failure
+                        # arm below, because a skip is not a failure of the run.
+                        ended_at = datetime.now(UTC)
+                        results.append(
+                            JobResult(
+                                job_name=job.name,
+                                status=JobStatus.SKIPPED,
+                                started_at=started_at,
+                                ended_at=ended_at,
+                                error_message=e.reason,
+                            )
+                        )
+                        self._logger.warning(
+                            "Job %s skipped: %s",
+                            job.name,
+                            e.reason,
+                            extra={"job": "orchestrator", "host": "source"},
+                        )
                     except PackageItemFailures as e:
                         # The user approved changes across several package managers in
                         # ONE batched review (D-24); letting one manager's failed items

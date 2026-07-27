@@ -41,7 +41,7 @@ from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
-from pcswitcher.models import CommandResult, Host, LogLevel, ProgressUpdate
+from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel, ProgressUpdate
 
 __all__ = [
     "ConvergeItemFailed",
@@ -485,6 +485,13 @@ class PackageSyncJob(SyncJob):
 
         A `plan()` failure propagates unchanged, so the orchestrator's per-job exception
         handling attributes it to this job's own `JobResult`.
+
+        A non-interactive run with a non-empty plan raises `JobSkipped`: D-26 forces every
+        item to SKIP_ONCE with nobody present to decide, so continuing would converge
+        nothing and report SUCCESS. It is raised before `after_review()`, so
+        `manual_installs_sync` does not push its registry either, and before any mutating
+        command, as `JobSkipped` requires. An EMPTY plan on the same path stays SUCCESS —
+        the target already matches the source, which is the goal met.
         """
         assert self.context.reviewer is not None, (
             f"{self.manager_id} sync has no reviewer; the orchestrator must inject one "
@@ -492,6 +499,11 @@ class PackageSyncJob(SyncJob):
         )
         plan = await self.plan()
         outcome = await self.context.reviewer.review(plan.groups)
+        if plan.groups and not outcome.was_interactive:
+            raise JobSkipped(
+                self.name,
+                f"non-interactive run left every {self.manager_id} review item undecided",
+            )
         self.accept_review(plan, outcome)
         await self.after_review()
         await self.apply()

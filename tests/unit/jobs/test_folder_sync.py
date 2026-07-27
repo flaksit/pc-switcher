@@ -20,7 +20,7 @@ import pytest
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.folder_sync import PASS_COPY, PASS_DELETE, PASS_MIRROR, FolderEntry, FolderSyncJob
 from pcswitcher.jobs.vscode_state_sync import VSCODE_STATE_DB_RELPATHS
-from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ProgressUpdate
+from pcswitcher.models import CommandResult, FirstSyncScope, Host, JobSkipped, LogLevel, ProgressUpdate
 
 # VS Code state-DB exclude relpaths (main + .backup) as folder_sync emits them, derived the
 # same way vscode_state_sync's vscode_state_exclude_paths() does — single source of truth.
@@ -152,6 +152,19 @@ class TestActiveFolderSelection:
         ctx = make_context(config={"folders": [{"path": "/home", "enabled": True}]})
         job = FolderSyncJob(ctx)
         assert len(job._active_folders()) == 1
+
+    async def test_a_job_with_no_active_folders_is_skipped(self) -> None:
+        """The schema's minItems: 1 forces an entry, not an ENABLED entry, so every folder
+        can be disabled. Mirroring nothing is not a successful mirror.
+        """
+        ctx = make_context(config={"folders": [{"path": "/home", "enabled": False}]})
+        job = FolderSyncJob(ctx)
+
+        with pytest.raises(JobSkipped) as exc_info:
+            await job.execute()
+
+        assert exc_info.value.job_name == "folder_sync"
+        ctx.source.start_process.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class TestValidateConfig:

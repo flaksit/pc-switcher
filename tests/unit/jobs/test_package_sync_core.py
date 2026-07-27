@@ -11,16 +11,13 @@ reasons that have nothing to do with the shared pipeline.
 
 from __future__ import annotations
 
-import io
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from rich.console import Console
 
-from pcswitcher.config import Configuration
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
@@ -33,13 +30,8 @@ from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivat
     PackagePlan,
     PackageSyncJob,
 )
-from pcswitcher.models import CommandResult, JobStatus, LogLevel, ValidationError
+from pcswitcher.models import CommandResult, JobSkipped, JobStatus, LogLevel, ValidationError
 from pcswitcher.orchestrator import Orchestrator
-
-DF_OUTPUT = (
-    "Filesystem     1B-blocks       Used  Available Use% Mounted on\n"
-    "/dev/sda1  1000000000000 500000000000 500000000000  50% /\n"
-)
 
 
 def make_context(
@@ -558,8 +550,8 @@ class _OrderRecordingJob(FakeSyncJob):
     test can assert `apply` is never reached before `review` returns.
     """
 
-    def __init__(self, context: JobContext, events: list[str]) -> None:
-        super().__init__(context)
+    def __init__(self, context: JobContext, events: list[str], *, source_items: Sequence[FakeItem] = ()) -> None:
+        super().__init__(context, source_items=source_items)
         self._events = events
 
     async def plan(self) -> PackagePlan:
@@ -582,8 +574,14 @@ class _OrderRecordingJob(FakeSyncJob):
 class _RecordingReviewer(FakeReviewer):
     """`FakeReviewer` that also appends `review` to a shared event list, to pin call order."""
 
-    def __init__(self, events: list[str], decisions: dict[str, Decision] | None = None) -> None:
-        super().__init__(decisions)
+    def __init__(
+        self,
+        events: list[str],
+        decisions: dict[str, Decision] | None = None,
+        *,
+        was_interactive: bool = True,
+    ) -> None:
+        super().__init__(decisions, was_interactive=was_interactive)
         self._events = events
 
     async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
@@ -659,6 +657,36 @@ class TestExecuteSelfContained:
         # The review is never reached when planning fails.
         assert reviewer.call_count == 0
 
+    @pytest.mark.asyncio
+    async def test_a_non_interactive_package_review_skips_the_job_instead_of_applying_nothing(self) -> None:
+        """D-26 forces every item to SKIP_ONCE without a TTY, so the job converges nothing;
+        reporting SUCCESS for that made every headless run look like four successful syncs.
+        """
+        events: list[str] = []
+        reviewer = _RecordingReviewer(events, was_interactive=False)
+        job = _OrderRecordingJob(make_context(reviewer=reviewer), events, source_items=[FakeItem("pkg-a")])
+
+        with pytest.raises(JobSkipped) as exc_info:
+            await job.execute()
+
+        assert exc_info.value.job_name == "fake_sync"
+        # Raised before after_review, so manual_installs_sync would not push its registry.
+        assert events == ["plan", "review"]
+        assert job.converge_calls == []
+
+    @pytest.mark.asyncio
+    async def test_an_empty_plan_is_still_a_success(self) -> None:
+        """Same non-interactive path, nothing to decide: the target already matches the
+        source, which is the goal met — not a skip.
+        """
+        events: list[str] = []
+        reviewer = _RecordingReviewer(events, was_interactive=False)
+        job = _OrderRecordingJob(make_context(reviewer=reviewer), events)
+
+        await job.execute()
+
+        assert events == ["plan", "review", "accept_review", "after_review", "apply"]
+
 
 class TestJobContextEnabledSyncJobs:
     """`JobContext.enabled_sync_jobs` is optional with a `None` default (a sibling of the
@@ -720,38 +748,6 @@ class _StubOtherFailureJob(SyncJob):
         raise RuntimeError("unrelated job crashed")
 
 
-def _make_wired_orchestrator() -> Orchestrator:
-    """A narrowly-constructed Orchestrator with enough wiring for `_execute_jobs` /
-    `_run_jobs_in_task_group` to run: mocked local/remote executors returning valid `df`
-    output for the background disk-space monitors, a non-interactive Console, and a
-    silenced logger/UI.
-    """
-    config = MagicMock(spec=Configuration)
-    config.logging = MagicMock()
-    config.logging.file = 10
-    config.logging.tui = 20
-    config.logging.external = 30
-    config.sync_jobs = {}
-    config.job_configs = {}
-    config.disk = MagicMock()
-    config.disk.preflight_minimum = "20%"
-    config.disk.runtime_minimum = "15%"
-    config.disk.warning_threshold = "25%"
-    config.disk.check_interval = 30
-
-    orchestrator = Orchestrator(target="target-host", config=config)
-    orchestrator._console = Console(file=io.StringIO())  # pyright: ignore[reportPrivateUsage]
-    orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
-    orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
-    local_executor = MagicMock()
-    local_executor.run_command = AsyncMock(return_value=CommandResult(0, DF_OUTPUT, ""))
-    remote_executor = MagicMock()
-    remote_executor.run_command = AsyncMock(return_value=CommandResult(0, DF_OUTPUT, ""))
-    orchestrator._local_executor = local_executor  # pyright: ignore[reportPrivateUsage]
-    orchestrator._remote_executor = remote_executor  # pyright: ignore[reportPrivateUsage]
-    return orchestrator
-
-
 class TestOrchestratorPackageItemFailuresContinuation:
     """PackageItemFailures records a FAILED JobResult but does not abort the run (D-27).
 
@@ -760,8 +756,8 @@ class TestOrchestratorPackageItemFailuresContinuation:
     """
 
     @pytest.mark.asyncio
-    async def test_failing_package_job_does_not_cancel_remaining_jobs(self) -> None:
-        orchestrator = _make_wired_orchestrator()
+    async def test_failing_package_job_does_not_cancel_remaining_jobs(self, wired_orchestrator: Orchestrator) -> None:
+        orchestrator = wired_orchestrator
         failing_job = _StubFailingPackageJob(make_context())
         success_job = _StubSuccessJob(make_context())
 
@@ -774,11 +770,11 @@ class TestOrchestratorPackageItemFailuresContinuation:
         assert results[1].status == JobStatus.SUCCESS
 
     @pytest.mark.asyncio
-    async def test_other_exception_types_still_abort_the_run(self) -> None:
+    async def test_other_exception_types_still_abort_the_run(self, wired_orchestrator: Orchestrator) -> None:
         """Regression guard: only PackageItemFailures gets the non-aborting branch —
         every other exception must still stop the remaining jobs from running.
         """
-        orchestrator = _make_wired_orchestrator()
+        orchestrator = wired_orchestrator
         failing_job = _StubOtherFailureJob(make_context())
         never_run_job = _StubSuccessJob(make_context())
 

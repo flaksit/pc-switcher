@@ -27,7 +27,15 @@ from pcswitcher.jobs.flatpak_sync import flatpak_sync_exclude_paths
 from pcswitcher.jobs.packages.state import DECISION_FILE_GLOB_RELPATH
 from pcswitcher.jobs.snap_sync import snap_sync_exclude_paths
 from pcswitcher.jobs.vscode_state_sync import vscode_state_exclude_paths
-from pcswitcher.models import ConfigError, FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.models import (
+    ConfigError,
+    FirstSyncScope,
+    Host,
+    JobSkipped,
+    LogLevel,
+    ProgressUpdate,
+    ValidationError,
+)
 from pcswitcher.sudoers import passwordless_sudo_hint
 
 # Matches rsync --info=progress2 output, e.g.:
@@ -870,8 +878,15 @@ class FolderSyncJob(SyncJob):
            Named `delete` when a copy pass preceded it and `mirror` when it ran alone
            and therefore did both halves of the job.
         3. On non-zero exit from either pass, logs CRITICAL and raises RuntimeError.
+
+        Raises `JobSkipped` when no folder is enabled, so the run does not report a
+        successful mirror of nothing.
         """
         folders = self._active_folders()
+        if not folders:
+            # The schema's minItems: 1 only forces one entry, not one ENABLED entry, so
+            # every folder can be disabled — nothing is mirrored and nothing converged.
+            raise JobSkipped(self.name, "no enabled folders configured")
 
         for folder in folders:
             prefix = "[dry-run] " if self.context.dry_run else ""
