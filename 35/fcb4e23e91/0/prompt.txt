@@ -1,0 +1,160 @@
+Do not push and run CI yet!
+
+---
+
+<task-notification>
+<task-id>b91vapll3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/b0a03faf-51bf-47b9-b60a-83a2131f5934/tasks/b91vapll3.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI with real Flathub fixture" completed (exit code -1)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abdc097ec99612e90</task-id>
+<tool-use-id>toolu_01DKVkrXdVSi7d6dyX3P8KeM</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/b0a03faf-51bf-47b9-b60a-83a2131f5934/tasks/abdc097ec99612e90.output</output-file>
+<status>completed</status>
+<summary>Agent "Investigate snapd refresh.hold no-op" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdict: (b) — the hold IS applied; the read-back is what's broken
+
+`snap get system refresh.hold` requires admin auth. Run as an unprivileged user it does not return "empty" — it **fails with `access denied (try with sudo)`** and prints nothing to stdout. `_capture_snap_hold` therefore returns `None` on every run, on every machine, unconditionally.
+
+Environment: pc2, Ubuntu 24.04, **snapd/snap 2.76.1**.
+
+### Evidence
+
+Baseline (no hold set), as `testuser`:
+
+```
+$ snap get system refresh.hold          rc=1  stdout=[]  stderr=[error: access denied (try with sudo)]
+$ sudo snap get system refresh.hold     rc=0  stdout=[]
+  state.json core.config.refresh = {"hold": ""}
+```
+
+The exact orchestrator command, then read-back three ways:
+
+```
+$ sudo snap set system refresh.hold="$(date -u -d '+6 hours' +%Y-%m-%dT%H:%M:%SZ)"   rc=0
+$ snap get system refresh.hold          rc=1  stdout=[]  stderr=[error: access denied (try with sudo)]
+$ sudo snap get system refresh.hold     rc=0  stdout=[2026-07-26T15:50:19Z]
+  state.json core.config.refresh = {"hold": "2026-07-26T15:50:19Z"}
+$ snap refresh --time                   (no sudo)
+  timer: 00:00~24:00/4
+  last: today at 11:47 CEST
+  hold: today at 17:50 CEST
+  next: today at 13:14 CEST (but held)
+```
+
+snapd authoritatively reports the hold in force (`hold:` line, `next: ... (but held)`), and it persists in `/var/lib/snapd/state.json`. **The pause works.** The per-snap `hello` hold from the CI run is irrelevant — my baseline had no per-snap hold and the read failed identically.
+
+### Consequence in production (the real bug)
+
+`orchestrator.py:1317` (`_capture_snap_hold`) always returns `None` → `_hold_snap_autorefresh` records "no prior hold" on both hosts → `_restore_snap_hold` takes the `prior is None` branch and runs `sudo snap set system refresh.hold=""` on **both** machines in `_cleanup`. Any hold the user set themselves (`snap refresh --hold`, an admin-set `refresh.hold`, incl. `forever`) is silently destroyed by every sync. Nothing warns: the `snap set` exits 0, and the failing `snap get` is swallowed by `result.success and value`.
+
+Same defect, informational only, at `src/pcswitcher/jobs/snap_sync.py:667-670` — validate() logs `snap refresh.hold: (none)` for both hosts on every run regardless of actual state.
+
+The CI failure is the same root cause in the test helper: `tests/integration/jobs/test_package_sync.py:601-607` `_capture_system_refresh_hold` also omits sudo, so `assert engaged is not None` can never pass. Its `_restore_system_refresh_hold` mirrors the destructive `refresh.hold=""` write.
+
+### Documented rule / mechanism (sources)
+
+- Access control: snapd `daemon/api_snap_conf.go:39-45` — `/v2/snaps/{name}/conf` has `ReadAccess: authenticatedAccess{Polkit: polkitActionManageConfiguration}`. The shipped policy (`/usr/share/polkit-1/actions/io.snapcraft.snapd.policy` on pc2, identical to snapd `data/polkit/io.snapcraft.snapd.policy`) sets `io.snapcraft.snapd.manage-configuration` to `allow_any=auth_admin`, `allow_inactive=auth_admin`, `allow_active=auth_admin_keep`. **Reading** snap config is admin-gated in every case — so this is not an SSH artifact: on a real desktop seat it would raise an interactive polkit prompt a non-interactive sync cannot satisfy.
+- `system` is an alias for `core`: verified — `sudo snap set core refresh.hold=&lt;ts&gt;` is read back identically by `sudo snap get system refresh.hold`. No historic distinction remains at 2.76.1.
+- snapd only clears `refresh.hold` when it has **expired** (`overlord/snapstate/autorefresh.go`: `clearRefreshHold()` called from `Ensure()` in the "expired hold case" branch). It does not clear or reject an in-future hold.
+- Format: `configcore/refresh.go:81-89` — value must be RFC3339 or the literal `forever`, else `snap set` errors out. The orchestrator's `+%Y-%m-%dT%H:%M:%SZ` is accepted.
+- No cap at set time: `+200 days` was stored and reported verbatim (`hold: 2027-02-11`). `maxPostponement = 95 * 24h` (`autorefresh.go:53`) constrains gating-snap holds (`autorefresh_gating.go:474-475` explicitly exempts `holdingSnap == "system"`), not the general config option. A 6-hour hold is nowhere near any limit.
+
+### Read-back semantics with sudo (all confirmed)
+
+| state | `sudo snap get system refresh.hold` |
+|---|---|
+| timestamp set | rc=0, `2026-07-26T15:50:19Z` |
+| `forever` | rc=0, `forever` |
+| set to `""` (what restore writes) | rc=0, empty stdout |
+| key removed (`refresh.hold!`) | rc=1, `error: snap "core" has no "refresh.hold" configuration option` |
+
+`snap refresh --time` works **unprivileged** and reveals the hold (`hold: today at 17:50 CEST` / `hold: forever` / `hold: 2027-02-11`), but the value is localized human text, not RFC3339 — usable as a human-readable log line, not as a capture/restore value.
+
+### Correct sequence on this snapd (not implemented, as instructed)
+
+- Capture: `sudo snap get system refresh.hold` — existing `value if result.success and value else None` logic is then correct for all four states above.
+- Apply: unchanged, `sudo snap set system refresh.hold="$(date -u -d '+6 hours' +%Y-%m-%dT%H:%M:%SZ)"` — already works.
+- Restore: unchanged shape, but it only becomes safe once capture is privileged.
+- Unprivileged verification (e.g. a validate-time log): `snap refresh --time`.
+
+Worth noting separately: the same silent-swallow pattern means `_apply_snap_hold`'s WARNING would not have caught this class of failure either; a post-set verification would.
+
+### VM / lock state
+
+pc2 restored exactly as found: `core.config.refresh = {"hold": ""}`, `snap refresh --time` shows no hold, `snap list` unchanged (hello/hello-world Notes `-`), no per-snap holds set by me. Lock acquired as `claude-snaphold-probe-9f3c` and released — `lock.sh status` reports **Lock not held**. No repo files changed.
+
+Sources: [snapd daemon/api_snap_conf.go](https://github.com/canonical/snapd/blob/master/daemon/api_snap_conf.go), [snapd overlord/snapstate/autorefresh.go](https://github.com/canonical/snapd/blob/master/overlord/snapstate/autorefresh.go), [snapd data/polkit/io.snapcraft.snapd.policy](https://github.com/canonical/snapd/blob/master/data/polkit/io.snapcraft.snapd.policy), [snapd overlord/configstate/configcore/refresh.go](https://github.com/canonical/snapd/blob/master/overlord/configstate/configcore/refresh.go)</result>
+<usage><subagent_tokens>93773</subagent_tokens><tool_uses>40</tool_uses><duration_ms>374681</duration_ms></usage>
+</task-notification>
+
+---
+
+DO NOT PUSH BEFORE I SAY SO
+
+---
+
+<task-notification>
+<task-id>a32dcb8e8ae3a7c15</task-id>
+<tool-use-id>toolu_01QJA1XWnkUACJQG9Raok7oV</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/b0a03faf-51bf-47b9-b60a-83a2131f5934/tasks/a32dcb8e8ae3a7c15.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix privileged refresh.hold capture" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done — one commit, `5e6a9a4`, on `gsd/phase-02-package-management-sync`.
+
+## What changed
+
+`/home/janfr/dev/pc-switcher/src/pcswitcher/orchestrator.py`
+- `_capture_snap_hold` now runs `sudo snap get system refresh.hold` and returns `tuple[str | None, bool]` — `(value, readable)`. Still a read: no `mutates=` (the audit passes; the reads flow through `_run_snap_hold_command`, whose single `run_command` site already passes `mutates=`, so no new call site appears in `test_mutates_audit.py`).
+- New `_SNAP_HOLD_UNSET_MARKER = 'has no "refresh.hold"'` separates "never set" (rc=1 + that marker → `readable=True`) from "read failed" (any other rc≠0 → `readable=False`). rc=0 empty → `(None, True)`; rc=0 value → `(value, True)`.
+- New per-host state `_snap_hold_readable_source/target`, defaulting `False` so an unread host is never cleared.
+- New `_verify_snap_hold(host, prior)`, called from `_apply_snap_hold` only after a successful `snap set`: reads the hold back and WARNs if it is unreadable, unset, or unchanged from `prior`. Wrapped in `try/except Exception` so the diagnostic can never end a run; both warnings point the reader at `snap refresh --time`.
+- `_apply_snap_hold` takes `prior` so the read-back has something to compare against.
+
+`/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/snap_sync.py` — both informational `validate()` hold reads now use `sudo`; module docstring updated (the sudo is about snapd's read gate, not mutation).
+
+`/home/janfr/dev/pc-switcher/tests/unit/orchestrator/test_snap_autorefresh_hold.py` — +3 classes, 23 tests total, all passing: `TestCaptureIsPrivileged` (every `snap get` starts with `sudo`; a denied read ≠ an unset option), `TestUserHoldIsNeverDestroyed` (parametrized timestamp/`forever` end-state round trip against a new `make_snapd` fake that stores what `snap set` writes; only a genuinely-absent hold gets cleared; an unreadable one is left alone), `TestApplyIsVerified` (silent on success, one warning per host when the hold did not stick, warning on a denied read-back, and a raising read-back leaves the sync running).
+
+`/home/janfr/dev/pc-switcher/tests/integration/jobs/test_package_sync.py` — `_capture_system_refresh_hold` now uses `sudo` (this is what should un-break `TestSnapHoldCaptureTiming::test_system_refresh_hold_does_not_mask_a_per_snap_held_note`; that test itself untouched). I also replaced the four raw unprivileged reads in `test_snap_revision_converges_without_hold` (lines ~1303/1338 pre-edit) with the fixed helper and compare captured values rather than raw stdout — that assertion was previously vacuous for the same reason (both sides read empty because both were denied). Post-fix it holds: no hold before → `None`; after the run the option is set-empty → `None`.
+
+Docs: `docs/system/core.md` (snap_sync `validate()` bullet: sudo on both ends, privileged probe) and `docs/jobs/package-sync.md` (capture/restore promise now states a user hold survives and that an unreadable prior value is left alone; the sudo bullet mentions `snap get`). ADR-020 left untouched — nothing in it became false (it promises capture-first + exact restore, both still true), and ADR-001 says ADRs are immutable.
+
+## `_restore_snap_hold` guard: implemented
+
+A failed capture is no longer treated as "there was no hold" — the clear is skipped and a WARNING is logged. Rationale, recorded in the docstring: the two error directions are not comparable. Clearing an option whose pre-sync value is unknown permanently destroys a hold the user may have set (`forever` has no expiry to fall back on); skipping the clear leaves at worst the timed 6-hour hold this run set, which self-expires — the same crash backstop the mechanism already relies on. Also note the correlated case: if the capture failed for lack of privilege, the apply almost certainly failed too, so there is usually nothing of ours to clear anyway.
+
+## Other unprivileged snap-config reads
+
+Grepped `snap get` / `"snap ...` across `src/`, `tests/`, `docs/`, `*.sh`. Every remaining occurrence is prose or a mock pattern string. The only executed snap reads left unprivileged are `snap list --all` and `snap version`, which are not config reads and are not polkit-gated. No other manager in the codebase reads config through an admin-gated verb (apt/flatpak reads already run under sudo where needed).
+
+## Verification
+
+`uv run ruff format --check . &amp;&amp; uv run ruff check . &amp;&amp; uv run codespell &amp;&amp; uv run basedpyright` clean (0 errors/warnings/notes); `uv run pytest tests/unit -q` → 1143 passed; `uv run pytest tests/integration --collect-only -q -m ""` → 80 tests collected. No snap/flatpak commands were run on this machine and no VM or lock was touched.</result>
+<usage><subagent_tokens>121507</subagent_tokens><tool_uses>51</tool_uses><duration_ms>538950</duration_ms></usage>
+</task-notification>
+
+---
+
+push and follow-up ci
+
+---
+
+<task-notification>
+<task-id>bxzq761yv</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/b0a03faf-51bf-47b9-b60a-83a2131f5934/tasks/bxzq761yv.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI after snap hold fix" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Solve C26/N7. Easy to check if machine-specific apt packages need repo/key, no? Subagent
