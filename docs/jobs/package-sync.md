@@ -23,7 +23,7 @@ All four ship **disabled**: enabling any of them lets pc-switcher change install
 - **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), plus the repository configuration that governs where packages come from: sources under `/etc/apt/sources.list.d`, pins (`/etc/apt/preferences.d`) and apt config (`/etc/apt/apt.conf.d`). Signing keys travel too, but you are never asked about them — see [Signing keys](#signing-keys).
 - **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
 - **`flatpak_sync`** — installed flatpak refs and their remotes, per user/system installation scope.
-- **`manual_installs_sync`** — everything no package manager can reproduce: apt packages with no repository candidate, plus unowned files under `/usr/local` and `/opt`. It also owns the [install-snippet registry](#install-snippets).
+- **`manual_installs_sync`** — everything no package manager can reproduce: apt packages installed from no configured repository (a `.deb` you installed by hand), plus unowned files under `/usr/local` and `/opt`. It also owns the [install-snippet registry](#install-snippets).
 
 ## Job ordering is enforced
 
@@ -45,7 +45,7 @@ Every item that would actually change something — an install, a removal, or a 
 
 You give those answers with two lists per group, not with a question per item. The first list is the apply list: ticked means apply. Whatever you leave unticked is then offered once more — "never offer again on this machine?" — and ticking it there is skip-always. Ticking nothing on that second list (just pressing Enter) is skip-this-run, so the items come back next sync. If you ticked everything for apply, the second list is not shown at all. Ctrl-C or EOF at either list aborts the whole sync.
 
-Items that only **report** a condition are not offered skip-always: a version difference between source and target, an apt package with no repository candidate, and the pin echo on a held or pinned package. These change nothing on the target, and neither machine "holds" the item in the way a machine-specific mark requires — marking a version difference would silently stop the package syncing altogether rather than stop reporting the drift. Resolve them by fixing the underlying condition (align the versions, add the repository, remove the pin).
+Items that only **report** a condition are not offered skip-always: a version difference between source and target, an apt package the target's own repositories offer no candidate for, and the pin echo on a held or pinned package. These change nothing on the target, and neither machine "holds" the item in the way a machine-specific mark requires — marking a version difference would silently stop the package syncing altogether rather than stop reporting the drift. Resolve them by fixing the underlying condition (align the versions, add the repository, remove the pin).
 
 ### A second apt review, when this run changed `/etc/apt`
 

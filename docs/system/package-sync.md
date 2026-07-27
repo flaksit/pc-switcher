@@ -60,7 +60,7 @@ Capture and every decision (what to install, what to mark machine-specific, how 
 
 ## `apt_sync`
 
-- **Covers**: the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target), plus the repository state that governs where packages come from: sources, pins and apt config under `/etc/apt`. Signing keys are kept correct alongside the repositories that reference them, but are not items and are never reviewed. Also detects unreproducible items: apt packages with no repository candidate, and unowned installs under `/usr/local`/`/opt`.
+- **Covers**: the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target), plus the repository state that governs where packages come from: sources, pins and apt config under `/etc/apt`. Signing keys are kept correct alongside the repositories that reference them, but are not items and are never reviewed. Also detects unreproducible items: apt packages installed from no configured repository, and unowned installs under `/usr/local`/`/opt`.
 - **Item classes**: `APT_PACKAGE`, `APT_SOURCE`, `APT_PIN`, `APT_CONFIG`, `APT_HOLD`, plus `UNREPRODUCIBLE`.
 - **Preconditions**: `apt-mark` on both machines; passwordless sudo on the source (reading `/etc/apt` state needs root even though the source is read-only) and on the target; a free dpkg frontend lock on the target — a lock held by e.g. `unattended-upgrades` is reported rather than raced against.
 - **Converges by**: `apt-get install`/`apt-get remove` per approved package (never `purge`), each preceded by a transaction simulation that refuses the real command if it would touch an unapproved package; file writes for the `/etc/apt` group, which is transactional — a failed metadata refresh restores every file the group touched.
@@ -84,7 +84,7 @@ Capture and every decision (what to install, what to mark machine-specific, how 
 
 ## `manual_installs_sync`
 
-- **Covers**: everything no package manager can reproduce — apt packages with no repository candidate and unowned installs under `/usr/local`/`/opt` — plus the install-snippet registry. It carries its own `sync_jobs` enable flag, so disabling `apt_sync` never silently disables manual-install detection.
+- **Covers**: everything no package manager can reproduce — apt packages whose installed version comes from no configured repository (only dpkg's own status file accounts for them) and unowned installs under `/usr/local`/`/opt` — plus the install-snippet registry. It carries its own `sync_jobs` enable flag, so disabling `apt_sync` never silently disables manual-install detection.
 - **Item classes**: `UNREPRODUCIBLE`.
 - **Resolution**: an unreproducible item ends a run resolved by a snippet, a machine-specific mark, or a deliberate skip-once — skip-once is a valid resolution, not an unresolved state. A non-interactive run records nothing and does not fail on undecided items alone (D-21/D-26).
 - **Snippet transport**: after its own review, the job pushes the registry to the target itself, so a snippet authored on the fly during that review reaches the target and is replayed in the same run. The registry never travels via `config_sync` (which runs before any review) or `folder_sync` (a user-controlled job).

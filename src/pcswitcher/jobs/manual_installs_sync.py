@@ -3,9 +3,9 @@ can reproduce (D-15, D-18, D-19, D-20, D-21).
 
 Two detectors, both run on the SOURCE:
 
-- apt packages in the source's `apt-mark showmanual` set whose SOURCE `apt-cache policy`
-  reports no candidate at all — installed via `dpkg -i` of a bare `.deb`, never
-  registered with any configured repository.
+- apt packages in the source's `apt-mark showmanual` set whose INSTALLED version comes
+  from no repository the source has configured — installed via `dpkg -i` of a bare
+  `.deb`, so only dpkg's own status file accounts for them.
 - paths directly under `/usr/local` and `/opt` (plus the immediate children of
   `/usr/local/bin` and `/usr/local/lib`) that no dpkg package owns — software an install
   script dropped there, bypassing apt entirely.
@@ -15,7 +15,8 @@ own enable flag, because half of what they cover is not apt's business at all (u
 files under `/usr/local`/`/opt`), and folding it into `apt_sync` meant disabling apt
 silently disabled manual-install detection with nothing telling the user. This job does
 its OWN `dpkg`/`apt-cache` queries rather than sharing `apt_sync`'s, so ownership stays
-clean — it never imports `apt_sync` (D-18).
+clean — it never imports `apt_sync` (D-18). The `apt-cache policy` PARSING both jobs need
+lives in `packages/apt_policy.py`, a third module neither job owns.
 
 An unreproducible item ends an interactive run resolved in one of three ways (D-21,
 decision 10): it has an install snippet in the shared, synced registry (`SnippetRegistry`,
@@ -47,6 +48,7 @@ from rich.markup import escape
 
 from pcswitcher.config_sync import CONFIG_REMOTE_DIR
 from pcswitcher.jobs.context import JobContext
+from pcswitcher.jobs.packages.apt_policy import packages_installed_from_no_repository
 from pcswitcher.jobs.packages.items import (
     DiffAction,
     DiffClass,
@@ -104,12 +106,12 @@ _DPKG_S_OWNED_RE = re.compile(r"^[^:]+:\s+(?P<path>/\S.*)$")
 
 @dataclass(frozen=True)
 class UnreproducibleItem:
-    """One item no package manager can reproduce (D-18): an apt package with no repo
-    candidate, or an unowned install under `/usr/local`/`/opt`.
+    """One item no package manager can reproduce (D-18): an apt package installed from no
+    configured repository, or an unowned install under `/usr/local`/`/opt`.
 
-    `origin` distinguishes how the item was found — `apt-no-candidate` (a name that
-    exists but has nothing to install from) versus `unowned-path` (a filesystem path
-    dpkg does not claim) — and lives inside `item_id` for the same reason `scope`
+    `origin` distinguishes how the item was found — `apt-no-candidate` (an installed
+    package no repository can supply) versus `unowned-path` (a filesystem path dpkg does
+    not claim) — and lives inside `item_id` for the same reason `scope`
     lives inside the two flatpak identities: the same `identifier` value can appear
     under both origins with no relation to each other (e.g. a package name that is
     also, coincidentally, a path component), so origin has to be part of identity, not
@@ -137,30 +139,6 @@ def _lines(output: str) -> list[str]:
     """Non-blank, stripped lines — the shape every `apt-mark`/`find` list command this
     module runs produces. A private copy of apt_sync's identical helper (D-18)."""
     return [line.strip() for line in output.splitlines() if line.strip()]
-
-
-def _packages_with_no_candidate(policy_output: str) -> set[str]:
-    """Parse a multi-package `apt-cache policy <name...>` run: names whose `Candidate:`
-    line reads `(none)`. Each package's block starts with an unindented `<name>:` header
-    line, per `apt-cache policy`'s documented output shape. A private copy of apt_sync's
-    identical parser (D-18): apt_sync keeps its own for `collect_unavailable_item_ids`
-    (D-25 REPO_UNAVAILABLE, a distinct concern about the TARGET's repos), so both jobs own
-    the parser they need without either importing the other.
-    """
-    no_candidate: set[str] = set()
-    current: str | None = None
-    for line in policy_output.splitlines():
-        if line and not line[0].isspace() and line.endswith(":"):
-            current = line[:-1]
-            continue
-        if current is None:
-            continue
-        stripped = line.strip()
-        if stripped.startswith("Candidate:"):
-            if stripped.removeprefix("Candidate:").strip() == "(none)":
-                no_candidate.add(current)
-            current = None
-    return no_candidate
 
 
 def _owned_paths_from_dpkg_s(output: str) -> frozenset[str]:
@@ -389,20 +367,27 @@ class ManualInstallsSyncJob(PackageSyncJob):
     # -- Detection (D-18/D-19), all on the source ---------------------------------------
 
     async def _scan_no_candidate_apt_packages(self, manual_names: Sequence[str]) -> list[UnreproducibleItem]:
-        """D-18: manually-installed packages whose SOURCE's own `apt-cache` has no
-        candidate at all — installed via `dpkg -i` of a bare `.deb`, never registered with
-        any configured repository. Runs the job's OWN `apt-cache policy` (D-18), never
-        apt_sync's.
+        """D-18: manually-installed packages whose INSTALLED version comes from no
+        repository the SOURCE has configured — put there by `dpkg -i` of a bare `.deb`.
+
+        One batched `apt-cache policy` over the whole manual set (never one call per
+        package), read through `packages_installed_from_no_repository`: a package's own
+        `Candidate:` line cannot answer this, because dpkg's status entry makes apt report
+        a hand-installed package's installed version as its candidate.
         """
         if not manual_names:
             return []
 
         quoted = " ".join(shlex.quote(name) for name in manual_names)
         result = await self.source.run_command(f"apt-cache policy {quoted}")
-        no_candidate = _packages_with_no_candidate(result.stdout)
+        no_repository = packages_installed_from_no_repository(result.stdout, manual_names)
         return [
-            UnreproducibleItem(origin="apt-no-candidate", identifier=name, label=f"{name} (no apt candidate)")
-            for name in sorted(no_candidate)
+            UnreproducibleItem(
+                origin="apt-no-candidate",
+                identifier=name,
+                label=f"{name} (installed from no configured repository)",
+            )
+            for name in sorted(no_repository)
         ]
 
     async def _scan_unowned_installs(self) -> list[UnreproducibleItem]:
