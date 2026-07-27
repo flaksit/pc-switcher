@@ -81,9 +81,12 @@ def installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]
     actually tracking. `/var/lib/dpkg/status` is dpkg's own record of the installed
     package, not a repository, and is skipped — every installed package lists it.
 
-    Defensive by construction: a name apt does not know produces no block at all, and a
-    package installed from a local `.deb` has `/var/lib/dpkg/status` as its only origin.
-    Both degrade to "no origin" — absent from this map, never to a guess.
+    A key MEANS apt printed a block for that name; the value means what apt said about it.
+    The two are deliberately separable, because a package installed from a local `.deb`
+    reaches an empty origin set while a name apt has never heard of reaches no key at all,
+    and the difference is the difference between "apt says no repository supplies this" and
+    "apt said nothing" — including the case where the whole command failed and produced no
+    output. `packages_installed_from_no_repository` may only indict the first.
     """
     origins: dict[str, set[str]] = {}
     current: str | None = None
@@ -91,6 +94,7 @@ def installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]
     for line in policy_output.splitlines():
         if line and not line[0].isspace() and line.endswith(":"):
             current, in_installed_block = line[:-1], False
+            origins.setdefault(current, set())
             continue
         if current is None:
             continue
@@ -119,14 +123,15 @@ def packages_installed_from_no_repository(policy_output: str, queried_names: Seq
     from a dpkg-only one here: neither has a repository origin for an installed version,
     because neither has an installed version.
 
-    `queried_names` is required rather than derived from the output because
-    `installed_origins_by_package` omits a package entirely when it has no repo origin, so
-    "no origins" is only representable as absence — and absence must stay distinguishable
-    from "never asked".
+    A name apt printed NO block for is never flagged. Absence is not evidence: apt prints a
+    block for every installed package (verified against a live `apt-mark showmanual` set),
+    so no block means the question was not answered — an unknown name, or an `apt-cache
+    policy` that failed outright and returned nothing. Indicting on absence would let one
+    failed command declare a machine's entire manual set unreproducible.
 
     A package hand-installed at a version NEWER than the repository's is flagged, which is
     correct rather than a false positive: replicating *this machine's* installed version
     needs the `.deb`, and the repository cannot supply it.
     """
     origins = installed_origins_by_package(policy_output)
-    return frozenset(name for name in queried_names if not origins.get(name))
+    return frozenset(name for name in queried_names if name in origins and not origins[name])

@@ -334,6 +334,22 @@ class TestNoCandidateDetection:
         for name in ("code", "gh", "docker.io", "7zip"):
             assert name in policy_calls[0]
 
+    @pytest.mark.asyncio
+    async def test_a_policy_read_that_answers_nothing_indicts_nothing(self) -> None:
+        """No block for a queried name is silence, not evidence — sharpest when the command
+        failed outright. Indicting on absence would declare a machine's whole manual set
+        unreproducible, and hand `apt_sync`'s exclusion the same verdict."""
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
+                "apt-cache policy": CommandResult(100, "", "E: could not read the package lists\n"),
+            }
+        )
+
+        plan = await ManualInstallsSyncJob(context).plan()
+
+        assert self._unreproducible_ids(plan) == set()
+
     def test_only_the_installed_version_row_contributes_origins(self) -> None:
         """`gh`'s older version rows name three Ubuntu URIs that merely OFFER the package.
         Only the `***` row's origin is where the installed version actually came from."""
