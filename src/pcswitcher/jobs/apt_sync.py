@@ -1096,12 +1096,6 @@ class AptSyncJob(PackageSyncJob):
         # filtering. Kept so the post-repository re-review can re-diff against a CHANGED
         # target without re-capturing the source, which this run never mutates.
         self._plan_source_items: tuple[AptPackageItem, ...] = ()
-        # The source's raw `apt-mark showmanual` set, captured in `capture_source_items`
-        # (before decision-file filtering). The SOURCE half of the collateral-protection
-        # union (decision 8): a package the user manually installed on EITHER machine is
-        # protected from a silent collateral removal/downgrade, so `_protected_manual_set`
-        # is `target` unioned with `source` rather than target alone.
-        self._source_manual_set: frozenset[str] = frozenset()
         # Metadata-refresh bookkeeping (decision 1). At most ONE `apt-get update` runs per
         # run across both refresh paths: `_metadata_refreshed` is set True by the first
         # successful refresh — whether the repository-group convergence's own `apt-get
@@ -1129,20 +1123,12 @@ class AptSyncJob(PackageSyncJob):
         """Manually-installed apt packages on the source, with versions (D-03), minus the
         bare-`.deb` installs `manual_installs_sync` owns.
 
-        Also records the source's raw `apt-mark showmanual` names into
-        `self._source_manual_set` — captured here, before any decision-file filtering AND
-        before the bare-`.deb` exclusion, so a package the user chose to skip on the source,
-        or one this job does not sync at all, still counts as source-manual for collateral
-        protection (decision 8, the SOURCE half of `_protected_manual_set`). Not syncing a
-        package is no reason to let apt remove it as collateral.
-
         The exclusion happens HERE and nowhere else: an item that never enters the manifest
         cannot become an `ItemDiff`, reach a review group, reach `_collect_plan_time_collateral`'s
         `apt-get --dry-run` simulation, or reach `collect_unavailable_item_ids`.
         """
         manual = await self.source.run_command("apt-mark showmanual")
         names = _lines(manual.stdout)
-        self._source_manual_set = frozenset(names)
         bare_debs = await self._source_bare_deb_packages(names)
         items = await self._resolve_versions(manual.stdout, self.source.run_command)
         return [item for item in items if item.name not in bare_debs]
@@ -1685,15 +1671,22 @@ class AptSyncJob(PackageSyncJob):
         return diffs
 
     def _protected_manual_set(self) -> frozenset[str]:
-        """Packages a collateral removal/downgrade must not silently touch: the union of
-        the TARGET's and the SOURCE's `apt-mark showmanual` sets (decision 8). A package
-        the user manually installed on EITHER machine is one they chose to have, so
-        protecting the union closes the rare edge case where a package is manual on the
-        source but auto-installed (or absent) on the target and would otherwise be
-        removed/downgraded silently. The machine-specific decision list is intentionally
-        NOT consulted (decision 8, accepted limitation).
+        """Packages a collateral removal/downgrade must not silently touch: the TARGET's
+        `apt-mark showmanual` set alone (ADR-021 D-40).
+
+        The source's manual set is deliberately NOT unioned in, and the case that gives up
+        is knowingly accepted rather than overlooked: a package the user installed by hand
+        on the source, which arrives on the target as an automatic dependency, can now be
+        removed as collateral without a prompt. If the target's apt installed it
+        automatically, the target's apt owns it, and reclaiming it as a user choice on the
+        strength of the OTHER machine's bookkeeping is a guess. The narrower set is also
+        the set apt itself consults, so "manually installed" means the same thing to
+        pc-switcher and to apt on the machine being changed.
+
+        The machine-specific decision list is still not consulted (D-30, accepted
+        limitation, unchanged).
         """
-        return self._target_manual_set | self._source_manual_set
+        return self._target_manual_set
 
     async def _capture_target_manual_set(self) -> frozenset[str]:
         """The target's `apt-mark showmanual` set — one batched command, the single
@@ -1749,9 +1742,9 @@ class AptSyncJob(PackageSyncJob):
         verb: str,
     ) -> list[ItemDiff]:
         """Partition a simulation's would-remove/would-downgrade packages by provenance
-        (D-30): a package in the target OR source manual set becomes a manual-collateral
-        review item (decision 8); one in neither is auto-installed — apt's own dependency
-        — and produces nothing, not even a report line the user cannot act on.
+        (D-30): a package in the TARGET's manual set becomes a manual-collateral review
+        item (ADR-021 D-40); one outside it is auto-installed — apt's own dependency — and
+        produces nothing, not even a report line the user cannot act on.
 
         A downgrade is detected exactly as before: an `install_versions` entry with a
         non-`None` old version and `compare_deb_versions(target, new, old) < 0`. The
@@ -2152,9 +2145,9 @@ class AptSyncJob(PackageSyncJob):
     async def _converge_install(self, diff: ItemDiff) -> CommandResult:
         """Simulate, then apply, one apt install — the last line of defence behind the
         plan-time collateral classification (D-30). Auto-installed collateral (a package
-        apt pulls in that is in neither the target nor source `apt-mark showmanual` set)
-        proceeds silently — apt resolving its own dependencies. A manually-installed
-        collateral removal or downgrade (manual on the target OR source, decision 8) is
+        apt pulls in that is outside the target's `apt-mark showmanual` set) proceeds
+        silently — apt resolving its own dependencies. A manually-installed collateral
+        removal or downgrade (manual on the TARGET, ADR-021 D-40) is
         refused unless the user approved it install-anyway in the review; the decision was
         made at plan time, and this guard only verifies the real transaction has not
         drifted to touch a manual package nobody saw.
@@ -2193,11 +2186,11 @@ class AptSyncJob(PackageSyncJob):
 
     async def _converge_remove(self, diff: ItemDiff) -> CommandResult:
         """Simulate, then apply, one apt remove — the same last line of defence the
-        install guard is (D-30). A collateral removal of an auto-installed package (in
-        neither the target nor source `apt-mark showmanual` set) proceeds — removing a
-        package legitimately removes the now-orphaned dependencies apt pulled in for it. A
-        collateral removal of a manually-installed package (manual on the target OR source,
-        decision 8) is refused unless it was itself an approved removal this run or approved
+        install guard is (D-30). A collateral removal of an auto-installed package (outside
+        the target's `apt-mark showmanual` set) proceeds — removing a package legitimately
+        removes the now-orphaned dependencies apt pulled in for it. A collateral removal of a
+        manually-installed package (manual on the TARGET, ADR-021 D-40) is
+        refused unless it was itself an approved removal this run or approved
         install-anyway as collateral; that decision was made at plan time, and this guard
         only catches a real transaction that drifted to touch a manual package nobody
         reviewed.

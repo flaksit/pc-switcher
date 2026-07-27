@@ -1247,10 +1247,11 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
         assert [d.item_id for d in plan.diffs] == ["apt:package:pkg-a"]
 
     @pytest.mark.asyncio
-    async def test_excluded_package_still_counts_as_source_manual_for_collateral_protection(self) -> None:
-        """Not syncing a package is no reason to let apt remove it as collateral: `code` is
-        dropped from the manifest but stays in the SOURCE half of `_protected_manual_set`
-        (decision 8), so an install whose simulation would remove it is still refused."""
+    async def test_an_excluded_bare_deb_package_is_not_protected_from_collateral(self) -> None:
+        """`code` is a bare `.deb` on the source, so it is dropped from the manifest, and it
+        is auto on the target. Under ADR-021 D-40 the target's apt owns it: an install whose
+        simulation would remove it proceeds with no collateral item and no prompt.
+        """
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
@@ -1267,7 +1268,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
         plan = await AptSyncJob(context).plan()
 
-        assert any(d.item_id == "apt:collateral:code" for d in plan.diffs)
+        assert not any(d.item_id == "apt:collateral:code" for d in plan.diffs)
 
 
 class TestRemovalConverge:
@@ -2985,7 +2986,7 @@ class TestReportOnlyRepoItemDecidedApply:
         target.send_file.assert_not_called()
 
 
-# -- Decision 8: collateral protects the SOURCE manual set too (union of target, source) -
+# -- ADR-021 D-40: collateral protects the TARGET's manual set alone -------------------
 
 _SOURCE_DECISION_SKIP_SRC_ONLY = (
     "machine_specific:\n"
@@ -2997,16 +2998,19 @@ _SOURCE_DECISION_SKIP_SRC_ONLY = (
 
 
 class TestSourceOnlyCollateral:
-    """Decision 8: a package in the SOURCE manual set is protected from collateral
-    removal/downgrade even when it is absent from the TARGET manual set."""
+    """ADR-021 D-40: a package manual on the SOURCE alone is NOT protected from collateral
+    removal/downgrade. The loss is deliberate — if the target's apt installed the package
+    automatically, the target's apt owns it, and reclaiming it as a user choice on the
+    strength of the other machine's bookkeeping is a guess. These two tests are kept
+    inverted rather than deleted, as the record that the case was given up on purpose.
+    """
 
     @pytest.mark.asyncio
-    async def test_source_only_manual_collateral_removal_becomes_a_review_item(self) -> None:
+    async def test_source_only_manual_collateral_removal_is_not_a_review_item(self) -> None:
         """`src-only` is manual on the source but skip-recorded there, so it is filtered
-        out of the source manifest (not a reviewed install candidate) yet still counts as
-        source-manual. It is not in the target manual set. Installing `pkg-a` would remove
-        it: under the old target-only rule this was silent auto collateral; under the union
-        it becomes a manual-collateral review item.
+        out of the source manifest, and it is absent from the target manual set. Installing
+        `pkg-a` would remove it, and that now happens silently: the target's own apt is the
+        only bookkeeping consulted.
         """
         context, _source, _target = make_context(
             source_responses={
@@ -3025,17 +3029,15 @@ class TestSourceOnlyCollateral:
 
         plan = await job.plan()
 
-        collateral = [d for d in plan.diffs if d.item_id == "apt:collateral:src-only"]
-        assert len(collateral) == 1
-        assert collateral[0].detail is not None and "removed" in collateral[0].detail
-        # src-only was filtered from the source manifest, so it is NOT itself a review
-        # candidate — it only surfaces via the source-manual union.
+        assert not any(d.item_id == "apt:collateral:src-only" for d in plan.diffs)
+        # src-only was filtered from the source manifest, so it is not a review candidate
+        # in its own right either — the removal reaches the user in no form at all.
         assert "apt:package:src-only" not in {d.item_id for d in plan.diffs}
 
     @pytest.mark.asyncio
-    async def test_apply_time_guard_refuses_source_only_manual_collateral(self) -> None:
-        """The apply-time install guard consults the union too: a drifted real transaction
-        that would remove a package manual on the SOURCE only (not the target) is refused.
+    async def test_apply_time_guard_allows_source_only_manual_collateral(self) -> None:
+        """The apply-time install guard reads the same narrowed set: a drifted real
+        transaction that would remove a package manual on the SOURCE only proceeds.
         `src-only` is skip-recorded on the source so it is not a reviewed candidate.
         """
         sim_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
@@ -3062,13 +3064,10 @@ class TestSourceOnlyCollateral:
         job = AptSyncJob(context)
         _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
 
-        with pytest.raises(PackageItemFailures) as exc_info:
-            await job.execute()
+        await job.execute()
 
-        _diff, message = exc_info.value.failures[0]
-        assert "src-only" in message
         commands = all_calls(target)
-        assert not any("sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c for c in commands)
+        assert any("sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-a" in c for c in commands)
 
 
 # -- C26/N7: a repo/key removal names the target-side machine-specific packages ---------
