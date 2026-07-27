@@ -73,7 +73,7 @@ Pick one of two approaches:
 
    # On the machine you're seeding, append every machine's key (its own included),
    # deduplicate, and keep permissions tight:
-   sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys
+   sort --unique ~/.ssh/authorized_keys --output=~/.ssh/authorized_keys
    chmod 600 ~/.ssh/authorized_keys
    ```
 

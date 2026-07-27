@@ -70,7 +70,7 @@ async def logging_test_source(
     )
 
     # Create test config
-    await executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+    await executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
     write_result = await executor.run_command(
         f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{_TEST_CONFIG}EOF",
         timeout=10.0,
@@ -80,7 +80,7 @@ async def logging_test_source(
     yield executor
 
     # Cleanup: restore original config
-    await executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
+    await executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
     await executor.run_command(
         "if [ -f ~/.config/pc-switcher/config.yaml.log-backup ]; then "
         "mv ~/.config/pc-switcher/config.yaml.log-backup ~/.config/pc-switcher/config.yaml; "
@@ -140,7 +140,7 @@ async def test_log_fr_aggregate(
 
     # Get the latest log file path
     log_path_result = await pc1_executor.run_command(
-        "ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1",
+        "ls --sort=time ~/.local/share/pc-switcher/logs/sync-*.log | head --lines=1",
         timeout=10.0,
     )
     assert log_path_result.success, f"No log files found: {log_path_result.stderr}"

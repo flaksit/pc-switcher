@@ -1,7 +1,7 @@
 """Generic folder sync job via rsync-over-SSH.
 
 Syncs configured folders from source to target, running rsync as root on both
-ends (local `sudo -E rsync` on source, `--rsync-path='sudo rsync'` on target)
+ends (local `sudo --preserve-env rsync` on source, `--rsync-path='sudo rsync'` on target)
 to preserve cross-owner file metadata including POSIX ACLs and xattrs.
 
 Safety relies on btrfs pre/post snapshots, the rsync --dry-run deletion log,
@@ -239,7 +239,7 @@ class FolderSyncJob(SyncJob):
           locale-dependent separator (',' on C/en_US, '.' on nl_BE-style),
           e.g. '80,153,795';
         - a human-readable figure with a K/M/G/T suffix (only when rsync runs
-          with -h), e.g. '9.53G', where the '.' is a decimal point.
+          with --human-readable), e.g. '9.53G', where the '.' is a decimal point.
 
         The parser strips both grouping separators so any locale's counter parses:
         the byte count is best-effort progress metadata (WR-01), not sync-critical.
@@ -294,13 +294,13 @@ class FolderSyncJob(SyncJob):
 
         Checks (in order):
         1. `sudo rsync --version` succeeds on source and target.
-        2. `acl` package is installed on source and target (required for -A flag;
+        2. `acl` package is installed on source and target (required for the --acls flag;
            without it rsync silently drops ACLs — RESEARCH Pitfall 5).
         3. Each active folder path exists on the source; if a folder configures a
            `filter_file`, its (expanded) path must also exist on the source, else
            a configured-but-absent filter file could silently degrade to a full
            `--delete` mirror with no filter rules applied.
-        4. Source and target share the same CPU architecture (`uname -m`): the
+        4. Source and target share the same CPU architecture (`uname --machine`): the
            pc-switcher install mirrors as arch-specific binaries (ADR-017), so a
            heterogeneous fleet is unsupported.
 
@@ -313,9 +313,9 @@ class FolderSyncJob(SyncJob):
         # as arch-specific binaries (ADR-017). A heterogeneous fleet would ship a
         # wrong-arch interpreter that dies at exec time with a cryptic
         # "cannot execute: required file not found"; refuse it up front. Fail open if
-        # either `uname -m` cannot be read (never determined arch → nothing to compare).
-        src_arch = await self.source.run_command("uname -m")
-        tgt_arch = await self.target.run_command("uname -m", login_shell=False)
+        # either `uname --machine` cannot be read (never determined arch → nothing to compare).
+        src_arch = await self.source.run_command("uname --machine")
+        tgt_arch = await self.target.run_command("uname --machine", login_shell=False)
         if src_arch.success and tgt_arch.success and src_arch.stdout.strip() != tgt_arch.stdout.strip():
             errors.append(
                 self._validation_error(
@@ -348,23 +348,23 @@ class FolderSyncJob(SyncJob):
             )
 
         # --- Step 2: acl package on both ends ---
-        result = await self.source.run_command("dpkg -l acl | grep -q '^ii'")
+        result = await self.source.run_command("dpkg --list acl | grep --quiet '^ii'")
         if result.exit_code != 0:
             errors.append(
                 self._validation_error(
                     Host.SOURCE,
                     "acl package is not installed on source "
-                    "(required for -A flag; without it rsync silently drops ACLs)",
+                    "(required for the --acls flag; without it rsync silently drops ACLs)",
                 )
             )
 
-        result = await self.target.run_command("dpkg -l acl | grep -q '^ii'", login_shell=False)
+        result = await self.target.run_command("dpkg --list acl | grep --quiet '^ii'", login_shell=False)
         if result.exit_code != 0:
             errors.append(
                 self._validation_error(
                     Host.TARGET,
                     "acl package is not installed on target "
-                    "(required for -A flag; without it rsync silently drops ACLs)",
+                    "(required for the --acls flag; without it rsync silently drops ACLs)",
                 )
             )
 
@@ -538,7 +538,7 @@ class FolderSyncJob(SyncJob):
         Used by every pass `_build_rsync_cmd` produces, so all of them use identical SSH
         credentials and target-side sudo elevation.
 
-        SSH transport note: `sudo -E rsync` runs rsync as root, and the ssh it spawns
+        SSH transport note: `sudo --preserve-env rsync` runs rsync as root, and the ssh it spawns
         also runs as root.  OpenSSH resolves `~/.ssh` from the running uid's passwd
         entry (root → /root/.ssh) regardless of the $HOME variable.  Passing explicit
         credentials (-l, -i, -o UserKnownHostsFile=, -F) with the invoking user's paths
@@ -561,7 +561,7 @@ class FolderSyncJob(SyncJob):
             ssh_tokens += ["-o", f"UserKnownHostsFile={known_hosts_file}"]
 
         # Offer all default key types that exist; ssh tries each in order.
-        # SSH_AUTH_SOCK (preserved by sudo -E) is also available when an agent
+        # SSH_AUTH_SOCK (preserved by sudo --preserve-env) is also available when an agent
         # is running, but explicit -i keys cover the no-agent case.
         for key_name in ("id_ed25519", "id_ecdsa", "id_rsa"):
             key_file = ssh_dir / key_name
@@ -569,10 +569,10 @@ class FolderSyncJob(SyncJob):
                 ssh_tokens += ["-i", str(key_file)]
 
         # shlex.join quotes individual tokens (handles spaces in paths).
-        # shlex.quote wraps the assembled command for the outer -e argument.
+        # shlex.quote wraps the assembled command for the outer --rsh argument.
         ssh_cmd = shlex.join(ssh_tokens)
         # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
-        return [f"-e {shlex.quote(ssh_cmd)}", f"--rsync-path={shlex.quote('sudo rsync')}"]
+        return [f"--rsh={shlex.quote(ssh_cmd)}", f"--rsync-path={shlex.quote('sudo rsync')}"]
 
     async def _needs_copy_pass(self, folder: FolderEntry) -> bool:
         """Whether a no-delete copy pass must run before the deleting mirror.
@@ -609,11 +609,12 @@ class FolderSyncJob(SyncJob):
         """Build the rsync shell command for syncing a single folder.
 
         Produces a command that:
-        - Runs as root on source via `sudo -E rsync` (preserves SSH_AUTH_SOCK
+        - Runs as root on source via `sudo --preserve-env rsync` (preserves SSH_AUTH_SOCK
           so the ssh agent socket remains accessible).
         - Elevates to root on target via `--rsync-path='sudo rsync'` over the
           normal-user SSH connection (D-05); root SSH login stays disabled.
-        - Uses the D-13 flag baseline: -aAXHS + --numeric-ids + --delete.
+        - Uses the D-13 flag baseline (ADR-013 spells it `-aAXHS`):
+          --archive --acls --xattrs --hard-links --sparse + --numeric-ids + --delete.
         - Adds --dry-run only when `dry_run` is True (D-12).
         - Omits --delete when `delete` is False: `execute` runs a no-delete copy
           pass first (when the tree has per-directory filters) so every source
@@ -633,9 +634,13 @@ class FolderSyncJob(SyncJob):
         """
         parts = [
             "sudo",
-            "-E",
+            "--preserve-env",
             "rsync",
-            "-aAXHS",
+            "--archive",
+            "--acls",
+            "--xattrs",
+            "--hard-links",
+            "--sparse",
             "--numeric-ids",
             # Build the whole file list before transferring anything, so
             # --info=progress2 reports against the real total from its first line.

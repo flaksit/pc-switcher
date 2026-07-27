@@ -668,14 +668,14 @@ class SnapSyncJob(PackageSyncJob):
 
     @override
     async def validate(self) -> list[ValidationError]:
-        """`snap version` on both ends, passwordless `sudo -n true` on BOTH ends, and a
+        """`snap version` on both ends, passwordless `sudo --non-interactive true` on BOTH ends, and a
         read-only informational hold check on both ends (never acted on — module docstring).
         Sequential checks appending to `errors`, matching `AptSyncJob.validate()`'s shape.
 
         Passwordless sudo is now required on the SOURCE too, not just the target: the
         orchestrator pauses snapd auto-refresh across the sync window by writing
         `refresh.hold` via `sudo snap set system` on both hosts (decision 4), so the source
-        needs the same `sudo -n` grant for `/usr/bin/snap` that the target already needed
+        needs the same `sudo --non-interactive` grant for `/usr/bin/snap` that the target already needed
         for install/refresh/remove.
         """
         errors: list[ValidationError] = []
@@ -688,7 +688,7 @@ class SnapSyncJob(PackageSyncJob):
         if not target_check.success:
             errors.append(self._validation_error(Host.TARGET, "snap is not available on target"))
 
-        source_sudo_check = await self.source.run_command("sudo -n true")
+        source_sudo_check = await self.source.run_command("sudo --non-interactive true")
         if not source_sudo_check.success:
             errors.append(
                 self._validation_error(
@@ -699,7 +699,7 @@ class SnapSyncJob(PackageSyncJob):
                 )
             )
 
-        sudo_check = await self.target.run_command("sudo -n true", login_shell=False)
+        sudo_check = await self.target.run_command("sudo --non-interactive true", login_shell=False)
         if not sudo_check.success:
             errors.append(
                 self._validation_error(

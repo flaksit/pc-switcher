@@ -136,18 +136,18 @@ async def start_persistent_remote_lock(
     # First create directory and write holder info to lock file
     # Note: Use $HOME instead of ~ because ~ doesn't expand inside double quotes
     setup_result = await executor.run_command(
-        f'mkdir -p "$HOME/.local/share/pc-switcher" && echo "{holder_info}" > "{lock_path}"',
+        f'mkdir --parents "$HOME/.local/share/pc-switcher" && echo "{holder_info}" > "{lock_path}"',
         mutates="claim the target's sync lock file, overwriting any previous holder record",
     )
     if not setup_result.success:
         return None
 
     # Start persistent process that holds the lock.
-    # flock -n = non-blocking attempt; if the lock is already held it exits
+    # flock --nonblock = non-blocking attempt; if the lock is already held it exits
     # immediately (non-zero). -c "read" otherwise blocks forever on stdin (which
     # never receives input), keeping the process — and the lock — alive until
     # terminated.
-    cmd = f'flock -n "{lock_path}" -c "read"'
+    cmd = f'flock --nonblock "{lock_path}" --command "read"'
 
     try:
         process = await executor.start_process(cmd)

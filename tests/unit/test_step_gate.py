@@ -112,12 +112,14 @@ class TestExecutorGate:
     async def test_write_is_gated_with_the_verbatim_command(self) -> None:
         gate = _stub_gate()
         executor, conn = _remote(gate)
-        await executor.run_command("sudo apt-get install -y firefox", login_shell=False, mutates="install firefox")
+        await executor.run_command(
+            "sudo apt-get install --assume-yes firefox", login_shell=False, mutates="install firefox"
+        )
         gate.confirm_action.assert_awaited_once_with(
             job="orchestrator",
             host=Host.TARGET,
             description="install firefox",
-            command="sudo apt-get install -y firefox",
+            command="sudo apt-get install --assume-yes firefox",
         )
         conn.run.assert_awaited_once()
 
@@ -127,14 +129,14 @@ class TestExecutorGate:
         executor, _conn = _remote(gate)
         await executor.run_command("pc-switcher --version", login_shell=True, mutates="upgrade")
         shown = gate.confirm_action.await_args.kwargs["command"]
-        assert shown.startswith("bash -l -c ")
+        assert shown.startswith("bash --login -c ")
         assert "pc-switcher --version" in shown
 
     async def test_abort_prevents_the_command(self) -> None:
         gate = _stub_gate(SyncAbortedByUser("declined"))
         executor, conn = _remote(gate)
         with pytest.raises(SyncAbortedByUser):
-            await executor.run_command("sudo rm -rf /etc/apt/x", login_shell=False, mutates="delete x")
+            await executor.run_command("sudo rm --recursive --force /etc/apt/x", login_shell=False, mutates="delete x")
         conn.run.assert_not_awaited()
 
     async def test_send_file_shows_both_paths_and_aborts_before_transfer(self) -> None:
@@ -165,17 +167,21 @@ class TestExecutorGate:
 
     async def test_no_gate_configured_is_a_plain_pass_through(self) -> None:
         executor, conn = _remote(None)
-        await executor.run_command("sudo apt-get install -y firefox", login_shell=False, mutates="install firefox")
+        await executor.run_command(
+            "sudo apt-get install --assume-yes firefox", login_shell=False, mutates="install firefox"
+        )
         conn.run.assert_awaited_once()
 
     async def test_active_job_labels_the_prompt(self) -> None:
         gate = _stub_gate()
         executor, _conn = _remote(gate)
         with active_job("apt_sync"):
-            await executor.run_command("sudo apt-get install -y firefox", login_shell=False, mutates="install")
+            await executor.run_command(
+                "sudo apt-get install --assume-yes firefox", login_shell=False, mutates="install"
+            )
         assert gate.confirm_action.await_args.kwargs["job"] == "apt_sync"
         # The label is scoped to the block; outside it, the orchestrator owns the traffic.
-        await executor.run_command("sudo apt-get remove -y firefox", login_shell=False, mutates="remove")
+        await executor.run_command("sudo apt-get remove --assume-yes firefox", login_shell=False, mutates="remove")
         assert gate.confirm_action.await_args.kwargs["job"] == "orchestrator"
 
 
@@ -187,12 +193,14 @@ class TestExecutorDebugTrace:
         executor, _conn = _remote(None)
         with caplog.at_level(logging.DEBUG, logger="pcswitcher.executor"):
             await executor.run_command("apt-mark showmanual", login_shell=False)
-            await executor.run_command("sudo apt-get install -y firefox", login_shell=False, mutates="install firefox")
+            await executor.run_command(
+                "sudo apt-get install --assume-yes firefox", login_shell=False, mutates="install firefox"
+            )
 
         messages = [record.getMessage() for record in caplog.records]
         assert "apt-mark showmanual" in messages
         # The write is traced with the same verbatim command plus its declared intent.
-        assert "sudo apt-get install -y firefox  [install firefox]" in messages
+        assert "sudo apt-get install --assume-yes firefox  [install firefox]" in messages
 
     async def test_trace_carries_job_and_host(self, caplog: pytest.LogCaptureFixture) -> None:
         executor, _conn = _remote(None)
@@ -207,9 +215,9 @@ class TestExecutorDebugTrace:
         """ "What was I about to be asked" is exactly what the debug log is for."""
         executor, _conn = _remote(_stub_gate(SyncAbortedByUser("declined")))
         with caplog.at_level(logging.DEBUG, logger="pcswitcher.executor"), pytest.raises(SyncAbortedByUser):
-            await executor.run_command("sudo rm -rf /etc/apt/x", login_shell=False, mutates="delete x")
+            await executor.run_command("sudo rm --recursive --force /etc/apt/x", login_shell=False, mutates="delete x")
 
-        assert any("sudo rm -rf /etc/apt/x" in record.getMessage() for record in caplog.records)
+        assert any("sudo rm --recursive --force /etc/apt/x" in record.getMessage() for record in caplog.records)
 
 
 def _entry() -> DecisionEntry:
@@ -226,7 +234,10 @@ def _snippet() -> Snippet:
     return Snippet(
         item_id="manual:zoom",
         label="zoom",
-        body="curl -fsSL https://example.invalid/zoom.deb -o /tmp/z.deb && sudo apt-get install -y /tmp/z.deb",
+        body=(
+            "curl --fail --silent --show-error --location https://example.invalid/zoom.deb --output /tmp/z.deb"
+            " && sudo apt-get install --assume-yes /tmp/z.deb"
+        ),
         authored_at="2026-01-01T00:00:00Z",
         authored_on="laptop",
     )

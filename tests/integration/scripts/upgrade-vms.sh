@@ -100,7 +100,7 @@ cleanup() {
     local exit_code=$?
 
     if [[ -n "$TMPDIR" && -d "$TMPDIR" ]]; then
-        rm -rf "$TMPDIR" 2>/dev/null || true
+        rm --recursive --force "$TMPDIR" 2>/dev/null || true
     fi
 
     exit $exit_code
@@ -116,7 +116,7 @@ detect_apt_changes() {
 
     # apt outputs a summary line like: "5 upgraded, 2 newly installed, 0 to remove..."
     # No changes if ALL three are zero
-    if echo "$output" | grep -qE "^0 upgraded, 0 newly installed, 0 to remove"; then
+    if echo "$output" | grep --quiet --extended-regexp "^0 upgraded, 0 newly installed, 0 to remove"; then
         return 1  # No changes
     fi
 
@@ -143,7 +143,7 @@ upgrade_vm() {
     echo "--- apt-get full-upgrade ---"
     local upgrade_output
     if ! upgrade_output=$(ssh_run "${SSH_USER}@${vm_ip}" \
-        "DEBIAN_FRONTEND=noninteractive sudo apt-get full-upgrade -y \
+        "DEBIAN_FRONTEND=noninteractive sudo apt-get full-upgrade --assume-yes \
          -o Dpkg::Options::='--force-confold' \
          -o Dpkg::Options::='--force-confdef' 2>&1"); then
         echo "$upgrade_output"
@@ -156,7 +156,7 @@ upgrade_vm() {
     echo "--- apt-get autoremove ---"
     local autoremove_output
     if ! autoremove_output=$(ssh_run "${SSH_USER}@${vm_ip}" \
-        "DEBIAN_FRONTEND=noninteractive sudo apt-get autoremove -y 2>&1"); then
+        "DEBIAN_FRONTEND=noninteractive sudo apt-get autoremove --assume-yes 2>&1"); then
         echo "$autoremove_output"
         echo "ERROR: Autoremove failed on $vm_name"
         exit 1
@@ -234,7 +234,7 @@ acquire_lock "upgrade-vms"
 
 # Get VM IP addresses (single API call)
 log_step "Resolving VM IP addresses..."
-if ! VM_LIST=$(hcloud server list -o columns=name,ipv4 -o noheader); then
+if ! VM_LIST=$(hcloud server list --output columns=name,ipv4 --output noheader); then
     log_error "Failed to list VMs via hcloud"
     exit 1
 fi
@@ -274,7 +274,7 @@ log_info "VMs reset to baseline state"
 
 # Upgrade packages in parallel (output prefixed with VM name)
 log_step "Upgrading packages on both VMs..."
-TMPDIR=$(mktemp -d)
+TMPDIR=$(mktemp --directory)
 
 # Run upgrades in parallel, prefix each line with VM name
 (

@@ -28,7 +28,7 @@ def passwordless_sudo_hint(commands: Sequence[str], *, user: str | None = None) 
     `user` is the account pc-switcher connects as, when known; otherwise the text uses
     a placeholder the user substitutes.
 
-    `visudo -f` is specified rather than a plain editor because it syntax-checks before
+    `visudo --file` is specified rather than a plain editor because it syntax-checks before
     saving, and a malformed file under `/etc/sudoers.d/` can lock the user out of sudo
     entirely — which on a machine reached only over SSH is expensive to recover from.
     """
@@ -38,11 +38,11 @@ def passwordless_sudo_hint(commands: Sequence[str], *, user: str | None = None) 
 
     return (
         f"To fix, on that machine run:\n"
-        f"    sudo visudo -f {SUDOERS_DROPIN_PATH}\n"
+        f"    sudo visudo --file={SUDOERS_DROPIN_PATH}\n"
         f"and add this line{substitution}:\n"
         f"    {account} ALL=(ALL) NOPASSWD: {grant}\n"
         f"Then confirm it worked:\n"
-        f"    sudo -n true && echo OK\n"
+        f"    sudo --non-interactive true && echo OK\n"
         f"Edit with visudo rather than a plain editor: it validates the syntax before saving, "
         f"and a broken file under /etc/sudoers.d/ can lock you out of sudo entirely. "
         f"A broader existing grant is fine — these are the paths that must be permitted, "

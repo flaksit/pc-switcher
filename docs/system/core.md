@@ -246,7 +246,7 @@ The system provides installation and setup tooling to deploy pc-switcher to new 
 **Why this priority**: This is P2 because while essential for new users, developers can manually install during early development. Once the core sync system works, this becomes P1 for usability.
 
 **Independent Test**: Can be fully tested by:
-1. Running `curl -LsSf https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash` on a fresh Ubuntu 24.04 machine (without uv installed)
+1. Running `curl --location --silent --show-error --fail https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash` on a fresh Ubuntu 24.04 machine (without uv installed)
 2. Verifying uv is installed if it was missing
 3. Verifying all other dependencies are installed
 4. Confirming pc-switcher package is installed
@@ -260,7 +260,7 @@ The system provides installation and setup tooling to deploy pc-switcher to new 
 
 **Acceptance Scenarios**:
 
-1. **Given** a fresh Ubuntu 24.04 machine without uv installed, **When** user runs `curl -LsSf https://...install.sh | bash`, **Then** the script installs uv (if not present), installs btrfs-progs (if not present), installs pc-switcher via `uv tool install`, creates `~/.config/pc-switcher/` with default config, and displays "pc-switcher installed successfully"
+1. **Given** a fresh Ubuntu 24.04 machine without uv installed, **When** user runs `curl --location --silent --show-error --fail https://...install.sh | bash`, **Then** the script installs uv (if not present), installs btrfs-progs (if not present), installs pc-switcher via `uv tool install`, creates `~/.config/pc-switcher/` with default config, and displays "pc-switcher installed successfully"
 
 2. **Given** pc-switcher sync installs on target (InstallOnTargetJob), **When** the target is missing uv, **Then** the same installation logic installs uv first, then installs/upgrades pc-switcher
 
@@ -498,7 +498,7 @@ Lineage: 001-core edge cases, 003-core-tests edge cases
 
 #### Installation & Setup
 
-- **CORE-FR-INSTALL-SCRIPT** `[Frictionless Command UX]`: System MUST provide installation script (`install.sh`) that can be run via `curl | sh` without prerequisites; the script installs uv (if not present) via `curl -LsSf https://astral.sh/uv/install.sh | sh`, installs btrfs-progs via apt-get (if not present), installs pc-switcher package via `uv tool install`, and creates default configuration; the installation logic MUST be shared with `InstallOnTargetJob` to ensure DRY compliance (btrfs filesystem is a documented prerequisite checked at runtime, not during installation)  
+- **CORE-FR-INSTALL-SCRIPT** `[Frictionless Command UX]`: System MUST provide installation script (`install.sh`) that can be run via `curl | sh` without prerequisites; the script installs uv (if not present) via `curl --location --silent --show-error --fail https://astral.sh/uv/install.sh | sh`, installs btrfs-progs via apt-get (if not present), installs pc-switcher package via `uv tool install`, and creates default configuration; the installation logic MUST be shared with `InstallOnTargetJob` to ensure DRY compliance (btrfs filesystem is a documented prerequisite checked at runtime, not during installation)  
   Lineage: 001-FR-035
 
 - **CORE-FR-DEFAULT-CONFIG** `[Up-to-date Documentation]`: Setup script MUST create default config file with inline comments explaining each setting  

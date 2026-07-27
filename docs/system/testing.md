@@ -12,11 +12,11 @@ As a pc-switcher developer, I can run unit tests locally to verify my changes be
 
 **Why this priority**: P1 because fast local testing is essential for development velocity. Unit tests catch logic errors early without requiring VM infrastructure.
 
-**Independent Test**: Can be fully tested by running `uv run pytest tests/unit tests/contract -v` on any developer machine.
+**Independent Test**: Can be fully tested by running `uv run pytest tests/unit tests/contract --verbose` on any developer machine.
 
 **Acceptance Scenarios**:
 
-1. **Given** I have cloned the repository, **When** I run `uv run pytest tests/unit tests/contract -v`, **Then** all unit tests execute within 30 seconds without requiring any external services or configuration
+1. **Given** I have cloned the repository, **When** I run `uv run pytest tests/unit tests/contract --verbose`, **Then** all unit tests execute within 30 seconds without requiring any external services or configuration
 
 2. **Given** I modify business logic code, **When** I run unit tests, **Then** any logic errors are detected through failing assertions before code is pushed
 
@@ -32,7 +32,7 @@ As a pc-switcher developer, I can run integration tests that exercise real syste
 
 **Why this priority**: P1 because pc-switcher performs destructive system operations. Testing with mocks would hide real-world issues. VM isolation provides safety while enabling realistic testing.
 
-**Independent Test**: Can be fully tested by running `uv run pytest tests/integration -v -m integration`.
+**Independent Test**: Can be fully tested by running `uv run pytest tests/integration --verbose -m integration`.
 
 **Acceptance Scenarios**:
 
@@ -176,7 +176,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 #### Unit Test Requirements
 
-- **TST-FR-UNIT-CMD**: Unit tests MUST be runnable with single command `uv run pytest tests/unit tests/contract -v`  
+- **TST-FR-UNIT-CMD**: Unit tests MUST be runnable with single command `uv run pytest tests/unit tests/contract --verbose`  
   Lineage: 002-FR-007
 
 - **TST-FR-INT-MARKER**: Integration tests MUST be selectable via pytest marker (`-m integration`) for running separately from unit tests  

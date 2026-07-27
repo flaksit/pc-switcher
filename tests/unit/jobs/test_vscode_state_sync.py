@@ -373,7 +373,7 @@ class TestExecuteOrchestration:
         cmds = _target_cmds(ctx)
         assert any("INSERT INTO ItemTable" in c and "ATTACH" in c for c in cmds)
         # The mv atomically replaces the live DB from the temp path.
-        assert any("mv -f" in c and target_db in c and ".pcswitcher-tmp" in c for c in cmds)
+        assert any("mv --force" in c and target_db in c and ".pcswitcher-tmp" in c for c in cmds)
 
     async def test_execute_preserves_secret_keys_by_default(self, tmp_path: Path) -> None:
         """The job hardcodes secret:// preservation: no config, the inject SQL keeps those keys."""
@@ -386,7 +386,7 @@ class TestExecuteOrchestration:
         assert any("secret://%" in c for c in _target_cmds(ctx))
 
     async def test_creates_target_dir_before_transfer(self, tmp_path: Path) -> None:
-        """The target globalStorage dir is created (mkdir -p) before the SFTP put.
+        """The target globalStorage dir is created (mkdir --parents) before the SFTP put.
 
         Guards the folder_sync-disabled path: with jobs toggled independently the
         parent dir may not exist, so send_file would otherwise fail.
@@ -398,7 +398,7 @@ class TestExecuteOrchestration:
             await job.execute()
 
         cmds = _target_cmds(ctx)
-        assert any("mkdir -p" in c and "globalStorage" in c for c in cmds)
+        assert any("mkdir --parents" in c and "globalStorage" in c for c in cmds)
 
     async def test_first_sync_skips_inject_but_places_db(self, tmp_path: Path) -> None:
         """Absent target DB: skip the ATTACH inject, still transfer and mv the neutral DB."""
@@ -411,7 +411,7 @@ class TestExecuteOrchestration:
         ctx.target.send_file.assert_awaited_once()  # type: ignore[union-attr]
         cmds = _target_cmds(ctx)
         assert not any("ATTACH" in c or "INSERT" in c for c in cmds)
-        assert any("mv -f" in c for c in cmds)
+        assert any("mv --force" in c for c in cmds)
 
     async def test_absent_source_editor_is_skipped(self, tmp_path: Path) -> None:
         """Only editors whose DB exists on the source are processed."""
@@ -464,7 +464,7 @@ class TestExecuteOrchestration:
 
         ctx.target.send_file.assert_not_awaited()  # type: ignore[union-attr]
         cmds = _target_cmds(ctx)
-        assert not any("ATTACH" in c or "INSERT" in c or "mv -f" in c for c in cmds)
+        assert not any("ATTACH" in c or "INSERT" in c or "mv --force" in c for c in cmds)
         # Source live DB is unchanged (source-strip never ran against it).
         assert set(_read(source_db)) == {"secret://a", "keep"}
 

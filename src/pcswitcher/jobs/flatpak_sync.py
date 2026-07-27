@@ -1030,7 +1030,7 @@ class FlatpakSyncJob(PackageSyncJob):
         sudo = _sudo_prefix(scope)
 
         if diff.action == DiffAction.REMOVE:
-            cmd = f"{sudo}flatpak uninstall -y {scope_flag} {shlex.quote(application)}"
+            cmd = f"{sudo}flatpak uninstall --assumeyes {scope_flag} {shlex.quote(application)}"
             return await self.target.run_command(
                 cmd, login_shell=False, mutates=f"uninstall {scope} flatpak {application}"
             )
@@ -1049,7 +1049,10 @@ class FlatpakSyncJob(PackageSyncJob):
                     "neither already configured on the target nor among this run's successfully-added "
                     "remotes (D-14)"
                 )
-            cmd = f"{sudo}flatpak install -y {scope_flag} {shlex.quote(source_item.origin)} {shlex.quote(application)}"
+            cmd = (
+                f"{sudo}flatpak install --assumeyes {scope_flag} "
+                f"{shlex.quote(source_item.origin)} {shlex.quote(application)}"
+            )
             return await self.target.run_command(
                 cmd, login_shell=False, mutates=f"install {scope} flatpak {application} from {source_item.origin}"
             )
@@ -1118,7 +1121,7 @@ class FlatpakSyncJob(PackageSyncJob):
         home = await self._target_home_dir()
         staging_dir = f"{home}/.cache/pc-switcher/flatpak-staging"
         mkdir = await self.target.run_command(
-            f"mkdir -p {shlex.quote(staging_dir)}",
+            f"mkdir --parents {shlex.quote(staging_dir)}",
             login_shell=False,
             mutates="create the flatpak signing-key staging directory",
         )
@@ -1141,7 +1144,7 @@ class FlatpakSyncJob(PackageSyncJob):
         if staged_key is None:
             return
         await self.target.run_command(
-            f"rm -f {shlex.quote(staged_key)}",
+            f"rm --force {shlex.quote(staged_key)}",
             login_shell=False,
             mutates="discard the staged flatpak signing key",
         )
@@ -1189,7 +1192,7 @@ class FlatpakSyncJob(PackageSyncJob):
     async def validate(self) -> list[ValidationError]:
         """`flatpak --version` on both ends — a missing binary is a reported
         validation error naming flatpak's absence (it ships in no default Ubuntu
-        24.04 install and may genuinely be absent), never an exception. `sudo -n
+        24.04 install and may genuinely be absent), never an exception. `sudo --non-interactive
         true` on the target only when a system-scope ref, remote or mask actually
         exists on either machine.
 
@@ -1219,7 +1222,7 @@ class FlatpakSyncJob(PackageSyncJob):
             )
 
         if source_check.success and target_check.success and await self._system_scope_in_play():
-            sudo_check = await self.target.run_command("sudo -n true", login_shell=False)
+            sudo_check = await self.target.run_command("sudo --non-interactive true", login_shell=False)
             if not sudo_check.success:
                 errors.append(
                     self._validation_error(

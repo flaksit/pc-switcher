@@ -109,7 +109,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "config_sync.py::_get_target_config::run_command": 1,
     "config_sync.py::_copy_config_to_target::run_command": 1,
     "disk.py::check_disk_space::run_command": 1,
-    # apt_sync: `apt-get -s` is a simulation, `apt-mark show*`/`apt-cache policy`/`find`/
+    # apt_sync: `apt-get --dry-run` is a simulation, `apt-mark show*`/`apt-cache policy`/`find`/
     # `test -f`/`echo $HOME` are queries, and validate() only probes for capabilities.
     "jobs/apt_sync.py::simulate_apt_transaction::run_command": 1,
     "jobs/apt_sync.py::compare_deb_versions::run_command": 2,
@@ -162,7 +162,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/snap_sync.py::SnapSyncJob.validate::run_command": 6,
     "jobs/vscode_state_sync.py::VscodeStateSyncJob.validate::run_command": 1,
     "jobs/vscode_state_sync.py::VscodeStateSyncJob.execute::run_command": 1,
-    # `flock -n <path> -c read` takes an advisory lock on a file already written above it;
+    # `flock --nonblock <path> --command read` takes an advisory lock on a file already written above it;
     # the process holds it and changes no content.
     "lock.py::start_persistent_remote_lock::start_process": 1,
     "orchestrator.py::Orchestrator._resolve_target_canonical_hostname::run_command": 1,

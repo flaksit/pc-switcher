@@ -45,7 +45,7 @@ async def test_core_fr_target_term(
 
     try:
         # Clean up any previous markers
-        await pc2_executor.run_command(f"rm -f {marker_file}")
+        await pc2_executor.run_command(f"rm --force {marker_file}")
 
         # Start background process that creates a marker and sleeps
         # Use nohup to ensure it runs independently
@@ -60,7 +60,7 @@ async def test_core_fr_target_term(
         pid = result.stdout.strip()
 
         # Verify the PID exists
-        result = await pc2_executor.run_command(f"ps -p {pid} -o pid= 2>/dev/null")
+        result = await pc2_executor.run_command(f"ps --pid {pid} --format pid= 2>/dev/null")
         assert result.stdout.strip() == pid, f"Process {pid} should be running"
 
         # Request termination (simulates orchestrator cleanup)
@@ -74,14 +74,14 @@ async def test_core_fr_target_term(
         await asyncio.sleep(1.0)
 
         # Verify the process was terminated
-        result = await pc2_executor.run_command(f"ps -p {pid} -o pid= 2>/dev/null")
+        result = await pc2_executor.run_command(f"ps --pid {pid} --format pid= 2>/dev/null")
         assert not result.stdout.strip(), "Background process should be terminated"
 
     finally:
         # Cleanup - make sure to kill any leftover processes
         if pid:
             await pc2_executor.run_command(f"kill -9 {pid} 2>/dev/null || true")
-        await pc2_executor.run_command(f"rm -f {marker_file}")
+        await pc2_executor.run_command(f"rm --force {marker_file}")
 
 
 async def test_core_fr_force_term(
@@ -190,8 +190,8 @@ async def test_core_fr_no_orphan(
 
     try:
         # Clean up any existing markers
-        await pc1_executor.run_command(f"rm -f {source_marker}")
-        await pc2_executor.run_command(f"rm -f {target_marker}")
+        await pc1_executor.run_command(f"rm --force {source_marker}")
+        await pc2_executor.run_command(f"rm --force {target_marker}")
 
         # Start test processes on both hosts using nohup for proper background execution
         await pc1_executor.run_command(f"nohup sh -c 'echo $$ > {source_marker} && sleep 300' > /dev/null 2>&1 &")
@@ -221,8 +221,8 @@ async def test_core_fr_no_orphan(
         await asyncio.sleep(1.0)
 
         # Verify no orphaned processes remain (check our specific PIDs)
-        source_orphan_check = await pc1_executor.run_command(f"ps -p {source_pid} -o pid= 2>/dev/null")
-        target_orphan_check = await pc2_executor.run_command(f"ps -p {target_pid} -o pid= 2>/dev/null")
+        source_orphan_check = await pc1_executor.run_command(f"ps --pid {source_pid} --format pid= 2>/dev/null")
+        target_orphan_check = await pc2_executor.run_command(f"ps --pid {target_pid} --format pid= 2>/dev/null")
 
         assert not source_orphan_check.stdout.strip(), "No orphaned processes should remain on source"
         assert not target_orphan_check.stdout.strip(), "No orphaned processes should remain on target"
@@ -233,8 +233,8 @@ async def test_core_fr_no_orphan(
             await pc1_executor.run_command(f"kill -9 {source_pid} 2>/dev/null || true")
         if target_pid:
             await pc2_executor.run_command(f"kill -9 {target_pid} 2>/dev/null || true")
-        await pc1_executor.run_command(f"rm -f {source_marker}")
-        await pc2_executor.run_command(f"rm -f {target_marker}")
+        await pc1_executor.run_command(f"rm --force {source_marker}")
+        await pc2_executor.run_command(f"rm --force {target_marker}")
 
 
 async def test_core_us_interrupt_as1_interrupt_requests_job_termination(
@@ -264,7 +264,7 @@ async def test_core_us_interrupt_as1_interrupt_requests_job_termination(
     job_pid = None
 
     try:
-        await pc2_executor.run_command(f"rm -f {job_marker}")
+        await pc2_executor.run_command(f"rm --force {job_marker}")
 
         # Start a job-like operation on target using nohup
         await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {job_marker} && sleep 300' > /dev/null 2>&1 &")
@@ -277,7 +277,7 @@ async def test_core_us_interrupt_as1_interrupt_requests_job_termination(
         job_pid = job_check.stdout.strip()
 
         # Verify the job process is running
-        pid_check = await pc2_executor.run_command(f"ps -p {job_pid} -o pid= 2>/dev/null")
+        pid_check = await pc2_executor.run_command(f"ps --pid {job_pid} --format pid= 2>/dev/null")
         assert pid_check.stdout.strip() == job_pid, "Job process should be running"
 
         # Simulate SIGINT handling - request termination
@@ -288,14 +288,14 @@ async def test_core_us_interrupt_as1_interrupt_requests_job_termination(
         await asyncio.sleep(1.0)
 
         # Verify job was terminated
-        orphan_check = await pc2_executor.run_command(f"ps -p {job_pid} -o pid= 2>/dev/null")
+        orphan_check = await pc2_executor.run_command(f"ps --pid {job_pid} --format pid= 2>/dev/null")
         assert not orphan_check.stdout.strip(), "Job should be terminated after interrupt"
 
     finally:
         # Cleanup
         if job_pid:
             await pc2_executor.run_command(f"kill -9 {job_pid} 2>/dev/null || true")
-        await pc2_executor.run_command(f"rm -f {job_marker}")
+        await pc2_executor.run_command(f"rm --force {job_marker}")
 
 
 async def test_core_us_interrupt_as3_second_interrupt_forces_termination(
@@ -323,7 +323,7 @@ async def test_core_us_interrupt_as3_second_interrupt_forces_termination(
     process_pid = None
 
     try:
-        await pc2_executor.run_command(f"rm -f {cleanup_marker}")
+        await pc2_executor.run_command(f"rm --force {cleanup_marker}")
 
         # Start a process that we'll try to clean up
         await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {cleanup_marker} && sleep 300' > /dev/null 2>&1 &")
@@ -369,14 +369,14 @@ async def test_core_us_interrupt_as3_second_interrupt_forces_termination(
         await asyncio.sleep(1.0)
 
         # Verify process was terminated
-        orphan_check = await pc2_executor.run_command(f"ps -p {process_pid} -o pid= 2>/dev/null")
+        orphan_check = await pc2_executor.run_command(f"ps --pid {process_pid} --format pid= 2>/dev/null")
         assert not orphan_check.stdout.strip(), "Processes should be terminated despite force quit"
 
     finally:
         # Cleanup
         if process_pid:
             await pc2_executor.run_command(f"kill -9 {process_pid} 2>/dev/null || true")
-        await pc2_executor.run_command(f"rm -f {cleanup_marker}")
+        await pc2_executor.run_command(f"rm --force {cleanup_marker}")
 
 
 async def test_core_edge_source_crash_timeout(
@@ -406,7 +406,7 @@ async def test_core_edge_source_crash_timeout(
     process_pid = None
 
     try:
-        await pc2_executor.run_command(f"rm -f {crash_marker}")
+        await pc2_executor.run_command(f"rm --force {crash_marker}")
 
         # Start a process on target that would normally be managed by source
         await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {crash_marker} && sleep 300' > /dev/null 2>&1 &")
@@ -434,11 +434,11 @@ async def test_core_edge_source_crash_timeout(
         await asyncio.sleep(1.0)
 
         # Verify processes are cleaned up
-        orphan_check = await pc2_executor.run_command(f"ps -p {process_pid} -o pid= 2>/dev/null")
+        orphan_check = await pc2_executor.run_command(f"ps --pid {process_pid} --format pid= 2>/dev/null")
         assert not orphan_check.stdout.strip(), "Processes should be cleaned up after crash recovery"
 
     finally:
         # Cleanup
         if process_pid:
             await pc2_executor.run_command(f"kill -9 {process_pid} 2>/dev/null || true")
-        await pc2_executor.run_command(f"rm -f {crash_marker}")
+        await pc2_executor.run_command(f"rm --force {crash_marker}")

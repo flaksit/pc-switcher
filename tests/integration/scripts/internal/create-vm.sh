@@ -183,7 +183,7 @@ run_installimage() {
         ${image_dir}/Ubuntu-noble-*amd64-base.tar.zst ${image_dir}/Ubuntu-noble-*amd64-base.tar.gz \
         ${image_dir}/Ubuntu-2404-*amd64-base.tar.zst ${image_dir}/Ubuntu-2404-*amd64-base.tar.gz \
         ${image_dir}/Ubuntu-24.04-*amd64-base.tar.zst ${image_dir}/Ubuntu-24.04-*amd64-base.tar.gz \
-        2>/dev/null | sort -V | tail -1")
+        2>/dev/null | sort --version-sort | tail --lines=1")
     if [[ -z "$image_path" ]]; then
         log_error_prefixed "No Ubuntu 24.04 amd64 base image found in ${image_dir}. Available images:"
         ssh_run "root@$vm_ip" "ls -1 ${image_dir}/ 2>/dev/null || echo '(image dir not found: ${image_dir})'" | while IFS= read -r line; do
@@ -265,7 +265,7 @@ verify_system() {
     # Verify btrfs filesystem
     log_info_prefixed "Checking btrfs filesystem..."
     local btrfs_check
-    btrfs_check=$(ssh_run "root@$vm_ip" "df -T / | tail -n1 | awk '{print \$2}'")
+    btrfs_check=$(ssh_run "root@$vm_ip" "df --print-type / | tail --lines=1 | awk '{print \$2}'")
 
     if [[ "$btrfs_check" != "btrfs" ]]; then
         log_error_prefixed "Root filesystem is not btrfs (got: $btrfs_check)"

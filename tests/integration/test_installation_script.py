@@ -65,7 +65,7 @@ async def test_core_fr_install_script(
 
     # Run the installation script
     result = await executor.run_command(
-        f"curl -sSL {INSTALL_SCRIPT_URL} | bash",
+        f"curl --silent --show-error --location {INSTALL_SCRIPT_URL} | bash",
         timeout=180.0,
     )
 
@@ -133,7 +133,7 @@ class TestInstallationScriptVersionParameter:
         release = highest_release
 
         # Install the release version using install.sh
-        cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={release.tag} bash"
+        cmd = f"curl --location --silent --show-error --fail {INSTALL_SCRIPT_URL} | VERSION={release.tag} bash"
         result = await executor.run_command(cmd, timeout=120.0)
         assert result.success, f"Installation failed: {result.stderr}"
 
@@ -159,7 +159,7 @@ class TestInstallationScriptVersionParameter:
         Note: This uses the pc2_with_old_pcswitcher_fn fixture, then we upgrade to the current release version.
         """
         # Upgrade to the release version
-        cmd = f"curl -LsSf {INSTALL_SCRIPT_URL} | VERSION={highest_release.tag} bash"
+        cmd = f"curl --location --silent --show-error --fail {INSTALL_SCRIPT_URL} | VERSION={highest_release.tag} bash"
         result = await pc2_with_old_pcswitcher_fn.run_command(cmd, timeout=120.0)
         assert result.success, f"Upgrade failed: {result.stderr}"
 

@@ -347,7 +347,7 @@ async def _copy_config_to_target(target: RemoteExecutor, source_path: Path) -> N
     """
     # Ensure directory exists on target
     result = await target.run_command(
-        f"mkdir -p {CONFIG_REMOTE_DIR}", mutates="create the pc-switcher config directory on the target"
+        f"mkdir --parents {CONFIG_REMOTE_DIR}", mutates="create the pc-switcher config directory on the target"
     )
     if not result.success:
         raise RuntimeError(f"Failed to create config directory on target: {result.stderr}")

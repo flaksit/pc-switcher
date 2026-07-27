@@ -32,4 +32,4 @@ def get_install_with_script_command_line(v: Release | Version | str | None = Non
 
     script_url = f"https://raw.githubusercontent.com/flaksit/pc-switcher/{url_ref}/install.sh"
 
-    return f"curl -sSL {script_url} | {set_version} bash {set_ref}"
+    return f"curl --silent --show-error --location {script_url} | {set_version} bash {set_ref}"

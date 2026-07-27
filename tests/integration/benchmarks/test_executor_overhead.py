@@ -152,7 +152,7 @@ class TestExecutorWrapperOverhead:
     async def test_direct_vs_wrapped_command_overhead(self, pc1_executor: BashLoginRemoteExecutor) -> None:
         """Compare direct RemoteExecutor vs login_shell=True overhead.
 
-        RemoteExecutor with login_shell=True wraps commands in 'bash -l -c "..."'
+        RemoteExecutor with login_shell=True wraps commands in 'bash --login -c "..."'
         to get a login shell environment. This test measures the cost of that wrapper.
         """
         num_runs = 10
@@ -193,7 +193,7 @@ class TestExecutorWrapperOverhead:
         logger.info(f"  Mean:   {direct_mean * 1000:.2f} ms")
         logger.info(f"  StdDev: {direct_std * 1000:.2f} ms")
         logger.info("")
-        logger.info("With Login Shell (login_shell=True, bash -l -c wrapper):")
+        logger.info("With Login Shell (login_shell=True, bash --login -c wrapper):")
         logger.info(f"  Mean:   {wrapped_mean * 1000:.2f} ms")
         logger.info(f"  StdDev: {wrapped_std * 1000:.2f} ms")
         logger.info("")

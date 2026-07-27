@@ -342,7 +342,7 @@ class VscodeStateSyncJob(SyncJob):
         Handles either a main ``state.vscdb`` or its ``.backup`` sidecar (same schema);
         ``label`` names which. The neutral DB is transferred to
         ``<target_db>.pcswitcher-tmp`` — same directory as the live file — so the final
-        ``mv -f`` is atomic and preserves ownership/perms.
+        ``mv --force`` is atomic and preserves ownership/perms.
         """
         remote_tmp = target_db + ".pcswitcher-tmp"
         tmp_dir = Path(tempfile.mkdtemp(prefix="pcswitcher-vscode-"))
@@ -360,9 +360,9 @@ class VscodeStateSyncJob(SyncJob):
             # Ensure that directory exists first: folder_sync normally creates it, but
             # jobs are independently toggleable, so `folder_sync: false` + this job on a
             # target that never ran the editor would otherwise leave the SFTP put with no
-            # parent directory. mkdir -p is a no-op when it already exists.
+            # parent directory. mkdir --parents is a no-op when it already exists.
             mkdir = await self.target.run_command(
-                f"mkdir -p {shlex.quote(Path(target_db).parent.as_posix())}",
+                f"mkdir --parents {shlex.quote(Path(target_db).parent.as_posix())}",
                 login_shell=False,
                 mutates=f"create the editor state directory for {label} on the target",
             )
@@ -384,7 +384,7 @@ class VscodeStateSyncJob(SyncJob):
 
             # Atomic replace within the same directory.
             move = await self.target.run_command(
-                f"mv -f {shlex.quote(remote_tmp)} {shlex.quote(target_db)}",
+                f"mv --force {shlex.quote(remote_tmp)} {shlex.quote(target_db)}",
                 login_shell=False,
                 mutates=f"replace the target's live {label} with the merged database, discarding the current file",
             )

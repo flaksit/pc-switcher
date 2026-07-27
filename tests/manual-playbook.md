@@ -18,7 +18,7 @@ This playbook verifies **visual and UX elements** that automated tests cannot ch
 
 2. Install pc-switcher on both machines from the version you want to test:
    ```bash
-   curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=<version> bash
+   curl --silent --show-error --location https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=<version> bash
    ```
 
 3. Initialize config on pc1:
@@ -115,7 +115,7 @@ To test config sync display, ensure pc2 config differs from pc1:
 
 ```bash
 # On pc2, modify a setting
-ssh pc2 "sed -i 's/INFO/WARNING/' ~/.config/pc-switcher/config.yaml"
+ssh pc2 "sed --in-place 's/INFO/WARNING/' ~/.config/pc-switcher/config.yaml"
 
 # Run sync from pc1
 pc-switcher sync pc2

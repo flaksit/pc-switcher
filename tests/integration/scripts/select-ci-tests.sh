@@ -65,7 +65,7 @@ while IFS= read -r f; do
         # pytestmark. Deleted files (absent from the checkout) and files without
         # a recognizable marker fall back to the full suite.
         tests/integration/*test_*.py)
-            marker=$([[ -f "$f" ]] && grep -oE 'pytest\.mark\.(area_[a-z]+|smoke)' "$f" | head -1 | cut -d. -f3 || true)
+            marker=$([[ -f "$f" ]] && grep --only-matching --extended-regexp 'pytest\.mark\.(area_[a-z]+|smoke)' "$f" | head --lines=1 | cut --delimiter='.' --fields=3 || true)
             if [[ -z "$marker" ]]; then
                 full "$f (no smoke/area_* pytestmark found)"
             fi

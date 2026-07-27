@@ -55,7 +55,7 @@ get_vm_ip() {
     local vm_name="$1"
     local ip
 
-    ip=$(hcloud server describe "$vm_name" -o json | jq -r '.public_net.ipv4.ip')
+    ip=$(hcloud server describe "$vm_name" --output json | jq --raw-output '.public_net.ipv4.ip')
 
     if [[ -z "$ip" || "$ip" == "null" ]]; then
         log_error "Could not get IP address for VM: $vm_name"
@@ -84,8 +84,8 @@ HOME_SNAPSHOT="${SNAPSHOT_BASE_DIR}/@home"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 # Create directories if they don't exist
-mkdir -p "$SNAPSHOT_BASE_DIR"
-mkdir -p "$OLD_SNAPSHOT_DIR"
+mkdir --parents "$SNAPSHOT_BASE_DIR"
+mkdir --parents "$OLD_SNAPSHOT_DIR"
 
 # Move existing baseline snapshots to old/ with timestamp (instead of deleting)
 # Note: btrfs read-only snapshots cannot be moved directly, so we temporarily
@@ -112,11 +112,11 @@ btrfs subvolume snapshot -r /home "$HOME_SNAPSHOT"
 
 # Rotate old baseline snapshots: keep 3 most recent, delete the rest
 echo "Rotating old baseline snapshots (keeping 3 most recent)..."
-for old_subvol in $(ls -1d ${OLD_SNAPSHOT_DIR}/baseline_@_* 2>/dev/null | sort -r | tail -n +4); do
+for old_subvol in $(ls -1 --directory ${OLD_SNAPSHOT_DIR}/baseline_@_* 2>/dev/null | sort --reverse | tail --lines=+4); do
     echo "Deleting old baseline: $old_subvol"
     btrfs subvolume delete "$old_subvol"
 done
-for old_subvol in $(ls -1d ${OLD_SNAPSHOT_DIR}/baseline_@home_* 2>/dev/null | sort -r | tail -n +4); do
+for old_subvol in $(ls -1 --directory ${OLD_SNAPSHOT_DIR}/baseline_@home_* 2>/dev/null | sort --reverse | tail --lines=+4); do
     echo "Deleting old baseline: $old_subvol"
     btrfs subvolume delete "$old_subvol"
 done

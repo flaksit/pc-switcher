@@ -69,7 +69,7 @@ def make_context(*, dry_run: bool = False) -> JobContext:
 
 class FakeShellExecutor:
     """Interprets the small, fixed vocabulary of shell commands `DecisionFile` issues
-    (`cat ... 2>/dev/null`, and the `mkdir -p ... && printf '%s' ... > ... && mv -f ...`
+    (`cat ... 2>/dev/null`, and the `mkdir --parents ... && printf '%s' ... > ... && mv --force ...`
     atomic-write shape), backed by an in-memory dict. Good enough to prove a genuine
     load()/record() round trip without shelling out to a real subprocess.
     """
@@ -263,10 +263,10 @@ class TestDecisionFileRecord:
         await store.record(_entry())
 
         cmd = executor.run_command.call_args.args[0]
-        assert "mkdir -p" in cmd
+        assert "mkdir --parents" in cmd
         assert ".pcswitcher-tmp" in cmd
-        assert "mv -f" in cmd
-        assert cmd.index("mkdir -p") < cmd.index(".pcswitcher-tmp") < cmd.index("mv -f")
+        assert "mv --force" in cmd
+        assert cmd.index("mkdir --parents") < cmd.index(".pcswitcher-tmp") < cmd.index("mv --force")
 
     @pytest.mark.asyncio
     async def test_source_held_write_uses_source_executor_and_leaves_target_untouched(self) -> None:
@@ -431,9 +431,9 @@ class TestPipelineWiring:
         await job.plan()
 
         for cmd in [call.args[0] for call in context.source.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
-            assert "mv -f" not in cmd
+            assert "mv --force" not in cmd
         for cmd in [call.args[0] for call in context.target.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
-            assert "mv -f" not in cmd
+            assert "mv --force" not in cmd
 
     @pytest.mark.asyncio
     async def test_every_record_call_originates_from_apply_not_plan(self) -> None:
@@ -459,8 +459,8 @@ class TestPipelineWiring:
 
         target_cmds = [call.args[0] for call in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
         source_cmds = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
-        assert any("mv -f" in cmd for cmd in target_cmds)
-        assert not any("mv -f" in cmd for cmd in source_cmds)
+        assert any("mv --force" in cmd for cmd in target_cmds)
+        assert not any("mv --force" in cmd for cmd in source_cmds)
 
     @pytest.mark.asyncio
     async def test_skip_always_on_install_writes_to_source_not_target(self) -> None:
@@ -474,8 +474,8 @@ class TestPipelineWiring:
 
         target_cmds = [call.args[0] for call in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
         source_cmds = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
-        assert any("mv -f" in cmd for cmd in source_cmds)
-        assert not any("mv -f" in cmd for cmd in target_cmds)
+        assert any("mv --force" in cmd for cmd in source_cmds)
+        assert not any("mv --force" in cmd for cmd in target_cmds)
 
     @pytest.mark.asyncio
     async def test_skip_always_on_change_writes_to_source_not_target(self) -> None:
@@ -493,8 +493,8 @@ class TestPipelineWiring:
 
         target_cmds = [call.args[0] for call in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
         source_cmds = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
-        assert any("mv -f" in cmd for cmd in source_cmds)
-        assert not any("mv -f" in cmd for cmd in target_cmds)
+        assert any("mv --force" in cmd for cmd in source_cmds)
+        assert not any("mv --force" in cmd for cmd in target_cmds)
 
     @pytest.mark.asyncio
     async def test_no_record_call_when_dry_run(self) -> None:
@@ -507,7 +507,7 @@ class TestPipelineWiring:
         await job.apply()
 
         for cmd in [call.args[0] for call in context.target.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
-            assert "mv -f" not in cmd
+            assert "mv --force" not in cmd
 
     @pytest.mark.asyncio
     async def test_no_record_call_when_outcome_was_not_interactive(self) -> None:
@@ -520,7 +520,7 @@ class TestPipelineWiring:
         await job.apply()
 
         for cmd in [call.args[0] for call in context.target.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
-            assert "mv -f" not in cmd
+            assert "mv --force" not in cmd
 
 
 class TestHandEditedDecisionFile:
@@ -633,7 +633,7 @@ class TestDecisionScopeIsDiffFilteringOnly:
                 # machine — apt considers it an auto-installed package.
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt.decisions.yaml": CommandResult(0, self._DECISIONS, ""),
-                "apt-get -s install": CommandResult(0, "Inst pkg-a (1.0)\nRemv ghost-tool [1.0]\n", ""),
+                "apt-get --dry-run install": CommandResult(0, "Inst pkg-a (1.0)\nRemv ghost-tool [1.0]\n", ""),
             },
         )
         job = AptSyncJob(context)
@@ -660,7 +660,7 @@ class TestDecisionScopeIsDiffFilteringOnly:
                 "apt-mark showmanual": CommandResult(0, "ghost-tool\n", ""),
                 "dpkg-query": CommandResult(0, "ghost-tool\t1.0\n", ""),
                 "apt.decisions.yaml": CommandResult(0, self._DECISIONS, ""),
-                "apt-get -s install": CommandResult(0, "Inst pkg-a (1.0)\nRemv ghost-tool [1.0]\n", ""),
+                "apt-get --dry-run install": CommandResult(0, "Inst pkg-a (1.0)\nRemv ghost-tool [1.0]\n", ""),
             },
         )
         job = AptSyncJob(context)
@@ -744,7 +744,7 @@ class TestSnippetRegistry:
         snippet = Snippet(
             item_id="unreproducible:apt-no-candidate:brscan3",
             label="brscan3 (no apt candidate)",
-            body="  sudo dpkg -i /tmp/brscan3.deb\n\nsudo apt-get install -f -y\n",
+            body="  sudo dpkg --install /tmp/brscan3.deb\n\nsudo apt-get install --fix-broken --assume-yes\n",
             authored_at="2026-07-23T09:00:00+00:00",
             authored_on="laptop",
         )
@@ -770,10 +770,10 @@ class TestSnippetRegistry:
         await registry.add(Snippet(item_id="x", label="x", body="echo hi", authored_at="t", authored_on="h"))
 
         cmd = executor.run_command.call_args.args[0]
-        assert "mkdir -p" in cmd
+        assert "mkdir --parents" in cmd
         assert ".pcswitcher-tmp" in cmd
-        assert "mv -f" in cmd
-        assert cmd.index("mkdir -p") < cmd.index(".pcswitcher-tmp") < cmd.index("mv -f")
+        assert "mv --force" in cmd
+        assert cmd.index("mkdir --parents") < cmd.index(".pcswitcher-tmp") < cmd.index("mv --force")
 
     @pytest.mark.asyncio
     async def test_add_preserves_an_unrelated_pre_existing_entry(self) -> None:

@@ -9,7 +9,7 @@ items via `apt-get install`/`apt-get remove`.
 
 Bare-`.deb` packages are NOT in scope and are dropped at capture
 (`_source_bare_deb_packages`). A package whose installed version comes from no configured
-repository was put there with `dpkg -i`; apt cannot install it on the target, and
+repository was put there with `dpkg --install`; apt cannot install it on the target, and
 `manual_installs_sync` offers it as an install snippet in the same run (D-18). Both jobs
 compute the predicate from the shared `packages/apt_policy.py` parser — the same test, never
 a result passed between them, since D-15/D-16 keep the four jobs independent.
@@ -20,7 +20,7 @@ forbids. So enabling `apt_sync` while disabling `manual_installs_sync` leaves th
 replicated by nobody — silently absent rather than offered as installs that fail. Documented
 for the user in `docs/jobs/package-sync.md`.
 
-Every approved item's transaction is simulated with `apt-get -s` before the real
+Every approved item's transaction is simulated with `apt-get --dry-run` before the real
 command runs, guarding against apt silently doing more than the review showed. Collateral
 effects are classified by provenance (D-30): a package the simulation would remove or
 downgrade that is auto-installed (not in the target's `apt-mark showmanual` set) is apt
@@ -210,10 +210,10 @@ _APT_HOLD_ID_PREFIX = "apt:hold:"
 # but is excluded from `_REPO_GROUP_CLASSES` membership checks by item_id, not class.
 _METADATA_REFRESH_ITEM_ID = "apt:metadata-refresh"
 
-# Matches one `apt-get -s` transaction line: `Inst <name> [<old>] (<new> ...)` for an
+# Matches one `apt-get --dry-run` transaction line: `Inst <name> [<old>] (<new> ...)` for an
 # install/upgrade (the `[<old>]` bracket only appears when a version is already
 # installed), or `Remv <name> [<old>]` for a removal. Parsed by leading verb token and
-# named groups rather than fixed column positions — the rest of an apt-get -s line's
+# named groups rather than fixed column positions — the rest of an apt-get --dry-run line's
 # shape varies with the package and its dependency resolution.
 _TRANSACTION_LINE_RE = re.compile(
     r"^(?P<verb>Inst|Remv)\s+(?P<name>\S+)"
@@ -915,9 +915,9 @@ def _backup_path_for(backup_dir: str, dest: str) -> str:
 
 @dataclass(frozen=True)
 class AptTransactionPreview:
-    """The parsed result of `apt-get -s <args>` — what apt says it WOULD do.
+    """The parsed result of `apt-get --dry-run <args>` — what apt says it WOULD do.
 
-    `apt-get -s` is the only honest answer to "what will this command do": apt resolves
+    `apt-get --dry-run` is the only honest answer to "what will this command do": apt resolves
     dependencies and conflicts at run time, so the package the user ticked and the
     transaction apt actually runs are not necessarily the same thing.
 
@@ -937,18 +937,18 @@ class AptTransactionPreview:
 async def simulate_apt_transaction(
     executor: RemoteExecutor, apt_args: str, *, login_shell: bool | None = False
 ) -> AptTransactionPreview:
-    """Run `apt-get -s <apt_args>` on `executor` and parse its Inst/Remv action lines.
+    """Run `apt-get --dry-run <apt_args>` on `executor` and parse its Inst/Remv action lines.
 
     No `sudo` is needed: simulation is read-only. Raises `ConvergeItemFailed` if the
     simulation itself fails (dpkg lock contention, unmet dependencies, a transient
-    apt-cache read error): a failed `apt-get -s` typically prints no Inst/Remv lines,
+    apt-cache read error): a failed `apt-get --dry-run` typically prints no Inst/Remv lines,
     which would otherwise parse as an indistinguishable-from-clean empty preview and
     let both call sites proceed with a real command whose simulation was never
     actually trustworthy (WR-01) — refuse rather than silently degrade.
     """
-    result = await executor.run_command(f"apt-get -s {apt_args}", login_shell=login_shell)
+    result = await executor.run_command(f"apt-get --dry-run {apt_args}", login_shell=login_shell)
     if not result.success:
-        raise ConvergeItemFailed(f"apt-get -s {apt_args} failed: {result.stderr.strip()}")
+        raise ConvergeItemFailed(f"apt-get --dry-run {apt_args} failed: {result.stderr.strip()}")
     installs: list[str] = []
     removals: list[str] = []
     install_versions: dict[str, tuple[str | None, str]] = {}
@@ -1003,7 +1003,7 @@ class AptSyncJob(PackageSyncJob):
         self._source_shared_keys: dict[str, str] = {}
         self._target_shared_keys: dict[str, str] = {}
         # Absolute paths of every key file on the TARGET that the target's own dpkg owns,
-        # from one batched `dpkg -S` at plan time. Provisioning consults it in one direction
+        # from one batched `dpkg --search` at plan time. Provisioning consults it in one direction
         # only (module docstring): it never blocks copying a key the target LACKS, it only
         # stops a differing key the target's package manages from being overwritten.
         self._target_package_owned_keys: frozenset[str] = frozenset()
@@ -1084,7 +1084,7 @@ class AptSyncJob(PackageSyncJob):
 
         The exclusion happens HERE and nowhere else: an item that never enters the manifest
         cannot become an `ItemDiff`, reach a review group, reach `_collect_plan_time_collateral`'s
-        `apt-get -s` simulation, or reach `collect_unavailable_item_ids`.
+        `apt-get --dry-run` simulation, or reach `collect_unavailable_item_ids`.
         """
         manual = await self.source.run_command("apt-mark showmanual")
         names = _lines(manual.stdout)
@@ -1095,7 +1095,7 @@ class AptSyncJob(PackageSyncJob):
 
     async def _source_bare_deb_packages(self, manual_names: Sequence[str]) -> frozenset[str]:
         """The source's manual packages installed from no configured repository — put there
-        by `dpkg -i` of a bare `.deb`, and therefore `manual_installs_sync`'s territory
+        by `dpkg --install` of a bare `.deb`, and therefore `manual_installs_sync`'s territory
         alone (D-18).
 
         Apt cannot install these anywhere: the target's repositories have never heard the
@@ -1141,7 +1141,7 @@ class AptSyncJob(PackageSyncJob):
         # dpkg-query's OWN format-string escapes (interpreted by dpkg-query, not the
         # shell) — hence a plain (non-f) string so Python leaves them as two-char
         # backslash sequences for dpkg-query to expand into real tab/newline.
-        versions_result = await run("dpkg-query -W -f='${Package}\\t${Version}\\n' " + quoted)
+        versions_result = await run("dpkg-query --show --showformat='${Package}\\t${Version}\\n' " + quoted)
 
         versions: dict[str, str] = {}
         for line in versions_result.stdout.splitlines():
@@ -1276,7 +1276,7 @@ class AptSyncJob(PackageSyncJob):
         `UNREPRODUCIBLE` diff.
 
         Runs AFTER the base diff and BEFORE review groups are (re)built. The batched
-        apt-get -s simulations reveal what the pending transaction would also remove or
+        apt-get --dry-run simulations reveal what the pending transaction would also remove or
         downgrade; each such package is split by provenance against the target's
         `apt-mark showmanual` set (captured here, once). An auto-installed collateral
         package is apt resolving its own dependencies — it proceeds silently, producing no
@@ -1670,13 +1670,13 @@ class AptSyncJob(PackageSyncJob):
         if install_names:
             quoted = " ".join(shlex.quote(name) for name in install_names)
             preview = await simulate_apt_transaction(
-                self.target, f"install -y --no-install-recommends {quoted}", login_shell=False
+                self.target, f"install --assume-yes --no-install-recommends {quoted}", login_shell=False
             )
             trigger_ids = frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in install_names)
             collateral.extend(await self._classify_collateral(preview, reviewed_names, trigger_ids, verb="installing"))
         if remove_names:
             quoted = " ".join(shlex.quote(name) for name in remove_names)
-            preview = await simulate_apt_transaction(self.target, f"remove -y {quoted}", login_shell=False)
+            preview = await simulate_apt_transaction(self.target, f"remove --assume-yes {quoted}", login_shell=False)
             trigger_ids = frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in remove_names)
             collateral.extend(await self._classify_collateral(preview, reviewed_names, trigger_ids, verb="removing"))
         return collateral
@@ -2107,7 +2107,7 @@ class AptSyncJob(PackageSyncJob):
         name = _package_name(diff.item_id)
         await self._ensure_metadata_refreshed()
         quoted = shlex.quote(name)
-        install_args = f"install -y --no-install-recommends {quoted}"
+        install_args = f"install --assume-yes --no-install-recommends {quoted}"
 
         preview = await simulate_apt_transaction(self.target, install_args, login_shell=False)
 
@@ -2116,7 +2116,7 @@ class AptSyncJob(PackageSyncJob):
         if refused:
             removed = ", ".join(refused)
             raise ConvergeItemFailed(
-                f"install of {name} refused: apt-get -s would remove manually-installed {removed}, "
+                f"install of {name} refused: apt-get --dry-run would remove manually-installed {removed}, "
                 "which was not approved as collateral in this run (D-30)"
             )
 
@@ -2125,7 +2125,7 @@ class AptSyncJob(PackageSyncJob):
                 continue
             if await compare_deb_versions(self.target, new_version, old_version) < 0:
                 raise ConvergeItemFailed(
-                    f"install of {name} refused: apt-get -s would downgrade manually-installed {pkg} "
+                    f"install of {name} refused: apt-get --dry-run would downgrade manually-installed {pkg} "
                     f"from {old_version} to {new_version}, which was not approved as collateral (D-30, D-04)"
                 )
 
@@ -2145,7 +2145,7 @@ class AptSyncJob(PackageSyncJob):
         """
         name = _package_name(diff.item_id)
         quoted = shlex.quote(name)
-        remove_args = f"remove -y {quoted}"
+        remove_args = f"remove --assume-yes {quoted}"
 
         preview = await simulate_apt_transaction(self.target, remove_args, login_shell=False)
         approved = self._approved_removal_names()
@@ -2158,7 +2158,7 @@ class AptSyncJob(PackageSyncJob):
         if refused:
             removed = ", ".join(refused)
             raise ConvergeItemFailed(
-                f"removal of {name} refused: apt-get -s would also remove manually-installed {removed}, "
+                f"removal of {name} refused: apt-get --dry-run would also remove manually-installed {removed}, "
                 "which was neither an approved removal nor approved as collateral in this run (D-30)"
             )
 
@@ -2168,7 +2168,7 @@ class AptSyncJob(PackageSyncJob):
     async def _converge_hold(self, diff: ItemDiff) -> CommandResult:
         """Converge one `apt:hold:<name>` membership item (#208, D4/D5): `apt-mark hold`
         for the add direction (INSTALL), `apt-mark unhold` for the remove direction
-        (REMOVE). Selection state only — no `apt-get -s` simulation and no transaction
+        (REMOVE). Selection state only — no `apt-get --dry-run` simulation and no transaction
         guard (a hold changes nothing about the installed package set, D4). The command's
         exit code alone decides pass/fail (D-27); a hold on an absent or unknown package
         that `apt-mark` rejects is a normal per-item failure (D6), not a gated abort.
@@ -2265,7 +2265,7 @@ class AptSyncJob(PackageSyncJob):
         staging_dir = f"{home}/.cache/pc-switcher/apt-staging"
         backup_dir = f"{staging_dir}/backup-{uuid4().hex}"
         await self.target.run_command(
-            f"mkdir -p {shlex.quote(staging_dir)}",
+            f"mkdir --parents {shlex.quote(staging_dir)}",
             login_shell=False,
             mutates="create the apt repository-group staging directory",
         )
@@ -2318,7 +2318,7 @@ class AptSyncJob(PackageSyncJob):
             # second `apt-get update`.
             self._metadata_refreshed = True
             await self.target.run_command(
-                f"rm -rf {shlex.quote(backup_dir)}",
+                f"rm --recursive --force {shlex.quote(backup_dir)}",
                 login_shell=False,
                 mutates="discard the repository-group backup after a successful refresh",
             )
@@ -2369,14 +2369,15 @@ class AptSyncJob(PackageSyncJob):
                 backup_path = _backup_path_for(backup_dir, dest)
                 action = f"restore {dest} from {backup_path}"
                 result = await self.target.run_command(
-                    f"sudo install -o root -g root -m 0644 {shlex.quote(backup_path)} {shlex.quote(dest)}",
+                    f"sudo install --owner=root --group=root --mode=0644 "
+                    f"{shlex.quote(backup_path)} {shlex.quote(dest)}",
                     login_shell=False,
                     mutates=f"ROLLBACK: restore {dest} from backup",
                 )
             else:
                 action = f"delete {dest}, which this run created"
                 result = await self.target.run_command(
-                    f"sudo rm -f {shlex.quote(dest)}",
+                    f"sudo rm --force {shlex.quote(dest)}",
                     login_shell=False,
                     mutates=f"ROLLBACK: delete {dest}, which this run created",
                 )
@@ -2402,7 +2403,7 @@ class AptSyncJob(PackageSyncJob):
             )
         else:
             await self.target.run_command(
-                f"rm -rf {shlex.quote(backup_dir)}",
+                f"rm --recursive --force {shlex.quote(backup_dir)}",
                 login_shell=False,
                 mutates="ROLLBACK: discard the repository-group backup directory",
             )
@@ -2453,13 +2454,13 @@ class AptSyncJob(PackageSyncJob):
             return False
 
         await self.target.run_command(
-            f"mkdir -p {shlex.quote(backup_dir)}",
+            f"mkdir --parents {shlex.quote(backup_dir)}",
             login_shell=False,
             mutates="create the repository-group backup directory",
         )
         backup_path = _backup_path_for(backup_dir, dest)
         result = await self.target.run_command(
-            f"sudo cp -a {quoted_dest} {shlex.quote(backup_path)}",
+            f"sudo cp --archive {quoted_dest} {shlex.quote(backup_path)}",
             login_shell=False,
             mutates=f"back up {dest} before the repository group is written",
         )
@@ -2470,7 +2471,7 @@ class AptSyncJob(PackageSyncJob):
         return True
 
     async def _write_or_remove_repo_item(self, diff: ItemDiff, staging_dir: str) -> None:
-        """Converge one repository-group diff: `sudo rm -f` for a REMOVE, or
+        """Converge one repository-group diff: `sudo rm --force` for a REMOVE, or
         `_stage_and_promote` for an INSTALL/CHANGE (T-02-35). A source file is gated on
         its keyrings having landed first (D-12).
         """
@@ -2478,7 +2479,7 @@ class AptSyncJob(PackageSyncJob):
 
         if diff.action == DiffAction.REMOVE:
             result = await self.target.run_command(
-                f"sudo rm -f {shlex.quote(dest)}",
+                f"sudo rm --force {shlex.quote(dest)}",
                 login_shell=False,
                 mutates=f"delete repository file {dest}",
             )
@@ -2510,13 +2511,13 @@ class AptSyncJob(PackageSyncJob):
         # the `apt` package, but `/etc/apt/keyrings` is a third-party convention that a
         # fresh Ubuntu 24.04 target does not have — `install` (unlike `install -D`)
         # never creates DEST's missing parent directories, so a per-repo key promotion
-        # to a fresh machine would otherwise fail every time. `mkdir -p -m` only chmods
-        # directories it actually creates (unlike `install -d`, which would also chmod
+        # to a fresh machine would otherwise fail every time. `mkdir --parents --mode` only chmods
+        # directories it actually creates (unlike `install --directory`, which would also chmod
         # the four directories that already exist), so this is a no-op everywhere except
         # the one directory this project actually needs to create.
         dest_dir = str(Path(dest).parent)
         mkdir_result = await self.target.run_command(
-            f"sudo mkdir -p -m 0755 {shlex.quote(dest_dir)}",
+            f"sudo mkdir --parents --mode=0755 {shlex.quote(dest_dir)}",
             login_shell=False,
             mutates=f"create directory {dest_dir} for {dest}",
         )
@@ -2531,7 +2532,7 @@ class AptSyncJob(PackageSyncJob):
                 Path(local), staged_dest, mutates=f"stage {dest} into the target's cache before promotion"
             )
             promote = await self.target.run_command(
-                f"sudo install -o root -g root -m 0644 {shlex.quote(staged_dest)} {shlex.quote(dest)}",
+                f"sudo install --owner=root --group=root --mode=0644 {shlex.quote(staged_dest)} {shlex.quote(dest)}",
                 login_shell=False,
                 mutates=f"promote the staged file into {dest} as root:root 0644",
             )
@@ -2539,7 +2540,7 @@ class AptSyncJob(PackageSyncJob):
                 raise ConvergeItemFailed(f"failed to install {dest}: {promote.stderr.strip()}")
         finally:
             await self.target.run_command(
-                f"rm -f {shlex.quote(staged_dest)}",
+                f"rm --force {shlex.quote(staged_dest)}",
                 login_shell=False,
                 mutates=f"remove the staging copy of {dest}",
             )
@@ -2554,21 +2555,21 @@ class AptSyncJob(PackageSyncJob):
         self, target_run: Callable[[str], Awaitable[CommandResult]]
     ) -> frozenset[str]:
         """Absolute paths of the target's key files that the target's own dpkg owns, from
-        ONE batched `dpkg -S` over every key file the target has (never one call per file —
+        ONE batched `dpkg --search` over every key file the target has (never one call per file —
         the `manual_installs_sync._scan_unowned_installs` shape).
 
-        The exit code is deliberately ignored: `dpkg -S` returns non-zero as soon as ANY
+        The exit code is deliberately ignored: `dpkg --search` returns non-zero as soon as ANY
         argument matches no package, which for a machine with even one hand-placed key is
         always. Ownership is read out of stdout, where each matched path arrives as
         `<package[, package...]>: <path>`; unmatched paths go to stderr and simply produce
         no entry, which is exactly the "unowned" answer.
 
-        Read-only, no sudo: `dpkg -S` queries the local dpkg database.
+        Read-only, no sudo: `dpkg --search` queries the local dpkg database.
         """
         paths = sorted(f"{directory}/{name}" for directory, digests in self._target_key_dirs() for name in digests)
         if not paths:
             return frozenset()
-        result = await target_run(f"dpkg -S {' '.join(shlex.quote(path) for path in paths)}")
+        result = await target_run(f"dpkg --search {' '.join(shlex.quote(path) for path in paths)}")
         owned: set[str] = set()
         for line in result.stdout.splitlines():
             _packages, separator, path = line.rpartition(": ")
@@ -2797,7 +2798,7 @@ class AptSyncJob(PackageSyncJob):
                 continue
             existed_before[dest] = True
             result = await self.target.run_command(
-                f"sudo rm -f {shlex.quote(dest)}",
+                f"sudo rm --force {shlex.quote(dest)}",
                 login_shell=False,
                 mutates=f"delete signing key {dest}, which no repository references any more",
             )
@@ -2870,7 +2871,7 @@ class AptSyncJob(PackageSyncJob):
         # capture degrades to empty digest maps rather than failing. The sync would then
         # report success having replicated no repository configuration at all — a silent
         # wrong-result, which is worse than refusing to start.
-        source_sudo_check = await self.source.run_command("sudo -n true")
+        source_sudo_check = await self.source.run_command("sudo --non-interactive true")
         if not source_sudo_check.success:
             errors.append(
                 self._validation_error(
@@ -2881,7 +2882,7 @@ class AptSyncJob(PackageSyncJob):
                 )
             )
 
-        sudo_check = await self.target.run_command("sudo -n true", login_shell=False)
+        sudo_check = await self.target.run_command("sudo --non-interactive true", login_shell=False)
         if not sudo_check.success:
             errors.append(
                 self._validation_error(

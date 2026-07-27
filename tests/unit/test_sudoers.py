@@ -29,13 +29,13 @@ class TestPasswordlessSudoHint:
         """A syntax error written by a plain editor can lock the user out of sudo."""
         hint = passwordless_sudo_hint(("/usr/bin/rsync",))
 
-        assert f"visudo -f {SUDOERS_DROPIN_PATH}" in hint
+        assert f"visudo --file={SUDOERS_DROPIN_PATH}" in hint
         assert "visudo" in hint
 
     def test_includes_a_verification_command(self) -> None:
         hint = passwordless_sudo_hint(("/usr/bin/rsync",))
 
-        assert "sudo -n true" in hint
+        assert "sudo --non-interactive true" in hint
 
     def test_substitutes_a_known_user_into_the_grant_line(self) -> None:
         hint = passwordless_sudo_hint(("/usr/bin/snap",), user="alice")

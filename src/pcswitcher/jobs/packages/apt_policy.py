@@ -116,7 +116,7 @@ def installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]
 
 def packages_installed_from_no_repository(policy_output: str, queried_names: Sequence[str]) -> frozenset[str]:
     """The `queried_names` whose INSTALLED version comes from no configured repository —
-    a bare `.deb` put on the machine with `dpkg -i` (D-18).
+    a bare `.deb` put on the machine with `dpkg --install` (D-18).
 
     Callers MUST pass only names known to be installed (`apt-mark showmanual` on the
     machine `policy_output` came from). A name that is not installed is indistinguishable

@@ -110,7 +110,7 @@ BRSCAN3_REGISTRY_YAML = (
     "snippets:\n"
     "  unreproducible:apt-no-candidate:brscan3:\n"
     "    label: brscan3 (no apt candidate)\n"
-    "    body: sudo dpkg -i /tmp/brscan3.deb\n"
+    "    body: sudo dpkg --install /tmp/brscan3.deb\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: laptop\n"
 )
@@ -370,7 +370,7 @@ class TestUnownedScan:
                     "/usr/local/flux\n/usr/local/bin/talosctl\n/usr/local/bin/kubectl-cnpg\n/opt/az\n",
                     "",
                 ),
-                "dpkg -S": CommandResult(0, "cnpg: /usr/local/bin/kubectl-cnpg\nazure-cli: /opt/az\n", ""),
+                "dpkg --search": CommandResult(0, "cnpg: /usr/local/bin/kubectl-cnpg\nazure-cli: /opt/az\n", ""),
             }
         )
         job = ManualInstallsSyncJob(context)
@@ -411,7 +411,7 @@ class TestSnippetResolution:
             target_responses={
                 # converge/replay still reads the target's copy, placed there by the push.
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
-                "bash -c 'sudo dpkg -i /tmp/brscan3.deb'": CommandResult(0, "brscan3 installed\n", ""),
+                "bash -c 'sudo dpkg --install /tmp/brscan3.deb'": CommandResult(0, "brscan3 installed\n", ""),
             },
         )
         job = ManualInstallsSyncJob(context)
@@ -426,7 +426,7 @@ class TestSnippetResolution:
         assert result.success
         replay_calls = [c.args[0] for c in target.run_command.call_args_list if c.args[0].startswith("bash -c")]
         assert len(replay_calls) == 1
-        assert "dpkg -i /tmp/brscan3.deb" in replay_calls[0]
+        assert "dpkg --install /tmp/brscan3.deb" in replay_calls[0]
 
     @pytest.mark.asyncio
     async def test_item_without_snippet_is_report_only_and_grouped_separately(self) -> None:
@@ -532,12 +532,12 @@ class TestInstallOnly:
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 "find /usr/local": CommandResult(0, "/usr/local/flux\n", ""),
-                "dpkg -S": CommandResult(0, "", ""),
+                "dpkg --search": CommandResult(0, "", ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\ntarget-only-tool\n", ""),
                 "find /usr/local": CommandResult(0, "/usr/local/flux\n/usr/local/target-only\n", ""),
-                "dpkg -S": CommandResult(0, "", ""),
+                "dpkg --search": CommandResult(0, "", ""),
             },
         )
         job = ManualInstallsSyncJob(context)
@@ -626,7 +626,7 @@ class TestExecuteIndependentOfApt:
             },
             target_responses={
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
-                "bash -c 'sudo dpkg -i /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
+                "bash -c 'sudo dpkg --install /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
             },
             reviewer=reviewer,
         )
@@ -650,13 +650,13 @@ class TestTracerEndToEnd:
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 "find /usr/local": CommandResult(0, "/usr/local/flux\n/opt/az\n", ""),
-                "dpkg -S": CommandResult(0, "azure-cli: /opt/az\n", ""),
+                "dpkg --search": CommandResult(0, "azure-cli: /opt/az\n", ""),
                 # Source registry holds only brscan3 -> it plans INSTALL, flux plans REPORT_ONLY.
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
             target_responses={
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
-                "bash -c 'sudo dpkg -i /tmp/brscan3.deb'": CommandResult(0, "brscan3 installed\n", ""),
+                "bash -c 'sudo dpkg --install /tmp/brscan3.deb'": CommandResult(0, "brscan3 installed\n", ""),
             },
         )
         job = ManualInstallsSyncJob(context)
@@ -697,7 +697,7 @@ class TestSameRunApplication:
         # target registry below, which stands in for what the push would have delivered.
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         item_id = "unreproducible:apt-no-candidate:falco-app"
-        body = "sudo dpkg -i /tmp/falco.deb"
+        body = "sudo dpkg --install /tmp/falco.deb"
         # Post-push target registry: the mocked send_file transports nothing, so seed the
         # snippet the replay reads directly on the target (simulates after_review's push).
         target_registry_yaml = (
@@ -781,10 +781,10 @@ class TestClassificationAuthority:
     ) -> None:
         """ADR-014: under dry-run an on-the-fly-authored item is promoted and previewed as
         an install (`apply()`'s dry-run branch reports 1 change to apply), yet NO `bash -c`
-        replay reaches the target and NO source registry write (`mv -f` of
+        replay reaches the target and NO source registry write (`mv --force` of
         `package-snippets.yaml`) runs — a rehearsal leaves no trace and touches nothing."""
         item_id = "unreproducible:apt-no-candidate:falco-app"
-        body = "sudo dpkg -i /tmp/falco.deb"
+        body = "sudo dpkg --install /tmp/falco.deb"
         reviewer = FakeReviewer(snippets={item_id: body})
         context, source, target = make_context(
             source_responses={
@@ -807,7 +807,7 @@ class TestClassificationAuthority:
         source_writes = [
             c.args[0]
             for c in source.run_command.call_args_list
-            if "package-snippets" in c.args[0] and "mv -f" in c.args[0]
+            if "package-snippets" in c.args[0] and "mv --force" in c.args[0]
         ]
         assert not source_writes
 
@@ -867,12 +867,12 @@ class TestContinueOnFailure:
             "snippets:\n"
             "  unreproducible:apt-no-candidate:brscan3:\n"
             "    label: brscan3 (no apt candidate)\n"
-            "    body: sudo dpkg -i /tmp/brscan3.deb\n"
+            "    body: sudo dpkg --install /tmp/brscan3.deb\n"
             "    authored_at: '2026-01-01T00:00:00+00:00'\n"
             "    authored_on: laptop\n"
             "  unreproducible:apt-no-candidate:cnpg:\n"
             "    label: cnpg (no apt candidate)\n"
-            "    body: sudo dpkg -i /tmp/cnpg.deb\n"
+            "    body: sudo dpkg --install /tmp/cnpg.deb\n"
             "    authored_at: '2026-01-01T00:00:00+00:00'\n"
             "    authored_on: laptop\n"
         )
@@ -885,8 +885,8 @@ class TestContinueOnFailure:
             },
             target_responses={
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
-                "bash -c 'sudo dpkg -i /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
-                "bash -c 'sudo dpkg -i /tmp/cnpg.deb'": CommandResult(1, "", "dpkg: error processing archive"),
+                "bash -c 'sudo dpkg --install /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
+                "bash -c 'sudo dpkg --install /tmp/cnpg.deb'": CommandResult(1, "", "dpkg: error processing archive"),
             },
         )
         job = ManualInstallsSyncJob(context)
@@ -1009,7 +1009,7 @@ class TestSnippetPush:
         base_source = source.run_command.side_effect
 
         def _rec_source(cmd: str, **kw: object) -> CommandResult:
-            if "package-snippets" in cmd and "mv -f" in cmd:
+            if "package-snippets" in cmd and "mv --force" in cmd:
                 events.append("persist")
             return base_source(cmd, **kw)
 
@@ -1025,7 +1025,7 @@ class TestSnippetPush:
             ReviewOutcome(
                 decisions={item_id: Decision.SKIP_ONCE},
                 was_interactive=True,
-                snippets={item_id: "sudo dpkg -i /tmp/brscan3.deb"},
+                snippets={item_id: "sudo dpkg --install /tmp/brscan3.deb"},
             ),
         )
         await job.after_review()
@@ -1053,7 +1053,7 @@ class TestSnippetPush:
             target_responses={
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
                 "echo $HOME": CommandResult(0, "/home/user\n", ""),
-                "bash -c 'sudo dpkg -i /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
+                "bash -c 'sudo dpkg --install /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
             },
             reviewer=reviewer,
         )
@@ -1083,7 +1083,7 @@ class TestSnippetPush:
 TARGET_WITH_EXTRA_YAML = BRSCAN3_REGISTRY_YAML + (
     "  unreproducible:apt-no-candidate:cnpg:\n"
     "    label: cnpg (no apt candidate)\n"
-    "    body: sudo dpkg -i /tmp/cnpg.deb\n"
+    "    body: sudo dpkg --install /tmp/cnpg.deb\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: workstation\n"
 )
@@ -1093,7 +1093,7 @@ TARGET_CHANGED_BODY_YAML = (
     "snippets:\n"
     "  unreproducible:apt-no-candidate:brscan3:\n"
     "    label: brscan3 (no apt candidate)\n"
-    "    body: sudo dpkg -i /tmp/brscan3-OLD.deb\n"
+    "    body: sudo dpkg --install /tmp/brscan3-OLD.deb\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: workstation\n"
 )

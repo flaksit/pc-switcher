@@ -15,12 +15,12 @@ class TestWrapForLoginShell:
     """Test the _wrap_for_login_shell helper method."""
 
     def test_wraps_simple_command(self) -> None:
-        """Simple commands are wrapped in bash -l -c with quotes."""
+        """Simple commands are wrapped in bash --login -c with quotes."""
         conn = MagicMock()
         executor = RemoteExecutor(conn)
 
         result = executor._wrap_for_login_shell("echo hello")
-        expected = f"bash -l -c {shlex.quote('echo hello')}"
+        expected = f"bash --login -c {shlex.quote('echo hello')}"
         assert result == expected
 
     def test_wraps_command_with_quotes(self) -> None:
@@ -30,7 +30,7 @@ class TestWrapForLoginShell:
 
         cmd = 'echo "hello world"'
         result = executor._wrap_for_login_shell(cmd)
-        expected = f"bash -l -c {shlex.quote(cmd)}"
+        expected = f"bash --login -c {shlex.quote(cmd)}"
         assert result == expected
 
     def test_wraps_command_with_special_chars(self) -> None:
@@ -40,7 +40,7 @@ class TestWrapForLoginShell:
 
         cmd = "echo $HOME && ls | grep foo"
         result = executor._wrap_for_login_shell(cmd)
-        expected = f"bash -l -c {shlex.quote(cmd)}"
+        expected = f"bash --login -c {shlex.quote(cmd)}"
         assert result == expected
 
     def test_wraps_command_with_single_quotes(self) -> None:
@@ -50,7 +50,7 @@ class TestWrapForLoginShell:
 
         cmd = "echo 'hello world'"
         result = executor._wrap_for_login_shell(cmd)
-        expected = f"bash -l -c {shlex.quote(cmd)}"
+        expected = f"bash --login -c {shlex.quote(cmd)}"
         assert result == expected
 
     def test_wraps_multiline_command(self) -> None:
@@ -60,7 +60,7 @@ class TestWrapForLoginShell:
 
         cmd = "echo hello\necho world"
         result = executor._wrap_for_login_shell(cmd)
-        expected = f"bash -l -c {shlex.quote(cmd)}"
+        expected = f"bash --login -c {shlex.quote(cmd)}"
         assert result == expected
 
 
@@ -83,7 +83,7 @@ class TestRunCommandLoginShell:
         result = await executor.run_command("echo hello", login_shell=True)
 
         # Verify wrapped command was passed to SSH
-        expected_cmd = f"bash -l -c {shlex.quote('echo hello')}"
+        expected_cmd = f"bash --login -c {shlex.quote('echo hello')}"
         conn.run.assert_called_once()
         actual_cmd = conn.run.call_args[0][0]
         assert actual_cmd == expected_cmd
@@ -165,7 +165,7 @@ class TestRunCommandLoginShell:
         result = await executor.run_command(cmd, login_shell=True)
 
         # Verify wrapped command
-        expected_cmd = f"bash -l -c {shlex.quote(cmd)}"
+        expected_cmd = f"bash --login -c {shlex.quote(cmd)}"
         actual_cmd = conn.run.call_args[0][0]
         assert actual_cmd == expected_cmd
         assert result.success
@@ -182,10 +182,10 @@ class TestStartProcessLoginShell:
         conn.create_process = AsyncMock(return_value=mock_process)
 
         executor = RemoteExecutor(conn)
-        remote_process = await executor.start_process("tail -f /var/log/syslog", login_shell=True)
+        remote_process = await executor.start_process("tail --follow /var/log/syslog", login_shell=True)
 
         # Verify wrapped command was passed to SSH
-        expected_cmd = f"bash -l -c {shlex.quote('tail -f /var/log/syslog')}"
+        expected_cmd = f"bash --login -c {shlex.quote('tail --follow /var/log/syslog')}"
         conn.create_process.assert_called_once()
         actual_cmd = conn.create_process.call_args[0][0]
         assert actual_cmd == expected_cmd
@@ -201,12 +201,12 @@ class TestStartProcessLoginShell:
         conn.create_process = AsyncMock(return_value=mock_process)
 
         executor = RemoteExecutor(conn)
-        await executor.start_process("tail -f /var/log/syslog", login_shell=False)
+        await executor.start_process("tail --follow /var/log/syslog", login_shell=False)
 
         # Verify original command was passed to SSH
         conn.create_process.assert_called_once()
         actual_cmd = conn.create_process.call_args[0][0]
-        assert actual_cmd == "tail -f /var/log/syslog"
+        assert actual_cmd == "tail --follow /var/log/syslog"
 
     @pytest.mark.asyncio
     async def test_login_shell_default_false(self) -> None:
@@ -216,11 +216,11 @@ class TestStartProcessLoginShell:
         conn.create_process = AsyncMock(return_value=mock_process)
 
         executor = RemoteExecutor(conn)
-        await executor.start_process("tail -f /var/log/syslog")
+        await executor.start_process("tail --follow /var/log/syslog")
 
         # Verify original command was passed to SSH (backward compatible)
         actual_cmd = conn.create_process.call_args[0][0]
-        assert actual_cmd == "tail -f /var/log/syslog"
+        assert actual_cmd == "tail --follow /var/log/syslog"
 
     @pytest.mark.asyncio
     async def test_process_tracking_with_login_shell(self) -> None:
@@ -270,7 +270,7 @@ class TestBashLoginRemoteExecutor:
         await executor.run_command("echo hello")
 
         # Verify wrapped command was passed
-        expected_cmd = f"bash -l -c {shlex.quote('echo hello')}"
+        expected_cmd = f"bash --login -c {shlex.quote('echo hello')}"
         actual_cmd = conn.run.call_args[0][0]
         assert actual_cmd == expected_cmd
 
@@ -295,10 +295,10 @@ class TestBashLoginRemoteExecutor:
         conn.create_process = AsyncMock(return_value=mock_process)
 
         executor = BashLoginRemoteExecutor(conn)
-        await executor.start_process("tail -f /var/log/syslog")
+        await executor.start_process("tail --follow /var/log/syslog")
 
         # Verify wrapped command was passed
-        expected_cmd = f"bash -l -c {shlex.quote('tail -f /var/log/syslog')}"
+        expected_cmd = f"bash --login -c {shlex.quote('tail --follow /var/log/syslog')}"
         actual_cmd = conn.create_process.call_args[0][0]
         assert actual_cmd == expected_cmd
 
@@ -310,8 +310,8 @@ class TestBashLoginRemoteExecutor:
         conn.create_process = AsyncMock(return_value=mock_process)
 
         executor = BashLoginRemoteExecutor(conn)
-        await executor.start_process("tail -f /var/log/syslog", login_shell=False)
+        await executor.start_process("tail --follow /var/log/syslog", login_shell=False)
 
         # Verify original command (no wrapper)
         actual_cmd = conn.create_process.call_args[0][0]
-        assert actual_cmd == "tail -f /var/log/syslog"
+        assert actual_cmd == "tail --follow /var/log/syslog"

@@ -103,7 +103,7 @@ class TestSourceLockConflictMessages:
                 assert ")" in error_msg
                 # Remediation guidance is present and points at killing the holder, not rm.
                 assert "releases automatically" in error_msg
-                assert "pkill -f pc-switcher.lock" in error_msg
+                assert "pkill --full pc-switcher.lock" in error_msg
         finally:
             existing_lock.release()
 
@@ -162,7 +162,7 @@ class TestTargetLockConflictMessages:
             assert error_msg.startswith(f"Target {target_hostname} is already involved in a sync")
             # Remediation guidance is present and points at killing the holder, not rm.
             assert "releases automatically" in error_msg
-            assert "pkill -f pc-switcher.lock" in error_msg
+            assert "pkill --full pc-switcher.lock" in error_msg
 
 
 class TestLockErrorMessageClarity:

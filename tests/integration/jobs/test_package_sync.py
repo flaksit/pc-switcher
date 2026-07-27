@@ -104,7 +104,7 @@ def nonblank_lines(text: str) -> list[str]:
 
 
 def parse_dpkg_installed(dpkg_query_output: str) -> set[str]:
-    """Parse `dpkg-query -W -f='${Package}\\t${Status}\\n'` into fully-installed package names.
+    """Parse `dpkg-query --show --showformat='${Package}\\t${Status}\\n'` into fully-installed package names.
 
     Only `install ok installed` counts as installed -- excludes packages merely known to
     dpkg (config-remaining after removal, half-installed, etc.).
@@ -220,7 +220,7 @@ async def _find_removable_candidates(
     pc1_manual_result = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
     pc2_manual_result = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
     pc2_dpkg_result = await pc2_executor.run_command(
-        "dpkg-query -W -f='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
     )
 
     pc1_manual = nonblank_lines(pc1_manual_result.stdout)
@@ -277,7 +277,7 @@ async def _create_extra_on_target_apt_package(
     pc1_manual_result = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
     pc2_manual_result = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
     pc2_dpkg_result = await pc2_executor.run_command(
-        "dpkg-query -W -f='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
     )
     pc1_manual = set(nonblank_lines(pc1_manual_result.stdout))
     pc2_manual = set(nonblank_lines(pc2_manual_result.stdout))
@@ -338,7 +338,8 @@ async def _write_package_sync_config(executor: BashLoginRemoteExecutor, **enable
     """
     config = _package_sync_test_config(**enabled_jobs)
     result = await executor.run_command(
-        f"mkdir -p ~/.config/pc-switcher && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
+        f"mkdir --parents ~/.config/pc-switcher"
+        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
         timeout=10.0,
     )
     assert result.success, f"Failed to write package-sync test config: {result.stderr}"
@@ -364,7 +365,7 @@ async def _restore_package(executor: BashLoginRemoteExecutor, name: str) -> None
     """
     quoted = shlex.quote(name)
     result = await executor.run_command(
-        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {quoted} && sudo apt-mark manual {quoted}",
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {quoted} && sudo apt-mark manual {quoted}",
         login_shell=False,
         timeout=120.0,
     )
@@ -426,12 +427,12 @@ async def _create_unowned_marker(executor: BashLoginRemoteExecutor, path: str) -
     root-owned) so `ManualInstallsSyncJob._scan_unowned_installs` detects it as an UNREPRODUCIBLE
     item on the next `plan()`.
     """
-    result = await executor.run_command(f"sudo mkdir -p {shlex.quote(path)}", login_shell=False, timeout=15.0)
+    result = await executor.run_command(f"sudo mkdir --parents {shlex.quote(path)}", login_shell=False, timeout=15.0)
     assert result.success, f"Failed to create unowned marker {path}: {result.stderr}"
 
 
 async def _remove_unowned_marker(executor: BashLoginRemoteExecutor, path: str) -> None:
-    await executor.run_command(f"sudo rm -rf {shlex.quote(path)}", login_shell=False, timeout=15.0)
+    await executor.run_command(f"sudo rm --recursive --force {shlex.quote(path)}", login_shell=False, timeout=15.0)
 
 
 async def _author_snippet(executor: BashLoginRemoteExecutor, item_id: str, label: str, body: str) -> None:
@@ -593,7 +594,9 @@ async def _apt_holds(executor: BashLoginRemoteExecutor) -> set[str]:
 # `orchestrator.py`, and this module deliberately re-derives what it asserts against (the
 # same rule the snap/flatpak parsers above follow). A timed RFC3339-UTC value, computed on
 # the host, is exactly the shape snapd's `refresh.hold` validator accepts.
-_SYSTEM_REFRESH_HOLD_SET_CMD = "sudo snap set system refresh.hold=\"$(date -u -d '+6 hours' +%Y-%m-%dT%H:%M:%SZ)\""
+_SYSTEM_REFRESH_HOLD_SET_CMD = (
+    "sudo snap set system refresh.hold=\"$(date --utc --date='+6 hours' +%Y-%m-%dT%H:%M:%SZ)\""
+)
 
 
 async def _capture_system_refresh_hold(executor: BashLoginRemoteExecutor) -> str | None:
@@ -759,7 +762,7 @@ async def _restore_flatpak_target_baseline(executor: BashLoginRemoteExecutor) ->
     scope_flag = "--user" if _FIXTURE_FLATPAK_SCOPE == "user" else "--system"
     sudo = "" if _FIXTURE_FLATPAK_SCOPE == "user" else "sudo "
     result = await executor.run_command(
-        f"{sudo}flatpak uninstall {scope_flag} -y {shlex.quote(_FIXTURE_FLATPAK_APP)} || true; "
+        f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(_FIXTURE_FLATPAK_APP)} || true; "
         f"{sudo}flatpak remote-add {scope_flag} --if-not-exists "
         f"{shlex.quote(_FIXTURE_FLATPAK_REMOTE)} {shlex.quote(_FIXTURE_FLATPAK_REPOFILE)}",
         login_shell=False,
@@ -789,7 +792,7 @@ async def _create_synthetic_repo_and_key(executor: BashLoginRemoteExecutor) -> t
     Returns `(source_filename, key_filename)`.
 
     Both directories are root-owned and `/etc/apt/keyrings` is absent on a fresh Ubuntu
-    24.04, so `mkdir -p` runs first (the shipped invariant) and every write goes through
+    24.04, so `mkdir --parents` runs first (the shipped invariant) and every write goes through
     `sudo tee`. Filenames are uuid-suffixed so the pair is unique and the fresh target
     provably lacks it. Dummy key bytes are fine: D-12 copies keys verbatim without
     validating, and `_SYNTHETIC_REPO_HOST` never resolves, so an `apt-get update` that
@@ -809,7 +812,7 @@ async def _create_synthetic_repo_and_key(executor: BashLoginRemoteExecutor) -> t
         f"Signed-By: {key_dest}\n"
     )
     result = await executor.run_command(
-        f"sudo mkdir -p {shlex.quote(_APT_KEYRINGS_DIR)} && "
+        f"sudo mkdir --parents {shlex.quote(_APT_KEYRINGS_DIR)} && "
         f"printf %s {shlex.quote(source_body)} | sudo tee {shlex.quote(source_dest)} > /dev/null && "
         f"printf %s {shlex.quote(f'pcswitcher-it-dummy-key-{uniq}')} | sudo tee {shlex.quote(key_dest)} > /dev/null",
         login_shell=False,
@@ -889,7 +892,9 @@ async def _capture_machine_package_state(executor: BashLoginRemoteExecutor) -> _
     """
     manual = await executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
     held = await executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
-    dpkg = await executor.run_command("dpkg-query -W -f='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0)
+    dpkg = await executor.run_command(
+        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+    )
     snaps = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
     flatpaks = await executor.run_command(
         "flatpak list --app --columns=application,version,origin,installation", login_shell=False, timeout=20.0
@@ -927,7 +932,7 @@ class TestAptSyncEndToEnd:
 
         try:
             remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y {shlex.quote(candidate)}",
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
                 login_shell=False,
                 timeout=120.0,
             )
@@ -974,7 +979,7 @@ class TestAptSyncEndToEnd:
 
         try:
             remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y {shlex.quote(candidate)}",
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
                 login_shell=False,
                 timeout=120.0,
             )
@@ -1091,8 +1096,8 @@ class TestAptSyncEndToEnd:
                 if filename
             )
             if cleanup_paths:
-                await pc1_executor.run_command(f"sudo rm -f {cleanup_paths}", login_shell=False, timeout=15.0)
-                await pc2_executor.run_command(f"sudo rm -f {cleanup_paths}", login_shell=False, timeout=15.0)
+                await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+                await pc2_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
 
 
 class TestPackageSyncWholeRunContracts:
@@ -1124,7 +1129,7 @@ class TestPackageSyncWholeRunContracts:
 
         try:
             remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y {shlex.quote(install_candidate)}",
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(install_candidate)}",
                 login_shell=False,
                 timeout=120.0,
             )
@@ -1207,7 +1212,7 @@ class TestPackageSyncWholeRunContracts:
 
         try:
             remove_result = await pc2_executor.run_command(
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y "
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes "
                 f"{shlex.quote(pkg_first)} {shlex.quote(pkg_second)}",
                 login_shell=False,
                 timeout=120.0,
@@ -1225,7 +1230,7 @@ class TestPackageSyncWholeRunContracts:
                 pc1_executor,
                 item_id_first,
                 _CONTINUE_TEST_MARKER_INSTALL_FIRST,
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {shlex.quote(pkg_first)}",
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {shlex.quote(pkg_first)}",
             )
             await _author_snippet(
                 pc1_executor,
@@ -1237,7 +1242,7 @@ class TestPackageSyncWholeRunContracts:
                 pc1_executor,
                 item_id_second,
                 _CONTINUE_TEST_MARKER_INSTALL_SECOND,
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {shlex.quote(pkg_second)}",
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {shlex.quote(pkg_second)}",
             )
 
             # The three unowned-install snippets are owned by manual_installs_sync (D-18),
@@ -1387,7 +1392,7 @@ class TestPackageSyncWholeRunContracts:
             # behind. Deleting the remote is NOT defensive — it is what removes pc2's only
             # trust in Flathub and makes the key replication load-bearing.
             await pc2_executor.run_command(
-                f"{sudo}flatpak uninstall -y {scope_flag} {shlex.quote(application)}",
+                f"{sudo}flatpak uninstall --assumeyes {scope_flag} {shlex.quote(application)}",
                 login_shell=False,
                 timeout=60.0,
             )
@@ -1486,7 +1491,7 @@ class TestPackageSyncWholeRunContracts:
 
         try:
             remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y {shlex.quote(candidate)}",
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
                 login_shell=False,
                 timeout=120.0,
             )
@@ -1589,7 +1594,7 @@ class TestPackageSyncWholeRunContracts:
 
         try:
             remove_apt = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y {shlex.quote(apt_candidate)}",
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(apt_candidate)}",
                 login_shell=False,
                 timeout=120.0,
             )
@@ -1696,7 +1701,7 @@ class TestManualInstallsSyncEndToEnd:
             # source registry (corrected D-23), so a source snippet plans INSTALL without
             # pc2 holding anything. The post-review push then places it on pc2 before replay.
             await _author_snippet(
-                pc1_executor, item_id, unowned_path, f'mkdir -p "$(dirname {new_marker})" && touch {new_marker}'
+                pc1_executor, item_id, unowned_path, f'mkdir --parents "$(dirname {new_marker})" && touch {new_marker}'
             )
 
             await _write_package_sync_config(pc1_executor, manual_installs_sync=True)
@@ -1726,8 +1731,10 @@ class TestManualInstallsSyncEndToEnd:
             )
         finally:
             await _remove_unowned_marker(pc1_executor, unowned_path)
-            await pc2_executor.run_command(f"rm -f {new_marker} {registry_relpath}", login_shell=False, timeout=15.0)
-            await pc1_executor.run_command(f"rm -f {registry_relpath}", login_shell=False, timeout=15.0)
+            await pc2_executor.run_command(
+                f"rm --force {new_marker} {registry_relpath}", login_shell=False, timeout=15.0
+            )
+            await pc1_executor.run_command(f"rm --force {registry_relpath}", login_shell=False, timeout=15.0)
 
 
 # `snap:hold:<name>` has no `SnapHoldItem` dataclass to build the id from -- `snap_sync`
@@ -1799,7 +1806,7 @@ class TestPackageSyncIdempotency:
             await _engage_system_refresh_hold(pc2_executor)
 
             remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y {shlex.quote(candidate)}",
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
                 login_shell=False,
                 timeout=120.0,
             )
@@ -2161,7 +2168,7 @@ class TestCrossDirectionRoundTrips:
 
         try:
             remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y {shlex.quote(candidate)}",
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
                 login_shell=False,
                 timeout=120.0,
             )
@@ -2182,7 +2189,7 @@ class TestCrossDirectionRoundTrips:
 
             # The user removes it again on pc2, which is about to become the SOURCE.
             second_removal = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y {shlex.quote(candidate)}",
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
                 login_shell=False,
                 timeout=120.0,
             )
@@ -2324,5 +2331,5 @@ class TestCrossDirectionRoundTrips:
                 if filename
             )
             if cleanup_paths:
-                await pc2_executor.run_command(f"sudo rm -f {cleanup_paths}", login_shell=False, timeout=15.0)
-                await pc1_executor.run_command(f"sudo rm -f {cleanup_paths}", login_shell=False, timeout=15.0)
+                await pc2_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+                await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)

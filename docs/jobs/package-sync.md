@@ -27,7 +27,7 @@ All four ship **disabled**: enabling any of them lets pc-switcher change install
 
 ### Hand-installed `.deb` packages belong to one job only
 
-A package whose installed version comes from no repository your machine has configured was put there with `dpkg -i`. It is `manual_installs_sync`'s territory exclusively: `apt_sync` detects the same packages, with the same test, and drops them from its manifest before it diffs anything. They produce no apt item, no review entry and no install.
+A package whose installed version comes from no repository your machine has configured was put there with `dpkg --install`. It is `manual_installs_sync`'s territory exclusively: `apt_sync` detects the same packages, with the same test, and drops them from its manifest before it diffs anything. They produce no apt item, no review entry and no install.
 
 There is nothing apt could do with them anyway. The target's apt has never heard the name, so offering it as an ordinary install would fail with "Unable to locate package" — while `manual_installs_sync` offers the same package as an [install snippet](#install-snippets) in the same run. Only one of the two answers works, so only one job asks.
 
@@ -65,7 +65,7 @@ A run that changes nothing under `/etc/apt` never shows a second screen, and nei
 
 ### Confirming every individual command
 
-The batched review approves *items*, not commands. One ticked line can expand into several: an apt package is an `apt-get -s` simulation then an `apt-get install`; an apt repository file is a backup, an upload, a `sudo install` promotion and an `apt-get update`.
+The batched review approves *items*, not commands. One ticked line can expand into several: an apt package is an `apt-get --dry-run` simulation then an `apt-get install`; an apt repository file is a backup, an upload, a `sudo install` promotion and an `apt-get update`.
 
 `pc-switcher sync <target> --confirm-each-command` inserts one prompt before every one of them, showing the exact command (or, for a file transfer, the source and destination paths) and waiting for **p** to proceed or **a** to abort the whole sync. There is no "skip this one": a single reviewed item can span several commands, so skipping one would leave that item half-applied. An unanswerable prompt (Ctrl-C, EOF) aborts.
 
@@ -73,7 +73,7 @@ It covers every write the four jobs make, plus the machine-local decision files 
 
 ### apt collateral
 
-When you approve an apt change, apt sometimes has to remove or downgrade *other* packages to satisfy it — so the package you approved is not always the whole transaction. `apt_sync` simulates every approved change with `apt-get -s` before applying anything and inspects that collateral. Dependencies apt pulls in or drops on its own are apt doing its job and are not shown to you. But if the collateral would remove or downgrade a package you installed by hand — one in either machine's `apt-mark showmanual` set, the source's or the target's — that becomes its own review item with an install-anyway / skip / abort choice. Protecting the union of both manual sets closes the case where a package is hand-installed on one machine but auto-resolved on the other. The classification happens during the review, never mid-apply, so you are never prompted while changes are landing.
+When you approve an apt change, apt sometimes has to remove or downgrade *other* packages to satisfy it — so the package you approved is not always the whole transaction. `apt_sync` simulates every approved change with `apt-get --dry-run` before applying anything and inspects that collateral. Dependencies apt pulls in or drops on its own are apt doing its job and are not shown to you. But if the collateral would remove or downgrade a package you installed by hand — one in either machine's `apt-mark showmanual` set, the source's or the target's — that becomes its own review item with an install-anyway / skip / abort choice. Protecting the union of both manual sets closes the case where a package is hand-installed on one machine but auto-resolved on the other. The classification happens during the review, never mid-apply, so you are never prompted while changes are landing.
 
 ## Signing keys
 
@@ -114,8 +114,8 @@ Some installed things no package manager can reproduce — a bare `.deb` downloa
 An install snippet is a shell command that reproduces the item — the tool never parses, interprets, or reasons about it. It is **stored and replayed verbatim**, and it runs **non-interactively**: no stdin is supplied during replay, so a command that prompts (for example a debconf question) fails rather than hanging the sync. A typical shape:
 
 ```bash
-sudo DEBIAN_FRONTEND=noninteractive dpkg -i /path/to/package.deb || \
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -f
+sudo DEBIAN_FRONTEND=noninteractive dpkg --install /path/to/package.deb || \
+sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken
 ```
 
 Snippets run **unprivileged**. On the target the body is replayed as `bash -c '<body>'` as the target user, with no outer `sudo` wrapped around it. Any privilege a snippet needs must be written inside the snippet by its author — that is why the example above calls `sudo` itself.

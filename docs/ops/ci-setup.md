@@ -151,7 +151,7 @@ Run checks locally before pushing:
 uv run basedpyright
 uv run ruff check && uv run ruff format --check
 uv run codespell
-uv run pytest tests/unit tests/contract -v
+uv run pytest tests/unit tests/contract --verbose
 
 # Integration tests (requires VM access)
 ./tests/local-pytest.sh tests/integration

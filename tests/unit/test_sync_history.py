@@ -282,7 +282,7 @@ class TestGetRecordRoleCommand:
     def test_returns_command_for_source(self) -> None:
         """get_record_role_command(SOURCE) returns a merge-preserving shell command."""
         cmd = get_record_role_command(SyncRole.SOURCE)
-        assert f"mkdir -p {HISTORY_DIR}" in cmd
+        assert f"mkdir --parents {HISTORY_DIR}" in cmd
         assert "python3" in cmd
         assert "last_role" in cmd
         assert SyncRole.SOURCE.value in cmd  # "source"
@@ -290,7 +290,7 @@ class TestGetRecordRoleCommand:
     def test_returns_command_for_target(self) -> None:
         """get_record_role_command(TARGET) returns a merge-preserving shell command."""
         cmd = get_record_role_command(SyncRole.TARGET)
-        assert f"mkdir -p {HISTORY_DIR}" in cmd
+        assert f"mkdir --parents {HISTORY_DIR}" in cmd
         assert "python3" in cmd
         assert "last_role" in cmd
         assert SyncRole.TARGET.value in cmd  # "target"

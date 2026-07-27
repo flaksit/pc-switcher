@@ -448,14 +448,16 @@ class TestFinalizeUnreproducible:
         plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
         job.accept_review(
             plan,
-            ReviewOutcome(decisions={}, was_interactive=True, snippets={diff.item_id: "sudo dpkg -i /tmp/x.deb"}),
+            ReviewOutcome(
+                decisions={}, was_interactive=True, snippets={diff.item_id: "sudo dpkg --install /tmp/x.deb"}
+            ),
         )
 
         await job.apply()
 
         source_cmds = [c.args[0] for c in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
         target_cmds = [c.args[0] for c in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
-        assert any("mv -f" in cmd and "package-snippets" in cmd for cmd in source_cmds)
+        assert any("mv --force" in cmd and "package-snippets" in cmd for cmd in source_cmds)
         assert not any("package-snippets" in cmd for cmd in target_cmds)
 
     @pytest.mark.asyncio
@@ -470,7 +472,7 @@ class TestFinalizeUnreproducible:
 
         source_cmds = [c.args[0] for c in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
         target_cmds = [c.args[0] for c in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
-        assert any("mv -f" in cmd and "fake.decisions" in cmd for cmd in source_cmds)
+        assert any("mv --force" in cmd and "fake.decisions" in cmd for cmd in source_cmds)
         assert not any("fake.decisions" in cmd for cmd in target_cmds)
 
     @pytest.mark.asyncio
@@ -491,7 +493,7 @@ class TestFinalizeUnreproducible:
         await job.apply()
 
         for cmd in [c.args[0] for c in context.source.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
-            assert "mv -f" not in cmd
+            assert "mv --force" not in cmd
 
     @pytest.mark.asyncio
     async def test_no_finalize_writes_when_outcome_not_interactive(self) -> None:
@@ -511,7 +513,7 @@ class TestFinalizeUnreproducible:
         await job.apply()
 
         for cmd in [c.args[0] for c in context.source.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
-            assert "mv -f" not in cmd
+            assert "mv --force" not in cmd
 
 
 class TestBaseHooksAreNoOps:

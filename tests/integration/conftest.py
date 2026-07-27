@@ -367,7 +367,7 @@ async def set_github_token_env_var(executor: BashLoginRemoteExecutor) -> None:
     if github_token:
         # Add GITHUB_TOKEN to ~/.profile so it's available in login shells
         await executor.run_command(
-            f'grep -q "export GITHUB_TOKEN=" ~/.profile 2>/dev/null || '
+            f'grep --quiet "export GITHUB_TOKEN=" ~/.profile 2>/dev/null || '
             f"echo 'export GITHUB_TOKEN=\"{github_token}\"' >> ~/.profile",
             timeout=10.0,
             login_shell=False,
@@ -499,7 +499,7 @@ async def uninstall_pcswitcher(executor: BashLoginRemoteExecutor) -> None:
     )
     assert not result.success, (
         f"pc-switcher should be uninstalled but is still found.\n"
-        f"Try running: uv tool list; ls -la ~/.local/bin/pc-switcher\n"
+        f"Try running: uv tool list; ls -l --all ~/.local/bin/pc-switcher\n"
         f"stdout: {result.stdout}"
     )
 
@@ -507,7 +507,7 @@ async def uninstall_pcswitcher(executor: BashLoginRemoteExecutor) -> None:
 async def _remove_config_and_data(executor: BashLoginRemoteExecutor) -> None:
     """Remove pc-switcher configuration and data directories."""
     await executor.run_command(
-        "rm -rf ~/.config/pc-switcher ~/.local/share/pc-switcher",
+        "rm --recursive --force ~/.config/pc-switcher ~/.local/share/pc-switcher",
         timeout=10.0,
     )
 

@@ -405,7 +405,7 @@ class RemoteExecutor(_GatedExecutorMixin):
         ~/.profile isn't sourced and PATH may not include ~/.local/bin.
 
         This wrapper ensures commands run with full user environment by
-        wrapping them in 'bash -l -c "..."', which:
+        wrapping them in 'bash --login -c "..."', which:
         - Sources /etc/profile and ~/.profile (login shell behavior)
         - Ensures PATH includes user-installed tools (uv, pc-switcher)
         - Simulates interactive SSH session environment
@@ -414,9 +414,9 @@ class RemoteExecutor(_GatedExecutorMixin):
             cmd: Original shell command
 
         Returns:
-            Wrapped command with bash -l -c prefix and proper quoting
+            Wrapped command with bash --login -c prefix and proper quoting
         """
-        return f"bash -l -c {shlex.quote(cmd)}"
+        return f"bash --login -c {shlex.quote(cmd)}"
 
     async def run_command(
         self,
@@ -431,7 +431,7 @@ class RemoteExecutor(_GatedExecutorMixin):
         Args:
             cmd: Shell command to execute
             timeout: Optional timeout in seconds
-            login_shell: If True, wrap command in 'bash -l -c' to source ~/.profile
+            login_shell: If True, wrap command in 'bash --login -c' to source ~/.profile
                 and ensure proper PATH. If None, uses the executor's default.
                 Useful for commands requiring user-installed tools (e.g., uv, pc-switcher).
             mutates: Short phrase describing the change when this command MODIFIES the
@@ -472,7 +472,7 @@ class RemoteExecutor(_GatedExecutorMixin):
 
         Args:
             cmd: Shell command to execute
-            login_shell: If True, wrap command in 'bash -l -c' to source ~/.profile
+            login_shell: If True, wrap command in 'bash --login -c' to source ~/.profile
                 and ensure proper PATH. If None, uses the executor's default.
                 Useful for background processes requiring user-installed tools.
             mutates: Short phrase describing the change when this process MODIFIES the
@@ -536,7 +536,7 @@ class RemoteExecutor(_GatedExecutorMixin):
 class BashLoginRemoteExecutor(RemoteExecutor):
     """RemoteExecutor that runs all commands in bash login shell by default.
 
-    This executor wraps all commands in 'bash -l -c "..."' to ensure:
+    This executor wraps all commands in 'bash --login -c "..."' to ensure:
     - ~/.profile is sourced
     - PATH includes ~/.local/bin (for user-installed tools like uv, pc-switcher)
     - Environment matches interactive SSH sessions

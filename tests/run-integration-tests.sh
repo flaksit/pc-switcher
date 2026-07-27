@@ -318,7 +318,7 @@ set +e
 # The marker expression is overridable so CI can additionally deselect `ci_skip`
 # (PC_SWITCHER_TEST_MARKERS in integration-tests.yml). A later -m in PYTEST_ARGS
 # still wins, so local ad-hoc selection is unaffected.
-uv run pytest -m "${PC_SWITCHER_TEST_MARKERS:-integration and not benchmark}" -s -ra --durations=25 "${PYTEST_ARGS[@]}"
+uv run pytest -m "${PC_SWITCHER_TEST_MARKERS:-integration and not benchmark}" --capture=no -ra --durations=25 "${PYTEST_ARGS[@]}"
 pytest_exit_code=$?
 set -e
 

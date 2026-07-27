@@ -193,7 +193,7 @@ class TestCopyConfigToTarget:
 
         # Verify mkdir was called
         mkdir_call = mock_remote_executor.run_command.call_args_list[0]
-        assert "mkdir -p ~/.config/pc-switcher" in mkdir_call[0][0]
+        assert "mkdir --parents ~/.config/pc-switcher" in mkdir_call[0][0]
 
         # Verify send_file was called with correct paths
         mock_remote_executor.send_file.assert_called_once_with(

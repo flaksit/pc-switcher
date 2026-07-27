@@ -2,7 +2,7 @@
 
 Covers the tracer's single path — one apt package missing on the target — through
 capture, diff, plan/apply separation, the coordinator-accepted-plan ordering guard,
-converge (with the apt-get -s transaction guard), dry-run, continue-on-failure, and
+converge (with the apt-get --dry-run transaction guard), dry-run, continue-on-failure, and
 validate(). All executor interactions are mocked; no real apt/dpkg/sudo commands run.
 """
 
@@ -267,7 +267,7 @@ class TestPlanApplySplit:
 
         assert len(plan.diffs) == 3
         for cmd in all_calls(target):
-            # `apt-get -s` (simulate) IS expected during plan() — plan 02-05's
+            # `apt-get --dry-run` (simulate) IS expected during plan() — plan 02-05's
             # plan-time collateral simulation is read-only by design (D-24/T-02-32).
             # `sudo find ... sha256sum` IS also expected — plan 02-06's repo-state
             # capture reads `/etc/apt/*` via sudo to guarantee access regardless of
@@ -310,8 +310,10 @@ class TestConverge:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "dpkg-query": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\n", ""
+                ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                     CommandResult(0, "", "")
                 ),
             },
@@ -346,7 +348,7 @@ class TestDryRun:
 
         await job.execute()
 
-        # `apt-get -s` (read-only plan-time collateral simulation) still runs even
+        # `apt-get --dry-run` (read-only plan-time collateral simulation) still runs even
         # under dry_run — dry_run only suppresses the REAL mutating command.
         for cmd in all_calls(target):
             assert "apt-get install" not in cmd
@@ -364,16 +366,16 @@ class TestContinueOnFailure:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "dpkg-query": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": clean_preview,
-                "apt-get -s install -y --no-install-recommends pkg-b": clean_preview,
-                "apt-get -s install -y --no-install-recommends pkg-c": clean_preview,
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": clean_preview,
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-b": clean_preview,
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-c": clean_preview,
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                     CommandResult(0, "", "")
                 ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-b": (
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-b": (
                     CommandResult(1, "", "dpkg error for pkg-b")
                 ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-c": (
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-c": (
                     CommandResult(0, "", "")
                 ),
             },
@@ -397,7 +399,7 @@ class TestContinueOnFailure:
         commands = all_calls(target)
         real_installs = [c for c in commands if "sudo" in c and "apt-get install" in c]
         assert len(real_installs) == 3
-        simulations = [c for c in commands if "apt-get -s" in c]
+        simulations = [c for c in commands if "apt-get --dry-run" in c]
         # 1 batched plan-time simulation (all three candidates) + 1 apply-time
         # simulation per approved item (D-24/T-02-32's two-layer guard).
         assert len(simulations) == 4
@@ -413,7 +415,7 @@ class TestTransactionGuard:
         never appears as a diff; the plan-time simulation is clean, but the apply-time
         simulation removes it.
         """
-        sim_cmd = "apt-get -s install -y --no-install-recommends pkg-a"
+        sim_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
         state = {"sim": 0}
 
         def target_side_effect(cmd: str, **_: object) -> CommandResult:
@@ -461,10 +463,10 @@ class TestTransactionGuard:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""
                 ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                     CommandResult(0, "", "")
                 ),
             },
@@ -486,8 +488,10 @@ class TestTransactionGuard:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\n", ""
+                ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                     CommandResult(0, "", "")
                 ),
             },
@@ -503,7 +507,7 @@ class TestTransactionGuard:
     @pytest.mark.asyncio
     async def test_failed_simulation_raises_instead_of_returning_empty_preview(self) -> None:
         """WR-01 regression: `simulate_apt_transaction` must not silently parse a
-        failed `apt-get -s` (dpkg lock contention, unmet dependencies, ...) as an
+        failed `apt-get --dry-run` (dpkg lock contention, unmet dependencies, ...) as an
         empty, falsely-clean preview — that would let both call sites proceed with
         the real command as if nothing would happen.
         """
@@ -513,7 +517,9 @@ class TestTransactionGuard:
         )
 
         with pytest.raises(ConvergeItemFailed, match="dpkg was interrupted"):
-            await simulate_apt_transaction(target, "install -y --no-install-recommends pkg-a", login_shell=False)
+            await simulate_apt_transaction(
+                target, "install --assume-yes --no-install-recommends pkg-a", login_shell=False
+            )
 
     @pytest.mark.asyncio
     async def test_apply_time_simulation_failure_fails_the_item_not_silently_clean(self) -> None:
@@ -522,7 +528,7 @@ class TestTransactionGuard:
         the normal per-item path rather than the real `apt-get install` running
         against an untrustworthy preview.
         """
-        install_cmd = "apt-get -s install -y --no-install-recommends pkg-a"
+        install_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
         state = {"calls": 0}
 
         def target_side_effect(cmd: str, **_: object) -> CommandResult:
@@ -765,7 +771,7 @@ class TestAptHold:
         await job.apply()
 
         source_cmds = all_calls(source)
-        assert any("mv -f" in cmd and "apt.decisions" in cmd for cmd in source_cmds)
+        assert any("mv --force" in cmd and "apt.decisions" in cmd for cmd in source_cmds)
 
     def test_apt_mark_is_in_the_target_sudo_command_list(self) -> None:
         assert "/usr/bin/apt-mark" in _TARGET_SUDO_COMMANDS
@@ -859,8 +865,10 @@ class TestInstallBeforeHoldOrdering:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-mark showhold": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\n", ""
+                ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                     CommandResult(0, "", "")
                 ),
                 "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
@@ -897,8 +905,10 @@ class TestInstallBeforeHoldOrdering:
                 "apt-mark showhold": CommandResult(0, "", ""),
                 "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
                 "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\n", ""
+                ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                     CommandResult(0, "", "")
                 ),
                 "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
@@ -942,10 +952,10 @@ class TestHoldOnAnAbsentPackage:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-mark showhold": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-good": CommandResult(
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-good": CommandResult(
                     0, "Inst pkg-good (1.0)\n", ""
                 ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-good": (
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-good": (
                     CommandResult(0, "", "")
                 ),
                 "sudo apt-mark hold ghost-pkg": CommandResult(1, "", "E: Unable to locate package ghost-pkg"),
@@ -967,7 +977,7 @@ class TestHoldOnAnAbsentPackage:
 
 class TestHoldsDriveNoSimulation:
     """#208 D4: a hold is dpkg selection state, not an apt transaction — so it drives no
-    `apt-get -s` preview at plan time and none at converge time.
+    `apt-get --dry-run` preview at plan time and none at converge time.
     """
 
     @pytest.mark.asyncio
@@ -994,7 +1004,7 @@ class TestHoldsDriveNoSimulation:
 
         commands = all_calls(target)
         assert any(c == "sudo apt-mark hold pkg-a" for c in commands)
-        assert not any("apt-get -s" in c for c in commands)
+        assert not any("apt-get --dry-run" in c for c in commands)
 
 
 class TestUnavailableCapture:
@@ -1035,7 +1045,9 @@ class TestUnavailableCapture:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, "pkg-a:\n  Candidate: 1.0\npkg-b:\n  Candidate: (none)\n", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\n", ""
+                ),
             },
         )
         job = AptSyncJob(context)
@@ -1068,7 +1080,7 @@ class TestNoUnreproducibleDetectionInApt:
                 # previously became UNREPRODUCIBLE diffs inside apt_sync's own plan().
                 "apt-cache policy": CommandResult(0, "brscan3:\n  Candidate: (none)\n", ""),
                 "find /usr/local": CommandResult(0, "/usr/local/flux\n", ""),
-                "dpkg -S": CommandResult(0, "", ""),
+                "dpkg --search": CommandResult(0, "", ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
@@ -1084,7 +1096,7 @@ class TestNoUnreproducibleDetectionInApt:
 
 class TestBareDebPackagesAreNotAptSyncsBusiness:
     """A11/D-18: a package whose INSTALLED version comes from no configured repository was
-    put there with `dpkg -i`, so apt cannot install it anywhere and the target's apt has
+    put there with `dpkg --install`, so apt cannot install it anywhere and the target's apt has
     never heard the name. `manual_installs_sync` offers it as an install snippet in the same
     run; `apt_sync` drops it at CAPTURE, so it is structurally absent from every downstream
     stage rather than filtered out of each one.
@@ -1188,7 +1200,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
         await AptSyncJob(context).plan()
 
-        simulations = [cmd for cmd in all_calls(target) if "apt-get -s" in cmd]
+        simulations = [cmd for cmd in all_calls(target) if "apt-get --dry-run" in cmd]
         assert simulations and all("code" not in cmd for cmd in simulations)
         assert any("gh" in cmd for cmd in simulations)
 
@@ -1247,7 +1259,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends gh": CommandResult(
+                "apt-get --dry-run install --assume-yes --no-install-recommends gh": CommandResult(
                     0, "Inst gh (2.96.0)\nRemv code [1.0]\n", ""
                 ),
             },
@@ -1265,8 +1277,8 @@ class TestRemovalConverge:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-extra\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-extra\t1.0\n", ""),
-                "apt-get -s remove -y pkg-extra": CommandResult(0, "Remv pkg-extra [1.0]\n", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y pkg-extra": CommandResult(0, "", ""),
+                "apt-get --dry-run remove --assume-yes pkg-extra": CommandResult(0, "Remv pkg-extra [1.0]\n", ""),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes pkg-extra": CommandResult(0, "", ""),
             },
         )
         job = AptSyncJob(context)
@@ -1294,8 +1306,10 @@ class TestRemovalGuard:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-                "apt-get -s remove -y pkg-a": CommandResult(0, "Remv pkg-a [1.0]\nRemv pkg-b [1.0]\n", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y pkg-a": CommandResult(0, "", ""),
+                "apt-get --dry-run remove --assume-yes pkg-a": CommandResult(
+                    0, "Remv pkg-a [1.0]\nRemv pkg-b [1.0]\n", ""
+                ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes pkg-a": CommandResult(0, "", ""),
             },
         )
         job = AptSyncJob(context)
@@ -1312,7 +1326,7 @@ class TestRemovalGuard:
         package nobody reviewed is still refused (D-30). `manual-b` is manual on both
         machines and matches, so it is not a diff; the plan-time simulation is clean.
         """
-        sim_cmd = "apt-get -s remove -y pkg-a"
+        sim_cmd = "apt-get --dry-run remove --assume-yes pkg-a"
         state = {"sim": 0}
 
         def target_side_effect(cmd: str, **_: object) -> CommandResult:
@@ -1352,10 +1366,12 @@ class TestRemovalGuard:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t1.0\n", ""),
-                "apt-get -s remove -y pkg-a": CommandResult(0, "Remv pkg-a [1.0]\nRemv pkg-b [1.0]\n", ""),
-                "apt-get -s remove -y pkg-b": CommandResult(0, "Remv pkg-b [1.0]\n", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y pkg-a": CommandResult(0, "", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y pkg-b": CommandResult(0, "", ""),
+                "apt-get --dry-run remove --assume-yes pkg-a": CommandResult(
+                    0, "Remv pkg-a [1.0]\nRemv pkg-b [1.0]\n", ""
+                ),
+                "apt-get --dry-run remove --assume-yes pkg-b": CommandResult(0, "Remv pkg-b [1.0]\n", ""),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes pkg-a": CommandResult(0, "", ""),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes pkg-b": CommandResult(0, "", ""),
             },
         )
         job = AptSyncJob(context)
@@ -1377,7 +1393,7 @@ class TestDowngradeGuard:
         at 2.0 and matches the source, so it is not a diff; the plan-time simulation is
         clean, but the apply-time simulation would downgrade it to 1.0.
         """
-        sim_cmd = "apt-get -s install -y --no-install-recommends pkg-a"
+        sim_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
         state = {"sim": 0}
 
         def target_side_effect(cmd: str, **_: object) -> CommandResult:
@@ -1428,10 +1444,10 @@ class TestDowngradeGuard:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nInst auto-dg [2.0] (1.0)\n", ""
                 ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                     CommandResult(0, "", "")
                 ),
             },
@@ -1466,7 +1482,7 @@ class TestPlanTimeCollateral:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
                 "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""
                 ),
             },
@@ -1501,7 +1517,7 @@ class TestPlanTimeCollateral:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""
                 ),
             },
@@ -1528,7 +1544,7 @@ class TestPlanTimeCollateral:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "manual-dg\n", ""),
                 "dpkg-query": CommandResult(0, "manual-dg\t2.0\n", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nInst manual-dg [2.0] (1.0)\nInst auto-dg [2.0] (1.0)\n", ""
                 ),
                 "dpkg --compare-versions 1.0 lt 2.0": CommandResult(0, "", ""),
@@ -1553,7 +1569,9 @@ class TestPlanTimeCollateral:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\n", ""
+                ),
             },
         )
         job = AptSyncJob(context)
@@ -1580,7 +1598,7 @@ class TestPlanTimeCollateral:
         plan = await job.plan()
 
         assert len(plan.diffs) == 10
-        simulations = [cmd for cmd in all_calls(target) if "apt-get -s" in cmd]
+        simulations = [cmd for cmd in all_calls(target) if "apt-get --dry-run" in cmd]
         assert len(simulations) <= 2
 
 
@@ -1599,10 +1617,10 @@ def _manual_collateral_context() -> tuple[JobContext, MagicMock, MagicMock]:
         target_responses={
             "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
             "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
-            "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+            "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                 0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""
             ),
-            "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+            "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                 CommandResult(0, "", "")
             ),
         },
@@ -1685,7 +1703,7 @@ class TestValidate:
         reports success having replicated no repository state at all.
         """
         context, _source, _target = make_context(
-            source_responses={"sudo -n true": CommandResult(1, "", "sudo: a password is required")},
+            source_responses={"sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required")},
             target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", "")},
         )
         job = AptSyncJob(context)
@@ -1702,7 +1720,7 @@ class TestValidate:
         """
         context, _source, _target = make_context(
             target_responses={
-                "sudo -n true": CommandResult(1, "", "sudo: a password is required"),
+                "sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required"),
                 "fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", ""),
             },
         )
@@ -2026,10 +2044,11 @@ class TestRepoGroupOrdering:
                 "apt-cache policy": CommandResult(0, _POLICY_AVAILABLE, ""),
                 "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
                 "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": CommandResult(
-                    0, "", ""
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\n", ""
                 ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes"
+                " --no-install-recommends pkg-a": CommandResult(0, "", ""),
                 "sudo apt-get update": CommandResult(0, "", ""),
             },
         )
@@ -2172,7 +2191,7 @@ class TestRepoGroupOrdering:
                 **_NO_PACKAGES,
                 "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
                 "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
-                "sudo install -o root -g root -m 0644": CommandResult(1, "", "disk full"),
+                "sudo install --owner=root --group=root --mode=0644": CommandResult(1, "", "disk full"),
                 "sudo apt-get update": CommandResult(0, "", ""),
             },
         )
@@ -2210,7 +2229,7 @@ class TestRepoGroupOrdering:
         await job.execute()
 
         commands = all_calls(target)
-        etc_removals = [c for c in commands if "sudo rm -f" in c]
+        etc_removals = [c for c in commands if "sudo rm --force" in c]
         assert len(etc_removals) == 1
         assert "sources.list.d/extra.list" in etc_removals[0]
 
@@ -2235,7 +2254,7 @@ class TestRepoGroupOrdering:
         commands = all_calls(target)
         promotions = [c for c in commands if "apt.conf.d/99conf" in c and "sudo install" in c]
         assert len(promotions) == 1
-        assert "-o root -g root -m 0644" in promotions[0]
+        assert "--owner=root --group=root --mode=0644" in promotions[0]
         assert not any("sudo mv" in c for c in commands)
 
     @pytest.mark.asyncio
@@ -2252,7 +2271,7 @@ class TestRepoGroupOrdering:
                 target_responses={
                     **_NO_PACKAGES,
                     "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
-                    "sudo install -o root -g root -m 0644": promote_result,
+                    "sudo install --owner=root --group=root --mode=0644": promote_result,
                     "sudo apt-get update": CommandResult(0, "", ""),
                 },
             )
@@ -2266,7 +2285,7 @@ class TestRepoGroupOrdering:
                     await job.execute()
 
             commands = all_calls(target)
-            staged_cleanup = [c for c in commands if c.startswith("rm -f") and "apt-staging" in c]
+            staged_cleanup = [c for c in commands if c.startswith("rm --force") and "apt-staging" in c]
             assert len(staged_cleanup) == 1, f"expected one staging cleanup for {label}"
 
     @pytest.mark.asyncio
@@ -2303,7 +2322,7 @@ class TestRepoGroupRemovalAndKeyChange:
     @pytest.mark.asyncio
     async def test_source_and_its_key_both_removed_with_one_update_after_both(self) -> None:
         """Both files are extra on the target and both approved: each gets its own
-        `sudo rm -f`, and the run's single `apt-get update` runs after both writes — apt's
+        `sudo rm --force`, and the run's single `apt-get update` runs after both writes — apt's
         metadata must never be refreshed against a half-removed repository.
         """
         context, _source, target = _repo_context(
@@ -2324,7 +2343,7 @@ class TestRepoGroupRemovalAndKeyChange:
         await job.execute()
 
         commands = all_calls(target)
-        removals = [c for c in commands if c.startswith("sudo rm -f")]
+        removals = [c for c in commands if c.startswith("sudo rm --force")]
         assert len(removals) == 2
         assert any("keyrings/bar.gpg" in c for c in removals)
         assert any("sources.list.d/extra.list" in c for c in removals)
@@ -2338,7 +2357,7 @@ class TestRepoGroupRemovalAndKeyChange:
         """C8: `foo.sources` is byte-identical on both machines and produces NO diff at
         all, but the keyring it names has different bytes — the vendor rotated it. The
         SOURCE's key file is staged under the target's home and promoted with `sudo
-        install -o root -g root -m 0644`; never re-fetched, never parsed, never written
+        install --owner=root --group=root --mode=0644`; never re-fetched, never parsed, never written
         from the target's own copy.
         """
         both_sides = sha256_line("d1", "foo.sources")
@@ -2372,10 +2391,15 @@ class TestRepoGroupRemovalAndKeyChange:
         assert staged_dest.startswith("/home/target-user")
 
         promotions = [
-            c for c in all_calls(target) if c.startswith("sudo install -o root -g root -m 0644") and "foo.gpg" in c
+            c
+            for c in all_calls(target)
+            if c.startswith("sudo install --owner=root --group=root --mode=0644") and "foo.gpg" in c
         ]
         assert len(promotions) == 1
-        assert promotions[0] == f"sudo install -o root -g root -m 0644 {staged_dest} /etc/apt/keyrings/foo.gpg"
+        assert (
+            promotions[0]
+            == f"sudo install --owner=root --group=root --mode=0644 {staged_dest} /etc/apt/keyrings/foo.gpg"
+        )
 
 
 class TestRepoGroupTransaction:
@@ -2413,9 +2437,9 @@ class TestRepoGroupTransaction:
         # Restore: the pre-existing pin file is put back from its backup.
         assert any("sudo install" in c and "backup-" in c and "preferences.d/curl-pin" in c for c in commands)
         # Delete: the brand-new config file this run created is removed.
-        assert any("sudo rm -f" in c and "apt.conf.d/99conf" in c for c in commands)
+        assert any("sudo rm --force" in c and "apt.conf.d/99conf" in c for c in commands)
         # A clean rollback discards the backup.
-        assert any(c.startswith("rm -rf") and "backup-" in c for c in commands)
+        assert any(c.startswith("rm --recursive --force") and "backup-" in c for c in commands)
         # Two `apt-get update` calls: the failing one and the post-rollback reprobe.
         assert sum(1 for c in commands if c == "sudo apt-get update") == 2
 
@@ -2437,7 +2461,7 @@ class TestRepoGroupTransaction:
                     "test -f /etc/apt/preferences.d/curl-pin": CommandResult(0, "", ""),
                     "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p2", "curl-pin"), ""),
                     # The restore itself fails — the case this test exists for.
-                    "sudo install -o root -g root -m 0644 /home/target-user/.cache": CommandResult(
+                    "sudo install --owner=root --group=root --mode=0644 /home/target-user/.cache": CommandResult(
                         1, "", "Read-only file system"
                     ),
                 },
@@ -2458,7 +2482,7 @@ class TestRepoGroupTransaction:
         assert "backup-" in messages
 
         # The backup is NOT discarded — it is the only copy of the pre-run file left.
-        assert not any(c.startswith("rm -rf") and "backup-" in c for c in all_calls(target))
+        assert not any(c.startswith("rm --recursive --force") and "backup-" in c for c in all_calls(target))
 
     @pytest.mark.asyncio
     async def test_successful_update_issues_no_restore_command(self) -> None:
@@ -2494,8 +2518,10 @@ class TestRepoGroupTransaction:
                     "echo $HOME": CommandResult(0, "/home/target-user", ""),
                     "apt-mark showmanual": CommandResult(0, "", ""),
                     "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
-                    "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-                    "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                    "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                        0, "Inst pkg-a (1.0)\n", ""
+                    ),
+                    "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                         CommandResult(0, "", "")
                     ),
                 },
@@ -2533,8 +2559,10 @@ class TestRepoGroupTransaction:
                     "echo $HOME": CommandResult(0, "/home/target-user", ""),
                     "apt-mark showmanual": CommandResult(0, "", ""),
                     "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
-                    "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-                    "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                    "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                        0, "Inst pkg-a (1.0)\n", ""
+                    ),
+                    "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                         CommandResult(0, "", "")
                     ),
                 },
@@ -2579,7 +2607,7 @@ class TestRepoGroupBackupFailure:
                 ),
                 "test -f /etc/apt/preferences.d/pin-a": CommandResult(0, "", ""),
                 "test -f /etc/apt/preferences.d/pin-b": CommandResult(0, "", ""),
-                "sudo cp -a": CommandResult(1, "", "disk full"),
+                "sudo cp --archive": CommandResult(1, "", "disk full"),
             },
         )
         job = AptSyncJob(context)
@@ -2597,7 +2625,9 @@ class TestRepoGroupBackupFailure:
         commands = all_calls(target)
         # Neither pin file was ever written: the group aborts before any write once
         # backing up fails.
-        assert not any("sudo install -o root -g root -m 0644" in c and "preferences.d/pin-" in c for c in commands)
+        assert not any(
+            "sudo install --owner=root --group=root --mode=0644" in c and "preferences.d/pin-" in c for c in commands
+        )
 
 
 class TestKeyringsDirectoryEnsured:
@@ -2637,9 +2667,9 @@ class TestKeyringsDirectoryEnsured:
         await job.execute()
 
         commands = all_calls(target)
-        mkdir_idx = _index_of(commands, lambda c: c == "sudo mkdir -p -m 0755 /etc/apt/keyrings")
+        mkdir_idx = _index_of(commands, lambda c: c == "sudo mkdir --parents --mode=0755 /etc/apt/keyrings")
         install_idx = _index_of(
-            commands, lambda c: "sudo install -o root -g root -m 0644" in c and "keyrings/foo.gpg" in c
+            commands, lambda c: "sudo install --owner=root --group=root --mode=0644" in c and "keyrings/foo.gpg" in c
         )
         assert mkdir_idx < install_idx
 
@@ -2648,7 +2678,7 @@ class TestKeyringsDirectoryEnsured:
         """The failure surfaces on the REPOSITORY, the thing the user reviewed: its key
         never landed, so the repo is not written either (D-12)."""
         context, _source, target = self._fresh_target(
-            **{"sudo mkdir -p -m 0755 /etc/apt/keyrings": CommandResult(1, "", "permission denied")}
+            **{"sudo mkdir --parents --mode=0755 /etc/apt/keyrings": CommandResult(1, "", "permission denied")}
         )
         job = AptSyncJob(context)
         _install_reviewer(job, {"apt:source:foo.sources": Decision.APPLY})
@@ -2660,7 +2690,9 @@ class TestKeyringsDirectoryEnsured:
         assert "apt:source:foo.sources" in failures
         assert "foo.gpg" in failures["apt:source:foo.sources"]
         commands = all_calls(target)
-        assert not any("sudo install -o root -g root -m 0644" in c and "keyrings/foo.gpg" in c for c in commands)
+        assert not any(
+            "sudo install --owner=root --group=root --mode=0644" in c and "keyrings/foo.gpg" in c for c in commands
+        )
 
 
 # -- Decision 1: one `apt-get update` before installs, across both refresh paths ---------
@@ -2682,12 +2714,16 @@ class TestMetadataRefreshBeforeInstall:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-                "apt-get -s install -y --no-install-recommends pkg-b": CommandResult(0, "Inst pkg-b (2.0)\n", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\n", ""
+                ),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-b": CommandResult(
+                    0, "Inst pkg-b (2.0)\n", ""
+                ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                     CommandResult(0, "", "")
                 ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-b": (
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-b": (
                     CommandResult(0, "", "")
                 ),
                 "sudo apt-get update": CommandResult(0, "", ""),
@@ -2714,8 +2750,12 @@ class TestMetadataRefreshBeforeInstall:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-                "apt-get -s install -y --no-install-recommends pkg-b": CommandResult(0, "Inst pkg-b (2.0)\n", ""),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\n", ""
+                ),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-b": CommandResult(
+                    0, "Inst pkg-b (2.0)\n", ""
+                ),
                 "sudo apt-get update": CommandResult(1, "", "Could not resolve host archive.ubuntu.com"),
             },
         )
@@ -2748,8 +2788,10 @@ class TestMetadataRefreshBeforeInstall:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\n", ""
+                ),
+                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
                     CommandResult(0, "", "")
                 ),
                 "sudo apt-get update": CommandResult(0, "", ""),
@@ -2808,7 +2850,7 @@ class TestReportOnlyRepoItemDecidedApply:
 
         commands = all_calls(target)
         assert not any("sudo apt-get update" in c for c in commands)
-        assert not any(c.startswith("sudo install") or c.startswith("sudo rm -f") for c in commands)
+        assert not any(c.startswith("sudo install") or c.startswith("sudo rm --force") for c in commands)
         target.send_file.assert_not_called()
 
 
@@ -2843,7 +2885,7 @@ class TestSourceOnlyCollateral:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nRemv src-only [1.0]\n", ""
                 ),
             },
@@ -2865,7 +2907,7 @@ class TestSourceOnlyCollateral:
         that would remove a package manual on the SOURCE only (not the target) is refused.
         `src-only` is skip-recorded on the source so it is not a reviewed candidate.
         """
-        sim_cmd = "apt-get -s install -y --no-install-recommends pkg-a"
+        sim_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
         state = {"sim": 0}
 
         def target_side_effect(cmd: str, **_: object) -> CommandResult:
@@ -3175,7 +3217,7 @@ def _scanning_target(
 ) -> Callable[..., CommandResult]:
     """A target whose source-file SCAN reflects the deletions the run has actually issued.
 
-    A `sudo rm -f /etc/apt/sources.list.d/<f>` drops `<f>` from every later scan, which is
+    A `sudo rm --force /etc/apt/sources.list.d/<f>` drops `<f>` from every later scan, which is
     what lets a test prove the keyring reference count is taken against the target's real
     post-write state rather than the state `plan()` saw. `sources_list` is the content of
     `/etc/apt/sources.list`, a file pc-switcher never syncs and never deletes.
@@ -3183,7 +3225,7 @@ def _scanning_target(
     live = dict(target_sources)
 
     def _side_effect(cmd: str, **_: object) -> CommandResult:
-        if cmd.startswith("sudo rm -f "):
+        if cmd.startswith("sudo rm --force "):
             live.pop(Path(shlex.split(cmd)[-1]).name, None)
         if _SOURCE_SCAN_CMD in cmd:
             scan = "".join(_scan_line(name, content) for name, content in live.items())
@@ -3207,12 +3249,13 @@ def _key_writes(target: MagicMock) -> list[str]:
     return [
         c.rsplit(" ", 1)[1]
         for c in all_calls(target)
-        if c.startswith("sudo install -o root -g root -m 0644") and c.rsplit(" ", 1)[1].startswith(_KEY_DEST_PREFIXES)
+        if c.startswith("sudo install --owner=root --group=root --mode=0644")
+        and c.rsplit(" ", 1)[1].startswith(_KEY_DEST_PREFIXES)
     ]
 
 
 def _key_deletions(target: MagicMock) -> list[str]:
-    return [c for c in all_calls(target) if c.startswith("sudo rm -f") and "/etc/apt/keyrings/" in c]
+    return [c for c in all_calls(target) if c.startswith("sudo rm --force") and "/etc/apt/keyrings/" in c]
 
 
 class TestKeysAreNotItems:
@@ -3480,9 +3523,9 @@ class TestUnusedKeyringCollection:
         await job.execute()
 
         commands = all_calls(target)
-        assert _key_deletions(target) == ["sudo rm -f /etc/apt/keyrings/shared.gpg"]
-        source_idx = _index_of(commands, lambda c: "sudo rm -f" in c and "sources.list.d/going.list" in c)
-        key_idx = _index_of(commands, lambda c: "sudo rm -f" in c and "keyrings/shared.gpg" in c)
+        assert _key_deletions(target) == ["sudo rm --force /etc/apt/keyrings/shared.gpg"]
+        source_idx = _index_of(commands, lambda c: "sudo rm --force" in c and "sources.list.d/going.list" in c)
+        key_idx = _index_of(commands, lambda c: "sudo rm --force" in c and "keyrings/shared.gpg" in c)
         update_idx = _index_of(commands, lambda c: c == "sudo apt-get update")
         assert source_idx < key_idx < update_idx
 
@@ -3660,19 +3703,19 @@ class TestUnusedKeyringCollection:
         await job.execute()
 
         commands = all_calls(target)
-        backup_idx = _index_of(commands, lambda c: c.startswith("sudo cp -a /etc/apt/keyrings/shared.gpg"))
-        delete_idx = _index_of(commands, lambda c: c == "sudo rm -f /etc/apt/keyrings/shared.gpg")
+        backup_idx = _index_of(commands, lambda c: c.startswith("sudo cp --archive /etc/apt/keyrings/shared.gpg"))
+        delete_idx = _index_of(commands, lambda c: c == "sudo rm --force /etc/apt/keyrings/shared.gpg")
         assert backup_idx < delete_idx
         delete_call = next(
             call
             for call in target.run_command.call_args_list
-            if call.args[0] == "sudo rm -f /etc/apt/keyrings/shared.gpg"
+            if call.args[0] == "sudo rm --force /etc/apt/keyrings/shared.gpg"
         )
         assert delete_call.kwargs.get("mutates")
 
 
 def _all_removals(target: MagicMock) -> list[str]:
-    return [c for c in all_calls(target) if c.startswith("sudo rm -f")]
+    return [c for c in all_calls(target) if c.startswith("sudo rm --force")]
 
 
 _PIN_SCAN_CMD = "-exec awk '/^Package:/"
@@ -3756,7 +3799,7 @@ def _shared_key_context(
     dpkg_output: str = "",
 ) -> tuple[JobContext, MagicMock, MagicMock]:
     """One repository whose `Signed-By:` points into `/usr/share/keyrings`, with the
-    target's copy of that directory and its `dpkg -S` answer under the test's control.
+    target's copy of that directory and its `dpkg --search` answer under the test's control.
     """
     return _repo_context(
         source_responses={
@@ -3768,9 +3811,9 @@ def _shared_key_context(
         target_responses={
             **_NO_PACKAGES,
             "find /usr/share/keyrings": CommandResult(0, target_shared, ""),
-            # dpkg -S exits non-zero as soon as ANY argument is unowned, which is the norm:
+            # dpkg --search exits non-zero as soon as ANY argument is unowned, which is the norm:
             # the exit code must not be what decides ownership.
-            "dpkg -S": CommandResult(1, dpkg_output, "dpkg-query: no path found matching pattern\n"),
+            "dpkg --search": CommandResult(1, dpkg_output, "dpkg-query: no path found matching pattern\n"),
             "test -f /usr/share/keyrings/vendor.gpg": CommandResult(1, "", ""),
             f"test -f /etc/apt/sources.list.d/{filename}": CommandResult(1, "", ""),
             "sudo apt-get update": CommandResult(0, "", ""),
@@ -3829,7 +3872,7 @@ class TestSharedKeyringsDirectory:
 
     @pytest.mark.asyncio
     async def test_a_package_owned_key_the_target_is_missing_is_copied_anyway(self) -> None:
-        """The bootstrap case. `dpkg -S` answers from the package's FILE LIST, so a keyring
+        """The bootstrap case. `dpkg --search` answers from the package's FILE LIST, so a keyring
         can be owned and absent at once — and a vendor `.deb` that ships both a repository
         entry and the keyring trusting it can only be installed once that keyring is there.
         Ownership must gate the OVERWRITE, never the COPY.
@@ -3852,7 +3895,7 @@ class TestSharedKeyringsDirectory:
 
     @pytest.mark.asyncio
     async def test_ownership_is_probed_once_for_every_key_directory(self) -> None:
-        """One batched `dpkg -S` naming every key the target has across all three
+        """One batched `dpkg --search` naming every key the target has across all three
         directories — never one call per file.
         """
         context, _source, target = _repo_context(
@@ -3867,7 +3910,7 @@ class TestSharedKeyringsDirectory:
 
         await AptSyncJob(context).plan()
 
-        dpkg_calls = [c for c in all_calls(target) if c.startswith("dpkg -S")]
+        dpkg_calls = [c for c in all_calls(target) if c.startswith("dpkg --search")]
         assert len(dpkg_calls) == 1
         assert "/etc/apt/keyrings/per-repo.gpg" in dpkg_calls[0]
         assert "/etc/apt/trusted.gpg.d/legacy.gpg" in dpkg_calls[0]
@@ -4010,11 +4053,11 @@ class TestSecondReviewAfterRepositoryChanges:
                     "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
                     "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "curl-pin"), ""),
                     "cat /etc/apt/preferences.d/curl-pin": CommandResult(0, _CURL_PIN_FILE, ""),
-                    "apt-get -s remove -y curl": CommandResult(0, "Remv curl [8.0]\n", ""),
+                    "apt-get --dry-run remove --assume-yes curl": CommandResult(0, "Remv curl [8.0]\n", ""),
                 },
                 before=_CURL_PIN_SCAN,
                 after="",
-                trigger="sudo rm -f /etc/apt/preferences.d/curl-pin",
+                trigger="sudo rm --force /etc/apt/preferences.d/curl-pin",
             ),
         )
         job = AptSyncJob(context)
@@ -4044,8 +4087,10 @@ class TestSecondReviewAfterRepositoryChanges:
         assert all("revealed by this run's /etc/apt changes" in group.title for group in reviewer.calls[1])
 
         commands = all_calls(target)
-        pin_idx = _index_of(commands, lambda c: c == "sudo rm -f /etc/apt/preferences.d/curl-pin")
-        remove_idx = _index_of(commands, lambda c: "apt-get remove -y curl" in c and c.startswith("sudo DEBIAN"))
+        pin_idx = _index_of(commands, lambda c: c == "sudo rm --force /etc/apt/preferences.d/curl-pin")
+        remove_idx = _index_of(
+            commands, lambda c: "apt-get remove --assume-yes curl" in c and c.startswith("sudo DEBIAN")
+        )
         assert pin_idx < remove_idx
 
     @pytest.mark.asyncio
@@ -4058,7 +4103,7 @@ class TestSecondReviewAfterRepositoryChanges:
         await job.execute()
 
         assert reviewer.call_count == 1
-        assert not any("apt-get remove -y curl" in c for c in all_calls(target))
+        assert not any("apt-get remove --assume-yes curl" in c for c in all_calls(target))
 
     @pytest.mark.asyncio
     async def test_a_pin_this_run_installs_withdraws_the_approval_it_contradicts(self) -> None:
@@ -4077,11 +4122,11 @@ class TestSecondReviewAfterRepositoryChanges:
                     "echo $HOME": CommandResult(0, "/home/target-user", ""),
                     "apt-mark showmanual": CommandResult(0, "curl\n", ""),
                     "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
-                    "apt-get -s remove -y curl": CommandResult(0, "Remv curl [8.0]\n", ""),
+                    "apt-get --dry-run remove --assume-yes curl": CommandResult(0, "Remv curl [8.0]\n", ""),
                 },
                 before="",
                 after=_CURL_PIN_SCAN,
-                trigger="sudo install -o root -g root -m 0644",
+                trigger="sudo install --owner=root --group=root --mode=0644",
             ),
         )
         job = AptSyncJob(context)
@@ -4091,7 +4136,7 @@ class TestSecondReviewAfterRepositoryChanges:
         await job.execute()
 
         assert reviewer.call_count == 1, "withdrawing work asks the user nothing"
-        assert not any(c.startswith("sudo DEBIAN") and "remove -y curl" in c for c in all_calls(target))
+        assert not any(c.startswith("sudo DEBIAN") and "remove --assume-yes curl" in c for c in all_calls(target))
 
     @pytest.mark.asyncio
     async def test_a_run_with_no_etc_apt_work_re_reads_nothing_and_reviews_once(self) -> None:
@@ -4103,7 +4148,7 @@ class TestSecondReviewAfterRepositoryChanges:
             target_responses={
                 **_NO_PACKAGES,
                 "apt-cache policy": CommandResult(0, _POLICY_AVAILABLE, ""),
-                "apt-get -s install": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                "apt-get --dry-run install": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
             },
         )
         job = AptSyncJob(context)
@@ -4123,7 +4168,7 @@ class TestSecondReviewAfterRepositoryChanges:
         await job.execute()
 
         assert reviewer.call_count == 1
-        assert not any(c.startswith("sudo rm -f") for c in all_calls(target))
+        assert not any(c.startswith("sudo rm --force") for c in all_calls(target))
 
 
 class TestNewRepositoryMakesAPackageAvailable:
@@ -4145,7 +4190,7 @@ class TestNewRepositoryMakesAPackageAvailable:
                 "echo $HOME": CommandResult(0, "/home/target-user", ""),
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "test -f": CommandResult(1, "", ""),
-                "apt-get -s install": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                "apt-get --dry-run install": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
             }.items():
                 if pattern in cmd:
                     return result

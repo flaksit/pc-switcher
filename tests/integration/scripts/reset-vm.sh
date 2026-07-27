@@ -50,7 +50,7 @@ fi
 if [[ "$#" -ne 1 ]]; then
     echo "Error: Expected 1 argument, got $#" >&2
     echo "Usage: $(basename "$0") <VM_HOST>" >&2
-    echo "Run with -h for help" >&2
+    echo "Run with --help for help" >&2
     exit 1
 fi
 
@@ -117,7 +117,7 @@ delete_subvol_recursive() {
 }
 
 # List all subvolumes under @snapshots/, excluding baseline/* and old/*
-for subvol_path in $(btrfs subvolume list / 2>/dev/null | awk '{print $NF}' | grep '^@snapshots/' | grep -v '^@snapshots/baseline/' | grep -v '^@snapshots/old/'); do
+for subvol_path in $(btrfs subvolume list / 2>/dev/null | awk '{print $NF}' | grep '^@snapshots/' | grep --invert-match '^@snapshots/baseline/' | grep --invert-match '^@snapshots/old/'); do
     # Convert @snapshots/... to /.snapshots/...
     abs_path=$(echo "$subvol_path" | sed 's/^@snapshots/\/.snapshots/')
     delete_subvol_recursive "$abs_path"
@@ -131,11 +131,11 @@ ssh_vm 'sudo bash -s' << 'EOF'
 set -euo pipefail
 
 # Mount top-level btrfs filesystem
-mkdir -p /mnt/btrfs
-if mountpoint -q /mnt/btrfs; then
+mkdir --parents /mnt/btrfs
+if mountpoint --quiet /mnt/btrfs; then
     umount /mnt/btrfs
 fi
-mount -o subvolid=5 /dev/sda2 /mnt/btrfs
+mount --options subvolid=5 /dev/sda2 /mnt/btrfs
 
 # Check current state
 has_root=false
@@ -165,7 +165,7 @@ if ! $has_root; then
     echo "ERROR: @ subvolume is missing!"
 
     # Check for any old snapshots in /.snapshots/old/
-    latest_root_old=$(ls -1d /.snapshots/old/@_* 2>/dev/null | sort -r | head -1 || true)
+    latest_root_old=$(ls -1 --directory /.snapshots/old/@_* 2>/dev/null | sort --reverse | head --lines=1 || true)
 
     # Try to recover from most recent @_old_* or legacy @_old
     if [ -n "$latest_root_old" ]; then
@@ -189,7 +189,7 @@ if ! $has_home; then
     echo "ERROR: @home subvolume is missing!"
 
     # Check for any old snapshots in /.snapshots/old/
-    latest_home_old=$(ls -1d /.snapshots/old/@home_* 2>/dev/null | sort -r | head -1 || true)
+    latest_home_old=$(ls -1 --directory /.snapshots/old/@home_* 2>/dev/null | sort --reverse | head --lines=1 || true)
 
     if [ -n "$latest_home_old" ]; then
         echo "RECOVERING: Restoring @home from $latest_home_old"
@@ -218,14 +218,14 @@ set -euo pipefail
 # 1. Top-level btrfs filesystem is still mounted on /mnt/btrfs from pre-flight check
 
 # 2. Verify / is mounted from @ (bail out if not)
-ROOT_SUBVOL=$(mount | grep ' on / ' | grep -o 'subvol=[^,)]*' | cut -d= -f2)
+ROOT_SUBVOL=$(mount | grep ' on / ' | grep --only-matching 'subvol=[^,)]*' | cut --delimiter='=' --fields=2)
 if [ "$ROOT_SUBVOL" != "/@" ]; then
     echo "ERROR: / is mounted from '$ROOT_SUBVOL', expected '/@'" >&2
     exit 1
 fi
 
 # 3. Verify /home is mounted from @home (bail out if not)
-HOME_SUBVOL=$(mount | grep ' on /home ' | grep -o 'subvol=[^,)]*' | cut -d= -f2)
+HOME_SUBVOL=$(mount | grep ' on /home ' | grep --only-matching 'subvol=[^,)]*' | cut --delimiter='=' --fields=2)
 if [ "$HOME_SUBVOL" != "/@home" ]; then
     echo "ERROR: /home is mounted from '$HOME_SUBVOL', expected '/@home'" >&2
     exit 1
@@ -249,7 +249,7 @@ btrfs subvolume snapshot /.snapshots/baseline/@home /mnt/btrfs/@home_new
 #    Store old snapshots in /.snapshots/old/ with timestamps for investigation
 
 # Ensure /.snapshots/old/ directory exists
-mkdir -p /.snapshots/old
+mkdir --parents /.snapshots/old
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 mv /mnt/btrfs/@ /mnt/btrfs/@snapshots/old/@_${TIMESTAMP}
@@ -310,7 +310,7 @@ delete_subvol_recursive() {
 
 # Rotate old root snapshots in /.snapshots/old/: keep 3 most recent, delete the rest
 # Timestamped names sort chronologically (YYYYMMDD_HHMMSS format)
-for old_subvol in $(ls -1d /.snapshots/old/@_* 2>/dev/null | sort -r | tail -n +4); do
+for old_subvol in $(ls -1 --directory /.snapshots/old/@_* 2>/dev/null | sort --reverse | tail --lines=+4); do
     # verify it is really a subvolume before deleting
     if btrfs subvolume show "$old_subvol" >/dev/null 2>&1; then
         echo "Deleting old snapshot: $old_subvol"
@@ -321,7 +321,7 @@ for old_subvol in $(ls -1d /.snapshots/old/@_* 2>/dev/null | sort -r | tail -n +
 done
 
 # Rotate old home snapshots in /.snapshots/old/: keep 3 most recent, delete the rest
-for old_subvol in $(ls -1d /.snapshots/old/@home_* 2>/dev/null | sort -r | tail -n +4); do
+for old_subvol in $(ls -1 --directory /.snapshots/old/@home_* 2>/dev/null | sort --reverse | tail --lines=+4); do
     # verify it is really a subvolume before deleting
     if btrfs subvolume show "$old_subvol" >/dev/null 2>&1; then
         echo "Deleting old snapshot: $old_subvol"

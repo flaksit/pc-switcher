@@ -90,7 +90,7 @@ __all__ = ["Orchestrator"]
 _SNAP_AUTOREFRESH_HOLD_DURATION = "+6 hours"
 # Shell snippet computing an RFC3339-UTC "now + hold duration" timestamp ON THE HOST (correct
 # against each host's own clock, and parseable by snapd's refresh.hold RFC3339 validator).
-_SNAP_HOLD_TIMESTAMP_CMD = f"date -u -d '{_SNAP_AUTOREFRESH_HOLD_DURATION}' +%Y-%m-%dT%H:%M:%SZ"
+_SNAP_HOLD_TIMESTAMP_CMD = f"date --utc --date='{_SNAP_AUTOREFRESH_HOLD_DURATION}' +%Y-%m-%dT%H:%M:%SZ"
 # snapd's error for an option that was never set (`snap "core" has no "refresh.hold"
 # configuration option`), as opposed to any other `snap get` failure. It is what separates
 # "there is no hold" from "the hold could not be read" — a distinction the value alone cannot
@@ -141,7 +141,7 @@ def _stuck_lock_hint(machine: str, lock_path: str) -> str:
     return (
         f"Wait for the other sync to finish — the lock releases automatically when it exits. "
         f"If no sync is running, a previous run left a stuck lock on {machine}; clear it by "
-        f"terminating the holder process (e.g. `fuser -k {lock_path}` or `pkill -f pc-switcher.lock`), "
+        f"terminating the holder process (e.g. `fuser --kill {lock_path}` or `pkill --full pc-switcher.lock`), "
         f"not by deleting the lock file."
     )
 

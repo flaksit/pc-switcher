@@ -210,8 +210,8 @@ class DecisionFile:
 
     async def record(self, entry: DecisionEntry) -> None:
         """Merge `entry` into this file by `item_id` (last write wins) and write
-        atomically: `mkdir -p` the directory, write the new content to a sibling
-        `.pcswitcher-tmp` path, then `mv -f` it into place — the same
+        atomically: `mkdir --parents` the directory, write the new content to a sibling
+        `.pcswitcher-tmp` path, then `mv --force` it into place — the same
         atomic-replace-within-the-same-directory shape `vscode_state_sync._sync_editor`
         uses, so an interrupted write can never leave a truncated file.
 
@@ -227,9 +227,9 @@ class DecisionFile:
         dir_relpath = shlex.quote(_DECISION_DIR_RELPATH)
         tmp_expr = f"{self._path_expr}.pcswitcher-tmp"
         cmd = (
-            f"mkdir -p ~/{dir_relpath} && "
+            f"mkdir --parents ~/{dir_relpath} && "
             f"printf '%s' {shlex.quote(content)} > {tmp_expr} && "
-            f"mv -f {tmp_expr} {self._path_expr}"
+            f"mv --force {tmp_expr} {self._path_expr}"
         )
         result = await self._executor.run_command(
             cmd, mutates=f"record permanent skip for {entry.label} in {self._display_path}"
@@ -383,7 +383,7 @@ class SnippetRegistry:
 
     async def add(self, snippet: Snippet) -> None:
         """Merge `snippet` into the registry by `item_id` (last write wins) and write
-        atomically — the identical `mkdir -p && printf ... > tmp && mv -f` shape
+        atomically — the identical `mkdir --parents && printf ... > tmp && mv --force` shape
         `DecisionFile.record` uses, so an interrupted write can never leave a truncated
         file.
         """
@@ -394,9 +394,9 @@ class SnippetRegistry:
         dir_relpath = shlex.quote(_DECISION_DIR_RELPATH)
         tmp_expr = f"{self._path_expr}.pcswitcher-tmp"
         cmd = (
-            f"mkdir -p ~/{dir_relpath} && "
+            f"mkdir --parents ~/{dir_relpath} && "
             f"printf '%s' {shlex.quote(content)} > {tmp_expr} && "
-            f"mv -f {tmp_expr} {self._path_expr}"
+            f"mv --force {tmp_expr} {self._path_expr}"
         )
         result = await self._executor.run_command(
             cmd, mutates=f"record install snippet for {snippet.label} in {self._display_path}"

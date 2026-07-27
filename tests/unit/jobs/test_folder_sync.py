@@ -43,10 +43,10 @@ def fail_when(substring: str, stderr: str) -> Callable[..., CommandResult]:
 
 
 def arch_reports(machine: str) -> Callable[..., CommandResult]:
-    """Return a run_command side_effect that reports `machine` for `uname -m`, success otherwise."""
+    """Return a run_command side_effect that reports `machine` for `uname --machine`, success otherwise."""
 
     def _side_effect(cmd: str, **_: object) -> CommandResult:
-        if "uname -m" in cmd:
+        if "uname --machine" in cmd:
             return CommandResult(exit_code=0, stdout=machine, stderr="")
         return CommandResult(exit_code=0, stdout="", stderr="")
 
@@ -429,7 +429,8 @@ class TestBuildRsyncCmd:
     def test_base_flags_present(self) -> None:
         """Command contains the full D-13 flag baseline."""
         cmd = self._build()
-        assert "-aAXHS" in cmd
+        for flag in ("--archive", "--acls", "--xattrs", "--hard-links", "--sparse"):
+            assert flag in cmd
         assert "--numeric-ids" in cmd
         assert "--delete" in cmd
         assert "--info=progress2" in cmd
@@ -453,7 +454,7 @@ class TestBuildRsyncCmd:
         assert "LC_ALL" not in cmd
 
     def test_root_via_sudo_and_ssh_transport(self) -> None:
-        """Command uses --rsync-path='sudo rsync' for remote root and an -e ssh option with -T and -l."""
+        """Command uses --rsync-path='sudo rsync' for remote root and an --rsh ssh option with -T and -l."""
         cmd = self._build()
         # Remote root via sudo (target side)
         assert "--rsync-path='sudo rsync'" in cmd
@@ -840,7 +841,7 @@ class TestPackageJobExcludeFiltersGating:
 
 
 class TestBuildRsyncCmdSSHTransport:
-    """Verify explicit SSH credentials in the -e transport of _build_rsync_cmd.
+    """Verify explicit SSH credentials in the --rsh transport of _build_rsync_cmd.
 
     When sudo launches rsync as root, the spawned ssh binary resolves ~/.ssh
     from root's passwd entry (/root/.ssh), ignoring $HOME.  The fix passes

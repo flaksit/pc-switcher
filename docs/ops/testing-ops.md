@@ -105,7 +105,7 @@ Create a PAT with **no special permissions** (public repo access is sufficient) 
 **Ubuntu/Debian**:
 ```bash
 wget https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz
-tar xzf hcloud-linux-amd64.tar.gz
+tar --extract --gzip --file hcloud-linux-amd64.tar.gz
 sudo mv hcloud /usr/local/bin/
 sudo chmod +x /usr/local/bin/hcloud
 hcloud version
@@ -197,7 +197,7 @@ The test infrastructure uses Hetzner server labels for lock-based concurrency co
 ### Checking Lock Status
 
 ```bash
-hcloud server describe pc1 -o json | jq '.labels'
+hcloud server describe pc1 --output json | jq '.labels'
 ```
 
 Look for `lock_holder` and `lock_acquired` labels.
@@ -212,7 +212,7 @@ hcloud server remove-label pc1 lock_holder
 hcloud server remove-label pc1 lock_acquired
 
 # Verify
-hcloud server describe pc1 -o json | jq '.labels'
+hcloud server describe pc1 --output json | jq '.labels'
 ```
 
 ### Lock Operations (Manual)
@@ -269,7 +269,7 @@ hcloud server describe pc1 -o json | jq '.labels'
 
 1. Check lock status:
    ```bash
-   hcloud server describe pc1 -o json | jq '.labels'
+   hcloud server describe pc1 --output json | jq '.labels'
    ```
 
 2. Verify lock holder is no longer active (check CI runs, ask developers)
@@ -282,7 +282,7 @@ hcloud server describe pc1 -o json | jq '.labels'
 
 4. Verify lock cleared:
    ```bash
-   hcloud server describe pc1 -o json | jq '.labels'
+   hcloud server describe pc1 --output json | jq '.labels'
    ```
 
 5. Retry integration tests

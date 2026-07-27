@@ -162,4 +162,4 @@ class Connection:
         if self._conn is None:
             return
         # Use pkill with pattern matching, ignore if no processes found
-        await self._conn.run(f"pkill -f '{pattern}' || true")
+        await self._conn.run(f"pkill --full '{pattern}' || true")

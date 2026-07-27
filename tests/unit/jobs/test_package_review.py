@@ -463,7 +463,7 @@ class TestUnreproducibleGroupResolution:
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         select_prompt = _fake_prompt(ask_return="add_snippet")
-        body = "  sudo dpkg -i /tmp/x.deb\n\nsudo apt-get install -f -y\n"
+        body = "  sudo dpkg --install /tmp/x.deb\n\nsudo apt-get install --fix-broken --assume-yes\n"
         text_prompt = _fake_prompt(ask_return=body)
 
         with (
@@ -556,7 +556,7 @@ class TestUnreproducibleGroupResolution:
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
-        body = "sudo dpkg -i /tmp/x.deb"
+        body = "sudo dpkg --install /tmp/x.deb"
         select_prompt = _fake_prompt(ask_side_effect=["add_snippet", "add_snippet"])
         text_prompt = _fake_prompt(ask_side_effect=["", body])  # empty, then real
 

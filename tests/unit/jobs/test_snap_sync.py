@@ -1017,7 +1017,7 @@ class TestValidate:
     @pytest.mark.asyncio
     async def test_target_without_passwordless_sudo_yields_validation_error(self) -> None:
         context, _source, _target = make_context(
-            target_responses={"sudo -n true": CommandResult(1, "", "sudo: a password is required")}
+            target_responses={"sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required")}
         )
         job = SnapSyncJob(context)
 
@@ -1031,7 +1031,7 @@ class TestValidate:
         auto-refresh via `sudo snap set system refresh.hold` on the source as well (decision 4).
         """
         context, _source, _target = make_context(
-            source_responses={"sudo -n true": CommandResult(1, "", "sudo: a password is required")}
+            source_responses={"sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required")}
         )
         job = SnapSyncJob(context)
 

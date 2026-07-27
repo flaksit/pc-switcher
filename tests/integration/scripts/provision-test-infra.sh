@@ -28,7 +28,7 @@ ensure_ssh_key() {
     if hcloud ssh-key describe "$SSH_KEY_NAME" &> /dev/null; then
         # Key exists, check if fingerprint matches
         local remote_fingerprint
-        remote_fingerprint=$(hcloud ssh-key describe "$SSH_KEY_NAME" -o json | jq -r '.fingerprint')
+        remote_fingerprint=$(hcloud ssh-key describe "$SSH_KEY_NAME" --output json | jq --raw-output '.fingerprint')
         log_info "Remote key fingerprint: $remote_fingerprint"
 
         if [[ "$local_fingerprint" == "$remote_fingerprint" ]]; then
@@ -95,7 +95,7 @@ check_vm_ready() {
 check_vm_has_btrfs() {
     local vm_ip="$1"
     local fs_type
-    fs_type=$(ssh_first "root@$vm_ip" "df -T / 2>/dev/null | tail -n1 | awk '{print \$2}'" 2>/dev/null) || return 1
+    fs_type=$(ssh_first "root@$vm_ip" "df --print-type / 2>/dev/null | tail --lines=1 | awk '{print \$2}'" 2>/dev/null) || return 1
     [[ "$fs_type" == "btrfs" ]]
 }
 
@@ -236,7 +236,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # Count authorized keys
-KEY_COUNT=$(echo "$SSH_AUTHORIZED_KEYS" | grep -c '^ssh-' || true)
+KEY_COUNT=$(echo "$SSH_AUTHORIZED_KEYS" | grep --count '^ssh-' || true)
 log_info "Found $KEY_COUNT authorized SSH key(s)"
 
 # Determine SSH public key path for Hetzner Cloud key

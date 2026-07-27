@@ -333,10 +333,10 @@ print(mock_executor.run_command.call_args_list)
 
 ```bash
 # Unit tests only (fast, no VMs)
-uv run pytest tests/unit tests/contract -v
+uv run pytest tests/unit tests/contract --verbose
 
 # Integration tests (requires VMs and env vars) — runs everything
-uv run pytest tests/integration -v -m "integration and not benchmark"
+uv run pytest tests/integration --verbose -m "integration and not benchmark"
 
 # Print the topic-scoped CI marker expression for the current branch
 tests/integration/scripts/select-ci-tests.sh origin/main

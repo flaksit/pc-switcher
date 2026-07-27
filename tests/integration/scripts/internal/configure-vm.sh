@@ -47,7 +47,7 @@ fi
 if [[ "$#" -lt 2 ]]; then
     echo "Error: Expected at least 2 arguments, got $#" >&2
     echo "Usage: $(basename "$0") <VM_HOST> <SSH_AUTHORIZED_KEYS> [VM_NAME]" >&2
-    echo "Run with -h for help" >&2
+    echo "Run with --help for help" >&2
     exit 1
 fi
 
@@ -73,7 +73,7 @@ log_info_prefixed "Installing required packages..."
 run_ssh << 'EOF'
 set -euo pipefail
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
+DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes \
     btrfs-progs \
     qemu-guest-agent \
     fail2ban \
@@ -84,10 +84,10 @@ EOF
 log_info_prefixed "Creating testuser..."
 run_ssh << 'EOF'
 set -euo pipefail
-useradd -m -s /bin/bash testuser
+useradd --create-home --shell /bin/bash testuser
 echo "testuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/testuser
 chmod 0440 /etc/sudoers.d/testuser
-mkdir -p /home/testuser/.ssh
+mkdir --parents /home/testuser/.ssh
 chmod 700 /home/testuser/.ssh
 EOF
 
@@ -106,10 +106,10 @@ run_ssh << 'EOF'
 set -euo pipefail
 
 chmod 600 /home/testuser/.ssh/authorized_keys
-chown -R testuser:testuser /home/testuser/.ssh
+chown --recursive testuser:testuser /home/testuser/.ssh
 
 # SSH hardening
-mkdir -p /etc/ssh/sshd_config.d
+mkdir --parents /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/99-hardening.conf << 'SSHEOF'
 PermitRootLogin no
 PasswordAuthentication no
@@ -129,8 +129,8 @@ ufw allow 22/tcp comment 'SSH'
 ufw --force enable
 
 # Snapshot directories
-mkdir -p /.snapshots/baseline
-mkdir -p /.snapshots/pc-switcher
+mkdir --parents /.snapshots/baseline
+mkdir --parents /.snapshots/pc-switcher
 
 # qemu-guest-agent
 systemctl enable qemu-guest-agent

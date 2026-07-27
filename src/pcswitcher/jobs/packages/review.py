@@ -220,8 +220,8 @@ _SNIPPET_AUTHORING_NOTE = (
     "This snippet replays non-interactively on the target — no stdin is available, so a\n"
     "command that prompts (e.g. a debconf question) will hang the sync rather than fail.\n"
     "A typical shape:\n\n"
-    "  sudo DEBIAN_FRONTEND=noninteractive dpkg -i /path/to/package.deb || \\\n"
-    "  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -f\n"
+    "  sudo DEBIAN_FRONTEND=noninteractive dpkg --install /path/to/package.deb || \\\n"
+    "  sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken\n"
 )
 
 

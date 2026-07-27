@@ -42,7 +42,7 @@ async def clean_config_environment(
     )
 
     # Remove config file
-    await pc1_executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
+    await pc1_executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
 
     # Verify config removed
     result = await pc1_executor.run_command("test -f ~/.config/pc-switcher/config.yaml")
@@ -51,7 +51,7 @@ async def clean_config_environment(
     yield pc1_executor
 
     # Restore environment
-    await pc1_executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
+    await pc1_executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
     await pc1_executor.run_command(
         "if [ -f ~/.config/pc-switcher/config.yaml.backup ]; then "
         "mv ~/.config/pc-switcher/config.yaml.backup ~/.config/pc-switcher/config.yaml; "
@@ -128,7 +128,7 @@ class TestInitCommand:
 
         try:
             # Setup: create config directory and file with marker
-            await executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+            await executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
             custom_marker = "# CUSTOM_CONFIG_MARKER_FOR_TESTING_12345"
             await executor.run_command(
                 f"echo '{custom_marker}' > ~/.config/pc-switcher/config.yaml",
@@ -171,7 +171,7 @@ class TestInitCommand:
 
         finally:
             # Clean up
-            await executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
+            await executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
 
     async def test_core_init_creates_parent_directory(
         self,
@@ -217,7 +217,7 @@ class TestInitCommand:
 
         finally:
             # Restore original directory
-            await executor.run_command("rm -rf ~/.config/pc-switcher", timeout=10.0)
+            await executor.run_command("rm --recursive --force ~/.config/pc-switcher", timeout=10.0)
             await executor.run_command(
                 "if [ -d ~/.config/pc-switcher.backup ]; then "
                 "mv ~/.config/pc-switcher.backup ~/.config/pc-switcher; "

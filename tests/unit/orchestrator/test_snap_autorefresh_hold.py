@@ -73,7 +73,7 @@ def make_snapd(initial_hold: str | None = None) -> MagicMock:
     def _side_effect(cmd: str, **_: object) -> CommandResult:
         if "snap set system refresh.hold=" in cmd:
             written = cmd.split("refresh.hold=", 1)[1].strip().strip('"').strip("'")
-            state["hold"] = APPLIED_HOLD if "date -u -d" in written else (written or None)
+            state["hold"] = APPLIED_HOLD if "date --utc --date=" in written else (written or None)
             return CommandResult(exit_code=0, stdout="", stderr="")
         if "snap get system refresh.hold" in cmd:
             hold = state["hold"]
@@ -132,7 +132,7 @@ class TestHoldEngaged:
             cmds = all_calls(ex)
             assert any("snap set system refresh.hold=" in c for c in cmds)
             # Timed hold: the value is computed on the host from `date`, not indefinite.
-            assert any("date -u -d" in c for c in cmds)
+            assert any("date --utc --date=" in c for c in cmds)
             # Never the indefinite `snap refresh --hold` verb (snap_sync Pitfall 1).
             assert not any("snap refresh --hold" in c for c in cmds)
         assert orchestrator._snap_hold_engaged is True  # pyright: ignore[reportPrivateUsage]

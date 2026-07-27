@@ -99,7 +99,7 @@ install_snaps() {
     if ! command -v snap >/dev/null 2>&1; then
         log "installing snapd"
         sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y snapd
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes snapd
     fi
 
     # An install issued while snapd is still seeding fails with "too early for
@@ -126,11 +126,11 @@ install_flatpak_packages() {
     fi
     log "installing apt package: flatpak"
     sudo apt-get update
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y flatpak
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes flatpak
 }
 
 add_flathub_remote() {
-    if flatpak remotes --user --columns=name | grep -qx "$FLATPAK_REMOTE"; then
+    if flatpak remotes --user --columns=name | grep --quiet --line-regexp "$FLATPAK_REMOTE"; then
         log "flatpak remote $FLATPAK_REMOTE already configured"
         return
     fi
@@ -145,7 +145,7 @@ add_flathub_remote() {
 
 # Whether `ref` is installed in the user installation.
 flatpak_user_ref_installed() {
-    flatpak list --user --columns=ref | grep -qx "$1"
+    flatpak list --user --columns=ref | grep --quiet --line-regexp "$1"
 }
 
 assert_app_runtime_unchanged() {
@@ -184,12 +184,12 @@ install_flatpak_runtime() {
     # No --no-related: the related refs (GL, VAAPI, codecs, Locale) have to be seeded
     # here, or the app install inside the test pulls them instead.
     log "installing flatpak runtime $FLATPAK_RUNTIME_REF (a few hundred MB, once per baseline)"
-    flatpak install --user -y --noninteractive "$FLATPAK_REMOTE" "$FLATPAK_RUNTIME_REF"
+    flatpak install --user --assumeyes --noninteractive "$FLATPAK_REMOTE" "$FLATPAK_RUNTIME_REF"
 }
 
 converge_flatpak_app() {
     local installed=false
-    if flatpak list --user --app --columns=application | grep -qx "$FLATPAK_APP"; then
+    if flatpak list --user --app --columns=application | grep --quiet --line-regexp "$FLATPAK_APP"; then
         installed=true
     fi
 
@@ -199,7 +199,7 @@ converge_flatpak_app() {
             return
         fi
         log "installing user-scope flatpak $FLATPAK_APP"
-        flatpak install --user -y --noninteractive "$FLATPAK_REMOTE" "$FLATPAK_APP"
+        flatpak install --user --assumeyes --noninteractive "$FLATPAK_REMOTE" "$FLATPAK_APP"
         return
     fi
 
@@ -208,7 +208,7 @@ converge_flatpak_app() {
     # than merely not installed, so a test that crashed mid-run cannot leave it behind.
     if [[ "$installed" == "true" ]]; then
         log "removing user-scope flatpak $FLATPAK_APP (this machine is the sync target)"
-        flatpak uninstall --user -y "$FLATPAK_APP"
+        flatpak uninstall --user --assumeyes "$FLATPAK_APP"
     else
         log "flatpak $FLATPAK_APP correctly absent"
     fi
@@ -226,10 +226,10 @@ converge_flatpak_app() {
 # script deliberately keeps installed.
 if [[ -f "$MARKER" ]] && [[ "$(cat "$MARKER")" != "$FIXTURES_VERSION" ]]; then
     log "marker reports version $(cat "$MARKER"), rebuilding for version $FIXTURES_VERSION"
-    flatpak uninstall --user -y "$LEGACY_FLATPAK_APP" >/dev/null 2>&1 || true
-    flatpak uninstall --user -y "$LEGACY_FLATPAK_RUNTIME" >/dev/null 2>&1 || true
+    flatpak uninstall --user --assumeyes "$LEGACY_FLATPAK_APP" >/dev/null 2>&1 || true
+    flatpak uninstall --user --assumeyes "$LEGACY_FLATPAK_RUNTIME" >/dev/null 2>&1 || true
     flatpak remote-delete --user --force "$LEGACY_FLATPAK_REMOTE" >/dev/null 2>&1 || true
-    sudo rm -rf "$LEGACY_FLATPAK_ROOT" "$LEGACY_OSTREE_TRUSTED_KEY"
+    sudo rm --recursive --force "$LEGACY_FLATPAK_ROOT" "$LEGACY_OSTREE_TRUSTED_KEY"
 fi
 
 install_snaps

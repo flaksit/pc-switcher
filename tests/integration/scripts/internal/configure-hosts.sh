@@ -85,15 +85,15 @@ update_hosts() {
     log_info "Updating /etc/hosts on $vm_ip..."
     run_ssh_heredoc "$vm_ip" <<EOF
 # Remove old pc1/pc2 entries
-sed -i '/\spc1$/d' /etc/hosts
-sed -i '/\spc2$/d' /etc/hosts
+sed --in-place '/\spc1$/d' /etc/hosts
+sed --in-place '/\spc2$/d' /etc/hosts
 
 # Add new entries
 echo "$pc1_ip pc1" >> /etc/hosts
 echo "$pc2_ip pc2" >> /etc/hosts
 
 echo "Updated /etc/hosts:"
-grep -E '\spc[12]$' /etc/hosts
+grep --extended-regexp '\spc[12]$' /etc/hosts
 EOF
 }
 
@@ -125,13 +125,13 @@ add_authorized_key() {
 
     log_info "Adding public key to $vm_ip authorized_keys..."
     ssh_run "testuser@$vm_ip" <<EOF
-mkdir -p ~/.ssh
+mkdir --parents ~/.ssh
 chmod 700 ~/.ssh
 touch ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 
 # Remove old key if present, then add new one
-grep -v "testuser@" ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp || true
+grep --invert-match "testuser@" ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp || true
 echo "$pubkey" >> ~/.ssh/authorized_keys.tmp
 mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
@@ -147,7 +147,7 @@ add_known_host() {
 
     log_info "Adding $remote_hostname to $vm_ip known_hosts..."
     ssh_run "testuser@$vm_ip" <<EOF
-mkdir -p ~/.ssh
+mkdir --parents ~/.ssh
 chmod 700 ~/.ssh
 
 # Remove old entry if present

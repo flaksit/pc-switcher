@@ -209,7 +209,7 @@ def get_record_role_command(role: SyncRole, peer: str | None = None) -> str:
         ]
     )
     script = "\n".join(lines)
-    return f'mkdir -p {HISTORY_DIR} && python3 -c "{script}"'
+    return f'mkdir --parents {HISTORY_DIR} && python3 -c "{script}"'
 
 
 def hostnames_equal(a: str | None, b: str | None) -> bool:

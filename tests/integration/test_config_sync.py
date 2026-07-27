@@ -25,7 +25,7 @@ class TestConfigSyncIntegration:
     async def test_get_target_config_returns_none_when_missing(self, pc1_executor: RemoteExecutor) -> None:
         """Should return None when config file doesn't exist on target."""
         # Ensure config doesn't exist
-        await pc1_executor.run_command("rm -f ~/.config/pc-switcher/config.yaml")
+        await pc1_executor.run_command("rm --force ~/.config/pc-switcher/config.yaml")
 
         result = await _get_target_config(pc1_executor)
 
@@ -36,7 +36,7 @@ class TestConfigSyncIntegration:
         config_content = "# Test config\nlog_level: DEBUG\n"
 
         # Create config file on target
-        await pc1_executor.run_command("mkdir -p ~/.config/pc-switcher")
+        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher")
         await pc1_executor.run_command(f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{config_content}EOF")
 
         try:
@@ -46,12 +46,12 @@ class TestConfigSyncIntegration:
             assert "log_level: DEBUG" in result
         finally:
             # Cleanup
-            await pc1_executor.run_command("rm -f ~/.config/pc-switcher/config.yaml")
+            await pc1_executor.run_command("rm --force ~/.config/pc-switcher/config.yaml")
 
     async def test_copy_config_to_target_creates_file(self, pc1_executor: RemoteExecutor) -> None:
         """Should create config file on target via SFTP."""
         # Ensure clean state
-        await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+        await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
         # Create local config file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -68,12 +68,12 @@ class TestConfigSyncIntegration:
         finally:
             # Cleanup
             local_path.unlink()
-            await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+            await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
     async def test_copy_config_to_target_creates_directory(self, pc1_executor: RemoteExecutor) -> None:
         """Should create the .config/pc-switcher directory if missing."""
         # Ensure directory doesn't exist
-        await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+        await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as f:
             f.write("test: value\n")
@@ -87,14 +87,14 @@ class TestConfigSyncIntegration:
                 result = await pc1_executor.run_command("test -d ~/.config/pc-switcher")
                 assert result.success
             finally:
-                await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+                await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
     async def test_sync_config_when_configs_match(self, pc1_executor: RemoteExecutor) -> None:
         """Should skip silently when configs match exactly."""
         config_content = "log_level: INFO\n"
 
         # Create matching configs on source and target
-        await pc1_executor.run_command("mkdir -p ~/.config/pc-switcher")
+        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher")
         await pc1_executor.run_command(f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{config_content}EOF")
 
         console = MagicMock()
@@ -113,12 +113,12 @@ class TestConfigSyncIntegration:
                 call_args_str = str(console.print.call_args_list)
                 assert "skipping" in call_args_str.lower()
             finally:
-                await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+                await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
     async def test_sync_config_no_target_config_accepts(self, pc1_executor: RemoteExecutor) -> None:
         """Should copy config when target has none and user accepts."""
         # Ensure no config on target
-        await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+        await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as f:
             f.write("log_level: DEBUG\nsync_jobs:\n  dummy: true\n")
@@ -138,12 +138,12 @@ class TestConfigSyncIntegration:
                 assert read_result.success
                 assert "log_level: DEBUG" in read_result.stdout
             finally:
-                await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+                await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
     async def test_sync_config_no_target_config_declines(self, pc1_executor: RemoteExecutor) -> None:
         """Should abort when target has no config and user declines."""
         # Ensure no config on target
-        await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+        await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write("log_level: DEBUG\n")
@@ -166,7 +166,7 @@ class TestConfigSyncIntegration:
     async def test_sync_config_differs_accepts_source(self, pc1_executor: RemoteExecutor) -> None:
         """Should overwrite target config when user accepts source."""
         # Create different config on target
-        await pc1_executor.run_command("mkdir -p ~/.config/pc-switcher")
+        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher")
         await pc1_executor.run_command("cat > ~/.config/pc-switcher/config.yaml << 'EOF'\nlog_level: WARNING\nEOF")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -189,12 +189,12 @@ class TestConfigSyncIntegration:
             assert "log_level: DEBUG" in read_result.stdout
         finally:
             local_path.unlink()
-            await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+            await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
     async def test_sync_config_differs_keeps_target(self, pc1_executor: RemoteExecutor) -> None:
         """Should keep target config when user chooses to keep."""
         # Create different config on target
-        await pc1_executor.run_command("mkdir -p ~/.config/pc-switcher")
+        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher")
         await pc1_executor.run_command("cat > ~/.config/pc-switcher/config.yaml << 'EOF'\nlog_level: WARNING\nEOF")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -217,12 +217,12 @@ class TestConfigSyncIntegration:
             assert "log_level: WARNING" in read_result.stdout
         finally:
             local_path.unlink()
-            await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+            await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
     async def test_sync_config_differs_aborts(self, pc1_executor: RemoteExecutor) -> None:
         """Should abort sync when user chooses abort."""
         # Create different config on target
-        await pc1_executor.run_command("mkdir -p ~/.config/pc-switcher")
+        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher")
         await pc1_executor.run_command("cat > ~/.config/pc-switcher/config.yaml << 'EOF'\nlog_level: WARNING\nEOF")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -241,7 +241,7 @@ class TestConfigSyncIntegration:
             assert result is False
         finally:
             local_path.unlink()
-            await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+            await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
     async def test_ui_lifecycle_during_sync(self, pc1_executor: RemoteExecutor) -> None:
         """Should pause and resume the UI around a config-sync prompt.
@@ -253,7 +253,7 @@ class TestConfigSyncIntegration:
         config_content = "log_level: INFO\n"
 
         # Ensure the target has no config so a prompt is required.
-        await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+        await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(config_content)
@@ -270,7 +270,7 @@ class TestConfigSyncIntegration:
             ui.resume.assert_called_once()
         finally:
             local_path.unlink()
-            await pc1_executor.run_command("rm -rf ~/.config/pc-switcher")
+            await pc1_executor.run_command("rm --recursive --force ~/.config/pc-switcher")
 
     async def test_core_us_install_as2_shared_install_logic(self, pc1_executor: RemoteExecutor) -> None:
         """CORE-US-INSTALL-AS2: Target install uses shared install logic - installs uv if missing.
@@ -286,13 +286,13 @@ class TestConfigSyncIntegration:
         had_uv = uv_check.success
 
         # Uninstall uv to simulate missing prerequisite
-        await pc1_executor.run_command("rm -f ~/.local/bin/uv")
+        await pc1_executor.run_command("rm --force ~/.local/bin/uv")
 
         try:
             # Run install.sh - this simulates what InstallOnTargetJob does
             install_url = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
             install_result = await pc1_executor.run_command(
-                f"curl -LsSf {install_url} | bash",
+                f"curl --location --silent --show-error --fail {install_url} | bash",
                 timeout=180.0,
             )
 
@@ -315,4 +315,4 @@ class TestConfigSyncIntegration:
 
             # Restore uv if it wasn't there before (leave system as we found it)
             if not had_uv:
-                await pc1_executor.run_command("rm -f ~/.local/bin/uv")
+                await pc1_executor.run_command("rm --force ~/.local/bin/uv")

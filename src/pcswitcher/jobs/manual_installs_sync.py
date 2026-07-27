@@ -4,7 +4,7 @@ can reproduce (D-15, D-18, D-19, D-20, D-21).
 Two detectors, both run on the SOURCE:
 
 - apt packages in the source's `apt-mark showmanual` set whose INSTALLED version comes
-  from no repository the source has configured — installed via `dpkg -i` of a bare
+  from no repository the source has configured — installed via `dpkg --install` of a bare
   `.deb`, so only dpkg's own status file accounts for them.
 - paths directly under `/usr/local` and `/opt` (plus the immediate children of
   `/usr/local/bin` and `/usr/local/lib`) that no dpkg package owns — software an install
@@ -90,7 +90,7 @@ __all__ = ["ManualInstallsSyncJob"]
 # CONTEXT.md). Owned by this job now, no longer shared with apt_sync (D-18).
 _UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")
 
-# Matches one `dpkg -S` "owned" line: `<package>[,<package>...]: <path>`. A path dpkg does
+# Matches one `dpkg --search` "owned" line: `<package>[,<package>...]: <path>`. A path dpkg does
 # not own produces no such line at all (its "no path found" diagnostic goes to stderr,
 # which this scan never inspects) — absence from stdout is the only signal
 # `_owned_paths_from_dpkg_s` needs. A private copy of apt_sync's identical regex: D-18
@@ -142,10 +142,10 @@ def _lines(output: str) -> list[str]:
 
 
 def _owned_paths_from_dpkg_s(output: str) -> frozenset[str]:
-    """Every path `dpkg -S` reports as owned, parsed from its stdout alone (D-19's
+    """Every path `dpkg --search` reports as owned, parsed from its stdout alone (D-19's
     unowned-install scan). A queried path dpkg does NOT own is simply absent from this set
     — its "no path found matching pattern" diagnostic is a stderr message this scan never
-    reads, so a batched multi-path `dpkg -S` degrades cleanly even when some paths are
+    reads, so a batched multi-path `dpkg --search` degrades cleanly even when some paths are
     unowned and others are not. A private copy of apt_sync's identical parser (D-18).
     """
     owned: set[str] = set()
@@ -251,7 +251,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
     async def _push_snippet_registry(self) -> None:
         """Copy the source's `~/.config/pc-switcher/package-snippets.yaml` to the target's
         own copy under the SSH user's home, mirroring `config_sync._copy_config_to_target`'s
-        `mkdir -p` -> `echo $HOME` -> `send_file` shape.
+        `mkdir --parents` -> `echo $HOME` -> `send_file` shape.
 
         `send_file` writes plain SFTP as the SSH user, always under that user's home
         (`~/.config/pc-switcher`) — never `/etc` — which is exactly where the registry
@@ -275,7 +275,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         await self._guard_registry_overwrite(source_path)
 
         mkdir = await self.target.run_command(
-            f"mkdir -p {CONFIG_REMOTE_DIR}", mutates="create the pc-switcher config directory on the target"
+            f"mkdir --parents {CONFIG_REMOTE_DIR}", mutates="create the pc-switcher config directory on the target"
         )
         if not mkdir.success:
             raise RuntimeError(f"Failed to create config directory on target: {mkdir.stderr}")
@@ -368,7 +368,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
 
     async def _scan_no_candidate_apt_packages(self, manual_names: Sequence[str]) -> list[UnreproducibleItem]:
         """D-18: manually-installed packages whose INSTALLED version comes from no
-        repository the SOURCE has configured — put there by `dpkg -i` of a bare `.deb`.
+        repository the SOURCE has configured — put there by `dpkg --install` of a bare `.deb`.
 
         One batched `apt-cache policy` over the whole manual set (never one call per
         package), read through `packages_installed_from_no_repository`: a package's own
@@ -395,8 +395,8 @@ class ManualInstallsSyncJob(PackageSyncJob):
         software an install script dropped there directly, bypassing apt entirely.
 
         One batched `find` over `_UNOWNED_SCAN_ROOTS` names every candidate path, then one
-        batched `dpkg -S` over those candidates decides ownership; a path absent from the
-        `dpkg -S` output is unowned. Both steps run on the SOURCE (D-18) — a fact about
+        batched `dpkg --search` over those candidates decides ownership; a path absent from the
+        `dpkg --search` output is unowned. Both steps run on the SOURCE (D-18) — a fact about
         what the source machine has installed, not the target.
         """
         quoted_roots = " ".join(shlex.quote(root) for root in _UNOWNED_SCAN_ROOTS)
@@ -406,7 +406,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
             return []
 
         quoted_paths = " ".join(shlex.quote(path) for path in candidates)
-        ownership = await self.source.run_command(f"dpkg -S {quoted_paths}")
+        ownership = await self.source.run_command(f"dpkg --search {quoted_paths}")
         owned = _owned_paths_from_dpkg_s(ownership.stdout)
 
         return [

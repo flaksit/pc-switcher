@@ -76,7 +76,7 @@ fi
 if [[ $# -lt 1 ]]; then
     log_error "Expected at least 1 argument, got $#"
     echo "Usage: $(basename "$0") <command> [holder]" >&2
-    echo "Run with -h for help" >&2
+    echo "Run with --help for help" >&2
     exit 1
 fi
 
@@ -93,16 +93,16 @@ get_lock_holder() {
     # The lock lives as a label on $LOCK_SERVER. On a from-scratch provision the
     # server does not exist yet, so treat that as "no holder" instead of failing
     # the pipeline under `set -euo pipefail`.
-    if ! hcloud server describe "$LOCK_SERVER" -o json >/dev/null 2>&1; then
+    if ! hcloud server describe "$LOCK_SERVER" --output json >/dev/null 2>&1; then
         return 0
     fi
 
-    hcloud server describe "$LOCK_SERVER" -o json | jq -r '.labels.lock_holder // empty'
+    hcloud server describe "$LOCK_SERVER" --output json | jq --raw-output '.labels.lock_holder // empty'
 }
 
 # Get lock acquisition timestamp from server labels
 get_lock_timestamp() {
-    hcloud server describe "$LOCK_SERVER" -o json | jq -r '.labels.lock_acquired // empty'
+    hcloud server describe "$LOCK_SERVER" --output json | jq --raw-output '.labels.lock_acquired // empty'
 }
 
 # Set lock labels
@@ -110,7 +110,7 @@ set_lock() {
     local holder="$1"
     local timestamp
     # Use format without colons (not valid in Hetzner labels)
-    timestamp=$(date -u +"%Y%m%d-%H%M%SZ")
+    timestamp=$(date --utc +"%Y%m%d-%H%M%SZ")
 
     hcloud server add-label "$LOCK_SERVER" "lock_holder=$holder"
     hcloud server add-label "$LOCK_SERVER" "lock_acquired=$timestamp"
@@ -148,7 +148,7 @@ acquire() {
     # group (pc-switcher-integration). Defer the persistent label: the provisioning
     # script re-acquires once the VMs exist so the configuration + test phase is
     # still protected.
-    if ! hcloud server describe "$LOCK_SERVER" -o json >/dev/null 2>&1; then
+    if ! hcloud server describe "$LOCK_SERVER" --output json >/dev/null 2>&1; then
         log_warn "Lock server '$LOCK_SERVER' does not exist yet — bootstrap mode; deferring persistent lock until VMs are created"
         return 0
     fi

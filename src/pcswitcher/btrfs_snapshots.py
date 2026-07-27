@@ -115,7 +115,7 @@ async def validate_snapshots_directory(
 
     # /.snapshots doesn't exist or isn't a subvolume - try to create it
     create_result = await executor.run_command(
-        "sudo btrfs subvolume create /.snapshots && sudo mkdir -p /.snapshots/pc-switcher",
+        "sudo btrfs subvolume create /.snapshots && sudo mkdir --parents /.snapshots/pc-switcher",
         mutates="create the /.snapshots subvolume and its pc-switcher folder on this machine",
     )
 
@@ -291,7 +291,7 @@ async def cleanup_snapshots(
 
 
 # Shell script to delete all pc-switcher btrfs subvolumes recursively.
-# Uses btrfs subvolume delete (fast) instead of rm -rf (slow for subvolumes).
+# Uses btrfs subvolume delete (fast) instead of rm --recursive --force (slow for subvolumes).
 # Must delete children before parents since btrfs subvolume delete is not recursive
 # in btrfs-progs < 6.12.
 # Based on pattern from tests/integration/scripts/reset-vm.sh
@@ -337,7 +337,7 @@ async def delete_all_snapshots(executor: Executor) -> CommandResult:
 
     This function forcefully deletes ALL snapshots under /.snapshots/pc-switcher/,
     handling nested subvolumes by deleting children before parents. It uses
-    `btrfs subvolume delete` which is much faster than `rm -rf` for subvolumes.
+    `btrfs subvolume delete` which is much faster than `rm --recursive --force` for subvolumes.
     Emptied session folders are removed as well so the directory does not
     accumulate stale entries across runs.
 

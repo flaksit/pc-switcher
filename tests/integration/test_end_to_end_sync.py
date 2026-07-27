@@ -89,7 +89,7 @@ async def pc1_to_pc2_traffic_blocker(
 
         # Block all TCP traffic from pc1 to port 22 (SSH)
         block_result = await pc2_executor.run_command(
-            f"sudo iptables -I INPUT -s {pc1_ip} -p tcp --dport 22 -j DROP",
+            f"sudo iptables --insert INPUT --source {pc1_ip} --protocol tcp --dport 22 --jump DROP",
             timeout=10.0,
             login_shell=False,
         )
@@ -102,7 +102,7 @@ async def pc1_to_pc2_traffic_blocker(
             return
         # Remove the blocking rule
         await pc2_executor.run_command(
-            f"sudo iptables -D INPUT -s {pc1_ip} -p tcp --dport 22 -j DROP",
+            f"sudo iptables --delete INPUT --source {pc1_ip} --protocol tcp --dport 22 --jump DROP",
             timeout=10.0,
             login_shell=False,
         )
@@ -174,7 +174,7 @@ async def sync_ready_source(
 
     # Create test config with short durations (4 seconds each = 8 seconds total for dummy_success)
     test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=4, target_duration=4)
-    await executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+    await executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
 
     # Use heredoc to write config
     write_result = await executor.run_command(
@@ -186,7 +186,7 @@ async def sync_ready_source(
     yield executor
 
     # Cleanup: restore original config
-    await executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
+    await executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
     await executor.run_command(
         "if [ -f ~/.config/pc-switcher/config.yaml.e2e-backup ]; then "
         "mv ~/.config/pc-switcher/config.yaml.e2e-backup ~/.config/pc-switcher/config.yaml; "
@@ -218,7 +218,7 @@ async def sync_ready_source_long_duration(
 
     # Create test config with longer durations for interrupt testing
     test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=60, target_duration=60)
-    await executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+    await executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
 
     write_result = await executor.run_command(
         f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
@@ -229,7 +229,7 @@ async def sync_ready_source_long_duration(
     yield executor
 
     # Cleanup
-    await executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
+    await executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
     await executor.run_command(
         "if [ -f ~/.config/pc-switcher/config.yaml.e2e-backup ]; then "
         "mv ~/.config/pc-switcher/config.yaml.e2e-backup ~/.config/pc-switcher/config.yaml; "
@@ -449,7 +449,8 @@ folder_sync:
 async def _write_config(executor: BashLoginRemoteExecutor, config: str) -> None:
     """Write the pc-switcher config to a VM."""
     result = await executor.run_command(
-        f"mkdir -p ~/.config/pc-switcher && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
+        f"mkdir --parents ~/.config/pc-switcher"
+        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
         timeout=10.0,
     )
     assert result.success, f"Failed to write config: {result.stderr}"
@@ -458,7 +459,7 @@ async def _write_config(executor: BashLoginRemoteExecutor, config: str) -> None:
 async def _write_filter_file(executor: BashLoginRemoteExecutor, contents: str) -> None:
     """Write the folder_sync filter_file referenced by the e2e config to a VM (#166)."""
     cmd = (
-        "mkdir -p ~/.config/pc-switcher && "
+        "mkdir --parents ~/.config/pc-switcher && "
         f"cat > ~/.config/pc-switcher/home.filter << 'FILTER_EOF'\n{contents}FILTER_EOF"
     )
     result = await executor.run_command(cmd, timeout=10.0)
@@ -476,7 +477,7 @@ def _seed_files_script(files: dict[str, str]) -> str:
     for rel, content in files.items():
         rel_path = PurePosixPath(rel)
         fmt = r"'%s\n'" if rel_path.name == ".pcswitcher-filter" else "%s"
-        lines.append(f"mkdir -p ~/{rel_path.parent}")
+        lines.append(f"mkdir --parents ~/{rel_path.parent}")
         lines.append(f"printf {fmt} {shlex.quote(content)} > ~/{rel}")
     return "\n".join(lines)
 
@@ -541,8 +542,8 @@ async def _seed_rich_tree(executor: BashLoginRemoteExecutor, tree: str) -> None:
     result = await executor.run_command(
         f"""set -e
 T={tree}
-rm -rf "$T"
-mkdir -p "$T"/d700 "$T"/d755 "$T"/setgid_dir "$T"/sticky_dir "$T"/secret
+rm --recursive --force "$T"
+mkdir --parents "$T"/d700 "$T"/d755 "$T"/setgid_dir "$T"/sticky_dir "$T"/secret
 
 # User-owned files with varied permission bits
 printf 'content-600' > "$T/f600.txt"; chmod 600 "$T/f600.txt"
@@ -560,30 +561,30 @@ printf 'in-sgid'   > "$T/setgid_dir/inside.txt"; chmod 2775 "$T/setgid_dir"
 printf 'in-sticky' > "$T/sticky_dir/inside.txt"; chmod 1777 "$T/sticky_dir"
 
 # POSIX ACL (numeric uid, need not exist on either machine)
-printf 'content-acl' > "$T/acl.txt"; setfacl -m u:2001:r "$T/acl.txt"
+printf 'content-acl' > "$T/acl.txt"; setfacl --modify u:2001:r "$T/acl.txt"
 
 # Backdated mtime
 printf 'content-backdated' > "$T/backdated.txt"
-touch -d "@{_BACKDATED_MTIME}" "$T/backdated.txt"
+touch --date="@{_BACKDATED_MTIME}" "$T/backdated.txt"
 
 # Hard-link pair and relative symlink
 printf 'content-hardlink' > "$T/hl_a.txt"
 ln "$T/hl_a.txt" "$T/hl_b.txt"
-ln -s f644.txt "$T/sym.txt"
+ln --symbolic f644.txt "$T/sym.txt"
 
 # Root-owned file and directory (created as the user, then chowned; the user
 # ends up with no access, and rsync-as-root must still read and preserve them).
 printf 'content-root-file' > "$T/root_file.txt"
 sudo chown 0:0 "$T/root_file.txt"; sudo chmod 600 "$T/root_file.txt"
-mkdir -p "$T/root_dir"; printf 'content-root-dir' > "$T/root_dir/inside.txt"
-sudo chown -R 0:0 "$T/root_dir"
+mkdir --parents "$T/root_dir"; printf 'content-root-dir' > "$T/root_dir/inside.txt"
+sudo chown --recursive 0:0 "$T/root_dir"
 sudo chmod 700 "$T/root_dir"; sudo chmod 600 "$T/root_dir/inside.txt"
 
 # Other-(system-)user-owned file and directory (invoking user has no access)
 printf 'content-other-file' > "$T/other_file.txt"
 sudo chown {_OTHER_UID}:{_OTHER_GID} "$T/other_file.txt"; sudo chmod 600 "$T/other_file.txt"
-mkdir -p "$T/other_dir"; printf 'content-other-dir' > "$T/other_dir/inside.txt"
-sudo chown -R {_OTHER_UID}:{_OTHER_GID} "$T/other_dir"
+mkdir --parents "$T/other_dir"; printf 'content-other-dir' > "$T/other_dir/inside.txt"
+sudo chown --recursive {_OTHER_UID}:{_OTHER_GID} "$T/other_dir"
 sudo chmod 700 "$T/other_dir"; sudo chmod 600 "$T/other_dir/inside.txt"
 
 # Excluded subtree (must never reach the target)
@@ -619,8 +620,8 @@ async def _seed_included_markers(executor: BashLoginRemoteExecutor) -> None:
     """Seed the SC3 inclusion/exclusion marker files in the real home dotdirs."""
     parts = ["set -e"]
     for rel, content in _INCLUDED_MARKERS.items():
-        parts.append(f'mkdir -p ~/"$(dirname {rel})" && printf %s {content!r} > ~/{rel}')
-    parts.append(f'mkdir -p ~/"$(dirname {_EXCLUDED_MARKER})" && printf excluded > ~/{_EXCLUDED_MARKER}')
+        parts.append(f'mkdir --parents ~/"$(dirname {rel})" && printf %s {content!r} > ~/{rel}')
+    parts.append(f'mkdir --parents ~/"$(dirname {_EXCLUDED_MARKER})" && printf excluded > ~/{_EXCLUDED_MARKER}')
     result = await executor.run_command("\n".join(parts), timeout=15.0, login_shell=False)
     assert result.success, f"Failed to seed inclusion markers: {result.stderr}"
 
@@ -634,8 +635,8 @@ async def _remove_test_artifacts(
     markers = " ".join(f"~/{rel}" for rel in (*_INCLUDED_MARKERS, _EXCLUDED_MARKER))
     for name, exec_ in (("pc1", pc1_exec), ("pc2", pc2_exec)):
         res = await exec_.run_command(
-            f"sudo rm -rf {tree} {markers} ~/{_FILTER_TREE} && "
-            "rm -f ~/.config/pc-switcher/config.yaml ~/.config/pc-switcher/home.filter",
+            f"sudo rm --recursive --force {tree} {markers} ~/{_FILTER_TREE} && "
+            "rm --force ~/.config/pc-switcher/config.yaml ~/.config/pc-switcher/home.filter",
             timeout=30.0,
             login_shell=False,
         )
@@ -687,7 +688,7 @@ class TestEndToEndSync:
             await _seed_rich_tree(pc1_executor, tree)
             await _seed_included_markers(pc1_executor)
             await _seed_filter_source(pc1_executor)
-            await pc2_executor.run_command(f"sudo rm -rf {tree}", timeout=15.0, login_shell=False)
+            await pc2_executor.run_command(f"sudo rm --recursive --force {tree}", timeout=15.0, login_shell=False)
             # Pre-seed the target-side files that drive the #166 --delete filter cases
             # (overwrite / delete-within-included / excluded-survivor). NOT under `tree`,
             # so the pc2 tree removal above leaves them in place for the first sync.
@@ -696,10 +697,10 @@ class TestEndToEndSync:
             # ADR-016 runtime-exclude sentinels: a marker inside each machine's own state dir
             # (reset_pcswitcher_state wiped the dir, so create it fresh here).
             await pc1_executor.run_command(
-                f"mkdir -p {_STATE_DIR} && printf pc1 > {_STATE_DIR}/SENTINEL_SOURCE", timeout=10.0
+                f"mkdir --parents {_STATE_DIR} && printf pc1 > {_STATE_DIR}/SENTINEL_SOURCE", timeout=10.0
             )
             await pc2_executor.run_command(
-                f"mkdir -p {_STATE_DIR} && printf pc2 > {_STATE_DIR}/SENTINEL_TARGET", timeout=10.0
+                f"mkdir --parents {_STATE_DIR} && printf pc2 > {_STATE_DIR}/SENTINEL_TARGET", timeout=10.0
             )
 
             src_manifest = await pc1_executor.run_command(_manifest_cmd(tree), timeout=30.0, login_shell=False)
@@ -744,18 +745,18 @@ class TestEndToEndSync:
 
             # 3a. Job integration via interface: log entries, snapshots on both, config synced.
             log_content = await pc1_executor.run_command(
-                "cat $(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)", timeout=10.0
+                "cat $(ls --sort=time ~/.local/share/pc-switcher/logs/sync-*.log | head --lines=1)", timeout=10.0
             )
             assert log_content.success, f"Failed to read log file: {log_content.stderr}"
             log_text = log_content.stdout.lower()
             assert "dummy_success" in log_text or "source phase" in log_text, "Generic job (dummy_success) not logged."
             assert "folder_sync" in log_text, "folder_sync job not logged."
             src_snaps = await pc1_executor.run_command(
-                "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head -1", timeout=10.0, login_shell=False
+                "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head --lines=1", timeout=10.0, login_shell=False
             )
             assert src_snaps.stdout.strip(), "Pre/post-sync snapshots missing on source."
             tgt_snaps = await pc2_executor.run_command(
-                "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head -1", timeout=10.0, login_shell=False
+                "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head --lines=1", timeout=10.0, login_shell=False
             )
             assert tgt_snaps.stdout.strip(), "Pre/post-sync snapshots missing on target."
             tgt_config = await pc2_executor.run_command("cat ~/.config/pc-switcher/config.yaml", timeout=10.0)
@@ -777,9 +778,9 @@ class TestEndToEndSync:
 
             # 3c. ACL, backdated mtime, hard-link inode sharing, symlink target.
             details = await pc2_executor.run_command(
-                f"getfacl -p {tree}/acl.txt && echo '---' && "
-                f"stat -c '%Y' {tree}/backdated.txt && "
-                f"stat -c '%i' {tree}/hl_a.txt && stat -c '%i' {tree}/hl_b.txt && "
+                f"getfacl --absolute-names {tree}/acl.txt && echo '---' && "
+                f"stat --format='%Y' {tree}/backdated.txt && "
+                f"stat --format='%i' {tree}/hl_a.txt && stat --format='%i' {tree}/hl_b.txt && "
                 f"readlink {tree}/sym.txt",
                 timeout=15.0,
                 login_shell=False,
@@ -838,10 +839,10 @@ class TestEndToEndSync:
             mutate = await pc2_executor.run_command(
                 f"""set -e
 T={tree}
-printf 'added-on-pc2' > "$T/added.txt"; chmod 750 "$T/added.txt"; touch -d "@{_ADDITION_MTIME}" "$T/added.txt"
+printf 'added-on-pc2' > "$T/added.txt"; chmod 750 "$T/added.txt"; touch --date="@{_ADDITION_MTIME}" "$T/added.txt"
 printf 'MODIFIED-644' > "$T/f644.txt"
-rm -f "$T/f600.txt"
-rm -rf "$T/d700"
+rm --force "$T/f600.txt"
+rm --recursive --force "$T/d700"
 chmod 700 "$T/f755.txt"
 """,
                 timeout=15.0,
@@ -856,9 +857,9 @@ chmod 700 "$T/f755.txt"
 
             roundtrip = await pc1_executor.run_command(
                 f"cat {tree}/added.txt && echo '|' && "
-                f"stat -c '%a %Y' {tree}/added.txt && echo '|' && "
+                f"stat --format='%a %Y' {tree}/added.txt && echo '|' && "
                 f"cat {tree}/f644.txt && echo '|' && "
-                f"stat -c '%a' {tree}/f755.txt && echo '|' && "
+                f"stat --format='%a' {tree}/f755.txt && echo '|' && "
                 f"( test ! -e {tree}/f600.txt && echo GONE_FILE ) && "
                 f"( test ! -e {tree}/d700 && echo GONE_DIR )",
                 timeout=15.0,
@@ -920,7 +921,7 @@ chmod 700 "$T/f755.txt"
         pid_file = "/tmp/pcswitcher-e2e-interrupt-test-pid.txt"
 
         # Clean up from any previous run
-        await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
+        await pc1_executor.run_command(f"rm --force {output_file} {pid_file}", timeout=10.0)
 
         # Start sync in background with script for TTY emulation
         # We use bash -c to wrap the command and capture the PID.
@@ -954,7 +955,9 @@ chmod 700 "$T/f755.txt"
             if "connecting" in output_check.stdout.lower() or "lock" in output_check.stdout.lower():
                 continue  # Still in setup phase, keep waiting
             # Check if process is still running
-            ps_check = await pc1_executor.run_command(f"ps -p {sync_pid} -o pid= 2>/dev/null || true", timeout=5.0)
+            ps_check = await pc1_executor.run_command(
+                f"ps --pid {sync_pid} --format pid= 2>/dev/null || true", timeout=5.0
+            )
             if not ps_check.stdout.strip():
                 break  # Process finished (possibly errored out)
 
@@ -970,7 +973,7 @@ chmod 700 "$T/f755.txt"
         for _ in range(40):  # Wait up to 40 seconds
             await asyncio.sleep(1)
             ps_check = await pc1_executor.run_command(
-                f"ps -p {sync_pid} -o pid= 2>/dev/null || echo 'terminated'",
+                f"ps --pid {sync_pid} --format pid= 2>/dev/null || echo 'terminated'",
                 timeout=5.0,
                 login_shell=False,
             )
@@ -988,7 +991,7 @@ chmod 700 "$T/f755.txt"
         assert "interrupt" in output_text.lower(), f"Output should contain interrupt message.\nOutput:\n{output_text}"
 
         # Clean up temp files
-        await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
+        await pc1_executor.run_command(f"rm --force {output_file} {pid_file}", timeout=10.0)
 
     async def test_core_edge_target_unreachable_mid_sync(
         self,
@@ -1026,7 +1029,7 @@ chmod 700 "$T/f755.txt"
         # Source: 4s (quick to get to target phase)
         # Target: 30s (long enough for us to inject failure and observe timeout)
         test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=4, target_duration=30)
-        await pc1_executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
         await pc1_executor.run_command(
             f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
             timeout=10.0,
@@ -1035,7 +1038,7 @@ chmod 700 "$T/f755.txt"
         # Start sync in background, capturing output to temp file
         output_file = "/tmp/pcswitcher-network-failure-test-output.txt"
         pid_file = "/tmp/pcswitcher-network-failure-test-pid.txt"
-        await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
+        await pc1_executor.run_command(f"rm --force {output_file} {pid_file}", timeout=10.0)
 
         # Start sync in background.
         # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
@@ -1066,7 +1069,8 @@ chmod 700 "$T/f755.txt"
 
             # Check the log file for "Target phase:" messages
             log_check = await pc1_executor.run_command(
-                "cat ~/.local/share/pc-switcher/logs/sync-*.log 2>/dev/null | grep -i 'target phase' || true",
+                "cat ~/.local/share/pc-switcher/logs/sync-*.log 2>/dev/null"
+                " | grep --ignore-case 'target phase' || true",
                 timeout=10.0,
             )
             last_log_content = log_check.stdout
@@ -1080,7 +1084,7 @@ chmod 700 "$T/f755.txt"
 
             # Check if process is still running
             ps_check = await pc1_executor.run_command(
-                f"ps -p {sync_pid} -o pid= 2>/dev/null || true",
+                f"ps --pid {sync_pid} --format pid= 2>/dev/null || true",
                 timeout=5.0,
                 login_shell=False,
             )
@@ -1105,7 +1109,7 @@ chmod 700 "$T/f755.txt"
         for _ in range(90):
             await asyncio.sleep(1)
             ps_check = await pc1_executor.run_command(
-                f"ps -p {sync_pid} -o pid= 2>/dev/null || echo 'exited'",
+                f"ps --pid {sync_pid} --format pid= 2>/dev/null || echo 'exited'",
                 timeout=5.0,
                 login_shell=False,
             )
@@ -1137,7 +1141,7 @@ chmod 700 "$T/f755.txt"
         assert has_error_indicator, f"Output should indicate connection failure.\nOutput:\n{output_text}"
 
         # Clean up temp files
-        await pc1_executor.run_command(f"rm -f {output_file} {pid_file}", timeout=10.0)
+        await pc1_executor.run_command(f"rm --force {output_file} {pid_file}", timeout=10.0)
 
         # Note: pc1_to_pc2_traffic_blocker fixture handles unblocking automatically
 
@@ -1167,7 +1171,7 @@ class TestInstallOnTargetIntegration:
 
         # Create minimal test config
         test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=2, target_duration=2)
-        await pc1_executor.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
         await pc1_executor.run_command(
             f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
             timeout=10.0,
@@ -1212,7 +1216,7 @@ class TestInstallOnTargetIntegration:
 
         finally:
             # Clean up config
-            await pc1_executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
+            await pc1_executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
 
     async def test_install_on_target_upgrade_older_version(
         self,
@@ -1232,7 +1236,7 @@ class TestInstallOnTargetIntegration:
 
         # Create minimal test config
         test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=2, target_duration=2)
-        await pc1_with_pcswitcher_mod.run_command("mkdir -p ~/.config/pc-switcher", timeout=10.0)
+        await pc1_with_pcswitcher_mod.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
         await pc1_with_pcswitcher_mod.run_command(
             f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
             timeout=10.0,
@@ -1273,7 +1277,7 @@ class TestInstallOnTargetIntegration:
 
         finally:
             # Clean up config
-            await pc1_with_pcswitcher_mod.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
+            await pc1_with_pcswitcher_mod.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
 
 
 class TestConsecutiveSyncWarning:

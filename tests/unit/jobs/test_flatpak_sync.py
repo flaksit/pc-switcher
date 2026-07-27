@@ -636,7 +636,7 @@ class TestRemoteTrustConverge:
 
         _sent_local, sent_remote = target.send_file.call_args.args
         assert sent_remote.startswith("/home/tester/.cache/pc-switcher/")
-        assert any("mkdir -p /home/tester/.cache/pc-switcher/flatpak-staging" in c for c in all_calls(target))
+        assert any("mkdir --parents /home/tester/.cache/pc-switcher/flatpak-staging" in c for c in all_calls(target))
 
     @pytest.mark.asyncio
     async def test_every_staging_write_carries_mutates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -650,7 +650,7 @@ class TestRemoteTrustConverge:
         assert target.send_file.call_args.kwargs["mutates"]
         for call in target.run_command.call_args_list:
             command = call.args[0]
-            if "mkdir -p" in command or "rm -f" in command or "remote-add" in command:
+            if "mkdir --parents" in command or "rm --force" in command or "remote-add" in command:
                 assert call.kwargs.get("mutates"), f"ungated write: {command}"
 
     @pytest.mark.asyncio
@@ -672,7 +672,7 @@ class TestRemoteTrustConverge:
         result = await job.converge(next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE))
 
         assert not result.success
-        assert any(f"rm -f {self._STAGED}" in c for c in all_calls(target))
+        assert any(f"rm --force {self._STAGED}" in c for c in all_calls(target))
 
     @pytest.mark.asyncio
     async def test_unverified_source_remote_replicates_as_unverified(
@@ -890,7 +890,7 @@ class TestConverge:
         await job.converge(diff)
 
         commands = all_calls(target)
-        assert any("flatpak uninstall -y --user com.spotify.Client" in c for c in commands)
+        assert any("flatpak uninstall --assumeyes --user com.spotify.Client" in c for c in commands)
 
     @pytest.mark.asyncio
     async def test_ref_with_missing_origin_remote_is_skipped_with_named_failure(self) -> None:
@@ -1376,7 +1376,7 @@ class TestMaskSystemScopeGate:
     async def test_system_scope_mask_requires_target_sudo(self) -> None:
         context, _source, _target = make_context(
             source_responses={"flatpak --system mask": CommandResult(0, "  org.example.Blocked\n", "")},
-            target_responses={"sudo -n true": CommandResult(1, "", "sudo: a password is required")},
+            target_responses={"sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required")},
         )
         job = FlatpakSyncJob(context)
 
@@ -1394,7 +1394,7 @@ class TestMaskSystemScopeGate:
         errors: list[ValidationError] = await job.validate()
 
         assert errors == []
-        assert not any("sudo -n true" in c for c in all_calls(target))
+        assert not any("sudo --non-interactive true" in c for c in all_calls(target))
 
 
 class TestExcludePaths:
@@ -1443,7 +1443,7 @@ class TestValidate:
     async def test_system_scope_item_present_without_sudo_yields_validation_error(self) -> None:
         context, _source, _target = make_context(
             source_responses={"flatpak list --app": CommandResult(0, "com.slack.Slack\t1.0\tflathub\tsystem\n", "")},
-            target_responses={"sudo -n true": CommandResult(1, "", "sudo: a password is required")},
+            target_responses={"sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required")},
         )
         job = FlatpakSyncJob(context)
 
@@ -1461,7 +1461,7 @@ class TestValidate:
         errors = await job.validate()
 
         assert errors == []
-        assert not any("sudo -n true" in c for c in all_calls(target))
+        assert not any("sudo --non-interactive true" in c for c in all_calls(target))
 
 
 class TestJobDiscovery:
