@@ -1,0 +1,41 @@
+<task-notification>
+<task-id>a8657f7b875439e57</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a8657f7b875439e57.output</output-file>
+<status>completed</status>
+<summary>Agent "Correct ADR-021 D-38 ESM decision" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. One commit: `e17ec00f docs(adr-021): replace D-38's refuted ESM rationale with an attachment gate`. Docs only, no source touched, nothing pushed.
+
+## What D-38 now says
+
+`docs/adr/adr-021-origin-replicating-package-convergence.md` (Decision §D-38, plus Implementation Rules, Forbidden, Consequences, Alternatives):
+
+- The distribution files rule is unchanged (written/overwritten, never removed). The two ESM files are now **gated** on the target's Pro attachment: when they would be written and the target reports unattached, `apt_sync` asks before its first mutating command, two answers only — attach now (user attaches by hand, pc-switcher re-probes and continues) or skip `apt_sync` for the run while every other job runs.
+- The refuted hypothesis is recorded explicitly so nobody re-derives it: `apt-get update` exits 0 with ESM sources and no credentials; a genuinely failing source does not abort the others (exit 100, all 19 / all 27 other lists still written); non-zero is an aggregate signal, no rollback. Missing-keyring case can't arise — `/usr/share/keyrings` is a key dir (`src/pcswitcher/jobs/apt_sync.py:200,203`).
+- The real hazard is named: public index, 401 pool, ESM candidate at priority 500 above `noble/universe`, so `apt-get install 7zip` exits 100 with `401 Unauthorized`. The 0-of-13 container figure is quoted, and the scaling to a real desktop is labelled inference.
+- Why the tool cannot attach: dashboard token or browser short-code flow, root-only `/var/lib/ubuntu-advantage/private/`, non-transferable per-machine token, and a token on a command line is a secret.
+- Detection is `pro status --format json` (exit 0 unprivileged, top-level `attached`); the payload's `account` block must never be logged.
+- New Forbidden bullet; the "unmeasured premise" Negative consequence is replaced by the real cost (a question in an otherwise unattended sync, and "skip" costs the whole apt job); the two Alternatives entries are rewritten.
+
+## Spec changes (`.planning/phases/02-package-management-sync/02-SPEC-package-review-model.md`)
+
+- **§5.3** rewritten as "The ESM / Pro attachment gate", six subsections: measured facts; trigger (plan-time digest comparison) and placement (in `plan()` right after `_capture_origin_state()`, `apt_sync.py:1677`, before `_plan_packages()` and before groups are built) with the `validate()` exclusion re-argued on `models.py:103` + `orchestrator.py:1019-1025`; `async def _target_pro_attached(self) -&gt; bool`; `async def _gate_esm_writes(self, esm_files: Sequence[str]) -&gt; bool` with three outcomes and five behaviour rules (attached / dry-run / non-interactive / bounded re-check at 3 affirmative answers / skip); prompt wording constraints; the prompt seam (`review.ask_gate` + a `Reviewer` method, not `ReviewGroup`, not `Confirmer`); and what skipping means (`JobSkipped`, a new `except JobSkipped` arm beside `orchestrator.py:1252`, `JobStatus.SKIPPED`, session still COMPLETED).
+- **§9 S8** rewritten to the new deliverables, dependency on S4 kept, blocking VM check marked DONE with the measured result.
+- **§11 risk 1** flipped from "hypothesis, not verified" to "settled by measurement, refuted", with the one remaining inference (blast radius) and how to settle it, plus the derived non-interactive fallback.
+- Also updated for internal consistency (beyond the literal list): ruling 14 (§0.1), the §1 cross-reference, the §7.3 matrix row and two §7.4 doc-list items, and all of §10.7's tests (the old ones asserted withholding).
+
+## The other two docs
+
+`docs/jobs/package-sync.md` and `docs/system/package-sync.md` say **nothing** about ESM or Ubuntu Pro (grepped) — no edits needed. Both still describe the ADR-020 world generally (e.g. the retired second apt review); rewriting them is S9's scope, not this correction's.
+
+## Premises corrected / could not verify
+
+- Your `_KEY_DIRS` citation `apt_sync.py:188,191` is off: 188 is the glob comment; the constants are `_APT_SHARED_KEYRINGS_DIR` at 200 and `_KEY_DIRS` at 203. The ADR cites 200,203.
+- The spec previously specified `pro api u.pro.status.is_attached.v1`; I replaced it with your measured `pro status --format json` and verified it locally (read-only): exit 0 unprivileged, top-level `attached`, and an `account` key — which is why the non-logging rule is stated.
+- Two design points the ruling did not cover, decided and labelled as derived, not ruled: (a) the non-interactive fallback is withhold-the-two-files + warn + continue, extrapolated from D-26 (skip the item, not the run); (b) "skip apt_sync" needs the new `JobSkipped` → `JobStatus.SKIPPED` orchestrator arm, because `JobStatus.SKIPPED` exists (`models.py:263`) but is constructed nowhere today, so a plain early return would be recorded SUCCESS (`orchestrator.py:1230-1237`). If you disagree with either, they are isolated to §5.3.4 rule 3 and §5.3.6.
+- Not verified by me: the container experiment (used as given, not re-run, per your instruction) and the `/var/lib/ubuntu-advantage/private/` permission claim.
+
+Gates: `uv run codespell` clean; `uv run pytest -q` → 1327 passed, 79 deselected (unchanged).</result>
+<usage><subagent_tokens>141626</subagent_tokens><tool_uses>55</tool_uses><duration_ms>596226</duration_ms></usage>
+</task-notification>
