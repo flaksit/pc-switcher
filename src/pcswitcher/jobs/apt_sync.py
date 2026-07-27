@@ -19,6 +19,16 @@ classifies their collateral against the target manual set, emitting a three-way
 install-anyway / skip / abort review item for each manual-collateral package so the decision
 is made in the batched review, never as a prompt during apply.
 
+The same plan-time-classification rule covers the `/etc/apt` removal direction (C26): a
+source file or signing key offered for deletion because the source machine no longer has it
+carries, in its review `detail`, what the target still needs it for — the machine-specific
+packages installed from that repository, and for a key the target source files still signed
+by it. Those packages are recorded skip-always, so `filter_inert` keeps them out of the
+target manifest and they produce no diff of their own in any run; without this the review
+shows a bare file deletion and nothing else. Disclosure, not refusal: removing a repository
+whose packages are going too is legitimate, so the removal stays offered (and, like every
+removal group, unticked).
+
 Apt sources/keys/pins/config, and the other two managers (snap, flatpak), are later
 Phase 2 plans.
 """
@@ -47,6 +57,8 @@ from pcswitcher.jobs.packages.items import (
     ItemClass,
     ItemDiff,
     build_dangling_keyring_detail,
+    build_orphaned_keyring_detail,
+    build_orphaned_packages_detail,
     build_version_mismatch_detail,
     compare_deb_versions,
 )
@@ -180,6 +192,12 @@ def _packages_with_no_candidate(policy_output: str) -> set[str]:
 _SIGNED_BY_RE = re.compile(r"^Signed-By:\s*(?P<path>\S+)", re.IGNORECASE)
 _LEGACY_SIGNED_BY_RE = re.compile(r"signed-by=(?P<path>[^\]\s,]+)")
 _PIN_PACKAGE_RE = re.compile(r"^Package:\s*(?P<packages>.+)$", re.IGNORECASE)
+# A deb822 stanza's repository URIs (one field, possibly several space-separated values,
+# and one file may hold several stanzas), and a legacy `.list` line's single URI — which
+# sits after the optional `[opt=val ...]` bracket, so the bracket must be consumed rather
+# than treated as the URI.
+_URIS_RE = re.compile(r"^URIs:\s*(?P<uris>.+)$", re.IGNORECASE)
+_LEGACY_DEB_LINE_RE = re.compile(r"^deb(?:-src)?\s+(?:\[[^\]]*\]\s*)?(?P<uri>\S+)")
 
 
 def _parse_sha256sum(output: str) -> dict[str, str]:
@@ -198,21 +216,92 @@ def _parse_sha256sum(output: str) -> dict[str, str]:
     return digests
 
 
-def _parse_source_file(filename: str, content: str) -> tuple[Literal["deb822", "list"], tuple[str, ...]]:
-    """A source file's format (by extension) and every keyring path it names.
+def _normalise_repo_uri(uri: str) -> str:
+    """A repository URI reduced to the shape `apt-cache policy` prints in its version
+    table: apt strips the trailing slash a source file may carry
+    (`https://packages.microsoft.com/repos/azure-cli/` -> `.../azure-cli`), so comparing
+    the two forms verbatim would miss every repo written with one.
+    """
+    return uri.rstrip("/")
 
-    deb822 `.sources` files name a key via a `Signed-By:` field; legacy `.list` files
-    name one inside the options bracket as `[... signed-by=<path> ...]` (RESEARCH
+
+def _parse_source_file(
+    filename: str, content: str
+) -> tuple[Literal["deb822", "list"], tuple[str, ...], tuple[str, ...]]:
+    """A source file's format (by extension), every keyring path it names, and every
+    repository URI it points at (normalised by `_normalise_repo_uri`).
+
+    deb822 `.sources` files name a key via a `Signed-By:` field and their repositories via
+    `URIs:`; legacy `.list` files put both on the `deb` line, the key inside the options
+    bracket as `[... signed-by=<path> ...]` and the URI immediately after it (RESEARCH
     Standard Stack). Parsed just far enough to extract these — never rewritten,
     normalised, or migrated between formats (RESEARCH Pitfall 3, deferred ideas).
+
+    One parser, two consumers: the keyring refs drive D-12's dangling-reference check and
+    the target-side key-removal impact, the URIs drive the source-removal impact (C26) by
+    matching against the origin `apt-cache policy` reports for an installed package. A
+    `Signed-By:` field holding an inline armored key rather than a path yields a ref that
+    matches no key file — harmless for both consumers, which degrade to "no link found".
     """
     fmt: Literal["deb822", "list"] = "deb822" if filename.endswith(".sources") else "list"
     refs: list[str] = []
-    for line in content.splitlines():
-        match = _SIGNED_BY_RE.match(line.strip()) if fmt == "deb822" else _LEGACY_SIGNED_BY_RE.search(line)
-        if match:
-            refs.append(match.group("path"))
-    return fmt, tuple(refs)
+    uris: list[str] = []
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if fmt == "deb822":
+            signed_by = _SIGNED_BY_RE.match(line)
+            uri_field = _URIS_RE.match(line)
+            if uri_field:
+                uris.extend(_normalise_repo_uri(uri) for uri in uri_field.group("uris").split())
+        else:
+            signed_by = _LEGACY_SIGNED_BY_RE.search(raw_line)
+            deb_line = _LEGACY_DEB_LINE_RE.match(line)
+            if deb_line:
+                uris.append(_normalise_repo_uri(deb_line.group("uri")))
+        if signed_by:
+            refs.append(signed_by.group("path"))
+    return fmt, tuple(refs), tuple(uris)
+
+
+def _installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]]:
+    """Parse a batched `apt-cache policy <name...>` run into `{package: origin URIs of
+    its INSTALLED version}` (C26).
+
+    `apt-cache policy`'s version table marks the installed version with a leading `***`
+    and indents each of that version's origins by eight spaces as
+    `<priority> <uri> <suite>/<component> <arch> Packages`. Only the installed version's
+    origins count: another version row may list a repository that merely *offers* the
+    package (Ubuntu's archive offers `gh` too), which is not the repository the target is
+    actually tracking. `/var/lib/dpkg/status` is dpkg's own record of the installed
+    package, not a repository, and is skipped.
+
+    Defensive by construction: a name apt does not know produces no block at all, and a
+    package installed from a local `.deb` has `/var/lib/dpkg/status` as its only origin.
+    Both degrade to "no origin" -> no link found, never to a guess.
+    """
+    origins: dict[str, set[str]] = {}
+    current: str | None = None
+    in_installed_block = False
+    for line in policy_output.splitlines():
+        if line and not line[0].isspace() and line.endswith(":"):
+            current, in_installed_block = line[:-1], False
+            continue
+        if current is None:
+            continue
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("***"):
+            in_installed_block = True
+            continue
+        if line.startswith("        "):
+            parts = stripped.split()
+            if in_installed_block and len(parts) >= 2 and parts[1] != "/var/lib/dpkg/status":
+                origins.setdefault(current, set()).add(_normalise_repo_uri(parts[1]))
+            continue
+        # Any other row at version-table depth is the next (non-installed) version.
+        in_installed_block = False
+    return {name: frozenset(uris) for name, uris in origins.items()}
 
 
 def _parse_pin_file(content: str) -> tuple[str, ...]:
@@ -267,6 +356,63 @@ async def _read_file_content(run: Callable[[str], Awaitable[CommandResult]], pat
     return result.stdout
 
 
+async def _scan_target_source_references(
+    run: Callable[[str], Awaitable[CommandResult]],
+) -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]]:
+    """`{filename: (keyring_refs, repository URIs)}` for EVERY source file on a machine,
+    from ONE batched command (C26).
+
+    Needed because a key removal's impact is a property of the files that reference the
+    key, which are not the files any diff implicates — a key can be extra on the target
+    while every source file naming it is identical on both machines and produces no diff
+    at all. The same scan feeds the source-removal impact, so both halves parse one
+    capture rather than two.
+
+    `find ... -exec awk {} +` passes every file to one awk process (the `collect_hold_pin_facts`
+    shape), and awk emits only the `URIs:`/`Signed-By:`/`deb` lines rather than whole
+    files — so this stays compatible with the module docstring's rule that full content is
+    fetched only for a file a diff implicates. `sudo`-qualified to match
+    `_capture_dir_digests`'s privilege (WR-04): an unprivileged read of a locked-down
+    source file returns empty output rather than failing, which would silently report no
+    dependency where one exists.
+    """
+    awk = (
+        r"tolower($0) ~ /^uris:/ || tolower($0) ~ /signed-by/ || tolower($0) ~ /^[ \t]*deb(-src)?[ \t]/ "
+        r'{print FILENAME "\t" $0}'
+    )
+    result = await run(
+        f"sudo find {shlex.quote(_APT_SOURCES_DIR)} -maxdepth 1 -type f -exec awk {shlex.quote(awk)} {{}} +"
+    )
+    lines_by_file: dict[str, list[str]] = {}
+    for line in result.stdout.splitlines():
+        path, tab, rest = line.partition("\t")
+        if tab:
+            lines_by_file.setdefault(Path(path).name, []).append(rest)
+    parsed: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+    for filename, lines in lines_by_file.items():
+        _fmt, refs, uris = _parse_source_file(filename, "\n".join(lines))
+        parsed[filename] = (refs, uris)
+    return parsed
+
+
+@dataclass(frozen=True)
+class _RepoRemovalImpacts:
+    """What a proposed `/etc/apt` deletion on the target would strand (C26), keyed by
+    filename and ready to become an `ItemDiff.detail`.
+
+    Empty on the overwhelmingly common run: nothing is computed at all unless the diff
+    actually offers a source or key removal AND the target has machine-specific apt
+    packages recorded.
+    """
+
+    source_details: Mapping[str, str]
+    key_details: Mapping[str, str]
+
+    @classmethod
+    def empty(cls) -> _RepoRemovalImpacts:
+        return cls(source_details={}, key_details={})
+
+
 @dataclass(frozen=True)
 class _FilenameDiff:
     """Filename-level classification of two `{filename: digest}` maps — the shared
@@ -304,12 +450,21 @@ def _file_diff(
 
 
 def _diff_apt_keys(
-    source_digests: Mapping[str, str], target_digests: Mapping[str, str], scope: Literal["per-repo", "global-trust"]
+    source_digests: Mapping[str, str],
+    target_digests: Mapping[str, str],
+    scope: Literal["per-repo", "global-trust"],
+    removal_details: Mapping[str, str] | None = None,
 ) -> list[ItemDiff]:
     """Key-file diffs. No content fetch is ever needed: a key's identity, label and
     diff all derive from filename + digest alone (D-12 — keys travel byte-for-byte,
     never parsed).
+
+    `removal_details` carries the C26 impact text for a key the target still needs,
+    keyed by filename — computed by `_repo_removal_impacts` from the target's own source
+    files, since nothing in the digest maps can see that dependency. A key with no
+    remaining dependent keeps `detail=None`; no noise on the common case.
     """
+    details = removal_details or {}
     names = _diff_filenames(source_digests, target_digests)
     diffs: list[ItemDiff] = []
 
@@ -334,7 +489,7 @@ def _diff_apt_keys(
                 action=DiffAction.REMOVE,
                 item_id=item.item_id,
                 label=item.label(),
-                detail=None,
+                detail=details.get(filename),
             )
         )
     for filename in sorted(names.changed):
@@ -731,6 +886,10 @@ class AptSyncJob(PackageSyncJob):
         """Capture + diff the four `/etc/apt/*` item classes (D-11/D-12/D-13), by
         whole-file digest (module docstring): one batched `sha256sum` listing per
         directory per machine, full content fetched only for a file a diff implicates.
+
+        A source or key offered for REMOVAL is additionally classified against what the
+        TARGET still needs (C26) before the diff is built, so the review names the
+        consequence rather than presenting a bare presence difference.
         """
 
         async def source_run(cmd: str) -> CommandResult:
@@ -754,15 +913,109 @@ class AptSyncJob(PackageSyncJob):
         self._target_key_digests_by_filename = {**target_per_repo_keys, **target_global_keys}
         source_key_filenames = frozenset(self._source_key_digests_by_filename)
 
+        impacts = await self._repo_removal_impacts(
+            target_run,
+            extra_sources=frozenset(target_sources) - frozenset(source_sources),
+            extra_keys=(frozenset(target_per_repo_keys) - frozenset(source_per_repo_keys))
+            | (frozenset(target_global_keys) - frozenset(source_global_keys)),
+        )
+
         diffs: list[ItemDiff] = []
         diffs.extend(
-            await self._diff_apt_sources(source_run, target_run, source_sources, target_sources, source_key_filenames)
+            await self._diff_apt_sources(
+                source_run,
+                target_run,
+                source_sources,
+                target_sources,
+                source_key_filenames,
+                impacts.source_details,
+            )
         )
-        diffs.extend(_diff_apt_keys(source_per_repo_keys, target_per_repo_keys, "per-repo"))
-        diffs.extend(_diff_apt_keys(source_global_keys, target_global_keys, "global-trust"))
+        diffs.extend(_diff_apt_keys(source_per_repo_keys, target_per_repo_keys, "per-repo", impacts.key_details))
+        diffs.extend(_diff_apt_keys(source_global_keys, target_global_keys, "global-trust", impacts.key_details))
         diffs.extend(await self._diff_apt_pins(source_run, target_run, source_pins, target_pins))
         diffs.extend(_diff_apt_configs(source_configs, target_configs))
         return diffs
+
+    async def _repo_removal_impacts(
+        self,
+        target_run: Callable[[str], Awaitable[CommandResult]],
+        *,
+        extra_sources: frozenset[str],
+        extra_keys: frozenset[str],
+    ) -> _RepoRemovalImpacts:
+        """Classify, at plan time, what each offered source/key deletion would strand on
+        the target (C26/N7) — the disclosure D-30 and the flatpak orphan case (#214) both
+        put in the review rather than in a refusal.
+
+        Scope is deliberately the target's MACHINE-SPECIFIC packages, not every installed
+        package from the repository. A skip-always package is structurally invisible:
+        `filter_inert` drops it from the target manifest before diffing, so it can never
+        produce an `ItemDiff` of its own in any run, and the user's explicit "this machine
+        keeps this, syncs never touch it" is exactly the promise a silent repo deletion
+        breaks. An ordinary package is at least eligible for its own removal diff, and
+        keying off the whole manual set would make the detail's length a property of the
+        machine — a base-repo deletion would name a hundred packages and inform nobody.
+        The limitation is documented in `docs/jobs/package-sync.md`.
+
+        Two batched commands at most, both gated on there being something to say: one
+        `apt-cache policy` over the recorded package names (never one per package, the
+        `collect_unavailable_item_ids` shape), and one scan of the target's source files.
+        """
+        if not extra_sources and not extra_keys:
+            return _RepoRemovalImpacts.empty()
+
+        _source_decisions, target_decisions = self._plan_decisions
+        # Identity by id prefix, not by `DecisionEntry.item_class`: the collateral
+        # report items share `ItemClass.APT_PACKAGE` but are `REPORT_ONLY` and carry an
+        # `apt:collateral:` id, so the prefix is what isolates real package decisions.
+        names = sorted(
+            _package_name(item_id) for item_id in target_decisions if item_id.startswith(_APT_PACKAGE_ID_PREFIX)
+        )
+        if not names:
+            return _RepoRemovalImpacts.empty()
+
+        quoted = " ".join(shlex.quote(name) for name in names)
+        policy = await target_run(f"apt-cache policy {quoted}")
+        origins_by_package = _installed_origins_by_package(policy.stdout)
+        packages_by_origin: dict[str, list[str]] = {}
+        for name in names:
+            for origin in origins_by_package.get(name, frozenset()):
+                packages_by_origin.setdefault(origin, []).append(name)
+
+        target_sources = await _scan_target_source_references(target_run)
+
+        def packages_from(filenames: Sequence[str]) -> list[str]:
+            reached: set[str] = set()
+            for filename in filenames:
+                _refs, uris = target_sources.get(filename, ((), ()))
+                for uri in uris:
+                    reached.update(packages_by_origin.get(uri, ()))
+            return sorted(reached)
+
+        source_details = {
+            filename: build_orphaned_packages_detail(filename, packages)
+            for filename in sorted(extra_sources)
+            if (packages := packages_from([filename]))
+        }
+
+        # A key's dependants are read off the target's CURRENT state, including source
+        # files this same run offers for removal (the #214 rule): at plan time a proposal
+        # is not an approval, and the user may untick the source's removal while ticking
+        # the key's.
+        key_details: dict[str, str] = {}
+        for key_filename in sorted(extra_keys):
+            referencing = sorted(
+                filename
+                for filename, (refs, _uris) in target_sources.items()
+                if any(Path(ref).name == key_filename for ref in refs)
+            )
+            if referencing:
+                key_details[key_filename] = build_orphaned_keyring_detail(
+                    key_filename, referencing, packages_from(referencing)
+                )
+
+        return _RepoRemovalImpacts(source_details=source_details, key_details=key_details)
 
     async def _diff_apt_sources(
         self,
@@ -771,6 +1024,7 @@ class AptSyncJob(PackageSyncJob):
         source_digests: Mapping[str, str],
         target_digests: Mapping[str, str],
         source_key_filenames: frozenset[str],
+        removal_details: Mapping[str, str] | None = None,
     ) -> list[ItemDiff]:
         """Source-file diffs, hydrated with format + keyring refs only for files a diff
         implicates (missing-on-target, extra-on-target, or digest-mismatched).
@@ -779,13 +1033,19 @@ class AptSyncJob(PackageSyncJob):
         itself carries the dangling-reference detail and is downgraded to
         `REPORT_ONLY` instead of `INSTALL` — it is not proposed for install on its own
         (D-12): a repo written without its key is a repo apt refuses.
+
+        `removal_details` carries the C26 impact text for an extra-on-target file whose
+        deletion would strand machine-specific packages, keyed by filename. Disclosure
+        only: the REMOVE action is unchanged, since removing a repo whose packages are
+        also going is legitimate.
         """
+        details = removal_details or {}
         names = _diff_filenames(source_digests, target_digests)
         diffs: list[ItemDiff] = []
 
         for filename in sorted(names.missing):
             content = await _read_file_content(source_run, f"{_APT_SOURCES_DIR}/{filename}")
-            fmt, refs = _parse_source_file(filename, content)
+            fmt, refs, _uris = _parse_source_file(filename, content)
             item = AptSourceItem(filename=filename, digest=source_digests[filename], fmt=fmt, keyring_refs=refs)
             dangling = _dangling_keyring_ref(refs, source_key_filenames)
             if dangling is not None:
@@ -813,7 +1073,7 @@ class AptSyncJob(PackageSyncJob):
 
         for filename in sorted(names.extra):
             content = await _read_file_content(target_run, f"{_APT_SOURCES_DIR}/{filename}")
-            fmt, _refs = _parse_source_file(filename, content)
+            fmt, _refs, _uris = _parse_source_file(filename, content)
             item = AptSourceItem(filename=filename, digest=target_digests[filename], fmt=fmt)
             diffs.append(
                 ItemDiff(
@@ -822,13 +1082,13 @@ class AptSyncJob(PackageSyncJob):
                     action=DiffAction.REMOVE,
                     item_id=item.item_id,
                     label=item.label(),
-                    detail=None,
+                    detail=details.get(filename),
                 )
             )
 
         for filename in sorted(names.changed):
             content = await _read_file_content(source_run, f"{_APT_SOURCES_DIR}/{filename}")
-            fmt, refs = _parse_source_file(filename, content)
+            fmt, refs, _uris = _parse_source_file(filename, content)
             item = AptSourceItem(filename=filename, digest=source_digests[filename], fmt=fmt, keyring_refs=refs)
             dangling = _dangling_keyring_ref(refs, source_key_filenames)
             detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename])
@@ -1595,7 +1855,7 @@ class AptSyncJob(PackageSyncJob):
         filename = diff.item_id.removeprefix("apt:source:")
         source_path = f"{_APT_SOURCES_DIR}/{filename}"
         content = await _read_file_content(self.source.run_command, source_path)
-        _fmt, refs = _parse_source_file(filename, content)
+        _fmt, refs, _uris = _parse_source_file(filename, content)
 
         for ref in refs:
             ref_filename = Path(ref).name

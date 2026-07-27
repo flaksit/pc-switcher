@@ -62,6 +62,8 @@ __all__ = [
     "UnreproducibleItem",
     "build_dangling_keyring_detail",
     "build_held_or_pinned_detail",
+    "build_orphaned_keyring_detail",
+    "build_orphaned_packages_detail",
     "build_orphaned_refs_detail",
     "build_repo_unavailable_detail",
     "build_version_mismatch_detail",
@@ -256,6 +258,38 @@ def build_orphaned_refs_detail(remote: str, applications: Sequence[str]) -> str:
     difference with nothing said about what depends on it.
     """
     return f"target refs still using {remote}: {', '.join(applications)} (removal orphans them)"
+
+
+def build_orphaned_packages_detail(source_filename: str, packages: Sequence[str]) -> str:
+    """Detail string for an apt source-file REMOVE diff whose removal would leave
+    machine-specific packages on the target without the repository that feeds them (C26).
+
+    Those packages are the ones a review can never show by itself: recorded skip-always,
+    they are filtered out of the target manifest before diffing (D-08), so they produce no
+    `ItemDiff` in any run. Naming them here is the only place the user learns that
+    approving the source deletion strands software they explicitly told this tool to keep.
+    Disclosure, not refusal — D-30's placement, the same as flatpak's orphaned refs.
+    """
+    return (
+        f"machine-specific packages on the target installed from {source_filename}: "
+        f"{', '.join(packages)} (removal leaves them without updates)"
+    )
+
+
+def build_orphaned_keyring_detail(key_filename: str, source_filenames: Sequence[str], packages: Sequence[str]) -> str:
+    """Detail string for an apt key REMOVE diff whose removal would leave target source
+    files pointing at a keyring that no longer exists (C26).
+
+    A key is a dependency of every source file whose `Signed-By:`/`signed-by=` names it,
+    so deleting it makes those repositories ones apt refuses on every subsequent
+    operation — the target-side mirror of `build_dangling_keyring_detail`'s source-side
+    check. `packages` names the machine-specific packages reached through those sources
+    when the link is resolvable, and is omitted when it is not.
+    """
+    text = f"target sources still signed by {key_filename}: {', '.join(source_filenames)}"
+    if packages:
+        text += f"; machine-specific packages behind them: {', '.join(packages)}"
+    return f"{text} (removal leaves those repositories unverifiable)"
 
 
 @dataclass(frozen=True)

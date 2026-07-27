@@ -2621,3 +2621,301 @@ class TestSourceOnlyCollateral:
         assert "src-only" in message
         commands = all_calls(target)
         assert not any("sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c for c in commands)
+
+
+# -- C26/N7: a repo/key removal names the target-side machine-specific packages ---------
+
+# Distinguishes the C26 source-reference scan from `collect_hold_pin_facts`'s own
+# `-exec awk` over `preferences.d`, which any looser substring would also match.
+_SOURCE_SCAN_CMD = "sources.list.d -maxdepth 1 -type f -exec awk"
+
+_VENDOR_LIST = "deb [signed-by=/etc/apt/keyrings/vendor.gpg] https://vendor.example.com/apt stable main\n"
+_VENDOR_SOURCES = (
+    "Types: deb\nURIs: https://vendor.example.com/apt/\nSuites: stable\n"
+    "Components: main\nSigned-By: /etc/apt/keyrings/vendor.gpg\n"
+)
+
+
+def _decision_file(*item_ids: str) -> str:
+    """A decision file recording each id skip-always as an apt package (D-08)."""
+    body = "".join(
+        f'  "{item_id}":\n'
+        "    item_class: apt_package\n"
+        f'    label: "{item_id.removeprefix("apt:package:")}"\n'
+        "    reason: null\n"
+        "    recorded_at: '2026-07-26T00:00:00Z'\n"
+        for item_id in item_ids
+    )
+    return f"machine_specific:\n{body}"
+
+
+def _policy_block(name: str, origin: str | None) -> str:
+    """One `apt-cache policy` package block, installed, with `origin` as the installed
+    version's repository — or dpkg's own record alone when `origin` is None (the shape a
+    package installed from a local `.deb` has).
+    """
+    lines = [f"{name}:", "  Installed: 1.0", "  Candidate: 1.0", "  Version table:", " *** 1.0 500"]
+    if origin is not None:
+        lines.append(f"        500 {origin} stable/main amd64 Packages")
+    lines.append("        100 /var/lib/dpkg/status")
+    return "\n".join(lines) + "\n"
+
+
+def _scan_line(filename: str, content: str) -> str:
+    """The `find ... -exec awk` scan's `<path>\\t<line>` output for one source file,
+    filtered the way the shipped awk program filters it.
+    """
+    keep = ("uris:", "signed-by", "deb ", "deb-src ")
+    return "".join(
+        f"/etc/apt/sources.list.d/{filename}\t{line}\n"
+        for line in content.splitlines()
+        if any(token in line.lower() for token in keep)
+    )
+
+
+class TestRepoRemovalNamesMachineSpecificPackages:
+    """C26/N7 — a source or key offered for removal names what the TARGET still needs.
+
+    The package is recorded skip-always on the target, so `filter_inert` drops it from
+    the target manifest and it produces no `ItemDiff` in any run: without this detail the
+    review shows a bare file deletion and the user has no way to learn that approving it
+    strands software they explicitly told the tool to keep. Disclosure, not refusal — the
+    REMOVE action is untouched, as for flatpak's orphaned refs (#214) and apt's own
+    transaction collateral (D-30).
+    """
+
+    @staticmethod
+    def _target_responses(
+        *,
+        source_files: dict[str, str],
+        source_digests: str,
+        key_digests: str = "",
+        decisions: str,
+        policy: str,
+    ) -> dict[str, CommandResult]:
+        """Target responses for a run whose `/etc/apt` state is entirely target-only.
+
+        `_SOURCE_SCAN_CMD` is listed FIRST: `respond_to` matches by substring and first
+        match wins, and the scan command contains `find /etc/apt/sources.list.d` too.
+        """
+        scan = "".join(_scan_line(name, content) for name, content in source_files.items())
+        return {
+            **_NO_PACKAGES,
+            _SOURCE_SCAN_CMD: CommandResult(0, scan, ""),
+            "find /etc/apt/sources.list.d": CommandResult(0, source_digests, ""),
+            "find /etc/apt/keyrings": CommandResult(0, key_digests, ""),
+            "apt.decisions.yaml": CommandResult(0, decisions, ""),
+            "apt-cache policy": CommandResult(0, policy, ""),
+            **{
+                f"cat /etc/apt/sources.list.d/{name}": CommandResult(0, content, "")
+                for name, content in source_files.items()
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_source_removal_names_the_machine_specific_package_it_would_strand(self) -> None:
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses=self._target_responses(
+                source_files={"vendor.list": _VENDOR_LIST},
+                source_digests=sha256_line("d1", "vendor.list"),
+                decisions=_decision_file("apt:package:vendor-tool"),
+                policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
+            ),
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.list")
+        assert diff.action == DiffAction.REMOVE
+        assert diff.detail is not None
+        assert "vendor-tool" in diff.detail
+        assert "vendor.list" in diff.detail
+
+    @pytest.mark.asyncio
+    async def test_the_machine_specific_package_itself_still_produces_no_diff(self) -> None:
+        """The inertness this detail exists to compensate for must not regress: naming
+        the package in a removal's detail is NOT the same as re-proposing it (D-08).
+        """
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                **self._target_responses(
+                    source_files={"vendor.list": _VENDOR_LIST},
+                    source_digests=sha256_line("d1", "vendor.list"),
+                    decisions=_decision_file("apt:package:vendor-tool"),
+                    policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
+                ),
+                "apt-mark showmanual": CommandResult(0, "vendor-tool\n", ""),
+                "dpkg-query": CommandResult(0, "vendor-tool\t1.0\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert "apt:package:vendor-tool" not in {d.item_id for d in plan.diffs}
+
+    @pytest.mark.asyncio
+    async def test_deb822_uris_match_the_policy_origin_despite_the_trailing_slash(self) -> None:
+        """A `.sources` file writes `URIs: https://.../apt/` while `apt-cache policy`
+        prints the origin without the trailing slash. Verbatim comparison would find no
+        link at all for every repository written the first way.
+        """
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses=self._target_responses(
+                source_files={"vendor.sources": _VENDOR_SOURCES},
+                source_digests=sha256_line("d1", "vendor.sources"),
+                decisions=_decision_file("apt:package:vendor-tool"),
+                policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
+            ),
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.sources")
+        assert diff.detail is not None and "vendor-tool" in diff.detail
+
+    @pytest.mark.asyncio
+    async def test_source_removal_with_no_dependent_package_keeps_detail_none(self) -> None:
+        """`other-tool` is machine-specific but was installed from a local `.deb`, so its
+        only origin is dpkg's own record: no link, no noise.
+        """
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses=self._target_responses(
+                source_files={"vendor.list": _VENDOR_LIST},
+                source_digests=sha256_line("d1", "vendor.list"),
+                decisions=_decision_file("apt:package:other-tool"),
+                policy=_policy_block("other-tool", None),
+            ),
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.list")
+        assert diff.action == DiffAction.REMOVE
+        assert diff.detail is None
+
+    @pytest.mark.asyncio
+    async def test_detail_reaches_the_user_through_the_review_entry(self) -> None:
+        """The plan's `ItemDiff` is not what the user reads — `ReviewGroup`/`ReviewEntry`
+        is. The removal lands in its own unticked removal group carrying the same text.
+        """
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses=self._target_responses(
+                source_files={"vendor.list": _VENDOR_LIST},
+                source_digests=sha256_line("d1", "vendor.list"),
+                decisions=_decision_file("apt:package:vendor-tool"),
+                policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
+            ),
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        group = next(g for g in plan.groups if g.action in _REMOVAL_ACTIONS)
+        entry = next(e for e in group.entries if e.item_id == "apt:source:vendor.list")
+        assert entry.detail is not None and "vendor-tool" in entry.detail
+
+    @pytest.mark.asyncio
+    async def test_key_removal_names_a_target_source_still_signed_by_it(self) -> None:
+        """A key is a dependency of every source file naming it. `keeper.list` stays on
+        the target (it exists on both machines, so it has no diff of its own), which is
+        exactly why the key's own removal item is the only place this can be said.
+        """
+        both_sides = sha256_line("d-keep", "keeper.list")
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, both_sides, ""),
+                "cat /etc/apt/sources.list.d/keeper.list": CommandResult(0, _VENDOR_LIST, ""),
+            },
+            target_responses=self._target_responses(
+                source_files={"keeper.list": _VENDOR_LIST},
+                source_digests=both_sides,
+                key_digests=sha256_line("k1", "vendor.gpg"),
+                decisions=_decision_file("apt:package:vendor-tool"),
+                policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
+            ),
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_class == ItemClass.APT_SOURCE for d in plan.diffs)
+        diff = next(d for d in plan.diffs if d.item_id == "apt:key:per-repo:vendor.gpg")
+        assert diff.action == DiffAction.REMOVE
+        assert diff.detail is not None
+        assert "keeper.list" in diff.detail
+        assert "vendor-tool" in diff.detail
+
+    @pytest.mark.asyncio
+    async def test_key_removal_no_target_source_references_it_keeps_detail_none(self) -> None:
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses=self._target_responses(
+                source_files={},
+                source_digests="",
+                key_digests=sha256_line("k1", "unused.gpg"),
+                decisions=_decision_file("apt:package:vendor-tool"),
+                policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
+            ),
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:key:per-repo:unused.gpg")
+        assert diff.action == DiffAction.REMOVE
+        assert diff.detail is None
+
+    @pytest.mark.asyncio
+    async def test_one_apt_cache_policy_call_regardless_of_package_count(self) -> None:
+        """The phase-wide batching rule: origins for every recorded package come from ONE
+        `apt-cache policy` run, never one per package.
+        """
+        names = [f"vendor-tool-{i}" for i in range(12)]
+        context, _source, target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses=self._target_responses(
+                source_files={"vendor.list": _VENDOR_LIST},
+                source_digests=sha256_line("d1", "vendor.list"),
+                decisions=_decision_file(*(f"apt:package:{name}" for name in names)),
+                policy="".join(_policy_block(name, "https://vendor.example.com/apt") for name in names),
+            ),
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        policy_calls = [cmd for cmd in all_calls(target) if "apt-cache policy" in cmd]
+        assert len(policy_calls) == 1
+        assert all(name in policy_calls[0] for name in names)
+        diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.list")
+        assert diff.detail is not None and all(name in diff.detail for name in names)
+
+    @pytest.mark.asyncio
+    async def test_no_impact_commands_when_nothing_is_offered_for_removal(self) -> None:
+        """Both extra classes empty: the run costs neither the policy call nor the scan.
+        Machine-specific packages exist, so only the removal gate can be what stops it.
+        """
+        context, _source, target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                **_NO_PACKAGES,
+                "apt.decisions.yaml": CommandResult(0, _decision_file("apt:package:vendor-tool"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        await job.plan()
+
+        commands = all_calls(target)
+        assert not any("apt-cache policy" in cmd for cmd in commands)
+        assert not any(_SOURCE_SCAN_CMD in cmd for cmd in commands)

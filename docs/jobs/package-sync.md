@@ -67,6 +67,8 @@ The mark is recorded in this machine's own decision file at `~/.config/pc-switch
 
 To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again and re-offers it in the review.
 
+A machine-specific apt package never appears in a review again, so an apt repository or signing key offered for **removal** names it explicitly — see [Deletions](#deletions).
+
 ## Install snippets
 
 Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, or software dropped under `/usr/local` or `/opt` by an install script. `manual_installs_sync` detects these and surfaces them in its review as items needing a resolution. For each one the review offers three choices: add an install snippet, mark it machine-specific (skip always), or skip for now.
@@ -129,6 +131,10 @@ The review verbs match the mechanism: apt and snap holds read *hold* / *unhold*,
 Removals propagate for the three package managers. A package removed from the source's `apt-mark showmanual` set, a snap uninstalled on the source, or a flatpak ref or remote removed on the source becomes a removal review item on the target — unticked by default, so you approve deletions deliberately.
 
 A flatpak remote offered for removal names, in the review item's detail, the refs installed on the target that still have it as their origin in that same scope. The removal is still offered — deleting a remote whose refs are going in the same run is normal cleanup — but you see what it would orphan before approving it. Deleting a remote also drops its signing key, since flatpak stores that key with the remote.
+
+An apt source file or signing key offered for removal does the same for **machine-specific** packages. The detail on a source-file removal names the packages you marked skip-always on this machine that are installed from that repository; the detail on a key removal names the source files on this machine still signed by it, and the machine-specific packages behind them. The removal is still offered and still unticked — you decide. This matters because a machine-specific package is invisible in the review by design: it is filtered out before any diff is computed, so nothing else in the run would tell you the repository feeding it is about to go.
+
+The link comes from `apt-cache policy`: pc-switcher matches the origin of each machine-specific package's installed version against the URIs in the repository files. A package installed from a bare `.deb`, or one whose repository was already gone, has no resolvable origin and is not named. Ordinary (non-machine-specific) packages are out of scope — they can still surface as removal items of their own, and naming every installed package from, say, the Ubuntu archive would list hundreds.
 
 `manual_installs_sync` is **install-only**: it has no target-side manifest of what it installed, so it never proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
 

@@ -77,7 +77,7 @@ Test file shorthand: `apt` = tests/unit/jobs/test_apt_sync.py · `snap` = test_s
 | C23 | Backup itself fails | every group item fails, no `KeyError` crash | U | apt:`test_backup_failure_fails_every_group_item_without_crashing` |
 | C24 | Source file *and* its key both extra on target, both approved | both deleted, one `apt-get update` after both writes | U V | apt:`test_source_and_its_key_both_removed_with_one_update_after_both`, INT:`test_apt_source_and_its_key_removed_together` (proven against `/etc/apt` and a working `apt-get update` afterwards) |
 | C25 | Content reads for hydration use sudo | matches the `sudo find … sha256sum` privilege | U | apt:`test_content_hydration_reads_use_sudo_matching_the_digest_capture` |
-| C26 | Target has a repo/key the source lacks, still needed by a target-side machine-specific package | removal offered with no awareness of that dependency | ‼ | no linkage exists in the code (user example 3, see N7) |
+| C26 | Target has a repo/key the source lacks, still needed by a target-side machine-specific package | removal still offered (unticked), its `detail` naming the machine-specific packages — for a key, the target sources still signed by it and the packages behind them | U | apt:`TestRepoRemovalNamesMachineSpecificPackages` (9) |
 | C27 | skip-always on a digest-derived repo item (`apt:source:`/`apt:key:`/`apt:pin:`/`apt:config:`), next run | item inert, no diff | U | blk:`TestAptRepoItemDecisions` (2) |
 
 ## D. apt collateral (D-30) and metadata refresh (decision 1)
@@ -330,7 +330,7 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 | N4 | A→B installs P; B→A later removes P | removal propagates as an unticked review item | V INT:`test_install_propagates_then_reversed_removal_needs_approval` — three runs: install, reversed-direction removal left undecided (no effect), then approved |
 | N5 | New apt source + key + package on A → A→B installs all three in order | key→source→update→install | U apt:`test_key_then_source_then_update_then_package_install` (single run, mocked) |
 | N6 | Package uninstalled + source/key removed on B → B→A | three independent removal items on A, all unticked | P (C18 + A3 separately; not as a narrative, and there is **no** "this was the last package from that source, remove it too?" prompt — that requirement is not implemented) |
-| N7 | Machine-specific package R on B needs source S; A removes S → A→B | user expects S kept | ‼ not implemented — S is offered for removal on B with no awareness of R (C26) |
+| N7 | Machine-specific package R on B needs source S; A removes S → A→B | S offered for removal, unticked, naming R in its detail so the user can decline knowingly | U apt:`TestRepoRemovalNamesMachineSpecificPackages` (C26) — single run, mocked; the two-machine composition is untested |
 | N8 | Dependency-only package Q kept/removed by apt's own bookkeeping across a P install/remove round trip | pc-switcher never touches Q | P — the single-run half is apt:`test_auto_installed_dependency_produces_no_diff_of_any_kind` (A10); the round trip is asserted nowhere |
 | N9 | Same package machine-specific on A, arrives as collateral on B | protected by the source∪target manual union | U apt:`TestSourceOnlyCollateral` (2 tests) |
 | N10 | Snippet authored on A in run 1 → run 2 from B (registries diverge) | non-additive push guarded | U man:`TestSnippetRegistryOverwriteGuard` (6 tests) — single run only |
@@ -340,7 +340,6 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 
 ### Open defects and unimplemented requirements
 
-- C26/N7 — a repo or key removal has no awareness of a target-side machine-specific package that still needs it. No linkage exists between the decision store and the repo diff. Example narrative 3 is not implemented.
 - N6 — no "this was the last package from that source, remove it too?" prompt. Source and key removals propagate only because the source machine's own files disappeared, as independent unticked items. Example narrative 2 is not implemented.
 
 ### Coverage gaps in behaviour believed correct
@@ -351,6 +350,11 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 - L11 — the hold is written with a timestamp so a crashed run self-expires. The timed value is asserted; no test simulates the crash.
 - N8 — the round trip in which apt's own bookkeeping keeps or drops a dependency-only package. The single-run half is covered (A10).
 - I22/N11 — real-TTY review rendering and the two-machine walkthrough are UAT-only by nature.
+- C26 — the source/key removal impact is asserted against mocked `apt-cache policy` output only. The output shape was verified by hand against a real Ubuntu 24.04 machine carrying both deb822 and legacy repositories (every installed package with a repository origin resolved to a source file, no unmatched origin), but no VM test exercises the parse against a live apt.
+
+### Accepted scope limits
+
+- C26 names only **machine-specific** packages, not every target-installed package from the repository being removed. A skip-always package is structurally invisible — `filter_inert` keeps it out of the target manifest, so it can never produce an `ItemDiff` in any run — and skip-always is an explicit user statement that this machine keeps it; both make the silent repo deletion a broken promise. An ordinary package is at least eligible for its own removal diff, and keying off the whole manual set would make the detail's length a property of the machine (a base-repo deletion would name over a hundred packages on a normal desktop and inform nobody). The narrower scope also keeps the cost at two batched commands gated on a removal actually being offered.
 
 ### Snap and flatpak end-to-end coverage was vacuous
 
