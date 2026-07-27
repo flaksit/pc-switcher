@@ -1,0 +1,374 @@
+Read .planning/phases/02-package-management-sync/02-HANDOVER-package-review.md first —
+it has the detail behind everything below. Then read docs/adr/adr-020-declarative-
+package-convergence.md.
+
+DO NOT PUSH until I say so. Do not touch the pc1/pc2 VMs or the Hetzner lock unasked. Ask when using pc1/pc2 would be useful for analysis.
+
+OPEN WORK, in priority order. Organize your work. You orchestrate. Use todo-list. Sub-agents do the work (both analysis, code and doc):
+
+1. The apt no-candidate detector has never fired. _packages_with_no_candidate (copies in
+    manual_installs_sync.py and apt_sync.py) tests for literal "Candidate: (none)", which
+    apt does NOT print for a hand-installed .deb — dpkg's status entry supplies the
+    candidate. Verified: code, brscan3, cnpg, falco-app, brother-udev-rule-type1 all report
+    a version. Correct test is already in the codebase: installed version whose only origin
+    is /var/lib/dpkg/status (reuse _installed_origins_by_package from 43a52fa3).
+
+2. Derived repos — designed and approved by me, not started. apt sources stop being
+    independently reviewable, exactly as keys did in d27337da: adding a repo is derived
+    from the packages approved from it, the repo is named in the package's review detail,
+    removal stays reviewed, and /etc/apt/sources.list + ubuntu.sources are NEVER collected.
+    Follow d27337da for shape and 43a52fa3 for naming consequences in `detail`.
+
+3. The batched review has never been driven by a human. Unit tests inject a FakeReviewer
+    (tests/unit/jobs/test_package_sync_core.py:72 and test_manual_installs_sync.py:132);
+    the VM suite bypasses prompting entirely via PCSWITCHER_PACKAGE_REVIEW_AUTOMATION
+    (src/pcswitcher/jobs/packages/review.py:94). So decisions are proven; prompts are not.
+    Nothing has ever rendered a questionary checkbox, paused/resumed the Rich Live panel
+    around one, driven the multi-line snippet editor, or hit Ctrl-C at a prompt.
+    Worst case: commit 089ea985 added a SECOND review that fires mid-execute(), after
+    /etc/apt converges (apt_sync.py:1410-1441). Untested at every level.
+    02-UAT.md test 1 covers this and is still pending. I want to run it myself — give me
+    copy-paste commands, don't drive it for me.
+
+RULES THAT COST US PREVIOUS SESSIONS:
+- Insist on RED. A test that cannot fail is not a test. Treat SKIPPED as not-a-test. When
+  retrofitting tests onto existing code (no red phase available), mutation-check instead:
+  break the implementation, confirm the test fails, restore.
+- Tests create the environment they need. No discover-or-skip. No pytest.skip in
+  tests/integration/jobs/test_package_sync.py. Fixtures live in
+  tests/integration/scripts/internal/vm-test-fixtures.sh.
+- Subagents experiment in docker or on pc1/pc2, never on this dev machine.
+- Verify before asserting. Check this machine rather than describing how software
+  "usually" behaves.
+
+DO NOT RE-LITIGATE (verified on real VMs): #208 D9 holds; the #215 flatpak GPG trust fix
+survives real Flathub; keyring resolution went 11 dangling -> 0; snap refresh.hold needs
+sudo to read (5e6a9a4c, pushed).
+
+---
+
+<task-notification>
+<task-id>a1cf35d4aac82e097</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a1cf35d4aac82e097.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyze no-candidate detector" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># No-candidate detector — analysis and fix proposal
+
+## 0. Verdict up front
+
+The handover is right about `manual_installs_sync` and **wrong about `apt_sync`**. The literal `Candidate: (none)` test is the *correct* question at `apt_sync.collect_unavailable_item_ids` (it asks "will the target's apt install this?") and the *wrong* question at `manual_installs_sync._scan_no_candidate_apt_packages` (which asks "did this come from a repo?").
+
+Also, contra the handover's "has never fired": on this dev machine the source-side detector **does** fire — for exactly one package, and it is the wrong one. Measured below.
+
+## 1. Empirical evidence (dev machine, read-only)
+
+All output verbatim from `apt-cache policy` on the current machine.
+
+### 1a. Hand-installed `.deb` (`code`)
+
+```
+code:
+  Installed: 1.129.1-1784303641
+  Candidate: 1.129.1-1784303641
+  Version table:
+ *** 1.129.1-1784303641 100
+        100 /var/lib/dpkg/status
+```
+
+`Candidate:` is the installed version. Same shape for `brscan3` (`0.2.13-1`), `cnpg` (`1.28.1`), `falco-app` (`4.7.4`), `brother-udev-rule-type1` (`1.0.2`) — each one block, one `***` row, one origin line `        100 /var/lib/dpkg/status`.
+
+### 1b. Repo-installed (`gh`)
+
+```
+gh:
+  Installed: 2.96.0
+  Candidate: 2.96.0
+  Version table:
+ *** 2.96.0 1001
+        500 https://cli.github.com/packages stable/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2.45.0-1ubuntu0.3+esm3 510
+        510 https://esm.ubuntu.com/apps/ubuntu noble-apps-security/main amd64 Packages
+     2.45.0-1ubuntu0.3 500
+        500 http://ftp.belnet.be/ubuntu noble-updates/universe amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages
+     2.45.0-1build1 500
+        500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
+```
+
+### 1c. Genuinely unknown name — **prints nothing at all**
+
+`apt-cache policy definitely-not-a-real-package-xyz` → exit 0, **stdout empty, stderr empty**. Not a block with `Candidate: (none)`. Batched with real names, the unknown name is silently absent from the output:
+
+```
+code:
+  Installed: 1.129.1-1784303641
+  ...
+gh:
+  Installed: 2.96.0
+  ...
+```
+
+(This is already known and asserted in `tests/unit/jobs/test_apt_sync.py:1888-1907`.)
+
+### 1d. Installed as an automatic dependency, not manual (`7zip`)
+
+```
+7zip:
+  Installed: 23.01+dfsg-11ubuntu0.1~esm1
+  Candidate: 23.01+dfsg-11ubuntu0.1~esm1
+  Version table:
+ *** 23.01+dfsg-11ubuntu0.1~esm1 510
+        510 https://esm.ubuntu.com/apps/ubuntu noble-apps-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     23.01+dfsg-11 500
+        500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
+```
+
+Indistinguishable from a manual repo install by policy alone — manual/auto is `apt-mark`'s business, not policy's.
+
+### 1e. Not installed, available in a repo (`cowsay`)
+
+```
+cowsay:
+  Installed: (none)
+  Candidate: 3.03+dfsg2-8
+  Version table:
+     3.03+dfsg2-8 500
+        500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
+```
+
+### 1f. What actually produces `Candidate: (none)`
+
+Two real cases found on this machine, neither a hand-`.deb`:
+
+Pure virtual package (`default-mta`):
+```
+default-mta:
+  Installed: (none)
+  Candidate: (none)
+  Version table:
+```
+
+**Negatively pinned, fully repo-available, installed package (`docker.io`)**:
+```
+docker.io:
+  Installed: 29.1.3-0ubuntu3~24.04.2
+  Candidate: (none)
+  Version table:
+ *** 29.1.3-0ubuntu3~24.04.2 -1
+        510 https://esm.ubuntu.com/apps/ubuntu noble-apps-security/main amd64 Packages
+        500 http://ftp.belnet.be/ubuntu noble-updates/universe amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages
+        100 /var/lib/dpkg/status
+     24.0.7-0ubuntu4 500
+        500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
+```
+Caused by the user's own pin `/etc/apt/preferences.d/no-esm-docker` (priority `-1`).
+
+### 1g. Both parsers run over the real 153-package source scan
+
+Ran the **shipped** `_installed_origins_by_package` (`apt_sync.py:737`) and `_packages_with_no_candidate` (`apt_sync.py:597`) against `apt-cache policy $(apt-mark showmanual)` on this machine:
+
+| | result |
+| --- | --- |
+| `apt-mark showmanual` names | 153 |
+| `_packages_with_no_candidate(...)` | `{'docker.io'}` |
+| names with **no repo origin on the installed version** | `{'brother-udev-rule-type1', 'brscan3', 'cnpg', 'code', 'falco-app'}` |
+| names with ≥1 repo origin | 148 (148 + 5 = 153 — every name produced a block) |
+
+So on this machine today `manual_installs_sync` produces exactly **one** unreproducible apt item — `docker.io (no apt candidate)` — a pinned, fully repo-reproducible package it would ask the user to write an install snippet for; and it misses all five real hand-`.deb` packages. One false positive, five false negatives.
+
+The 148+5=153 identity also proves the source-side inference is sound: **every installed package yields a block**, so on a `showmanual`-derived name list, "absent from `_installed_origins_by_package`'s dict" ⟺ "installed version's only origin is `/var/lib/dpkg/status`".
+
+Unverified (no `:i386` package installed here): whether an arch-qualified name (`libc6:i386`) prints header `libc6:i386:` and therefore round-trips through the `line[:-1]` header rule in both parsers. **Hypothesis**: it does and is fine; this machine's `showmanual` contains no arch-qualified names, so it is untested either way.
+
+## 2. Call sites
+
+### Site A — `apt_sync.collect_unavailable_item_ids` (`apt_sync.py:1223`, policy call at `:1234`)
+
+| | |
+| --- | --- |
+| Machine queried | **TARGET** (`self.target.run_command`, `apt_sync.py:1233`) |
+| Input set | `missing_item_ids` — computed at `apt_sync.py:1268-1270` (and again at `:1999-2001`) as *source `apt-mark showmanual` items* minus *target `apt-mark showmanual` items*, both after `filter_inert` |
+| Necessarily installed on the queried machine? | **No — and not even necessarily absent.** "Missing" means *absent from the target's manual set*, not *not installed*. An auto-installed-but-not-manual target package reaches this call site. |
+| Question actually asked | "Can the target's apt install this package right now?" |
+| Literal test verdict | **Correct but incomplete.** |
+
+Reachability of the auto-installed case is not theoretical: the integration suite manufactures it deliberately (`tests/integration/jobs/test_package_sync.py:271-275`, "a selection-state flip changes what `apt_sync` captures without changing what is on the disk", via `apt-mark manual`/`apt-mark auto`).
+
+Why *correct*: `Candidate: (none)` means apt will refuse to install — true for the virtual case (1f) and for the negative-pin case (`docker.io`, 1f), and both correctly become `REPO_UNAVAILABLE`/`REPORT_ONLY` at `apt_sync.py:363-374`.
+
+Why *incomplete*: the dominant real case — a hand-`.deb` name the target's apt has never heard of — prints **nothing** (1c), so it falls through to `MISSING_ON_TARGET`/`INSTALL` and fails at apply with `Unable to locate package`. That fall-through is **deliberate and asserted**: `tests/unit/jobs/test_apt_sync.py:1888-1907` documents "absence must read as 'no evidence against'" because this run may be about to add the repo that provides it.
+
+Why the origin-based predicate must **not** be used here: for the auto-installed-from-a-bare-`.deb` target package (`Candidate: &lt;ver&gt;`, dpkg-status origin only), `apt-get install &lt;name&gt;` succeeds — it just flips the package to manual. The origin test would wrongly declare it `REPO_UNAVAILABLE` and suppress a correct, cheap action.
+
+### Site B — `manual_installs_sync._scan_no_candidate_apt_packages` (`manual_installs_sync.py:391`, policy call at `:401`)
+
+| | |
+| --- | --- |
+| Machine queried | **SOURCE** (`self.source.run_command`, `manual_installs_sync.py:401`) |
+| Input set | `manual_names` = the source's own `apt-mark showmanual` (`manual_installs_sync.py:443-447`) |
+| Necessarily installed on the queried machine? | **Yes.** Verified: all 153 `showmanual` names on this machine are `ii`, and each produced a policy block. |
+| Question actually asked | "Was this installed from a bare `.deb`, i.e. can no configured repository reproduce it?" (module docstring `manual_installs_sync.py:6-8`; ADR-020 D-18) |
+| Literal test verdict | **Wrong.** Measured: 1 false positive (`docker.io`), 5 false negatives (§1g). |
+
+`_packages_with_no_candidate`'s copy at `manual_installs_sync.py:142-163` is byte-identical to `apt_sync.py:597-615`; its docstring at `:145-148` explicitly justifies the duplication.
+
+## 3. Fix proposal
+
+### 3.1 Correct predicates
+
+They differ. Two predicates, one parse.
+
+**Site B (source, `manual_installs_sync`) — replace entirely.**
+
+New rule: a name from the source's `apt-mark showmanual` is `apt-no-candidate` iff its **installed** version has no repository origin, i.e. every origin row under its `***` version is `/var/lib/dpkg/status`. Nothing else — not `Candidate: (none)`, not block absence.
+
+Signature to add to the shared module (§3.2):
+
+```
+def packages_installed_from_no_repository(
+    policy_output: str, queried_names: Sequence[str]
+) -&gt; frozenset[str]
+```
+
+- `queried_names` is required because the origins map omits a package entirely when it has no repo origin (`apt_sync.py:753`, `origins.setdefault` is only reached inside the `parts[1] != "/var/lib/dpkg/status"` guard) — "no origins" is representable only as absence, and absence needs the queried list to be distinguished from "never asked".
+- Returns `{name for name in queried_names if not origins.get(name)}`, where `origins` is `installed_origins_by_package(policy_output)`.
+- Docstring must state the precondition: **callers must pass only names known to be installed** (a not-installed name would be indistinguishable from a dpkg-only one). At the only call site that precondition holds by construction — the list is `apt-mark showmanual`.
+- Deliberate consequence to document: a package hand-installed at version 2.0 while a repo offers 1.0 **is** flagged unreproducible. That is correct under D-18 — replicating *this machine's* installed version needs the `.deb`, not the repo's older one.
+
+Call site change at `manual_installs_sync.py:402`: swap `_packages_with_no_candidate(result.stdout)` for `packages_installed_from_no_repository(result.stdout, manual_names)`. Nothing else in that function moves; the label at `:404` (`f"{name} (no apt candidate)"`) should be reworded to say what is now actually meant — e.g. name that no configured repository provides it — since "no apt candidate" is now literally false for every item it produces.
+
+**Site A (target, `apt_sync`) — keep the predicate, decide separately about the blind spot.**
+
+Keep `Candidate: (none)` as-is at `apt_sync.py:1234`. It answers Site A's question correctly.
+
+The remaining gap (empty block ⇒ silently offered ⇒ `Unable to locate package` at apply) is a **separate open decision, not part of this fix**. Presenting the options rather than picking:
+
+- **(i) Leave it.** Deliberate today, locked in by `tests/unit/jobs/test_apt_sync.py:1888`. Cost: every hand-`.deb` package on the source is proposed as an apt install that is *guaranteed* to fail, once per sync, forever — because the source-side fix in Site B does *not* suppress apt_sync's own diff (D-15 forbids the cross-job coupling that would; this is exactly the undecided matrix-A11 double-surfacing in handover §4).
+- **(ii) Strict only in the second pass.** Make `_replanned_package_diffs` (`apt_sync.py:1991`) treat an empty block as unavailable, since after `apt-get update` no further repo work is coming. Cheap, but the second pass only runs when repository work was approved (`apt_sync.py:1885-1887`), so a run with no `/etc/apt` changes is unfixed.
+- **(iii) Ask the source instead.** Have `apt_sync.capture_source_items` (`apt_sync.py:1126`) run one extra batched `apt-cache policy` on the **source** over the same `showmanual` list and reuse `packages_installed_from_no_repository`. A package that came from no repo *on the source* cannot come from a repo on the target either, independent of target repo state and of ordering — so it classifies deterministically at plan time, with no second-pass dependency and no cross-job coupling. Costs one read command on the source, and needs its own detail wording (`build_repo_unavailable_detail`, `apt_sync.py:267-272`, currently says "target's repositories offer no candidate", which would be the wrong sentence). Also requires a new entry in `_READ_ONLY_CALLS` (`tests/unit/test_mutates_audit.py:116` currently pins `capture_source_items` at 1 `run_command`).
+
+Recommendation: **(iii)**, with (i) as the do-nothing fallback. It is the only option that fixes the case the handover actually observed (`code` proposed as an install that fails) without depending on whether the run happens to touch `/etc/apt`.
+
+### 3.2 Where the shared parser lives
+
+**New module: `src/pcswitcher/jobs/packages/apt_policy.py`.** Move `_installed_origins_by_package` (`apt_sync.py:737-775`), `_normalise_repo_uri` (`apt_sync.py:684-690`, its only dependency), and `_packages_with_no_candidate` (`apt_sync.py:597-615`) there as public functions; add `packages_installed_from_no_repository` alongside. Delete both `_packages_with_no_candidate` copies from `apt_sync.py` and `manual_installs_sync.py:142-163`.
+
+Justification against **D-15** (`docs/adr/adr-020-declarative-package-convergence.md:79`, "one manager's diff on the shared base would make the other three inherit inputs they never supply"):
+
+- D-15's stated harm is **inheritance**, on the shared *base class*. `apt_policy.py` defines no class and is not in `PackageSyncJob`'s MRO. `snap_sync` and `flatpak_sync` simply never import it and inherit nothing new. The `packages/` package is not exclusively `PackageSyncJob` — `state.py` and `review.py` are already free-function/standalone-class modules imported selectively.
+- It also satisfies **D-18**'s actual constraint (`manual_installs_sync.py:17-18`, "never imports `apt_sync`") — the dependency runs `manual_installs_sync → apt_policy ← apt_sync`, with neither job importing the other. Today's alternative is what D-18 chose: duplication, justified at `manual_installs_sync.py:94-96` as "one duplicated line is cheaper than a shared-core coupling". That premise no longer holds — the correct parser is a ~25-line stateful indentation walker with three subtle rules (`***` marker, exact 8-space origin indent, dpkg-status skip), not one line. `apt_sync.py:778-786` documents the project's own precedent for what duplicating a parser of this size costs: `_pin_packages`/`_parse_pin_file` diverged and silently lost every name after the first.
+
+If the user prefers to keep D-18's zero-shared-code rule literally, the fallback is to duplicate the *origin* parser into `manual_installs_sync` too — but then the report should note that the project now maintains two copies of a 25-line parser, and 3.1's shared-signature guidance applies per copy.
+
+### 3.3 Should `_packages_with_no_candidate` be deleted?
+
+**Retain, do not delete.** Move it to `apt_policy.py` and export it as `packages_with_no_candidate`; its single remaining caller is `apt_sync.collect_unavailable_item_ids` (`apt_sync.py:1234`), where it is correct. Delete only the `manual_installs_sync.py:142-163` copy.
+
+Its docstring must be corrected on the move: the current one at `apt_sync.py:598-601` implies `(none)` is what apt prints for an uninstallable package, which §1c disproves. It should say: `(none)` means apt knows the name but will not install it (pure virtual, or every version pinned below zero — `docker.io` is the observed case); a name apt has never heard of produces **no block at all** and is therefore absent from the result, which the caller reads as "no evidence against".
+
+### 3.4 Consequences
+
+**`manual_installs_sync` detection flow (`manual_installs_sync.py:402` area).** No structural change: `_scan_no_candidate_apt_packages` keeps its shape (one batched policy read on the source, `manual_installs_sync.py:400-406`), `capture_source_items` (`:434-448`) keeps passing `manual_names` (now used for both the command and the predicate), and everything downstream — `filter_inert`, `plan()`'s snippet lookup at `:474-494`, the carved `UNREPRODUCIBLE_REVIEW_ACTION` group at `:497-526` — is unchanged. What changes is *which* items appear: on the user's P17, one wrong item (`docker.io`) disappears and five real ones (`brother-udev-rule-type1`, `brscan3`, `cnpg`, `code`, `falco-app`) appear. **D-18's calibration in the handover ("4 apt packages have no repo candidate") is superseded: the measured number is 5.**
+
+Also `tests/unit/test_mutates_audit.py:152` pins `_scan_no_candidate_apt_packages` at 1 `run_command` — unchanged by this fix (still exactly one policy read).
+
+**The second review (commit `089ea985`).** The handover's line reference is wrong: `_rereview_repo_invalidated_packages` is at **`apt_sync.py:1899-1989`**, not 1410-1441 (that range is inside `_diff_apt_sources`/the orphaned-packages detail). Its gate is `apt_sync.py:1885-1887`. Consequences:
+
+- With Site A's predicate unchanged, the second review is **unaffected** by this fix. It calls `collect_unavailable_item_ids` through `_replanned_package_diffs` (`apt_sync.py:2002`) with the same semantics as the first pass, so a `(none)` → available transition after `apt-get update` still reaches the user the same run, exactly as the handover describes.
+- If option (ii) or (iii) from §3.1 is adopted, the second pass changes meaning and needs its own test: under (iii), the *source-side* origin fact does not change after `apt-get update`, so a package classified unavailable-by-source-origin must **stay** unavailable across the re-diff rather than flipping to `INSTALL` and being re-offered. That is the one new invariant (iii) introduces.
+- `manual_installs_sync` has no second review and is unaffected either way.
+
+## 4. Test plan
+
+### 4.1 Existing tests that pass because of the wrong predicate
+
+All in `tests/unit/jobs/test_manual_installs_sync.py`. Every one feeds a `Candidate: (none)` policy fixture that, under the corrected predicate, yields **no** unreproducible item — so every one of these currently passes for the wrong reason and goes RED on the fix until its fixture is replaced with the §1a shape.
+
+| Line of fixture | Enclosing test (line) |
+| --- | --- |
+| 170-172 | `test_no_candidate_source_package_becomes_unreproducible_diff` (166) |
+| 232 | `test_item_with_snippet_plans_install_and_converges_by_replaying_it` (228) |
+| 261 | `test_item_without_snippet_is_report_only_and_grouped_separately` (257) |
+| 358 | `test_no_removal_diff_or_group_even_when_the_target_holds_items` (350) |
+| 395 | `test_machine_specific_item_is_filtered_before_becoming_a_diff` (383) |
+| 431 | `test_plan_runs_with_apt_absent_from_config_and_manual_enabled` (427) |
+| 448 | `test_execute_runs_plan_review_apply_through_injected_reviewer` (442) |
+| 476 | `test_detect_plan_and_replay_end_to_end` (472) |
+| 540 | `test_on_the_fly_snippet_is_replayed_the_same_run` (517) |
+| 571 | `test_target_only_snippet_stays_report_only` (567) |
+| 592 | `test_source_snippet_classifies_install` (588) |
+| 617 | `test_dry_run_previews_on_the_fly_install_without_replay_or_write` (604) |
+| 650 | `test_run_whose_only_items_were_skipped_once_passes` (646) |
+| 673 | `test_interactive_unresolved_no_longer_fails_the_run` (666) |
+| 707-709 | `test_failed_snippet_replay_is_a_per_item_failure_and_does_not_stop_the_job` (690) |
+| 876 | `test_push_runs_after_review_and_before_replay_in_execute` (864) |
+
+Remedy for 15 of the 16: mechanical fixture swap to a module-level constant (see 4.2) — these tests are about snippets/review/push, not detection. The exception is `test_no_candidate_source_package_becomes_unreproducible_diff` (166), which is the detection test itself and should be replaced by the new tests in 4.2.
+
+**Not affected, verified:** `tests/unit/jobs/test_package_sync_core.py` never parses policy output — its `apt-no-candidate` references (lines 447, 465, 480, 500, 526, 536) are hardcoded item-id strings only. `tests/unit/jobs/test_apt_sync.py` `TestUnavailableCapture` (990-1042), `test_a_package_apt_reports_no_candidate_for_is_withheld_from_the_first_pass` (1868) and `test_a_package_apt_has_never_heard_of_prints_no_block_and_is_still_offered` (1888) all stay green under §3.1's Site A decision (keep the predicate) — and under option (iii) only `:1888` would need revisiting.
+
+### 4.2 New unit tests
+
+Add a module-level fixture block to `tests/unit/jobs/test_manual_installs_sync.py`, verbatim from §1 (the raw strings measured above), e.g. `_POLICY_HAND_DEB` (the `code` block, §1a), `_POLICY_REPO_INSTALLED` (the `gh` block, §1b), `_POLICY_PINNED_NO_CANDIDATE` (the `docker.io` block, §1f), `_POLICY_AUTO_DEP` (the `7zip` block, §1d). Use real names, not `brscan3`-as-placeholder — the whole point is that the fixtures are the shapes apt actually emits.
+
+New tests in `TestNoCandidateDetection` (`tests/unit/jobs/test_manual_installs_sync.py:161`):
+
+1. `test_hand_installed_deb_whose_only_origin_is_dpkg_status_is_unreproducible` — source `apt-mark showmanual` → `code\n`, policy → `_POLICY_HAND_DEB`. Assert one `UNREPRODUCIBLE`/`REPORT_ONLY` diff, `item_id == "unreproducible:apt-no-candidate:code"`.
+2. `test_repo_installed_package_reporting_a_candidate_is_not_unreproducible` — `gh\n` + `_POLICY_REPO_INSTALLED`. Assert **no** `UNREPRODUCIBLE` diff. (Guards the naive "does the block mention `/var/lib/dpkg/status`?" mis-implementation — `gh`'s block does.)
+3. `test_negatively_pinned_package_is_not_unreproducible` — `docker.io\n` + `_POLICY_PINNED_NO_CANDIDATE`. Assert no diff. **This is the regression test for today's only observed false positive.**
+4. `test_installed_from_a_repo_as_an_automatic_dependency_is_not_unreproducible` — `7zip\n` + `_POLICY_AUTO_DEP`. Assert no diff.
+5. `test_batched_scan_separates_hand_deb_from_repo_installed_in_one_call` — `code\ngh\ndocker.io\n7zip\n` + the four blocks concatenated in that order. Assert exactly `{"unreproducible:apt-no-candidate:code"}`, and assert exactly one `apt-cache policy` call on the source (the batching contract, mirroring `tests/unit/jobs/test_apt_sync.py:1035-1038`).
+
+Plus, in `tests/unit/jobs/test_apt_sync.py`, one test pinning the corrected Site A docstring claim so the two predicates cannot be conflated later:
+
+6. `test_a_hand_installed_deb_present_on_the_target_is_still_offered_for_install` — target `apt-mark showmanual` empty, source `code\n`, target policy → `_POLICY_HAND_DEB`. Assert `MISSING_ON_TARGET`/`INSTALL`, **not** `REPO_UNAVAILABLE`. (This is the auto-installed-on-target case; it is what stops someone "fixing" Site A by dropping the origin predicate in.)
+
+### 4.3 Mutation checks (RED proof)
+
+| Test | Break this | Expected failure |
+| --- | --- | --- |
+| 1 | In `packages_installed_from_no_repository`, return `frozenset()` unconditionally | no `UNREPRODUCIBLE` diff → assertion on `len(...) == 1` fails |
+| 1 | Revert the call site at `manual_installs_sync.py:402` to `packages_with_no_candidate` | `code`'s block has `Candidate: 1.129.1-…` → no item → fails |
+| 2 | Change the predicate to "block text contains `/var/lib/dpkg/status`" | `gh` flagged → fails |
+| 3 | Add `or name in packages_with_no_candidate(policy_output)` to the predicate | `docker.io` flagged → fails |
+| 4 | Drop the `parts[1] != "/var/lib/dpkg/status"` guard in `installed_origins_by_package` | every package gets an origin → tests 1 and 5 lose their expected item → fail |
+| 4 | Drop the `in_installed_block` guard (accept origins from any version row) | `code` has no non-installed row, so test 1 stays green — but test 5's `docker.io`/`gh` stay green too; the guard is instead proven by test 6 plus a targeted parser test on `_POLICY_REPO_INSTALLED` asserting `origins["gh"] == {"https://cli.github.com/packages"}` (not the three Ubuntu URIs from the older rows) |
+| 5 | Change the batched policy call to one-per-package | the single-call assertion fails |
+| 6 | Substitute the origin predicate into `collect_unavailable_item_ids` | `code` → `REPO_UNAVAILABLE` → fails |
+
+### 4.4 Integration coverage
+
+No integration test exercises apt-no-candidate detection today — verified: `tests/integration/` contains zero references to `apt-no-candidate` or `no_candidate`, and the only mention of the concept is a note explaining why it is *avoided* (`tests/integration/jobs/test_package_sync.py:1192-1196`, "a package name that resolves to nothing … short-circuits before ever touching the target, so it would prove nothing about D-27"). There are no `pytest.skip`s in that file (only helper-driven `assert`s at `:258-259` and `:1202-1204`); keep it that way.
+
+**Required fixture addition to `tests/integration/scripts/internal/vm-test-fixtures.sh`.** The VM baseline has no package installed from a bare `.deb`, so the source-side predicate is untestable there. Add a `install_bare_deb()` step, in the same idempotent, presence-guarded style as `install_snaps()` (`:98-118`):
+
+- Build the `.deb` **on the VM**, do not download one — a downloaded `.deb` from a real vendor drags in a network dependency and a version that drifts. Construct a trivial control-only package (`dpkg-deb --build` over a scratch tree with `DEBIAN/control` naming a package such as `pcswitcher-bare-deb`, version `1.0`, `Architecture: all`, a one-line description, plus one payload file so the package owns something).
+- Install it with `sudo dpkg -i`. Then `sudo apt-mark manual &lt;name&gt;` so it is unambiguously in `apt-mark showmanual` (a `dpkg -i` install is normally already manual; make it explicit rather than assumed).
+- Guard: `dpkg-query -W &lt;name&gt; &gt;/dev/null 2&gt;&amp;1 &amp;&amp; return`.
+- Assert-shape the fixture at the end of the function (cheap, and it is the property the tests depend on): `apt-cache policy &lt;name&gt;` must show `Candidate: 1.0` **and** `/var/lib/dpkg/status` as its only origin. If the name ever became repo-resolvable the fixture is invalid and the run should fail loudly, not silently pass.
+- Add the call to the `# -- main --` sequence (`:236-241`), unconditionally — both machines need it, since the source-side scan runs on pc1 and pc2's own `apt-mark showmanual` set matters to `apt_sync`'s diff.
+- **Bump `FIXTURES_VERSION` from 3 to 4** (`vm-test-fixtures.sh:31`) **and `PCSWITCHER_TEST_FIXTURES_VERSION` in `tests/integration/scripts/internal/common.sh:156`** — they are cross-referenced by comment at `vm-test-fixtures.sh:30` and `common.sh:153`, and the marker comparison at `vm-test-fixtures.sh:227` is what forces the baseline rebuild.
+- No legacy-cleanup branch is needed for this addition (unlike the v3 flatpak reset at `:227-234`): the guard is a presence check by package name, so a v3 baseline simply gains the package on the next run.
+
+New integration test in `tests/integration/jobs/test_package_sync.py`:
+
+- `test_bare_deb_on_source_is_detected_as_unreproducible_and_offered_for_resolution` — with `manual_installs_sync` enabled (`_write_package_sync_config(..., manual_installs_sync=True)`, as at `:1252`), run a sync from pc1 and assert the run's output names the fixture package as an item needing resolution, and that no `apt_sync` install of it succeeds. Mutation check: revert `manual_installs_sync.py:402` to the literal predicate — the fixture package's `Candidate:` is `1.0`, so no item is produced and the assertion on the run output fails.
+
+## 5. Files touched by the proposal
+
+- `src/pcswitcher/jobs/packages/apt_policy.py` — new
+- `src/pcswitcher/jobs/apt_sync.py` — `:597-615`, `:684-690`, `:737-775` move out; `:1234` and `:1470` become imports; (option iii only) `:1126`, `:267-272`
+- `src/pcswitcher/jobs/manual_installs_sync.py` — `:142-163` deleted, `:402` and `:404` changed, module docstring `:6-8` reworded
+- `tests/unit/jobs/test_manual_installs_sync.py` — 16 fixture sites (§4.1), new tests (§4.2)
+- `tests/unit/jobs/test_apt_sync.py` — new test 6; parser-import updates
+- `tests/unit/test_mutates_audit.py` — `:116` only if option (iii) is taken
+- `tests/integration/scripts/internal/vm-test-fixtures.sh` (`:31`, main block) and `tests/integration/scripts/internal/common.sh:156`
+- `tests/integration/jobs/test_package_sync.py` — new test
+- `docs/adr/adr-020-declarative-package-convergence.md` D-18 paragraph (`:105`) — "no-repo-candidate apt packages" is the wrong phrase for the corrected rule; and `docs/jobs/package-sync.md` wherever it repeats it</result>
+<usage><subagent_tokens>124325</subagent_tokens><tool_uses>36</tool_uses><duration_ms>467117</duration_ms></usage>
+</task-notification>
