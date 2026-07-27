@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import IntEnum, StrEnum
 from typing import Any
 
@@ -189,7 +189,7 @@ class Snapshot:
 
     subvolume: str  # e.g., "@home"
     phase: SnapshotPhase  # PRE or POST
-    timestamp: datetime  # When the snapshot was created
+    timestamp: datetime  # When the snapshot was created (UTC, from the name)
     session_id: str  # 8-char hex session identifier
     host: Host  # SOURCE or TARGET
     path: str  # Full filesystem path
@@ -231,8 +231,10 @@ class Snapshot:
         except ValueError as e:
             raise ValueError(f"Invalid phase '{phase_str}' in path: {path}") from e
 
-        # Parse timestamp
-        timestamp = datetime.strptime(snap_ts, "%Y%m%dT%H%M%S")
+        # Names are stamped in UTC (`btrfs_snapshots._snapshot_timestamp`), so the parsed
+        # value is UTC too -- kept aware rather than naive so it cannot be compared
+        # against a local-time `now()` without the mismatch being an error.
+        timestamp = datetime.strptime(snap_ts, "%Y%m%dT%H%M%S").replace(tzinfo=UTC)
 
         return cls(
             subvolume=subvolume,

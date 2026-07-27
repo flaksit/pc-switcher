@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import shlex
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from pytimeparse2 import parse as parse_duration_seconds
@@ -46,8 +46,7 @@ def snapshot_name(subvolume: str, phase: SnapshotPhase) -> str:
     Returns:
         Snapshot name like "pre-@home-20251129T143022"
     """
-    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    return f"{phase.value}-{subvolume}-{timestamp}"
+    return f"{phase.value}-{subvolume}-{_snapshot_timestamp()}"
 
 
 def session_folder_name(session_id: str) -> str:
@@ -59,8 +58,20 @@ def session_folder_name(session_id: str) -> str:
     Returns:
         Folder name like "20251129T143022-abc12345"
     """
-    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    return f"{timestamp}-{session_id}"
+    return f"{_snapshot_timestamp()}-{session_id}"
+
+
+def _snapshot_timestamp() -> str:
+    """Now, as the `%Y%m%dT%H%M%S` stamp every snapshot and session folder is named by.
+
+    UTC, not local time. The stamp is the only ordering key retention has — `list_snapshots`
+    parses it back out of the path and `cleanup_snapshots` ranks sessions by it — so it has
+    to mean the same instant wherever it was written. Local time makes two machines in
+    different zones, or one machine either side of a DST change, produce names that sort
+    against each other by their offset instead of by when they happened, and the older
+    session then outranks the newer one.
+    """
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
 
 
 async def create_snapshot(
@@ -236,7 +247,7 @@ async def cleanup_snapshots(
     snapshots_to_delete: list[Snapshot] = []
 
     if max_age_days is not None:
-        cutoff_date = datetime.now() - timedelta(days=max_age_days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=max_age_days)
 
         for session_id, session_snaps in sorted_sessions:
             if session_id in protected_session_ids:

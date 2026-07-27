@@ -14,7 +14,7 @@ from docs/system/spec.md.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -87,7 +87,7 @@ async def test_core_us_btrfs_create_snapshots(
     """
     phase_name = "pre" if phase == SnapshotPhase.PRE else "post"
     session_id = f"test-{phase_name}sync-001"
-    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     session_folder = f"{timestamp}-{session_id}"
     session_path = f"/.snapshots/pc-switcher/{session_folder}"
     snap_path = ""  # Initialize to avoid type checker warning
@@ -225,7 +225,10 @@ async def test_core_us_btrfs_as7_cleanup_snapshots_with_retention(
         # Create 5 test sessions (we'll keep 3 most recent)
         # Use hex session IDs to match the expected pattern (8 hex chars)
         # Use fake timestamps (1 minute apart) to ensure ordering without sleeping
-        base_time = datetime.now()
+        # UTC, matching what pc-switcher stamps into a real snapshot name: these fake
+        # sessions are ranked against whatever else is on the machine, and a local-time
+        # stamp would sort them by the runner's offset rather than by their age.
+        base_time = datetime.now(UTC)
         for i in range(5):
             # Generate 8-char hex session ID (like real session IDs)
             session_id = f"c1ea{i:04x}"  # e.g., c1ea0000, c1ea0001, etc.

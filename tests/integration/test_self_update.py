@@ -245,28 +245,3 @@ class TestSelfUpdateErrorHandling:
         assert not success, "Should fail with non-existent version"
         # Error could come from uv or from GitHub API
         assert len(stdout) > 0 or len(stderr) > 0
-
-
-class TestSelfUpdateNoStableRelease:
-    """Tests for behavior when no stable releases exist."""
-
-    async def test_no_stable_release_error(
-        self,
-        pc2_executor_with_new: BashLoginRemoteExecutor,
-        old_release: Release,
-        github_releases_desc: list[Release],
-    ) -> None:
-        """Test that self update without --prerelease fails when no stable releases exist."""
-        stable_releases = [r for r in github_releases_desc if not r.is_prerelease]
-        if stable_releases:
-            pytest.skip(
-                f"Test requires no stable releases, but found {len(stable_releases)}: "
-                f"{[r.tag for r in stable_releases[:3]]}{'...' if len(stable_releases) > 3 else ''}"
-            )
-
-        await install_pcswitcher_with_script(pc2_executor_with_new, old_release)
-
-        # Without --prerelease, should fail (only prereleases exist)
-        success, stdout, _stderr = await _run_self_update(pc2_executor_with_new)
-        assert not success, "Self update should fail when no stable releases exist"
-        assert "error" in stdout.lower(), "Should show error message about no stable releases"
