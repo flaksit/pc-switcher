@@ -374,6 +374,52 @@ async def install_pcswitcher_with_script(
     return result
 
 
+@pytest.fixture(scope="session")
+def branch_head_commit(current_git_branch: str) -> str:
+    """Commit the remote branch points at — the code install.sh installs from.
+
+    Resolved once per session so ensure_pcswitcher_at_branch_head can tell whether a
+    VM's installed build already is the branch tip.
+    """
+    result = subprocess.run(
+        ["git", "ls-remote", "origin", f"refs/heads/{current_git_branch}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    if not result.stdout.strip():
+        pytest.fail(
+            f"Branch {current_git_branch!r} does not exist on origin. Push it first: "
+            "install fixtures install pc-switcher from the remote branch."
+        )
+    return result.stdout.split()[0]
+
+
+async def ensure_pcswitcher_at_branch_head(
+    executor: BashLoginRemoteExecutor,
+    branch: str,
+    head_commit: str,
+) -> None:
+    """Install pc-switcher from `branch` unless the installed build already is `head_commit`.
+
+    Dev builds stamp the short commit into the version's local part (e.g.
+    0.5.1.post167.dev0+43a52fa3), so a matching stamp proves the VM already runs the
+    branch tip and the ~10s clone+build install can be skipped in favour of a ~1s
+    version probe. Any mismatch — nothing installed, an older push, a self-update or
+    install-script test having changed the installed version — falls through to a real
+    install. A branch tip that is exactly a release tag carries no commit stamp and
+    therefore always reinstalls (safe, just slower).
+    """
+    installed = await executor.run_command("pc-switcher --version", timeout=10.0)
+    if installed.success and head_commit[:8] in installed.stdout:
+        return
+
+    await install_pcswitcher_with_script(executor, branch)
+
+    verify = await executor.run_command("pc-switcher --version", timeout=10.0)
+    assert verify.success, f"pc-switcher not accessible after install: {verify.stderr}"
+
+
 @overload
 async def install_pcswitcher_with_uv(executor: BashLoginRemoteExecutor) -> CommandResult: ...
 
@@ -452,27 +498,17 @@ async def uninstall_pcswitcher_and_config(executor: BashLoginRemoteExecutor) -> 
 
 @pytest.fixture(scope="module")
 async def pc1_with_pcswitcher_mod(
-    pc1_executor: BashLoginRemoteExecutor, current_git_branch: str
+    pc1_executor: BashLoginRemoteExecutor, current_git_branch: str, branch_head_commit: str
 ) -> BashLoginRemoteExecutor:
-    """Ensure pc-switcher is installed on pc1 from current branch.
+    """Ensure pc-switcher on pc1 is the current branch tip.
 
-    Module-scoped: installs pc-switcher once per test module if not already present.
-    Does NOT uninstall after tests - leaves pc-switcher installed for efficiency.
+    Module-scoped. Skips the install when the VM already runs the branch tip (see
+    ensure_pcswitcher_at_branch_head). Does NOT uninstall after tests.
 
-    Use this fixture when tests require pc-switcher to be available on pc1.
-
-    NOTE: This fixture installs from the current git branch to test in-development code.
+    NOTE: installs from the current git branch to test in-development code.
     The branch must be pushed to origin for this to work.
     """
-    branch = current_git_branch
-
-    # Always reinstall to ensure we have the latest code from current branch
-    await install_pcswitcher_with_script(pc1_executor, branch)
-
-    # Verify installation
-    verify = await pc1_executor.run_command("pc-switcher --version", timeout=10.0)
-    assert verify.success, f"pc-switcher not accessible after install: {verify.stderr}"
-
+    await ensure_pcswitcher_at_branch_head(pc1_executor, current_git_branch, branch_head_commit)
     return pc1_executor
 
 
@@ -521,30 +557,23 @@ async def pc2_with_old_pcswitcher_fn(
 
 @pytest.fixture
 async def pc2_with_pcswitcher(
-    pc2_executor: BashLoginRemoteExecutor, current_git_branch: str
+    pc2_executor: BashLoginRemoteExecutor, current_git_branch: str, branch_head_commit: str
 ) -> BashLoginRemoteExecutor:
-    """Ensure pc-switcher is installed on pc2 from current branch.
-
-    Function-scoped: installs pc-switcher for each test that uses this fixture.
-    This ensures pc2 has the exact same version as pc1 (from current branch),
+    """Ensure pc-switcher on pc2 is the current branch tip — same version as pc1,
     which is required for back-sync tests.
+
+    Function-scoped, but skips the install when the VM already runs the branch tip
+    (see ensure_pcswitcher_at_branch_head), so only the first user per session — and
+    any test after one that changed the installed version — pays for a real install.
 
     WARNING: This fixture wraps pc2_executor and modifies VM state.
     Tests using this fixture MUST NOT use pc2_executor directly in parallel,
     as both operate on the same VM and will interfere with each other.
 
-    NOTE: This fixture installs from the current git branch to test in-development code.
+    NOTE: installs from the current git branch to test in-development code.
     The branch must be pushed to origin for this to work.
     """
-    branch = current_git_branch
-
-    # Install from the same branch as pc1 to ensure version match
-    await install_pcswitcher_with_script(pc2_executor, branch)
-
-    # Verify installation
-    verify = await pc2_executor.run_command("pc-switcher --version", timeout=10.0)
-    assert verify.success, f"pc-switcher not accessible after install: {verify.stderr}"
-
+    await ensure_pcswitcher_at_branch_head(pc2_executor, current_git_branch, branch_head_commit)
     return pc2_executor
 
 
