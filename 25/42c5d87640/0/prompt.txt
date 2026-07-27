@@ -1,0 +1,62 @@
+<task-notification>
+<task-id>ae02a96a13ceeaf95</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/ae02a96a13ceeaf95.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit skip-as-success misuse" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Part 1 — audit
+
+**Premise check: your premise is right, but understated.** `JobStatus.SKIPPED` (`src/pcswitcher/models.py:263`) is constructed nowhere in `src/`, and no test constructs it either. `SUCCESS` is built at exactly one place (`orchestrator.py:1233`), `FAILED` at two (`orchestrator.py:1263`, `1280`). `_summarize_job_outcomes` (`orchestrator.py:202-216`) already has a docstring line treating `SKIPPED` as a normal outcome — the enum member and its semantics were designed and never wired.
+
+The understatement: there is also a case where an **enabled job produces no `JobResult` at all**, which is worse than a dishonest one.
+
+### The table
+
+| # | `path:line` | Trigger | What the job did | Status today | Honest? |
+|---|---|---|---|---|---|
+| 1 | `src/pcswitcher/jobs/packages/sync_core.py:493-497` (review at `packages/review.py:476-487`, no-op at `sync_core.py:357-359`) | non-interactive run (`is_interactive(console)` False, no `PACKAGE_REVIEW_AUTOMATION_ENV`) with a non-empty plan | nothing — every item forced `SKIP_ONCE`, logs "No `&lt;mgr&gt;` changes to apply", `_record_permanent_skips` also short-circuits on `was_interactive` (`sync_core.py:432`) | SUCCESS, ×4 jobs | **Misuse.** This is the D-26 case you asked about. A headless run reports four successful package syncs having converged zero items. |
+| 2 | `src/pcswitcher/jobs/vscode_state_sync.py:298-302` | no handled state DB exists on the source | nothing, early `return` | SUCCESS | **Misuse** (mild). Not-applicable ≠ synced. |
+| 3 | `src/pcswitcher/jobs/folder_sync.py:874` + `_active_folders` at `folder_sync.py:256-266` | every configured folder has `enabled: false` (schema `minItems: 1` at `folder_sync.py:201` only forces ≥1 *entry*) | nothing — the `for` body never runs | SUCCESS | **Misuse.** |
+| 4 | `src/pcswitcher/orchestrator.py:996-998` ← `_resolve_sync_job_class` returning None at `orchestrator.py:698-703` / `715-721` | an enabled `sync_jobs` name whose module or class does not resolve | nothing; a WARNING is logged | **no `JobResult` at all**; session `COMPLETED` | **Worst of the set.** A job the user enabled vanishes with no record. Not a status bug — a missing record. |
+| 5 | `src/pcswitcher/jobs/install_on_target.py:80-87` and `:101-102` | target version already matches source; or dry-run | nothing | *no `JobResult`* — it is a `SystemJob` run outside `_execute_jobs` (`orchestrator.py:634-649`) | Out of the JobResult model entirely. Leave. |
+| 6 | `src/pcswitcher/jobs/snap_sync.py:492-507` | source snap installed from a local file | everything **except** those snaps (and their target counterparts are withheld from removal); one WARNING | SUCCESS | **Legitimate.** Per-item exclusion; a job-level status cannot carry it. |
+| 7 | `sync_core.py:348-352` (`REPORT_ONLY` excluded from `apply_diffs`); classes at `apt_sync.py:419`, `:561`, `:565`, `flatpak_sync.py:479-492` | version-mismatch / repo-unavailable / origin-mismatch / unreproducible items | everything but those; they are shown in the review, never converged | SUCCESS | **Legitimate.** By design (D-25), surfaced in the review. |
+| 8 | `apt_sync.py:2996-3002`, `:3011-3017`, `:2599-2609` | an unused keyring cannot be backed up / cannot be deleted; a repo-group rollback step fails | everything but that cleanup; WARNING | SUCCESS (the group itself records failures separately at `apt_sync.py:2495`, `:2551` → `PackageItemFailures` → FAILED) | **Legitimate.** Best-effort GC and rollback-of-rollback. |
+| 9 | `orchestrator.py:1342-1402`, `:1428-1487` | snap auto-refresh hold cannot be set / verified / restored | run proceeds unpaused; WARNING | orchestrator-level, no job status | **Legitimate.** Documented best-effort race guard. |
+| 10 | all jobs under `--dry-run` | `context.dry_run` | reads only | SUCCESS | **Legitimate**, and already an explicit decision: `tests/unit/test_dry_run.py:6` says "Returns SUCCESS/FAILED as expected (not SKIPPED)". |
+| 11 | `orchestrator.py:1244-1251` | a job raises `SyncAbortedByUser` | partial | **no `JobResult`**; session `ABORTED` | Acceptable — the run stops, so a per-job record is moot. |
+| 12 | `orchestrator.py:987-994` | job disabled in config | never instantiated | no result, DEBUG log | Correct as-is. |
+
+No "validation that warns and continues" exists inside jobs: every `ValidationError` is fatal (`orchestrator.py:1023-1025`), and `ValidationError` (`models.py`) has no severity field.
+
+### Judgement
+
+Should become `SKIPPED`: **1, 2, 3, 4**. Case 1 is the one that matters — it silently makes every CI/headless run look like a successful package sync.
+
+Should stay `SUCCESS`: **6, 7, 8, 9, 10**, plus an *empty* package plan (target already matches the source — that is the goal, met). My dividing line: "nothing to do because already converged" is success; "nothing done because nobody could decide, or nothing was applicable" is skipped; per-item exclusions inside a working job are neither and belong in the review/warnings.
+
+### Two findings beyond the brief
+
+- `JobResult` is consumed by nothing but `_summarize_job_outcomes` and the CLI exit code (`cli.py:387`). Nothing renders per-job outcomes, so **`CORE-FR-SUMMARY` (`docs/system/core.md:540`) — which names SUCCESS/SKIPPED/FAILED explicitly — is unimplemented.** Until a summary exists, `SKIPPED` is only a log line.
+- Case 4 needs no exception: the orchestrator should construct the `SKIPPED` result directly at discovery time.
+
+## Part 2 — spec changes
+
+One commit, `70a08094`, one file (`.planning/phases/02-package-management-sync/02-SPEC-package-review-model.md`, +39/-19):
+
+- **§5.3.4** — outcomes reduced to True / raises `JobSkipped` (False survives only for dry-run). Rule 3 now raises `JobSkipped`, marked **ruled by the user**, with your pin reasoning made concrete: `/etc/apt/preferences.d` is always-sync with no derivation predicate (§2.4), and the dev machine's own `ubuntu-pro-esm-apps` / `ubuntu-pro-esm-infra` pins (§5.2) travel regardless — so withholding the sources gives the target the source's pin state over a different repository set. Rule 4's 3-answer bound removed, unbounded, marked **ruled**. Rule 2 gains one derived-and-labelled clause: the dry-run WARNING must say a real run would skip the job, else the preview describes an outcome no real run produces.
+- **§5.3.6** — now only what is apt-specific; the mechanism points at S8a.
+- **§9** — new **S8a — honest job outcomes**, before S8, depends on nothing: the `JobSkipped` signature, the orchestrator arm, the four call sites as a table, an explicit not-converted list, and the `CORE-FR-SUMMARY` scope note. S8 loses `JobSkipped` and the bound, gains a dependency on S8a. Parallelism paragraph notes S8a's files touch neither lane.
+- **§10.7** — bound test replaced by an unbounded-loop test; the non-interactive test inverted to assert the skip; the orchestrator test reassigned to S8a; four new S8a tests added.
+- **§11 risk 1** — the "derived rather than ruled" paragraph replaced by the ruling.
+
+`uv run codespell` clean. Did not run pytest. Nothing pushed; VMs and lock untouched.
+
+### Could not verify
+
+- Whether case 3 (all folders disabled) or case 4 (unresolvable job name) occurs in any real config — I read the code paths, not usage.
+- Runtime behaviour of any of this: no run was executed.
+- `apt_sync.py` / `sync_core.py` / `test_apt_sync.py` were mid-edit; line numbers I cite from them are from the working tree at read time and may shift under the other agent's commits. Numbers from `orchestrator.py`, `models.py`, `folder_sync.py`, `vscode_state_sync.py`, `review.py`, `snap_sync.py` are stable.</result>
+<usage><subagent_tokens>158299</subagent_tokens><tool_uses>65</tool_uses><duration_ms>408993</duration_ms></usage>
+</task-notification>

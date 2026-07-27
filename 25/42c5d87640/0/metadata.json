@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "2542c5d87640",
+  "session_id": "6f351f45-55a4-4eda-a695-eb874d952f76",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-27T21:42:23.396867124Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "docs/jobs/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync.py",
+    "src/pcswitcher/jobs/packages/items.py",
+    "src/pcswitcher/jobs/packages/review.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "tests/unit/jobs/test_apt_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "64251941ba6a",
+  "checkpoint_transcript_start": 480,
+  "transcript_lines_at_start": 480,
+  "compact_transcript_start": 105,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 9629,
+    "cache_read_tokens": 843532,
+    "output_tokens": 3809,
+    "api_call_count": 3
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-27T21:42:23.315545547Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 468,
+    "human_removed": 976,
+    "total_committed": 0,
+    "total_lines_changed": 1448,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 244,
+      "user_lines_removed": 724,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/jobs/package-sync.md": 5,
+        "docs/system/data-model.md": 1,
+        "docs/system/package-sync.md": 1,
+        "src/pcswitcher/jobs/apt_sync.py": 57,
+        "src/pcswitcher/jobs/packages/items.py": 7,
+        "src/pcswitcher/jobs/packages/review.py": 1,
+        "src/pcswitcher/jobs/packages/sync_core.py": 3,
+        "tests/unit/jobs/test_apt_sync.py": 160
+      },
+      "user_removed_per_file": {
+        "docs/jobs/package-sync.md": 11,
+        "docs/system/data-model.md": 2,
+        "docs/system/package-sync.md": 1,
+        "src/pcswitcher/jobs/apt_sync.py": 374,
+        "src/pcswitcher/jobs/packages/items.py": 1,
+        "src/pcswitcher/jobs/packages/review.py": 1,
+        "src/pcswitcher/jobs/packages/sync_core.py": 3,
+        "tests/unit/jobs/test_apt_sync.py": 330,
+        "tests/unit/test_mutates_audit.py": 1
+      }
+    }
+  ]
+}
