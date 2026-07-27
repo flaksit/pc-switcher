@@ -7,6 +7,7 @@ for btrfs subvolumes during the sync process.
 from __future__ import annotations
 
 import asyncio
+import shlex
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -341,8 +342,11 @@ async def delete_all_snapshots(executor: Executor) -> CommandResult:
     Returns:
         CommandResult with exit code, stdout, stderr
     """
+    # `shlex.quote`, never `!r`: Python's repr escapes newlines to the two characters
+    # `\` and `n`, which collapses the whole script onto one line and hands bash a
+    # syntax error it swallows into `|| true`. That made this function a silent no-op.
     return await executor.run_command(
-        f"sudo bash -c {_DELETE_ALL_SNAPSHOTS_SCRIPT!r}",
+        f"sudo bash -c {shlex.quote(_DELETE_ALL_SNAPSHOTS_SCRIPT)}",
         mutates="permanently delete EVERY pc-switcher snapshot on this machine, losing all rollback points",
     )
 
