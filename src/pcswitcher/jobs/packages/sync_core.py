@@ -167,6 +167,11 @@ class PackageSyncJob(SyncJob):
         # can run `_drop_inert_diffs` over its own extra diffs without a second pair of
         # remote reads. Re-assigned on every `plan()`, never cached across calls.
         self._plan_decisions: tuple[Mapping[str, DecisionEntry], Mapping[str, DecisionEntry]] = ({}, {})
+        # The source manifest the last `plan()` diffed, after decision-file filtering. Kept
+        # so a subclass can re-diff against a CHANGED target without re-capturing the
+        # source, which this run never mutates (only `apt_sync` does, for its post-repository
+        # re-review). Re-assigned on every `plan()`, never cached across calls.
+        self._plan_source_items: tuple[AptPackageItem, ...] = ()
 
     # -- Abstract hooks subclasses implement -------------------------------------------
 
@@ -519,6 +524,7 @@ class PackageSyncJob(SyncJob):
         self._plan_decisions = (source_decisions, target_decisions)
 
         source_items = await filter_inert(await self.capture_source_items(), source_decisions)
+        self._plan_source_items = tuple(source_items)
         target_items = await filter_inert(await self.query_target_items(), target_decisions)
         hold_pin_facts = await self.collect_hold_pin_facts()
         source_hold_names, target_hold_names = await self.collect_hold_sets()

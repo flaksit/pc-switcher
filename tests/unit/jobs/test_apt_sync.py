@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import shlex
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -27,7 +27,13 @@ from pcswitcher.jobs.apt_sync import (
     simulate_apt_transaction,
 )
 from pcswitcher.jobs.packages.items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
-from pcswitcher.jobs.packages.review import _REMOVAL_ACTIONS, COLLATERAL_REVIEW_ACTION, Decision, ReviewOutcome
+from pcswitcher.jobs.packages.review import (
+    _REMOVAL_ACTIONS,
+    COLLATERAL_REVIEW_ACTION,
+    Decision,
+    ReviewGroup,
+    ReviewOutcome,
+)
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFailures, PackagePlan
 from pcswitcher.models import CommandResult, Host
 from pcswitcher.orchestrator import Orchestrator
@@ -1770,9 +1776,20 @@ def _repo_context(
     return context, source, target
 
 
+_POLICY_AVAILABLE = (
+    "pkg-a:\n  Installed: (none)\n  Candidate: 1.0\n  Version table:\n"
+    "     1.0 500\n        500 https://example.com stable/main amd64 Packages\n"
+)
+_POLICY_NO_CANDIDATE = "pkg-a:\n  Installed: (none)\n  Candidate: (none)\n  Version table:\n"
+
+
 class TestRepoGroupOrdering:
     @pytest.mark.asyncio
     async def test_key_then_source_then_update_then_package_install(self) -> None:
+        """N5 end to end: the package is one apt reports a real candidate for, so the
+        availability classification says INSTALL, and the four commands land in apt's own
+        dependency order.
+        """
         context, _source, target = _repo_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
@@ -1783,6 +1800,7 @@ class TestRepoGroupOrdering:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_AVAILABLE, ""),
                 "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
                 "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
                 "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
@@ -1795,11 +1813,7 @@ class TestRepoGroupOrdering:
         job = AptSyncJob(context)
         _install_reviewer(
             job,
-            {
-                "apt:key:per-repo:foo.gpg": Decision.APPLY,
-                "apt:source:foo.sources": Decision.APPLY,
-                "apt:package:pkg-a": Decision.APPLY,
-            },
+            {"apt:source:foo.sources": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY},
         )
 
         await job.execute()
@@ -1812,6 +1826,48 @@ class TestRepoGroupOrdering:
             commands, lambda c: "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-a" in c
         )
         assert key_idx < source_idx < update_idx < package_idx
+
+    @pytest.mark.asyncio
+    async def test_a_package_apt_reports_no_candidate_for_is_withheld_from_the_first_pass(self) -> None:
+        """The other half of what N5's ordering test cannot show: an available package is
+        offered, one apt reports `Candidate: (none)` for is not — it is `REPORT_ONLY`, and
+        the first review never even shows it as installable.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_NO_CANDIDATE, ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert [(d.diff_class, d.action) for d in plan.diffs] == [(DiffClass.REPO_UNAVAILABLE, DiffAction.REPORT_ONLY)]
+
+    @pytest.mark.asyncio
+    async def test_a_package_apt_has_never_heard_of_prints_no_block_and_is_still_offered(self) -> None:
+        """`apt-cache policy` prints NOTHING for a name apt does not know — not a block with
+        `Candidate: (none)`. That absence must read as "no evidence against", so a package
+        whose repository this same run is about to add is still offered for install.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, "", "N: Unable to locate package pkg-a\n"),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert [(d.diff_class, d.action) for d in plan.diffs] == [(DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL)]
 
     @pytest.mark.asyncio
     async def test_apt_get_update_runs_exactly_once_for_three_repo_items(self) -> None:
@@ -3651,3 +3707,241 @@ class TestInlineArmoredSignedBy:
         assert any(
             "sudo install" in c and c.endswith("/etc/apt/sources.list.d/ppa.sources") for c in all_calls(target)
         )
+
+
+# -- The second review: facts this run's own /etc/apt changes invalidated ---------------
+#
+# `plan()` reads `preferences.d` and asks apt what it can install; the SAME run rewrites
+# `/etc/apt`. A pin the user is deleting still suppressed its packages at plan time, so
+# their real diff was withheld and only reappeared on the NEXT run.
+
+_CURL_PIN_SCAN = "/etc/apt/preferences.d/curl-pin\tPackage: curl\n"
+_CURL_PIN_FILE = "Package: curl\nPin: version 8.0\nPin-Priority: 1001\n"
+
+
+class _RecordingReviewer(FakeReviewer):
+    """`FakeReviewer` that keeps EVERY call's groups, not just the last one."""
+
+    def __init__(self, decisions: dict[str, Decision]) -> None:
+        super().__init__(decisions)
+        self.calls: list[tuple[ReviewGroup, ...]] = []
+
+    async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
+        self.calls.append(tuple(groups))
+        return await super().review(groups)
+
+
+def _pin_lifecycle_target(
+    responses: dict[str, CommandResult],
+    *,
+    before: str,
+    after: str,
+    trigger: str,
+) -> Callable[..., CommandResult]:
+    """A target whose `preferences.d` pin SCAN changes once this run issues `trigger` —
+    the whole point being that the second scan reads the state the run produced, not the
+    one `plan()` saw.
+    """
+    state = {"converged": False}
+
+    def _side_effect(cmd: str, **_: object) -> CommandResult:
+        if trigger in cmd:
+            state["converged"] = True
+        if _PIN_SCAN_CMD in cmd:
+            return CommandResult(0, after if state["converged"] else before, "")
+        for pattern, result in responses.items():
+            if pattern in cmd:
+                return result
+        return CommandResult(0, "", "")
+
+    return _side_effect
+
+
+def _actionable_entry_ids(groups: Sequence[ReviewGroup]) -> set[str]:
+    """Item ids the user was actually offered a converge action for. A `REPORT_ONLY` entry
+    is shown but implies no verb, so it is exactly what the suppressed cases look like.
+    """
+    return {
+        entry.item_id for group in groups if group.action != DiffAction.REPORT_ONLY.value for entry in group.entries
+    }
+
+
+class TestSecondReviewAfterRepositoryChanges:
+    """A decision the user could not have made correctly the first time is asked again,
+    not deferred to the next run (ADR-020 D-24: batching is a preference, not a hard rule).
+    """
+
+    @staticmethod
+    def _deleting_pin_context(pin_decision: Decision) -> tuple[AptSyncJob, MagicMock, _RecordingReviewer]:
+        """`curl` is extra on the target and governed by `curl-pin`, which the source
+        machine does not have — so the pin is offered for deletion and `curl`'s own removal
+        diff is suppressed into `HELD_OR_PINNED` at plan time.
+        """
+        context, _source, target = _repo_context(
+            target_side_effect=_pin_lifecycle_target(
+                {
+                    "echo $HOME": CommandResult(0, "/home/target-user", ""),
+                    "apt-mark showmanual": CommandResult(0, "curl\n", ""),
+                    "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
+                    "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "curl-pin"), ""),
+                    "cat /etc/apt/preferences.d/curl-pin": CommandResult(0, _CURL_PIN_FILE, ""),
+                    "apt-get -s remove -y curl": CommandResult(0, "Remv curl [8.0]\n", ""),
+                },
+                before=_CURL_PIN_SCAN,
+                after="",
+                trigger="sudo rm -f /etc/apt/preferences.d/curl-pin",
+            ),
+        )
+        job = AptSyncJob(context)
+        reviewer = _RecordingReviewer({"apt:pin:curl-pin": pin_decision, "apt:package:curl": Decision.APPLY})
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+        return job, target, reviewer
+
+    @pytest.mark.asyncio
+    async def test_the_pin_hides_the_package_in_the_first_review(self) -> None:
+        job, _target, reviewer = self._deleting_pin_context(Decision.APPLY)
+
+        plan = await job.plan()
+
+        curl = next(d for d in plan.diffs if d.item_id == "apt:package:curl")
+        assert (curl.diff_class, curl.action) == (DiffClass.HELD_OR_PINNED, DiffAction.REPORT_ONLY)
+        assert reviewer.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_deleting_the_pin_reveals_the_package_in_a_second_review_this_same_run(self) -> None:
+        job, target, reviewer = self._deleting_pin_context(Decision.APPLY)
+
+        await job.execute()
+
+        assert reviewer.call_count == 2
+        assert "apt:package:curl" not in _actionable_entry_ids(reviewer.calls[0])
+        assert "apt:package:curl" in _actionable_entry_ids(reviewer.calls[1])
+        assert all("revealed by this run's /etc/apt changes" in group.title for group in reviewer.calls[1])
+
+        commands = all_calls(target)
+        pin_idx = _index_of(commands, lambda c: c == "sudo rm -f /etc/apt/preferences.d/curl-pin")
+        remove_idx = _index_of(commands, lambda c: "apt-get remove -y curl" in c and c.startswith("sudo DEBIAN"))
+        assert pin_idx < remove_idx
+
+    @pytest.mark.asyncio
+    async def test_keeping_the_pin_keeps_the_package_hidden_and_asks_nothing_twice(self) -> None:
+        """The user unticks the pin deletion: nothing about `/etc/apt` changes, so there is
+        no invalidated fact and no second screen.
+        """
+        job, target, reviewer = self._deleting_pin_context(Decision.SKIP_ONCE)
+
+        await job.execute()
+
+        assert reviewer.call_count == 1
+        assert not any("apt-get remove -y curl" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_pin_this_run_installs_withdraws_the_approval_it_contradicts(self) -> None:
+        """The other direction. The user approved removing `curl` AND installing a pin file
+        that governs it. Once the pin lands, the removal is no longer supported — the
+        approval is dropped silently, because withdrawing work needs no decision.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "curl-pin"), ""),
+                "cat /etc/apt/preferences.d/curl-pin": CommandResult(0, _CURL_PIN_FILE, ""),
+            },
+            target_side_effect=_pin_lifecycle_target(
+                {
+                    "echo $HOME": CommandResult(0, "/home/target-user", ""),
+                    "apt-mark showmanual": CommandResult(0, "curl\n", ""),
+                    "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
+                    "apt-get -s remove -y curl": CommandResult(0, "Remv curl [8.0]\n", ""),
+                },
+                before="",
+                after=_CURL_PIN_SCAN,
+                trigger="sudo install -o root -g root -m 0644",
+            ),
+        )
+        job = AptSyncJob(context)
+        reviewer = _RecordingReviewer({"apt:pin:curl-pin": Decision.APPLY, "apt:package:curl": Decision.APPLY})
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+
+        await job.execute()
+
+        assert reviewer.call_count == 1, "withdrawing work asks the user nothing"
+        assert not any(c.startswith("sudo DEBIAN") and "remove -y curl" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_run_with_no_etc_apt_work_re_reads_nothing_and_reviews_once(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "apt-cache policy": CommandResult(0, _POLICY_AVAILABLE, ""),
+                "apt-get -s install": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        reviewer = _RecordingReviewer({"apt:package:pkg-a": Decision.APPLY})
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+
+        await job.execute()
+
+        assert reviewer.call_count == 1
+        assert len([c for c in all_calls(target) if _PIN_SCAN_CMD in c]) == 1, "nothing is re-read"
+
+    @pytest.mark.asyncio
+    async def test_a_dry_run_converges_nothing_so_it_reviews_once(self) -> None:
+        job, target, reviewer = self._deleting_pin_context(Decision.APPLY)
+        job.context = dataclasses.replace(job.context, dry_run=True)
+
+        await job.execute()
+
+        assert reviewer.call_count == 1
+        assert not any(c.startswith("sudo rm -f") for c in all_calls(target))
+
+
+class TestNewRepositoryMakesAPackageAvailable:
+    """The general class the second review closes, not just the pin symptom: at plan time
+    the target's apt reports no candidate; the repository this run installs supplies one.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_package_apt_could_not_offer_at_plan_time_is_reviewed_once_the_repo_lands(self) -> None:
+        policy_results = [CommandResult(0, _POLICY_NO_CANDIDATE, ""), CommandResult(0, _POLICY_AVAILABLE, "")]
+        state = {"calls": 0}
+
+        def _target(cmd: str, **_: object) -> CommandResult:
+            if "apt-cache policy" in cmd:
+                index = min(state["calls"], len(policy_results) - 1)
+                state["calls"] += 1
+                return policy_results[index]
+            for pattern, result in {
+                "echo $HOME": CommandResult(0, "/home/target-user", ""),
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "test -f": CommandResult(1, "", ""),
+                "apt-get -s install": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+            }.items():
+                if pattern in cmd:
+                    return result
+            return CommandResult(0, "", "")
+
+        context, _source, target = _repo_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_side_effect=_target,
+        )
+        job = AptSyncJob(context)
+        reviewer = _RecordingReviewer({"apt:source:foo.sources": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+
+        await job.execute()
+
+        assert "apt:package:pkg-a" not in _actionable_entry_ids(reviewer.calls[0])
+        assert "apt:package:pkg-a" in _actionable_entry_ids(reviewer.calls[1])
+        assert any(c.startswith("sudo DEBIAN") and "install" in c and "pkg-a" in c for c in all_calls(target))

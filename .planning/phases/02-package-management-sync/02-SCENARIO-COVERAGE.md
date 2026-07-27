@@ -346,7 +346,10 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 | N2 | Converge in run 1 → run 2 is empty | idempotent | V INT:`test_second_consecutive_sync_has_nothing_to_do` (see J10) |
 | N3 | skip-always on a **hold/mask** in run 1 → run 2 | inert | U V INT:`TestBlockStateDecisionRoundTrip` (apt and snap holds, each over two real runs); the mechanism is asserted per manager at unit level by B9, E15 and F20 |
 | N4 | A→B installs P; B→A later removes P | removal propagates as an unticked review item | V INT:`test_install_propagates_then_reversed_removal_needs_approval` — three runs: install, reversed-direction removal left undecided (no effect), then approved |
-| N5 | New apt source + key + package on A → A→B installs all three in order | key→source→update→install | U apt:`test_key_then_source_then_update_then_package_install` (single run, mocked) |
+| N5 | New apt source + key + package on A → A→B installs all three in order | key→source→update→install, and the package is installed because apt reports a real candidate for it | U apt:`test_key_then_source_then_update_then_package_install` (single run, mocked; the `apt-cache policy` response is now supplied, and inverting the availability classification fails it), `test_a_package_apt_reports_no_candidate_for_is_withheld_from_the_first_pass`, `test_a_package_apt_has_never_heard_of_prints_no_block_and_is_still_offered` |
+| N12 | Pin file the user deletes this run | its packages' real diff is revealed in a SECOND review the same run, not deferred to the next | U apt:`TestSecondReviewAfterRepositoryChanges` (6) |
+| N13 | Repository the user installs this run supplies a package apt had no candidate for at plan time | same: re-diffed after `apt-get update`, reviewed, installed | U apt:`TestNewRepositoryMakesAPackageAvailable` |
+| N14 | Pin file the user INSTALLS this run governs a package they approved for removal | the approval is withdrawn silently — dropping work needs no decision | U apt:`test_a_pin_this_run_installs_withdraws_the_approval_it_contradicts` |
 | N6 | Package uninstalled + source/key removed on B → B→A | three independent removal items on A, all unticked | P (C18 + A3 separately; not as a narrative, and there is **no** "this was the last package from that source, remove it too?" prompt — that requirement is not implemented) |
 | N7 | Machine-specific package R on B needs source S; A removes S → A→B | S offered for removal, unticked, naming R in its detail so the user can decline knowingly | U apt:`TestRepoRemovalNamesMachineSpecificPackages` (C26) — single run, mocked; the two-machine composition is untested |
 | N8 | Dependency-only package Q kept/removed by apt's own bookkeeping across a P install/remove round trip | pc-switcher never touches Q | P — the single-run half is apt:`test_auto_installed_dependency_produces_no_diff_of_any_kind` (A10); the round trip is asserted nowhere |
@@ -359,6 +362,12 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 ### Open defects and unimplemented requirements
 
 - N6 — no "this was the last package from that source, remove it too?" prompt. Source removals propagate only because the source machine's own files disappeared, as unticked items; the key that removal orphans then goes on its own, with no item and no prompt. Example narrative 2 is not implemented.
+
+### Facts a run invalidates for itself
+
+`plan()` reads the target's `/etc/apt/preferences.d` and asks its apt what it can install; the same run then rewrites `/etc/apt`. Both classes of fact are stale by the time packages converge. `apt_sync` therefore converges the repository group first, re-diffs packages against the target it just produced, and reviews what changed (N12–N14). ADR-020 D-24's per-manager batching is a preference, not a count — a second screen beats shipping a classification known to be wrong.
+
+Two limits remain. A dry run converges nothing, so its preview shows the pre-repository classification. And the re-diff runs once, after the repository group: nothing later in the run re-triggers it, because nothing later changes `/etc/apt`.
 
 ### Coverage gaps in behaviour believed correct
 

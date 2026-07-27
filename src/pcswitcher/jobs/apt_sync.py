@@ -66,10 +66,16 @@ Legacy `/etc/apt/trusted.gpg.d` keys are replicated but never collected: they ar
 trust with no discoverable referent, so "unused" is not computable for them and they are
 allowed to accumulate rather than be deleted on a guess.
 
-Known limitation: because provisioning is driven by source-file writes, a keyring the
-vendor ROTATED while its source file stayed byte-identical never travels, and the target's
-apt keeps failing that repository's signature check until something else changes the source
-file. Keys still travel byte-for-byte and are never re-fetched from a vendor (D-12).
+Keys travel byte-for-byte and are never re-fetched from a vendor (D-12).
+
+A run that changes `/etc/apt` invalidates the facts its own `plan()` collected from
+`/etc/apt` — most visibly a `preferences.d` pin the user is deleting, which at plan time
+still suppressed its packages into `HELD_OR_PINNED`/`REPORT_ONLY`. `apply()` therefore
+converges the repository group FIRST, re-derives the package facts against the target the
+run just produced, and puts whatever genuinely changed through a SECOND review
+(`_rereview_repo_invalidated_packages`). ADR-020 D-24's one-review-per-manager is a
+preference, not a constraint: a decision the user could not have made correctly the first
+time is asked again rather than deferred to the next run.
 
 Apt sources/keys/pins/config, and the other two managers (snap, flatpak), are later
 Phase 2 plans.
@@ -80,7 +86,7 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Literal, override
 from uuid import uuid4
@@ -109,6 +115,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewGroup,
     ReviewOutcome,
 )
+from pcswitcher.jobs.packages.state import filter_inert
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
@@ -1399,6 +1406,196 @@ class AptSyncJob(PackageSyncJob):
                 unresolved=outcome.unresolved,
             )
         super().accept_review(plan, outcome)
+
+    # -- Post-repository re-plan and second review -------------------------------------
+
+    @override
+    async def apply(self) -> None:
+        """Converge the repository group FIRST, re-derive the package facts it invalidated,
+        and re-review whatever actually changed — then run the base apply loop.
+
+        `plan()` reads `/etc/apt/preferences.d` and asks the target's apt what it can
+        install. This same run then REWRITES `/etc/apt`. Every such fact is therefore stale
+        by the time packages converge, and the visible case is a pin file the user is
+        deleting: at plan time it still forced its packages to `HELD_OR_PINNED`/
+        `REPORT_ONLY`, so their real install/change/remove diff was suppressed and would
+        only reappear on the next run.
+
+        The repository group is converged eagerly here rather than lazily on the first
+        repository diff `converge()` sees; `_ensure_repo_group_converged` is idempotent, so
+        the base loop's own calls become cache lookups and every item still reports through
+        it exactly as before. The only reordering is that skip-always decision files are now
+        written after `/etc/apt` lands rather than before — neither depends on the other.
+
+        A second review is D-24's one-review-per-manager giving way to correctness
+        (ADR-020's 2026-07-27 amendment): a decision the user could not have made correctly
+        the first time is asked again, not deferred. Aborting at that review therefore stops
+        the run with `/etc/apt` already converged, which is a reviewed, coherent state.
+
+        Skipped entirely under dry-run: nothing is written, so nothing is invalidated — but
+        a dry-run preview does show the pre-repository package classification, and that is
+        the one place the staleness remains visible.
+        """
+        if not self.context.dry_run and self._repository_work_approved():
+            await self._ensure_repo_group_converged()
+            await self._rereview_repo_invalidated_packages()
+        await super().apply()
+
+    def _repository_work_approved(self) -> bool:
+        """Whether this run has any `/etc/apt` work at all, by the presence of the synthetic
+        metadata-refresh marker: `accept_review` inserts it exactly when a repository-group
+        item was approved or a keyring may need writing, so no marker means nothing can
+        invalidate `plan()`'s facts.
+        """
+        assert self._accepted_outcome is not None
+        return self._accepted_outcome.decisions.get(_METADATA_REFRESH_ITEM_ID) == Decision.APPLY
+
+    async def _rereview_repo_invalidated_packages(self) -> None:
+        """Re-diff packages against the target this run just produced, then withdraw the
+        approvals the new state contradicts and review the actions it revealed.
+
+        The source manifest is reused verbatim (`self._plan_source_items`): pc-switcher
+        never mutates the source, so re-capturing it would cost two commands to learn
+        nothing. Everything read from the TARGET is re-read, because that is what changed.
+
+        Two directions, only one of which needs the user:
+
+        - An item whose action APPEARED or CHANGED (a package the deleted pin was
+          suppressing, or one the newly-installed repository can now provide) has never been
+          reviewed in its current form, so it goes to a second review together with any
+          manual collateral its transaction implies.
+        - An item the user approved that the new state no longer supports (a package a pin
+          this run INSTALLED now governs) has its approval withdrawn silently. Dropping work
+          needs no decision — and asking would be asking the user to re-confirm a "no".
+        """
+        assert self._accepted_plan is not None
+        assert self._accepted_outcome is not None
+
+        fresh = await self._replanned_package_diffs()
+        fresh_by_id = {diff.item_id: diff for diff in fresh}
+        reviewed_by_id = {diff.item_id: diff for diff in self._accepted_plan.diffs}
+
+        revealed: list[ItemDiff] = []
+        for diff in fresh:
+            if diff.action == DiffAction.REPORT_ONLY:
+                continue
+            previous = reviewed_by_id.get(diff.item_id)
+            if previous is None or previous.action != diff.action:
+                revealed.append(diff)
+
+        withdrawn: set[str] = set()
+        for diff in self._accepted_plan.diffs:
+            # Only package-level items are re-diffed here; the repository group has already
+            # converged and its collateral report items carry no converge verb to withdraw.
+            if diff.item_class not in (ItemClass.APT_PACKAGE, ItemClass.APT_HOLD):
+                continue
+            if diff.action == DiffAction.REPORT_ONLY:
+                continue
+            if self._accepted_outcome.decisions.get(diff.item_id) != Decision.APPLY:
+                continue
+            current = fresh_by_id.get(diff.item_id)
+            if current is None or current.action != diff.action:
+                withdrawn.add(diff.item_id)
+
+        if not revealed and not withdrawn:
+            return
+
+        for item_id in sorted(withdrawn):
+            self._log(
+                Host.TARGET,
+                LogLevel.FULL,
+                f"withdrawing {reviewed_by_id[item_id].label}: this run's /etc/apt changes make it "
+                f"{fresh_by_id[item_id].action.value if item_id in fresh_by_id else 'inapplicable'}",
+            )
+
+        collateral = await self._collect_plan_time_collateral(revealed) if revealed else []
+        decisions: dict[str, Decision] = {
+            **self._accepted_outcome.decisions,
+            **dict.fromkeys(withdrawn, Decision.SKIP_ONCE),
+        }
+        second_groups: tuple[ReviewGroup, ...] = ()
+
+        if revealed or collateral:
+            second_groups = self._rereview_groups([*revealed, *collateral])
+            assert self.context.reviewer is not None
+            second = await self.context.reviewer.review(second_groups)
+            decisions.update(second.decisions)
+            outcome = ReviewOutcome(
+                decisions=decisions,
+                was_interactive=self._accepted_outcome.was_interactive and second.was_interactive,
+                snippets={**self._accepted_outcome.snippets, **second.snippets},
+                unresolved=(*self._accepted_outcome.unresolved, *second.unresolved),
+            )
+        else:
+            outcome = ReviewOutcome(
+                decisions=decisions,
+                was_interactive=self._accepted_outcome.was_interactive,
+                snippets=self._accepted_outcome.snippets,
+                unresolved=self._accepted_outcome.unresolved,
+            )
+
+        merged_plan = self._merge_replanned_diffs([*revealed, *collateral], second_groups)
+
+        # Re-run over the MERGED plan so the first review's collateral resolutions survive:
+        # `_resolve_collateral` recomputes `self._approved_collateral` from scratch, and
+        # handing it only the second review's items would silently drop the first's.
+        outcome = self._resolve_collateral(merged_plan, outcome)
+        super().accept_review(merged_plan, outcome)
+
+    async def _replanned_package_diffs(self) -> tuple[ItemDiff, ...]:
+        """The package/hold diff as it stands NOW — every target-side input re-read, the
+        source manifest reused, and the same decision-file inertness filter applied.
+        """
+        _source_decisions, target_decisions = self._plan_decisions
+        target_items = await filter_inert(await self.query_target_items(), target_decisions)
+        hold_pin_facts = await self.collect_hold_pin_facts()
+        source_hold_names, target_hold_names = await self.collect_hold_sets()
+        missing_item_ids = frozenset(item.item_id for item in self._plan_source_items) - frozenset(
+            item.item_id for item in target_items
+        )
+        unavailable_item_ids = await self.collect_unavailable_item_ids(missing_item_ids)
+        return self._drop_inert_diffs(
+            self.diff_items(
+                self._plan_source_items,
+                target_items,
+                hold_pin_facts=hold_pin_facts,
+                unavailable_item_ids=unavailable_item_ids,
+                source_hold_names=source_hold_names,
+                target_hold_names=target_hold_names,
+            ),
+            *self._plan_decisions,
+        )
+
+    def _merge_replanned_diffs(self, extra: Sequence[ItemDiff], extra_groups: Sequence[ReviewGroup]) -> PackagePlan:
+        """The accepted plan with `extra` folded in — replacing same-id diffs in place and
+        appending genuinely new ones into the package band, holds still last (D8).
+        `extra_groups` is appended so the plan's groups still describe everything the user
+        was actually shown.
+
+        The repository group and the metadata-refresh marker keep their positions and are
+        never re-diffed: they have already converged by the time this runs.
+        """
+        assert self._accepted_plan is not None
+        by_id = {diff.item_id: diff for diff in extra}
+        merged = [by_id.get(diff.item_id, diff) for diff in self._accepted_plan.diffs]
+        known = {diff.item_id for diff in self._accepted_plan.diffs}
+        merged.extend(diff for diff in extra if diff.item_id not in known)
+        holds = [diff for diff in merged if diff.item_class == ItemClass.APT_HOLD]
+        rest = [diff for diff in merged if diff.item_class != ItemClass.APT_HOLD]
+        return PackagePlan(
+            manager=self._accepted_plan.manager,
+            diffs=(*rest, *holds),
+            groups=(*self._accepted_plan.groups, *extra_groups),
+        )
+
+    def _rereview_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
+        """`_build_review_groups` over the re-diffed items, with every title marked as a
+        second pass so the user can tell this screen from the one they already answered.
+        """
+        return tuple(
+            replace(group, title=f"{group.title} (revealed by this run's /etc/apt changes)")
+            for group in self._build_review_groups(diffs)
+        )
 
     @override
     async def converge(self, diff: ItemDiff) -> CommandResult:
