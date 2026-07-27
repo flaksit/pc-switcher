@@ -45,6 +45,16 @@ from pcswitcher.jobs.packages.review import (
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFailures, PackagePlan
 from pcswitcher.models import CommandResult, Host
 from pcswitcher.orchestrator import Orchestrator
+
+# The real `apt-cache policy` blocks manual_installs_sync is tested against, imported
+# rather than copied: the A11 ruling is that both jobs decide bare-`.deb` ownership from
+# the SAME evidence, which two independently-drifting fixtures would stop demonstrating.
+from tests.unit.jobs.test_manual_installs_sync import (
+    _POLICY_AUTO_DEP,
+    _POLICY_HAND_DEB,
+    _POLICY_PINNED_NO_CANDIDATE,
+    _POLICY_REPO_INSTALLED,
+)
 from tests.unit.jobs.test_package_sync_core import FakeReviewer
 
 SHOWMANUAL_3 = "pkg-a\npkg-b\npkg-c\n"
@@ -1070,6 +1080,182 @@ class TestNoUnreproducibleDetectionInApt:
         plan = await job.plan()
 
         assert not any(d.item_class == ItemClass.UNREPRODUCIBLE for d in plan.diffs)
+
+
+class TestBareDebPackagesAreNotAptSyncsBusiness:
+    """A11/D-18: a package whose INSTALLED version comes from no configured repository was
+    put there with `dpkg -i`, so apt cannot install it anywhere and the target's apt has
+    never heard the name. `manual_installs_sync` offers it as an install snippet in the same
+    run; `apt_sync` drops it at CAPTURE, so it is structurally absent from every downstream
+    stage rather than filtered out of each one.
+
+    Both jobs read the same real `apt-cache policy` blocks, imported rather than copied:
+    the point of the ruling is that the two answer the predicate identically, which a
+    paraphrased fixture would stop proving.
+    """
+
+    @pytest.mark.asyncio
+    async def test_bare_deb_package_produces_no_diff_and_no_review_entry(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "code\n", ""),
+                "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert list(plan.diffs) == []
+        assert not any("code" in entry.item_id for group in plan.groups for entry in group.entries)
+
+    @pytest.mark.asyncio
+    async def test_bare_deb_package_reaches_no_apt_get_install(self) -> None:
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "code\n", ""),
+                "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:code": Decision.APPLY})
+
+        await job.execute()
+
+        assert not any("apt-get install" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_repo_installed_package_is_still_captured_and_diffed(self) -> None:
+        """The guard against over-excluding: `gh`'s block also carries a
+        `/var/lib/dpkg/status` line, as every installed package's does."""
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert [(d.item_id, d.diff_class, d.action) for d in plan.diffs] == [
+            ("apt:package:gh", DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_one_source_policy_call_covers_the_whole_manual_set(self) -> None:
+        policy = _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED + _POLICY_PINNED_NO_CANDIDATE + _POLICY_AUTO_DEP
+        context, source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "code\ngh\ndocker.io\n7zip\n", ""),
+                "dpkg-query": CommandResult(0, "code\t1.0\ngh\t2.96.0\ndocker.io\t29.1\n7zip\t23.01\n", ""),
+                "apt-cache policy": CommandResult(0, policy, ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        policy_calls = [cmd for cmd in all_calls(source) if "apt-cache policy" in cmd]
+        assert len(policy_calls) == 1
+        for name in ("code", "gh", "docker.io", "7zip"):
+            assert name in policy_calls[0]
+        # Only `code` is hand-installed; the negatively-pinned and auto-dependency packages
+        # both have repository origins and stay apt_sync's to install.
+        assert {d.item_id for d in plan.diffs} == {
+            "apt:package:gh",
+            "apt:package:docker.io",
+            "apt:package:7zip",
+        }
+
+    @pytest.mark.asyncio
+    async def test_excluded_package_reaches_neither_the_simulation_nor_the_availability_probe(self) -> None:
+        """Both downstream target reads are built from the diffs, so a package excluded at
+        capture cannot appear in the transaction `_collect_plan_time_collateral` asks apt to
+        rehearse, nor in `collect_unavailable_item_ids`' missing-on-target probe."""
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
+                "dpkg-query": CommandResult(0, "code\t1.0\ngh\t2.96.0\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED, ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+
+        await AptSyncJob(context).plan()
+
+        simulations = [cmd for cmd in all_calls(target) if "apt-get -s" in cmd]
+        assert simulations and all("code" not in cmd for cmd in simulations)
+        assert any("gh" in cmd for cmd in simulations)
+
+        probes = [cmd for cmd in all_calls(target) if "apt-cache policy" in cmd]
+        assert probes and all("code" not in cmd for cmd in probes)
+        assert any("gh" in cmd for cmd in probes)
+
+    @pytest.mark.asyncio
+    async def test_repo_installed_package_the_target_has_never_heard_of_is_still_offered(self) -> None:
+        """The target half is untouched (`collect_unavailable_item_ids`): the target's apt
+        printing no block is still "no evidence against", because a repository this same run
+        adds may be about to supply the package."""
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, "", "N: Unable to locate package gh\n"),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert [(d.diff_class, d.action) for d in plan.diffs] == [(DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL)]
+
+    @pytest.mark.asyncio
+    async def test_a_source_policy_read_that_answers_nothing_excludes_nothing(self) -> None:
+        """Silence is not evidence. If `apt-cache policy` fails on the source, indicting on
+        absence would drop the machine's entire manual set from the sync without a word."""
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(100, "", "E: could not read the package lists\n"),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert [d.item_id for d in plan.diffs] == ["apt:package:pkg-a"]
+
+    @pytest.mark.asyncio
+    async def test_excluded_package_still_counts_as_source_manual_for_collateral_protection(self) -> None:
+        """Not syncing a package is no reason to let apt remove it as collateral: `code` is
+        dropped from the manifest but stays in the SOURCE half of `_protected_manual_set`
+        (decision 8), so an install whose simulation would remove it is still refused."""
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
+                "dpkg-query": CommandResult(0, "code\t1.0\ngh\t2.96.0\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-get -s install -y --no-install-recommends gh": CommandResult(
+                    0, "Inst gh (2.96.0)\nRemv code [1.0]\n", ""
+                ),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert any(d.item_id == "apt:collateral:code" for d in plan.diffs)
 
 
 class TestRemovalConverge:

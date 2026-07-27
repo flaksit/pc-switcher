@@ -114,6 +114,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/apt_sync.py::simulate_apt_transaction::run_command": 1,
     "jobs/apt_sync.py::compare_deb_versions::run_command": 2,
     "jobs/apt_sync.py::AptSyncJob.capture_source_items::run_command": 1,
+    "jobs/apt_sync.py::AptSyncJob._source_bare_deb_packages::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob.query_target_items::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob.query_target_items.run::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._scan_target_pin_lines::run_command": 1,

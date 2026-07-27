@@ -20,10 +20,18 @@ All four ship **disabled**: enabling any of them lets pc-switcher change install
 
 ### What each job covers
 
-- **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), plus the repository configuration that governs where packages come from: sources under `/etc/apt/sources.list.d`, pins (`/etc/apt/preferences.d`) and apt config (`/etc/apt/apt.conf.d`). Signing keys travel too, but you are never asked about them — see [Signing keys](#signing-keys).
+- **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), minus the packages you installed from a hand-downloaded `.deb` (see below), plus the repository configuration that governs where packages come from: sources under `/etc/apt/sources.list.d`, pins (`/etc/apt/preferences.d`) and apt config (`/etc/apt/apt.conf.d`). Signing keys travel too, but you are never asked about them — see [Signing keys](#signing-keys).
 - **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
 - **`flatpak_sync`** — installed flatpak refs and their remotes, per user/system installation scope.
 - **`manual_installs_sync`** — everything no package manager can reproduce: apt packages installed from no configured repository (a `.deb` you installed by hand), plus unowned files under `/usr/local` and `/opt`. It also owns the [install-snippet registry](#install-snippets).
+
+### Hand-installed `.deb` packages belong to one job only
+
+A package whose installed version comes from no repository your machine has configured was put there with `dpkg -i`. It is `manual_installs_sync`'s territory exclusively: `apt_sync` detects the same packages, with the same test, and drops them from its manifest before it diffs anything. They produce no apt item, no review entry and no install.
+
+There is nothing apt could do with them anyway. The target's apt has never heard the name, so offering it as an ordinary install would fail with "Unable to locate package" — while `manual_installs_sync` offers the same package as an [install snippet](#install-snippets) in the same run. Only one of the two answers works, so only one job asks.
+
+The consequence is worth knowing: the two jobs have separate enable flags, and `apt_sync` does not consult `manual_installs_sync`'s. **If you enable `apt_sync` but disable `manual_installs_sync`, your hand-installed `.deb` packages are synced by nobody** — they are silently absent from the review rather than offered as installs that fail. Keep `manual_installs_sync` enabled if you install software from downloaded `.deb` files.
 
 ## Job ordering is enforced
 

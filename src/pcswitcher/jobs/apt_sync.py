@@ -7,6 +7,19 @@ contract), diffs it against the same query on the target into every D-25 class
 (`PackageSyncJob._diff_apt_packages`), and converges the approved `INSTALL`/`REMOVE`
 items via `apt-get install`/`apt-get remove`.
 
+Bare-`.deb` packages are NOT in scope and are dropped at capture
+(`_source_bare_deb_packages`). A package whose installed version comes from no configured
+repository was put there with `dpkg -i`; apt cannot install it on the target, and
+`manual_installs_sync` offers it as an install snippet in the same run (D-18). Both jobs
+compute the predicate from the shared `packages/apt_policy.py` parser — the same test, never
+a result passed between them, since D-15/D-16 keep the four jobs independent.
+
+The ownership split has a consequence this job may not paper over: `manual_installs_sync`
+has its own enable flag, and reading another job's flag is exactly the coupling D-15
+forbids. So enabling `apt_sync` while disabling `manual_installs_sync` leaves these packages
+replicated by nobody — silently absent rather than offered as installs that fail. Documented
+for the user in `docs/jobs/package-sync.md`.
+
 Every approved item's transaction is simulated with `apt-get -s` before the real
 command runs, guarding against apt silently doing more than the review showed. Collateral
 effects are classified by provenance (D-30): a package the simulation would remove or
@@ -99,6 +112,7 @@ from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.apt_policy import (
     installed_origins_by_package,
     normalise_repo_uri,
+    packages_installed_from_no_repository,
     packages_with_no_candidate,
 )
 from pcswitcher.jobs.packages.items import (
@@ -1058,16 +1072,50 @@ class AptSyncJob(PackageSyncJob):
         self._collateral_trigger_ids: dict[str, frozenset[str]] = {}
 
     async def capture_source_items(self) -> Sequence[AptPackageItem]:
-        """Manually-installed apt packages on the source, with versions (D-03).
+        """Manually-installed apt packages on the source, with versions (D-03), minus the
+        bare-`.deb` installs `manual_installs_sync` owns.
 
         Also records the source's raw `apt-mark showmanual` names into
-        `self._source_manual_set` — captured here, before any decision-file filtering, so
-        a package the user chose to skip on the source still counts as source-manual for
-        collateral protection (decision 8, the SOURCE half of `_protected_manual_set`).
+        `self._source_manual_set` — captured here, before any decision-file filtering AND
+        before the bare-`.deb` exclusion, so a package the user chose to skip on the source,
+        or one this job does not sync at all, still counts as source-manual for collateral
+        protection (decision 8, the SOURCE half of `_protected_manual_set`). Not syncing a
+        package is no reason to let apt remove it as collateral.
+
+        The exclusion happens HERE and nowhere else: an item that never enters the manifest
+        cannot become an `ItemDiff`, reach a review group, reach `_collect_plan_time_collateral`'s
+        `apt-get -s` simulation, or reach `collect_unavailable_item_ids`.
         """
         manual = await self.source.run_command("apt-mark showmanual")
-        self._source_manual_set = frozenset(_lines(manual.stdout))
-        return await self._resolve_versions(manual.stdout, self.source.run_command)
+        names = _lines(manual.stdout)
+        self._source_manual_set = frozenset(names)
+        bare_debs = await self._source_bare_deb_packages(names)
+        items = await self._resolve_versions(manual.stdout, self.source.run_command)
+        return [item for item in items if item.name not in bare_debs]
+
+    async def _source_bare_deb_packages(self, manual_names: Sequence[str]) -> frozenset[str]:
+        """The source's manual packages installed from no configured repository — put there
+        by `dpkg -i` of a bare `.deb`, and therefore `manual_installs_sync`'s territory
+        alone (D-18).
+
+        Apt cannot install these anywhere: the target's repositories have never heard the
+        name, so `apt-cache policy` on the target prints no block at all and the package
+        would fall through to a proposed `INSTALL` that fails with "Unable to locate
+        package". `manual_installs_sync` offers the same package as an install snippet in
+        the same run, so leaving it in this manifest surfaces one package twice with only
+        one workable answer.
+
+        Same predicate as `manual_installs_sync`, from the same shared parser rather than a
+        shared result: D-15/D-16 keep the four jobs independent, so both jobs pay one
+        batched `apt-cache policy` (never one per package) instead of one importing the
+        other.
+        """
+        if not manual_names:
+            return frozenset()
+
+        quoted = " ".join(shlex.quote(name) for name in manual_names)
+        result = await self.source.run_command(f"apt-cache policy {quoted}")
+        return packages_installed_from_no_repository(result.stdout, manual_names)
 
     async def query_target_items(self) -> Sequence[AptPackageItem]:
         """The target's own manually-installed apt packages, with versions."""
