@@ -56,7 +56,7 @@ A signing key stopped being an item on 2026-07-27 (ADR-020 amendment): no `apt:k
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
 | C1 | Source file missing on target, key present on source | INSTALL | U | apt:`test_source_with_key_present_on_source_yields_plain_install` |
-| C2 | Source file whose `Signed-By:`/`signed-by=` names a key absent on the source | REPORT_ONLY + dangling detail, never installable | U | apt:`test_source_with_dangling_keyring_reference_is_flagged_not_installable` |
+| C2 | Source file whose `Signed-By:`/`signed-by=` names a key absent on the source | REPORT_ONLY + dangling detail, never installable | U | apt:`test_source_with_dangling_keyring_reference_is_flagged_not_installable`, `test_a_genuinely_missing_key_is_still_reported_dangling` (all three key directories searched first) |
 | C3 | Same, but the source file is *changed* rather than missing | also downgraded to REPORT_ONLY | U | apt:`test_changed_source_with_dangling_keyring_reference_is_downgraded_to_report_only` |
 | C4 | deb822 `.sources` vs legacy `.list` | format recorded per file, never normalised; identity is the filename | U | apt:`test_deb822_and_legacy_source_each_record_own_format` |
 | C5 | Same repo described by both a `.list` and a `.sources` file | two distinct items, both visible | P | identity-by-filename tested; the coexistence case itself is not |
@@ -91,7 +91,12 @@ A signing key stopped being an item on 2026-07-27 (ADR-020 amendment): no `apt:k
 | C34 | Run that removes no source file | collection pass does not run at all — not even its re-scan | U | apt:`test_no_source_removed_means_no_collection_pass_at_all` |
 | C35 | Keyring whose only referent is the repository this run removes | not refreshed first, then collected | U | apt:`test_a_key_only_the_departing_repo_needs_is_not_refreshed_first`, `test_key_left_unreferenced_by_an_approved_removal_is_deleted` |
 | C36 | Collected keyring | backed up into the group's backup dir before deletion, deletion carries `mutates=` | U | apt:`test_a_collected_key_is_backed_up_and_gated_as_a_modification` |
-| C37 | deb822 `Signed-By:` holding an inline armored key | yields no reference: no invented dependency, no real keyring made to look referenced | U | apt:`test_inline_armored_signed_by_names_no_keyring` |
+| C37 | deb822 `Signed-By:` holding an inline armored key — block on continuation lines, or its first line on the field line as `add-apt-repository` writes it | yields no reference: no invented dependency, no real keyring made to look referenced, and the repository installs normally | U | apt:`test_inline_armored_signed_by_names_no_keyring`, `TestInlineArmoredSignedBy` (2) |
+| C38 | `Signed-By:` pointing into `/usr/share/keyrings` — where `add-apt-repository`, `ubuntu.sources` and most vendor `.deb`s put their key | resolves; the repository is INSTALL, not REPORT_ONLY | U | apt:`test_a_usr_share_keyrings_reference_resolves_and_the_repo_is_installable` |
+| C39 | Referenced keyring the target LACKS, whatever owns it on either machine | copied — including one the target's dpkg owns, which is the only way a repository whose key ships inside a package it hosts can bootstrap | U | apt:`test_a_hand_placed_key_the_target_lacks_is_provisioned`, `test_a_package_owned_key_the_target_is_missing_is_copied_anyway` |
+| C40 | Referenced keyring the target HAS with different bytes, owned by a target package | left alone; the repository is still written (the refusal in C13 does not apply to a difference this run chose not to touch) | U | apt:`test_a_package_owned_key_present_with_different_bytes_is_not_overwritten` |
+| C41 | Keyring ownership probe | ONE batched `dpkg -S` over every key in all three directories, exit code ignored (it is non-zero as soon as any path is unowned) | U | apt:`test_ownership_is_probed_once_for_every_key_directory`, mutation-checked against an exit-code guard |
+| C42 | `/usr/share/keyrings` key no source references | not copied (the directory is mostly the distro's own) and never collected | U | apt:`test_a_shared_keyring_no_source_references_is_never_copied` |
 
 ## D. apt collateral (D-30) and metadata refresh (decision 1)
 
@@ -363,6 +368,7 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 - L11 — the hold is written with a timestamp so a crashed run self-expires. The timed value is asserted; no test simulates the crash.
 - N8 — the round trip in which apt's own bookkeeping keeps or drops a dependency-only package. The single-run half is covered (A10).
 - I22/N11 — real-TTY review rendering and the two-machine walkthrough are UAT-only by nature.
+- C38–C42 — the three-directory resolution and the `dpkg -S` ownership rule are asserted against mocked output only. The `dpkg -S` output shape and its non-zero exit on any unowned path were verified by hand on a real Ubuntu 24.04 machine, as was the survey that motivated the fix: 11 of that machine's 20 `sources.list.d` files classified as dangling before it (9 pointing into `/usr/share/keyrings`, 2 inline-armored PPAs), 0 after. No VM test exercises either against a live dpkg.
 - C26 — the source removal impact is asserted against mocked `apt-cache policy` output only. The output shape was verified by hand against a real Ubuntu 24.04 machine carrying both deb822 and legacy repositories (every installed package with a repository origin resolved to a source file, no unmatched origin), but no VM test exercises the parse against a live apt.
 
 ### Accepted scope limits

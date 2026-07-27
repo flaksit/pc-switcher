@@ -39,7 +39,21 @@ decisions the user already made about SOURCES:
   the source files this run actually writes (INSTALL and CHANGE alike — a changed source
   may point at a keyring the target has never seen). `_require_keyrings_ready` still
   refuses to write a source whose keyring did not arrive, so a repository is never written
-  ahead of its key.
+  ahead of its key. Provisioning is ownership-aware in ONE direction: a keyring the target
+  LACKS is copied whatever owns it on the source, but a keyring the target already has
+  with different bytes is left alone when the target's own dpkg owns that path — the
+  target's package manages that file and clobbering a distro keyring is not this job's
+  business. Ownership must not gate the COPY, because a vendor `.deb` (`code`,
+  `tailscale-archive-keyring`) ships both its `sources.list.d` entry and its keyring, so
+  the repository the package comes from cannot be trusted until the key that package owns
+  is already there; skipping package-owned keys would make that bootstrap unsatisfiable.
+
+Three key directories are captured, not two: `/etc/apt/keyrings`, `/etc/apt/trusted.gpg.d`
+and `/usr/share/keyrings`. The last is where `add-apt-repository`, several vendor `.deb`s
+and Ubuntu itself put keyrings, and most real `Signed-By:` values point there; leaving it
+out made every such reference resolve to nothing and downgraded the repository to
+`REPORT_ONLY`. Like `/etc/apt/keyrings` it is provisioned only for keys a source actually
+references, and unlike it, it is never collected: it is package territory.
 - `_remove_unused_keyrings` runs AFTER every source write and deletion, and only when this
   run actually removed a source file. It re-scans the target's REAL source files and drops
   each `/etc/apt/keyrings` file no surviving source references. Counting against the
@@ -130,6 +144,13 @@ _APT_SOURCES_DIR = "/etc/apt/sources.list.d"
 _APT_SOURCES_LIST = "/etc/apt/sources.list"
 _APT_KEYRINGS_DIR = "/etc/apt/keyrings"
 _APT_TRUSTED_GPG_DIR = "/etc/apt/trusted.gpg.d"
+# The third key directory (module docstring). Not an `/etc/apt` path at all, which is why
+# it was missed: it is where `add-apt-repository`, Ubuntu's own `ubuntu.sources`/Pro
+# sources and most vendor `.deb`s put the keyring their `Signed-By:` names.
+_APT_SHARED_KEYRINGS_DIR = "/usr/share/keyrings"
+# The three directories a `Signed-By:` reference is resolved against, in the order a
+# basename lookup consults them.
+_KEY_DIRS = (_APT_KEYRINGS_DIR, _APT_TRUSTED_GPG_DIR, _APT_SHARED_KEYRINGS_DIR)
 _APT_PREFERENCES_DIR = "/etc/apt/preferences.d"
 _APT_CONF_DIR = "/etc/apt/apt.conf.d"
 
@@ -227,6 +248,20 @@ _LEGACY_SIGNED_BY_RE = re.compile(r"signed-by=(?P<path>[^\]\s,]+)")
 _PIN_PACKAGE_RE = re.compile(r"^Package:\s*(?P<packages>.+)$", re.IGNORECASE)
 
 
+def _keyring_reference(value: str) -> str | None:
+    """`value` as a keyring PATH reference, or `None` when it is not one.
+
+    A `Signed-By:` field carries either a path or an INLINE armored key. Only an absolute
+    path is a reference to a file that has to exist; anything else is the armored block
+    itself and needs no provisioning, because it travels inside the source file. The
+    distinction is not cosmetic: `add-apt-repository` writes the armor's first line on the
+    field line (`Signed-By: -----BEGIN PGP PUBLIC KEY BLOCK-----`), so a bare `\\S+` capture
+    turns every PPA added the normal way into a reference to a file named `-----BEGIN`,
+    which resolves nowhere and downgrades the repository to `REPORT_ONLY`.
+    """
+    return value if value.startswith("/") else None
+
+
 def _pin_packages(line: str) -> list[str]:
     """The package names one `preferences.d` `Package:` stanza line pins.
 
@@ -290,11 +325,11 @@ def _parse_source_file(
     and keyring garbage collection, the URIs drive the source-removal impact (C26) by
     matching against the origin `apt-cache policy` reports for an installed package.
 
-    A `Signed-By:` field may carry an INLINE armored key instead of a path — the field
-    value is empty and the armored block follows on continuation lines. That yields NO
-    ref, which is correct in both directions: the file depends on no key FILE (so nothing
-    is invented for it), and the armored block's own lines are not mistaken for a path (so
-    no real keyring is made to look referenced by it either).
+    A `Signed-By:` field may carry an INLINE armored key instead of a path, either with an
+    empty field value and the block on continuation lines or with the block's first line on
+    the field line itself. Neither yields a ref (`_keyring_reference`), which is correct in
+    both directions: the file depends on no key FILE, so nothing is invented for it, and no
+    part of the armored block is mistaken for a path.
     """
     fmt: Literal["deb822", "list"] = "deb822" if filename.endswith(".sources") else "list"
     refs: list[str] = []
@@ -312,7 +347,9 @@ def _parse_source_file(
             if deb_line:
                 uris.append(_normalise_repo_uri(deb_line.group("uri")))
         if signed_by:
-            refs.append(signed_by.group("path"))
+            ref = _keyring_reference(signed_by.group("path"))
+            if ref is not None:
+                refs.append(ref)
     return fmt, tuple(refs), tuple(uris)
 
 
@@ -373,6 +410,10 @@ def _dangling_keyring_ref(keyring_refs: Sequence[str], source_key_filenames: fro
     `source_key_filenames`, or `None` if every reference resolves to a real file on the
     source. A source file with no `Signed-By:`/`signed-by=` at all (`keyring_refs` is
     empty) has nothing to validate — it is not itself a dangling reference.
+
+    `source_key_filenames` spans all three key directories (`_KEY_DIRS`), so a reference is
+    dangling only when the source machine really has no such key — not merely when it keeps
+    it somewhere this job did not think to look.
     """
     for ref in keyring_refs:
         if Path(ref).name not in source_key_filenames:
@@ -630,6 +671,13 @@ class AptSyncJob(PackageSyncJob):
         self._target_keyrings: dict[str, str] = {}
         self._source_global_keys: dict[str, str] = {}
         self._target_global_keys: dict[str, str] = {}
+        self._source_shared_keys: dict[str, str] = {}
+        self._target_shared_keys: dict[str, str] = {}
+        # Absolute paths of every key file on the TARGET that the target's own dpkg owns,
+        # from one batched `dpkg -S` at plan time. Provisioning consults it in one direction
+        # only (module docstring): it never blocks copying a key the target LACKS, it only
+        # stops a differing key the target's package manages from being overwritten.
+        self._target_package_owned_keys: frozenset[str] = frozenset()
         # Absolute target paths `_provision_keyrings` successfully wrote this run. A source
         # file may only be written once every keyring it references is either already
         # byte-identical on the target or in here (`_require_keyrings_ready`).
@@ -908,20 +956,20 @@ class AptSyncJob(PackageSyncJob):
 
         source_sources = await _capture_dir_digests(source_run, _APT_SOURCES_DIR)
         target_sources = await _capture_dir_digests(target_run, _APT_SOURCES_DIR)
-        source_per_repo_keys = await _capture_dir_digests(source_run, _APT_KEYRINGS_DIR)
-        target_per_repo_keys = await _capture_dir_digests(target_run, _APT_KEYRINGS_DIR)
-        source_global_keys = await _capture_dir_digests(source_run, _APT_TRUSTED_GPG_DIR)
-        target_global_keys = await _capture_dir_digests(target_run, _APT_TRUSTED_GPG_DIR)
+        # One `sha256sum` listing per key directory per machine, driven by `_KEY_DIRS` so
+        # capture, reference resolution and provisioning can never disagree about which
+        # directories exist.
+        source_keys = [await _capture_dir_digests(source_run, directory) for directory in _KEY_DIRS]
+        target_keys = [await _capture_dir_digests(target_run, directory) for directory in _KEY_DIRS]
         source_pins = await _capture_dir_digests(source_run, _APT_PREFERENCES_DIR)
         target_pins = await _capture_dir_digests(target_run, _APT_PREFERENCES_DIR)
         source_configs = await _capture_dir_digests(source_run, _APT_CONF_DIR)
         target_configs = await _capture_dir_digests(target_run, _APT_CONF_DIR)
 
-        self._source_keyrings = source_per_repo_keys
-        self._target_keyrings = target_per_repo_keys
-        self._source_global_keys = source_global_keys
-        self._target_global_keys = target_global_keys
-        source_key_filenames = frozenset(source_per_repo_keys) | frozenset(source_global_keys)
+        self._source_keyrings, self._source_global_keys, self._source_shared_keys = source_keys
+        self._target_keyrings, self._target_global_keys, self._target_shared_keys = target_keys
+        source_key_filenames = frozenset(name for digests in source_keys for name in digests)
+        self._target_package_owned_keys = await self._capture_package_owned_keys(target_run)
 
         # Unconditional, one batched command: which keyrings the target's sources point at
         # is what makes a key correct, and that is a property of EVERY source file on the
@@ -1877,30 +1925,75 @@ class AptSyncJob(PackageSyncJob):
     # the user made about SOURCES, and nothing below ever asks a question, builds an
     # `ItemDiff`, or writes a decision file.
 
+    async def _capture_package_owned_keys(
+        self, target_run: Callable[[str], Awaitable[CommandResult]]
+    ) -> frozenset[str]:
+        """Absolute paths of the target's key files that the target's own dpkg owns, from
+        ONE batched `dpkg -S` over every key file the target has (never one call per file —
+        the `manual_installs_sync._scan_unowned_installs` shape).
+
+        The exit code is deliberately ignored: `dpkg -S` returns non-zero as soon as ANY
+        argument matches no package, which for a machine with even one hand-placed key is
+        always. Ownership is read out of stdout, where each matched path arrives as
+        `<package[, package...]>: <path>`; unmatched paths go to stderr and simply produce
+        no entry, which is exactly the "unowned" answer.
+
+        Read-only, no sudo: `dpkg -S` queries the local dpkg database.
+        """
+        paths = sorted(f"{directory}/{name}" for directory, digests in self._target_key_dirs() for name in digests)
+        if not paths:
+            return frozenset()
+        result = await target_run(f"dpkg -S {' '.join(shlex.quote(path) for path in paths)}")
+        owned: set[str] = set()
+        for line in result.stdout.splitlines():
+            _packages, separator, path = line.rpartition(": ")
+            if separator and path.startswith("/"):
+                owned.add(path.strip())
+        return frozenset(owned)
+
     def _keyring_digests(self, ref: str) -> tuple[str | None, str | None]:
         """`(source digest, target digest)` for the key file a `Signed-By:` reference
-        names, looked up by BASENAME across both key directories.
+        names, looked up by BASENAME across all three key directories (`_KEY_DIRS`).
 
         Basename rather than the full path because that is how `_dangling_keyring_ref`
         already resolves a reference, and the two must agree: a reference this method
         cannot resolve is exactly one that check already downgraded the repository for.
         """
         name = Path(ref).name
-        source = self._source_keyrings.get(name) or self._source_global_keys.get(name)
-        target = self._target_keyrings.get(name) or self._target_global_keys.get(name)
+        source = next((digests[name] for _dir, digests in self._source_key_dirs() if name in digests), None)
+        target = next((digests[name] for _dir, digests in self._target_key_dirs() if name in digests), None)
         return source, target
 
+    def _source_key_dirs(self) -> tuple[tuple[str, dict[str, str]], ...]:
+        """Each key directory paired with the SOURCE machine's digest map for it, in
+        `_KEY_DIRS` order — the single place the three directories are enumerated, so
+        adding or dropping one cannot be done in resolution but missed in provisioning.
+        """
+        maps = (self._source_keyrings, self._source_global_keys, self._source_shared_keys)
+        return tuple(zip(_KEY_DIRS, maps, strict=True))
+
+    def _target_key_dirs(self) -> tuple[tuple[str, dict[str, str]], ...]:
+        maps = (self._target_keyrings, self._target_global_keys, self._target_shared_keys)
+        return tuple(zip(_KEY_DIRS, maps, strict=True))
+
     def _keyring_local_path(self, ref: str) -> str | None:
-        """Where the SOURCE machine keeps the key a reference names, or `None` when it
-        keeps it in neither directory this job manages (a package-owned keyring under
-        `/usr/share/keyrings`, say, which the target's own packages provide).
+        """Where the SOURCE machine keeps the key a reference names, or `None` when the
+        source machine has no such key at all — D-12's dangling reference, already reported
+        on the REPOSITORY item.
         """
         name = Path(ref).name
-        if name in self._source_keyrings:
-            return f"{_APT_KEYRINGS_DIR}/{name}"
-        if name in self._source_global_keys:
-            return f"{_APT_TRUSTED_GPG_DIR}/{name}"
-        return None
+        return next((f"{directory}/{name}" for directory, digests in self._source_key_dirs() if name in digests), None)
+
+    def _target_manages_keyring(self, ref: str) -> bool:
+        """Whether the target already has the key `ref` names AND its own dpkg owns that
+        path — the one case where a differing keyring is deliberately left alone.
+
+        Not a general ownership gate (module docstring): a key the target LACKS is copied
+        whatever owns it on the source, because a vendor `.deb` that ships both a repository
+        entry and the keyring trusting it cannot be installed until that keyring is present.
+        """
+        _source_digest, target_digest = self._keyring_digests(ref)
+        return target_digest is not None and ref in self._target_package_owned_keys
 
     def _keyring_writes(self, refs: frozenset[str]) -> list[tuple[str, str]]:
         """`(local path, target destination)` for every keyring this run must copy, given
@@ -1916,18 +2009,25 @@ class AptSyncJob(PackageSyncJob):
         - Every `/etc/apt/trusted.gpg.d` key the source has. Nothing references these —
           they are ambient trust — so a reference count cannot select among them and their
           own content is the only signal there is.
-        - The `/etc/apt/keyrings` files that `refs` actually names. The whole directory is
-          deliberately NOT mirrored: a keyring no source on the target points at is litter,
-          not configuration.
+        - The `/etc/apt/keyrings` and `/usr/share/keyrings` files that `refs` actually
+          names. Neither directory is mirrored wholesale: a keyring no source on the target
+          points at is litter, and `/usr/share/keyrings` is mostly the distro's own.
+
+        Overwriting is ownership-aware, copying is not (module docstring): a key the target
+        already has with different bytes is skipped when the target's dpkg owns that path,
+        while a key the target LACKS is always copied — including a package-owned one,
+        which is the only way a repository whose keyring ships inside a package it hosts can
+        ever be bootstrapped.
 
         A destination is emitted at most once, so one rotated key serving three
         repositories is still exactly one write.
         """
         writes: dict[str, str] = {}
         for name, digest in self._source_global_keys.items():
-            if self._target_global_keys.get(name) != digest:
-                dest = f"{_APT_TRUSTED_GPG_DIR}/{name}"
-                writes[dest] = dest
+            dest = f"{_APT_TRUSTED_GPG_DIR}/{name}"
+            if self._target_global_keys.get(name) == digest or self._target_manages_keyring(dest):
+                continue
+            writes[dest] = dest
         for ref in refs:
             local = self._keyring_local_path(ref)
             if local is None:
@@ -1936,7 +2036,7 @@ class AptSyncJob(PackageSyncJob):
                 # what "never re-fetched from a vendor" forbids.
                 continue
             source_digest, target_digest = self._keyring_digests(ref)
-            if source_digest == target_digest:
+            if source_digest == target_digest or self._target_manages_keyring(ref):
                 continue
             writes[ref] = local
         return [(writes[dest], dest) for dest in sorted(writes)]
@@ -2022,9 +2122,11 @@ class AptSyncJob(PackageSyncJob):
         stopped referencing its key, and one whose deletion the user declined — or that
         failed to be deleted — still references it and keeps it alive.
 
-        Scoped to `/etc/apt/keyrings`. Legacy `/etc/apt/trusted.gpg.d` keys are ambient
-        trust that nothing references by construction, so "unused" is not computable for
-        them; they are left to accumulate rather than deleted on a guess.
+        Scoped to `/etc/apt/keyrings`, the one directory that exists purely for this. Legacy
+        `/etc/apt/trusted.gpg.d` keys are ambient trust that nothing references by
+        construction, so "unused" is not computable for them; `/usr/share/keyrings` is
+        package territory and holds keys the distro's own tooling put there. Both are left
+        to accumulate rather than deleted on a guess.
 
         Each deletion is backed up into the group's own backup directory first and recorded
         in `existed_before`, so a failing `apt-get update` rolls a collected key back with
@@ -2076,6 +2178,11 @@ class AptSyncJob(PackageSyncJob):
 
         Reads the references `_diff_apt_sources` already parsed from the SOURCE machine's
         copy of this file, which is the copy about to be written.
+
+        A key the target has and its own dpkg owns counts as ready even though this run
+        deliberately did not overwrite it: the target's package manages that file, so the
+        repository is trusted there — refusing the write would strand a repository over a
+        key difference the run chose not to touch.
         """
         filename = diff.item_id.removeprefix("apt:source:")
         for ref in self._source_keyring_refs.get(filename, ()):
@@ -2083,6 +2190,8 @@ class AptSyncJob(PackageSyncJob):
                 continue
             source_digest, target_digest = self._keyring_digests(ref)
             if source_digest is not None and source_digest == target_digest:
+                continue
+            if self._target_manages_keyring(ref):
                 continue
             raise ConvergeItemFailed(
                 f"source {filename} references keyring {ref!r}, which is neither already "

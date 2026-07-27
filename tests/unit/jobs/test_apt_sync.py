@@ -2919,13 +2919,16 @@ def _scanning_target(
     return _side_effect
 
 
+_KEY_DEST_PREFIXES = ("/etc/apt/keyrings/", "/etc/apt/trusted.gpg.d/", "/usr/share/keyrings/")
+
+
 def _key_writes(target: MagicMock) -> list[str]:
-    """Every `/etc/apt` key promotion this run issued, by destination path."""
+    """Every key promotion this run issued, by destination path, across all three key
+    directories."""
     return [
         c.rsplit(" ", 1)[1]
         for c in all_calls(target)
-        if c.startswith("sudo install -o root -g root -m 0644")
-        and ("/etc/apt/keyrings/" in c.rsplit(" ", 1)[1] or "/etc/apt/trusted.gpg.d/" in c.rsplit(" ", 1)[1])
+        if c.startswith("sudo install -o root -g root -m 0644") and c.rsplit(" ", 1)[1].startswith(_KEY_DEST_PREFIXES)
     ]
 
 
@@ -3439,3 +3442,212 @@ class TestPinStanzaParsing:
 
         assert any(d.item_id == "apt:pin:multi" for d in plan.diffs)
         assert _parse_pin_file("Package: foo bar\nPackage: *\n") == ("foo", "bar")
+
+
+# -- The third key directory, ownership-aware provisioning, inline-armored keys ---------
+#
+# `/usr/share/keyrings` is where `add-apt-repository`, Ubuntu's own sources and most
+# vendor `.deb`s put the keyring their `Signed-By:` names. Resolving references against
+# `/etc/apt/keyrings` and `/etc/apt/trusted.gpg.d` alone made most real repositories look
+# dangling, and a `Signed-By:` carrying an inline armored key was read as a path.
+
+_SHARED_SOURCES = (
+    "Types: deb\nURIs: https://vendor.example.com\nSuites: stable\nComponents: main\n"
+    "Signed-By: /usr/share/keyrings/vendor.gpg\n"
+)
+_GHOST_SOURCES = (
+    "Types: deb\nURIs: https://ghost.example.com\nSuites: stable\nComponents: main\n"
+    "Signed-By: /etc/apt/keyrings/ghost.gpg\n"
+)
+# What `add-apt-repository` actually writes: the armor's FIRST LINE sits on the field line,
+# so a bare `\S+` capture reads `-----BEGIN` as a keyring path.
+_INLINE_ON_FIELD_LINE = (
+    "Types: deb\nURIs: https://ppa.example.com\nSuites: noble\nComponents: main\n"
+    "Signed-By: -----BEGIN PGP PUBLIC KEY BLOCK-----\n .\n mDMEY2FrZQ==\n"
+    " -----END PGP PUBLIC KEY BLOCK-----\n"
+)
+
+
+def _shared_key_context(
+    *,
+    filename: str = "vendor.sources",
+    content: str = _SHARED_SOURCES,
+    source_shared: str = sha256_line("k1", "vendor.gpg"),
+    target_shared: str = "",
+    dpkg_output: str = "",
+) -> tuple[JobContext, MagicMock, MagicMock]:
+    """One repository whose `Signed-By:` points into `/usr/share/keyrings`, with the
+    target's copy of that directory and its `dpkg -S` answer under the test's control.
+    """
+    return _repo_context(
+        source_responses={
+            **_NO_PACKAGES,
+            "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", filename), ""),
+            f"cat /etc/apt/sources.list.d/{filename}": CommandResult(0, content, ""),
+            "find /usr/share/keyrings": CommandResult(0, source_shared, ""),
+        },
+        target_responses={
+            **_NO_PACKAGES,
+            "find /usr/share/keyrings": CommandResult(0, target_shared, ""),
+            # dpkg -S exits non-zero as soon as ANY argument is unowned, which is the norm:
+            # the exit code must not be what decides ownership.
+            "dpkg -S": CommandResult(1, dpkg_output, "dpkg-query: no path found matching pattern\n"),
+            "test -f /usr/share/keyrings/vendor.gpg": CommandResult(1, "", ""),
+            f"test -f /etc/apt/sources.list.d/{filename}": CommandResult(1, "", ""),
+            "sudo apt-get update": CommandResult(0, "", ""),
+        },
+    )
+
+
+class TestSharedKeyringsDirectory:
+    """`/usr/share/keyrings` resolves references, is provisioned for referenced keys only,
+    and is never collected.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_usr_share_keyrings_reference_resolves_and_the_repo_is_installable(self) -> None:
+        context, _source, _target = _shared_key_context()
+
+        plan = await AptSyncJob(context).plan()
+
+        source_diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.sources")
+        assert source_diff.action == DiffAction.INSTALL
+        assert source_diff.detail is None
+
+    @pytest.mark.asyncio
+    async def test_a_hand_placed_key_the_target_lacks_is_provisioned(self) -> None:
+        """Nothing on this machine owns `vendor.gpg` — it is as machine-local as anything in
+        `/etc/apt/keyrings`, and currently replicated nowhere.
+        """
+        context, _source, target = _shared_key_context()
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:vendor.sources": Decision.APPLY})
+
+        await job.execute()
+
+        assert _key_writes(target) == ["/usr/share/keyrings/vendor.gpg"]
+
+    @pytest.mark.asyncio
+    async def test_a_package_owned_key_present_with_different_bytes_is_not_overwritten(self) -> None:
+        """The target's own package manages that file. The repository is still written —
+        refusing it over a difference this run deliberately did not touch would strand it.
+        """
+        context, _source, target = _shared_key_context(
+            target_shared=sha256_line("k-old", "vendor.gpg"),
+            dpkg_output="vendor-keyring: /usr/share/keyrings/vendor.gpg\n",
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:vendor.sources": Decision.APPLY})
+
+        await job.execute()
+
+        assert _key_writes(target) == []
+        assert any(
+            "sudo install" in c and c.endswith("/etc/apt/sources.list.d/vendor.sources") for c in all_calls(target)
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_package_owned_key_the_target_is_missing_is_copied_anyway(self) -> None:
+        """The bootstrap case. `dpkg -S` answers from the package's FILE LIST, so a keyring
+        can be owned and absent at once — and a vendor `.deb` that ships both a repository
+        entry and the keyring trusting it can only be installed once that keyring is there.
+        Ownership must gate the OVERWRITE, never the COPY.
+        """
+        context, _source, target = _shared_key_context(
+            # The target has a key directory with something else in it, so ownership really
+            # is probed, and dpkg names `vendor.gpg` as owned even though it is not there.
+            target_shared=sha256_line("s9", "unrelated.gpg"),
+            dpkg_output=(
+                "unrelated-keyring: /usr/share/keyrings/unrelated.gpg\n"
+                "vendor-keyring: /usr/share/keyrings/vendor.gpg\n"
+            ),
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:vendor.sources": Decision.APPLY})
+
+        await job.execute()
+
+        assert _key_writes(target) == ["/usr/share/keyrings/vendor.gpg"]
+
+    @pytest.mark.asyncio
+    async def test_ownership_is_probed_once_for_every_key_directory(self) -> None:
+        """One batched `dpkg -S` naming every key the target has across all three
+        directories — never one call per file.
+        """
+        context, _source, target = _repo_context(
+            source_responses={**_NO_PACKAGES},
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "per-repo.gpg"), ""),
+                "find /etc/apt/trusted.gpg.d": CommandResult(0, sha256_line("g1", "legacy.gpg"), ""),
+                "find /usr/share/keyrings": CommandResult(0, sha256_line("s1", "shared.gpg"), ""),
+            },
+        )
+
+        await AptSyncJob(context).plan()
+
+        dpkg_calls = [c for c in all_calls(target) if c.startswith("dpkg -S")]
+        assert len(dpkg_calls) == 1
+        assert "/etc/apt/keyrings/per-repo.gpg" in dpkg_calls[0]
+        assert "/etc/apt/trusted.gpg.d/legacy.gpg" in dpkg_calls[0]
+        assert "/usr/share/keyrings/shared.gpg" in dpkg_calls[0]
+
+    @pytest.mark.asyncio
+    async def test_a_shared_keyring_no_source_references_is_never_copied(self) -> None:
+        """`/usr/share/keyrings` is not mirrored wholesale: it is mostly the distro's own."""
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /usr/share/keyrings": CommandResult(0, sha256_line("s1", "ubuntu-archive-keyring.gpg"), ""),
+            },
+            target_responses={**_NO_PACKAGES},
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {})
+
+        await job.execute()
+
+        assert _key_writes(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_genuinely_missing_key_is_still_reported_dangling(self) -> None:
+        """The check must still bite: `ghost.gpg` exists in no key directory on the source."""
+        context, _source, _target = _shared_key_context(
+            filename="ghost.sources", content=_GHOST_SOURCES, source_shared=""
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        source_diff = next(d for d in plan.diffs if d.item_id == "apt:source:ghost.sources")
+        assert source_diff.action == DiffAction.REPORT_ONLY
+        assert source_diff.detail is not None
+        assert "/etc/apt/keyrings/ghost.gpg" in source_diff.detail
+
+
+class TestInlineArmoredSignedBy:
+    """A `Signed-By:` value that is not an absolute path is an inline armored key, not a
+    reference. Every PPA `add-apt-repository` adds is written that way.
+    """
+
+    def test_the_armor_first_line_on_the_field_line_yields_no_ref(self) -> None:
+        _fmt, refs, _uris = _parse_source_file("ppa.sources", _INLINE_ON_FIELD_LINE)
+
+        assert refs == ()
+
+    @pytest.mark.asyncio
+    async def test_a_ppa_with_an_inline_key_installs_normally_and_needs_no_keyring(self) -> None:
+        context, _source, target = _shared_key_context(
+            filename="ppa.sources", content=_INLINE_ON_FIELD_LINE, source_shared=""
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:ppa.sources": Decision.APPLY})
+
+        plan = await job.plan()
+        assert next(d for d in plan.diffs if d.item_id == "apt:source:ppa.sources").action == DiffAction.INSTALL
+
+        await job.execute()
+
+        assert _key_writes(target) == []
+        assert any(
+            "sudo install" in c and c.endswith("/etc/apt/sources.list.d/ppa.sources") for c in all_calls(target)
+        )
