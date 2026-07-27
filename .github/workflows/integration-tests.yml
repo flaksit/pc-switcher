@@ -21,9 +21,7 @@ jobs:
     name: Check if integration tests needed
     runs-on: ubuntu-latest
     outputs:
-      # Non-PR events (schedule, manual dispatch) have no diff to filter on and
-      # always run.
-      should-run: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.integration }}
+      should-run: ${{ steps.decide.outputs.should-run }}
     steps:
       - uses: actions/checkout@v7
         if: github.event_name == 'pull_request'
@@ -40,6 +38,31 @@ jobs:
               - 'install.sh'
               - 'pyproject.toml'
               - 'uv.lock'
+      - name: Decide whether this run is needed
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request)
+              echo "should-run=${{ steps.filter.outputs.integration }}" >> $GITHUB_OUTPUT
+              ;;
+            schedule)
+              # A nightly on an unchanged main would re-test what the previous
+              # nightly already covered — skip it and save the VM cycle.
+              last=$(gh api "repos/${{ github.repository }}/actions/workflows/integration-tests.yml/runs?event=schedule&per_page=5" \
+                --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }})][0].head_sha // empty')
+              if [[ -n "$last" && "$last" == "${{ github.sha }}" ]]; then
+                echo "main unchanged since the previous nightly ($last); skipping"
+                echo "should-run=false" >> $GITHUB_OUTPUT
+              else
+                echo "should-run=true" >> $GITHUB_OUTPUT
+              fi
+              ;;
+            *)
+              echo "should-run=true" >> $GITHUB_OUTPUT
+              ;;
+          esac
 
   wait-for-ci:
     name: Wait for lint and unit tests
