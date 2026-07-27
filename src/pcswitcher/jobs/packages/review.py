@@ -40,7 +40,7 @@ question for an item no package manager can reproduce; "how does this get resolv
 `ReviewOutcome.snippets` carries that group's authored snippets back to the caller
 (`PackageSyncJob.apply()`), which persists them. An interactive review always resolves
 every entry (decision 10): an empty snippet capture re-prompts rather than falling through
-to an "unresolved" state, and Ctrl-C / EOF anywhere in the review aborts the whole sync
+to an "unresolved" state, and Ctrl-C anywhere in the review aborts the whole sync
 (`SyncAbortedByUser`) rather than skipping items. `ReviewOutcome.unresolved` is therefore
 populated only on the non-interactive path, where it reports (never fails) the items no
 one was present to resolve (D-26).
@@ -271,7 +271,7 @@ async def _review_unreproducible_group(
     explicit skip-once. There is no fourth "genuinely undecided" outcome (decision 10 —
     unresolved must be unrepresentable in an interactive flow):
 
-    - Ctrl-C / EOF at the resolution choice (`select` returns `None`) means the user wants
+    - Ctrl-C at the resolution choice (`select` returns `None`) means the user wants
       to stop, so it aborts the ENTIRE sync with `SyncAbortedByUser` — never a per-item
       skip-and-mark-unresolved.
     - Choosing "add an install snippet" and then submitting an empty body (or abandoning
@@ -303,11 +303,11 @@ async def _review_unreproducible_group(
             selected = await asyncio.to_thread(choice_prompt.ask)
 
             if selected is None:
-                # Ctrl-C / EOF: the user wants to abort, not skip this one item (decision
+                # Ctrl-C: the user wants to abort, not skip this one item (decision
                 # 10). Raise the clean-stop control-flow exception the orchestrator and CLI
                 # already catch once at WARNING, so the whole sync stops here.
                 raise SyncAbortedByUser(
-                    f"package review aborted while resolving unreproducible item {entry.label!r} (Ctrl-C/EOF)"
+                    f"package review aborted while resolving unreproducible item {entry.label!r} (Ctrl-C)"
                 )
 
             if selected == "skip_always":
@@ -357,7 +357,7 @@ async def _offer_permanent_skips(
     nothing. Leaving this list empty is the status quo (skip once, re-offered next run), so
     a bare Enter keeps the pre-existing behaviour.
 
-    Ctrl-C / EOF (`ask` returns `None`) aborts the WHOLE sync like every other review
+    Ctrl-C (`ask` returns `None`) aborts the WHOLE sync like every other review
     screen — never a silent per-item fallthrough.
     """
     console.print(
@@ -376,7 +376,7 @@ async def _offer_permanent_skips(
     selected = await asyncio.to_thread(prompt.ask)
 
     if selected is None:
-        raise SyncAbortedByUser("package review aborted at a never-offer-again screen (Ctrl-C/EOF)")
+        raise SyncAbortedByUser("package review aborted at a never-offer-again screen (Ctrl-C)")
 
     # Scoped to the entries actually offered, so a promotion can never reach back and
     # overwrite an APPLY decision the apply list already recorded.
@@ -504,11 +504,11 @@ async def review_items(
             selected = await asyncio.to_thread(prompt.ask)
 
             if selected is None:
-                # Ctrl-C / EOF at a checkbox screen means the user wants to abort, not
+                # Ctrl-C at a checkbox screen means the user wants to abort, not
                 # silently skip the rest of the review (decision 10). Raise the clean-stop
                 # control-flow exception so the whole sync stops here rather than leaving
                 # this and every later group's items undecided.
-                raise SyncAbortedByUser("package review aborted at a checkbox screen (Ctrl-C/EOF)")
+                raise SyncAbortedByUser("package review aborted at a checkbox screen (Ctrl-C)")
 
             selected_ids = set(selected)
             for entry in group.entries:

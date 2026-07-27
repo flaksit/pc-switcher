@@ -51,7 +51,7 @@ Every item that would actually change something — an install, a removal, or a 
 - **Skip this run** — leave it alone for now; it comes back next sync.
 - **Skip always** — mark it as belonging to this machine only, so no future sync touches it (see [Machine-specific packages](#machine-specific-packages)).
 
-You give those answers with two lists per group, not with a question per item. The first list is the apply list: ticked means apply. Whatever you leave unticked is then offered once more — "never offer again on this machine?" — and ticking it there is skip-always. Ticking nothing on that second list (just pressing Enter) is skip-this-run, so the items come back next sync. If you ticked everything for apply, the second list is not shown at all. Ctrl-C or EOF at either list aborts the whole sync.
+You give those answers with two lists per group, not with a question per item. The first list is the apply list: ticked means apply. Whatever you leave unticked is then offered once more — "never offer again on this machine?" — and ticking it there is skip-always. Ticking nothing on that second list (just pressing Enter) is skip-this-run, so the items come back next sync. If you ticked everything for apply, the second list is not shown at all. Ctrl-C at either list aborts the whole sync.
 
 Items that only **report** a condition are not offered skip-always: a version difference between source and target, an apt package the target's own repositories offer no candidate for, and the pin echo on a held or pinned package. These change nothing on the target, and neither machine "holds" the item in the way a machine-specific mark requires — marking a version difference would silently stop the package syncing altogether rather than stop reporting the drift. Resolve them by fixing the underlying condition (align the versions, add the repository, remove the pin).
 
@@ -130,7 +130,7 @@ The snippet registry lives at `~/.config/pc-switcher/package-snippets.yaml`. Unl
 
 Every unreproducible item is resolved before the run continues: it gets a snippet, it is marked machine-specific (skip always), or you skip it once. There is no fourth "unresolved" outcome on an interactive run.
 
-- **Ctrl-C / EOF** at the review means you want to stop, so it aborts the whole sync — never a silent per-item skip.
+- **Ctrl-C** at the review means you want to stop, so it aborts the whole sync — never a silent per-item skip.
 - Choosing "add an install snippet" and then submitting an **empty** body is not accepted: the review re-prompts the three-way choice rather than falling through. You must enter a real snippet or pick skip-once / skip-always.
 - A **non-interactive** run (no TTY) cannot ask, so it marks every undecided item skip-once and reports them; it never records a snippet or a machine-specific mark. Re-run interactively to actually resolve anything.
 
