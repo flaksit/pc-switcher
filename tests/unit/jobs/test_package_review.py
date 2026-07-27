@@ -289,6 +289,37 @@ class TestInteractive:
         assert message == "Remove packages"
         assert message != "Apply"
 
+    async def test_every_direction_that_arrives_unticked_is_still_offered_permanence(self) -> None:
+        """ "Arrives unticked" and "is offered permanence" are two independent properties of
+        a group (`_REMOVAL_ACTIONS` vs `_PROMOTABLE_ACTIONS`), and ADR-021 makes them differ
+        for the two-answer screens. Every ordinary removal direction must keep both.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        groups = [
+            ReviewGroup(manager="apt", action=action, title=f"{action} things", entries=[_entry(action)])
+            for action in ("remove", "delete", "disable")
+        ]
+        # Nothing ticked on the apply screen, everything ticked on the follow-up: a
+        # promotion can only be observed where the follow-up screen is offered at all.
+        asked: list[int] = []
+
+        def _ask() -> list[str]:
+            call = len(asked)
+            asked.append(call)
+            return [] if call % 2 == 0 else [groups[call // 2].entries[0].item_id]
+
+        prompt = _fake_prompt(ask_side_effect=_ask)
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
+        ):
+            outcome = await review_items(groups, console=console, ui=ui)
+
+        assert len([call for call in checkbox.call_args_list if "never offer again" in call.args[0]]) == 3
+        assert outcome.decisions == dict.fromkeys(("remove", "delete", "disable"), Decision.SKIP_ALWAYS)
+
 
 @pytest.mark.asyncio
 class TestTerminalUIReviewer:

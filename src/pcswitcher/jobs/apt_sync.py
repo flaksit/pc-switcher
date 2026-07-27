@@ -144,11 +144,12 @@ _APT_PACKAGE_ID_PREFIX = "apt:package:"
 # Binaries this job runs under sudo, quoted back to the user when the passwordless-sudo
 # check fails. A lower bound on what must be permitted, not an exact scope (ADR-013).
 # The source is only ever read, so it needs just the /etc/apt digest capture.
-_SOURCE_SUDO_COMMANDS = ("/usr/bin/find",)
+_SOURCE_SUDO_COMMANDS = ("/usr/bin/find", "/usr/bin/sha256sum")
 _TARGET_SUDO_COMMANDS = (
     "/usr/bin/apt-get",
     "/usr/bin/apt-mark",
     "/usr/bin/find",
+    "/usr/bin/sha256sum",
     "/usr/bin/install",
     "/usr/bin/cp",
     "/usr/bin/rm",
@@ -158,10 +159,16 @@ _TARGET_SUDO_COMMANDS = (
 # The five `/etc/apt/*` directories D-11/D-13 pull into scope, each captured with one
 # batched `sha256sum` listing (never one command per file).
 _APT_SOURCES_DIR = "/etc/apt/sources.list.d"
-# apt's other source location. NOT an item class — this file is never captured, diffed or
-# written by pc-switcher — but it is scanned for keyring references, because a keyring named
-# only here is still in use and deleting it would break apt. It is the clearest instance of
-# "a source file this tool does not sync still counts as a reference".
+# The only two extensions apt reads in `sources.list.d`. Everything else there — the
+# `.save` and `.curtin.orig` copies Ubuntu's own tooling leaves behind (four of them on the
+# development machine) — is invisible to apt, so offering one as a syncable item would ask
+# the user about a file that changes nothing.
+_APT_SOURCE_EXTENSIONS = (".list", ".sources")
+# apt's other source location. It is scanned for keyring references, because a keyring named
+# only here is still in use and deleting it would break apt — the clearest instance of "a
+# source file this tool does not sync still counts as a reference" — and its digest is
+# captured on both machines, which is what ADR-021 D-38's write-when-missing/overwrite-when-
+# different rule compares. It is never a removal candidate in any direction.
 _APT_SOURCES_LIST = "/etc/apt/sources.list"
 _APT_KEYRINGS_DIR = "/etc/apt/keyrings"
 _APT_TRUSTED_GPG_DIR = "/etc/apt/trusted.gpg.d"
@@ -750,15 +757,42 @@ def _dangling_keyring_ref(keyring_refs: Sequence[str], source_key_filenames: fro
     return None
 
 
-async def _capture_dir_digests(run: Callable[[str], Awaitable[CommandResult]], directory: str) -> dict[str, str]:
+async def _capture_dir_digests(
+    run: Callable[[str], Awaitable[CommandResult]],
+    directory: str,
+    *,
+    extensions: Sequence[str] = (),
+) -> dict[str, str]:
     """One `sudo find <dir> -maxdepth 1 -type f -exec sha256sum {} +` per directory —
     a single batched command, never one `sha256sum` per file. `-exec ... {} +` never
     runs at all when the directory has no matching files, so an empty/absent directory
     degrades to an empty digest map rather than a shell error.
+
+    `extensions` narrows the capture to the files apt itself reads, and is only correct
+    where apt HAS such a rule: `sources.list.d` is read for `*.list`/`*.sources` alone, so
+    the `.save`/`.curtin.orig` copies apt ignores must not become syncable items.
+    `preferences.d` and `apt.conf.d` pass no extensions, because apt reads extensionless
+    files in both.
     """
     quoted = shlex.quote(directory)
-    result = await run(f"sudo find {quoted} -maxdepth 1 -type f -exec sha256sum {{}} +")
+    predicate = ""
+    if extensions:
+        names = " -o ".join(f"-name {shlex.quote(f'*{ext}')}" for ext in extensions)
+        predicate = f"\\( {names} \\) "
+    result = await run(f"sudo find {quoted} -maxdepth 1 -type f {predicate}-exec sha256sum {{}} +")
     return _parse_sha256sum(result.stdout)
+
+
+async def _capture_file_digest(run: Callable[[str], Awaitable[CommandResult]], path: str) -> str | None:
+    """One `sudo sha256sum <path>`, or `None` when the file is absent.
+
+    The single-file counterpart to `_capture_dir_digests`, for `/etc/apt/sources.list`,
+    which is a file rather than a directory and so has no `find` listing to appear in.
+    Verified: `sha256sum` on a missing path exits 1 and writes nothing to stdout, so the
+    absent case falls out of the parse rather than needing a probe of its own.
+    """
+    result = await run(f"sudo sha256sum {shlex.quote(path)}")
+    return _parse_sha256sum(result.stdout).get(Path(path).name)
 
 
 async def _read_file_content(run: Callable[[str], Awaitable[CommandResult]], path: str) -> str:
@@ -775,19 +809,28 @@ async def _read_file_content(run: Callable[[str], Awaitable[CommandResult]], pat
     return result.stdout
 
 
-async def _scan_target_source_references(
+async def _scan_source_file_references(
     run: Callable[[str], Awaitable[CommandResult]],
 ) -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]]:
     """`{filename: (keyring_refs, repository URIs)}` for EVERY source file on a machine,
     from ONE batched command — `sources.list.d` AND `/etc/apt/sources.list`.
 
-    Two consumers, both of which need a fact no diff carries. The source-removal impact
-    (C26) needs the repository URIs of a file whose deletion is offered. Keyring garbage
-    collection needs the reference count of a key across every source file that exists,
-    which is emphatically not the set of files any diff implicates: a keyring is commonly
-    named only by files that are byte-identical on both machines, or that the user marked
-    machine-specific, or — `/etc/apt/sources.list` — that pc-switcher never syncs at all.
-    Missing any of those would delete a key that is still in use.
+    Machine-agnostic by construction (it takes the `run` callable and names no host), and
+    run against BOTH machines: the target's answer drives the two consumers below, the
+    source's answer is what maps a package's origin URIs back to the repository file that
+    would have to travel for it (ADR-021 D-34).
+
+    Two target-side consumers, both of which need a fact no diff carries. The source-removal
+    impact (C26) needs the repository URIs of a file whose deletion is offered. Keyring
+    garbage collection needs the reference count of a key across every source file that
+    exists, which is emphatically not the set of files any diff implicates: a keyring is
+    commonly named only by files that are byte-identical on both machines, or that the user
+    marked machine-specific, or — `/etc/apt/sources.list` — that pc-switcher never syncs at
+    all. Missing any of those would delete a key that is still in use.
+
+    Deliberately unfiltered by extension, unlike `_capture_dir_digests`' `sources.list.d`
+    capture: a keyring named only by a file apt ignores is still a key nothing else
+    references, and keeping it is cheaper than deleting one that turns out to be in use.
 
     `find ... -exec awk {} +` passes every file to one awk process (the `collect_hold_pin_facts`
     shape), and awk emits only the `URIs:`/`Signed-By:`/`deb` lines rather than whole
@@ -1016,6 +1059,17 @@ class AptSyncJob(PackageSyncJob):
         # says which keyrings matter: a keyring is commonly named only by files that are
         # byte-identical on both machines and so produce no diff at all.
         self._target_source_refs: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+        # The same scan run against the SOURCE machine. Its URIs are what map a package's
+        # installed-version origins back to the repository file that declares them, which
+        # is the file that has to travel for that package to be installable from the same
+        # place on the target (ADR-021 D-34).
+        self._source_source_refs: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+        # `/etc/apt/sources.list`'s digest on each machine, or None where the file is
+        # absent. Captured separately from the five directories because it is a single
+        # file: it has no `find` listing to appear in, and it is one of the files that is
+        # written and updated but never removed (ADR-021 D-38).
+        self._source_sources_list_digest: str | None = None
+        self._target_sources_list_digest: str | None = None
         # `{filename: keyring_refs}` parsed from the SOURCE machine's copy of every source
         # file a diff implicates — the refs that will apply once this run writes that file,
         # which are not necessarily the refs the target's current copy names.
@@ -1365,8 +1419,10 @@ class AptSyncJob(PackageSyncJob):
         async def target_run(cmd: str) -> CommandResult:
             return await self.target.run_command(cmd, login_shell=False)
 
-        source_sources = await _capture_dir_digests(source_run, _APT_SOURCES_DIR)
-        target_sources = await _capture_dir_digests(target_run, _APT_SOURCES_DIR)
+        source_sources = await _capture_dir_digests(source_run, _APT_SOURCES_DIR, extensions=_APT_SOURCE_EXTENSIONS)
+        target_sources = await _capture_dir_digests(target_run, _APT_SOURCES_DIR, extensions=_APT_SOURCE_EXTENSIONS)
+        self._source_sources_list_digest = await _capture_file_digest(source_run, _APT_SOURCES_LIST)
+        self._target_sources_list_digest = await _capture_file_digest(target_run, _APT_SOURCES_LIST)
         # One `sha256sum` listing per key directory per machine, driven by `_KEY_DIRS` so
         # capture, reference resolution and provisioning can never disagree about which
         # directories exist.
@@ -1382,10 +1438,13 @@ class AptSyncJob(PackageSyncJob):
         source_key_filenames = frozenset(name for digests in source_keys for name in digests)
         self._target_package_owned_keys = await self._capture_package_owned_keys(target_run)
 
-        # Unconditional, one batched command: which keyrings the target's sources point at
-        # is what makes a key correct, and that is a property of EVERY source file on the
-        # target, not just the ones a diff implicates. `_source_removal_details` reuses it.
-        self._target_source_refs = await _scan_target_source_references(target_run)
+        # Unconditional, one batched command per machine: which keyrings the target's
+        # sources point at is what makes a key correct, and that is a property of EVERY
+        # source file on the target, not just the ones a diff implicates.
+        # `_source_removal_details` reuses the target's scan; the source's answer is the
+        # origin-to-file map ADR-021 D-34 derives repository writes from.
+        self._target_source_refs = await _scan_source_file_references(target_run)
+        self._source_source_refs = await _scan_source_file_references(source_run)
         removal_details = await self._source_removal_details(
             target_run, extra_sources=frozenset(target_sources) - frozenset(source_sources)
         )
@@ -2780,7 +2839,7 @@ class AptSyncJob(PackageSyncJob):
         candidates = frozenset(self._target_keyrings) - frozenset(self._source_keyrings)
         if not candidates:
             return
-        references = await _scan_target_source_references(target_run)
+        references = await _scan_source_file_references(target_run)
         referenced = {Path(ref).name for refs, _uris in references.values() for ref in refs}
 
         for filename in sorted(candidates - referenced):

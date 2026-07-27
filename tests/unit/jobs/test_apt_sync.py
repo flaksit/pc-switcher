@@ -1953,6 +1953,137 @@ class TestRepoStateCapture:
         assert by_id["apt:config:99update"].action == DiffAction.INSTALL
 
 
+# -- ADR-021 seams: what apt actually reads, on BOTH machines --------------------------
+
+# The extension predicate the `sources.list.d` capture carries. Keyed FIRST in a response
+# mapping so the fake can answer the filtered command differently from the unfiltered one:
+# `respond_to` matches by substring, first match wins, so a capture that lost its filter
+# falls through to the wider listing and the `.save` file reappears.
+_FILTERED_SOURCES_FIND = "-name '*.list' -o -name '*.sources'"
+_SOURCES_LIST_DIGEST_CMD = "sudo sha256sum /etc/apt/sources.list"
+
+
+class TestWhatAptItselfReads:
+    """The capture is scoped to the files apt reads, on both machines (ADR-021 §5)."""
+
+    @pytest.mark.asyncio
+    async def test_a_save_file_in_sources_list_d_is_never_captured(self) -> None:
+        """Ubuntu's own tooling leaves `.save`/`.curtin.orig` copies beside the real files.
+        apt reads neither, so neither may reach the review — the target-only copy below
+        would otherwise be offered for deletion as a repository the source lacks.
+        """
+        unfiltered = sha256_line("d1", "vendor.list") + sha256_line("d2", "vendor.list.save")
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                **_NO_PACKAGES,
+                _FILTERED_SOURCES_FIND: CommandResult(0, sha256_line("d1", "vendor.list"), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, unfiltered, ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        item_ids = {d.item_id for d in plan.diffs}
+        assert "apt:source:vendor.list.save" not in item_ids
+        assert "apt:source:vendor.list" in item_ids
+
+    @pytest.mark.asyncio
+    async def test_preferences_d_and_apt_conf_d_keep_no_extension_filter(self) -> None:
+        """apt reads extensionless files in both (six of them in `preferences.d` on the
+        development machine), so the narrowing that is right for `sources.list.d` is wrong
+        here — on either machine.
+        """
+        context, source, target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "no-esm-docker"), ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        unfiltered = [
+            cmd
+            for machine in (source, target)
+            for cmd in all_calls(machine)
+            if "-exec sha256sum" in cmd and ("/etc/apt/preferences.d" in cmd or "/etc/apt/apt.conf.d" in cmd)
+        ]
+        # Both directories, both machines.
+        assert len(unfiltered) == 4
+        assert not any("-name" in cmd for cmd in unfiltered)
+        assert "apt:pin:no-esm-docker" in {d.item_id for d in plan.diffs}
+
+    @pytest.mark.asyncio
+    async def test_sources_list_is_digested_on_both_machines_and_is_still_not_an_item(self) -> None:
+        """`/etc/apt/sources.list` is a file, not a directory, so it appears in no `find`
+        listing and needs its own digest — which ADR-021 D-38's write-when-different rule
+        compares. Capturing it must not turn it into a reviewable item.
+        """
+        context, source, target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                _SOURCES_LIST_DIGEST_CMD: CommandResult(0, sha256_line("s1", "/etc/apt/sources.list"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                _SOURCES_LIST_DIGEST_CMD: CommandResult(0, sha256_line("s2", "/etc/apt/sources.list"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert job._source_sources_list_digest == "s1"  # pyright: ignore[reportPrivateUsage]
+        assert job._target_sources_list_digest == "s2"  # pyright: ignore[reportPrivateUsage]
+        assert sum(1 for cmd in all_calls(source) if _SOURCES_LIST_DIGEST_CMD in cmd) == 1
+        assert sum(1 for cmd in all_calls(target) if _SOURCES_LIST_DIGEST_CMD in cmd) == 1
+        assert not any(d.item_id.endswith(":sources.list") for d in plan.diffs)
+
+    @pytest.mark.asyncio
+    async def test_an_absent_sources_list_yields_no_digest_rather_than_an_error(self) -> None:
+        """Verified on the development machine: `sha256sum` on a missing path exits 1 and
+        prints nothing to stdout, so absence falls out of the parse with no probe.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                _SOURCES_LIST_DIGEST_CMD: CommandResult(1, "", "sha256sum: /etc/apt/sources.list: No such file\n"),
+            },
+            target_responses=_NO_PACKAGES,
+        )
+        job = AptSyncJob(context)
+
+        await job.plan()
+
+        assert job._source_sources_list_digest is None  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_the_source_file_scan_runs_against_both_machines(self) -> None:
+        """The scan is machine-agnostic and both answers are load-bearing: the target's
+        drives keyring reference counting and the removal impact, the source's is what maps
+        a package's origin URIs back to the repository file that would have to travel
+        (ADR-021 D-34).
+        """
+        context, source, target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+            },
+            target_responses=_NO_PACKAGES,
+        )
+        job = AptSyncJob(context)
+
+        await job.plan()
+
+        assert sum(1 for cmd in all_calls(source) if _SOURCE_SCAN_CMD in cmd) == 1
+        assert sum(1 for cmd in all_calls(target) if _SOURCE_SCAN_CMD in cmd) == 1
+        refs, uris = job._source_source_refs["vendor.list"]  # pyright: ignore[reportPrivateUsage]
+        assert uris == ("https://vendor.example.com/apt",)
+        assert refs == ("/etc/apt/keyrings/vendor.gpg",)
+
+
 # -- Task 2: ordered, transactional repository-group convergence -----------------------
 
 

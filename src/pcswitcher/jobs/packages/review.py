@@ -99,13 +99,18 @@ PACKAGE_REVIEW_AUTOMATION_ENV = "PCSWITCHER_PACKAGE_REVIEW_AUTOMATION"
 # item to match the source is not the destructive branch a bulk tick must guard against).
 _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable"})
 
-# `ReviewGroup.action` values whose items carry a converge verb, and are therefore the only
-# ones offered the "never offer again" promotion below (D-07). A `REPORT_ONLY` group is
-# excluded on purpose: a version mismatch, a missing repo candidate or a pin echo has no
-# machine that HOLDS the item for D-08a to record against, and recording one would stop the
-# package syncing altogether rather than stop reporting the condition. Those are resolved by
-# fixing the underlying condition, not by a machine-specific mark.
-_ACTIONABLE_ACTIONS = _REMOVAL_ACTIONS | frozenset({"install", "add", "enable", "change"})
+# `ReviewGroup.action` values whose items carry a converge verb AND may be recorded
+# machine-specific, and are therefore the only ones offered the "never offer again"
+# promotion below (D-07). A `REPORT_ONLY` group is excluded on purpose: a version mismatch,
+# a missing repo candidate or a pin echo has no machine that HOLDS the item for D-08a to
+# record against, and recording one would stop the package syncing altogether rather than
+# stop reporting the condition. Those are resolved by fixing the underlying condition, not
+# by a machine-specific mark.
+#
+# Enumerated independently of `_REMOVAL_ACTIONS` rather than derived from it: "arrives
+# unticked" and "is offered permanence" are two different questions about a group, and
+# ADR-021's two-answer screens answer them differently (unticked, never promoted).
+_PROMOTABLE_ACTIONS = frozenset({"install", "add", "enable", "change", "remove", "delete", "disable"})
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of unreproducible items (D-18/D-21) as needing the three-way per-entry resolution flow
@@ -141,12 +146,18 @@ class ReviewEntry:
 
     Deliberately minimal — this module has no dependency on the real item model plan
     02-03 introduces. Plan 02-05 adapts `ItemDiff` onto this shape.
+
+    `versions` carries `(the target's current content, the source's content)` for the one
+    screen that shows two whole files side by side instead of a detail line (ADR-021's
+    repository conflict). Optional and defaulted so every other construction site — and
+    every other screen — is unaffected; a unified diff is deliberately not the shape.
     """
 
     item_id: str
     label: str
     action_label: str
     detail: str | None = None
+    versions: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -208,8 +219,8 @@ def _is_collateral_group(action: str) -> bool:
     return action == COLLATERAL_REVIEW_ACTION
 
 
-def _is_actionable_group(action: str) -> bool:
-    return action in _ACTIONABLE_ACTIONS
+def _is_promotable_group(action: str) -> bool:
+    return action in _PROMOTABLE_ACTIONS
 
 
 # Printed once before the multi-line capture, so a user does not author a snippet that
@@ -514,7 +525,7 @@ async def review_items(
             for entry in group.entries:
                 decisions[entry.item_id] = Decision.APPLY if entry.item_id in selected_ids else Decision.SKIP_ONCE
 
-            if _is_actionable_group(group.action):
+            if _is_promotable_group(group.action):
                 unticked = [entry for entry in group.entries if entry.item_id not in selected_ids]
                 if unticked:
                     await _offer_permanent_skips(group, unticked, console=console, decisions=decisions)
