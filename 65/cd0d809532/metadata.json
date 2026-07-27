@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "65cd0d809532",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/btrfs_snapshots.py",
+    "tests/unit/test_btrfs_snapshots.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/65/cd0d809532/0/metadata.json",
+      "transcript": "/65/cd0d809532/0/full.jsonl",
+      "compact_transcript": "/65/cd0d809532/0/transcript.jsonl",
+      "content_hash": "/65/cd0d809532/0/content_hash.txt",
+      "prompt": "/65/cd0d809532/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 208,
+    "cache_creation_tokens": 204474,
+    "cache_read_tokens": 15249594,
+    "output_tokens": 47500,
+    "api_call_count": 110
+  }
+}
