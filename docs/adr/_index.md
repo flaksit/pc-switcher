@@ -1,4 +1,4 @@
-# Architecture Decisions Summary (Last updated: 2026-07-23)
+# Architecture Decisions Summary (Last updated: 2026-07-27)
 
 ## Active Decisions
 
@@ -20,7 +20,7 @@
 - [ADR-017](adr-017-mirror-pcswitcher-install.md): Mirror pc-switcher's own install; hardcode-exclude only its runtime state
 - [ADR-018](adr-018-selective-vscode-state-sync.md): SQLite-aware selective sync of VS Code editor state.vscdb
 - [ADR-019](adr-019-homogeneous-fleet.md): Homogeneous fleet — matching real users (uid/gid >= 1000) and paths across machines (no user/id/path mapping)
-- [ADR-020](adr-020-declarative-package-convergence.md): Declarative package convergence: manifest capture, item diff, replay through each ecosystem's own tooling, with each package job owning its own batched review between its plan and its apply
+- [ADR-021](adr-021-origin-replicating-package-convergence.md): Origin-replicating package convergence — an apt package replicates as (name, origin); the review decides packages and apt config, while repositories, keys and pins are derived from the packages approved from them
 
 ### Instructions for AI agents
 Load specific ADRs only when relevant to current task: search workspace files to find relevant ADRs
@@ -28,3 +28,4 @@ Load specific ADRs only when relevant to current task: search workspace files to
 ## Superseded
 
 - [ADR-016](adr-016-hardcoded-runtime-file-excludes.md): Hardcoded exclusion of pc-switcher's own runtime files → Superseded by [ADR-017](adr-017-mirror-pcswitcher-install.md)
+- [ADR-020](adr-020-declarative-package-convergence.md): Declarative package convergence: manifest capture, item diff, replay through each ecosystem's own tooling → Superseded by [ADR-021](adr-021-origin-replicating-package-convergence.md)

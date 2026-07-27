@@ -1,8 +1,10 @@
 # ADR-020: Declarative package convergence: manifest capture, item diff, replay via each ecosystem's own tooling
 
-Status: Accepted
+Status: Superseded by ADR-021
 
 Date: 2026-07-23
+
+Superseded by: [ADR-021](adr-021-origin-replicating-package-convergence.md) — an apt package replicates as (name, origin), not name, so repositories, keys and pins became mechanism derived from the packages approved from them instead of reviewed inventory items.
 
 ## TL;DR
 
