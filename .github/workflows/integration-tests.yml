@@ -196,8 +196,13 @@ jobs:
       - name: Run integration tests
         run: |
           set -o pipefail
+          # `not ci_skip` in CI only: the exception hatch for tests that must
+          # not run here (local/manual runs still execute them).
+          base="integration and not benchmark and not ci_skip"
           if [[ -n "${{ steps.select.outputs.markers }}" ]]; then
-            export PC_SWITCHER_TEST_MARKERS="integration and not benchmark and (${{ steps.select.outputs.markers }})"
+            export PC_SWITCHER_TEST_MARKERS="$base and (${{ steps.select.outputs.markers }})"
+          else
+            export PC_SWITCHER_TEST_MARKERS="$base"
           fi
           ./tests/run-integration-tests.sh 2>&1 | tee pytest-output.log
         env:

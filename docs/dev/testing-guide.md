@@ -271,7 +271,7 @@ tests/integration/
 ```python
 @pytest.mark.integration   # Requires VM infrastructure (auto-applied in tests/integration/)
 @pytest.mark.benchmark     # Performance benchmarks (in benchmarks/ folder, not run by default)
-@pytest.mark.ci_skip       # Inert stopgap, slated for removal (superseded by CI selection markers)
+@pytest.mark.ci_skip       # Exception hatch: excluded from ALL CI runs (topic and full); local runs still execute it
 @pytest.mark.smoke         # CI selection: fast sanity, part of every CI integration selection
 @pytest.mark.area_package  # CI selection: package-manager sync tests
 @pytest.mark.area_install  # CI selection: install / self-update tests
@@ -280,7 +280,7 @@ tests/integration/
 @pytest.mark.area_core     # CI selection: core behavior, no topic mapping (full-suite runs only)
 ```
 
-Every integration test MUST carry exactly one CI-selection marker (`smoke` or an `area_*`), normally as a module-level `pytestmark` — collection fails otherwise (enforced in `tests/integration/conftest.py`).
+Every integration test MUST carry exactly one CI-selection marker (`smoke` or an `area_*`), normally as a module-level `pytestmark` — collection fails otherwise (enforced in `tests/integration/conftest.py`). `ci_skip` is additive to the area marker, not a replacement.
 
 ## CI test selection (topic-based)
 
