@@ -77,6 +77,22 @@ POLICY_NO_CANDIDATE = """docker.io:
         500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
 """
 
+# COMPOSED, not measured: the development machine does not have Mozilla's repository, so
+# this is `firefox`'s real archive row (above, verbatim) with a vendor row added in the shape
+# `git`'s PPA row has, at the priority Mozilla's documented `preferences.d` pin gives it. It
+# is the source-side half of the defect ADR-021 D-34 closes: the vendor's copy is installed
+# here, and the archive's epoch-1 copy is what the target would install.
+POLICY_MOZILLA_FIREFOX_INSTALLED = """firefox:
+  Installed: 145.0
+  Candidate: 145.0
+  Version table:
+ *** 145.0 1000
+        1000 https://packages.mozilla.org/apt mozilla/main amd64 Packages
+        100 /var/lib/dpkg/status
+     1:1snap1-0ubuntu5 500
+        500 http://ftp.belnet.be/ubuntu noble/main amd64 Packages
+"""
+
 # `code`, installed from a downloaded `.deb`: dpkg's own status entry supplies the
 # candidate, so the candidate row has no repository origin at all. Verbatim.
 POLICY_HAND_DEB = """code:

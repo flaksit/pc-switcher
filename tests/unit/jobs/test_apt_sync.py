@@ -28,10 +28,14 @@ from pcswitcher.jobs.apt_sync import (
     HoldPinFact,
     _diff_apt_packages,
     _distribution_origins,
+    _OriginOutcome,
+    _OriginPlan,
     _parse_pin_file,
     _parse_source_file,
     _source_files_serving,
     build_held_or_pinned_detail,
+    build_origin_detail,
+    build_origin_mismatch_detail,
     build_repo_unavailable_detail,
     compare_deb_versions,
     simulate_apt_transaction,
@@ -51,7 +55,11 @@ from pcswitcher.orchestrator import Orchestrator
 # The real `apt-cache policy` blocks manual_installs_sync is tested against, imported
 # rather than copied: the A11 ruling is that both jobs decide bare-`.deb` ownership from
 # the SAME evidence, which two independently-drifting fixtures would stop demonstrating.
-from tests.unit.jobs.test_apt_policy import POLICY_INSTALLED_AND_CANDIDATE_DIFFER
+from tests.unit.jobs.test_apt_policy import (
+    POLICY_ARCHIVE_CANDIDATE_UNINSTALLED,
+    POLICY_INSTALLED_AND_CANDIDATE_DIFFER,
+    POLICY_MOZILLA_FIREFOX_INSTALLED,
+)
 from tests.unit.jobs.test_manual_installs_sync import (
     _POLICY_AUTO_DEP,
     _POLICY_HAND_DEB,
@@ -172,7 +180,7 @@ class TestDiff:
 
         source_items = await job.capture_source_items()
         target_items = await job.query_target_items()
-        diffs = _diff_apt_packages(source_items, target_items, (), frozenset())
+        diffs = _diff_apt_packages(source_items, target_items, (), {})
 
         assert len(diffs) == 2
         assert {d.item_id for d in diffs} == {"apt:package:pkg-a", "apt:package:pkg-c"}
@@ -186,7 +194,7 @@ class TestDiff:
             AptPackageItem(name="pkg-a", version="1.0"),
             AptPackageItem(name="pkg-extra", version="9.9"),
         ]
-        diffs = _diff_apt_packages(source_items, target_items, (), frozenset())
+        diffs = _diff_apt_packages(source_items, target_items, (), {})
 
         assert len(diffs) == 1
         assert diffs[0].item_id == "apt:package:pkg-extra"
@@ -1011,13 +1019,16 @@ class TestHoldsDriveNoSimulation:
 
 
 class TestUnavailableCapture:
-    """collect_unavailable_item_ids: one batched apt-cache policy call over the
-    missing-on-target set — a `Candidate: (none)` package is REPO_UNAVAILABLE, not
-    proposed as an INSTALL.
+    """ONE batched `apt-cache policy` on the target answers every origin question this run
+    asks of it, and a package whose origin cannot be provided there is reported rather than
+    installed from somewhere else (ADR-021 D-34).
     """
 
     @pytest.mark.asyncio
-    async def test_no_candidate_package_is_reported_not_installed(self) -> None:
+    async def test_a_package_no_repository_can_supply_is_reported_not_installed(self) -> None:
+        """No origin on the source, and the target's apt says it will install nothing: two
+        answers that agree, so the package is reported.
+        """
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
@@ -1039,18 +1050,29 @@ class TestUnavailableCapture:
         assert plan.diffs[0].action == DiffAction.REPORT_ONLY
 
     @pytest.mark.asyncio
-    async def test_batched_single_apt_cache_policy_call_for_multiple_missing_packages(self) -> None:
+    async def test_one_batched_policy_call_covers_every_package(self) -> None:
         context, _source, target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t1.0\n", ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+                "apt-cache policy": CommandResult(
+                    0,
+                    _policy_block("pkg-a", "https://vendor.example.com/apt")
+                    + _policy_block("pkg-b", "https://vendor.example.com/apt"),
+                    "",
+                ),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-cache policy": CommandResult(0, "pkg-a:\n  Candidate: 1.0\npkg-b:\n  Candidate: (none)\n", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\n", ""
+                "apt-cache policy": CommandResult(
+                    0,
+                    _policy_block("pkg-a", "https://vendor.example.com/apt")
+                    + "pkg-b:\n  Installed: (none)\n  Candidate: (none)\n  Version table:\n",
+                    "",
                 ),
+                "apt-get --dry-run install": CommandResult(0, "Inst pkg-a (1.0)\nInst pkg-b (1.0)\n", ""),
             },
         )
         job = AptSyncJob(context)
@@ -1063,8 +1085,12 @@ class TestUnavailableCapture:
         assert "pkg-b" in policy_calls[0]
 
         by_id = {diff.item_id: diff for diff in plan.diffs}
+        # pkg-a: the target's candidate is already the source's origin -> ordinary install.
         assert by_id["apt:package:pkg-a"].diff_class == DiffClass.MISSING_ON_TARGET
-        assert by_id["apt:package:pkg-b"].diff_class == DiffClass.REPO_UNAVAILABLE
+        # pkg-b: the target has no candidate, but the source declares the origin in a file
+        # that can travel -> still an install, with that repository derived from it.
+        assert by_id["apt:package:pkg-b"].diff_class == DiffClass.MISSING_ON_TARGET
+        assert job._origin_plan["apt:package:pkg-b"].derived_files == frozenset({"vendor.list"})  # pyright: ignore[reportPrivateUsage]
 
 
 class TestNoUnreproducibleDetectionInApt:
@@ -1151,6 +1177,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
                 "apt-mark showmanual": CommandResult(0, "gh\n", ""),
                 "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
                 "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
             target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
         )
@@ -1169,6 +1196,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
                 "apt-mark showmanual": CommandResult(0, "code\ngh\ndocker.io\n7zip\n", ""),
                 "dpkg-query": CommandResult(0, "code\t1.0\ngh\t2.96.0\ndocker.io\t29.1\n7zip\t23.01\n", ""),
                 "apt-cache policy": CommandResult(0, policy, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
             target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
         )
@@ -1197,6 +1225,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
                 "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
                 "dpkg-query": CommandResult(0, "code\t1.0\ngh\t2.96.0\n", ""),
                 "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
             target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
         )
@@ -1221,6 +1250,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
                 "apt-mark showmanual": CommandResult(0, "gh\n", ""),
                 "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
                 "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
@@ -2191,6 +2221,278 @@ class TestOriginCapture:
         await job.plan()
 
         assert job._source_origins["gh"] == frozenset({"https://cli.github.com/packages"})  # pyright: ignore[reportPrivateUsage]
+
+
+_MOZILLA_SOURCES = (
+    "Types: deb\nURIs: https://packages.mozilla.org/apt\nSuites: mozilla\n"
+    "Components: main\nSigned-By: /etc/apt/keyrings/packages.mozilla.org.asc\n"
+)
+_UBUNTU_SOURCES_BELNET = "Types: deb\nURIs: http://ftp.belnet.be/ubuntu\nSuites: noble\nComponents: main\n"
+_UBUNTU_SOURCES_ARCHIVE = "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble\nComponents: main\n"
+_RIVAL_LIST = "deb https://rival.example.com/apt stable main\n"
+
+
+class TestOriginClassification:
+    """ADR-021 D-34 at plan time: a package replicates as (name, origin), so a name the
+    target could satisfy from a different vendor is not "already available".
+    """
+
+    @pytest.mark.asyncio
+    async def test_same_origin_install_derives_no_repository_write(self) -> None:
+        """Class 1. The target's own candidate already comes from a place the source uses,
+        so nothing about `/etc/apt` has to change for the install to be faithful.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://vendor.example.com/apt"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://vendor.example.com/apt"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:pkg-a")
+        assert diff.action == DiffAction.INSTALL
+        assert job._origin_plan["apt:package:pkg-a"].derived_files == frozenset()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_different_origin_install_derives_the_sources_own_repository(self) -> None:
+        """Class 2, the Firefox case. The target HAS a candidate for the name — Ubuntu's
+        epoch-1 transitional package — and it is not the source's software. Name-only
+        matching read this as an ordinary install and shipped the other vendor's package.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "firefox\n", ""),
+                "dpkg-query": CommandResult(0, "firefox\t145.0\n", ""),
+                "apt-cache policy": CommandResult(0, POLICY_MOZILLA_FIREFOX_INSTALLED, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("mozilla.sources", _MOZILLA_SOURCES), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "packages.mozilla.org.asc"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, POLICY_ARCHIVE_CANDIDATE_UNINSTALLED, ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:firefox")
+        assert (diff.diff_class, diff.action) == (DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL)
+        assert diff.detail == "from packages.mozilla.org/apt"
+        # The keyring half of the write set is derived at write time from this file's own
+        # `Signed-By:`; what the plan owes is the file.
+        assert job._origin_plan["apt:package:firefox"].derived_files == frozenset({"mozilla.sources"})  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_unreplicable_origin_is_report_only_naming_the_origin(self) -> None:
+        """Class 4. The repository the package came from is gone from the source's own
+        `/etc/apt`, so there is no file to hand the target and no honest install to offer.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://gone.example.com/apt"), ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+        job = AptSyncJob(context)
+        job.context = dataclasses.replace(job.context, reviewer=FakeReviewer({"apt:package:pkg-a": Decision.APPLY}))
+
+        await job.execute()
+
+        diff = next(d for d in job._accepted_plan.diffs if d.item_id == "apt:package:pkg-a")  # pyright: ignore[reportPrivateUsage, reportOptionalMemberAccess]
+        assert (diff.diff_class, diff.action) == (DiffClass.REPO_UNAVAILABLE, DiffAction.REPORT_ONLY)
+        assert diff.detail is not None and "gone.example.com/apt" in diff.detail
+        assert not any("apt-get install" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_dangling_keyring_makes_the_package_unavailable(self) -> None:
+        """Class 4's other half. The source declares the repository but references a key it
+        does not have, so the file cannot be written and the origin cannot be delivered —
+        and it is the PACKAGE that says so, because the package is what the user decided.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://vendor.example.com/apt"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:pkg-a")
+        assert (diff.diff_class, diff.action) == (DiffClass.REPO_UNAVAILABLE, DiffAction.REPORT_ONLY)
+        assert diff.detail is not None and "vendor.gpg" in diff.detail
+
+    @pytest.mark.asyncio
+    async def test_one_writable_serving_file_is_enough(self) -> None:
+        """A package served by both a sound repository file and a broken one is replicable:
+        the origin only has to be declared once for the target to install from it, so a
+        second file with a dangling key must not condemn the package.
+        """
+        broken = "deb [signed-by=/etc/apt/keyrings/missing.gpg] https://vendor.example.com/apt old main\n"
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://vendor.example.com/apt"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(
+                    0, _scan_line("broken.list", broken) + _scan_line("vendor.list", _VENDOR_LIST), ""
+                ),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:pkg-a")
+        assert diff.action == DiffAction.INSTALL
+
+    @pytest.mark.asyncio
+    async def test_a_distribution_origin_install_names_no_origin(self) -> None:
+        """The unremarkable case earns no text: naming the mirror on every archive package
+        would bury the two lines that matter under a hundred that do not.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "http://ftp.belnet.be/ubuntu"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("ubuntu.sources", _UBUNTU_SOURCES_BELNET), ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:pkg-a")
+        assert diff.action == DiffAction.INSTALL
+        assert diff.detail is None
+
+    @pytest.mark.asyncio
+    async def test_two_machines_on_different_ubuntu_mirrors_produce_no_origin_mismatch(self) -> None:
+        """The suppression that makes the provenance comparison usable at all: each machine's
+        distribution origins are read from its OWN distribution files, so a Belgian mirror
+        and the default archive are one vendor, not two.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "http://ftp.belnet.be/ubuntu"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("ubuntu.sources", _UBUNTU_SOURCES_BELNET), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "http://archive.ubuntu.com/ubuntu"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("ubuntu.sources", _UBUNTU_SOURCES_ARCHIVE), ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [d for d in plan.diffs if d.diff_class == DiffClass.ORIGIN_MISMATCH] == []
+
+    @pytest.mark.asyncio
+    async def test_divergent_vendor_provenance_reports_origin_mismatch(self) -> None:
+        """The same name and the same version on both machines, from two vendors. A
+        presence-and-version diff sees nothing here, which is why this class exists —
+        report only, because converging it means a cross-vendor reinstall nobody asked for.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://vendor.example.com/apt"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://rival.example.com/apt"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("rival.list", _RIVAL_LIST), ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:pkg-a")
+        assert (diff.diff_class, diff.action) == (DiffClass.ORIGIN_MISMATCH, DiffAction.REPORT_ONLY)
+        assert diff.detail is not None
+        assert "vendor.example.com/apt" in diff.detail
+        assert "rival.example.com/apt" in diff.detail
+
+
+class TestOriginDetailWording:
+    """Ruling 9's naming rules, as pure text."""
+
+    def test_origin_detail_strips_the_scheme_and_names_the_full_path(self) -> None:
+        """The path, not the bare host: one Launchpad host serves thousands of PPAs."""
+        assert build_origin_detail(["https://ppa.launchpadcontent.net/git-core/ppa/ubuntu"]) == (
+            "from ppa.launchpadcontent.net/git-core/ppa/ubuntu"
+        )
+
+    def test_origin_detail_is_omitted_for_a_distribution_origin(self) -> None:
+        """The caller filters the distribution's own origins out, so nothing left to name
+        means the distribution serves it and the line says nothing about origins.
+        """
+        assert build_origin_detail([]) is None
+
+    def test_several_vendors_are_named_comma_separated(self) -> None:
+        assert build_origin_detail(["https://a.example.com/apt", "https://b.example.com/deb"]) == (
+            "from a.example.com/apt, b.example.com/deb"
+        )
+
+    def test_the_mismatch_detail_names_both_sides(self) -> None:
+        detail = build_origin_mismatch_detail(["https://vendor.example.com/apt"], ["https://rival.example.com/apt"])
+
+        assert detail == "source installed it from vendor.example.com/apt, target from rival.example.com/apt"
+
+
+class TestOriginOutcome:
+    """`_OriginPlan.outcome` in isolation, for the branches a whole-plan test cannot reach
+    cheaply."""
+
+    def test_apt_silence_on_the_target_does_not_condemn_a_package(self) -> None:
+        """`df48cd07`'s rule at the classification level: a policy call that produced no
+        block for the name answered nothing, and a run whose probe failed must not report a
+        repository problem it never established.
+        """
+        plan = _OriginPlan(target_candidate_known=False)
+
+        assert plan.outcome() is not _OriginOutcome.UNREPLICABLE
+
+    def test_an_explicit_no_candidate_with_no_origin_to_replicate_is_unreplicable(self) -> None:
+        """The other half of the same distinction: apt answered, and its answer was no."""
+        plan = _OriginPlan(target_candidate_known=True)
+
+        assert plan.outcome() is _OriginOutcome.UNREPLICABLE
+
+    def test_a_plan_with_no_origin_fact_at_all_still_installs(self) -> None:
+        """The degenerate case: nothing captured, nothing to hold the install to."""
+        assert _OriginPlan().outcome() is _OriginOutcome.SAME_ORIGIN
 
 
 # -- Task 2: ordered, transactional repository-group convergence -----------------------
@@ -3228,6 +3530,20 @@ def _scan_line(filename: str, content: str, *, path: str | None = None) -> str:
     return "".join(
         f"{where}\t{line}\n" for line in content.splitlines() if any(token in line.lower() for token in keep)
     )
+
+
+# The source-side scan that makes the shared `apt-cache policy` fixtures' origins resolve to
+# a repository file (ADR-021 D-34). Without one, `gh`'s vendor origin is declared by no file
+# on the source and the package is correctly unreplicable — which is a different fact from
+# the one those tests are about.
+_POLICY_FIXTURE_SCAN = (
+    _scan_line("github-cli.list", "deb https://cli.github.com/packages stable main\n")
+    + _scan_line(
+        "ubuntu.sources",
+        "Types: deb\nURIs: http://ftp.belnet.be/ubuntu http://security.ubuntu.com/ubuntu\n",
+    )
+    + _scan_line("ubuntu-esm-apps.sources", "Types: deb\nURIs: https://esm.ubuntu.com/apps/ubuntu\n")
+)
 
 
 class TestRepoRemovalNamesMachineSpecificPackages:
@@ -4574,10 +4890,14 @@ class TestHoldPinFactAndDetails:
         assert hold_diff.detail != pin_diff.detail
         assert hold.mechanism != pin.mechanism
 
-    def test_build_repo_unavailable_detail_names_the_package(self) -> None:
-        detail = build_repo_unavailable_detail("brscan3")
+    def test_build_repo_unavailable_detail_names_the_package_its_origin_and_the_cause(self) -> None:
+        detail = build_repo_unavailable_detail(
+            "brscan3", ["https://gone.example.com/apt"], "no repository file on the source declares it"
+        )
 
         assert "brscan3" in detail
+        assert "gone.example.com/apt" in detail
+        assert "no repository file on the source declares it" in detail
 
 
 class TestDiffEngine:
@@ -4586,7 +4906,7 @@ class TestDiffEngine:
     def test_missing_on_target_yields_install(self) -> None:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, [], (), frozenset())
+        diffs = _diff_apt_packages(source_items, [], (), {})
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.MISSING_ON_TARGET
@@ -4595,7 +4915,7 @@ class TestDiffEngine:
     def test_extra_on_target_yields_remove(self) -> None:
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages([], target_items, (), frozenset())
+        diffs = _diff_apt_packages([], target_items, (), {})
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.EXTRA_ON_TARGET
@@ -4605,7 +4925,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="2.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, (), frozenset())
+        diffs = _diff_apt_packages(source_items, target_items, (), {})
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.VERSION_MISMATCH
@@ -4618,7 +4938,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, (), frozenset())
+        diffs = _diff_apt_packages(source_items, target_items, (), {})
 
         assert diffs == []
 
@@ -4629,7 +4949,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, (), frozenset(), frozenset({"pkg-a"}), frozenset())
+        diffs = _diff_apt_packages(source_items, target_items, (), {}, frozenset({"pkg-a"}), frozenset())
 
         assert len(diffs) == 1
         assert diffs[0].item_class == ItemClass.APT_HOLD
@@ -4646,7 +4966,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="2.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, (), frozenset(), frozenset(), frozenset({"pkg-a"}))
+        diffs = _diff_apt_packages(source_items, target_items, (), {}, frozenset(), frozenset({"pkg-a"}))
 
         assert len(diffs) == 1
         assert diffs[0].item_class == ItemClass.APT_HOLD
@@ -4657,9 +4977,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(
-            source_items, target_items, (), frozenset(), frozenset({"pkg-a"}), frozenset({"pkg-a"})
-        )
+        diffs = _diff_apt_packages(source_items, target_items, (), {}, frozenset({"pkg-a"}), frozenset({"pkg-a"}))
 
         assert diffs == []
 
@@ -4671,19 +4989,27 @@ class TestDiffEngine:
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
         pin = HoldPinFact(mechanism="pin", package="pkg-a", source_ref="/etc/apt/preferences.d/pkg-a-pin")
 
-        pin_diffs = _diff_apt_packages(source_items, target_items, [pin], frozenset())
-        hold_diffs = _diff_apt_packages(source_items, target_items, (), frozenset(), frozenset({"pkg-a"}), frozenset())
+        pin_diffs = _diff_apt_packages(source_items, target_items, [pin], {})
+        hold_diffs = _diff_apt_packages(source_items, target_items, (), {}, frozenset({"pkg-a"}), frozenset())
 
         assert pin_diffs[0].diff_class == DiffClass.HELD_OR_PINNED
         assert pin_diffs[0].item_class == ItemClass.APT_PACKAGE
         assert hold_diffs[0].item_class == ItemClass.APT_HOLD
         assert hold_diffs[0].diff_class != DiffClass.HELD_OR_PINNED
 
-    def test_missing_and_unavailable_yields_repo_unavailable_not_install(self) -> None:
+    def test_an_origin_no_source_file_declares_yields_repo_unavailable_not_install(self) -> None:
+        """ADR-021 §2.3 class 4, the only remaining meaning of `REPO_UNAVAILABLE`: the
+        source has the package from a repository that has since been deleted from the
+        source's own `/etc/apt`, so the origin cannot be handed to the target at all.
+        """
         source_items = [AptPackageItem(name="brscan3", version="")]
+        plan = {"apt:package:brscan3": _OriginPlan(source_origins=frozenset({"https://gone.example.com/apt"}))}
 
-        diffs = _diff_apt_packages(source_items, [], (), frozenset({"apt:package:brscan3"}))
+        diffs = _diff_apt_packages(source_items, [], (), plan)
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.REPO_UNAVAILABLE
         assert diffs[0].action == DiffAction.REPORT_ONLY
+        assert diffs[0].detail is not None
+        assert "gone.example.com/apt" in diffs[0].detail
+        assert "no repository file on the source declares it" in diffs[0].detail

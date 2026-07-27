@@ -59,6 +59,16 @@ class ItemClass(StrEnum):
 class DiffClass(StrEnum):
     """The full D-25 conflict taxonomy — every member is producible once this plan's
     `diff_items` dispatch (`packages/sync_core.py`) is filled out.
+
+    `REPO_UNAVAILABLE` and `ORIGIN_MISMATCH` are the two ADR-021 D-34 classes and are about
+    WHERE an item comes from, not whether it is present:
+
+    - `REPO_UNAVAILABLE` — the source's origin cannot be provided on the target, so the
+      item is reported rather than installed from somewhere else. Redefined by ADR-021: it
+      no longer means "apt printed `Candidate: (none)`", which said nothing about
+      provenance and read as unavailable for packages the target could have installed.
+    - `ORIGIN_MISMATCH` — present on both machines, from two different vendors. A real
+      divergence a presence-and-version diff cannot see.
     """
 
     MISSING_ON_TARGET = "missing_on_target"
@@ -66,6 +76,7 @@ class DiffClass(StrEnum):
     VERSION_MISMATCH = "version_mismatch"
     HELD_OR_PINNED = "held_or_pinned"
     REPO_UNAVAILABLE = "repo_unavailable"
+    ORIGIN_MISMATCH = "origin_mismatch"
     UNREPRODUCIBLE = "unreproducible"
 
 

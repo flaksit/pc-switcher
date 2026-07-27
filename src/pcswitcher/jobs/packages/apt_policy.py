@@ -32,7 +32,6 @@ __all__ = [
     "installed_origins_by_package",
     "normalise_repo_uri",
     "packages_installed_from_no_repository",
-    "packages_with_no_candidate",
 ]
 
 # dpkg's own record of an installed package. It appears as an origin row on every
@@ -47,37 +46,6 @@ def normalise_repo_uri(uri: str) -> str:
     the two forms verbatim would miss every repo written with one.
     """
     return uri.rstrip("/")
-
-
-def packages_with_no_candidate(policy_output: str) -> set[str]:
-    """Parse a multi-package `apt-cache policy <name...>` run: names whose `Candidate:`
-    line reads `(none)`. Each package's block starts with an unindented `<name>:` header
-    line, per `apt-cache policy`'s documented output shape.
-
-    `(none)` means apt knows the name but will not install ANY version of it: a pure
-    virtual package, or every version pinned below zero. It does NOT mean the package is
-    unavailable in general, and it is emphatically not what apt prints for a package
-    installed from a bare `.deb` — dpkg's own status entry supplies a candidate for that,
-    so a hand-installed package reports its installed version here
-    (`packages_installed_from_no_repository` is the test for that case).
-
-    A name apt has never heard of produces NO BLOCK AT ALL and is therefore absent from
-    the result, which every caller reads as "no evidence against".
-    """
-    no_candidate: set[str] = set()
-    current: str | None = None
-    for line in policy_output.splitlines():
-        if line and not line[0].isspace() and line.endswith(":"):
-            current = line[:-1]
-            continue
-        if current is None:
-            continue
-        stripped = line.strip()
-        if stripped.startswith("Candidate:"):
-            if stripped.removeprefix("Candidate:").strip() == "(none)":
-                no_candidate.add(current)
-            current = None
-    return no_candidate
 
 
 def installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]]:

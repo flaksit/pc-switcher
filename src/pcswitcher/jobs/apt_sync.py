@@ -7,6 +7,18 @@ contract), diffs it against the same query on the target into every D-25 class
 (`PackageSyncJob._diff_apt_packages`), and converges the approved `INSTALL`/`REMOVE`
 items via `apt-get install`/`apt-get remove`.
 
+A package is matched by (name, ORIGIN), never by name alone (ADR-021 D-34). The target
+having a candidate for a name is not evidence it can supply the source's software: one name
+is often offered by two vendors, and Ubuntu's `firefox` carries epoch 1, which outranks
+every unpinned vendor version, so an install matched by name replicates the name and
+inverts the provenance. `plan()` therefore reads where the source installed each package
+from, maps that back to the repository file on the SOURCE that declares it, and classifies
+the package against the target's real candidate origins: same origin -> ordinary install;
+different or absent origin with a writable declaring file -> install, with that repository
+derived from the package's own approval; no writable declaring file -> `REPO_UNAVAILABLE`,
+reported rather than installed from somewhere else. A package installed on both machines
+from two different vendors is `ORIGIN_MISMATCH`, report-only.
+
 Bare-`.deb` packages are NOT in scope and are dropped at capture
 (`capture_source_items`). A package whose installed version comes from no configured
 repository was put there with `dpkg --install`; apt cannot install it on the target, and
@@ -103,6 +115,7 @@ import re
 import shlex
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar, Literal, override
 from uuid import uuid4
@@ -114,7 +127,6 @@ from pcswitcher.jobs.packages.apt_policy import (
     installed_origins_by_package,
     normalise_repo_uri,
     packages_installed_from_no_repository,
-    packages_with_no_candidate,
 )
 from pcswitcher.jobs.packages.items import (
     DiffAction,
@@ -221,6 +233,10 @@ _ITEM_CLASS_ORDER: dict[ItemClass, int] = {
 # never by action).
 _APT_HOLD_ID_PREFIX = "apt:hold:"
 
+# A URI's scheme, stripped for DISPLAY only (ruling 9). Matches `cdrom:`-style schemes too,
+# whose `//` is optional, so an origin apt can never replicate still reads as itself.
+_URI_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*:(//)?", re.IGNORECASE)
+
 # Synthetic diff id for the one `apt-get update` this job issues per run when at least
 # one source/key/pin/config item was approved (Task 2). Not a real `/etc/apt` item —
 # reuses `ItemClass.APT_SOURCE` so it sorts with the repo group (see `_ITEM_CLASS_ORDER`)
@@ -300,12 +316,56 @@ def build_held_or_pinned_detail(fact: HoldPinFact) -> str:
     return f"{verb} ({fact.mechanism}, via {fact.source_ref})"
 
 
-def build_repo_unavailable_detail(name: str) -> str:
-    """Detail string for a `REPO_UNAVAILABLE` diff: the target's own repositories
-    offer no installable candidate for this package (`apt-cache policy` showed none).
-    This must read as its own fact, not silently downgrade to a proposed `INSTALL`.
+def _display_origin(uri: str) -> str:
+    """A repository URI in the form the review shows it (ruling 9): the FULL path with its
+    scheme stripped — `ppa.launchpadcontent.net/git-core/ppa/ubuntu`.
+
+    The path, never the bare host: one Launchpad host serves thousands of unrelated PPAs and
+    one vendor host often serves several channels, so a hostname does not identify the
+    repository the package actually came from. Only the display strips; the comparison form
+    stays exactly what `normalise_repo_uri` produces, scheme included, because that is what
+    apt prints and what the two machines' URIs are matched on.
     """
-    return f"target's repositories offer no candidate for {name}"
+    return _URI_SCHEME_RE.sub("", uri).rstrip("/")
+
+
+def build_origin_detail(origins: Sequence[str]) -> str | None:
+    """Detail naming where an approved install would come from, or `None` when there is
+    nothing worth naming (ruling 9).
+
+    `origins` is the package's NON-distribution origins, already filtered by the caller
+    against the origins that machine's own distribution files declare — so an empty sequence
+    means the distribution's archive serves it, which is the unremarkable case and earns no
+    text. Several are named comma-separated and sorted, because a package genuinely served
+    by two vendors is a fact the user should see whole.
+    """
+    if not origins:
+        return None
+    return f"from {', '.join(_display_origin(uri) for uri in origins)}"
+
+
+def build_repo_unavailable_detail(name: str, origins: Sequence[str], cause: str) -> str:
+    """Detail for a `REPO_UNAVAILABLE` diff: where the source has this package from, and why
+    the target cannot be given the same place (ADR-021 D-34).
+
+    Both halves are load-bearing. Naming the origin is what stops this reading as "apt has
+    never heard of it"; naming the cause is what tells the user whether the remedy is theirs
+    (a repository file that no longer exists, a missing signing key) or nobody's.
+    """
+    where = f" from {', '.join(_display_origin(uri) for uri in origins)}" if origins else ""
+    return f"{name} cannot be installed{where} on the target: {cause}"
+
+
+def build_origin_mismatch_detail(source_origins: Sequence[str], target_origins: Sequence[str]) -> str:
+    """Detail for an `ORIGIN_MISMATCH` diff: the same package, two vendors.
+
+    Report only, and both sides are named because neither is wrong — converging it would
+    mean a cross-vendor reinstall, which is not a float (D-04) and not something the user
+    asked for. The user is the only one who can say which machine is the odd one out.
+    """
+    source = ", ".join(_display_origin(uri) for uri in source_origins)
+    target = ", ".join(_display_origin(uri) for uri in target_origins)
+    return f"source installed it from {source}, target from {target}"
 
 
 @dataclass(frozen=True)
@@ -335,6 +395,28 @@ class AptHoldItem:
         return f"{self.name} (hold)"
 
 
+class _OriginOutcome(StrEnum):
+    """What the origin facts say can be done about one package missing on the target.
+
+    Three outcomes, not ADR-021 §2.3's four: its classes 2 and 3 (the target has a candidate
+    from the wrong vendor / the target has no candidate at all) differ only in what they
+    look like, never in what happens — both install the package and both derive the source's
+    repository first — so collapsing them keeps the diff from branching on a distinction
+    that has no consequence.
+    """
+
+    SAME_ORIGIN = "same_origin"
+    """Class 1. Ordinary install, zero repository work — the target already offers the
+    package from a place the source uses, or there is no origin fact to hold it to."""
+
+    REPLICABLE = "replicable"
+    """Classes 2 and 3. Install, with the source's repository files derived from it."""
+
+    UNREPLICABLE = "unreplicable"
+    """Class 4. `REPO_UNAVAILABLE`/`REPORT_ONLY` — the origin is declared by no writable
+    file on the source, so the package can only be reported."""
+
+
 @dataclass(frozen=True)
 class _OriginPlan:
     """Every origin fact one source package's classification turns on (ADR-021 D-34).
@@ -354,7 +436,13 @@ class _OriginPlan:
 
     target_candidate_origins: frozenset[str] = frozenset()
     """Origin URIs of the version the TARGET would install. Empty means no repository on
-    the target offers the name — `Candidate: (none)`, or no block at all."""
+    the target offers the name."""
+
+    target_candidate_known: bool = False
+    """Whether apt printed a block for the name on the target AT ALL. Silence is not the
+    same answer as `Candidate: (none)` and must never be read as one (`df48cd07`): the
+    first is a question apt did not answer, including the case where the whole command
+    failed; only the second is apt saying it will install nothing."""
 
     vendor_source_origins: tuple[str, ...] = ()
     """`source_origins` minus the SOURCE's distribution origins, sorted. What the review
@@ -370,6 +458,53 @@ class _OriginPlan:
     least one can. A file whose `Signed-By:` resolves to no key on the source is a
     repository apt would refuse on the target, so it cannot deliver the origin."""
 
+    def outcome(self) -> _OriginOutcome:
+        """Which of ADR-021 §2.3's outcomes this package falls into.
+
+        The ladder is ordered by what it takes to be sure: a target candidate from an origin
+        the source uses settles the question outright, and only after that does it matter
+        whether the origin could be replicated at all.
+        """
+        if not self.source_origins:
+            # apt named no repository origin for the source's installed version, or printed
+            # no block for it at all. Absence is never evidence (`df48cd07`): with no origin
+            # to replicate there is nothing to compare, so the question degrades to the
+            # presence one this job asked before origins existed — and on that question the
+            # target's silence still condemns nothing, only an explicit `Candidate: (none)`
+            # does. A run whose policy call failed proposes the install and lets the install
+            # report its own failure, rather than reporting a repository problem it never
+            # established.
+            refused = self.target_candidate_known and not self.target_candidate_origins
+            return _OriginOutcome.UNREPLICABLE if refused else _OriginOutcome.SAME_ORIGIN
+        if self.source_origins & self.target_candidate_origins:
+            return _OriginOutcome.SAME_ORIGIN
+        if self.source_files and self.unwritable is None:
+            return _OriginOutcome.REPLICABLE
+        return _OriginOutcome.UNREPLICABLE
+
+    @property
+    def derived_files(self) -> frozenset[str]:
+        """The source repository files approving this package would make travel (ruling 4).
+
+        Empty for `SAME_ORIGIN`: the target already offers the package from a place the
+        source uses, so nothing about `/etc/apt` has to change for the install to be
+        faithful. Empty for `UNREPLICABLE` too — that package is reported, not installed,
+        and deriving a repository for a report-only item would break ruling 4's "derived
+        from the packages approved from it".
+        """
+        return self.source_files if self.outcome() is _OriginOutcome.REPLICABLE else frozenset()
+
+    @property
+    def unavailable_cause(self) -> str:
+        """Why the source's origin cannot be provided on the target — the second half of a
+        `REPO_UNAVAILABLE` detail, after the origin itself.
+        """
+        if self.unwritable is not None:
+            return self.unwritable
+        if not self.source_origins:
+            return "the source's apt names no repository origin for it"
+        return "no repository file on the source declares it"
+
 
 @dataclass(frozen=True)
 class _TargetPolicy:
@@ -383,14 +518,28 @@ class _TargetPolicy:
 
     candidate_origins: Mapping[str, frozenset[str]] = field(default_factory=dict)
     installed_origins: Mapping[str, frozenset[str]] = field(default_factory=dict)
-    no_candidate: frozenset[str] = frozenset()
+
+
+def _is_origin_mismatch(plan: _OriginPlan) -> bool:
+    """Whether a package present on BOTH machines came from two different vendors (§2.6).
+
+    Both sides must name a vendor and the two sets must not overlap. A side with no vendor
+    origin at all is served by the distribution, and the distribution is not a vendor — that
+    suppression is the whole reason this can be asked of every package without two machines
+    on different Ubuntu mirrors reporting every one of them as mismatched.
+    """
+    return (
+        bool(plan.vendor_source_origins)
+        and bool(plan.vendor_target_origins)
+        and not (frozenset(plan.vendor_source_origins) & frozenset(plan.vendor_target_origins))
+    )
 
 
 def _diff_apt_packages(
     source_items: Sequence[AptPackageItem],
     target_items: Sequence[AptPackageItem],
     hold_pin_facts: Sequence[HoldPinFact],
-    unavailable_item_ids: frozenset[str],
+    origin_plan: Mapping[str, _OriginPlan],
     source_hold_names: frozenset[str] = frozenset(),
     target_hold_names: frozenset[str] = frozenset(),
 ) -> list[ItemDiff]:
@@ -403,11 +552,21 @@ def _diff_apt_packages(
     informational only. A HELD package (target hold set) has its install/upgrade
     action SUPPRESSED (a held package is never proposed for install/version change)
     but produces NO package-level report — the hold travels as its own `apt:hold:`
-    item, so a held package is never double-reported. Otherwise: missing-on-target ->
-    `REPO_UNAVAILABLE` if apt reports no candidate, else `MISSING_ON_TARGET`/`INSTALL`;
-    extra-on-target -> `EXTRA_ON_TARGET`/`REMOVE`; present on both with differing
-    versions -> `VERSION_MISMATCH`/`REPORT_ONLY` (D-04: reported, never
-    force-downgraded); present on both with equal versions -> no diff at all.
+    item, so a held package is never double-reported. Otherwise:
+
+    - missing-on-target -> `MISSING_ON_TARGET`/`INSTALL` when the source's origin either
+      already serves the target or can be made to (`_OriginPlan.outcome`), else
+      `REPO_UNAVAILABLE`/`REPORT_ONLY`. This is ADR-021 D-34: the package a target could
+      satisfy from a DIFFERENT vendor is still an install, but one that carries the source's
+      repository with it, and the review line names where it will come from.
+    - extra-on-target -> `EXTRA_ON_TARGET`/`REMOVE`.
+    - present on both, from vendors that do not overlap -> `ORIGIN_MISMATCH`/`REPORT_ONLY`,
+      checked BEFORE the version comparison: two vendors' copies of one name have no common
+      version scale, so "source has X, target has Y" would report a difference of degree
+      where the real difference is of provenance.
+    - present on both with differing versions -> `VERSION_MISMATCH`/`REPORT_ONLY` (D-04:
+      reported, never force-downgraded).
+    - present on both, same vendor, same version -> no diff at all.
 
     Hold membership (D2): source-held & target-not -> `AptHoldItem` INSTALL (hold);
     target-held & source-not -> REMOVE (unhold); held on both or neither -> no diff.
@@ -448,7 +607,8 @@ def _diff_apt_packages(
             # report — the `apt:hold:` item below carries the hold fact.
             continue
         elif source_item is not None and target_item is None:
-            if item_id in unavailable_item_ids:
+            origins = origin_plan.get(item_id, _OriginPlan())
+            if origins.outcome() is _OriginOutcome.UNREPLICABLE:
                 diffs.append(
                     ItemDiff(
                         item_class=ItemClass.APT_PACKAGE,
@@ -456,7 +616,9 @@ def _diff_apt_packages(
                         action=DiffAction.REPORT_ONLY,
                         item_id=item_id,
                         label=source_item.label(),
-                        detail=build_repo_unavailable_detail(source_item.name),
+                        detail=build_repo_unavailable_detail(
+                            source_item.name, sorted(origins.source_origins), origins.unavailable_cause
+                        ),
                     )
                 )
             else:
@@ -467,7 +629,7 @@ def _diff_apt_packages(
                         action=DiffAction.INSTALL,
                         item_id=item_id,
                         label=source_item.label(),
-                        detail=None,
+                        detail=build_origin_detail(origins.vendor_source_origins),
                     )
                 )
         elif target_item is not None and source_item is None:
@@ -481,6 +643,18 @@ def _diff_apt_packages(
                     detail=None,
                 )
             )
+        elif _is_origin_mismatch(origin_plan.get(item_id, _OriginPlan())):
+            origins = origin_plan[item_id]
+            diffs.append(
+                ItemDiff(
+                    item_class=ItemClass.APT_PACKAGE,
+                    diff_class=DiffClass.ORIGIN_MISMATCH,
+                    action=DiffAction.REPORT_ONLY,
+                    item_id=item_id,
+                    label=target_item.label() if target_item is not None else item_id,
+                    detail=build_origin_mismatch_detail(origins.vendor_source_origins, origins.vendor_target_origins),
+                )
+            )
         elif source_item is not None and target_item is not None and source_item.version != target_item.version:
             diffs.append(
                 ItemDiff(
@@ -492,7 +666,7 @@ def _diff_apt_packages(
                     detail=build_version_mismatch_detail(source_item.version, target_item.version),
                 )
             )
-        # else: present on both, equal versions, not held/pinned -> no diff.
+        # else: present on both, one vendor, equal versions, not held/pinned -> no diff.
 
     # Hold membership diffs (#208, D2/D8): emitted AFTER every package diff so a
     # package install lands before its hold when both are approved.
@@ -1369,7 +1543,6 @@ class AptSyncJob(PackageSyncJob):
         return _TargetPolicy(
             candidate_origins=candidate_origins_by_package(result.stdout),
             installed_origins=installed_origins_by_package(result.stdout),
-            no_candidate=frozenset(packages_with_no_candidate(result.stdout)),
         )
 
     def _build_origin_plan(
@@ -1403,6 +1576,7 @@ class AptSyncJob(PackageSyncJob):
                 source_origins=origins,
                 source_files=files,
                 target_candidate_origins=policy.candidate_origins.get(item.name, frozenset()),
+                target_candidate_known=item.name in policy.candidate_origins,
                 vendor_source_origins=tuple(sorted(origins - source_distribution)),
                 vendor_target_origins=tuple(sorted(target_installed - target_distribution)),
                 unwritable=self._unwritable_origin_reason(files),
@@ -1426,13 +1600,6 @@ class AptSyncJob(PackageSyncJob):
                 return None
             reasons.append(build_dangling_keyring_detail(filename, dangling))
         return reasons[0] if reasons else None
-
-    @staticmethod
-    def _unavailable_item_ids(missing_item_ids: frozenset[str], no_candidate: frozenset[str]) -> frozenset[str]:
-        """The missing-on-target ids whose name apt answered `Candidate: (none)` for —
-        D-25's REPO_UNAVAILABLE, not a proposable INSTALL.
-        """
-        return frozenset(item_id for item_id in missing_item_ids if _package_name(item_id) in no_candidate)
 
     async def _plan_packages(self) -> PackagePlan:
         """The package half of `plan()`: load decision files -> capture -> query -> diff
@@ -1465,9 +1632,6 @@ class AptSyncJob(PackageSyncJob):
         target_items = await filter_inert(await self.query_target_items(), target_decisions)
         hold_pin_facts = await self.collect_hold_pin_facts()
         source_hold_names, target_hold_names = await self.collect_hold_sets()
-        missing_item_ids = frozenset(item.item_id for item in source_items) - frozenset(
-            item.item_id for item in target_items
-        )
         policy = await self.collect_target_policy([item.name for item in source_items])
         self._origin_plan = self._build_origin_plan(source_items, target_items, policy)
         diffs = self._drop_inert_diffs(
@@ -1475,7 +1639,7 @@ class AptSyncJob(PackageSyncJob):
                 source_items,
                 target_items,
                 hold_pin_facts,
-                self._unavailable_item_ids(missing_item_ids, policy.no_candidate),
+                self._origin_plan,
                 source_hold_names,
                 target_hold_names,
             ),
@@ -2234,9 +2398,6 @@ class AptSyncJob(PackageSyncJob):
         target_items = await filter_inert(await self.query_target_items(), target_decisions)
         hold_pin_facts = await self.collect_hold_pin_facts()
         source_hold_names, target_hold_names = await self.collect_hold_sets()
-        missing_item_ids = frozenset(item.item_id for item in self._plan_source_items) - frozenset(
-            item.item_id for item in target_items
-        )
         policy = await self.collect_target_policy([item.name for item in self._plan_source_items])
         self._origin_plan = self._build_origin_plan(self._plan_source_items, target_items, policy)
         return self._drop_inert_diffs(
@@ -2244,7 +2405,7 @@ class AptSyncJob(PackageSyncJob):
                 self._plan_source_items,
                 target_items,
                 hold_pin_facts,
-                self._unavailable_item_ids(missing_item_ids, policy.no_candidate),
+                self._origin_plan,
                 source_hold_names,
                 target_hold_names,
             ),
