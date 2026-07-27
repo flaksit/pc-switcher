@@ -3,7 +3,7 @@
   "checkpoint_id": "8ad12a1a8526",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 2,
+  "checkpoints_count": 5,
   "files_touched": [
     "src/pcswitcher/jobs/apt_sync.py",
     "src/pcswitcher/jobs/packages/apt_policy.py",
@@ -16,13 +16,20 @@
       "compact_transcript": "/8a/d12a1a8526/0/transcript.jsonl",
       "content_hash": "/8a/d12a1a8526/0/content_hash.txt",
       "prompt": "/8a/d12a1a8526/0/prompt.txt"
+    },
+    {
+      "metadata": "/8a/d12a1a8526/1/metadata.json",
+      "transcript": "/8a/d12a1a8526/1/full.jsonl",
+      "compact_transcript": "/8a/d12a1a8526/1/transcript.jsonl",
+      "content_hash": "/8a/d12a1a8526/1/content_hash.txt",
+      "prompt": "/8a/d12a1a8526/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1384,
-    "cache_creation_tokens": 225554,
-    "cache_read_tokens": 11775662,
-    "output_tokens": 85257,
-    "api_call_count": 69
+    "input_tokens": 1890,
+    "cache_creation_tokens": 4107429,
+    "cache_read_tokens": 143817749,
+    "output_tokens": 357786,
+    "api_call_count": 341
   }
 }
