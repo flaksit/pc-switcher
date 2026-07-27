@@ -1,0 +1,491 @@
+Do not push and run CI yet!
+
+---
+
+<task-notification>
+<task-id>b91vapll3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/b0a03faf-51bf-47b9-b60a-83a2131f5934/tasks/b91vapll3.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI with real Flathub fixture" completed (exit code -1)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abdc097ec99612e90</task-id>
+<tool-use-id>toolu_01DKVkrXdVSi7d6dyX3P8KeM</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/b0a03faf-51bf-47b9-b60a-83a2131f5934/tasks/abdc097ec99612e90.output</output-file>
+<status>completed</status>
+<summary>Agent "Investigate snapd refresh.hold no-op" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdict: (b) — the hold IS applied; the read-back is what's broken
+
+`snap get system refresh.hold` requires admin auth. Run as an unprivileged user it does not return "empty" — it **fails with `access denied (try with sudo)`** and prints nothing to stdout. `_capture_snap_hold` therefore returns `None` on every run, on every machine, unconditionally.
+
+Environment: pc2, Ubuntu 24.04, **snapd/snap 2.76.1**.
+
+### Evidence
+
+Baseline (no hold set), as `testuser`:
+
+```
+$ snap get system refresh.hold          rc=1  stdout=[]  stderr=[error: access denied (try with sudo)]
+$ sudo snap get system refresh.hold     rc=0  stdout=[]
+  state.json core.config.refresh = {"hold": ""}
+```
+
+The exact orchestrator command, then read-back three ways:
+
+```
+$ sudo snap set system refresh.hold="$(date -u -d '+6 hours' +%Y-%m-%dT%H:%M:%SZ)"   rc=0
+$ snap get system refresh.hold          rc=1  stdout=[]  stderr=[error: access denied (try with sudo)]
+$ sudo snap get system refresh.hold     rc=0  stdout=[2026-07-26T15:50:19Z]
+  state.json core.config.refresh = {"hold": "2026-07-26T15:50:19Z"}
+$ snap refresh --time                   (no sudo)
+  timer: 00:00~24:00/4
+  last: today at 11:47 CEST
+  hold: today at 17:50 CEST
+  next: today at 13:14 CEST (but held)
+```
+
+snapd authoritatively reports the hold in force (`hold:` line, `next: ... (but held)`), and it persists in `/var/lib/snapd/state.json`. **The pause works.** The per-snap `hello` hold from the CI run is irrelevant — my baseline had no per-snap hold and the read failed identically.
+
+### Consequence in production (the real bug)
+
+`orchestrator.py:1317` (`_capture_snap_hold`) always returns `None` → `_hold_snap_autorefresh` records "no prior hold" on both hosts → `_restore_snap_hold` takes the `prior is None` branch and runs `sudo snap set system refresh.hold=""` on **both** machines in `_cleanup`. Any hold the user set themselves (`snap refresh --hold`, an admin-set `refresh.hold`, incl. `forever`) is silently destroyed by every sync. Nothing warns: the `snap set` exits 0, and the failing `snap get` is swallowed by `result.success and value`.
+
+Same defect, informational only, at `src/pcswitcher/jobs/snap_sync.py:667-670` — validate() logs `snap refresh.hold: (none)` for both hosts on every run regardless of actual state.
+
+The CI failure is the same root cause in the test helper: `tests/integration/jobs/test_package_sync.py:601-607` `_capture_system_refresh_hold` also omits sudo, so `assert engaged is not None` can never pass. Its `_restore_system_refresh_hold` mirrors the destructive `refresh.hold=""` write.
+
+### Documented rule / mechanism (sources)
+
+- Access control: snapd `daemon/api_snap_conf.go:39-45` — `/v2/snaps/{name}/conf` has `ReadAccess: authenticatedAccess{Polkit: polkitActionManageConfiguration}`. The shipped policy (`/usr/share/polkit-1/actions/io.snapcraft.snapd.policy` on pc2, identical to snapd `data/polkit/io.snapcraft.snapd.policy`) sets `io.snapcraft.snapd.manage-configuration` to `allow_any=auth_admin`, `allow_inactive=auth_admin`, `allow_active=auth_admin_keep`. **Reading** snap config is admin-gated in every case — so this is not an SSH artifact: on a real desktop seat it would raise an interactive polkit prompt a non-interactive sync cannot satisfy.
+- `system` is an alias for `core`: verified — `sudo snap set core refresh.hold=&lt;ts&gt;` is read back identically by `sudo snap get system refresh.hold`. No historic distinction remains at 2.76.1.
+- snapd only clears `refresh.hold` when it has **expired** (`overlord/snapstate/autorefresh.go`: `clearRefreshHold()` called from `Ensure()` in the "expired hold case" branch). It does not clear or reject an in-future hold.
+- Format: `configcore/refresh.go:81-89` — value must be RFC3339 or the literal `forever`, else `snap set` errors out. The orchestrator's `+%Y-%m-%dT%H:%M:%SZ` is accepted.
+- No cap at set time: `+200 days` was stored and reported verbatim (`hold: 2027-02-11`). `maxPostponement = 95 * 24h` (`autorefresh.go:53`) constrains gating-snap holds (`autorefresh_gating.go:474-475` explicitly exempts `holdingSnap == "system"`), not the general config option. A 6-hour hold is nowhere near any limit.
+
+### Read-back semantics with sudo (all confirmed)
+
+| state | `sudo snap get system refresh.hold` |
+|---|---|
+| timestamp set | rc=0, `2026-07-26T15:50:19Z` |
+| `forever` | rc=0, `forever` |
+| set to `""` (what restore writes) | rc=0, empty stdout |
+| key removed (`refresh.hold!`) | rc=1, `error: snap "core" has no "refresh.hold" configuration option` |
+
+`snap refresh --time` works **unprivileged** and reveals the hold (`hold: today at 17:50 CEST` / `hold: forever` / `hold: 2027-02-11`), but the value is localized human text, not RFC3339 — usable as a human-readable log line, not as a capture/restore value.
+
+### Correct sequence on this snapd (not implemented, as instructed)
+
+- Capture: `sudo snap get system refresh.hold` — existing `value if result.success and value else None` logic is then correct for all four states above.
+- Apply: unchanged, `sudo snap set system refresh.hold="$(date -u -d '+6 hours' +%Y-%m-%dT%H:%M:%SZ)"` — already works.
+- Restore: unchanged shape, but it only becomes safe once capture is privileged.
+- Unprivileged verification (e.g. a validate-time log): `snap refresh --time`.
+
+Worth noting separately: the same silent-swallow pattern means `_apply_snap_hold`'s WARNING would not have caught this class of failure either; a post-set verification would.
+
+### VM / lock state
+
+pc2 restored exactly as found: `core.config.refresh = {"hold": ""}`, `snap refresh --time` shows no hold, `snap list` unchanged (hello/hello-world Notes `-`), no per-snap holds set by me. Lock acquired as `claude-snaphold-probe-9f3c` and released — `lock.sh status` reports **Lock not held**. No repo files changed.
+
+Sources: [snapd daemon/api_snap_conf.go](https://github.com/canonical/snapd/blob/master/daemon/api_snap_conf.go), [snapd overlord/snapstate/autorefresh.go](https://github.com/canonical/snapd/blob/master/overlord/snapstate/autorefresh.go), [snapd data/polkit/io.snapcraft.snapd.policy](https://github.com/canonical/snapd/blob/master/data/polkit/io.snapcraft.snapd.policy), [snapd overlord/configstate/configcore/refresh.go](https://github.com/canonical/snapd/blob/master/overlord/configstate/configcore/refresh.go)</result>
+<usage><subagent_tokens>93773</subagent_tokens><tool_uses>40</tool_uses><duration_ms>374681</duration_ms></usage>
+</task-notification>
+
+---
+
+DO NOT PUSH BEFORE I SAY SO
+
+---
+
+<task-notification>
+<task-id>a32dcb8e8ae3a7c15</task-id>
+<tool-use-id>toolu_01QJA1XWnkUACJQG9Raok7oV</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/b0a03faf-51bf-47b9-b60a-83a2131f5934/tasks/a32dcb8e8ae3a7c15.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix privileged refresh.hold capture" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done — one commit, `5e6a9a4`, on `gsd/phase-02-package-management-sync`.
+
+## What changed
+
+`/home/janfr/dev/pc-switcher/src/pcswitcher/orchestrator.py`
+- `_capture_snap_hold` now runs `sudo snap get system refresh.hold` and returns `tuple[str | None, bool]` — `(value, readable)`. Still a read: no `mutates=` (the audit passes; the reads flow through `_run_snap_hold_command`, whose single `run_command` site already passes `mutates=`, so no new call site appears in `test_mutates_audit.py`).
+- New `_SNAP_HOLD_UNSET_MARKER = 'has no "refresh.hold"'` separates "never set" (rc=1 + that marker → `readable=True`) from "read failed" (any other rc≠0 → `readable=False`). rc=0 empty → `(None, True)`; rc=0 value → `(value, True)`.
+- New per-host state `_snap_hold_readable_source/target`, defaulting `False` so an unread host is never cleared.
+- New `_verify_snap_hold(host, prior)`, called from `_apply_snap_hold` only after a successful `snap set`: reads the hold back and WARNs if it is unreadable, unset, or unchanged from `prior`. Wrapped in `try/except Exception` so the diagnostic can never end a run; both warnings point the reader at `snap refresh --time`.
+- `_apply_snap_hold` takes `prior` so the read-back has something to compare against.
+
+`/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/snap_sync.py` — both informational `validate()` hold reads now use `sudo`; module docstring updated (the sudo is about snapd's read gate, not mutation).
+
+`/home/janfr/dev/pc-switcher/tests/unit/orchestrator/test_snap_autorefresh_hold.py` — +3 classes, 23 tests total, all passing: `TestCaptureIsPrivileged` (every `snap get` starts with `sudo`; a denied read ≠ an unset option), `TestUserHoldIsNeverDestroyed` (parametrized timestamp/`forever` end-state round trip against a new `make_snapd` fake that stores what `snap set` writes; only a genuinely-absent hold gets cleared; an unreadable one is left alone), `TestApplyIsVerified` (silent on success, one warning per host when the hold did not stick, warning on a denied read-back, and a raising read-back leaves the sync running).
+
+`/home/janfr/dev/pc-switcher/tests/integration/jobs/test_package_sync.py` — `_capture_system_refresh_hold` now uses `sudo` (this is what should un-break `TestSnapHoldCaptureTiming::test_system_refresh_hold_does_not_mask_a_per_snap_held_note`; that test itself untouched). I also replaced the four raw unprivileged reads in `test_snap_revision_converges_without_hold` (lines ~1303/1338 pre-edit) with the fixed helper and compare captured values rather than raw stdout — that assertion was previously vacuous for the same reason (both sides read empty because both were denied). Post-fix it holds: no hold before → `None`; after the run the option is set-empty → `None`.
+
+Docs: `docs/system/core.md` (snap_sync `validate()` bullet: sudo on both ends, privileged probe) and `docs/jobs/package-sync.md` (capture/restore promise now states a user hold survives and that an unreadable prior value is left alone; the sudo bullet mentions `snap get`). ADR-020 left untouched — nothing in it became false (it promises capture-first + exact restore, both still true), and ADR-001 says ADRs are immutable.
+
+## `_restore_snap_hold` guard: implemented
+
+A failed capture is no longer treated as "there was no hold" — the clear is skipped and a WARNING is logged. Rationale, recorded in the docstring: the two error directions are not comparable. Clearing an option whose pre-sync value is unknown permanently destroys a hold the user may have set (`forever` has no expiry to fall back on); skipping the clear leaves at worst the timed 6-hour hold this run set, which self-expires — the same crash backstop the mechanism already relies on. Also note the correlated case: if the capture failed for lack of privilege, the apply almost certainly failed too, so there is usually nothing of ours to clear anyway.
+
+## Other unprivileged snap-config reads
+
+Grepped `snap get` / `"snap ...` across `src/`, `tests/`, `docs/`, `*.sh`. Every remaining occurrence is prose or a mock pattern string. The only executed snap reads left unprivileged are `snap list --all` and `snap version`, which are not config reads and are not polkit-gated. No other manager in the codebase reads config through an admin-gated verb (apt/flatpak reads already run under sudo where needed).
+
+## Verification
+
+`uv run ruff format --check . &amp;&amp; uv run ruff check . &amp;&amp; uv run codespell &amp;&amp; uv run basedpyright` clean (0 errors/warnings/notes); `uv run pytest tests/unit -q` → 1143 passed; `uv run pytest tests/integration --collect-only -q -m ""` → 80 tests collected. No snap/flatpak commands were run on this machine and no VM or lock was touched.</result>
+<usage><subagent_tokens>121507</subagent_tokens><tool_uses>51</tool_uses><duration_ms>538950</duration_ms></usage>
+</task-notification>
+
+---
+
+push and follow-up ci
+
+---
+
+<task-notification>
+<task-id>bxzq761yv</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/b0a03faf-51bf-47b9-b60a-83a2131f5934/tasks/bxzq761yv.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI after snap hold fix" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Solve C26/N7. Easy to check if machine-specific apt packages need repo/key, no? Subagent
+
+---
+
+<task-notification>
+<task-id>acfec68ae347037ef</task-id>
+<tool-use-id>toolu_011DKBqyhaQ7tPusKM2ecyd7</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/b0a03faf-51bf-47b9-b60a-83a2131f5934/tasks/acfec68ae347037ef.output</output-file>
+<status>completed</status>
+<summary>Agent "Link repo removal to machine-specific pkgs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Committed locally as `43a52fa3`. Not pushed.
+
+## `apt-cache policy` output shape (verified on this machine, read-only)
+
+Verified against `/etc/apt/sources.list.d` here, which carries both deb822 `.sources` and legacy `.list` repos. The version table marks the installed version with a leading ` *** `, and indents each of that version's origins by exactly 8 spaces:
+
+```
+gh:
+  Installed: 2.96.0
+  Candidate: 2.96.0
+  Version table:
+ *** 2.96.0 1001
+        500 https://cli.github.com/packages stable/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2.45.0-1ubuntu0.3+esm3 510
+        510 https://esm.ubuntu.com/apps/ubuntu noble-apps-security/main amd64 Packages
+```
+
+Three facts that drove the implementation:
+
+- **Only the installed version's origins count.** Ubuntu's archive also *offers* `gh`, but that is not the repo the target tracks. Scoping to the whole version table would have produced false links.
+- **apt strips the trailing slash.** `URIs: https://packages.microsoft.com/repos/azure-cli/` prints as `.../azure-cli`. Verbatim comparison would have missed every repo written that way — most of them. Hence `_normalise_repo_uri`.
+- **`/var/lib/dpkg/status` is dpkg's own record, not a repo.** A package installed from a local `.deb` (`brother-udev-rule-type1` here) has it as its only origin, which degrades correctly to "no link found".
+
+I validated the *shipped* functions (not a prototype) against the real machine: all 20 source files parsed, 148 of 153 manual packages resolved to an origin, and **zero unmatched policy origins**. Verified `apt-cache madison` was not needed — policy proved reliable.
+
+## Scope decision: machine-specific packages only
+
+This is the judgement call you asked me to make explicitly, and it is a genuine trade-off — the invisibility argument alone does not settle it. An ordinary package installed identically on both machines from the removed repo is *equally* invisible today. Three things decided it:
+
+1. **Machine-specific is invisible structurally, not incidentally.** `filter_inert` guarantees a skip-always package produces no `ItemDiff` in any run, forever. An ordinary package's silence is a coincidence of this run's state; it remains eligible for its own removal diff.
+2. **Skip-always is an explicit promise** — "this machine keeps this, syncs never touch it". Pulling its repo out from under it breaks that promise specifically. No equivalent promise exists for ordinary packages.
+3. **Measured, not assumed:** widening makes the detail's length a property of the machine. On this box `ubuntu.sources` maps to 126 manual packages. A review line naming 126 packages informs nobody. Cost was *not* the deciding factor — I measured `apt-cache policy` over all 153 manual packages at 71 KB / 0.5 s, which is affordable. Readability was.
+
+The limitation is documented in `docs/jobs/package-sync.md` and in a new "Accepted scope limits" section of the matrix, not left implicit.
+
+## Key half vs source half
+
+The key half is **more complete in structure, weaker in reachability**. It always names the referencing target source files (the direct dependency), and additionally names machine-specific packages behind them when the URI→origin link resolves. Where it degrades: a `.sources` file whose `Signed-By:` holds an inline armored key rather than a path yields a ref matching no filename. Two real PPA files here (`git-core`, `libreoffice`) have exactly this shape. That is pre-existing `_parse_source_file` behaviour — it also affects D-12's dangling-keyring check — and I left it alone as out of scope, but it means those keys would not be linked. It degrades to "no detail", never to a wrong claim.
+
+One deliberate departure worth flagging: dependants are read from the target's **current** state, including source files this same run proposes removing. That follows the #214 rule (a proposal is not an approval), but it means the C24 scenario — source file and its key both extra, both approved — now carries a detail naming the file being removed alongside it. Factually true and consistent with flatpak; you may prefer it suppressed.
+
+## Not verifiable without a VM
+
+- The parse against a **live** apt on a target. All new tests mock `apt-cache policy`. Hand-verification on this machine is strong evidence for the shape but is not a test.
+- The N7 two-machine composition. The unit tests cover a single mocked run; I marked N7 `U` with the composition explicitly called out as untested rather than claiming `V`.
+- The `sudo find ... -exec awk` scan under a real target's sudoers. It reuses the existing `sudo find` binary already in `_TARGET_SUDO_COMMANDS`, so no policy change should be needed — but that is inferred from the existing `-exec sha256sum` precedent, not measured.
+
+I mutation-checked the new tests (forcing `detail=None` fails 5 of 9) so they are not vacuous — given this phase's history with vacuous coverage, that seemed worth doing explicitly.
+
+Full gate clean: ruff format/check, codespell, basedpyright (0 errors), 1152 unit tests pass, 80 integration tests still collect.</result>
+<usage><subagent_tokens>163948</subagent_tokens><tool_uses>87</tool_uses><duration_ms>817034</duration_ms></usage>
+</task-notification>
+
+---
+
+What do you mean by "Target has a repo/key the source lacks, still needed by a target-side machine-specific package"?
+
+---
+
+What do you mean by "Suppressing it would understate the case where you untick the source"?
+
+---
+
+I already said very early on that repos and keys make pairs. Or maybe keys are used by multiplee repos 1-n? Doesn't matter. I don't even think we should bother the user with review about keys. User thinks in repos and packages. Keys are just a way to make a repo work. pc-switcher should handle keys transparently: leave the ones needed for repos and remove the ones that are not needed for any repo anymore.
+Subagent for analysis and fix.
+
+---
+
+So we just leave /etc/apt/trusted.gpg.d keys alone. Not a problem that they would accumulate a bit.
+"Existing recorded key decisions": there are none, we are still implementing this feature. No-one used it yet. No need for decision file for keys: they are handled automatically, transparently, after all repo operations have been done.
+
+---
+
+With this, keys are no Item anymore, I think. There is just a provision operation that is run before adding new sources and a removal run after removing any sources (no-op when not removing sources).
+Provisioning is:
+- copy all /etc/apt/trusted.gpg.d keys from source that are missing on target
+- add keyrings for sources the user decided to "add"
+
+---
+
+do "when I write or verify a repo, make sure its key matches"
+
+---
+
+Can we have inconsistent review decisions between packages and sources? Same dependency problem as repo->key?
+
+---
+
+Should we do the same with repos as with keys: let pc-switcher handle them automatically without any user review?
+
+---
+
+"you might replicate a repo precisely so you can install from it later by hand": I doubt so. I only add a repo when I want to install a package from it. So there always is a package refering to it.
+
+---
+
+<task-notification>
+<task-id>a60414f7d0183dd29</task-id>
+<tool-use-id>toolu_01GochsmAYpW5x7jPnmvGbjp</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/b0a03faf-51bf-47b9-b60a-83a2131f5934/tasks/a60414f7d0183dd29.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyse package-source decision coupling" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I read the sources of truth, the shared core, `apt_sync.py` (both HEAD and the in-flight working tree), `flatpak_sync.py`, the review module, the N5 ordering test, and probed real `apt` state on this dev machine (read-only).
+
+# 1. Instance 1: **REFUTED as stated** — and the real defect is the mirror image
+
+The premise ("a package that exists only in a repo being added this run reports `Candidate: (none)` → `REPO_UNAVAILABLE` → never offered") does not hold, because `apt-cache policy` prints **nothing at all** for a name apt has never heard of.
+
+Verified on this machine:
+```
+$ apt-cache policy cowsay nonexistent-pkg-zzz libjpeg62
+cowsay: … Candidate: 3.03+dfsg2-8 …
+libjpeg62: … Candidate: 1:6b2-3.1 …
+exit=0            # nonexistent-pkg-zzz produces NO block
+```
+`_packages_with_no_candidate` (`/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/apt_sync.py:195-213`) only collects names whose block contains `Candidate: (none)`. No block → not collected → not in `unavailable_item_ids` → `sync_core.py:340-350` emits `MISSING_ON_TARGET` / `INSTALL`, **default-ticked** (`review.py:499`).
+
+So the user's stated expectation ("Sync adds source, key and installs P") is what the code *intends* on the default path, and the ordering (`_ITEM_CLASS_ORDER`, `apt_sync.py:149-157`; re-sort in `accept_review`, `apt_sync.py:1309-1314`) makes it work — **provided the source item itself is approved and installable**. The bug is not that P is withheld; it is that **P's install carries no dependency on the source's decision at all**, in either direction. Everything below follows from that.
+
+`REPO_UNAVAILABLE` on a *missing-on-target* package therefore only fires when the target's apt **knows the name but has no installable version** — a negative-priority pin, or a name reachable only via `Provides:` (verified: `apt-cache policy www-browser` → `Candidate: (none)`). The negative-pin sub-case is **inferred, not measured** (testing it would require writing `/etc/apt/preferences.d`).
+
+Corollary — the N5 test is vacuous on this point. `tests/unit/jobs/test_apt_sync.py:1799` (`test_key_then_source_then_update_then_package_install`, cited as coverage for narrative N5) supplies no `apt-cache policy` response; the stub falls back to `CommandResult(0, "", "")` (`test_apt_sync.py:1749`). It passes for the same reason reality passes, but it would also pass if the classification were inverted. It proves ordering, not availability classification.
+
+# 2. The family, enumerated
+
+Caveat on citations: `src/pcswitcher/jobs/apt_sync.py` is being rewritten right now (`git status` shows it modified; the diff is ~647 lines). Line numbers are from the working tree as I read it; the mechanisms I cite exist identically in HEAD (`43a52fa3`) unless noted.
+
+## F1 — CRITICAL. `Signed-By:` pointing outside `/etc/apt` makes the repo permanently unreplicable, while its packages stay default-ticked
+
+`_dangling_keyring_ref` (`apt_sync.py:359-368`) resolves a source file's keyring reference **by basename against `/etc/apt/keyrings` ∪ `/etc/apt/trusted.gpg.d` only** (`source_key_filenames`, `apt_sync.py:900`). Any other reference is "dangling", and the source item is downgraded from `INSTALL`/`CHANGE` to `REPORT_ONLY` (`apt_sync.py:1021-1032`, `1065-1080`). `REPORT_ONLY` never converges (`sync_core.py:606`) and cannot even be silenced with skip-always (ADR-020 D-07 scope amendment; `review.py:108`).
+
+I ran the two real regexes (`_SIGNED_BY_RE`, `_LEGACY_SIGNED_BY_RE`, verbatim) against this machine's actual `/etc/apt/sources.list.d`. **11 of 16 source files classify as dangling:**
+
+| File | ref extracted | verdict |
+| --- | --- | --- |
+| `ubuntu.sources` | `/usr/share/keyrings/ubuntu-archive-keyring.gpg` | dangling |
+| `ubuntu-esm-apps.sources`, `ubuntu-esm-infra.sources` | `/usr/share/keyrings/ubuntu-pro-esm-*.gpg` | dangling |
+| `google-chrome.sources`, `hashicorp.list`, `nodesource.list`, `claude-desktop.list`, `tailscale.list`, `task-task.list` | `/usr/share/keyrings/*.gpg` | dangling |
+| `git-core-ubuntu-ppa-noble.sources`, `libreoffice-ubuntu-ppa-noble.sources` | `-----BEGIN` | dangling |
+| `azure-cli.sources`, `github-cli.list` | `/etc/apt/keyrings/*` | OK |
+| `pgdg.list`, `spotify.list`, `jeffreyratcliffe-…sources` | no ref | OK |
+
+Two independent causes:
+
+- **`/usr/share/keyrings` is not captured.** `dpkg -S` confirms `google-chrome.gpg`, `hashicorp-archive-keyring.gpg`, `nodesource.gpg`, `claude-desktop.gpg`, `task-task-archive-keyring.gpg` are **owned by no package** — the user placed them by hand. They are exactly as machine-local as an `/etc/apt/keyrings` key, and nothing replicates them. (`ubuntu-archive-keyring.gpg` and `tailscale-archive-keyring.gpg` *are* package-owned, so for those "dangling" is a false alarm of a different kind: the key arrives with its own deb.) `_keyring_local_path` (`apt_sync.py:1867-1877`) already contemplates "a package-owned keyring under `/usr/share/keyrings`, say, which the target's own packages provide" and returns `None` — it directly contradicts `_dangling_keyring_ref`, which calls the same reference fatal.
+- **Inline-armored `Signed-By:` is mis-parsed.** `_parse_source_file`'s docstring (`apt_sync.py:274-281`) asserts that with an inline key "the field value is empty and the armored block follows on continuation lines… That yields NO ref." **That assertion is false** for files written by Ubuntu's `add-apt-repository`: verified, `git-core-ubuntu-ppa-noble.sources:5` reads literally `Signed-By: -----BEGIN PGP PUBLIC KEY BLOCK-----`. `^Signed-By:\s*(?P&lt;path&gt;\S+)` captures `-----BEGIN` as a path, which is then reported as a dangling keyring. Every PPA added the normal way is affected.
+
+User-visible outcome: on a first sync to a fresh machine, ~2/3 of the user's repositories appear in the review as unactionable report lines, are never written, and the dozens of packages behind them are simultaneously offered as default-ticked installs that then fail with `E: Unable to locate package`. This *is* the user's stated scenario failing, just via a different mechanism than the one hypothesised.
+
+This sits inside the blast radius of the in-flight rewrite — **re-verify against the finished diff before filing.**
+
+## F2 — HIGH. Skip-always on a source file makes its packages fail forever, silently
+
+A source `INSTALL` diff is source-held under D-08a (`sync_core.py:406-415`), so skip-always records on the source and `_drop_inert_diffs` removes the diff on every subsequent run (`sync_core.py:417-445`, applied to apt's own repo diffs at `apt_sync.py:823-829`). The packages from that repo keep their own `apt:package:&lt;name&gt;` identities and keep being emitted as default-ticked installs — **every run, failing every run**, with an apt error that never mentions the declined repository. Nothing in the review, the failure text, or the decision file links the two. This is the "user unticked the source" case in its most durable form, and it is created by a legitimate, documented user action.
+
+## F3 — MEDIUM. Package install approved, source unticked in the same run
+
+Same defect, one run deep. Install groups default-ticked, sources and packages are two independent entries; unticking the source and leaving its packages ticked (the natural reading of "I don't want that repo *file*") produces one opaque per-item failure per package. D-27 makes this non-fatal and reported, which is the acceptable part; the unacceptable part is that the review never disclosed the dependency and the failure text does not name the cause.
+
+## F4 — LOW/MEDIUM. Plan-time availability is computed against lists the code itself refuses to install against
+
+`collect_unavailable_item_ids` (`apt_sync.py:770-783`) is the sole availability probe (verified: one call site, `sync_core.py:528`; no re-evaluation anywhere after the repo group converges). It runs before any `apt-get update`. Meanwhile ADR-020's Implementation Rules and `_ensure_metadata_refreshed` (`apt_sync.py:1355-1387`) both state that installing against stale lists is unsafe and force exactly one refresh before the first install. So the classification input is the state the apply path treats as untrustworthy. Because unknown names produce empty output (§1), the practical failure mode is benign — stale lists push packages *toward* being offered, not away. It is a documented-intent contradiction worth closing rather than a live incident.
+
+## F5 — LOW. Source removal approved **and** a package from it approved for install, same run
+
+Both diffs are producible simultaneously (the package needs a target-side candidate, which the doomed repo supplies). `_ITEM_CLASS_ORDER` puts `APT_SOURCE` at rank 2 and packages at rank 3 with the group's `apt-get update` between them, so the repo is deleted and the lists refreshed *before* the install runs. Result: guaranteed per-item install failure, no disclosure at review time, no guard at apply time. Removal groups are unticked by default (`review.py:499`), so this requires two deliberate ticks. Acceptable outcome, undisclosed cause.
+
+## F6 — LOW. A pin the run is about to delete still suppresses its packages' diffs
+
+`collect_hold_pin_facts` (`apt_sync.py:730-756`) reads the **target's current** `/etc/apt/preferences.d` at plan time. The pinned branch in `_diff_apt_packages` fires first and unconditionally (`sync_core.py:312-322`), emitting `HELD_OR_PINNED`/`REPORT_ONLY` and suppressing that package's own install/change/remove diff. So approving deletion of a pin file (rank 1, converges first) does not make the packages it governed reviewable in the same run — they reappear next run. Same plan-time-staleness shape as the hypothesis in §1, and here it is real. Self-healing, hence LOW.
+
+The converse (a pin arriving this run, unknown to the target's plan-time facts) is harmless: pins converge at rank 1, so the install honours the new pin. If the user unticks the pin and ticks the package, the package installs unpinned — permitted by D-04's float policy, reported as `VERSION_MISMATCH` next run.
+
+## F7 — LOW, but see §4. Pinning a package on the target makes it un-removable, silently and unfixably
+
+The pinned branch requires only `target_item is not None` (`sync_core.py:312`). A package installed on the target but absent from the source, named by any target pin file, therefore never produces an `EXTRA_ON_TARGET`/`REMOVE` item — it is reported and nothing else. And because `REPORT_ONLY` items are denied skip-always, the user cannot mark it machine-specific to stop the noise either. ADR-020's #208 amendment justifies the echo as informational ("a pin can still permit an upgrade"); suppressing the *removal* direction is a stronger effect than any decision describes.
+
+## F8 — LOW. Multi-name `Package:` stanzas lose all but the first name in the pin echo
+
+`collect_hold_pin_facts`'s awk prints `$2` only (`apt_sync.py:748`). `Package: foo bar` yields a fact for `foo` alone; `bar` gets no echo and is diffed normally. `_parse_pin_file` (`apt_sync.py:344-356`) parses the same line correctly and its docstring acknowledges the divergence. Also, `Package: *` (very common) yields a fact for the literal `*`, matching nothing. Errs toward *fewer* suppressions, so it is a consistency wart, not a hazard.
+
+## F9 — LOW. flatpak's twin of F5
+
+`_remote_ready_on_target` (`flatpak_sync.py:1046-1054`) answers from the **plan-time** `_target_remotes_by_id` plus remotes added this run. A remote whose `REMOVE` is approved is still "present" by that test, and remotes converge before refs — so an approved remote deletion plus an approved ref install from it slips the guard and fails inside flatpak. Same contradictory-pair hole, milder because flatpak's own error is legible.
+
+## F10 — Doc drift, not a bug. C26's key half
+
+`_source_removal_details` (`apt_sync.py:925-983`, from `43a52fa3`) covers the removal side adequately **within its stated scope**: it names only packages recorded skip-always on the target (`apt_sync.py:961-963`), gated on a removal actually being offered, and it disclosed rather than refuses. There is **no apply-time guard**, and none is needed — deleting a source file destroys nothing, packages merely stop updating. The scope limit is deliberate and documented (`02-SCENARIO-COVERAGE.md` "Accepted scope limits"). But the in-flight rewrite drops keys as items, and the new docstring already says "a signing key is never offered for deletion" (`apt_sync.py:945-947`), while `docs/jobs/package-sync.md:135` and matrix row C26 still describe the key-removal detail. The other agent should carry that.
+
+# 3. What existing machinery already mitigates
+
+- **D-27 continue-and-report** covers F3, F5, F9 in the sense that matters: nothing is left half-applied, the run visibly fails, the remaining items proceed. What it does not do is *explain* — the failure text is apt's, and it never names the declined/removed repository. That is the whole gap for these three.
+- **Removal groups unticked by default** (`review.py:100`, `499`) makes F5 and F9 require deliberate double-ticks. Real mitigation.
+- **`_require_keyrings_ready`** (`apt_sync.py:1834+` region) guards key-before-source *inside* the repo group; it has nothing to say about packages, so it does not touch this family.
+- **D-30 collateral classification** is the architectural precedent, not a mitigation: it proves plan-time classification of a cross-item consequence into its own review item is the house style.
+- **Transactional repo group with rollback** (`apt_sync.py:1520-1660`) protects `/etc/apt` from a failed refresh. It does not roll back or re-plan packages — `test_rollback_does_not_prevent_package_items_from_being_attempted` (matrix C22) confirms packages are still attempted after a rollback, which means a rolled-back repo group leaves the F3 shape behind by design.
+- **flatpak's `_remote_ready_on_target`** is the only existing dependency guard of this family anywhere in the phase, and it is apply-time refusal with a named per-item failure (`flatpak_sync.py:932-937`). apt has no counterpart.
+
+Explicitly **acceptable as designed**: F10's scope limit; the "unticked pin + ticked package installs unpinned" case (D-04); D-27's per-item failure *as an outcome*.
+
+# 4. Recommended design
+
+Take the three candidate approaches in turn.
+
+**Re-evaluating availability after the repo group converges — reject.** It would mean a second review (packages that only became available after the repos landed cannot be silently installed without one) and it breaks D-24's "each job reviews once before its own first mutating command". Cost far exceeds the benefit, and §1 shows the availability check is not where the damage is.
+
+**Attempt the install and let D-27 report — keep, as the floor, but make it speak.** For F3, F5 and F9 this is genuinely the right outcome: the user made two contradictory ticks, one run, clear failure, next run shows the drift. The fix is one line of provenance in the failure text, not a guard.
+
+**Teach plan time about repos in play — adopt, in the cheap direction only.** Do *not* ask the source which repo provides each package (that is a per-package `apt-cache policy` on the source and a URI-matching layer, for a benefit §1 shows is small). Instead reuse machinery `43a52fa3` already built: `_parse_source_file` already extracts each source file's URIs, and `_installed_origins_by_package` (`apt_sync.py:303-341`) already maps a package to its installed version's origin URIs from one batched `apt-cache policy`. Run that same batched policy **on the source** over the missing-on-target package names, match each package's origin URIs against the URIs of the source files this run is proposing to add/change/remove, and you have the package→source edge for free, at plan time, without a second review.
+
+Concretely, per scenario:
+
+| Scenario | Recommendation |
+| --- | --- |
+| **F1** | Fix the classifier, not the review. (a) Treat a `Signed-By:` value that is not an absolute path — `-----BEGIN`, or empty — as *no reference*, per the docstring's own stated intent. (b) Decide what `/usr/share/keyrings` means. Three options: capture it as a third key directory (replicates hand-placed vendor keys, but also copies package-owned files the target already has — mitigable by skipping any file `dpkg -S` resolves); treat it as "provided by the target, not our business" and stop calling it dangling (leaves a genuinely hand-placed key unreplicated, and the repo lands broken); or capture it and require a decision. I would take the first with the `dpkg -S` filter — it is the only one that makes the user's real machine replicate. This one needs the user's call, and it belongs to whoever is finishing the keys-as-items rewrite. |
+| **F2** | Highest value, smallest change. When a package `INSTALL` diff's origin resolves to a source file that is inert on this machine, emit the package as `REPORT_ONLY` with a detail naming the declined repository — the D-30/#214 disclosure shape. Stops the perpetual failure and explains it. `plan()` in `apt_sync.py` (after `_plan_repo_diffs`, before the sort at `:823`) is the site. |
+| **F3, F5, F9** | Disclosure, not refusal. On the source `INSTALL`/`CHANGE`/`REMOVE` diff, add a `detail` naming the packages this run also proposes installing from it ("apt-sync also proposes installing gh, gh-copilot from this repository") — the exact inverse of C26's existing text, using the same origin map. Then, in `_converge_install`, when the install fails and the package's origin was a source item that was not approved (or was approved for removal), append that fact to the failure message. For F9, extend `_remote_ready_on_target` to also return False when this run approved that remote's removal — a two-line change in `flatpak_sync.py:1046`. |
+| **F4** | Either move the availability probe behind the run's single `apt-get update` (impossible without breaking read-only `plan()`), or — better — write down that availability is classified against the target's lists as they stand and that the apply-path refresh may change the answer, and lean on F2/F3's disclosure to cover the cases that matter. I would do the latter: a doc line in `docs/jobs/package-sync.md` plus a comment at `apt_sync.py:770`. |
+| **F6** | Subtract the pin files this run approves for `REMOVE` from `pinned` before the diff, in `apt_sync.py`'s plan override. Cheap. Or accept and document the one-run lag. |
+| **F8** | Replace the awk `$2` with the same multi-name parse `_parse_pin_file` already does; skip `*`. Trivially cheap. |
+
+Cross-cutting: everywhere above, the recommendation is **plan-time classification into review `detail`**, matching D-30, #214 and `43a52fa3`. Nothing here should become a mid-apply prompt or a blanket refusal.
+
+# 5. Requirements gaps — need a user decision, not a fix
+
+1. **What a `Signed-By: /usr/share/keyrings/...` reference means.** D-12 says "a repo's signing key travels bundled with its repo item, byte-for-byte" and names `/etc/apt/keyrings` and legacy `/etc/apt/trusted.gpg.d` as the key populations. `/usr/share/keyrings` is named nowhere in ADR-020 or 02-CONTEXT.md, yet it holds the keys for 9 of this machine's 16 repositories, 5 of them owned by no package. Nobody ever decided whether pc-switcher replicates them, ignores them, or treats their repos as unreplicable. (F1(b).)
+2. **Whether a pin may block a removal.** D-05 and the #208 amendment describe pins as replicating constraints and as an informational echo on the package. Neither says a pin on the target should make a package un-removable *and* un-markable. (F7.)
+3. **Whether declining a repository should imply declining its packages.** D-07 gives every item an independent three-way decision and says nothing about dependent pairs; N6 in the coverage matrix already records the mirror-image omission ("no 'this was the last package from that source, remove it too?' prompt — that requirement is not implemented"). My F2/F3 recommendation (disclose, still offer) is the option most consistent with the phase's precedents, but "declining the source should auto-decline its packages" is a defensible alternative nobody has ruled on.
+4. **Whether a package whose repository is inert should keep being offered at all.** Follows from (3); the current behaviour — offer forever, fail forever — is the one option that is certainly wrong, but which of the alternatives applies is a user call.</result>
+<usage><subagent_tokens>180181</subagent_tokens><tool_uses>40</tool_uses><duration_ms>505315</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a712234b2040a806c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/b0a03faf-51bf-47b9-b60a-83a2131f5934/tasks/a712234b2040a806c.output</output-file>
+<status>completed</status>
+<summary>Agent "Make apt keys transparent" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Committed locally as `d27337da`, nothing pushed.
+
+## What the model is now
+
+An apt signing key is **not an item**. `ItemClass.APT_KEY` and `AptKeyItem` are deleted; there is no `apt:key:` identity anywhere in the codebase (verified by grep across `src/`, `docs/`, `tests/`). Keys are two file operations bracketing the repository group in `src/pcswitcher/jobs/apt_sync.py`:
+
+- **`_provision_keyrings`** — before any source write. Copies every `/etc/apt/trusted.gpg.d` key the target lacks or differs on, plus every keyring referenced by a source that will exist on the target, matched on **content**, not presence. `/etc/apt/keyrings` is never mirrored wholesale.
+- **`_remove_unused_keyrings`** — after every source write and deletion, gated on the run having removed a source. Counts references from a **fresh** `_scan_target_source_references` of the target's real post-write state.
+
+## Answers to your questions
+
+**Global-trust keys**: replicated (missing *and* differing — I refresh on content, my call), never collected. Justification: nothing references a `trusted.gpg.d` file by construction, so "unused" is not computable and content difference is the only signal that exists in either direction; deleting one would be a guess against ambient trust that apt uses for every repo without a `Signed-By:`.
+
+**Existing recorded key decisions**: none possible, by construction — a key never reaches a `ReviewGroup`, so `_record_permanent_skips` has nothing to record. `blk:test_a_signing_key_is_never_offered_and_so_can_never_be_recorded` drives a full `SKIP_ALWAYS`-everything review over a target-only orphaned keyring and asserts neither machine's decision file is written. No migration branch exists.
+
+**Strand-a-repo guard**: it is not a guard. It *is* how the removal set is derived — the reference count runs against the target's actual state after all repository operations, so a declined removal, a failed removal, a machine-specific repo and `/etc/apt/sources.list` all keep their key alive without any special case. I extended the scan to cover `/etc/apt/sources.list` (never synced, so always survives).
+
+**Rotation**: fixed as instructed. `test_rotated_keyring_is_refreshed_although_its_source_file_is_identical` asserts the plan has **zero** diffs and the key is still promoted. The trigger is `_pending_keyring_work()` in `accept_review`, which inserts the metadata-refresh marker so the group runs at all; it is a decision-independent superset and the group recomputes the exact set and returns early if empty.
+
+**Judgement calls to flag**
+1. A `Signed-By:` pointing outside `/etc/apt/keyrings` and `/etc/apt/trusted.gpg.d` (e.g. `/usr/share/keyrings/ubuntu-archive-keyring.gpg`) is not provisioned — pre-existing `_dangling_keyring_ref` behaviour already downgrades such a repo to `REPORT_ONLY`, and I did not change it.
+2. Key provisioning/collection only runs when the repository group runs. Global-trust key work is itself a trigger, so an ambient-trust-only difference still converges; a pins/config-only run also provisions.
+3. Dry-run shows no key activity (the group never converges under `--dry-run`).
+
+**Mutation-checked** (each reverted after): counting references against the plan-time scan instead of the post-write one (2 fail); deleting referenced keys (4); collecting with no source removed (1); collecting global-trust keys (1, after I strengthened that assertion — my first mutation was mis-targeted and survived); presence-based instead of content-based provisioning, i.e. no rotation (2); mirroring `/etc/apt/keyrings` wholesale (2); departing repo still counting as a reference (1); `_require_keyrings_ready` never refusing (2); dropping `/etc/apt/sources.list` from the scan (12); removing the rotation trigger from `accept_review` (3).
+
+**Bug I introduced and fixed mid-flight**: `_stage_and_promote` initially used one path for both the local read and the target destination, which would misplace a keyring the two machines keep in different directories. It now takes `local` and `dest` separately.
+
+**VM tests updated** — `tests/integration/jobs/test_package_sync.py`. The dry-run test now names **only** the repository in its automation decisions and asserts the key travels anyway (under the old model an undecided item defaults to skip-once and would produce no line — non-vacuous in both directions). The C24 removal test likewise decides only the repository and proves the key is collected; its `apt-get update`/`Err:`-line witnesses are unchanged.
+
+**Unverifiable without a VM**: both integration tests above, and the reference-scan parse against a live `/etc/apt` (the `find … sources.list.d /etc/apt/sources.list … -exec awk` command shape and the `sources.list` stderr-on-missing-path behaviour are reasoned from `find` semantics, not executed here).</result>
+<usage><subagent_tokens>365933</subagent_tokens><tool_uses>99</tool_uses><duration_ms>1735027</duration_ms></usage>
+</task-notification>
+
+---
+
+Ok for your design on the sources.
+
+/usr/share/keyrings: option 1 (third key directory)
+
+"package-owned ones don't replicate, because they arrive with their own deb": there are installs (like vscode if I remember well) that work as follows:
+- I manually download .deb
+- I install the .deb
+- The .deb doesn't contain the program, but only instructions to install the source and the key(ring) and run apt-get update and run apt-get update install.
+How would sync work in pc-switcher? Does pc-switcher see both an installed package and its source (so will copy the source and install the package) AND that there was a manual .deb install (so will ask for the snippet)?
+Are these maybe the "dangling keys" you talk about?
+
+You cited vacuous tests. Were they fixed?
+
+"pin file being deleted this run still suppresses its packages' diffs for one run": should not.
+If, for doing this correctly, pc-switcher needs to ask the user twice for decisions, that is not a problem. Clear, correct, complete and understandable behavior is much more important than my PREFERENCE (not HIGHEST PRIORITY OVER EVERYTHING ELSE) to have as much prompts as possible at the same time.
+
+---
+
+About vscode-style: you say "It sees vscode.sources". Where? I don't. Is my package "code" not linked to a repo?
+
+Edit ADR-020 in place so that it says "prefer batched review / user prompts" rather than "require single batched review per manager".
+
+---
+
+ADR-020: you only ADDED text about batching reviews. But it still says "one batch per manager" in the text you kept. Can lead to confusion. Edit properly IN PLACE, as I asked.
+
+---
+
+agent may need to touch ADR-020 for it's own work on repos/keys
+
+---
+
+agent finished
+
+---
+
+do not push until I say so
+
+---
+
+"untested outside the fake": I didn't even test the fake. We should. I don't know where to find it.
+Context almost full. Need to go to a fresh session. Handover with what's still open.
