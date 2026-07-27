@@ -76,7 +76,7 @@ A repository's signing key travels with the repository, byte-for-byte from the s
 
 ### Job split into four jobs (D-15, D-16, D-17, D-18)
 
-Four jobs — `apt_sync`, `snap_sync`, `flatpak_sync` and `manual_installs_sync` — over one shared core (item model, diff, three-way decision flow, batched TUI review, machine-local file I/O, snippet registry) extracted while building, not deferred to a post-hoc refactor. Package jobs run before `folder_sync` so apps are provisioned before their data lands (decisive for flatpak, where `~/.local/share/flatpak` must exist before `~/.var/app` arrives).
+Four jobs — `apt_sync`, `snap_sync`, `flatpak_sync` and `manual_installs_sync` — over one shared core extracted while building, not deferred to a post-hoc refactor. The core is what all four use: the item taxonomy, the plan/review/apply order, the three-way decision flow, the batched TUI review and the machine-local file I/O. Each manager's own item shapes and its own diff stay in that manager's module — one manager's diff on the shared base would make the other three inherit inputs they never supply, which is the coupling D-15 exists to prevent. Package jobs run before `folder_sync` so apps are provisioned before their data lands (decisive for flatpak, where `~/.local/share/flatpak` must exist before `~/.var/app` arrives).
 
 `manual_installs_sync` owns everything no package manager can reproduce: the apt-no-candidate set and the scan for unowned installs under `/usr/local` and `/opt`, plus the snippet registry.
 
@@ -129,7 +129,7 @@ Package jobs export their owned paths to `folder_sync` via the ADR-018 mechanism
 ## Alternatives Considered
 
 - **File-level replication of the package databases** (`/var/lib/dpkg`, `/var/lib/snapd`, the flatpak OSTree store) — rejected: the package managers must stay authoritative for their own state, and file-level replication would fight their own consistency mechanisms.
-- **A single combined `package_sync` job** — rejected per D-15: four separate jobs give independent enable flags, independent config, independent failure isolation and independent progress reporting, at the cost of one shared core module.
+- **A single combined `package_sync` job** — rejected per D-15: four separate jobs give independent enable flags, independent config, independent failure isolation and independent progress reporting, at the cost of one shared core module holding only what all four use.
 - **A `--delete` file mirror of `/etc/apt`** — rejected per D-11: it would wipe the target's own machine-specific sources, which contradicts the machine-local decision model (D-07/D-08).
 - **Source-cache reuse for offline installs** — deferred per D-28; revisit if target-side downloads prove slow or unreliable.
 

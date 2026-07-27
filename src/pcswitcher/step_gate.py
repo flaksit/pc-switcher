@@ -1,6 +1,8 @@
 """Per-action confirmation gate behind `--confirm-each-command`.
 
-A package sync run converges dozens of small mutating commands — `apt-get install`,
+Generic infrastructure, not one job family's: it lives beside `executor.py`, which is its
+only caller, and gates every write any job makes. A package sync is simply where the need
+is sharpest — such a run converges dozens of small mutating commands — `apt-get install`,
 `snap remove`, `sudo install` into `/etc/apt`, an SFTP push of the snippet registry — each
 of which was approved only in aggregate, as a ticked line in a batched review. This gate
 inserts one prompt before every single one of them, showing the EXACT operation about to

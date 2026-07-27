@@ -25,7 +25,6 @@ from pcswitcher.jobs.apt_sync import AptSyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages import state as package_state
 from pcswitcher.jobs.packages.items import (
-    AptPackageItem,
     DiffAction,
     DiffClass,
     ItemClass,
@@ -42,8 +41,9 @@ from pcswitcher.jobs.packages.state import (
     SnippetRegistry,
     filter_inert,
 )
-from pcswitcher.jobs.packages.sync_core import PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, Host, ValidationError
+from pcswitcher.jobs.packages.sync_core import PackagePlan
+from pcswitcher.models import CommandResult, Host
+from tests.unit.jobs.test_package_sync_core import FakeItem, FakeSyncJob
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -101,7 +101,7 @@ class FakeShellExecutor:
         return None
 
 
-def _entry(item_id: str = "apt:package:brscan3", reason: str | None = "printer driver") -> DecisionEntry:
+def _entry(item_id: str = "fake:brscan3", reason: str | None = "printer driver") -> DecisionEntry:
     return DecisionEntry(
         item_id=item_id,
         item_class=ItemClass.APT_PACKAGE,
@@ -149,8 +149,8 @@ def _respond_echo_home(home: str) -> Callable[..., CommandResult]:
 class TestFilterInert:
     @pytest.mark.asyncio
     async def test_drops_items_whose_id_is_in_decisions(self) -> None:
-        items = [AptPackageItem(name="brscan3", version="0.4.11-2"), AptPackageItem(name="vim", version="9.0")]
-        decisions = {"apt:package:brscan3": _entry()}
+        items = [FakeItem(name="brscan3"), FakeItem(name="vim")]
+        decisions = {"fake:brscan3": _entry()}
 
         result = await filter_inert(items, decisions)
 
@@ -158,7 +158,7 @@ class TestFilterInert:
 
     @pytest.mark.asyncio
     async def test_empty_decisions_keeps_every_item(self) -> None:
-        items = [AptPackageItem(name="vim", version="9.0")]
+        items = [FakeItem(name="vim")]
 
         result = await filter_inert(items, {})
 
@@ -166,8 +166,8 @@ class TestFilterInert:
 
     @pytest.mark.asyncio
     async def test_no_items_match_returns_all_unchanged_in_order(self) -> None:
-        items = [AptPackageItem(name="a", version="1"), AptPackageItem(name="b", version="1")]
-        decisions = {"apt:package:unrelated": _entry(item_id="apt:package:unrelated")}
+        items = [FakeItem(name="a"), FakeItem(name="b")]
+        decisions = {"fake:unrelated": _entry(item_id="fake:unrelated")}
 
         result = await filter_inert(items, decisions)
 
@@ -243,9 +243,9 @@ class TestDecisionFileLoad:
         reader = DecisionFile("apt", shell)
         entries = await reader.load()
 
-        assert set(entries) == {"apt:package:brscan3"}
-        assert entries["apt:package:brscan3"].reason == "printer driver"
-        assert entries["apt:package:brscan3"].item_class == ItemClass.APT_PACKAGE
+        assert set(entries) == {"fake:brscan3"}
+        assert entries["fake:brscan3"].reason == "printer driver"
+        assert entries["fake:brscan3"].item_class == ItemClass.APT_PACKAGE
 
 
 # ---------------------------------------------------------------------------
@@ -316,18 +316,18 @@ class TestDecisionFileRecord:
 
         entries = await DecisionFile("apt", shell).load()
         assert len(entries) == 1
-        assert entries["apt:package:brscan3"].reason == "second reason"
+        assert entries["fake:brscan3"].reason == "second reason"
 
     @pytest.mark.asyncio
     async def test_recording_a_second_distinct_item_preserves_the_first(self) -> None:
         shell = FakeShellExecutor()
         store = DecisionFile("apt", shell)
 
-        await store.record(_entry(item_id="apt:package:brscan3"))
+        await store.record(_entry(item_id="fake:brscan3"))
         await store.record(_entry(item_id="apt:package:some-vendor-tool"))
 
         entries = await DecisionFile("apt", shell).load()
-        assert set(entries) == {"apt:package:brscan3", "apt:package:some-vendor-tool"}
+        assert set(entries) == {"fake:brscan3", "apt:package:some-vendor-tool"}
 
 
 # ---------------------------------------------------------------------------
@@ -356,42 +356,6 @@ class TestRelpathConstants:
 # Task 2: pipeline wiring — inert items never reach the review, skip-always is
 # recorded on the correct end, never in dry-run or a non-interactive outcome.
 # ---------------------------------------------------------------------------
-
-
-class _FakePackageJob(PackageSyncJob):
-    """Minimal concrete `PackageSyncJob` with configurable source/target items and a
-    recording `converge()`, matching the shape `test_package_sync_core.py`'s
-    `FakeSyncJob` uses — isolates the shared plan()/apply() pipeline from any
-    apt-specific machinery.
-    """
-
-    name: ClassVar[str] = "fake_pkg"
-    manager_id: ClassVar[str] = "fake"
-
-    def __init__(
-        self,
-        context: JobContext,
-        *,
-        source_items: list[AptPackageItem] = [],  # noqa: B006 (test-only, never mutated)
-        target_items: list[AptPackageItem] = [],  # noqa: B006
-    ) -> None:
-        super().__init__(context)
-        self._source_items = source_items
-        self._target_items = target_items
-        self.converge_calls: list[ItemDiff] = []
-
-    async def capture_source_items(self) -> list[AptPackageItem]:
-        return self._source_items
-
-    async def query_target_items(self) -> list[AptPackageItem]:
-        return self._target_items
-
-    async def validate(self) -> list[ValidationError]:
-        return []
-
-    async def converge(self, diff: ItemDiff) -> CommandResult:
-        self.converge_calls.append(diff)
-        return CommandResult(0, "", "")
 
 
 def _remove_diff(item_id: str) -> ItemDiff:
@@ -433,27 +397,27 @@ class TestPipelineWiring:
         context = make_context()
         source = context.source
         source.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
-            side_effect=_respond_cat_with(_decision_file_contents("apt:package:brscan3"))
+            side_effect=_respond_cat_with(_decision_file_contents("fake:brscan3"))
         )
-        job = _FakePackageJob(
+        job = FakeSyncJob(
             context,
-            source_items=[AptPackageItem(name="brscan3", version="1.0"), AptPackageItem(name="vim", version="9.0")],
+            source_items=[FakeItem(name="brscan3"), FakeItem(name="vim")],
         )
 
         plan = await job.plan()
 
-        assert {d.item_id for d in plan.diffs} == {"apt:package:vim"}
+        assert {d.item_id for d in plan.diffs} == {"fake:vim"}
         all_group_item_ids = {entry.item_id for group in plan.groups for entry in group.entries}
-        assert "apt:package:brscan3" not in all_group_item_ids
+        assert "fake:brscan3" not in all_group_item_ids
 
     @pytest.mark.asyncio
     async def test_target_held_inert_item_absent_even_though_source_also_differs(self) -> None:
         context = make_context()
         target = context.target
         target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
-            side_effect=_respond_cat_with(_decision_file_contents("apt:package:legacy-tool"))
+            side_effect=_respond_cat_with(_decision_file_contents("fake:legacy-tool"))
         )
-        job = _FakePackageJob(context, target_items=[AptPackageItem(name="legacy-tool", version="1.0")])
+        job = FakeSyncJob(context, target_items=[FakeItem(name="legacy-tool")])
 
         plan = await job.plan()
 
@@ -462,7 +426,7 @@ class TestPipelineWiring:
     @pytest.mark.asyncio
     async def test_plan_issues_no_decision_file_write(self) -> None:
         context = make_context()
-        job = _FakePackageJob(context, source_items=[AptPackageItem(name="vim", version="9.0")])
+        job = FakeSyncJob(context, source_items=[FakeItem(name="vim")])
 
         await job.plan()
 
@@ -474,9 +438,9 @@ class TestPipelineWiring:
     @pytest.mark.asyncio
     async def test_every_record_call_originates_from_apply_not_plan(self) -> None:
         context = make_context()
-        job = _FakePackageJob(context, source_items=[AptPackageItem(name="vim", version="9.0")])
+        job = FakeSyncJob(context, source_items=[FakeItem(name="vim")])
         plan = await job.plan()
-        job.accept_review(plan, ReviewOutcome(decisions={"apt:package:vim": Decision.APPLY}, was_interactive=True))
+        job.accept_review(plan, ReviewOutcome(decisions={"fake:vim": Decision.APPLY}, was_interactive=True))
 
         with patch.object(DecisionFile, "record", new=AsyncMock()) as record_mock:
             await job.apply()
@@ -486,8 +450,8 @@ class TestPipelineWiring:
     @pytest.mark.asyncio
     async def test_skip_always_on_remove_writes_to_target_not_source(self) -> None:
         context = make_context()
-        job = _FakePackageJob(context)
-        diff = _remove_diff("apt:package:legacy-tool")
+        job = FakeSyncJob(context)
+        diff = _remove_diff("fake:legacy-tool")
         plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
         job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
 
@@ -501,8 +465,8 @@ class TestPipelineWiring:
     @pytest.mark.asyncio
     async def test_skip_always_on_install_writes_to_source_not_target(self) -> None:
         context = make_context()
-        job = _FakePackageJob(context)
-        diff = _install_diff("apt:package:brscan3")
+        job = FakeSyncJob(context)
+        diff = _install_diff("fake:brscan3")
         plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
         job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
 
@@ -520,8 +484,8 @@ class TestPipelineWiring:
         offering it. Sibling of the INSTALL and REMOVE cases above.
         """
         context = make_context()
-        job = _FakePackageJob(context)
-        diff = _change_diff("apt:package:drifting-tool")
+        job = FakeSyncJob(context)
+        diff = _change_diff("fake:drifting-tool")
         plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
         job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
 
@@ -535,8 +499,8 @@ class TestPipelineWiring:
     @pytest.mark.asyncio
     async def test_no_record_call_when_dry_run(self) -> None:
         context = make_context(dry_run=True)
-        job = _FakePackageJob(context)
-        diff = _remove_diff("apt:package:legacy-tool")
+        job = FakeSyncJob(context)
+        diff = _remove_diff("fake:legacy-tool")
         plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
         job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
 
@@ -548,8 +512,8 @@ class TestPipelineWiring:
     @pytest.mark.asyncio
     async def test_no_record_call_when_outcome_was_not_interactive(self) -> None:
         context = make_context()
-        job = _FakePackageJob(context)
-        diff = _remove_diff("apt:package:legacy-tool")
+        job = FakeSyncJob(context)
+        diff = _remove_diff("fake:legacy-tool")
         plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
         job.accept_review(plan, ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS}, was_interactive=False))
 
@@ -571,30 +535,30 @@ class TestHandEditedDecisionFile:
         shell = FakeShellExecutor()
         # The manager name only picks the path; the fake read below answers any `cat`.
         store = DecisionFile("apt", shell)
-        await store.record(_entry(item_id="apt:package:brscan3"))
-        await store.record(_entry(item_id="apt:package:legacy-tool"))
+        await store.record(_entry(item_id="fake:brscan3"))
+        await store.record(_entry(item_id="fake:legacy-tool"))
         recorded = next(iter(shell.files.values()))
 
         # The user opens the file and deletes ONE entry, leaving the other in place.
         data: dict[str, dict[str, object]] = yaml.safe_load(recorded)
-        del data["machine_specific"]["apt:package:brscan3"]
+        del data["machine_specific"]["fake:brscan3"]
         hand_edited = yaml.safe_dump(data)
 
         context = make_context()
         context.source.run_command = AsyncMock(side_effect=_respond_cat_with(hand_edited))  # pyright: ignore[reportAttributeAccessIssue]
-        job = _FakePackageJob(
+        job = FakeSyncJob(
             context,
             source_items=[
-                AptPackageItem(name="brscan3", version="1.0"),
-                AptPackageItem(name="legacy-tool", version="1.0"),
-                AptPackageItem(name="vim", version="9.0"),
+                FakeItem(name="brscan3"),
+                FakeItem(name="legacy-tool"),
+                FakeItem(name="vim"),
             ],
         )
 
         plan = await job.plan()
 
         # brscan3 is live again; the entry the user kept stays inert.
-        assert {d.item_id for d in plan.diffs} == {"apt:package:brscan3", "apt:package:vim"}
+        assert {d.item_id for d in plan.diffs} == {"fake:brscan3", "fake:vim"}
 
     @pytest.mark.asyncio
     async def test_deleting_the_whole_file_makes_every_item_live_again(self) -> None:
@@ -602,14 +566,14 @@ class TestHandEditedDecisionFile:
         (H13), so removing it re-offers every previously-recorded item."""
         context = make_context()
         context.source.run_command = AsyncMock(return_value=CommandResult(1, "", ""))  # pyright: ignore[reportAttributeAccessIssue]
-        job = _FakePackageJob(
+        job = FakeSyncJob(
             context,
-            source_items=[AptPackageItem(name="brscan3", version="1.0"), AptPackageItem(name="vim", version="9.0")],
+            source_items=[FakeItem(name="brscan3"), FakeItem(name="vim")],
         )
 
         plan = await job.plan()
 
-        assert {d.item_id for d in plan.diffs} == {"apt:package:brscan3", "apt:package:vim"}
+        assert {d.item_id for d in plan.diffs} == {"fake:brscan3", "fake:vim"}
 
 
 def _respond_by_substring(mapping: dict[str, CommandResult]) -> Callable[..., CommandResult]:

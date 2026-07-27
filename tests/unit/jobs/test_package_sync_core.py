@@ -1,16 +1,19 @@
-"""Unit tests for `PackageSyncJob`'s shared diff engine, review grouping, and the
-converge dispatch across all four `DiffAction`s (plan 02-05, D-07/D-24/D-25).
+"""Unit tests for what `PackageSyncJob` actually shares: review grouping, the converge
+dispatch across all four `DiffAction`s, decision-file routing and `execute()`'s order
+(D-07/D-24/D-25).
 
-`FakeSyncJob` is a minimal concrete `PackageSyncJob` (empty capture/query, a
-converge() that just records calls) so these tests exercise the SHARED pipeline —
-`_diff_apt_packages`, `_build_review_groups`, `apply()`'s action-based dispatch —
-independent of `AptSyncJob`'s apt-specific machinery, which `test_apt_sync.py` covers.
+`FakeSyncJob` is a minimal concrete `PackageSyncJob` whose `plan()` diffs items by bare
+presence and whose `converge()` only records calls. Deliberately not apt-shaped: a
+manager's own diff is that manager's (`_diff_apt_packages` is tested in
+`test_apt_sync.py`), and a fake borrowing one would make these tests pass or fail for
+reasons that have nothing to do with the shared pipeline.
 """
 
 from __future__ import annotations
 
 import io
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,15 +24,9 @@ from pcswitcher.config import Configuration
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
-from pcswitcher.jobs.packages.items import (
-    AptPackageItem,
-    DiffAction,
-    DiffClass,
-    HoldPinFact,
-    ItemClass,
-    ItemDiff,
-)
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome
+from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
 from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivateUsage]
     _ACTION_VOCABULARY,
     PackageItemFailures,
@@ -110,207 +107,81 @@ def _diff(
     )
 
 
+@dataclass(frozen=True)
+class FakeItem:
+    """The least an item can be and still flow through the shared pipeline: an id and a
+    label. No manager's fields, so nothing these tests assert can be an accident of one
+    ecosystem's shape.
+    """
+
+    name: str
+
+    @property
+    def item_id(self) -> str:
+        return f"fake:{self.name}"
+
+    def label(self) -> str:
+        return self.name
+
+
 class FakeSyncJob(PackageSyncJob):
-    """Minimal concrete `PackageSyncJob`: empty capture/query, a recording converge()."""
+    """Minimal concrete `PackageSyncJob`: items in, presence-diffed, a recording converge().
+
+    Reusable by any test whose subject is the shared pipeline rather than a manager
+    (`test_package_state.py` drives its decision-file routing through this class).
+    """
 
     name: ClassVar[str] = "fake_sync"
     manager_id: ClassVar[str] = "fake"
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {}
 
-    def __init__(self, context: JobContext) -> None:
+    def __init__(
+        self,
+        context: JobContext,
+        *,
+        source_items: Sequence[FakeItem] = (),
+        target_items: Sequence[FakeItem] = (),
+    ) -> None:
         super().__init__(context)
+        self._source_items = tuple(source_items)
+        self._target_items = tuple(target_items)
         self.converge_calls: list[ItemDiff] = []
-
-    async def capture_source_items(self) -> list[AptPackageItem]:
-        return []
-
-    async def query_target_items(self) -> list[AptPackageItem]:
-        return []
 
     async def validate(self) -> list[Any]:
         return []
+
+    async def plan(self) -> PackagePlan:
+        """The skeleton every real `plan()` follows -- load both decision files, filter
+        each side through its own, diff, drop what is inert, build groups -- with the
+        simplest diff that exists: present on one side only.
+        """
+        source_decisions = await DecisionFile(self.manager_id, self.source).load()
+        target_decisions = await DecisionFile(self.manager_id, self.target).load()
+        self._plan_decisions = (source_decisions, target_decisions)
+
+        source_items = await filter_inert(self._source_items, source_decisions)
+        target_items = await filter_inert(self._target_items, target_decisions)
+        source_ids = {item.item_id: item for item in source_items}
+        target_ids = {item.item_id: item for item in target_items}
+        diffs = [
+            _diff(item.item_id, DiffAction.INSTALL) for item in source_items if item.item_id not in target_ids
+        ] + [
+            _diff(item.item_id, DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET)
+            for item in target_items
+            if item.item_id not in source_ids
+        ]
+        kept = self._drop_inert_diffs(diffs, source_decisions, target_decisions)
+        return PackagePlan(manager=self.manager_id, diffs=kept, groups=self._build_review_groups(kept))
 
     async def converge(self, diff: ItemDiff) -> CommandResult:
         self.converge_calls.append(diff)
         return CommandResult(0, "", "")
 
 
-class FakeSyncJobWithFacts(FakeSyncJob):
-    """`FakeSyncJob` with configurable source/target items and hook return values —
-    exercises `plan()`'s wiring of `collect_hold_pin_facts`/`collect_unavailable_item_ids`
-    into `diff_items` without any apt-specific machinery.
-    """
-
-    def __init__(
-        self,
-        context: JobContext,
-        *,
-        source_items: list[AptPackageItem] = [],  # noqa: B006 (test-only, never mutated)
-        target_items: list[AptPackageItem] = [],  # noqa: B006
-        hold_pin_facts: list[HoldPinFact] = [],  # noqa: B006
-        unavailable_ids: frozenset[str] = frozenset(),
-        hold_sets: tuple[frozenset[str], frozenset[str]] = (frozenset(), frozenset()),
-    ) -> None:
-        super().__init__(context)
-        self._source_items = source_items
-        self._target_items = target_items
-        self._hold_pin_facts = hold_pin_facts
-        self._unavailable_ids = unavailable_ids
-        self._hold_sets = hold_sets
-
-    async def capture_source_items(self) -> list[AptPackageItem]:
-        return self._source_items
-
-    async def query_target_items(self) -> list[AptPackageItem]:
-        return self._target_items
-
-    async def collect_hold_pin_facts(self) -> list[HoldPinFact]:
-        return self._hold_pin_facts
-
-    async def collect_hold_sets(self) -> tuple[frozenset[str], frozenset[str]]:
-        return self._hold_sets
-
-    async def collect_unavailable_item_ids(self, missing_item_ids: frozenset[str]) -> frozenset[str]:
-        return self._unavailable_ids & missing_item_ids
-
-
 def _accept(job: PackageSyncJob, diffs: tuple[ItemDiff, ...], decisions: dict[str, Decision]) -> PackagePlan:
     plan = PackagePlan(manager=job.manager_id, diffs=diffs, groups=job._build_review_groups(diffs))
     job.accept_review(plan, ReviewOutcome(decisions=decisions, was_interactive=True))
     return plan
-
-
-class TestDiffEngine:
-    """`PackageSyncJob._diff_apt_packages` produces every D-25 diff class."""
-
-    def test_missing_on_target_yields_install(self) -> None:
-        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
-
-        diffs = PackageSyncJob._diff_apt_packages(source_items, [], (), frozenset())
-
-        assert len(diffs) == 1
-        assert diffs[0].diff_class == DiffClass.MISSING_ON_TARGET
-        assert diffs[0].action == DiffAction.INSTALL
-
-    def test_extra_on_target_yields_remove(self) -> None:
-        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
-
-        diffs = PackageSyncJob._diff_apt_packages([], target_items, (), frozenset())
-
-        assert len(diffs) == 1
-        assert diffs[0].diff_class == DiffClass.EXTRA_ON_TARGET
-        assert diffs[0].action == DiffAction.REMOVE
-
-    def test_version_mismatch_yields_report_only_with_both_versions(self) -> None:
-        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
-        target_items = [AptPackageItem(name="pkg-a", version="2.0")]
-
-        diffs = PackageSyncJob._diff_apt_packages(source_items, target_items, (), frozenset())
-
-        assert len(diffs) == 1
-        assert diffs[0].diff_class == DiffClass.VERSION_MISMATCH
-        assert diffs[0].action == DiffAction.REPORT_ONLY
-        assert diffs[0].detail is not None
-        assert "1.0" in diffs[0].detail
-        assert "2.0" in diffs[0].detail
-
-    def test_equal_versions_yields_no_diff(self) -> None:
-        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
-        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
-
-        diffs = PackageSyncJob._diff_apt_packages(source_items, target_items, (), frozenset())
-
-        assert diffs == []
-
-    def test_source_hold_only_yields_apt_hold_install(self) -> None:
-        """#208: a name held on the source but not the target is an `apt:hold:` INSTALL
-        (hold), a distinct APT_HOLD item — never a package-level HELD_OR_PINNED report.
-        """
-        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
-        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
-
-        diffs = PackageSyncJob._diff_apt_packages(
-            source_items, target_items, (), frozenset(), frozenset({"pkg-a"}), frozenset()
-        )
-
-        assert len(diffs) == 1
-        assert diffs[0].item_class == ItemClass.APT_HOLD
-        assert diffs[0].item_id == "apt:hold:pkg-a"
-        assert diffs[0].action == DiffAction.INSTALL
-        assert diffs[0].diff_class != DiffClass.HELD_OR_PINNED
-
-    def test_target_hold_only_yields_apt_hold_remove_and_suppresses_package_action(self) -> None:
-        """#208: a name held on the target but not the source is an `apt:hold:` REMOVE
-        (unhold); the version-mismatch package action it would otherwise carry is
-        suppressed (a held package is never proposed for upgrade) and no HELD_OR_PINNED
-        report is emitted for the hold mechanism.
-        """
-        source_items = [AptPackageItem(name="pkg-a", version="2.0")]
-        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
-
-        diffs = PackageSyncJob._diff_apt_packages(
-            source_items, target_items, (), frozenset(), frozenset(), frozenset({"pkg-a"})
-        )
-
-        assert len(diffs) == 1
-        assert diffs[0].item_class == ItemClass.APT_HOLD
-        assert diffs[0].action == DiffAction.REMOVE
-        assert not any(d.diff_class == DiffClass.HELD_OR_PINNED for d in diffs)
-
-    def test_held_on_both_yields_no_diff(self) -> None:
-        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
-        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
-
-        diffs = PackageSyncJob._diff_apt_packages(
-            source_items, target_items, (), frozenset(), frozenset({"pkg-a"}), frozenset({"pkg-a"})
-        )
-
-        assert diffs == []
-
-    def test_pin_fact_yields_held_or_pinned_distinguishable_from_a_hold_item(self) -> None:
-        """A pin keeps its REPORT_ONLY HELD_OR_PINNED echo on the package; a hold is a
-        separate APT_HOLD membership item — the two stay distinguishable (#208).
-        """
-        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
-        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
-        pin = HoldPinFact(mechanism="pin", package="pkg-a", source_ref="/etc/apt/preferences.d/pkg-a-pin")
-
-        pin_diffs = PackageSyncJob._diff_apt_packages(source_items, target_items, [pin], frozenset())
-        hold_diffs = PackageSyncJob._diff_apt_packages(
-            source_items, target_items, (), frozenset(), frozenset({"pkg-a"}), frozenset()
-        )
-
-        assert pin_diffs[0].diff_class == DiffClass.HELD_OR_PINNED
-        assert pin_diffs[0].item_class == ItemClass.APT_PACKAGE
-        assert hold_diffs[0].item_class == ItemClass.APT_HOLD
-        assert hold_diffs[0].diff_class != DiffClass.HELD_OR_PINNED
-
-    def test_missing_and_unavailable_yields_repo_unavailable_not_install(self) -> None:
-        source_items = [AptPackageItem(name="brscan3", version="")]
-
-        diffs = PackageSyncJob._diff_apt_packages(source_items, [], (), frozenset({"apt:package:brscan3"}))
-
-        assert len(diffs) == 1
-        assert diffs[0].diff_class == DiffClass.REPO_UNAVAILABLE
-        assert diffs[0].action == DiffAction.REPORT_ONLY
-
-    @pytest.mark.asyncio
-    async def test_plan_wires_hooks_into_the_diff(self) -> None:
-        """`plan()` calls `collect_hold_pin_facts`/`collect_unavailable_item_ids` and
-        passes their results into `diff_items` — the generic hook contract, exercised
-        without any apt-specific machinery.
-        """
-        job = FakeSyncJobWithFacts(
-            make_context(),
-            source_items=[AptPackageItem(name="pkg-a", version="1.0")],
-            target_items=[],
-            unavailable_ids=frozenset({"apt:package:pkg-a"}),
-        )
-
-        plan = await job.plan()
-
-        assert len(plan.diffs) == 1
-        assert plan.diffs[0].diff_class == DiffClass.REPO_UNAVAILABLE
 
 
 class TestReviewGroupsByAction:
@@ -512,28 +383,20 @@ class TestConvergeDispatchByAction:
 class TestIdempotency:
     """J10/N2: a run over an ALREADY-converged pair is a no-op end to end.
 
-    Asserted on the shared pipeline (`FakeSyncJobWithFacts`) so it holds for every
-    manager rather than for one manager's capture code: identical item sets and identical
-    hold sets must produce zero diffs, zero review groups, no converge and no command
-    carrying `mutates=`. Pins that the diff engine has no "always re-propose" branch —
-    the property a real second sync depends on.
-
-    A PIN fact is deliberately absent: D-25 requires the `HELD_OR_PINNED` echo on every
-    run, so a pinned package is a standing REPORT_ONLY diff by design, not a convergence
-    failure.
+    Asserted on the shared pipeline so it holds for every manager rather than for one
+    manager's capture code: identical item sets must produce zero diffs, zero review
+    groups, no converge and no command carrying `mutates=`. Pins that nothing between
+    plan() and apply() has an "always re-propose" branch — the property a real second
+    sync depends on. Each manager's own diff carries the same property for its own item
+    classes; apt's is covered in `test_apt_sync.py`.
     """
 
     @pytest.mark.asyncio
     async def test_identical_source_and_target_produce_no_diff_no_group_and_no_mutation(self) -> None:
         reviewer = FakeReviewer()
         context = make_context(reviewer=reviewer)
-        items = [AptPackageItem(name="pkg-a", version="1.0"), AptPackageItem(name="pkg-b", version="2.0")]
-        job = FakeSyncJobWithFacts(
-            context,
-            source_items=items,
-            target_items=list(items),
-            hold_sets=(frozenset({"pkg-a"}), frozenset({"pkg-a"})),
-        )
+        items = [FakeItem(name="pkg-a"), FakeItem(name="pkg-b")]
+        job = FakeSyncJob(context, source_items=items, target_items=list(items))
 
         plan = await job.plan()
         assert plan.diffs == ()
@@ -816,12 +679,6 @@ class _StubFailingPackageJob(PackageSyncJob):
 
     name: ClassVar[str] = "stub_failing_package"
     manager_id: ClassVar[str] = "stub-failing"
-
-    async def capture_source_items(self) -> Sequence[AptPackageItem]:
-        raise NotImplementedError
-
-    async def query_target_items(self) -> Sequence[AptPackageItem]:
-        raise NotImplementedError
 
     async def converge(self, diff: ItemDiff) -> CommandResult:
         raise NotImplementedError

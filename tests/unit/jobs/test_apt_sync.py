@@ -23,13 +23,18 @@ from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.apt_sync import (
     _METADATA_REFRESH_ITEM_ID,
     _TARGET_SUDO_COMMANDS,
+    AptPackageItem,
     AptSyncJob,
+    HoldPinFact,
+    _diff_apt_packages,
     _parse_pin_file,
     _parse_source_file,
+    build_held_or_pinned_detail,
+    build_repo_unavailable_detail,
     compare_deb_versions,
     simulate_apt_transaction,
 )
-from pcswitcher.jobs.packages.items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import (
     _REMOVAL_ACTIONS,
     COLLATERAL_REVIEW_ACTION,
@@ -154,7 +159,7 @@ class TestDiff:
 
         source_items = await job.capture_source_items()
         target_items = await job.query_target_items()
-        diffs = job.diff_items(source_items, target_items)
+        diffs = _diff_apt_packages(source_items, target_items, (), frozenset())
 
         assert len(diffs) == 2
         assert {d.item_id for d in diffs} == {"apt:package:pkg-a", "apt:package:pkg-c"}
@@ -168,10 +173,7 @@ class TestDiff:
             AptPackageItem(name="pkg-a", version="1.0"),
             AptPackageItem(name="pkg-extra", version="9.9"),
         ]
-        context, _source, _target = make_context()
-        job = AptSyncJob(context)
-
-        diffs = job.diff_items(source_items, target_items)
+        diffs = _diff_apt_packages(source_items, target_items, (), frozenset())
 
         assert len(diffs) == 1
         assert diffs[0].item_id == "apt:package:pkg-extra"
@@ -4061,3 +4063,158 @@ class TestCompareDebVersions:
         assert await compare_deb_versions(executor, "2:1.0", "10.0") > 0
         assert await compare_deb_versions(executor, "1.0-1", "1.0-2") < 0
         assert await compare_deb_versions(executor, "1.0-1", "1.0-1") == 0
+
+
+class TestHoldPinFactAndDetails:
+    """Hold and pin stay distinguishable facts even under one review category."""
+
+    def test_hold_and_pin_details_are_distinguishable(self) -> None:
+        hold = HoldPinFact(mechanism="hold", package="curl", source_ref="apt-mark showhold")
+        pin = HoldPinFact(mechanism="pin", package="curl", source_ref="/etc/apt/preferences.d/curl-pin")
+
+        hold_detail = build_held_or_pinned_detail(hold)
+        pin_detail = build_held_or_pinned_detail(pin)
+
+        assert hold_detail != pin_detail
+        assert "hold" in hold_detail
+        assert "pin" in pin_detail
+
+    def test_hold_and_pin_diffs_carry_different_mechanism_values(self) -> None:
+        hold = HoldPinFact(mechanism="hold", package="curl", source_ref="apt-mark showhold")
+        pin = HoldPinFact(mechanism="pin", package="curl", source_ref="/etc/apt/preferences.d/curl-pin")
+
+        hold_diff = ItemDiff(
+            item_class=ItemClass.APT_PACKAGE,
+            diff_class=DiffClass.HELD_OR_PINNED,
+            action=DiffAction.REPORT_ONLY,
+            item_id="apt:package:curl",
+            label="curl",
+            detail=build_held_or_pinned_detail(hold),
+        )
+        pin_diff = ItemDiff(
+            item_class=ItemClass.APT_PACKAGE,
+            diff_class=DiffClass.HELD_OR_PINNED,
+            action=DiffAction.REPORT_ONLY,
+            item_id="apt:package:curl",
+            label="curl",
+            detail=build_held_or_pinned_detail(pin),
+        )
+
+        assert hold_diff.diff_class == DiffClass.HELD_OR_PINNED
+        assert pin_diff.diff_class == DiffClass.HELD_OR_PINNED
+        assert hold_diff.detail != pin_diff.detail
+        assert hold.mechanism != pin.mechanism
+
+    def test_build_repo_unavailable_detail_names_the_package(self) -> None:
+        detail = build_repo_unavailable_detail("brscan3")
+
+        assert "brscan3" in detail
+
+
+class TestDiffEngine:
+    """`_diff_apt_packages` produces every D-25 diff class."""
+
+    def test_missing_on_target_yields_install(self) -> None:
+        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
+
+        diffs = _diff_apt_packages(source_items, [], (), frozenset())
+
+        assert len(diffs) == 1
+        assert diffs[0].diff_class == DiffClass.MISSING_ON_TARGET
+        assert diffs[0].action == DiffAction.INSTALL
+
+    def test_extra_on_target_yields_remove(self) -> None:
+        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
+
+        diffs = _diff_apt_packages([], target_items, (), frozenset())
+
+        assert len(diffs) == 1
+        assert diffs[0].diff_class == DiffClass.EXTRA_ON_TARGET
+        assert diffs[0].action == DiffAction.REMOVE
+
+    def test_version_mismatch_yields_report_only_with_both_versions(self) -> None:
+        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
+        target_items = [AptPackageItem(name="pkg-a", version="2.0")]
+
+        diffs = _diff_apt_packages(source_items, target_items, (), frozenset())
+
+        assert len(diffs) == 1
+        assert diffs[0].diff_class == DiffClass.VERSION_MISMATCH
+        assert diffs[0].action == DiffAction.REPORT_ONLY
+        assert diffs[0].detail is not None
+        assert "1.0" in diffs[0].detail
+        assert "2.0" in diffs[0].detail
+
+    def test_equal_versions_yields_no_diff(self) -> None:
+        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
+        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
+
+        diffs = _diff_apt_packages(source_items, target_items, (), frozenset())
+
+        assert diffs == []
+
+    def test_source_hold_only_yields_apt_hold_install(self) -> None:
+        """#208: a name held on the source but not the target is an `apt:hold:` INSTALL
+        (hold), a distinct APT_HOLD item — never a package-level HELD_OR_PINNED report.
+        """
+        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
+        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
+
+        diffs = _diff_apt_packages(source_items, target_items, (), frozenset(), frozenset({"pkg-a"}), frozenset())
+
+        assert len(diffs) == 1
+        assert diffs[0].item_class == ItemClass.APT_HOLD
+        assert diffs[0].item_id == "apt:hold:pkg-a"
+        assert diffs[0].action == DiffAction.INSTALL
+        assert diffs[0].diff_class != DiffClass.HELD_OR_PINNED
+
+    def test_target_hold_only_yields_apt_hold_remove_and_suppresses_package_action(self) -> None:
+        """#208: a name held on the target but not the source is an `apt:hold:` REMOVE
+        (unhold); the version-mismatch package action it would otherwise carry is
+        suppressed (a held package is never proposed for upgrade) and no HELD_OR_PINNED
+        report is emitted for the hold mechanism.
+        """
+        source_items = [AptPackageItem(name="pkg-a", version="2.0")]
+        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
+
+        diffs = _diff_apt_packages(source_items, target_items, (), frozenset(), frozenset(), frozenset({"pkg-a"}))
+
+        assert len(diffs) == 1
+        assert diffs[0].item_class == ItemClass.APT_HOLD
+        assert diffs[0].action == DiffAction.REMOVE
+        assert not any(d.diff_class == DiffClass.HELD_OR_PINNED for d in diffs)
+
+    def test_held_on_both_yields_no_diff(self) -> None:
+        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
+        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
+
+        diffs = _diff_apt_packages(
+            source_items, target_items, (), frozenset(), frozenset({"pkg-a"}), frozenset({"pkg-a"})
+        )
+
+        assert diffs == []
+
+    def test_pin_fact_yields_held_or_pinned_distinguishable_from_a_hold_item(self) -> None:
+        """A pin keeps its REPORT_ONLY HELD_OR_PINNED echo on the package; a hold is a
+        separate APT_HOLD membership item — the two stay distinguishable (#208).
+        """
+        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
+        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
+        pin = HoldPinFact(mechanism="pin", package="pkg-a", source_ref="/etc/apt/preferences.d/pkg-a-pin")
+
+        pin_diffs = _diff_apt_packages(source_items, target_items, [pin], frozenset())
+        hold_diffs = _diff_apt_packages(source_items, target_items, (), frozenset(), frozenset({"pkg-a"}), frozenset())
+
+        assert pin_diffs[0].diff_class == DiffClass.HELD_OR_PINNED
+        assert pin_diffs[0].item_class == ItemClass.APT_PACKAGE
+        assert hold_diffs[0].item_class == ItemClass.APT_HOLD
+        assert hold_diffs[0].diff_class != DiffClass.HELD_OR_PINNED
+
+    def test_missing_and_unavailable_yields_repo_unavailable_not_install(self) -> None:
+        source_items = [AptPackageItem(name="brscan3", version="")]
+
+        diffs = _diff_apt_packages(source_items, [], (), frozenset({"apt:package:brscan3"}))
+
+        assert len(diffs) == 1
+        assert diffs[0].diff_class == DiffClass.REPO_UNAVAILABLE
+        assert diffs[0].action == DiffAction.REPORT_ONLY

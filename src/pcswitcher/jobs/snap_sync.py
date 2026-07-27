@@ -451,7 +451,6 @@ class SnapSyncJob(PackageSyncJob):
         self._source_items_by_id: dict[str, SnapItem] = {}
         self._target_items_by_id: dict[str, SnapItem] = {}
 
-    @override
     async def capture_source_items(self) -> Sequence[SnapItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """`snap list --all` on the source (D-06).
 
@@ -463,7 +462,6 @@ class SnapSyncJob(PackageSyncJob):
         result = await self.source.run_command("snap list --all")
         return _parse_snap_list(result.stdout)
 
-    @override
     async def query_target_items(self) -> Sequence[SnapItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """The target's own `snap list --all` (same reasoning as `capture_source_items`)."""
         result = await self.target.run_command("snap list --all", login_shell=False)

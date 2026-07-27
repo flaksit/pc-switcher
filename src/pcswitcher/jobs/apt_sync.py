@@ -97,10 +97,8 @@ from uuid import uuid4
 from pcswitcher.executor import Executor, RemoteExecutor
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.items import (
-    AptPackageItem,
     DiffAction,
     DiffClass,
-    HoldPinFact,
     ItemClass,
     ItemDiff,
     build_version_mismatch_detail,
@@ -112,7 +110,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.packages.state import filter_inert
+from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
@@ -205,11 +203,242 @@ _TRANSACTION_LINE_RE = re.compile(
 )
 
 
-# -- apt-owned item shapes and review details ----------------------------------------
+# -- apt's own item shapes, detail strings and package diff ---------------------------
 #
-# Here rather than in the shared `packages/items.py`: nothing outside `apt_sync` builds
-# an `/etc/apt` item or writes one of these detail strings, and a shape only one job
-# constructs is that job's own business (D-15).
+# All of it here, none of it in `packages/`. A shape only this job constructs and a diff
+# only this job runs are this job's business (D-15): while the package diff lived on
+# `PackageSyncJob`, the other three managers inherited hold sets, pin facts and
+# no-candidate ids they never fill in, and each wrote its own diff anyway -- because what
+# a diff even IS differs per ecosystem. `packages/items.py` keeps the taxonomy every
+# manager is keyed on; `packages/sync_core.py` keeps the plan/review/apply order.
+
+
+@dataclass(frozen=True)
+class AptPackageItem:
+    """One manually-installed apt package (D-03), captured from `apt-mark showmanual`
+    plus one batched `dpkg-query` call for versions.
+    """
+
+    name: str
+    version: str
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `apt:package:<name>`."""
+        return f"apt:package:{self.name}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return f"{self.name} ({self.version})" if self.version else self.name
+
+
+@dataclass(frozen=True)
+class HoldPinFact:
+    """One fact about a package's upgrade being blocked, from one of two distinct
+    mechanisms (RESEARCH Pitfall 2):
+
+    - A HOLD is dpkg *selection state* stored under `/var/lib/dpkg`, read via
+      `apt-mark showhold`. It blocks ALL upgrades of that package outright.
+    - A PIN is an apt priority *preference* stored under `/etc/apt/preferences.d`. It
+      can still allow an upgrade within whatever the pin's priority permits — it is
+      not an absolute block.
+
+    Both surface under the same `DiffClass.HELD_OR_PINNED` review category (D-25), but
+    they are read from two different sources and mean different things. A diff
+    implementation that reads only one silently misses every package blocked by the
+    other mechanism, which is why `mechanism` and `source_ref` stay on this fact
+    rather than being collapsed into a single boolean.
+    """
+
+    mechanism: Literal["hold", "pin"]
+    package: str
+    source_ref: str
+
+
+def build_held_or_pinned_detail(fact: HoldPinFact) -> str:
+    """Detail string for a `HELD_OR_PINNED` diff: names the mechanism and its origin
+    so a hold and a pin never read as the same fact in the review, even though both
+    surface under one category (RESEARCH Pitfall 2).
+    """
+    verb = "held" if fact.mechanism == "hold" else "pinned"
+    return f"{verb} ({fact.mechanism}, via {fact.source_ref})"
+
+
+def build_repo_unavailable_detail(name: str) -> str:
+    """Detail string for a `REPO_UNAVAILABLE` diff: the target's own repositories
+    offer no installable candidate for this package (`apt-cache policy` showed none).
+    This must read as its own fact, not silently downgrade to a proposed `INSTALL`.
+    """
+    return f"target's repositories offer no candidate for {name}"
+
+
+@dataclass(frozen=True)
+class AptHoldItem:
+    """One apt package hold (#208): dpkg selection state read via `apt-mark showhold`.
+
+    A hold is boolean-membership: a package is either held or it is not, so this item
+    carries only the package `name` and diffs as a presence difference (source-held &
+    target-not -> add the hold; target-held & source-not -> remove it). Its identity
+    (`apt:hold:<name>`) is DISTINCT from the package item's (`apt:package:<name>`) so a
+    package and its hold are two separate review items — replicating the user's
+    deliberate "block all upgrades" intent independently of whether the package itself
+    is being installed this run.
+    """
+
+    name: str
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_HOLD
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `apt:hold:<name>`."""
+        return f"apt:hold:{self.name}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return f"{self.name} (hold)"
+
+
+def _diff_apt_packages(
+    source_items: Sequence[AptPackageItem],
+    target_items: Sequence[AptPackageItem],
+    hold_pin_facts: Sequence[HoldPinFact],
+    unavailable_item_ids: frozenset[str],
+    source_hold_names: frozenset[str] = frozenset(),
+    target_hold_names: frozenset[str] = frozenset(),
+) -> list[ItemDiff]:
+    """One diff per item id present on either side, source-then-target order,
+    followed by the `apt:hold:` membership diffs (#208, D5/D8 — holds emitted AFTER
+    package diffs so install lands before its hold once the diffs converge).
+
+    Precedence per package id: a PINNED package (present on the target and named by a
+    pin fact) yields `HELD_OR_PINNED`/`REPORT_ONLY` — the pin echo D-25 requires,
+    informational only. A HELD package (target hold set) has its install/upgrade
+    action SUPPRESSED (a held package is never proposed for install/version change)
+    but produces NO package-level report — the hold travels as its own `apt:hold:`
+    item, so a held package is never double-reported. Otherwise: missing-on-target ->
+    `REPO_UNAVAILABLE` if apt reports no candidate, else `MISSING_ON_TARGET`/`INSTALL`;
+    extra-on-target -> `EXTRA_ON_TARGET`/`REMOVE`; present on both with differing
+    versions -> `VERSION_MISMATCH`/`REPORT_ONLY` (D-04: reported, never
+    force-downgraded); present on both with equal versions -> no diff at all.
+
+    Hold membership (D2): source-held & target-not -> `AptHoldItem` INSTALL (hold);
+    target-held & source-not -> REMOVE (unhold); held on both or neither -> no diff.
+    """
+    source_by_id = {item.item_id: item for item in source_items}
+    target_by_id = {item.item_id: item for item in target_items}
+
+    # PINS only (#208, D5): holds no longer key this guard — they travel as their own
+    # `apt:hold:` items below, so this branch keys purely on the pin mechanism.
+    pinned: dict[str, HoldPinFact] = {}
+    for fact in hold_pin_facts:
+        if fact.mechanism == "pin":
+            pinned.setdefault(fact.package, fact)
+
+    seen: dict[str, None] = {}
+    for item in (*source_items, *target_items):
+        seen.setdefault(item.item_id, None)
+
+    diffs: list[ItemDiff] = []
+    for item_id in seen:
+        source_item = source_by_id.get(item_id)
+        target_item = target_by_id.get(item_id)
+
+        if target_item is not None and target_item.name in pinned:
+            diffs.append(
+                ItemDiff(
+                    item_class=ItemClass.APT_PACKAGE,
+                    diff_class=DiffClass.HELD_OR_PINNED,
+                    action=DiffAction.REPORT_ONLY,
+                    item_id=item_id,
+                    label=target_item.label(),
+                    detail=build_held_or_pinned_detail(pinned[target_item.name]),
+                )
+            )
+        elif target_item is not None and target_item.name in target_hold_names:
+            # Held on the target: suppress its install/version action entirely (a held
+            # package must never be proposed for install/upgrade). No package-level
+            # report — the `apt:hold:` item below carries the hold fact.
+            continue
+        elif source_item is not None and target_item is None:
+            if item_id in unavailable_item_ids:
+                diffs.append(
+                    ItemDiff(
+                        item_class=ItemClass.APT_PACKAGE,
+                        diff_class=DiffClass.REPO_UNAVAILABLE,
+                        action=DiffAction.REPORT_ONLY,
+                        item_id=item_id,
+                        label=source_item.label(),
+                        detail=build_repo_unavailable_detail(source_item.name),
+                    )
+                )
+            else:
+                diffs.append(
+                    ItemDiff(
+                        item_class=ItemClass.APT_PACKAGE,
+                        diff_class=DiffClass.MISSING_ON_TARGET,
+                        action=DiffAction.INSTALL,
+                        item_id=item_id,
+                        label=source_item.label(),
+                        detail=None,
+                    )
+                )
+        elif target_item is not None and source_item is None:
+            diffs.append(
+                ItemDiff(
+                    item_class=ItemClass.APT_PACKAGE,
+                    diff_class=DiffClass.EXTRA_ON_TARGET,
+                    action=DiffAction.REMOVE,
+                    item_id=item_id,
+                    label=target_item.label(),
+                    detail=None,
+                )
+            )
+        elif source_item is not None and target_item is not None and source_item.version != target_item.version:
+            diffs.append(
+                ItemDiff(
+                    item_class=ItemClass.APT_PACKAGE,
+                    diff_class=DiffClass.VERSION_MISMATCH,
+                    action=DiffAction.REPORT_ONLY,
+                    item_id=item_id,
+                    label=target_item.label(),
+                    detail=build_version_mismatch_detail(source_item.version, target_item.version),
+                )
+            )
+        # else: present on both, equal versions, not held/pinned -> no diff.
+
+    # Hold membership diffs (#208, D2/D8): emitted AFTER every package diff so a
+    # package install lands before its hold when both are approved.
+    diffs.extend(_diff_apt_holds(source_hold_names, target_hold_names))
+    return diffs
+
+
+def _diff_apt_holds(source_hold_names: frozenset[str], target_hold_names: frozenset[str]) -> list[ItemDiff]:
+    """`apt:hold:` membership diffs (#208, D2): source-held & target-not -> INSTALL
+    (hold); target-held & source-not -> REMOVE (unhold); held on both or on neither
+    -> no diff. `sorted` for a stable, deterministic review order.
+    """
+    diffs: list[ItemDiff] = []
+    for name in sorted(source_hold_names | target_hold_names):
+        in_source = name in source_hold_names
+        in_target = name in target_hold_names
+        if in_source == in_target:
+            continue
+        hold_item = AptHoldItem(name=name)
+        diffs.append(
+            ItemDiff(
+                item_class=ItemClass.APT_HOLD,
+                diff_class=DiffClass.MISSING_ON_TARGET if in_source else DiffClass.EXTRA_ON_TARGET,
+                action=DiffAction.INSTALL if in_source else DiffAction.REMOVE,
+                item_id=hold_item.item_id,
+                label=hold_item.label(),
+                detail=None,
+            )
+        )
+    return diffs
+
+
+# -- the `/etc/apt/*` item shapes and their review details ----------------------------
 
 
 @dataclass(frozen=True)
@@ -861,6 +1090,10 @@ class AptSyncJob(PackageSyncJob):
         # silently) if it is not. Consulted at plan time by `_classify_collateral` and
         # at apply time by the converge guards, which must agree.
         self._target_manual_set: frozenset[str] = frozenset()
+        # The source manifest the last `_plan_packages()` diffed, after decision-file
+        # filtering. Kept so the post-repository re-review can re-diff against a CHANGED
+        # target without re-capturing the source, which this run never mutates.
+        self._plan_source_items: tuple[AptPackageItem, ...] = ()
         # The source's raw `apt-mark showmanual` set, captured in `capture_source_items`
         # (before decision-file filtering). The SOURCE half of the collateral-protection
         # union (decision 8): a package the user manually installed on EITHER machine is
@@ -890,7 +1123,6 @@ class AptSyncJob(PackageSyncJob):
         # them at the apply-time guard.
         self._collateral_trigger_ids: dict[str, frozenset[str]] = {}
 
-    @override
     async def capture_source_items(self) -> Sequence[AptPackageItem]:
         """Manually-installed apt packages on the source, with versions (D-03).
 
@@ -903,7 +1135,6 @@ class AptSyncJob(PackageSyncJob):
         self._source_manual_set = frozenset(_lines(manual.stdout))
         return await self._resolve_versions(manual.stdout, self.source.run_command)
 
-    @override
     async def query_target_items(self) -> Sequence[AptPackageItem]:
         """The target's own manually-installed apt packages, with versions."""
         manual = await self.target.run_command("apt-mark showmanual", login_shell=False)
@@ -939,7 +1170,6 @@ class AptSyncJob(PackageSyncJob):
 
         return [AptPackageItem(name=name, version=versions.get(name, "")) for name in names]
 
-    @override
     async def collect_hold_pin_facts(self) -> Sequence[HoldPinFact]:
         """PIN facts from the target's `/etc/apt/preferences.d/*` `Package:` stanzas —
         the target-only `HELD_OR_PINNED`/`REPORT_ONLY` echo on the package item.
@@ -979,7 +1209,6 @@ class AptSyncJob(PackageSyncJob):
             )
         return facts
 
-    @override
     async def collect_hold_sets(self) -> tuple[frozenset[str], frozenset[str]]:
         """Source and target package-hold NAME sets from `apt-mark showhold` on BOTH
         machines (#208, D5). Read from both ends because the hold is replicated as a
@@ -991,7 +1220,6 @@ class AptSyncJob(PackageSyncJob):
         target_hold = await self.target.run_command("apt-mark showhold", login_shell=False)
         return frozenset(_lines(source_hold.stdout)), frozenset(_lines(target_hold.stdout))
 
-    @override
     async def collect_unavailable_item_ids(self, missing_item_ids: frozenset[str]) -> frozenset[str]:
         """Batched `apt-cache policy` over every missing-on-target name (one call, not
         one per package): a `Candidate: (none)` means the target's repositories have
@@ -1006,7 +1234,56 @@ class AptSyncJob(PackageSyncJob):
         no_candidate = _packages_with_no_candidate(result.stdout)
         return frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in names if name in no_candidate)
 
-    @override
+    async def _plan_packages(self) -> PackagePlan:
+        """The package half of `plan()`: load decision files -> capture -> query -> diff
+        -> build review groups. Read-only.
+
+        Nothing here may mutate either machine: a job plans and reviews before it
+        converges, so `plan()` runs before the user has approved anything. Both
+        machines' decision files are loaded first (a read, like everything else here)
+        and each side's captured/queried items are filtered through its OWN file before
+        diffing (D-08): an item recorded on the source is dropped from the source
+        manifest so it is never pushed to a peer again; an item recorded on the target
+        is dropped from the target query so it is never proposed for
+        install/remove/change again — either way it produces no `ItemDiff` and never
+        reaches the review.
+
+        The finished diffs go through `_drop_inert_diffs` as well, which catches the
+        recorded items no input-side filter can see: the `apt:hold:` membership items are
+        derived from hold-set membership, and the post-diff pass is the only CORRECT place
+        for them anyway — the target hold set additionally suppresses a held package's own
+        install/upgrade action, so filtering that input set would re-propose upgrading a
+        held package. `plan()` runs the same pass again over the repository and collateral
+        diffs it appends.
+        """
+        source_decisions = await DecisionFile(self.manager_id, self.source).load()
+        target_decisions = await DecisionFile(self.manager_id, self.target).load()
+        self._plan_decisions = (source_decisions, target_decisions)
+
+        source_items = await filter_inert(await self.capture_source_items(), source_decisions)
+        self._plan_source_items = tuple(source_items)
+        target_items = await filter_inert(await self.query_target_items(), target_decisions)
+        hold_pin_facts = await self.collect_hold_pin_facts()
+        source_hold_names, target_hold_names = await self.collect_hold_sets()
+        missing_item_ids = frozenset(item.item_id for item in source_items) - frozenset(
+            item.item_id for item in target_items
+        )
+        unavailable_item_ids = await self.collect_unavailable_item_ids(missing_item_ids)
+        diffs = self._drop_inert_diffs(
+            _diff_apt_packages(
+                source_items,
+                target_items,
+                hold_pin_facts,
+                unavailable_item_ids,
+                source_hold_names,
+                target_hold_names,
+            ),
+            source_decisions,
+            target_decisions,
+        )
+        groups = self._build_review_groups(diffs)
+        return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
+
     async def plan(self) -> PackagePlan:
         """Extends the base diff (missing/extra/mismatch/held/unavailable) with
         plan-time apt transaction-collateral classification (D-30) and the four
@@ -1026,7 +1303,7 @@ class AptSyncJob(PackageSyncJob):
         decided at plan time, in the SAME review the user approves from — never a prompt
         during apply.
         """
-        base_plan = await super().plan()
+        base_plan = await self._plan_packages()
         self._target_manual_set = await self._capture_target_manual_set()
         collateral_diffs = await self._collect_plan_time_collateral(base_plan.diffs)
         repo_diffs = await self._plan_repo_diffs()
@@ -1724,13 +2001,13 @@ class AptSyncJob(PackageSyncJob):
         )
         unavailable_item_ids = await self.collect_unavailable_item_ids(missing_item_ids)
         return self._drop_inert_diffs(
-            self.diff_items(
+            _diff_apt_packages(
                 self._plan_source_items,
                 target_items,
-                hold_pin_facts=hold_pin_facts,
-                unavailable_item_ids=unavailable_item_ids,
-                source_hold_names=source_hold_names,
-                target_hold_names=target_hold_names,
+                hold_pin_facts,
+                unavailable_item_ids,
+                source_hold_names,
+                target_hold_names,
             ),
             *self._plan_decisions,
         )

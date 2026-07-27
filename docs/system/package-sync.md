@@ -16,11 +16,12 @@ The three package-manager jobs sit in the orchestrator's job-execution phase **a
 
 ## Shared core contract (`PackageSyncJob`)
 
-`PackageSyncJob` is an abstract `SyncJob` every package-manager job subclasses. It declares three abstract hooks a concrete job implements:
+`PackageSyncJob` is an abstract `SyncJob` every package-manager job subclasses. It declares two abstract hooks a concrete job implements:
 
-- `capture_source_items()` — read this manager's manifest from the source. Read-only.
-- `query_target_items()` — read this manager's current state from the target. Read-only.
+- `plan(diff)` — capture the source's manifest, query the target, diff the two, and build this job's review groups. Read-only. Each manager writes its own: what a diff even IS differs per ecosystem, so there is no base implementation to inherit — only the pieces every implementation uses (`filter_inert` on the way in, `_drop_inert_diffs` on the way out, `_build_review_groups` at the end).
 - `converge(diff)` — apply one approved diff on the target. May raise `ConvergeItemFailed` to refuse an item without attempting its mutating command (e.g. a transaction-safety guard), or return a `CommandResult` whose non-zero exit code is treated as a per-item failure the same way.
+
+What the base class holds is what all four managers genuinely share: the plan/review/apply order, the machine-local decision-file rules, the review grouping and the converge loop. A manager's own item shapes, its own diff and the facts only it can collect live in that manager's module — a base class holding one manager's logic makes the other three inherit a surface they never use.
 
 In return, the base class guarantees:
 
@@ -35,7 +36,7 @@ In return, the base class guarantees:
 
 Each package job runs plan then review then apply inside its own `execute()`, and applies nothing until its own review returns:
 
-- **plan** — capture the source's manifest, query the target's own state, diff the two, build this job's own review groups. Read-only: nothing here may mutate either machine.
+- **plan** — capture the source's manifest, query the target's own state, diff the two, build this job's own review groups. Read-only: nothing here may mutate either machine. Each manager implements this itself.
 - **review** — present this job's own batched review, grouped by action, batched per manager and never across managers. Installs and removals show as separate groups with removals labelled as removals, so a bulk tick can never silently delete.
 - **apply** — converge only the diffs the user approved, one item at a time, collecting per-item failures rather than stopping at the first one.
 

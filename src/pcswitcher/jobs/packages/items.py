@@ -23,18 +23,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import ClassVar, Literal
 
 __all__ = [
-    "AptHoldItem",
-    "AptPackageItem",
     "DiffAction",
     "DiffClass",
-    "HoldPinFact",
     "ItemClass",
     "ItemDiff",
-    "build_held_or_pinned_detail",
-    "build_repo_unavailable_detail",
     "build_version_mismatch_detail",
 ]
 
@@ -90,25 +84,6 @@ class DiffAction(StrEnum):
 
 
 @dataclass(frozen=True)
-class AptPackageItem:
-    """One manually-installed apt package (D-03), captured from `apt-mark showmanual`
-    plus one batched `dpkg-query` call for versions.
-    """
-
-    name: str
-    version: str
-
-    @property
-    def item_id(self) -> str:
-        """Stable identity string: `apt:package:<name>`."""
-        return f"apt:package:{self.name}"
-
-    def label(self) -> str:
-        """Human-readable text for the review UI and logs."""
-        return f"{self.name} ({self.version})" if self.version else self.name
-
-
-@dataclass(frozen=True)
 class ItemDiff:
     """One item's diff result — the one shape the review and converge loop both consume.
 
@@ -125,29 +100,6 @@ class ItemDiff:
     detail: str | None = None
 
 
-@dataclass(frozen=True)
-class HoldPinFact:
-    """One fact about a package's upgrade being blocked, from one of two distinct
-    mechanisms (RESEARCH Pitfall 2):
-
-    - A HOLD is dpkg *selection state* stored under `/var/lib/dpkg`, read via
-      `apt-mark showhold`. It blocks ALL upgrades of that package outright.
-    - A PIN is an apt priority *preference* stored under `/etc/apt/preferences.d`. It
-      can still allow an upgrade within whatever the pin's priority permits — it is
-      not an absolute block.
-
-    Both surface under the same `DiffClass.HELD_OR_PINNED` review category (D-25), but
-    they are read from two different sources and mean different things. A diff
-    implementation that reads only one silently misses every package blocked by the
-    other mechanism, which is why `mechanism` and `source_ref` stay on this fact
-    rather than being collapsed into a single boolean.
-    """
-
-    mechanism: Literal["hold", "pin"]
-    package: str
-    source_ref: str
-
-
 def build_version_mismatch_detail(source_version: str, target_version: str) -> str:
     """Detail string for a `VERSION_MISMATCH` diff: both versions, machine-labelled.
 
@@ -156,47 +108,3 @@ def build_version_mismatch_detail(source_version: str, target_version: str) -> s
     proposes a resolution, it names the two facts and leaves the decision alone.
     """
     return f"source has {source_version}, target has {target_version}"
-
-
-def build_held_or_pinned_detail(fact: HoldPinFact) -> str:
-    """Detail string for a `HELD_OR_PINNED` diff: names the mechanism and its origin
-    so a hold and a pin never read as the same fact in the review, even though both
-    surface under one category (RESEARCH Pitfall 2).
-    """
-    verb = "held" if fact.mechanism == "hold" else "pinned"
-    return f"{verb} ({fact.mechanism}, via {fact.source_ref})"
-
-
-def build_repo_unavailable_detail(name: str) -> str:
-    """Detail string for a `REPO_UNAVAILABLE` diff: the target's own repositories
-    offer no installable candidate for this package (`apt-cache policy` showed none).
-    This must read as its own fact, not silently downgrade to a proposed `INSTALL`.
-    """
-    return f"target's repositories offer no candidate for {name}"
-
-
-@dataclass(frozen=True)
-class AptHoldItem:
-    """One apt package hold (#208): dpkg selection state read via `apt-mark showhold`.
-
-    A hold is boolean-membership: a package is either held or it is not, so this item
-    carries only the package `name` and diffs as a presence difference (source-held &
-    target-not -> add the hold; target-held & source-not -> remove it). Its identity
-    (`apt:hold:<name>`) is DISTINCT from the package item's (`apt:package:<name>`) so a
-    package and its hold are two separate review items — replicating the user's
-    deliberate "block all upgrades" intent independently of whether the package itself
-    is being installed this run.
-    """
-
-    name: str
-
-    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_HOLD
-
-    @property
-    def item_id(self) -> str:
-        """Stable identity string: `apt:hold:<name>`."""
-        return f"apt:hold:{self.name}"
-
-    def label(self) -> str:
-        """Human-readable text for the review UI and logs."""
-        return f"{self.name} (hold)"

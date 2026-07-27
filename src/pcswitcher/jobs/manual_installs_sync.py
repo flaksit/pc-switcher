@@ -431,7 +431,6 @@ class ManualInstallsSyncJob(PackageSyncJob):
 
     # -- plan() / converge() ------------------------------------------------------------
 
-    @override
     async def capture_source_items(self) -> Sequence[UnreproducibleItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """The source's unreproducible items: apt-no-candidate packages plus unowned
         `/usr/local`/`/opt` installs (D-18). `apt-mark showmanual` runs once here and its
@@ -448,7 +447,6 @@ class ManualInstallsSyncJob(PackageSyncJob):
             *await self._scan_unowned_installs(),
         ]
 
-    @override
     async def query_target_items(self) -> Sequence[UnreproducibleItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """No target-side manifest exists for unreproducible items: they are always
         source-held (they describe what the SOURCE machine has installed), and convergence

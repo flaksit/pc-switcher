@@ -805,7 +805,6 @@ class FlatpakSyncJob(PackageSyncJob):
         # before `flatpak remote-add --gpg-import` reads it (#215).
         self._target_home: str | None = None
 
-    @override
     async def capture_source_items(self) -> Sequence[FlatpakItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """`flatpak list --app` on the source (D-06).
 
@@ -818,7 +817,6 @@ class FlatpakSyncJob(PackageSyncJob):
         result = await self.source.run_command(_FLATPAK_LIST_CMD)
         return _parse_flatpak_list(result.stdout)
 
-    @override
     async def query_target_items(self) -> Sequence[FlatpakItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """The target's own `flatpak list --app` (same reasoning as `capture_source_items`)."""
         result = await self.target.run_command(_FLATPAK_LIST_CMD, login_shell=False)
