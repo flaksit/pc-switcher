@@ -1,0 +1,33 @@
+you said as well "did one SSH round trip per session folder". Do you mean each time a new SSH connection? Or re-using shared, open SSH connection?
+
+---
+
+As with ci_mark: instead of listing tests explicitly in select-ci-tests.sh, shouldn't we better mark the tests?
+
+---
+
+About "pre-merge": currently, integr tests run only after PR was set to ready-for-review. So on every push, the topic-subset is run.If we run full set upon "ready-for-review" event, that runs the full set while we are actually eager to get asap feedback on the specific feature the PR touches. Running the full set as "pre-merge"
+
+---
+
+About "pre-merge": currently, integr tests run only after PR was set to ready-for-review. So on every push, the topic-subset is run.
+If we run full set upon "ready-for-review" event, that runs the full set while we are actually eager to get asap feedback on the specific feature the PR touches. We WANT only the topic-subset to be run.
+Running the full set as "pre-merge" is a nice idea. But must be just before merge, not on ready-for-review.
+Could be part of the merge job (is that possible? Or only for merge groups (I don't want to go there now)?) and then it should cancel the merge on error. But I'm not sure we always want to run the full set for every PR. How to make it optional? Or just trigger full set manually when I want? How?
+
+---
+
+nightly cron: how does that work? What if multiple PRs open at same time (locking will fail)? Only for ready-for-review PR's, I hope.
+
+---
+
+"Multiple PRs pushing ...serialize": I have more the impression that they fail on lock. See history of failed jobs.
+
+---
+
+"Multiple PRs pushing ...serialize": I have more the impression that they fail on lock. See history of failed jobs.
+Ensure nightly job only runs if there were changes to main. This is rare and I don't want to waste hours of my github action minutes.
+
+---
+
+NO, DO NOT IMPLEMENT AUTO UNLOCKING
