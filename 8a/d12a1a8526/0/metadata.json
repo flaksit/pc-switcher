@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8ad12a1a8526",
+  "session_id": "6f351f45-55a4-4eda-a695-eb874d952f76",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-27T20:47:51.03539543Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/apt_sync.py",
+    "src/pcswitcher/jobs/packages/apt_policy.py",
+    "tests/unit/test_mutates_audit.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "9913ae875397",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1384,
+    "cache_creation_tokens": 225554,
+    "cache_read_tokens": 11775662,
+    "output_tokens": 85257,
+    "api_call_count": 69
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-27T20:47:50.954864885Z",
+    "agent_lines": 24,
+    "agent_removed": 10,
+    "human_added": 252,
+    "human_modified": 62,
+    "human_removed": 0,
+    "total_committed": 331,
+    "total_lines_changed": 351,
+    "agent_percentage": 9.686609686609685,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 249,
+      "user_lines_removed": 55,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "src/pcswitcher/jobs/apt_sync.py": 171,
+        "src/pcswitcher/jobs/packages/apt_policy.py": 64,
+        "tests/unit/test_mutates_audit.py": 5
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/apt_sync.py": 41,
+        "src/pcswitcher/jobs/packages/apt_policy.py": 13,
+        "tests/unit/test_mutates_audit.py": 1
+      }
+    }
+  ]
+}
