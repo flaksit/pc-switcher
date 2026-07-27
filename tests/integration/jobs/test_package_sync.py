@@ -80,6 +80,8 @@ from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decis
 from pcswitcher.jobs.packages.state import DECISION_FILE_RELPATH_TEMPLATE, DecisionFile, Snippet, SnippetRegistry
 from pcswitcher.models import CommandResult
 
+pytestmark = pytest.mark.area_package
+
 # Prefix marking each candidate's reverse-dependency block in the batched pc2 probe below.
 RDEPENDS_MARKER = "@@RDEPENDS_FOR@@"
 

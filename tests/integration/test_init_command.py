@@ -20,8 +20,7 @@ import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 
-# Excluded from CI (still runs locally); see docs/dev/testing-guide.md "Markers".
-pytestmark = pytest.mark.ci_skip
+pytestmark = pytest.mark.area_core
 
 
 @pytest.fixture

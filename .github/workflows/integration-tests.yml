@@ -9,17 +9,24 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+      - labeled
   workflow_dispatch:
+  schedule:
+    # Nightly full-suite run on main: the backstop for topic-scoped PR runs
+    # (see "Select tests for this run"), so no area rots unexercised.
+    - cron: "30 2 * * *"
 
 jobs:
   check-changes:
     name: Check if integration tests needed
     runs-on: ubuntu-latest
     outputs:
-      should-run: ${{ steps.filter.outputs.integration }}
+      should-run: ${{ steps.decide.outputs.should-run }}
     steps:
       - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
       - uses: dorny/paths-filter@v4
+        if: github.event_name == 'pull_request'
         id: filter
         with:
           filters: |
@@ -31,11 +38,41 @@ jobs:
               - 'install.sh'
               - 'pyproject.toml'
               - 'uv.lock'
+      - name: Decide whether this run is needed
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request)
+              echo "should-run=${{ steps.filter.outputs.integration }}" >> $GITHUB_OUTPUT
+              ;;
+            schedule)
+              # A nightly on an unchanged main would re-test what the previous
+              # nightly already covered — skip it and save the VM cycle.
+              last=$(gh api "repos/${{ github.repository }}/actions/workflows/integration-tests.yml/runs?event=schedule&per_page=5" \
+                --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }})][0].head_sha // empty')
+              if [[ -n "$last" && "$last" == "${{ github.sha }}" ]]; then
+                echo "main unchanged since the previous nightly ($last); skipping"
+                echo "should-run=false" >> $GITHUB_OUTPUT
+              else
+                echo "should-run=true" >> $GITHUB_OUTPUT
+              fi
+              ;;
+            *)
+              echo "should-run=true" >> $GITHUB_OUTPUT
+              ;;
+          esac
 
   wait-for-ci:
     name: Wait for lint and unit tests
     needs: check-changes
-    if: github.event.pull_request.draft == false && needs.check-changes.outputs.should-run == 'true'
+    # The 'labeled' guard: only the 'ci: full' label starts a run — adding any
+    # other label to a PR must not burn a CI cycle (or the VM lock).
+    if: >-
+      needs.check-changes.outputs.should-run == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci: full')
     runs-on: ubuntu-latest
     steps:
       # No native cross-workflow `needs:`. CI (lint + unit) runs in ci.yml on the
@@ -44,10 +81,12 @@ jobs:
       # Must use the PR head SHA, not github.sha (the merge commit) — ci.yml's
       # checks attach to the head commit. "CI Status" always runs (even when
       # lint/unit are path-filtered out), so it is safe to wait on by name.
+      # On schedule/dispatch there is no PR; github.sha (branch head) carries the
+      # CI Status check from its own push.
       - name: Wait for CI Status
         uses: lewagon/wait-on-check-action@v1.8.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           check-name: CI Status
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 15
@@ -55,7 +94,10 @@ jobs:
   integration:
     name: Integration Tests
     needs: [check-changes, wait-for-ci]
-    if: github.event.pull_request.draft == false && needs.check-changes.outputs.should-run == 'true'
+    if: >-
+      needs.check-changes.outputs.should-run == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci: full')
     runs-on: ubuntu-latest
     concurrency:
       group: pc-switcher-integration
@@ -130,18 +172,44 @@ jobs:
         # handful of SSH queries and exits in seconds.
         timeout-minutes: 50
 
+      - name: Select tests for this run
+        id: select
+        # PR runs — including ready_for_review — run only the tests for the
+        # areas the PR touches, as a pytest -m expression over the smoke/area_*
+        # markers (see select-ci-tests.sh for the mapping and its
+        # err-toward-full rule). Full suite on: the 'ci: full' PR label (the
+        # opt-in pre-merge gate — add it, let the run go green, then merge; a
+        # red run blocks the merge like any failing required check), nightly
+        # schedule, and manual dispatch.
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" \
+                || "${{ contains(github.event.pull_request.labels.*.name, 'ci: full') }}" == "true" ]]; then
+            echo "Full suite: event=${{ github.event_name }} action=${{ github.event.action }}"
+            echo "markers=" >> $GITHUB_OUTPUT
+          else
+            selection=$(tests/integration/scripts/select-ci-tests.sh "origin/${{ github.base_ref }}")
+            [[ "$selection" == "full" ]] && selection=""
+            echo "Selection: ${selection:-full suite}"
+            echo "markers=$selection" >> $GITHUB_OUTPUT
+          fi
+
       - name: Run integration tests
         run: |
           set -o pipefail
+          # `not ci_skip` in CI only: the exception hatch for tests that must
+          # not run here (local/manual runs still execute them).
+          base="integration and not benchmark and not ci_skip"
+          if [[ -n "${{ steps.select.outputs.markers }}" ]]; then
+            export PC_SWITCHER_TEST_MARKERS="$base and (${{ steps.select.outputs.markers }})"
+          else
+            export PC_SWITCHER_TEST_MARKERS="$base"
+          fi
           ./tests/run-integration-tests.sh 2>&1 | tee pytest-output.log
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
           PC_SWITCHER_TEST_PC1_HOST: ${{ steps.vm_ips.outputs.pc1_ip || steps.provision.outputs.pc1_ip }}
           PC_SWITCHER_TEST_PC2_HOST: ${{ steps.vm_ips.outputs.pc2_ip || steps.provision.outputs.pc2_ip }}
           PC_SWITCHER_TEST_USER: testuser
-          # Exclude ci_skip-marked integration tests here only; local/manual runs
-          # still execute them (default expression in run-integration-tests.sh).
-          PC_SWITCHER_TEST_MARKERS: "integration and not benchmark and not ci_skip"
           CI_JOB_ID: ${{ github.run_id }}
           # Long-lived read-only PAT, not the ephemeral Actions token, so reused
           # or pre-provisioned VMs (conftest injection path) stay authenticated.
@@ -174,6 +242,9 @@ jobs:
         run: |
           if [[ "${{ github.event.pull_request.draft }}" == "true" ]]; then
             echo "✓ Integration tests skipped (draft PR)"
+            exit 0
+          elif [[ "${{ github.event.action }}" == "labeled" && "${{ github.event.label.name }}" != "ci: full" ]]; then
+            echo "✓ Integration tests skipped (unrelated label)"
             exit 0
           elif [[ "${{ needs.check-changes.outputs.should-run }}" != "true" ]]; then
             echo "✓ Integration tests skipped (no relevant changes)"

@@ -68,6 +68,12 @@ markers = [
     "local_rsync: Tests that shell out to a real local rsync binary (no VM/SSH; skipped if rsync is absent)",
     "benchmark: Performance benchmarks (not run by default)",
     "ci_skip: Integration tests excluded from CI runs (still run in local/manual integration runs)",
+    "smoke: Fast sanity tests included in every CI integration selection",
+    "area_package: Package-manager sync tests (apt/snap/flatpak); topic-selected by select-ci-tests.sh",
+    "area_install: Install and self-update tests; topic-selected by select-ci-tests.sh",
+    "area_btrfs: Btrfs snapshot tests; topic-selected by select-ci-tests.sh",
+    "area_folder: Folder-sync end-to-end tests; topic-selected by select-ci-tests.sh",
+    "area_core: Core-behavior tests with no topic mapping (run in full-suite runs only)",
 ]
 log_cli = true
 # Here, set log level to the level we want from logs from our code.

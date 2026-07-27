@@ -18,8 +18,7 @@ import pytest
 
 from pcswitcher.executor import RemoteExecutor
 
-# Excluded from CI (still runs locally); see docs/dev/testing-guide.md "Markers".
-pytestmark = pytest.mark.ci_skip
+pytestmark = pytest.mark.area_core
 
 
 async def test_core_fr_target_term(

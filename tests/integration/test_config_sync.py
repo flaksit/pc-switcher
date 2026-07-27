@@ -16,8 +16,7 @@ from pcswitcher.config_sync import (
 )
 from pcswitcher.executor import RemoteExecutor
 
-# Excluded from CI (still runs locally); see docs/dev/testing-guide.md "Markers".
-pytestmark = pytest.mark.ci_skip
+pytestmark = pytest.mark.smoke
 
 
 class TestConfigSyncIntegration:

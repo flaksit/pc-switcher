@@ -360,25 +360,12 @@ concurrency:
 | `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM hostname/IP | `pc1` |
 | `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM hostname/IP | `pc2` |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
-| `PC_SWITCHER_TEST_MARKERS` | pytest `-m` expression; CI sets it to also drop `ci_skip` | `integration and not benchmark` |
+| `PC_SWITCHER_TEST_MARKERS` | pytest `-m` expression; CI sets it to the topic selection (smoke/area_* markers) | `integration and not benchmark` |
 | `CI_JOB_ID` | CI job ID for lock identification | `$USER` |
 
 ### pytest Configuration
 
-From `pyproject.toml`:
-
-```toml
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "module"
-asyncio_default_test_loop_scope = "module"
-markers = [
-    "integration: Integration tests (require VM infrastructure)",
-    "slow: Tests that take >5 seconds",
-    "benchmark: Performance benchmarks (not run by default)",
-    "ci_skip: Integration tests excluded from CI runs (still run in local/manual integration runs)",
-]
-```
+See `[tool.pytest.ini_options]` in `pyproject.toml`:
 
 **Event loop configuration**: Both fixtures and tests must share the same event loop scope. If fixtures use `loop_scope="module"` but tests default to `loop_scope="function"`, async objects (like SSH connections) created on the module loop cannot be used from the function loop.
 

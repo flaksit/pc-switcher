@@ -269,13 +269,24 @@ tests/integration/
 ## Markers
 
 ```python
-@pytest.mark.integration  # Requires VM infrastructure (auto-applied in tests/integration/)
-@pytest.mark.slow         # Takes >5 seconds
-@pytest.mark.benchmark    # Performance benchmarks (in benchmarks/ folder, not run by default)
-@pytest.mark.ci_skip      # Integration test excluded from CI (still runs locally); see below
+@pytest.mark.integration   # Requires VM infrastructure (auto-applied in tests/integration/)
+@pytest.mark.benchmark     # Performance benchmarks (in benchmarks/ folder, not run by default)
+@pytest.mark.ci_skip       # Exception hatch: excluded from ALL CI runs (topic and full); local runs still execute it
+@pytest.mark.smoke         # CI selection: fast sanity, part of every CI integration selection
+@pytest.mark.area_package  # CI selection: package-manager sync tests
+@pytest.mark.area_install  # CI selection: install / self-update tests
+@pytest.mark.area_btrfs    # CI selection: btrfs snapshot tests
+@pytest.mark.area_folder   # CI selection: folder-sync end-to-end tests
+@pytest.mark.area_core     # CI selection: core behavior, no topic mapping (full-suite runs only)
 ```
 
-`ci_skip` is applied inline where the test lives: a module-level `pytestmark = pytest.mark.ci_skip` excludes a whole file, and a `@pytest.mark.ci_skip` decorator on a class or test excludes just that class or test. CI deselects the marker by setting `PC_SWITCHER_TEST_MARKERS="integration and not benchmark and not ci_skip"` (in `.github/workflows/integration-tests.yml`); local and manual runs use the default expression in `run-integration-tests.sh` and therefore still execute these tests. To exclude more from CI, add the marker at the file, class, or test level.
+Every integration test MUST carry exactly one CI-selection marker (`smoke` or an `area_*`), normally as a module-level `pytestmark` — collection fails otherwise (enforced in `tests/integration/conftest.py`). `ci_skip` is additive to the area marker, not a replacement.
+
+## CI test selection (topic-based)
+
+On ordinary PR pushes, CI runs only the integration tests for the areas the PR touches, plus the `smoke` set, via a pytest `-m` expression (e.g. `integration and not benchmark and (smoke or area_package)`). `tests/integration/scripts/select-ci-tests.sh` builds the expression: product source files map to areas through its case patterns, and a changed test file contributes the area named by its own `pytestmark`. Any changed file outside the mapped areas selects the full suite — the mapping errs toward running too much, never too little.
+
+Every PR run — including `ready_for_review` — is topic-scoped; the full suite runs on: the `ci: full` PR label (while present, every run is full; adding it triggers a run immediately), the nightly schedule on main, and manual `workflow_dispatch` (`gh workflow run "Integration Tests" --ref <branch>`). Pre-merge gating is opt-in: add `ci: full` as the last step before merging and let the run go green — a red run blocks the merge like any failing required check. When adding a new source module, map it in `select-ci-tests.sh`; new test files only need their marker.
 
 ## Common Pitfalls
 
@@ -324,11 +335,11 @@ print(mock_executor.run_command.call_args_list)
 # Unit tests only (fast, no VMs)
 uv run pytest tests/unit tests/contract -v
 
-# Integration tests (requires VMs and env vars) — runs everything, including ci_skip files
+# Integration tests (requires VMs and env vars) — runs everything
 uv run pytest tests/integration -v -m "integration and not benchmark"
 
-# Reproduce the CI selection (drops the ci_skip-marked files)
-uv run pytest tests/integration -v -m "integration and not benchmark and not ci_skip"
+# Print the topic-scoped CI marker expression for the current branch
+tests/integration/scripts/select-ci-tests.sh origin/main
 
 # Specific test
 uv run pytest tests/unit/test_config.py::TestConfig::test_load_default -v

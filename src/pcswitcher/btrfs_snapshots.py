@@ -166,31 +166,22 @@ async def list_snapshots(
     """
     snapshots: list[Snapshot] = []
 
-    # List all session folders
-    list_result = await executor.run_command("ls -1 /.snapshots/pc-switcher/ 2>/dev/null || true")
-    if not list_result.stdout.strip():
-        return []
+    # One command for the whole tree, not one per session folder: each command is a
+    # full SSH round trip, and session folders can number in the hundreds (empty ones
+    # included), which once turned this listing into minutes of wall time.
+    list_result = await executor.run_command(
+        "find /.snapshots/pc-switcher -mindepth 2 -maxdepth 2 2>/dev/null || true"
+    )
 
-    session_folders = [name.strip() for name in list_result.stdout.strip().split("\n") if name.strip()]
-
-    for folder_name in session_folders:
-        folder_path = f"/.snapshots/pc-switcher/{folder_name}"
-
-        # List snapshots in this folder
-        snap_result = await executor.run_command(f"ls -1 {folder_path} 2>/dev/null || true")
-        if not snap_result.stdout.strip():
+    for line in list_result.stdout.splitlines():
+        snap_path = line.strip()
+        if not snap_path:
             continue
-
-        snap_names = [name.strip() for name in snap_result.stdout.strip().split("\n") if name.strip()]
-
-        for snap_name in snap_names:
-            snap_path = f"{folder_path}/{snap_name}"
-            try:
-                snapshot = Snapshot.from_path(snap_path, host)
-                snapshots.append(snapshot)
-            except ValueError:
-                # Skip snapshots that don't match our naming convention
-                continue
+        try:
+            snapshots.append(Snapshot.from_path(snap_path, host))
+        except ValueError:
+            # Skip snapshots that don't match our naming convention
+            continue
 
     # Sort by timestamp, newest first
     snapshots.sort(key=lambda s: s.timestamp, reverse=True)
@@ -320,6 +311,12 @@ btrfs subvolume list / 2>/dev/null | awk '{print $NF}' | grep '^@snapshots/pc-sw
     | while read -r abs_path; do
     delete_subvol_recursive "$abs_path"
 done
+
+# Remove the now-empty session folders (plain directories, nested ones included:
+# -delete implies depth-first, so a folder emptied during the same sweep goes
+# too). Leaving them behind makes /.snapshots/pc-switcher grow without bound,
+# and everything that scans it pays for the clutter.
+find /.snapshots/pc-switcher -mindepth 1 -type d -empty -delete 2>/dev/null || true
 """
 
 
@@ -329,6 +326,8 @@ async def delete_all_snapshots(executor: Executor) -> CommandResult:
     This function forcefully deletes ALL snapshots under /.snapshots/pc-switcher/,
     handling nested subvolumes by deleting children before parents. It uses
     `btrfs subvolume delete` which is much faster than `rm -rf` for subvolumes.
+    Emptied session folders are removed as well so the directory does not
+    accumulate stale entries across runs.
 
     Use cases:
     - Test cleanup between test runs

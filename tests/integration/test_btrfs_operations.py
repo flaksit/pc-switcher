@@ -18,6 +18,8 @@ import pytest
 
 from pcswitcher.executor import RemoteExecutor
 
+pytestmark = pytest.mark.area_btrfs
+
 
 @pytest.fixture(scope="module")
 async def test_volume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
