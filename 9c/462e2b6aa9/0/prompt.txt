@@ -1,0 +1,25 @@
+Rewrite ADR-020: Integrate amendments (we are still working on it) and remove them. Remove so-called "decisions" that are just good software design and not hard decisions that should never be derived from. There is a lot of text. Review if it is relevant and ADR-worthy; drop otherwise.
+
+---
+
+You left a lot of analysis and implementation detail that is not SPEC. Useful?
+E.g; "Before any source file is written: copy every `/etc/apt/trusted.gpg.d` key whose bytes..."
+
+---
+
+"An apt signing key is deliberately NOT an item" still very implementation-level. ADR = Architecture Decision Record. Not technical-implementation-level-choice.
+
+---
+
+or just as code comment or even just readable code
+
+---
+
+or just as code comment or even just readable code. Or just not worth documenting. I think this was documented because first, a key was implemented as Item and then we changed that and then you felt the need to document that change. You are always over-eager documenting entire history lessons. Don't.
+
+---
+
+docs/system/core.md is about the CORE of pc-switcher. The framework (orchestrator, TUI, ...). NOT about individual jobs (or groups of jobs). Commit 09693515 was the last legitimate change to it, I think. PackageSync-related stuff must be elsewhere.
+docs/jobs is for user-faced docs.
+docs/system is the golden record of the SPEC; not about analysis or implementation detail.
+So what would be the better place? Just in .planning/phases/02-package... because it is detail? Non-detail contents could go in docs/system, but in a separate .md
