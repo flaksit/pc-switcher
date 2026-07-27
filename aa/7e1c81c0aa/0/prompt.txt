@@ -1,0 +1,22 @@
+Analyze gh #216 and propose approaches. Let me choose. Ask questions if needed.
+
+---
+
+CI is running integration tests. You cannot and should not intervene with that! The VM's are locked by the integration test.
+
+---
+
+did it have a lock? If yes, how come? If no, why didn't it stop immediately? Or was it waiting and waiting for lock?
+
+---
+
+rebase on gsd/phase-02-package-management-sync. 3c3db729 there adds a TEMPORARY hack: markers to some tests to keep them out of CI while I'm working on stuff in other session. Continue your work to come to proposal
+
+---
+
+Looks good. Do P1+P2+P4. For P1, if analysis needed (I think so), you can use the VM's now; no CI running.
+
+---
+
+Looks good. Do P1+P2+P4. For P1, if analysis needed (I think so), you can use the VM's now; no CI is running; always lock before using them!
+What is pre-merge? Separate trigger than push?
