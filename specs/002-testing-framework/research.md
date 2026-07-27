@@ -56,7 +56,6 @@ addopts = [
 ]
 markers = [
     "integration: Integration tests (require VM infrastructure)",
-    "slow: Tests that take >5 seconds",
 ]
 ```
 

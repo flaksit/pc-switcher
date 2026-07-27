@@ -270,7 +270,6 @@ tests/integration/
 
 ```python
 @pytest.mark.integration   # Requires VM infrastructure (auto-applied in tests/integration/)
-@pytest.mark.slow          # Takes >5 seconds
 @pytest.mark.benchmark     # Performance benchmarks (in benchmarks/ folder, not run by default)
 @pytest.mark.ci_skip       # Inert stopgap, slated for removal (superseded by CI selection markers)
 @pytest.mark.smoke         # CI selection: fast sanity, part of every CI integration selection
