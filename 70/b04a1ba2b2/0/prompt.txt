@@ -472,3 +472,7 @@ Edit ADR-020 in place so that it says "prefer batched review / user prompts" rat
 ---
 
 ADR-020: you only ADDED text about batching reviews. But it still says "one batch per manager" in the text you kept. Can lead to confusion. Edit properly IN PLACE, as I asked.
+
+---
+
+agent may need to touch ADR-020 for it's own work on repos/keys
