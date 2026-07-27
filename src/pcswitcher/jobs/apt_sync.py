@@ -28,11 +28,11 @@ review shows a bare file deletion and nothing else. Disclosure, not refusal: rem
 repository whose packages are going too is legitimate, so the removal stays offered (and,
 like every removal group, unticked).
 
-A signing key is NOT an item (ADR-020's 2026-07-27 amendment). It has no `ItemClass`, no
-`item_id`, no diff, no review entry and no decision-file identity: the user thinks in
-repositories and packages, and a key is only how a repository is made to work. Keys are
-therefore two plain file operations bracketing the repository group, both driven by the
-decisions the user already made about SOURCES:
+A signing key is NOT an item. It has no `ItemClass`, no `item_id`, no diff, no review
+entry and no decision-file identity: the user thinks in repositories and packages, and a
+key is only how a repository is made to work. Keys are therefore two plain file operations
+bracketing the repository group, both driven by the decisions the user already made about
+SOURCES:
 
 - `_provision_keyrings` runs BEFORE any source file is written. It copies every source
   `/etc/apt/trusted.gpg.d` key the target lacks or differs on, and the keyrings named by
@@ -1427,10 +1427,10 @@ class AptSyncJob(PackageSyncJob):
         it exactly as before. The only reordering is that skip-always decision files are now
         written after `/etc/apt` lands rather than before — neither depends on the other.
 
-        A second review is D-24's one-review-per-manager giving way to correctness
-        (ADR-020's 2026-07-27 amendment): a decision the user could not have made correctly
-        the first time is asked again, not deferred. Aborting at that review therefore stops
-        the run with `/etc/apt` already converged, which is a reviewed, coherent state.
+        A second review is ADR-020 D-24's one-review-per-manager giving way to correctness:
+        a decision the user could not have made correctly the first time is asked again,
+        not deferred. Aborting at that review therefore stops the run with `/etc/apt`
+        already converged, which is a reviewed, coherent state.
 
         Skipped entirely under dry-run: nothing is written, so nothing is invalidated — but
         a dry-run preview does show the pre-repository package classification, and that is

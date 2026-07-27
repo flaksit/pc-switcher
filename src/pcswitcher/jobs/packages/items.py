@@ -24,7 +24,7 @@ Plan 02-06 adds the `/etc/apt/*`-adjacent item classes (`AptSourceItem`, `AptPin
 `AptConfigItem`) and is the last plan permitted to modify this module (02-05's own note).
 A signing key is deliberately NOT among them: `apt_sync` provisions and collects keys as
 plain file operations bracketing its repository convergence, so a key has no identity in
-the diff/review/decision pipeline at all (ADR-020's 2026-07-27 amendment).
+the diff/review/decision pipeline at all.
 
 Each `/etc/apt` item is identified by its FILENAME, not by any value parsed from its
 content: RESEARCH's Pitfall 3 documents that a legacy `.list` file and

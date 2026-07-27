@@ -1019,8 +1019,7 @@ class TestAptSyncEndToEnd:
         The key half is what makes this non-vacuous: the automation decisions below name
         the repository ONLY. Under a model where a key is a reviewable item, an item with
         no recorded decision defaults to skip-once and would produce no `Would install`
-        line at all; the key appearing anyway is exactly the transparent provisioning
-        (ADR-020's 2026-07-27 amendment).
+        line at all; the key appearing anyway is exactly the transparent provisioning.
 
         This is the one test whose subject is legitimately the run's own output
         (`--dry-run` makes no filesystem change to assert against, so ADR-014's read-only

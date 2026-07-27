@@ -2928,7 +2928,7 @@ class TestRepoRemovalNamesMachineSpecificPackages:
         assert sum(1 for cmd in commands if _SOURCE_SCAN_CMD in cmd) == 1
 
 
-# -- Signing keys are handled transparently (ADR-020 amendment 2026-07-27) --------------
+# -- Signing keys are handled transparently --------------------------------------------
 #
 # A key is not an item: no `ItemClass`, no `item_id`, no diff, no review entry, no decision
 # file. Provisioning runs before any source write and keeps the target's copy matching the
