@@ -10,6 +10,7 @@ This folder contains the "Golden Copy" of the system specification. It represent
 ## Domain Specifications
 
 - [Core](core.md): Core infrastructure, CLI, and orchestration.
+- [Package Sync](package-sync.md): The four package jobs, their shared contract and their plan/review/apply pipeline.
 - [Testing Framework](testing.md): Testing framework, infrastructure, and strategy.
 - [Logging](logging.md): Logging infrastructure and configuration.
 

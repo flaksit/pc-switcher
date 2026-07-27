@@ -45,6 +45,7 @@ Living specifications per [ADR-011](adr/adr-011-sdd-with-living-specs.md):
 - [architecture.md](system/architecture.md) - System architecture
 - [data-model.md](system/data-model.md) - Core entities and schemas
 - [core.md](system/core.md) - Core infrastructure spec
+- [package-sync.md](system/package-sync.md) - Package sync specification
 - [logging.md](system/logging.md) - Logging specification
 - [testing.md](system/testing.md) - Testing specification
 

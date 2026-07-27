@@ -162,7 +162,7 @@ class Snapshot:
 
 ## Package Sync Entities
 
-Phase 2's package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) adds its own item model and two on-disk data shapes. See [Package Sync Subsystem](architecture.md#package-sync-subsystem) for the pipeline these flow through.
+Phase 2's package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) adds its own item model and two on-disk data shapes. See the [Package Sync Spec](package-sync.md) for the pipeline these flow through.
 
 ### Item identity
 
