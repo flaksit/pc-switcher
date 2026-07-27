@@ -1,0 +1,5 @@
+you said as well "did one SSH round trip per session folder". Do you mean each time a new SSH connection? Or re-using shared, open SSH connection?
+
+---
+
+As with ci_mark: instead of listing tests explicitly in select-ci-tests.sh, shouldn't we better mark the tests?
