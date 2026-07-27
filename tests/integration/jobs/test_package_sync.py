@@ -778,6 +778,7 @@ async def _restore_flatpak_target_baseline(executor: BashLoginRemoteExecutor) ->
 # the full five-directory set).
 _APT_SOURCES_DIR = "/etc/apt/sources.list.d"
 _APT_KEYRINGS_DIR = "/etc/apt/keyrings"
+_APT_PREFERENCES_DIR = "/etc/apt/preferences.d"
 
 # Host the synthetic repository points at. `.invalid` is reserved by RFC 2606 and can
 # never resolve, so apt reaches this repo only to fail, and the name appears in
@@ -820,6 +821,28 @@ async def _create_synthetic_repo_and_key(executor: BashLoginRemoteExecutor) -> t
     )
     assert result.success, f"Failed to create synthetic repo+key on source: {result.stderr}"
     return source_filename, key_filename
+
+
+async def _create_synthetic_pin(executor: BashLoginRemoteExecutor) -> str:
+    """Create a uuid-suffixed `/etc/apt/preferences.d` file the target lacks, and return its
+    filename.
+
+    A pin is in ADR-021 D-36's always-sync bucket: it travels with no review line and no
+    derivation predicate, which makes it the cheapest real subject for the derived-write
+    preview. Its stanza names a package and an origin neither machine has, so it is inert
+    wherever it lands — a pin naming an absent origin changes nothing about apt's choices.
+    """
+    uniq = uuid4().hex[:12]
+    filename = f"pcswitcher-it-pin-{uniq}"
+    dest = f"{_APT_PREFERENCES_DIR}/{filename}"
+    body = f"Package: pcswitcher-it-nothing-{uniq}\nPin: origin {_SYNTHETIC_REPO_HOST}\nPin-Priority: 1000\n"
+    result = await executor.run_command(
+        f"printf %s {shlex.quote(body)} | sudo tee {shlex.quote(dest)} > /dev/null",
+        login_shell=False,
+        timeout=20.0,
+    )
+    assert result.success, f"Failed to create synthetic pin on source: {result.stderr}"
+    return filename
 
 
 async def _apt_get_update(executor: BashLoginRemoteExecutor) -> CommandResult:
@@ -1006,7 +1029,7 @@ class TestAptSyncEndToEnd:
         finally:
             await _restore_package(pc2_executor, candidate)
 
-    async def test_apt_repository_state_dry_run_reviews_the_repo_and_carries_its_key(
+    async def test_apt_repository_state_dry_run_previews_derived_writes_and_reviews_no_repository(
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -1014,54 +1037,52 @@ class TestAptSyncEndToEnd:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """Broken-window ledger entry #2, exercised at VM level: a target missing one
-        vendor repo receives the source's repository file as a reviewed `INSTALL`, its
-        signing key travels WITHOUT a decision of its own, and the intended `apt-get
-        update` (the metadata-refresh marker) is reported.
+        """ADR-021 D-37/D-38 at VM level, in both directions at once.
 
-        The key half is what makes this non-vacuous: the automation decisions below name
-        the repository ONLY. The key is no item, so it can carry no decision and gets no
-        line of its own — it is named ON the repository's line, which is the only way a
-        run can report a write into `/etc/apt` that nobody was asked about (ADR-014).
+        The synthetic repository the source has and the target lacks feeds NO package this
+        run syncs, so under derivation it does not travel and it is not a review line
+        either — ruling 4 working as intended, and the property a unit test can only assert
+        against a mocked `/etc/apt`. The synthetic PIN beside it is in the always-sync
+        bucket, so it travels with no review line at all, which is what the preview has to
+        report for `--dry-run` to remain the whole truth about a run (ADR-014).
 
-        This is the one test whose subject is legitimately the run's own output
-        (`--dry-run` makes no filesystem change to assert against, so ADR-014's read-only
-        preview IS the review): apply()'s dry-run branch logs `[dry-run] Would install
-        <label> — <detail>` per approved item and `[dry-run] Would change Refresh apt
-        package metadata (apt-get update)` for the marker (`accept_review` inserts it once
-        any repository-group item is approved).
+        This is the one test whose subject is legitimately the run's own output: `--dry-run`
+        makes no filesystem change to assert against, so the preview IS the result. The
+        decisions passed in name nothing — under this model the two `/etc/apt` files here
+        need no decision, and a run that wrote them because something was ticked would be
+        the defect.
 
-        A fresh runner VM has no vendor repo whose signing key lives in
-        `/etc/apt/keyrings` on both machines, so this test SETS UP its own divergence
-        instead of skipping: a synthetic deb822 `.sources` + keyring pair is written on
-        the SOURCE (pc1) that the target lacks, giving the diff exactly one missing repo
-        that pulls its key along (ledger entry #2). Because it is `--dry-run` nothing on
-        pc2 changes; the synthetic files are removed from pc1 in a `finally` regardless of
-        outcome.
+        A fresh runner VM has neither file, so the test SETS UP its own divergence instead
+        of skipping: a uuid-suffixed `.sources`+keyring pair and a uuid-suffixed
+        `preferences.d` file, all written on the SOURCE (pc1). Because it is `--dry-run`
+        nothing on pc2 changes; the synthetic files are removed from pc1 in a `finally`
+        regardless of outcome.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
         source_filename = ""
         key_filename = ""
+        pin_filename = ""
         try:
             source_filename, key_filename = await _create_synthetic_repo_and_key(pc1_executor)
+            pin_filename = await _create_synthetic_pin(pc1_executor)
             source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
             key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
+            pin_dest = f"{_APT_PREFERENCES_DIR}/{pin_filename}"
 
-            # The fresh target provably lacks the uuid-suffixed synthetic pair, so the diff
-            # is exactly one missing vendor repo (defensive, cheap: --dry-run writes nothing).
+            # The fresh target provably lacks every uuid-suffixed file, so the divergence is
+            # exactly the one this test built (defensive, cheap: --dry-run writes nothing).
             absent = await pc2_executor.run_command(
-                f"test ! -e {shlex.quote(source_dest)} && test ! -e {shlex.quote(key_dest)}",
+                " && ".join(f"test ! -e {shlex.quote(path)}" for path in (source_dest, key_dest, pin_dest)),
                 login_shell=False,
                 timeout=10.0,
             )
-            assert absent.success, "synthetic repo/key unexpectedly already present on pc2 before the run"
+            assert absent.success, "synthetic /etc/apt files unexpectedly already present on pc2 before the run"
 
             await _write_apt_sync_config(pc1_executor)
 
-            # The REPOSITORY only. The key is deliberately absent from the decisions.
-            decisions = {f"apt:source:{source_filename}": Decision.APPLY}
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --dry-run"
+            # Nothing is decided: neither file is a question any more.
+            sync_cmd = f"{_automation_env_assignment_multi({})} pc-switcher sync pc2 --yes --dry-run"
             sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
             assert sync_result.success, (
                 f"pc-switcher sync --dry-run exited {sync_result.exit_code}.\n"
@@ -1069,18 +1090,20 @@ class TestAptSyncEndToEnd:
             )
 
             combined_output = sync_result.stdout + sync_result.stderr
-            # The repository is the reviewed item, shown by its own `Would install <label>`
-            # dry-run line with the label `<file> (<fmt>)`.
-            assert f"install {source_filename}" in combined_output, (
-                f"missing source file {source_filename!r} not shown as its own review entry.\n{combined_output}"
+            # The always-sync pin is previewed as a derived write, with no review entry.
+            assert f"Would write {pin_dest}" in combined_output, (
+                f"always-sync pin {pin_dest!r} was not previewed as a derived write.\n{combined_output}"
             )
-            # The key travels with it although nothing decided about it, and the run says so.
-            assert key_filename in combined_output, (
-                f"signing key {key_filename!r} did not travel with the repository that references it.\n"
-                f"{combined_output}"
+            # The repository feeds no approved package, so nothing about it travels — and it
+            # is offered in no direction, which is what makes "derived, never ticked" true.
+            assert f"install {source_filename}" not in combined_output, (
+                f"repository {source_filename!r} was still offered as a review entry.\n{combined_output}"
             )
-            # The intended metadata refresh (the apt-get update the repo change requires)
-            # is reported as its own marker item.
+            assert key_filename not in combined_output, (
+                f"signing key {key_filename!r} travelled for a repository no package needed.\n{combined_output}"
+            )
+            # The intended metadata refresh (the apt-get update the pin write requires) is
+            # reported as its own marker item.
             assert "apt-get update" in combined_output, (
                 f"intended apt-get update (metadata refresh) not reported.\n{combined_output}"
             )
@@ -1092,6 +1115,7 @@ class TestAptSyncEndToEnd:
                 for directory, filename in (
                     (_APT_SOURCES_DIR, source_filename),
                     (_APT_KEYRINGS_DIR, key_filename),
+                    (_APT_PREFERENCES_DIR, pin_filename),
                 )
                 if filename
             )

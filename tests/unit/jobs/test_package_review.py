@@ -27,6 +27,7 @@ from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, Ite
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
     PACKAGE_REVIEW_AUTOMATION_ENV,
+    REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
@@ -786,6 +787,158 @@ class TestCollateralGroupResolution:
 
         select_mock.assert_not_called()
         assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
+        assert outcome.unresolved == ()
+
+
+def _conflict_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
+    return ReviewGroup(
+        manager="apt",
+        action=REPO_CONFLICT_REVIEW_ACTION,
+        title="Resolve apt repository conflicts",
+        entries=tuple(entries),
+    )
+
+
+def _conflict_entry(
+    *, target_version: str = "deb https://old.example.com stable main\n", source_version: str = "Types: deb\n"
+) -> ReviewEntry:
+    return ReviewEntry(
+        item_id="apt:conflict:vendor.list",
+        label="vendor.list",
+        action_label="overwrite",
+        detail="vendor.list differs on the two machines and feeds machine-specific packages on the target: curl",
+        versions=(target_version, source_version),
+    )
+
+
+@pytest.mark.asyncio
+class TestRepoConflictGroupResolution:
+    """Ruling 6: a `REPO_CONFLICT_REVIEW_ACTION` group gets a two-way per-entry flow —
+    overwrite or skip once — with both whole file versions shown, never a checkbox and
+    never a third answer.
+    """
+
+    async def test_overwrite_records_apply(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        select_prompt = _fake_prompt(ask_return="overwrite")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+        ):
+            outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
+
+        assert outcome.decisions == {"apt:conflict:vendor.list": Decision.APPLY}
+
+    async def test_skip_records_skip_once_and_only_two_answers_are_offered(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        select_prompt = _fake_prompt(ask_return="skip_once")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt) as select_mock,
+        ):
+            outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
+
+        assert outcome.decisions == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
+        assert [choice.value for choice in select_mock.call_args.kwargs["choices"]] == ["overwrite", "skip_once"]
+
+    async def test_both_whole_versions_are_shown_and_no_unified_diff(self) -> None:
+        """The user's own words: a diff of two repository definitions is not readable. The
+        target's current file comes first, then the source's, each whole.
+        """
+        out = io.StringIO()
+        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+        ui = MagicMock()
+        entry = _conflict_entry(
+            target_version="deb https://old.example.com stable main\n",
+            source_version="deb https://new.example.com noble main\n",
+        )
+        select_prompt = _fake_prompt(ask_return="skip_once")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+        ):
+            await review_items([_conflict_group([entry])], console=console, ui=ui)
+
+        printed = out.getvalue()
+        assert "old.example.com" in printed
+        assert "new.example.com" in printed
+        assert printed.index("old.example.com") < printed.index("new.example.com")
+        assert "@@" not in printed and "\n-deb" not in printed
+
+    async def test_a_bracketed_filename_in_a_conflict_panel_renders_without_markup_error(self) -> None:
+        """T-02-02: neither the filename nor either file body may reach Rich as a bare
+        `str`. This screen is the only one that prints whole FILES, and a repository
+        definition is exactly where a bracketed path shows up — one that Rich reads as a
+        closing tag raises `MarkupError` and takes the review down with it.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        entry = ReviewEntry(
+            item_id="apt:conflict:vendor[1].list",
+            label="vendor[1].list",
+            action_label="overwrite",
+            detail="feeds [curl]",
+            versions=(
+                "# migrated from [/etc/apt/sources.list]\n"
+                "deb [signed-by=/etc/apt/keyrings/v.gpg] https://a.example.com s m\n",
+                "Types: deb\nURIs: https://a.example.com\nSigned-By: [/etc/apt/keyrings/v.gpg]\n",
+            ),
+        )
+        select_prompt = _fake_prompt(ask_return="skip_once")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+        ):
+            outcome = await review_items([_conflict_group([entry])], console=console, ui=ui)
+
+        assert outcome.decisions == {"apt:conflict:vendor[1].list": Decision.SKIP_ONCE}
+
+    async def test_ctrl_c_aborts_the_sync_naming_the_file(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        select_prompt = _fake_prompt(ask_return=None)
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            pytest.raises(SyncAbortedByUser, match=r"vendor\.list"),
+        ):
+            await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
+
+        ui.resume.assert_called_once()
+
+    async def test_conflict_group_never_offered_as_a_checkbox(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        select_prompt = _fake_prompt(ask_return="skip_once")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
+        ):
+            await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
+
+        checkbox.assert_not_called()
+
+    async def test_non_interactive_conflict_entries_skip_once_and_are_not_unresolved(self) -> None:
+        console = _non_interactive_console()
+        ui = MagicMock()
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(False)),
+            patch("pcswitcher.jobs.packages.review.questionary.select") as select_mock,
+        ):
+            outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
+
+        select_mock.assert_not_called()
+        assert outcome.decisions == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
         assert outcome.unresolved == ()
 
 

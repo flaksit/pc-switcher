@@ -42,6 +42,7 @@ from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, Ite
 from pcswitcher.jobs.packages.review import (
     _REMOVAL_ACTIONS,
     COLLATERAL_REVIEW_ACTION,
+    REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
     Decision,
     ReviewGroup,
@@ -4875,6 +4876,152 @@ class TestTwoAnswerRemovals:
             "sudo rm --force /etc/apt/sources.list.d/vendor.list",
             "sudo rm --force /etc/apt/preferences.d/vendor-pin",
         ]
+
+
+class TestRepositoryConflicts:
+    """Ruling 6: a repository file present on both machines with different content is
+    overwritten silently — EXCEPT when it feeds a package the target recorded
+    machine-specific, which is the one `/etc/apt` change the user is still asked about.
+    """
+
+    _CHANGED_VENDOR = "deb [signed-by=/etc/apt/keyrings/vendor.gpg] https://vendor.example.com/apt noble main\n"
+
+    @classmethod
+    def _differing_repo(cls, *, recorded: str) -> tuple[JobContext, MagicMock, MagicMock]:
+        """`vendor.list` on both machines with different bytes, declaring the origin the
+        target's `curl` is installed from. `recorded` is the target's decision file."""
+        return _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", cls._CHANGED_VENDOR), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-new", "vendor.list"), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, cls._CHANGED_VENDOR, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "curl\n", ""),
+                "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-old", "vendor.list"), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, _VENDOR_LIST, ""),
+                "apt.decisions.yaml": CommandResult(0, recorded, ""),
+                "apt-cache policy": CommandResult(0, _policy_block("curl", "https://vendor.example.com/apt"), ""),
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_changed_repository_with_no_machine_specific_package_is_overwritten_silently(self) -> None:
+        """The ordinary case, and the reason the trigger is narrow: two machines whose
+        repository definitions have drifted are meant to converge, not to negotiate.
+        """
+        context, _source, _target = self._differing_repo(recorded="machine_specific: {}\n")
+
+        plan = await AptSyncJob(context).plan()
+
+        assert not any(group.action == REPO_CONFLICT_REVIEW_ACTION for group in plan.groups)
+
+    @pytest.mark.asyncio
+    async def test_a_changed_repository_feeding_a_machine_specific_package_asks_and_shows_both_versions(self) -> None:
+        """The entry carries both whole files, the target's first — the user asked for the
+        two versions, not a unified diff — and offers exactly the two answers.
+        """
+        context, _source, _target = self._differing_repo(recorded=_decision_file("apt:package:curl"))
+
+        plan = await AptSyncJob(context).plan()
+
+        group = next(g for g in plan.groups if g.action == REPO_CONFLICT_REVIEW_ACTION)
+        entry = group.entries[0]
+        assert entry.label == "vendor.list"
+        assert entry.versions == (_VENDOR_LIST, self._CHANGED_VENDOR)
+        assert entry.detail is not None and "curl" in entry.detail
+
+    @pytest.mark.asyncio
+    async def test_overwriting_a_conflict_writes_the_sources_version(self) -> None:
+        context, _source, target = self._differing_repo(recorded=_decision_file("apt:package:curl"))
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:conflict:vendor.list": Decision.APPLY})
+
+        await job.execute()
+
+        assert any(
+            "sudo install" in c and c.endswith("/etc/apt/sources.list.d/vendor.list") for c in all_calls(target)
+        )
+
+    @pytest.mark.asyncio
+    async def test_skipping_a_conflict_writes_nothing_and_fails_the_package_that_needed_it(self) -> None:
+        """The coupling §4.3 requires: a skipped conflict is not the same as no conflict.
+        The package the user ticked depends on that file for its origin, so installing it
+        anyway would deliver the wrong vendor's software — exactly what D-34 exists to stop.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://vendor.example.com/apt"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", self._CHANGED_VENDOR), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-new", "vendor.list"), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, self._CHANGED_VENDOR, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "curl\n", ""),
+                "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-old", "vendor.list"), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, _VENDOR_LIST, ""),
+                "apt.decisions.yaml": CommandResult(0, _decision_file("apt:package:curl"), ""),
+                "apt-cache policy": CommandResult(0, _policy_block("curl", "https://vendor.example.com/apt"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
+        assert set(failures) == {"apt:package:pkg-a"}
+        assert "/etc/apt/sources.list.d/vendor.list" in failures["apt:package:pkg-a"]
+        assert not any(
+            "sudo install" in c and c.endswith("/etc/apt/sources.list.d/vendor.list") for c in all_calls(target)
+        )
+        assert not _real_installs(target)
+
+    @pytest.mark.asyncio
+    async def test_the_conflict_computation_costs_one_batched_policy_call(self) -> None:
+        """Both `/etc/apt` follow-ups share one computation (§4.4): a run offering a removal
+        AND a conflict asks the target's apt once, not twice.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", self._CHANGED_VENDOR), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-new", "vendor.list"), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, self._CHANGED_VENDOR, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "curl\n", ""),
+                "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
+                _SOURCE_SCAN_CMD: CommandResult(
+                    0, _scan_line("vendor.list", _VENDOR_LIST) + _scan_line("gone.list", _RIVAL_LIST), ""
+                ),
+                "find /etc/apt/sources.list.d": CommandResult(
+                    0, sha256_line("d-old", "vendor.list") + sha256_line("d9", "gone.list"), ""
+                ),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, _VENDOR_LIST, ""),
+                "cat /etc/apt/sources.list.d/gone.list": CommandResult(0, _RIVAL_LIST, ""),
+                "apt.decisions.yaml": CommandResult(0, _decision_file("apt:package:curl"), ""),
+                "apt-cache policy": CommandResult(0, _policy_block("curl", "https://vendor.example.com/apt"), ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert any(g.action == REPO_CONFLICT_REVIEW_ACTION for g in plan.groups)
+        assert sum(1 for c in all_calls(target) if "apt-cache policy" in c) == 1
 
 
 class TestPinsStillTravelAsFiles:

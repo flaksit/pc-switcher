@@ -170,6 +170,7 @@ from pcswitcher.jobs.packages.items import (
 )
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
+    REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
     Decision,
     ReviewEntry,
@@ -273,6 +274,13 @@ _REPO_REMOVAL_VERBS: dict[ItemClass, str] = {
 # Item-id prefixes that may never appear in a decision file, in any direction (rulings 5
 # and 12). `apt:config:` is absent on purpose — it keeps the registry.
 _UNRECORDABLE_ITEM_ID_PREFIXES = ("apt:source:", "apt:pin:")
+
+# Identity of a repository-conflict review entry. Distinct from `apt:source:` because it is
+# not the same question: `apt:source:<f>` asks whether to DELETE a file the source no longer
+# has, `apt:conflict:<f>` asks which of two versions of a file both machines have should win.
+# It reaches no diff and no decision file — it exists only between the review and
+# `_build_derived_writes`.
+_CONFLICT_ID_PREFIX = "apt:conflict:"
 
 # Deletion order inside the repository group (ADR-021 §3.3 step 5), deliberately the
 # reverse of the write order: the repository goes before the pin that prefers it, so the
@@ -850,6 +858,36 @@ def build_dangling_keyring_detail(filename: str, missing_ref: str) -> str:
     return f"{filename} references keyring {missing_ref!r}, which does not exist on the source"
 
 
+@dataclass(frozen=True)
+class _RepoConflict:
+    """One repository file the two machines disagree about that feeds packages the target
+    keeps (ADR-021 ruling 6) — the only `/etc/apt` CHANGE that is still a question.
+
+    Both whole versions are carried, never a diff of them: the question is which of two
+    configurations the machine should have, and the user's position is that a diff of two
+    repository definitions is not readable.
+    """
+
+    packages: tuple[str, ...]
+    target_version: str
+    source_version: str
+
+
+def build_repo_conflict_detail(filename: str, packages: Sequence[str]) -> str:
+    """Detail for a repository-conflict entry: why THIS differing file is being put to the
+    user when every other one is overwritten silently (ruling 6).
+
+    The named packages are the whole reason. They are recorded skip-always, so `filter_inert`
+    keeps them out of the target manifest and they produce no diff of their own in any run —
+    without this line the user sees a file they are asked to overwrite and no indication that
+    doing so moves software they explicitly told this tool to leave alone.
+    """
+    return (
+        f"{filename} differs on the two machines and feeds machine-specific packages on the target: "
+        f"{', '.join(packages)}"
+    )
+
+
 def build_orphaned_packages_detail(source_filename: str, packages: Sequence[str]) -> str:
     """Detail string for an apt source-file REMOVE diff whose removal would leave
     machine-specific packages on the target without the repository that feeds them (C26).
@@ -1412,6 +1450,10 @@ class AptSyncJob(PackageSyncJob):
         # `{package item_id: the derived destinations that package needs}`, the inverse
         # lookup D-39's attribution runs at install time.
         self._package_derived_dests: dict[str, frozenset[str]] = {}
+        # `{filename: _RepoConflict}` for the differing repository files that feed
+        # machine-specific packages (ruling 6). Populated in `plan()`, consumed by the
+        # conflict review group and then by the derived write set.
+        self._repo_conflicts: dict[str, _RepoConflict] = {}
         # Lazily computed the first time `converge()` sees a repository-group item
         # (pin/config/source, or the synthetic metadata-refresh marker): maps each
         # such diff's item_id to (succeeded, message). Populated all at once so the
@@ -1698,7 +1740,7 @@ class AptSyncJob(PackageSyncJob):
         collateral_diffs = await self._collect_plan_time_collateral(base_plan.diffs)
         repo_diffs = await self._plan_repo_diffs()
 
-        if not collateral_diffs and not repo_diffs:
+        if not collateral_diffs and not repo_diffs and not self._repo_conflicts:
             return base_plan
 
         # Ordering is an apt FACT (key before source before packages, T-02-16), not a
@@ -1741,12 +1783,30 @@ class AptSyncJob(PackageSyncJob):
         """
         collateral = [diff for diff in diffs if _is_collateral_diff(diff)]
         removals = [diff for diff in diffs if _is_repo_removal_diff(diff)]
-        if not collateral and not removals:
+        if not collateral and not removals and not self._repo_conflicts:
             return super()._build_review_groups(diffs)
 
         carved_ids = {diff.item_id for diff in (*collateral, *removals)}
         rest = [diff for diff in diffs if diff.item_id not in carved_ids]
         groups = list(super()._build_review_groups(rest))
+        if self._repo_conflicts:
+            groups.append(
+                ReviewGroup(
+                    manager=self.manager_id,
+                    action=REPO_CONFLICT_REVIEW_ACTION,
+                    title=f"Resolve {self.manager_id} repository conflicts",
+                    entries=tuple(
+                        ReviewEntry(
+                            item_id=f"{_CONFLICT_ID_PREFIX}{filename}",
+                            label=filename,
+                            action_label="overwrite",
+                            detail=build_repo_conflict_detail(filename, conflict.packages),
+                            versions=(conflict.target_version, conflict.source_version),
+                        )
+                        for filename, conflict in sorted(self._repo_conflicts.items())
+                    ),
+                )
+            )
         for item_class, verb in _REPO_REMOVAL_VERBS.items():
             entries = [diff for diff in removals if diff.item_class is item_class]
             if not entries:
@@ -1848,9 +1908,25 @@ class AptSyncJob(PackageSyncJob):
         self._source_pin_digests, self._target_pin_digests = source_pins, target_pins
 
         self._target_package_owned_keys = await self._capture_package_owned_keys(target_run)
-        removal_details = await self._source_removal_details(
-            target_run,
-            extra_sources=frozenset(target_sources) - frozenset(source_sources) - _DISTRO_SOURCE_FILENAMES,
+
+        extra = frozenset(target_sources) - frozenset(source_sources) - _DISTRO_SOURCE_FILENAMES
+        changed = frozenset(_diff_filenames(source_sources, target_sources).changed)
+        if (
+            self._source_sources_list_digest is not None
+            and self._source_sources_list_digest != self._target_sources_list_digest
+        ):
+            changed |= {Path(_APT_SOURCES_LIST).name}
+        # ONE batched policy call answers both follow-ups (§4.4): the removal direction's
+        # disclosure text and the conflict screen's trigger are the same computation over two
+        # different filename sets.
+        machine_specific = await self._machine_specific_packages_by_source_file(target_run, extra | changed)
+        removal_details = {
+            filename: build_orphaned_packages_detail(filename, packages)
+            for filename, packages in machine_specific.items()
+            if filename in extra
+        }
+        await self._capture_repo_conflicts(
+            source_run, target_run, {f: p for f, p in machine_specific.items() if f in changed}
         )
 
         diffs: list[ItemDiff] = []
@@ -1859,36 +1935,38 @@ class AptSyncJob(PackageSyncJob):
         diffs.extend(_diff_apt_configs(source_configs, target_configs))
         return diffs
 
-    async def _source_removal_details(
-        self,
-        target_run: Callable[[str], Awaitable[CommandResult]],
-        *,
-        extra_sources: frozenset[str],
-    ) -> dict[str, str]:
-        """Classify, at plan time, what each offered source-file deletion would strand on
-        the target (C26/N7) — the disclosure D-30 and the flatpak orphan case (#214) both
-        put in the review rather than in a refusal.
+    async def _machine_specific_packages_by_source_file(
+        self, target_run: Callable[[str], Awaitable[CommandResult]], filenames: frozenset[str]
+    ) -> dict[str, list[str]]:
+        """`{filename: machine-specific packages the target installs from it}`, for the
+        files in `filenames` that feed at least one — the shared computation behind both
+        `/etc/apt` follow-ups (ADR-021 §4.1).
+
+        Two callers, two prompts, one question. A repository the source no longer has
+        discloses what its deletion would strand (C26/N7); a repository whose two copies
+        differ becomes the conflict screen instead of a silent overwrite (ruling 6). Both
+        turn on the same fact: which packages this machine keeps that only this file feeds.
 
         Scope is deliberately the target's MACHINE-SPECIFIC packages, not every installed
         package from the repository. A skip-always package is structurally invisible:
         `filter_inert` drops it from the target manifest before diffing, so it can never
         produce an `ItemDiff` of its own in any run, and the user's explicit "this machine
-        keeps this, syncs never touch it" is exactly the promise a silent repo deletion
-        breaks. An ordinary package is at least eligible for its own removal diff, and
-        keying off the whole manual set would make the detail's length a property of the
-        machine — a base-repo deletion would name a hundred packages and inform nobody.
-        The limitation is documented in `docs/jobs/package-sync.md`.
+        keeps this, syncs never touch it" is exactly the promise a silent repository change
+        breaks. An ordinary package is at least eligible for its own diff, and keying off
+        the whole manual set would make the answer's length a property of the machine — a
+        base-repository change would name a hundred packages and inform nobody. The
+        limitation is documented in `docs/jobs/package-sync.md`.
 
-        There is no key counterpart: a signing key is never offered for deletion, so there
-        is no review text for one to carry. The user approves the REPOSITORY; whichever
-        keyring that leaves unused is collected afterwards without a decision of its own.
+        There is no key counterpart: a signing key is never offered for deletion or change,
+        so there is no review text for one to carry. The user approves the REPOSITORY;
+        whichever keyring that leaves unused is collected afterwards with no decision.
 
-        Costs one batched `apt-cache policy` over the recorded package names (never one
-        per package, the `collect_target_policy` shape), gated on a removal actually
-        being offered; the source-file scan it also needs was already captured for keyring
-        correctness, so this adds no second scan.
+        Costs one batched `apt-cache policy` over the recorded package names (never one per
+        package, the `collect_target_policy` shape), gated on `filenames` being non-empty so
+        an ordinary run pays nothing; the source-file scan it also needs was already
+        captured for keyring correctness, so this adds no second scan.
         """
-        if not extra_sources:
+        if not filenames:
             return {}
 
         _source_decisions, target_decisions = self._plan_decisions
@@ -1909,15 +1987,37 @@ class AptSyncJob(PackageSyncJob):
             for origin in origins_by_package.get(name, frozenset()):
                 packages_by_origin.setdefault(origin, []).append(name)
 
-        details: dict[str, str] = {}
-        for filename in sorted(extra_sources):
+        by_file: dict[str, list[str]] = {}
+        for filename in sorted(filenames):
             _refs, uris = self._target_source_refs.get(filename, ((), ()))
             reached: set[str] = set()
             for uri in uris:
                 reached.update(packages_by_origin.get(uri, ()))
             if reached:
-                details[filename] = build_orphaned_packages_detail(filename, sorted(reached))
-        return details
+                by_file[filename] = sorted(reached)
+        return by_file
+
+    async def _capture_repo_conflicts(
+        self,
+        source_run: Callable[[str], Awaitable[CommandResult]],
+        target_run: Callable[[str], Awaitable[CommandResult]],
+        machine_specific: Mapping[str, list[str]],
+    ) -> None:
+        """Read both machines' copies of every conflicted repository file, so the review can
+        show the two versions (ruling 6).
+
+        Only for a file that differs AND feeds a machine-specific package — the whole point
+        of the trigger is that this is rare, so paying two `cat`s per entry is cheaper than
+        any scheme that avoids them. Every other differing file is overwritten silently.
+        """
+        self._repo_conflicts = {}
+        for filename, packages in machine_specific.items():
+            path = _source_file_destination(filename)
+            target_version = await _read_file_content(target_run, path)
+            source_version = await _read_file_content(source_run, path)
+            self._repo_conflicts[filename] = _RepoConflict(
+                packages=tuple(packages), target_version=target_version, source_version=source_version
+            )
 
     async def _diff_apt_sources(
         self,
@@ -2162,6 +2262,19 @@ class AptSyncJob(PackageSyncJob):
             if differs(self._source_pin_digests, self._target_pin_digests, filename)
         )
 
+        # A conflict the user declined is a file this run may NOT write (ruling 6). It is
+        # seeded as a failed derived write rather than merely dropped, because a package
+        # whose origin depended on it cannot be delivered and installing it anyway would put
+        # the wrong vendor's software on the target — the one outcome D-34 exists to prevent.
+        skipped = {
+            _source_file_destination(filename): (
+                "the user chose to keep the target's version of this file for now (ADR-021 ruling 6)"
+            )
+            for filename in self._repo_conflicts
+            if outcome.decisions.get(f"{_CONFLICT_ID_PREFIX}{filename}") != Decision.APPLY
+        }
+        self._failed_derived_writes = dict(skipped)
+
         distro: list[str] = [
             f"{_APT_SOURCES_DIR}/{filename}"
             for filename in sorted(_DISTRO_SOURCE_FILENAMES & frozenset(self._source_source_digests))
@@ -2172,10 +2285,13 @@ class AptSyncJob(PackageSyncJob):
             and self._source_sources_list_digest != self._target_sources_list_digest
         ):
             distro.append(_APT_SOURCES_LIST)
-        self._derived_distro_writes = tuple(distro)
+        self._derived_distro_writes = tuple(dest for dest in distro if dest not in skipped)
 
-        already = frozenset(self._derived_distro_writes)
-        repo: set[str] = set()
+        repo: set[str] = {
+            _source_file_destination(filename)
+            for filename in self._repo_conflicts
+            if outcome.decisions.get(f"{_CONFLICT_ID_PREFIX}{filename}") == Decision.APPLY
+        }
         for diff in plan.diffs:
             if diff.item_class is not ItemClass.APT_PACKAGE or diff.action is not DiffAction.INSTALL:
                 continue
@@ -2184,16 +2300,17 @@ class AptSyncJob(PackageSyncJob):
             origin_plan = self._origin_plan.get(diff.item_id)
             if origin_plan is None:
                 continue
+            # The attribution set keeps a skipped conflict; the write list does not. That
+            # asymmetry IS D-39's rule: the package still depended on the file.
             needed = {
-                dest
+                _source_file_destination(filename)
                 for filename in origin_plan.derived_files
-                if (dest := _source_file_destination(filename)) not in already
-                and self._target_source_digests.get(filename) != self._source_source_digests.get(filename)
+                if self._target_source_digests.get(filename) != self._source_source_digests.get(filename)
             }
             if needed:
                 repo.update(needed)
                 self._package_derived_dests[diff.item_id] = frozenset(needed)
-        self._derived_repo_writes = tuple(sorted(repo))
+        self._derived_repo_writes = tuple(sorted(repo - frozenset(distro) - frozenset(skipped)))
 
     def _derived_writes(self) -> tuple[str, ...]:
         """Every derived destination, in the order `_ensure_repo_group_converged` writes

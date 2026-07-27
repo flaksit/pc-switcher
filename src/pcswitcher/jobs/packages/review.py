@@ -52,6 +52,11 @@ offer again" promotion, so `Decision.SKIP_ALWAYS` is unreachable for it and noth
 it is ever recorded. That is why `_REMOVAL_ACTIONS` and `_PROMOTABLE_ACTIONS` are two
 independent sets rather than one derived from the other.
 
+A `ReviewGroup` whose `action` is `REPO_CONFLICT_REVIEW_ACTION` gets a per-entry two-way
+flow instead (ADR-021 ruling 6): a repository file that differs on the two machines and
+feeds a package the target recorded machine-specific is shown as both whole files — never a
+unified diff — and answered overwrite or skip-once. Nothing is recorded either way.
+
 A `ReviewGroup` whose `action` is `COLLATERAL_REVIEW_ACTION` likewise gets its own
 interaction shape (D-30): each entry is a manually-installed package the pending apt
 transaction would remove or downgrade, resolved one at a time with a three-way choice —
@@ -84,6 +89,7 @@ from pcswitcher.terminal import is_interactive
 __all__ = [
     "COLLATERAL_REVIEW_ACTION",
     "PACKAGE_REVIEW_AUTOMATION_ENV",
+    "REPO_CONFLICT_REVIEW_ACTION",
     "REPO_REMOVAL_REVIEW_ACTION",
     "UNREPRODUCIBLE_REVIEW_ACTION",
     "Decision",
@@ -151,6 +157,18 @@ UNREPRODUCIBLE_REVIEW_ACTION = "unreproducible"
 # recorded decision onto the triggering install (`AptSyncJob.accept_review`): APPLY lets the
 # install proceed and allows the collateral removal, SKIP_ONCE leaves the install unapproved.
 COLLATERAL_REVIEW_ACTION = "collateral"
+
+# Sentinel `ReviewGroup.action` for the one `/etc/apt` CHANGE that is still a question
+# (ADR-021 ruling 6): a repository file present on both machines with different content that
+# feeds a package the target recorded machine-specific. Every other change overwrites
+# silently, because the user asked for the two machines to match; this one cannot, because
+# overwriting it moves software the user explicitly told this tool to leave alone.
+#
+# Its own per-entry flow, a two-choice sibling of `COLLATERAL_REVIEW_ACTION`: overwrite
+# records `Decision.APPLY`, skip records `Decision.SKIP_ONCE`, and there is no third answer —
+# the remedy is consolidating the two files, not recording a preference. `ReviewEntry.
+# versions` carries both file contents, shown as two panels rather than a unified diff.
+REPO_CONFLICT_REVIEW_ACTION = "repo_conflict"
 
 
 class PausableUI(Protocol):
@@ -238,6 +256,10 @@ def _is_unreproducible_group(action: str) -> bool:
 
 def _is_collateral_group(action: str) -> bool:
     return action == COLLATERAL_REVIEW_ACTION
+
+
+def _is_repo_conflict_group(action: str) -> bool:
+    return action == REPO_CONFLICT_REVIEW_ACTION
 
 
 def _is_promotable_group(action: str) -> bool:
@@ -471,6 +493,60 @@ async def _review_collateral_group(
             decisions[entry.item_id] = Decision.SKIP_ONCE
 
 
+async def _review_repo_conflict_group(
+    group: ReviewGroup,
+    *,
+    console: Console,
+    decisions: dict[str, Decision],
+) -> None:
+    """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group's entries, one at a time, with the
+    two-way choice ADR-021 ruling 6 requires: overwrite the target's file with the source's,
+    or skip for now.
+
+    Both whole files are printed, the target's first, never a unified diff — the user's own
+    position is that a diff of two repository definitions is not readable, and the question
+    is which of two configurations the machine should have, not what changed between them.
+
+    Two answers, not three. Skip-always is deliberately absent: a permanent mark on a
+    repository file would permanently change where the packages it feeds come from, and the
+    remedy for two machines whose definitions have drifted is consolidating them.
+
+    `Decision.APPLY` puts the file in the write set; `Decision.SKIP_ONCE` keeps it out AND
+    fails every approved package whose origin depended on it (the caller's job) — a skipped
+    conflict is not the same as no conflict, because the package the user ticked cannot be
+    delivered from the origin they were promised.
+
+    Ctrl-C (`select` returns `None`) aborts the whole sync naming the file, like every other
+    screen. Every untrusted string — the filename, the detail, and both file bodies — is
+    wrapped in `Text` before it reaches the console, so a bracketed line inside a repository
+    definition cannot trigger the Rich markup crash (T-02-02).
+    """
+    for entry in group.entries:
+        console.print()
+        console.print(Text(entry.label, style="bold"))
+        if entry.detail:
+            console.print(Text(entry.detail, style="dim"))
+        if entry.versions is not None:
+            target_version, source_version = entry.versions
+            console.print(Panel(Text(target_version), title=Text("on the target now"), border_style="yellow"))
+            console.print(Panel(Text(source_version), title=Text("on the source"), border_style="cyan"))
+
+        choice_prompt = questionary.select(
+            f"{entry.label} differs on the two machines and feeds machine-specific packages. Proceed?",
+            choices=[
+                questionary.Choice(title="Overwrite the target's file with the source's", value="overwrite"),
+                questionary.Choice(title="Skip for now", value="skip_once"),
+            ],
+        )
+        selected = await asyncio.to_thread(choice_prompt.ask)
+
+        if selected is None:
+            raise SyncAbortedByUser(
+                f"package review aborted while resolving the repository conflict on {entry.label!r} (Ctrl-C)"
+            )
+        decisions[entry.item_id] = Decision.APPLY if selected == "overwrite" else Decision.SKIP_ONCE
+
+
 async def review_items(
     groups: Sequence[ReviewGroup],
     *,
@@ -521,6 +597,10 @@ async def review_items(
 
             if _is_collateral_group(group.action):
                 await _review_collateral_group(group, console=console, decisions=decisions)
+                continue
+
+            if _is_repo_conflict_group(group.action):
+                await _review_repo_conflict_group(group, console=console, decisions=decisions)
                 continue
 
             removal = _is_removal_direction(group.action)
