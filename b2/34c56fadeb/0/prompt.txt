@@ -1,0 +1,8 @@
+- packages-keep-their-registry: yes
+- For ask UX: Ctrl-C -> abort. Ctrl-D or empty answer -> re-ask. I don't see why we need special Ctrl-D treatment.
+
+Fix that, then give me clear instructions for the 'runbook to drive the questionary widgets'.
+
+---
+
+EOFError is ok as well, if that would be the default behavior. No need for extra code. User should not press Ctrl-D. Not documented. Normal user wouldn't do that.
