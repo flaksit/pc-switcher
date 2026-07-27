@@ -19,8 +19,8 @@ import pytest
 
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
-from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, UnreproducibleItem
+from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob, UnreproducibleItem
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import (
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
@@ -1114,3 +1114,19 @@ class TestJobDiscovery:
         job_class = orchestrator._resolve_sync_job_class("manual_installs_sync")  # pyright: ignore[reportPrivateUsage]
 
         assert job_class is ManualInstallsSyncJob
+
+
+class TestUnreproducibleItem:
+    def test_reports_its_item_class(self) -> None:
+        assert UnreproducibleItem.ITEM_CLASS == ItemClass.UNREPRODUCIBLE
+
+    def test_same_identifier_different_origin_yields_distinct_item_ids(self) -> None:
+        no_candidate = UnreproducibleItem(origin="apt-no-candidate", identifier="brscan3", label="brscan3")
+        unowned_path = UnreproducibleItem(origin="unowned-path", identifier="brscan3", label="/opt/brscan3")
+
+        assert no_candidate.item_id != unowned_path.item_id
+
+    def test_label_is_a_plain_field(self) -> None:
+        item = UnreproducibleItem(origin="unowned-path", identifier="/opt/flux", label="flux (unowned in /opt)")
+
+        assert item.label == "flux (unowned in /opt)"

@@ -15,7 +15,7 @@ import pytest
 
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.packages.items import DiffAction, DiffClass
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
 from pcswitcher.jobs.packages.review import (
     Decision,
     ReviewGroup,
@@ -23,7 +23,7 @@ from pcswitcher.jobs.packages.review import (
     _is_removal_direction,  # pyright: ignore[reportPrivateUsage]
 )
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
-from pcswitcher.jobs.snap_sync import SnapSyncJob, snap_sync_exclude_paths
+from pcswitcher.jobs.snap_sync import SnapItem, SnapSyncJob, snap_sync_exclude_paths
 from pcswitcher.models import CommandResult, Host, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
@@ -1064,3 +1064,17 @@ class TestJobDiscovery:
         job_class = orchestrator._resolve_sync_job_class("snap_sync")  # pyright: ignore[reportPrivateUsage]
 
         assert job_class is SnapSyncJob
+
+
+class TestSnapItem:
+    def test_reports_its_item_class(self) -> None:
+        assert SnapItem.ITEM_CLASS == ItemClass.SNAP
+
+    def test_label_names_the_snap_channel_and_revision(self) -> None:
+        item = SnapItem(name="firefox", channel="latest/stable", revision="4536")
+
+        assert item.item_id == "snap:firefox"
+        label = item.label()
+        assert "firefox" in label
+        assert "latest/stable" in label
+        assert "4536" in label

@@ -69,13 +69,9 @@ from uuid import uuid4
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
-from pcswitcher.jobs.packages.items import (
-    AptHoldItem,
-    AptPackageItem,
-    FlatpakItem,
-    FlatpakRemoteItem,
-    UnreproducibleItem,
-)
+from pcswitcher.jobs.flatpak_sync import FlatpakItem, FlatpakRemoteItem
+from pcswitcher.jobs.manual_installs_sync import UnreproducibleItem
+from pcswitcher.jobs.packages.items import AptHoldItem, AptPackageItem
 from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
 from pcswitcher.jobs.packages.state import DECISION_FILE_RELPATH_TEMPLATE, DecisionFile, Snippet, SnippetRegistry
 from pcswitcher.models import CommandResult

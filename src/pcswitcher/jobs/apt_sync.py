@@ -94,22 +94,16 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, override
 from uuid import uuid4
 
-from pcswitcher.executor import RemoteExecutor
+from pcswitcher.executor import Executor, RemoteExecutor
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.items import (
-    AptConfigItem,
     AptPackageItem,
-    AptPinItem,
-    AptSourceItem,
     DiffAction,
     DiffClass,
     HoldPinFact,
     ItemClass,
     ItemDiff,
-    build_dangling_keyring_detail,
-    build_orphaned_packages_detail,
     build_version_mismatch_detail,
-    compare_deb_versions,
 )
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
@@ -209,6 +203,154 @@ _TRANSACTION_LINE_RE = re.compile(
     r"(?:\s+\[(?P<old_version>[^\]]+)\])?"
     r"(?:\s+\((?P<new_version>[^\s)]+)\)?)?"
 )
+
+
+# -- apt-owned item shapes and review details ----------------------------------------
+#
+# Here rather than in the shared `packages/items.py`: nothing outside `apt_sync` builds
+# an `/etc/apt` item or writes one of these detail strings, and a shape only one job
+# constructs is that job's own business (D-15).
+
+
+@dataclass(frozen=True)
+class AptSourceItem:
+    """One apt repository definition file under `/etc/apt/sources.list.d` (D-11).
+
+    Identity is the FILENAME (module docstring), not the parsed repository URI: a
+    legacy `.list` and a deb822 `.sources` file can coexist describing the same repo
+    (RESEARCH Pitfall 3), and filename identity is what keeps that visible as two
+    review entries rather than one silently merged one. `fmt` records which shape the
+    file had so a converged copy preserves it — this tool never normalises one format
+    into the other (that migration is explicitly deferred, see CONTEXT.md's deferred
+    ideas). `keyring_refs` holds every `Signed-By:` (deb822) / `signed-by=` (legacy)
+    path this file names, so the source item's dependency on its key(s) is a captured
+    fact, not something re-derived by re-parsing the file at convergence time.
+    """
+
+    filename: str
+    digest: str
+    fmt: Literal["deb822", "list"]
+    keyring_refs: tuple[str, ...] = ()
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_SOURCE
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `apt:source:<filename>`."""
+        return f"apt:source:{self.filename}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs, naming the file's format so
+        a reviewer can tell a `.list` repo from a `.sources` one at a glance.
+        """
+        return f"{self.filename} ({self.fmt})"
+
+
+@dataclass(frozen=True)
+class AptPinItem:
+    """One apt pin-preference file under `/etc/apt/preferences.d` (D-13).
+
+    Diffed by whole-file digest, not by parsed stanza (RESEARCH's alternatives table
+    recommends whole-file for v1; CONTEXT.md leaves the choice to discretion) —
+    `pinned_packages` is populated by whichever caller parses the file's content (this
+    module's diff-time capture, or `AptSyncJob.collect_hold_pin_facts`'s own read) and
+    stays empty when only the digest was needed to decide there was no diff at all.
+    """
+
+    filename: str
+    digest: str
+    pinned_packages: tuple[str, ...] = ()
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_PIN
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `apt:pin:<filename>`."""
+        return f"apt:pin:{self.filename}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return self.filename
+
+
+@dataclass(frozen=True)
+class AptConfigItem:
+    """One apt behavior-configuration file under `/etc/apt/apt.conf.d` (D-13).
+
+    Synced as an opaque item — whole-file digest only, no parsing of apt's config
+    grammar — since these files are plain, hand-authored `Acquire::.../APT::...`
+    stanzas with no sub-item this phase needs to address individually.
+    """
+
+    filename: str
+    digest: str
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_CONFIG
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `apt:config:<filename>`."""
+        return f"apt:config:{self.filename}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return self.filename
+
+
+async def compare_deb_versions(executor: Executor, left: str, right: str) -> int:
+    """Compare two Debian package version strings, `sorted`-comparator convention.
+
+    Returns negative when `left` < `right`, zero when equal, positive when `left` >
+    `right`. Not hand-rolled: Debian version ordering has epoch, tilde and revision
+    tie-breaking rules that are neither lexicographic nor PEP 440 — only dpkg's own
+    comparator correctly ranks an epoch-bearing version like `2:1.0` above `10.0`
+    (RESEARCH Don't Hand-Roll). Shells out through `executor` (never assumes a local
+    `dpkg`, since the target's version may need comparing against its own dpkg) with
+    `shlex.quote` on both operands (ASVS V5, T-02-01). Short-circuits to equal for
+    byte-identical strings so the common "nothing changed" case costs no subprocess.
+    """
+    if left == right:
+        return 0
+
+    quoted_left = shlex.quote(left)
+    quoted_right = shlex.quote(right)
+
+    lt_result = await executor.run_command(f"dpkg --compare-versions {quoted_left} lt {quoted_right}")
+    if lt_result.success:
+        return -1
+
+    gt_result = await executor.run_command(f"dpkg --compare-versions {quoted_left} gt {quoted_right}")
+    if gt_result.success:
+        return 1
+
+    return 0
+
+
+def build_dangling_keyring_detail(filename: str, missing_ref: str) -> str:
+    """Detail string when a source file's `Signed-By:`/`signed-by=` reference resolves
+    to no keyring file on the SOURCE itself (a source referencing a key nobody
+    captured). Flags the source item rather than letting it be proposed for install on
+    its own (D-12): a repository written without its key is a repository apt refuses on
+    every subsequent operation, so surfacing the gap here is cheaper than discovering it
+    as an opaque apt-get failure on the target.
+    """
+    return f"{filename} references keyring {missing_ref!r}, which does not exist on the source"
+
+
+def build_orphaned_packages_detail(source_filename: str, packages: Sequence[str]) -> str:
+    """Detail string for an apt source-file REMOVE diff whose removal would leave
+    machine-specific packages on the target without the repository that feeds them (C26).
+
+    Those packages are the ones a review can never show by itself: recorded skip-always,
+    they are filtered out of the target manifest before diffing (D-08), so they produce no
+    `ItemDiff` in any run. Naming them here is the only place the user learns that
+    approving the source deletion strands software they explicitly told this tool to keep.
+    Disclosure, not refusal — D-30's placement, the same as flatpak's orphaned refs.
+    """
+    return (
+        f"machine-specific packages on the target installed from {source_filename}: "
+        f"{', '.join(packages)} (removal leaves them without updates)"
+    )
 
 
 def _package_name(item_id: str) -> str:

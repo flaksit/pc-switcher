@@ -4,7 +4,7 @@ D-29, ADR-020).
 Scope (user vs. system) is part of a flatpak item's identity, not just a field on it:
 this project's own reference machine has several runtimes installed in BOTH scopes
 under the same application id, and `FlatpakItem.item_id`/`FlatpakRemoteItem.item_id`
-already fold scope into the identity string (`packages/items.py`). That is what makes
+already fold scope into the identity string (`FlatpakItem` below). That is what makes
 "same application, different scope" fall out of the generic source-vs-target diff as
 two independent items with no special-casing in this module — a ref present as
 `user` on the source and `system` on the target produces one install diff and one
@@ -76,6 +76,7 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Literal, override
 
@@ -83,12 +84,8 @@ from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.items import (
     DiffAction,
     DiffClass,
-    FlatpakItem,
-    FlatpakMaskItem,
-    FlatpakRemoteItem,
     ItemClass,
     ItemDiff,
-    build_orphaned_refs_detail,
     build_version_mismatch_detail,
 )
 from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
@@ -156,6 +153,124 @@ _TARGET_SUDO_COMMANDS = ("/usr/bin/flatpak",)
 # flatpak's own per-installation metadata, NOT `~/.var/app` (per-application user
 # data, folder_sync's territory — module docstring).
 _FLATPAK_DATA_RELPATH = Path(".local") / "share" / "flatpak"
+
+
+# -- flatpak-owned item shapes and review details -------------------------------------
+#
+# Here rather than in the shared `packages/items.py`: no other job constructs a flatpak
+# item or writes the orphaned-refs detail.
+
+
+@dataclass(frozen=True)
+class FlatpakItem:
+    """One installed flatpak application ref (D-06), scoped user or system.
+
+    `scope` lives inside the identity string, not just as a field: this project's own
+    machine has several runtimes installed in both scopes with the same application
+    id, and folding scope into `item_id` is what makes "same name, different scope"
+    fall out of the generic diff engine as two distinct items with no special-casing
+    in `flatpak_sync`.
+    """
+
+    application: str
+    version: str
+    origin: str
+    scope: Literal["user", "system"]
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.FLATPAK_REF
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `flatpak:ref:<scope>:<application>`."""
+        return f"flatpak:ref:{self.scope}:{self.application}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return f"{self.application} ({self.version}, {self.origin}, {self.scope})"
+
+
+@dataclass(frozen=True)
+class FlatpakRemoteItem:
+    """One configured flatpak remote (D-11/D-14), scoped user or system.
+
+    Flatpak tracks remotes per-installation: `flathub` commonly exists in both scopes
+    with a byte-identical URL, yet the two are separate configuration the target must
+    provision separately. `scope` inside `item_id` (same reasoning as `FlatpakItem`)
+    is what keeps those two facts distinct rather than colliding on the shared name.
+
+    `gpg_verify` and `key_digest` are the remote's TRUST configuration (#215). A remote
+    replicated as name+url alone is configured but unusable — flatpak refuses every
+    install from it with `Can't check signature: public key not found` — so trust is
+    part of the item, not an incidental of the machine. `gpg_verify` is read from
+    `flatpak remotes --columns=options` (the `no-gpg-verify` token) and `key_digest` is
+    the sha256 of the remote's own ostree keyring, `<installation>/repo/<name>.
+    trustedkeys.gpg`; it is `None` for an unverified remote and for a verified one whose
+    trust comes from a machine-level anchor under `/usr/share/ostree/trusted.gpg.d`
+    rather than from a per-remote key.
+
+    The DIGEST lives on the item, not the key bytes. An item is carried through the diff,
+    the review and the decision file, all of which want an identity and a comparison,
+    never a payload; the bytes themselves travel
+    separately and byte-for-byte (`flatpak_sync` stages the source's keyring file and
+    passes it to `flatpak remote-add --gpg-import`), which is ADR-020 D-12's rule that
+    key material is copied from the source machine and never re-fetched from a vendor.
+    """
+
+    name: str
+    url: str
+    scope: Literal["user", "system"]
+    gpg_verify: bool = True
+    key_digest: str | None = None
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.FLATPAK_REMOTE
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `flatpak:remote:<scope>:<name>`."""
+        return f"flatpak:remote:{self.scope}:{self.name}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return f"{self.name} remote ({self.scope}): {self.url}"
+
+
+@dataclass(frozen=True)
+class FlatpakMaskItem:
+    """One flatpak mask pattern (#208, D-10), scoped user or system.
+
+    A mask is a pattern flatpak refuses to install or update (`flatpak mask <pattern>`),
+    replicated as a PURE pattern — never filtered to installed refs (D-10) — so a mask
+    edit reads as remove-old + add-new and a scope split as add + remove, reported as
+    found rather than normalised. `scope` lives inside `item_id` (same reasoning as
+    `FlatpakItem`/`FlatpakRemoteItem`) so the same pattern masked in both scopes falls
+    out of the generic diff as two distinct items.
+    """
+
+    pattern: str
+    scope: Literal["user", "system"]
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.FLATPAK_MASK
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `flatpak:mask:<scope>:<pattern>`."""
+        return f"flatpak:mask:{self.scope}:{self.pattern}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return f"{self.pattern} (mask, {self.scope})"
+
+
+def build_orphaned_refs_detail(remote: str, applications: Sequence[str]) -> str:
+    """Detail string for a flatpak remote REMOVE diff whose removal would leave
+    target-side refs without their origin (#214).
+
+    Names the consequence in the review the user approves from, the same place D-30 puts
+    apt's transaction collateral — deleting the remote is still offered, because a
+    legitimate cleanup removes the refs too, but it is never offered as a bare presence
+    difference with nothing said about what depends on it.
+    """
+    return f"target refs still using {remote}: {', '.join(applications)} (removal orphans them)"
 
 
 def _lines(output: str) -> list[str]:
@@ -237,7 +352,7 @@ def _parse_keyring_digests(output: str) -> dict[str, str]:
 
 
 def _split_flatpak_item_id(item_id: str, expected_kind: Literal["ref", "remote", "mask"]) -> tuple[str, str]:
-    """`(scope, name)` from a `flatpak:<kind>:<scope>:<name>` item id (packages/items.py).
+    """`(scope, name)` from a `flatpak:<kind>:<scope>:<name>` item id (`FlatpakItem` above).
 
     `name` is the application id for a ref, the remote name for a remote, the pattern
     for a mask — none carries a `:` of its own: refs/remotes are dotted/alnum tokens

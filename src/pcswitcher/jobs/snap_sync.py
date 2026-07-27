@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, override
 
@@ -55,7 +56,6 @@ from pcswitcher.jobs.packages.items import (
     DiffClass,
     ItemClass,
     ItemDiff,
-    SnapItem,
     build_version_mismatch_detail,
 )
 from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
@@ -65,7 +65,7 @@ from pcswitcher.sudoers import passwordless_sudo_hint
 
 __all__ = ["SnapSyncJob", "snap_sync_exclude_paths"]
 
-# `SnapItem.item_id` is always this prefix + the snap name (packages/items.py).
+# `SnapItem.item_id` is always this prefix + the snap name (below).
 _SNAP_ID_PREFIX = "snap:"
 
 # A per-snap hold membership item's item_id (#208, D1): this prefix + the snap name.
@@ -87,6 +87,57 @@ _TARGET_SUDO_COMMANDS = ("/usr/bin/snap",)
 # #118) and excludes the retained older ones (revisions the target's snapd never
 # installed). See `snap_sync_exclude_paths`.
 _NON_REVISION_DIR_NAMES = frozenset({"common", "current"})
+
+
+# -- snap-owned item shape ------------------------------------------------------------
+#
+# Here rather than in the shared `packages/items.py`: no other job constructs a snap item.
+
+
+@dataclass(frozen=True)
+class SnapItem:
+    """One installed snap (D-06): name, tracked channel, and installed revision.
+
+    `channel` is a FIELD of the snap item, not a standalone item class:
+    `ItemClass.SNAP_CHANNEL` is reserved for the diff DETAIL on a channel-only change
+    (retracking with no revision change) and never becomes a standalone item — a
+    channel with no snap attached to it has no meaning of its own.
+
+    `held` is per-snap refresh-hold state parsed from `snap list` Notes (#208): it is a
+    FIELD, not part of the snap's identity, and defaults `False` so existing construction
+    sites and the shared diff never have to name it. `snap_sync` populates it and diffs it
+    into a separate `snap:hold:<name>` membership item (`ItemClass.SNAP_HOLD`), keeping the
+    hold a distinct review item from the snap itself.
+
+    `classic` and `devmode` are the snap's CONFINEMENT, likewise parsed from the Notes
+    column and likewise FIELDS rather than identity, defaulted so existing construction
+    sites and the shared diff never have to name them. They are not identity because
+    confinement is a property snapd derives from the revision the store published, not a
+    user choice the two machines can legitimately disagree about for the same revision:
+    making it identity would split one snap into two items, and diffing on it would emit a
+    `CHANGE` proposing a "convergence" with no command behind it. They exist solely so
+    `snap_sync` can pass `--classic`/`--devmode` to `snap install`/`snap refresh`, which
+    snapd requires as explicit per-revision confirmation before it will install a
+    classic-confinement or devmode revision at all.
+    """
+
+    name: str
+    channel: str
+    revision: str
+    held: bool = False
+    classic: bool = False
+    devmode: bool = False
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.SNAP
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `snap:<name>`."""
+        return f"snap:{self.name}"
+
+    def label(self) -> str:
+        """Human-readable text for the review UI and logs."""
+        return f"{self.name} ({self.channel}, revision {self.revision})"
 
 
 def _snap_name(item_id: str) -> str:

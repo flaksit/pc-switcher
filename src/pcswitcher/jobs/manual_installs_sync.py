@@ -38,10 +38,10 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar, override
+from typing import Any, ClassVar, Literal, override
 
 from rich.markup import escape
 
@@ -52,7 +52,6 @@ from pcswitcher.jobs.packages.items import (
     DiffClass,
     ItemClass,
     ItemDiff,
-    UnreproducibleItem,
 )
 from pcswitcher.jobs.packages.review import (
     UNREPRODUCIBLE_REVIEW_ACTION,
@@ -96,6 +95,42 @@ _UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")
 # keeps ownership clean by NOT importing apt_sync, and this parser is small enough that
 # one duplicated line is cheaper than a shared-core coupling.
 _DPKG_S_OWNED_RE = re.compile(r"^[^:]+:\s+(?P<path>/\S.*)$")
+
+
+# -- manual-install item shape --------------------------------------------------------
+#
+# Here rather than in the shared `packages/items.py`: no other job constructs one.
+
+
+@dataclass(frozen=True)
+class UnreproducibleItem:
+    """One item no package manager can reproduce (D-18): an apt package with no repo
+    candidate, or an unowned install under `/usr/local`/`/opt`.
+
+    `origin` distinguishes how the item was found — `apt-no-candidate` (a name that
+    exists but has nothing to install from) versus `unowned-path` (a filesystem path
+    dpkg does not claim) — and lives inside `item_id` for the same reason `scope`
+    lives inside the two flatpak identities: the same `identifier` value can appear
+    under both origins with no relation to each other (e.g. a package name that is
+    also, coincidentally, a path component), so origin has to be part of identity, not
+    just a field alongside it.
+
+    Unlike the other item types, `label` here is a plain FIELD rather than a `label()`
+    method: the human-readable description comes from whichever detector found the
+    item (D-19's unowned-install scan, or the no-candidate check) and is not something
+    this dataclass can derive from `origin`/`identifier` alone.
+    """
+
+    origin: Literal["apt-no-candidate", "unowned-path"]
+    identifier: str
+    label: str
+
+    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.UNREPRODUCIBLE
+
+    @property
+    def item_id(self) -> str:
+        """Stable identity string: `unreproducible:<origin>:<identifier>`."""
+        return f"unreproducible:{self.origin}:{self.identifier}"
 
 
 def _lines(output: str) -> list[str]:

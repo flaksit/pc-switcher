@@ -112,6 +112,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # apt_sync: `apt-get -s` is a simulation, `apt-mark show*`/`apt-cache policy`/`find`/
     # `test -f`/`echo $HOME` are queries, and validate() only probes for capabilities.
     "jobs/apt_sync.py::simulate_apt_transaction::run_command": 1,
+    "jobs/apt_sync.py::compare_deb_versions::run_command": 2,
     "jobs/apt_sync.py::AptSyncJob.capture_source_items::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob.query_target_items::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob.query_target_items.run::run_command": 1,
@@ -152,7 +153,6 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._scan_unowned_installs::run_command": 2,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob.capture_source_items::run_command": 1,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob.validate::run_command": 2,
-    "jobs/packages/items.py::compare_deb_versions::run_command": 2,
     # The decision file and snippet registry are read with `cat`; their writes are gated.
     "jobs/packages/state.py::DecisionFile.load::run_command": 1,
     "jobs/packages/state.py::SnippetRegistry.load::run_command": 1,

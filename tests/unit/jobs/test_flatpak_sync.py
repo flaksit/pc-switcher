@@ -16,10 +16,13 @@ import pytest
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext, flatpak_sync
 from pcswitcher.jobs.flatpak_sync import (
+    FlatpakItem,
+    FlatpakRemoteItem,
     FlatpakSyncJob,
     _parse_flatpak_masks,  # pyright: ignore[reportPrivateUsage]
     _parse_flatpak_remotes,  # pyright: ignore[reportPrivateUsage]
     _parse_keyring_digests,  # pyright: ignore[reportPrivateUsage]
+    build_orphaned_refs_detail,
     flatpak_sync_exclude_paths,
 )
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
@@ -1476,3 +1479,52 @@ class TestJobDiscovery:
         job_class = orchestrator._resolve_sync_job_class("flatpak_sync")  # pyright: ignore[reportPrivateUsage]
 
         assert job_class is FlatpakSyncJob
+
+
+class TestFlatpakItem:
+    def test_reports_its_item_class(self) -> None:
+        assert FlatpakItem.ITEM_CLASS == ItemClass.FLATPAK_REF
+
+    def test_same_application_different_scope_yields_distinct_item_ids(self) -> None:
+        user_item = FlatpakItem(application="com.slack.Slack", version="4.50", origin="flathub", scope="user")
+        system_item = FlatpakItem(application="com.slack.Slack", version="4.50", origin="flathub", scope="system")
+
+        assert user_item.item_id != system_item.item_id
+
+    def test_label_names_the_item_in_actionable_terms(self) -> None:
+        item = FlatpakItem(application="com.slack.Slack", version="4.50", origin="flathub", scope="user")
+
+        label = item.label()
+
+        assert "com.slack.Slack" in label
+        assert "4.50" in label
+        assert "flathub" in label
+
+
+class TestFlatpakRemoteItem:
+    def test_reports_its_item_class(self) -> None:
+        assert FlatpakRemoteItem.ITEM_CLASS == ItemClass.FLATPAK_REMOTE
+
+    def test_same_remote_name_byte_identical_url_different_scope_yields_distinct_item_ids(self) -> None:
+        url = "https://dl.flathub.org/repo/"
+        user_remote = FlatpakRemoteItem(name="flathub", url=url, scope="user")
+        system_remote = FlatpakRemoteItem(name="flathub", url=url, scope="system")
+
+        assert user_remote.item_id != system_remote.item_id
+
+    def test_label_names_the_remote(self) -> None:
+        remote = FlatpakRemoteItem(name="flathub", url="https://dl.flathub.org/repo/", scope="user")
+
+        label = remote.label()
+
+        assert "flathub" in label
+        assert "https://dl.flathub.org/repo/" in label
+
+
+class TestOrphanedRefsDetail:
+    def test_names_the_remote_and_every_dependent(self) -> None:
+        detail = build_orphaned_refs_detail("customremote", ["org.example.One", "org.example.Two"])
+
+        assert "customremote" in detail
+        assert "org.example.One" in detail
+        assert "org.example.Two" in detail
