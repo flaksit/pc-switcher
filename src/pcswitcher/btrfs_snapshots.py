@@ -312,10 +312,11 @@ btrfs subvolume list / 2>/dev/null | awk '{print $NF}' | grep '^@snapshots/pc-sw
     delete_subvol_recursive "$abs_path"
 done
 
-# Remove the now-empty session folders (plain directories). Leaving them behind
-# makes /.snapshots/pc-switcher grow without bound, and everything that scans it
-# pays for the clutter.
-find /.snapshots/pc-switcher -mindepth 1 -maxdepth 1 -type d -empty -delete 2>/dev/null || true
+# Remove the now-empty session folders (plain directories, nested ones included:
+# -delete implies depth-first, so a folder emptied during the same sweep goes
+# too). Leaving them behind makes /.snapshots/pc-switcher grow without bound,
+# and everything that scans it pays for the clutter.
+find /.snapshots/pc-switcher -mindepth 1 -type d -empty -delete 2>/dev/null || true
 """
 
 
