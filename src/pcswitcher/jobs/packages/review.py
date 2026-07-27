@@ -45,6 +45,13 @@ to an "unresolved" state, and Ctrl-C anywhere in the review aborts the whole syn
 populated only on the non-interactive path, where it reports (never fails) the items no
 one was present to resolve (D-26).
 
+A `ReviewGroup` whose `action` is `REPO_REMOVAL_REVIEW_ACTION` keeps the ordinary checkbox
+shape but takes only TWO answers (ADR-021 rulings 5 and 12): delete, or leave it for now.
+It arrives unticked like every other removal direction and is never offered the "never
+offer again" promotion, so `Decision.SKIP_ALWAYS` is unreachable for it and nothing about
+it is ever recorded. That is why `_REMOVAL_ACTIONS` and `_PROMOTABLE_ACTIONS` are two
+independent sets rather than one derived from the other.
+
 A `ReviewGroup` whose `action` is `COLLATERAL_REVIEW_ACTION` likewise gets its own
 interaction shape (D-30): each entry is a manually-installed package the pending apt
 transaction would remove or downgrade, resolved one at a time with a three-way choice —
@@ -77,6 +84,7 @@ from pcswitcher.terminal import is_interactive
 __all__ = [
     "COLLATERAL_REVIEW_ACTION",
     "PACKAGE_REVIEW_AUTOMATION_ENV",
+    "REPO_REMOVAL_REVIEW_ACTION",
     "UNREPRODUCIBLE_REVIEW_ACTION",
     "Decision",
     "ReviewEntry",
@@ -93,11 +101,23 @@ _logger = logging.getLogger("pcswitcher.jobs.packages.review")
 # Never mentioned in --help, the config schema, or docs/configuration.md.
 PACKAGE_REVIEW_AUTOMATION_ENV = "PCSWITCHER_PACKAGE_REVIEW_AUTOMATION"
 
+# Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group of
+# `/etc/apt` repository or pin DELETIONS as taking only two answers — delete, or leave it
+# for now (ADR-021 D-37, rulings 5 and 12). Unlike the other two sentinels this needs no
+# per-entry flow: it renders as an ordinary unticked checkbox list, and the whole difference
+# is that it is never offered the "never offer again" promotion. A permanent machine-local
+# mark on a file whose entire purpose is to feed packages would silently and permanently
+# change where those packages come from, and the user's remedy is consolidating the two
+# machines' files, not recording a preference. One sentinel, two groups: `_build_review_
+# groups` keys on (action, item_class), so repositories and pins still reach the user as
+# separate screens with separate titles.
+REPO_REMOVAL_REVIEW_ACTION = "repo_removal"
+
 # Canonical removal-direction action values (D-07's "remove/delete/disable" family). Any
 # `ReviewGroup.action` outside this set is treated as install-direction (checked by
 # default) — covers "install"/"add"/"enable" as well as "change" (converging an existing
 # item to match the source is not the destructive branch a bulk tick must guard against).
-_REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable"})
+_REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable", REPO_REMOVAL_REVIEW_ACTION})
 
 # `ReviewGroup.action` values whose items carry a converge verb AND may be recorded
 # machine-specific, and are therefore the only ones offered the "never offer again"
@@ -109,7 +129,8 @@ _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable"})
 #
 # Enumerated independently of `_REMOVAL_ACTIONS` rather than derived from it: "arrives
 # unticked" and "is offered permanence" are two different questions about a group, and
-# ADR-021's two-answer screens answer them differently (unticked, never promoted).
+# ADR-021's two-answer screens answer them differently — `REPO_REMOVAL_REVIEW_ACTION` is
+# in the first set and deliberately absent from this one.
 _PROMOTABLE_ACTIONS = frozenset({"install", "add", "enable", "change", "remove", "delete", "disable"})
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group

@@ -170,6 +170,7 @@ from pcswitcher.jobs.packages.items import (
 )
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
+    REPO_REMOVAL_REVIEW_ACTION,
     Decision,
     ReviewEntry,
     ReviewGroup,
@@ -259,6 +260,19 @@ _ITEM_CLASS_ORDER: dict[ItemClass, int] = {
     # holding a package that this same run is installing must happen once it is present.
     ItemClass.APT_HOLD: 4,
 }
+
+# The two `/etc/apt` item classes whose ONLY remaining review direction is deletion, and
+# the verb each reads with (ADR-021 D-37, rulings 5 and 12). Both take two answers — delete
+# or leave it for now — so both carry `REPO_REMOVAL_REVIEW_ACTION`; keeping them as two
+# entries is what gives the user two separate screens rather than one mixed list.
+_REPO_REMOVAL_VERBS: dict[ItemClass, str] = {
+    ItemClass.APT_SOURCE: "delete repository",
+    ItemClass.APT_PIN: "delete pin file",
+}
+
+# Item-id prefixes that may never appear in a decision file, in any direction (rulings 5
+# and 12). `apt:config:` is absent on purpose — it keeps the registry.
+_UNRECORDABLE_ITEM_ID_PREFIXES = ("apt:source:", "apt:pin:")
 
 # Deletion order inside the repository group (ADR-021 §3.3 step 5), deliberately the
 # reverse of the write order: the repository goes before the pin that prefers it, so the
@@ -1709,33 +1723,57 @@ class AptSyncJob(PackageSyncJob):
 
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
-        """Carves the manual-collateral diffs (D-30) out of the checkbox groups into a
-        `COLLATERAL_REVIEW_ACTION` group whose entries take the three-way install-anyway /
-        skip / abort resolution, presented after the base groups (installs/changes/
-        removals) so the user sees the bulk of the diff before being asked to resolve
-        anything.
+        """Carve apt's two non-standard screens out of the ordinary checkbox groups.
+
+        Repository and pin DELETIONS (ADR-021 rulings 5 and 12) become
+        `REPO_REMOVAL_REVIEW_ACTION` groups: still checkbox lists, still unticked, but
+        offered only two answers because a permanent machine-local mark on a file whose
+        purpose is to feed packages would silently change where those packages come from
+        forever. Manual-collateral diffs (D-30) become a `COLLATERAL_REVIEW_ACTION` group
+        whose entries take the three-way install-anyway / skip / abort resolution.
+
+        Both trail the base groups — packages and apt config — so the user sees the bulk of
+        the diff before being asked to resolve anything, and collateral comes last because
+        it is the only screen that can abort the run.
 
         The unreproducible carve-out is gone (D-18: that concern moved to
-        `manual_installs_sync`); this override remains only for collateral.
+        `manual_installs_sync`).
         """
         collateral = [diff for diff in diffs if _is_collateral_diff(diff)]
-        if not collateral:
+        removals = [diff for diff in diffs if _is_repo_removal_diff(diff)]
+        if not collateral and not removals:
             return super()._build_review_groups(diffs)
 
-        carved_ids = {diff.item_id for diff in collateral}
+        carved_ids = {diff.item_id for diff in (*collateral, *removals)}
         rest = [diff for diff in diffs if diff.item_id not in carved_ids]
         groups = list(super()._build_review_groups(rest))
-        groups.append(
-            ReviewGroup(
-                manager=self.manager_id,
-                action=COLLATERAL_REVIEW_ACTION,
-                title=f"Resolve {self.manager_id} manual-collateral removals",
-                entries=tuple(
-                    ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="resolve", detail=diff.detail)
-                    for diff in collateral
-                ),
+        for item_class, verb in _REPO_REMOVAL_VERBS.items():
+            entries = [diff for diff in removals if diff.item_class is item_class]
+            if not entries:
+                continue
+            groups.append(
+                ReviewGroup(
+                    manager=self.manager_id,
+                    action=REPO_REMOVAL_REVIEW_ACTION,
+                    title=f"{verb.capitalize()}s the source no longer has ({self.manager_id})",
+                    entries=tuple(
+                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label=verb, detail=diff.detail)
+                        for diff in entries
+                    ),
+                )
             )
-        )
+        if collateral:
+            groups.append(
+                ReviewGroup(
+                    manager=self.manager_id,
+                    action=COLLATERAL_REVIEW_ACTION,
+                    title=f"Resolve {self.manager_id} manual-collateral removals",
+                    entries=tuple(
+                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="resolve", detail=diff.detail)
+                        for diff in collateral
+                    ),
+                )
+            )
         return tuple(groups)
 
     async def _capture_origin_state(self) -> None:
@@ -2221,6 +2259,29 @@ class AptSyncJob(PackageSyncJob):
                 unresolved=outcome.unresolved,
             )
         super().accept_review(plan, outcome)
+
+    @override
+    async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
+        """The base recording pass, minus every `apt:source:`/`apt:pin:` id (ADR-021
+        rulings 5 and 12).
+
+        The interactive flow already cannot produce a `SKIP_ALWAYS` for one — their groups
+        are absent from `_PROMOTABLE_ACTIONS`, so the promotion screen never offers them —
+        but "no registry entry" is a property of the model, not of one prompt's wiring, and
+        a decision can also arrive from the review's automation hook or from a caller
+        assembling a `ReviewOutcome` by hand. Filtered by id prefix rather than by action so
+        it holds in EVERY direction, including ones this job no longer emits.
+
+        `apt:config:` is deliberately not filtered: it keeps the full three-way decision and
+        the machine-local registry, because no approved package implies whether a proxy or a
+        recommends policy should travel (D-37).
+        """
+        recordable = PackagePlan(
+            manager=plan.manager,
+            diffs=tuple(diff for diff in plan.diffs if not diff.item_id.startswith(_UNRECORDABLE_ITEM_ID_PREFIXES)),
+            groups=plan.groups,
+        )
+        await super()._record_permanent_skips(recordable, decisions)
 
     @override
     async def apply(self) -> None:
@@ -3299,6 +3360,12 @@ def _is_collateral_diff(diff: ItemDiff) -> bool:
     """A manual-collateral item, identified by its stable id prefix (D-30). These carve
     into their own `COLLATERAL_REVIEW_ACTION` group rather than a checkbox group."""
     return diff.item_id.startswith(_COLLATERAL_ID_PREFIX)
+
+
+def _is_repo_removal_diff(diff: ItemDiff) -> bool:
+    """A `/etc/apt` repository or pin DELETION — the only direction either class still
+    reaches the user in, and a two-answer one (ADR-021 rulings 5 and 12)."""
+    return diff.item_class in _REPO_REMOVAL_VERBS and diff.action is DiffAction.REMOVE
 
 
 def _collateral_diff(name: str, effect: str) -> ItemDiff:

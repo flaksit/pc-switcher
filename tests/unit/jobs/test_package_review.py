@@ -27,6 +27,7 @@ from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, Ite
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
     PACKAGE_REVIEW_AUTOMATION_ENV,
+    REPO_REMOVAL_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
     ReviewEntry,
@@ -319,6 +320,34 @@ class TestInteractive:
 
         assert len([call for call in checkbox.call_args_list if "never offer again" in call.args[0]]) == 3
         assert outcome.decisions == dict.fromkeys(("remove", "delete", "disable"), Decision.SKIP_ALWAYS)
+
+    async def test_repo_removal_is_unticked_and_never_offered_permanence(self) -> None:
+        """The two-answer screen (ADR-021 rulings 5 and 12). It is a removal direction, so
+        it arrives unticked like any other; it is NOT promotable, so the "never offer again"
+        screen is never built and `SKIP_ALWAYS` is unreachable — which is what "no registry
+        entry" means at this layer.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        group = ReviewGroup(
+            manager="apt",
+            action=REPO_REMOVAL_REVIEW_ACTION,
+            title="Delete repositories the source no longer has (apt)",
+            entries=[_entry("apt:source:vendor.list", action_label="delete repository")],
+        )
+        prompt = _fake_prompt(ask_return=[])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        apply_calls = _apply_screens(checkbox)
+        assert len(apply_calls) == 1
+        assert apply_calls[0].kwargs["choices"][0].checked is False
+        assert checkbox.call_count == 1, "no never-offer-again screen may follow a two-answer group"
+        assert outcome.decisions == {"apt:source:vendor.list": Decision.SKIP_ONCE}
 
 
 @pytest.mark.asyncio

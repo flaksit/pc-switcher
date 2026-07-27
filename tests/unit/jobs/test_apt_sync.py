@@ -42,9 +42,12 @@ from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, Ite
 from pcswitcher.jobs.packages.review import (
     _REMOVAL_ACTIONS,
     COLLATERAL_REVIEW_ACTION,
+    REPO_REMOVAL_REVIEW_ACTION,
     Decision,
     ReviewGroup,
     ReviewOutcome,
+    _is_promotable_group,
+    _is_removal_direction,
 )
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFailures, PackagePlan
 from pcswitcher.models import CommandResult, Host
@@ -4774,6 +4777,104 @@ class TestAPinNeverSpeaksForAPackage:
 
         assert not any("/^Package:/" in cmd for cmd in all_calls(target))
         assert any(_PIN_DIGEST_CMD in cmd for cmd in all_calls(target))
+
+
+class TestTwoAnswerRemovals:
+    """Rulings 5 and 12: a repository or pin the source no longer has is still reviewed —
+    nothing derives a deletion — but with two answers, on its own screen, and with no
+    machine-local registry behind it.
+    """
+
+    @staticmethod
+    def _target_only_repo_state() -> tuple[JobContext, MagicMock, MagicMock]:
+        """A target carrying one repository and one pin the source does not have, plus an
+        apt-config file that must NOT be swept into the same shape (ruling 11)."""
+        return make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d9", "vendor.list"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, _VENDOR_LIST, ""),
+                _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p9", "vendor-pin"), ""),
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c9", "99extra"), ""),
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_repository_and_pin_removals_get_two_separate_two_answer_screens(self) -> None:
+        """One sentinel, two groups: `_build_review_groups` keys on the item class, so a
+        repository deletion and a pin deletion never share a list. Apt config keeps the
+        ordinary action value and therefore the ordinary three-way path.
+        """
+        context, _source, _target = self._target_only_repo_state()
+
+        plan = await AptSyncJob(context).plan()
+
+        by_action = {(group.action, group.entries[0].item_id.split(":")[1]): group for group in plan.groups}
+        assert (REPO_REMOVAL_REVIEW_ACTION, "source") in by_action
+        assert (REPO_REMOVAL_REVIEW_ACTION, "pin") in by_action
+        assert by_action[(REPO_REMOVAL_REVIEW_ACTION, "source")].entries[0].action_label == "delete repository"
+        assert by_action[(REPO_REMOVAL_REVIEW_ACTION, "pin")].entries[0].action_label == "delete pin file"
+        # Ruling 11: the config file is an ordinary removal, in an ordinary group.
+        assert (DiffAction.REMOVE.value, "config") in by_action
+
+    @pytest.mark.asyncio
+    async def test_a_two_answer_group_is_unticked_and_never_offered_permanence(self) -> None:
+        """Both halves of the sentinel's contract, read off the real groups this job builds
+        rather than a hand-made one: unticked because it is a removal direction, never
+        promoted because it is not promotable.
+        """
+        context, _source, _target = self._target_only_repo_state()
+
+        plan = await AptSyncJob(context).plan()
+
+        two_answer = [group for group in plan.groups if group.action == REPO_REMOVAL_REVIEW_ACTION]
+        assert len(two_answer) == 2, "the repository and the pin deletion each need their own screen"
+        for group in two_answer:
+            assert _is_removal_direction(group.action)
+            assert not _is_promotable_group(group.action)
+
+    @pytest.mark.asyncio
+    async def test_approving_a_pin_removal_deletes_the_file(self) -> None:
+        """The answer that acts still acts: two answers, not one."""
+        context, _source, target = _repo_context(
+            target_responses={
+                **_NO_PACKAGES,
+                _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p9", "vendor-pin"), ""),
+            }
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:pin:vendor-pin": Decision.APPLY})
+
+        await job.execute()
+
+        removals = [c for c in all_calls(target) if c.startswith("sudo rm --force")]
+        assert removals == ["sudo rm --force /etc/apt/preferences.d/vendor-pin"]
+
+    @pytest.mark.asyncio
+    async def test_the_repository_goes_before_the_pin_that_prefers_it(self) -> None:
+        """Deletion order is the reverse of the write order (§3.3 step 5): a pin naming an
+        origin apt no longer has is a worse intermediate state than a repository nothing
+        prefers.
+        """
+        context, _source, target = _repo_context(
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d9", "vendor.list"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, _VENDOR_LIST, ""),
+                _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p9", "vendor-pin"), ""),
+            }
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:vendor.list": Decision.APPLY, "apt:pin:vendor-pin": Decision.APPLY})
+
+        await job.execute()
+
+        removals = [c for c in all_calls(target) if c.startswith("sudo rm --force") and "/etc/apt/" in c]
+        assert removals == [
+            "sudo rm --force /etc/apt/sources.list.d/vendor.list",
+            "sudo rm --force /etc/apt/preferences.d/vendor-pin",
+        ]
 
 
 class TestPinsStillTravelAsFiles:

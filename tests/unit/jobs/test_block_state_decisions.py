@@ -241,6 +241,43 @@ class TestAptRepoItemDecisions:
         assert "apt:config:99recommends" not in review_item_ids(plan)
 
     @pytest.mark.asyncio
+    async def test_no_repository_or_pin_id_can_reach_a_decision_file(self) -> None:
+        """Rulings 5 and 12: a repository or pin DELETION takes two answers, so there is no
+        third state to persist — and the model says "no registry entry", not "the prompt
+        happens not to offer one". Asserted the hard way, with `SKIP_ALWAYS` forced onto
+        every diff the plan produced, which is what an automation hook or a hand-built
+        outcome could do.
+
+        The `apt:config:` line in the same run must still be recorded: it is the one
+        `/etc/apt` class that keeps the registry (D-37).
+        """
+        target_responses = {
+            "apt-mark showmanual": CommandResult(0, "", ""),
+            "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "vendor.list"), ""),
+            "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, "deb https://vendor.example.com x y\n", ""),
+            "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "vendor-pin"), ""),
+            "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99extra"), ""),
+        }
+        context, source, target = make_context(target_responses=target_responses)
+        job = AptSyncJob(context)
+        plan = await job.plan()
+
+        offered = {diff.item_id for diff in plan.diffs}
+        assert {"apt:source:vendor.list", "apt:pin:vendor-pin", "apt:config:99extra"} <= offered
+
+        job.accept_review(
+            plan,
+            ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS for diff in plan.diffs}, was_interactive=True),
+        )
+        await job.apply()
+
+        assert not wrote_decision_file(source)
+        recorded = recorded_decision_file(target)
+        assert "apt:config:99extra" in recorded
+        assert "apt:source:" not in recorded
+        assert "apt:pin:" not in recorded
+
+    @pytest.mark.asyncio
     async def test_a_signing_key_is_never_offered_and_so_can_never_be_recorded(self) -> None:
         """`orphan.gpg` exists only on the target and no repository references it — the
         strongest candidate a key removal could ever have. It reaches neither `plan.diffs`
