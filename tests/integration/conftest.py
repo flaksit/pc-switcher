@@ -48,14 +48,34 @@ REQUIRED_ENV_VARS = [
 ]
 
 
+# Every integration test must declare where it belongs in CI's topic-based selection
+# (tests/integration/scripts/select-ci-tests.sh): an area marker, `smoke`, or
+# `area_core` for core behavior with no topic mapping (full-suite runs only).
+# Enforced at collection so a new test file cannot silently fall outside topic runs.
+_CI_SELECTION_MARKERS = {"smoke", "area_package", "area_install", "area_btrfs", "area_folder", "area_core"}
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Auto-apply integration marker and check VM environment."""
+    """Auto-apply integration marker and require a CI-selection marker on each test."""
     integration_marker = pytest.mark.integration
 
-    # Auto-apply integration marker to all tests in tests/integration/
+    unmapped: list[str] = []
     for item in items:
-        if "/integration/" in str(item.fspath):
-            item.add_marker(integration_marker)
+        if "/integration/" not in str(item.fspath):
+            continue
+        # Auto-apply integration marker to all tests in tests/integration/
+        item.add_marker(integration_marker)
+
+        markers = {marker.name for marker in item.iter_markers()}
+        if "benchmark" not in markers and not (markers & _CI_SELECTION_MARKERS):
+            unmapped.append(item.nodeid)
+
+    if unmapped:
+        raise pytest.UsageError(
+            "Integration tests without a CI-selection marker "
+            f"({', '.join(sorted(_CI_SELECTION_MARKERS))}); "
+            'see "CI test selection" in docs/dev/testing-guide.md:\n  ' + "\n  ".join(unmapped)
+        )
 
 
 # ---------------------------------------------------------------------------------

@@ -39,6 +39,8 @@ import pytest_asyncio
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import get_this_version
 
+pytestmark = pytest.mark.area_folder
+
 
 # Dataclass for pc1_to_pc2_traffic_blocker fixture
 @dataclass

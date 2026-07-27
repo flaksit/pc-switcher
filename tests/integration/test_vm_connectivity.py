@@ -11,7 +11,11 @@ don't require VM infrastructure to validate.
 
 from __future__ import annotations
 
+import pytest
+
 from pcswitcher.executor import RemoteExecutor
+
+pytestmark = pytest.mark.smoke
 
 
 async def test_hostname_verification_pc1(pc1_executor: RemoteExecutor) -> None:

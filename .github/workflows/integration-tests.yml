@@ -146,25 +146,29 @@ jobs:
 
       - name: Select tests for this run
         id: select
-        # Ordinary PR pushes run only the tests for the areas the PR touches
-        # (see select-ci-tests.sh for the mapping and its err-toward-full rule).
+        # Ordinary PR pushes run only the tests for the areas the PR touches, as
+        # a pytest -m expression over the smoke/area_* markers (see
+        # select-ci-tests.sh for the mapping and its err-toward-full rule).
         # Full suite on: ready_for_review (the pre-merge gate — branch protection
         # requires this workflow's status), nightly schedule, and manual dispatch.
         run: |
           if [[ "${{ github.event_name }}" != "pull_request" || "${{ github.event.action }}" == "ready_for_review" ]]; then
             echo "Full suite: event=${{ github.event_name }} action=${{ github.event.action }}"
-            echo "paths=" >> $GITHUB_OUTPUT
+            echo "markers=" >> $GITHUB_OUTPUT
           else
             selection=$(tests/integration/scripts/select-ci-tests.sh "origin/${{ github.base_ref }}")
             [[ "$selection" == "full" ]] && selection=""
             echo "Selection: ${selection:-full suite}"
-            echo "paths=$selection" >> $GITHUB_OUTPUT
+            echo "markers=$selection" >> $GITHUB_OUTPUT
           fi
 
       - name: Run integration tests
         run: |
           set -o pipefail
-          ./tests/run-integration-tests.sh ${{ steps.select.outputs.paths }} 2>&1 | tee pytest-output.log
+          if [[ -n "${{ steps.select.outputs.markers }}" ]]; then
+            export PC_SWITCHER_TEST_MARKERS="integration and not benchmark and (${{ steps.select.outputs.markers }})"
+          fi
+          ./tests/run-integration-tests.sh 2>&1 | tee pytest-output.log
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
           PC_SWITCHER_TEST_PC1_HOST: ${{ steps.vm_ips.outputs.pc1_ip || steps.provision.outputs.pc1_ip }}

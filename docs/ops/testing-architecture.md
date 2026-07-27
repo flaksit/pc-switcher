@@ -360,7 +360,7 @@ concurrency:
 | `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM hostname/IP | `pc1` |
 | `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM hostname/IP | `pc2` |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
-| `PC_SWITCHER_TEST_MARKERS` | pytest `-m` expression (CI narrows runs by test paths, not markers) | `integration and not benchmark` |
+| `PC_SWITCHER_TEST_MARKERS` | pytest `-m` expression; CI sets it to the topic selection (smoke/area_* markers) | `integration and not benchmark` |
 | `CI_JOB_ID` | CI job ID for lock identification | `$USER` |
 
 ### pytest Configuration

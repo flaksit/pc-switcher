@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Select which integration test paths CI should run for a PR, based on the files
-# it changes. Topic-scoped changes run their area's tests plus a small smoke set;
+# Select which integration tests CI should run for a PR, based on the files it
+# changes. Topic-scoped changes run their area's tests plus the smoke set;
 # anything outside the mapped areas selects the full suite.
 #
 # Usage: select-ci-tests.sh <base-ref>
@@ -9,14 +9,17 @@
 #             merge base (triple-dot), so only the PR's own changes count.
 #
 # Output (stdout):
-#   - A space-separated list of pytest paths → run exactly these.
+#   - A pytest -m expression such as "smoke or area_package" → run that selection.
 #   - The word "full" → run the full suite.
 # Classification rationale goes to stderr so workflow logs show why.
 #
-# The area→tests mapping errs toward "full": every file must match an area
-# pattern, or the whole suite runs. New source files therefore run the full
-# suite until someone maps them here — silently running too much, never too
-# little.
+# Two mappings feed the expression:
+#   - Source files → area, via the case patterns below. Every file must match,
+#     or the whole suite runs: new source files run the full suite until someone
+#     maps them here — silently running too much, never too little.
+#   - Changed test files → area, read from the file's own pytestmark
+#     (smoke/area_* markers; presence on every test is enforced at collection
+#     time in tests/integration/conftest.py).
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -33,19 +36,22 @@ if [[ -z "$changed" ]]; then
     exit 0
 fi
 
-# Always included: cheap sanity that connectivity, versioning, and the config
-# sync path still work, regardless of which area a PR touches.
-SMOKE_TESTS="tests/integration/test_vm_connectivity.py tests/integration/test_version_resolution.py tests/integration/test_config_sync.py"
+full() {
+    echo "'$1' -> full suite" >&2
+    echo "full"
+    exit 0
+}
 
-PACKAGE_TESTS="tests/integration/jobs/test_package_sync.py"
-INSTALL_TESTS="tests/integration/test_self_update.py tests/integration/test_installation_script.py tests/integration/jobs/test_install_on_target_job.py"
-BTRFS_TESTS="tests/integration/test_snapshot_infrastructure.py tests/integration/test_btrfs_operations.py"
-FOLDER_TESTS="tests/integration/test_end_to_end_sync.py"
+# Smoke (connectivity, version resolution, config sync) is part of every
+# topic-scoped selection as cheap cross-cutting sanity.
+areas="smoke"
 
-need_package=false
-need_install=false
-need_btrfs=false
-need_folder=false
+add_area() {
+    case " $areas " in
+        *" $1 "*) ;;
+        *) areas="$areas $1" ;;
+    esac
+}
 
 while IFS= read -r f; do
     case "$f" in
@@ -55,39 +61,36 @@ while IFS= read -r f; do
         # gated by ci.yml, benchmarks are deselected from CI integration runs.
         docs/* | *.md | .planning/* | LICENSE | tests/unit/* | tests/integration/benchmarks/*)
             ;;
+        # A changed integration test runs its own area: read it from the file's
+        # pytestmark. Deleted files (absent from the checkout) and files without
+        # a recognizable marker fall back to the full suite.
+        tests/integration/*test_*.py)
+            marker=$([[ -f "$f" ]] && grep -oE 'pytest\.mark\.(area_[a-z]+|smoke)' "$f" | head -1 | cut -d. -f3 || true)
+            if [[ -z "$marker" ]]; then
+                full "$f (no smoke/area_* pytestmark found)"
+            fi
+            add_area "$marker"
+            ;;
         src/pcswitcher/jobs/apt_sync.py | src/pcswitcher/jobs/snap_sync.py | \
         src/pcswitcher/jobs/flatpak_sync.py | src/pcswitcher/jobs/manual_installs_sync.py | \
-        src/pcswitcher/jobs/packages/* | src/pcswitcher/machine-packages.example.yaml | \
-        tests/integration/jobs/test_package_sync.py)
-            need_package=true
+        src/pcswitcher/jobs/packages/* | src/pcswitcher/machine-packages.example.yaml)
+            add_area area_package
             ;;
         install.sh | src/pcswitcher/install.py | src/pcswitcher/version.py | \
-        src/pcswitcher/jobs/install_on_target.py | \
-        tests/integration/test_self_update.py | tests/integration/test_installation_script.py | \
-        tests/integration/jobs/test_install_on_target_job.py)
-            need_install=true
+        src/pcswitcher/jobs/install_on_target.py)
+            add_area area_install
             ;;
-        src/pcswitcher/btrfs_snapshots.py | src/pcswitcher/jobs/btrfs.py | \
-        tests/integration/test_snapshot_infrastructure.py | tests/integration/test_btrfs_operations.py)
-            need_btrfs=true
+        src/pcswitcher/btrfs_snapshots.py | src/pcswitcher/jobs/btrfs.py)
+            add_area area_btrfs
             ;;
-        src/pcswitcher/jobs/folder_sync.py | src/pcswitcher/home.filter | src/pcswitcher/root.filter | \
-        tests/integration/test_end_to_end_sync.py)
-            need_folder=true
+        src/pcswitcher/jobs/folder_sync.py | src/pcswitcher/home.filter | src/pcswitcher/root.filter)
+            add_area area_folder
             ;;
         *)
-            echo "'$f' is outside every mapped area -> full suite" >&2
-            echo "full"
-            exit 0
+            full "$f (outside every mapped area)"
             ;;
     esac
 done <<< "$changed"
 
-selected="$SMOKE_TESTS"
-$need_package && selected="$selected $PACKAGE_TESTS"
-$need_install && selected="$selected $INSTALL_TESTS"
-$need_btrfs && selected="$selected $BTRFS_TESTS"
-$need_folder && selected="$selected $FOLDER_TESTS"
-
-echo "Topic-scoped selection (package=$need_package install=$need_install btrfs=$need_btrfs folder=$need_folder)" >&2
-echo "$selected"
+echo "Topic-scoped selection: $areas" >&2
+echo "${areas// / or }"

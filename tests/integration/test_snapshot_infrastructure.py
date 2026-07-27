@@ -31,7 +31,7 @@ from pcswitcher.executor import RemoteExecutor
 from pcswitcher.models import Host, SnapshotPhase
 
 # Excluded from CI (still runs locally); see docs/dev/testing-guide.md "Markers".
-pytestmark = pytest.mark.ci_skip
+pytestmark = [pytest.mark.ci_skip, pytest.mark.area_btrfs]
 
 
 @pytest.fixture(scope="module")

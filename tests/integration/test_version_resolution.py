@@ -20,7 +20,11 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 from pcswitcher.version import get_this_version
+
+pytestmark = pytest.mark.smoke
 
 # The release triple dunamai produces when no tag is reachable. Compared as a triple, not
 # with `>`: the fallback renders as `0.0.0+post.<n>.dev.0.<sha>`, whose post/dev segments

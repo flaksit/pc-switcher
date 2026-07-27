@@ -25,7 +25,7 @@ from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import Release, find_one_version, get_this_version
 
 # Excluded from CI (still runs locally); see docs/dev/testing-guide.md "Markers".
-pytestmark = pytest.mark.ci_skip
+pytestmark = [pytest.mark.ci_skip, pytest.mark.area_install]
 
 # Install script URL from main branch
 INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh"
