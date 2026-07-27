@@ -36,7 +36,7 @@ from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivat
     PackagePlan,
     PackageSyncJob,
 )
-from pcswitcher.models import CommandResult, JobStatus, ValidationError
+from pcswitcher.models import CommandResult, JobStatus, LogLevel, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
 DF_OUTPUT = (
@@ -486,6 +486,27 @@ class TestConvergeDispatchByAction:
         await job.apply()
 
         assert job.converge_calls == []
+
+    @pytest.mark.asyncio
+    async def test_dry_run_preview_carries_each_items_detail(self, caplog: pytest.LogCaptureFixture) -> None:
+        """ADR-014: the dry run reports exactly what would happen, and for several diff
+        classes the WHAT lives in `detail` — the signing keys an apt source install
+        copies, the two versions behind a mismatch. A dry run renders no review panel,
+        so dropping the detail here is the difference between a preview and a bare list
+        of item names.
+        """
+        caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
+        job = FakeSyncJob(make_context(dry_run=True))
+        diffs = (
+            _diff("i1", DiffAction.INSTALL, detail="signing key copied with it: vendor.gpg"),
+            _diff("i2", DiffAction.INSTALL),
+        )
+        _accept(job, diffs, {d.item_id: Decision.APPLY for d in diffs})
+
+        await job.apply()
+
+        assert "[dry-run] Would install i1 — signing key copied with it: vendor.gpg" in caplog.messages
+        assert "[dry-run] Would install i2" in caplog.messages
 
 
 class TestIdempotency:

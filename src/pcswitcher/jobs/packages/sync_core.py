@@ -579,7 +579,7 @@ class PackageSyncJob(SyncJob):
         must still fail if one of them ended up unresolved.
 
         Dry-run (ADR-014): each intended action is logged at FULL with a `[dry-run] `
-        prefix and no converge command is ever issued.
+        prefix, carrying the diff's own detail, and no converge command is ever issued.
 
         `REPORT_ONLY` diffs are excluded here regardless of decision: they imply no
         converge verb (D-25's held/pinned, version-mismatch, repo-unavailable,
@@ -623,7 +623,12 @@ class PackageSyncJob(SyncJob):
 
             for index, diff in enumerate(apply_diffs):
                 if self.context.dry_run:
-                    self._log(Host.TARGET, LogLevel.FULL, f"{prefix}Would {diff.action.value} {diff.label}")
+                    # The detail belongs on the line, not only in the review panel: a
+                    # dry run never renders that panel, and ADR-014 makes the preview
+                    # the whole report. Without it the preview says strictly less about
+                    # an item than the interactive review does.
+                    detail = f" — {diff.detail}" if diff.detail else ""
+                    self._log(Host.TARGET, LogLevel.FULL, f"{prefix}Would {diff.action.value} {diff.label}{detail}")
                 else:
                     await self._converge_one(diff, failures)
                 self._report_progress(ProgressUpdate(percent=int((index + 1) / total * 100)))
