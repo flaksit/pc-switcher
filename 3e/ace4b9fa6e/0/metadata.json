@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "3eace4b9fa6e",
+  "session_id": "53d496e4-97d1-4460-811e-3fb656c48596",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-27T13:02:38.080049112Z",
+  "branch": "pc-216",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/btrfs_snapshots.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d4c7e3abb03d",
+  "checkpoint_transcript_start": 732,
+  "transcript_lines_at_start": 732,
+  "compact_transcript_start": 145,
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 3837,
+    "cache_read_tokens": 936344,
+    "output_tokens": 3346,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-27T13:02:38.018123508Z",
+    "agent_lines": 5,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 5,
+    "total_lines_changed": 9,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

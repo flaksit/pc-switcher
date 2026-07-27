@@ -1,0 +1,6 @@
+Silence conftest.py:51 .
+
+---
+
+Silence conftest.py:51 .
+Fix delete_all_snapshots so it removes empty folders.
