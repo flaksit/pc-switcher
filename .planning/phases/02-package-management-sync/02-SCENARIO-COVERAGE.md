@@ -50,6 +50,8 @@ Test file shorthand: `apt` = tests/unit/jobs/test_apt_sync.py · `snap` = test_s
 
 ## C. apt repository config — sources, keys, pins, apt.conf (D-11, D-12, D-13, D-27)
 
+A signing key stopped being an item on 2026-07-27 (ADR-020 amendment): no `apt:key:` identity, no diff, no review entry, no decision-file entry. Rows C6–C8, C12–C13 and C24 are restated below against the two file operations that replaced it — keyring provisioning before any source write, keyring collection after every source write and deletion.
+
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
 | C1 | Source file missing on target, key present on source | INSTALL | U | apt:`test_source_with_key_present_on_source_yields_plain_install` |
@@ -57,14 +59,14 @@ Test file shorthand: `apt` = tests/unit/jobs/test_apt_sync.py · `snap` = test_s
 | C3 | Same, but the source file is *changed* rather than missing | also downgraded to REPORT_ONLY | U | apt:`test_changed_source_with_dangling_keyring_reference_is_downgraded_to_report_only` |
 | C4 | deb822 `.sources` vs legacy `.list` | format recorded per file, never normalised; identity is the filename | U | apt:`test_deb822_and_legacy_source_each_record_own_format` |
 | C5 | Same repo described by both a `.list` and a `.sources` file | two distinct items, both visible | P | identity-by-filename tested; the coexistence case itself is not |
-| C6 | Key present per-repo vs global-trust with the same filename | distinct item ids | U | apt:`test_per_repo_and_global_trust_keys_are_distinct_item_ids` |
-| C7 | Key digests identical on both machines | no diff, no content fetch | U | apt:`test_key_matching_digest_on_both_sides_produces_no_diff` |
-| C8 | Key content differs | VERSION_MISMATCH → CHANGE, bytes copied verbatim | U | apt:`test_changed_per_repo_key_is_staged_then_promoted_with_the_source_bytes` |
+| C6 | Any key, any direction (missing / differing / target-only) | never a diff, never a review entry, never a decision | U | apt:`TestKeysAreNotItems::test_no_key_reaches_a_diff_or_a_review_group_in_any_direction`, blk:`test_a_signing_key_is_never_offered_and_so_can_never_be_recorded` |
+| C7 | Key digests identical on both machines | no transfer, no promotion, no `apt-get update` | U | apt:`test_a_matching_keyring_is_never_written` |
+| C8 | Key content differs while its source file is byte-identical (vendor rotation) | refreshed anyway, bytes copied verbatim | U | apt:`test_rotated_keyring_is_refreshed_although_its_source_file_is_identical` |
 | C9 | Pin/config file missing / extra / changed | INSTALL / REMOVE / CHANGE | U | apt:`test_pin_and_config_diff_missing_extra_and_changed` |
-| C10 | Convergence order | key → pin/config → source → `apt-get update` → packages | U | apt:`test_key_then_source_then_update_then_package_install` |
+| C10 | Convergence order | key → pin/config → source → unused-key collection → `apt-get update` → packages | U | apt:`test_key_then_source_then_update_then_package_install`, `test_key_of_an_installed_repo_is_provisioned_with_no_decision_of_its_own`, `test_key_left_unreferenced_by_an_approved_removal_is_deleted` (asserts source-rm < key-rm < update) |
 | C11 | Several repo items approved | exactly one `apt-get update` | U | apt:`test_apt_get_update_runs_exactly_once_for_three_repo_items` |
 | C12 | Keys never re-fetched from a vendor | no command contains a URL | U | apt:`test_no_key_command_contains_a_url` |
-| C13 | Key write fails | dependent source file left unwritten | U | apt:`test_failed_key_write_leaves_dependent_source_unwritten` |
+| C13 | Key write fails | dependent source file left unwritten, and it is the SOURCE that fails (no key item exists to fail) | U | apt:`test_failed_key_write_leaves_dependent_source_unwritten`, `test_directory_preparation_failure_fails_the_item_not_the_run` |
 | C14 | `/etc/apt` write mechanism | stage under `~/.cache`, `sudo install -o root -g root -m 0644`, never `mv`, never `send_file` outside home | U | apt:`test_promotion_uses_sudo_install_with_owner_group_mode_never_mv`, `test_send_file_destinations_start_with_home_never_contain_etc` |
 | C15 | Staging copy lifecycle | removed on success and on failure | U | apt:`test_staging_file_removed_after_success_and_after_failure` |
 | C16 | `/etc/apt/keyrings` absent (fresh 24.04) | `sudo mkdir -p -m 0755` before `install` | U | apt:`test_promotion_ensures_keyrings_directory_before_install` |
@@ -75,10 +77,20 @@ Test file shorthand: `apt` = tests/unit/jobs/test_apt_sync.py · `snap` = test_s
 | C21 | `apt-get update` succeeds | no restore command issued, backup discarded | U | apt:`test_successful_update_issues_no_restore_command` |
 | C22 | Rollback happened | package items still attempted (D-27) | U | apt:`test_rollback_does_not_prevent_package_items_from_being_attempted` |
 | C23 | Backup itself fails | every group item fails, no `KeyError` crash | U | apt:`test_backup_failure_fails_every_group_item_without_crashing` |
-| C24 | Source file *and* its key both extra on target, both approved | both deleted, one `apt-get update` after both writes | U V | apt:`test_source_and_its_key_both_removed_with_one_update_after_both`, INT:`test_apt_source_and_its_key_removed_together` (proven against `/etc/apt` and a working `apt-get update` afterwards) |
+| C24 | Source file extra on target, its key left unreferenced by the approved removal | both deleted, key deletion after the source deletion, one `apt-get update` after both | U V | apt:`test_source_and_its_key_both_removed_with_one_update_after_both`, `test_key_left_unreferenced_by_an_approved_removal_is_deleted`, INT:`test_apt_source_and_its_key_removed_together` (proven against `/etc/apt` and a working `apt-get update` afterwards, with only the REPOSITORY decided) |
 | C25 | Content reads for hydration use sudo | matches the `sudo find … sha256sum` privilege | U | apt:`test_content_hydration_reads_use_sudo_matching_the_digest_capture` |
-| C26 | Target has a repo/key the source lacks, still needed by a target-side machine-specific package | removal still offered (unticked), its `detail` naming the machine-specific packages — for a key, the target sources still signed by it and the packages behind them | U | apt:`TestRepoRemovalNamesMachineSpecificPackages` (9) |
-| C27 | skip-always on a digest-derived repo item (`apt:source:`/`apt:key:`/`apt:pin:`/`apt:config:`), next run | item inert, no diff | U | blk:`TestAptRepoItemDecisions` (2) |
+| C26 | Target has a repo the source lacks, still needed by a target-side machine-specific package | removal still offered (unticked), its `detail` naming the machine-specific packages | U | apt:`TestRepoRemovalNamesMachineSpecificPackages` (7) |
+| C27 | skip-always on a digest-derived repo item (`apt:source:`/`apt:pin:`/`apt:config:`), next run | item inert, no diff | U | blk:`TestAptRepoItemDecisions` (2) |
+| C28 | Keyring referenced by a source that will exist on the target | provisioned from the source machine, before the source write, whether the source is INSTALLed or CHANGEd | U | apt:`test_key_of_an_installed_repo_is_provisioned_with_no_decision_of_its_own`, `test_key_of_a_changed_repo_is_provisioned_too` |
+| C29 | Keyring on the source machine that no target-side source references | not copied — `/etc/apt/keyrings` is never mirrored wholesale | U | apt:`test_an_unreferenced_source_keyring_is_not_copied_to_the_target` |
+| C30 | One rotated key referenced by several repositories (1-n) | exactly one write | U | apt:`test_one_rotated_key_serving_three_repos_is_written_once` |
+| C31 | `/etc/apt/trusted.gpg.d` key missing or differing on the target | copied/refreshed on its own content (nothing references it), never collected | U | apt:`test_global_trust_keys_are_replicated_whether_missing_or_differing`, `test_a_global_trust_key_is_never_collected` |
+| C32 | Keyring still referenced by a surviving source — one with no diff, one the user unticked, one recorded machine-specific, one in `/etc/apt/sources.list` | kept in every case | U | apt:`test_key_still_referenced_by_a_surviving_repo_is_kept`, `test_key_referenced_by_a_repo_whose_removal_was_declined_is_kept`, `test_key_referenced_by_a_machine_specific_repo_is_kept`, `test_key_referenced_only_by_a_file_pc_switcher_never_syncs_is_kept` |
+| C33 | Keyring the source machine still has, unreferenced on the target | never collected (it is configuration this sync replicates, not litter) | U | apt:`test_a_key_the_source_machine_still_has_is_never_collected` |
+| C34 | Run that removes no source file | collection pass does not run at all — not even its re-scan | U | apt:`test_no_source_removed_means_no_collection_pass_at_all` |
+| C35 | Keyring whose only referent is the repository this run removes | not refreshed first, then collected | U | apt:`test_a_key_only_the_departing_repo_needs_is_not_refreshed_first`, `test_key_left_unreferenced_by_an_approved_removal_is_deleted` |
+| C36 | Collected keyring | backed up into the group's backup dir before deletion, deletion carries `mutates=` | U | apt:`test_a_collected_key_is_backed_up_and_gated_as_a_modification` |
+| C37 | deb822 `Signed-By:` holding an inline armored key | yields no reference: no invented dependency, no real keyring made to look referenced | U | apt:`test_inline_armored_signed_by_names_no_keyring` |
 
 ## D. apt collateral (D-30) and metadata refresh (decision 1)
 
@@ -340,7 +352,7 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 
 ### Open defects and unimplemented requirements
 
-- N6 — no "this was the last package from that source, remove it too?" prompt. Source and key removals propagate only because the source machine's own files disappeared, as independent unticked items. Example narrative 2 is not implemented.
+- N6 — no "this was the last package from that source, remove it too?" prompt. Source removals propagate only because the source machine's own files disappeared, as unticked items; the key that removal orphans then goes on its own, with no item and no prompt. Example narrative 2 is not implemented.
 
 ### Coverage gaps in behaviour believed correct
 
@@ -350,7 +362,7 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 - L11 — the hold is written with a timestamp so a crashed run self-expires. The timed value is asserted; no test simulates the crash.
 - N8 — the round trip in which apt's own bookkeeping keeps or drops a dependency-only package. The single-run half is covered (A10).
 - I22/N11 — real-TTY review rendering and the two-machine walkthrough are UAT-only by nature.
-- C26 — the source/key removal impact is asserted against mocked `apt-cache policy` output only. The output shape was verified by hand against a real Ubuntu 24.04 machine carrying both deb822 and legacy repositories (every installed package with a repository origin resolved to a source file, no unmatched origin), but no VM test exercises the parse against a live apt.
+- C26 — the source removal impact is asserted against mocked `apt-cache policy` output only. The output shape was verified by hand against a real Ubuntu 24.04 machine carrying both deb822 and legacy repositories (every installed package with a repository origin resolved to a source file, no unmatched origin), but no VM test exercises the parse against a live apt.
 
 ### Accepted scope limits
 

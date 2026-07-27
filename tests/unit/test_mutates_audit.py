@@ -120,6 +120,9 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/apt_sync.py::AptSyncJob.collect_unavailable_item_ids::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._plan_repo_diffs.source_run::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._plan_repo_diffs.target_run::run_command": 1,
+    # The post-write re-scan of the target's source files that keyring collection counts
+    # references against — a `find ... -exec awk` read, no different from the plan-time one.
+    "jobs/apt_sync.py::AptSyncJob._remove_unused_keyrings.target_run::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._capture_target_manual_set::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._backup_destination::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._target_home_dir::run_command": 1,

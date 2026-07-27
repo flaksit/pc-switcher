@@ -208,8 +208,11 @@ class TestAptHeldPackageSuppression:
 
 
 class TestAptRepoItemDecisions:
-    """`apt:source:` / `apt:key:` — digest-derived like the block-state items, so they
-    reach `plan()` with no input item to filter and depend on the same post-diff pass.
+    """`apt:source:` — digest-derived like the block-state items, so it reaches `plan()`
+    with no input item to filter and depends on the same post-diff pass.
+
+    There is deliberately no key counterpart: a signing key is not an item, so it can
+    never be offered, never be declined, and never reach a decision file at all.
     """
 
     @pytest.mark.asyncio
@@ -236,26 +239,32 @@ class TestAptRepoItemDecisions:
         assert "apt:source:foo.sources" not in review_item_ids(plan)
 
     @pytest.mark.asyncio
-    async def test_declined_key_removal_is_recorded_on_target_and_never_re_offered(self) -> None:
-        key_id = "apt:key:per-repo:orphan.gpg"
-        target_responses = {
-            "apt-mark showmanual": CommandResult(0, "", ""),
-            "find /etc/apt/keyrings": CommandResult(0, sha256_line("k9", "orphan.gpg"), ""),
-        }
-
-        context, source, target = make_context(target_responses=target_responses)
-        await record_skip_always(AptSyncJob(context), key_id)
-        assert wrote_decision_file(target)
-        assert not wrote_decision_file(source)
-        recorded = recorded_decision_file(target)
-
-        context, _source, _target = make_context(
-            target_responses={**target_responses, decision_cat("apt"): CommandResult(0, recorded, "")}
+    async def test_a_signing_key_is_never_offered_and_so_can_never_be_recorded(self) -> None:
+        """`orphan.gpg` exists only on the target and no repository references it — the
+        strongest candidate a key removal could ever have. It reaches neither `plan.diffs`
+        nor a review group, so there is nothing for the user to decline and nothing
+        `_record_permanent_skips` could ever write.
+        """
+        context, source, target = make_context(
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k9", "orphan.gpg"), ""),
+            }
         )
-        plan = await AptSyncJob(context).plan()
+        job = AptSyncJob(context)
+        plan = await job.plan()
 
-        assert key_id not in {diff.item_id for diff in plan.diffs}
-        assert key_id not in review_item_ids(plan)
+        assert not any(diff.item_id.startswith("apt:key:") for diff in plan.diffs)
+        assert not any(item_id.startswith("apt:key:") for item_id in review_item_ids(plan))
+
+        job.accept_review(
+            plan,
+            ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS for diff in plan.diffs}, was_interactive=True),
+        )
+        await job.apply()
+
+        assert not wrote_decision_file(source)
+        assert not wrote_decision_file(target)
 
 
 class TestSnapHoldDecisions:

@@ -172,7 +172,6 @@ Every item class computes a stable `item_id` string rather than reusing the mana
 | - | - | - |
 | `AptPackageItem` | `apt:package:<name>` | — |
 | `AptSourceItem` | `apt:source:<filename>` | filename (a legacy `.list` and a deb822 `.sources` file for the same repo stay two entries) |
-| `AptKeyItem` | `apt:key:<scope>:<filename>` | `scope`: `per-repo` or `global-trust` |
 | `AptPinItem` | `apt:pin:<filename>` | — |
 | `AptConfigItem` | `apt:config:<filename>` | — |
 | `SnapItem` | `snap:<name>` | — (channel and revision are fields, not part of identity) |

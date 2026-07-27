@@ -20,7 +20,7 @@ All four ship **disabled**: enabling any of them lets pc-switcher change install
 
 ### What each job covers
 
-- **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), plus the repository configuration that governs where packages come from: sources under `/etc/apt/sources.list.d`, signing keys (`/etc/apt/keyrings`, legacy `/etc/apt/trusted.gpg.d`), pins (`/etc/apt/preferences.d`) and apt config (`/etc/apt/apt.conf.d`).
+- **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), plus the repository configuration that governs where packages come from: sources under `/etc/apt/sources.list.d`, pins (`/etc/apt/preferences.d`) and apt config (`/etc/apt/apt.conf.d`). Signing keys travel too, but you are never asked about them — see [Signing keys](#signing-keys).
 - **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
 - **`flatpak_sync`** — installed flatpak refs and their remotes, per user/system installation scope.
 - **`manual_installs_sync`** — everything no package manager can reproduce: apt packages with no repository candidate, plus unowned files under `/usr/local` and `/opt`. It also owns the [install-snippet registry](#install-snippets).
@@ -59,6 +59,20 @@ It covers every write the four jobs make, plus the machine-local decision files 
 
 When you approve an apt change, apt sometimes has to remove or downgrade *other* packages to satisfy it — so the package you approved is not always the whole transaction. `apt_sync` simulates every approved change with `apt-get -s` before applying anything and inspects that collateral. Dependencies apt pulls in or drops on its own are apt doing its job and are not shown to you. But if the collateral would remove or downgrade a package you installed by hand — one in either machine's `apt-mark showmanual` set, the source's or the target's — that becomes its own review item with an install-anyway / skip / abort choice. Protecting the union of both manual sets closes the case where a package is hand-installed on one machine but auto-resolved on the other. The classification happens during the review, never mid-apply, so you are never prompted while changes are landing.
 
+## Signing keys
+
+You think in repositories and packages. A signing key is just how a repository is made to work, so pc-switcher never asks you about one: no key appears in a review, and no key can be marked machine-specific. It keeps them correct on its own.
+
+When a repository is installed or changed on the target, the keyring it names arrives first — copied byte-for-byte from the source machine, never downloaded from a vendor. The same check runs for every repository that is *already* on the target: if the key on the source machine has different bytes, the target's copy is refreshed. That is what makes a **rotated** key follow you. A vendor replacing its signing key changes no `.sources` file, so nothing in the review would ever mention it, and the target's apt would start failing that repository's signature check until you noticed by hand. A key that already matches is left alone entirely — no transfer, no command.
+
+When you approve removing a repository, the keyring it was the last user of goes with it. That count is taken *after* the repository is actually gone, against the real state of the target, so it gets the awkward cases right: a repository you left unticked still counts, one you marked machine-specific still counts, and so does `/etc/apt/sources.list`, which pc-switcher never syncs at all. Nothing is deleted unless the source machine has dropped that key too. If you remove no repository in a run, nothing is collected.
+
+Legacy keys in `/etc/apt/trusted.gpg.d` are the exception to the cleanup. They are *ambient* trust — no repository names them, so there is no way to tell which one is still doing a job. pc-switcher copies them across and never deletes one; they are allowed to accumulate rather than be removed on a guess.
+
+If a repository on the source machine names a keyring that machine does not actually have, that is a fact about a **repository** and you do see it: the repository is reported rather than offered for install, naming the missing key. It is never written to the target without its key — a repository apt cannot verify is worse than no repository.
+
+Each key write and deletion is still a real command, so `--confirm-each-command` shows every one of them.
+
 ## Machine-specific packages
 
 Choosing **skip always** on a review item marks that package as belonging to *this specific machine* — the one running as source or target right now. A machine-specific package is never synced out to peers when this machine is the source, and never installed or removed here by a sync arriving from another machine. Use it for things tied to one box: a hardware driver, a vendor tool for an attached peripheral.
@@ -67,7 +81,7 @@ The mark is recorded in this machine's own decision file at `~/.config/pc-switch
 
 To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again and re-offers it in the review.
 
-A machine-specific apt package never appears in a review again, so an apt repository or signing key offered for **removal** names it explicitly — see [Deletions](#deletions).
+A machine-specific apt package never appears in a review again, so an apt repository offered for **removal** names it explicitly — see [Deletions](#deletions).
 
 ## Install snippets
 
@@ -132,7 +146,7 @@ Removals propagate for the three package managers. A package removed from the so
 
 A flatpak remote offered for removal names, in the review item's detail, the refs installed on the target that still have it as their origin in that same scope. The removal is still offered — deleting a remote whose refs are going in the same run is normal cleanup — but you see what it would orphan before approving it. Deleting a remote also drops its signing key, since flatpak stores that key with the remote.
 
-An apt source file or signing key offered for removal does the same for **machine-specific** packages. The detail on a source-file removal names the packages you marked skip-always on this machine that are installed from that repository; the detail on a key removal names the source files on this machine still signed by it, and the machine-specific packages behind them. The removal is still offered and still unticked — you decide. This matters because a machine-specific package is invisible in the review by design: it is filtered out before any diff is computed, so nothing else in the run would tell you the repository feeding it is about to go.
+An apt repository file offered for removal does the same for **machine-specific** packages: its detail names the packages you marked skip-always on this machine that are installed from that repository. The removal is still offered and still unticked — you decide. This matters because a machine-specific package is invisible in the review by design: it is filtered out before any diff is computed, so nothing else in the run would tell you the repository feeding it is about to go.
 
 The link comes from `apt-cache policy`: pc-switcher matches the origin of each machine-specific package's installed version against the URIs in the repository files. A package installed from a bare `.deb`, or one whose repository was already gone, has no resolvable origin and is not named. Ordinary (non-machine-specific) packages are out of scope — they can still surface as removal items of their own, and naming every installed package from, say, the Ubuntu archive would list hundreds.
 
@@ -142,7 +156,7 @@ The link comes from `apt-cache policy`: pc-switcher matches the origin of each m
 
 Each enabled package job needs passwordless sudo for a handful of binaries:
 
-- **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages, write `/etc/apt` configuration, and set or clear apt holds via `apt-mark`).
+- **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages, write and remove `/etc/apt` configuration including signing keys, and set or clear apt holds via `apt-mark`).
 - **`snap_sync`** — on both the **source** and the **target**; validation fails if either lacks it. The target needs it to install, refresh and remove snaps, and both hosts need it to pause snapd's auto-refresh for the sync window (`sudo snap set system refresh.hold`, plus the matching `sudo snap get` — snapd requires admin rights to read snap configuration as well as to write it). The runtime pause itself tolerates a transient failure without aborting the sync, but the sudo grant is checked up front on both machines.
 - **`flatpak_sync`** — on the target only, and only when the diff involves a system-scope item (a system-scope ref, remote, or mask). User-scope masks need no sudo.
 - **`manual_installs_sync`** — a snippet author decides its own privilege needs; the replay itself runs unprivileged, so the job requires no sudo beyond what a given snippet writes for itself.

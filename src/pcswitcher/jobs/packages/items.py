@@ -20,10 +20,14 @@ diff directions were always addable without reopening these enums' shape; this p
 (02-05) is where every remaining `DiffClass` member and the four remaining item
 dataclasses actually arrive.
 
-Plan 02-06 adds the four `/etc/apt/*`-adjacent item classes (`AptSourceItem`,
-`AptKeyItem`, `AptPinItem`, `AptConfigItem`) and is the last plan permitted to modify
-this module (02-05's own note). Each is identified by its FILENAME, not by any value
-parsed from its content: RESEARCH's Pitfall 3 documents that a legacy `.list` file and
+Plan 02-06 adds the `/etc/apt/*`-adjacent item classes (`AptSourceItem`, `AptPinItem`,
+`AptConfigItem`) and is the last plan permitted to modify this module (02-05's own note).
+A signing key is deliberately NOT among them: `apt_sync` provisions and collects keys as
+plain file operations bracketing its repository convergence, so a key has no identity in
+the diff/review/decision pipeline at all (ADR-020's 2026-07-27 amendment).
+
+Each `/etc/apt` item is identified by its FILENAME, not by any value parsed from its
+content: RESEARCH's Pitfall 3 documents that a legacy `.list` file and
 a deb822 `.sources` file can legitimately coexist in `sources.list.d` describing the
 same repository (e.g. after a partial `apt modernize-sources` run), and identifying by
 filename is what keeps that pair visible in the review as two distinct items rather
@@ -46,7 +50,6 @@ if TYPE_CHECKING:
 __all__ = [
     "AptConfigItem",
     "AptHoldItem",
-    "AptKeyItem",
     "AptPackageItem",
     "AptPinItem",
     "AptSourceItem",
@@ -62,7 +65,6 @@ __all__ = [
     "UnreproducibleItem",
     "build_dangling_keyring_detail",
     "build_held_or_pinned_detail",
-    "build_orphaned_keyring_detail",
     "build_orphaned_packages_detail",
     "build_orphaned_refs_detail",
     "build_repo_unavailable_detail",
@@ -82,7 +84,6 @@ class ItemClass(StrEnum):
 
     APT_PACKAGE = "apt_package"
     APT_SOURCE = "apt_source"
-    APT_KEY = "apt_key"
     APT_PIN = "apt_pin"
     APT_CONFIG = "apt_config"
     APT_HOLD = "apt_hold"
@@ -276,22 +277,6 @@ def build_orphaned_packages_detail(source_filename: str, packages: Sequence[str]
     )
 
 
-def build_orphaned_keyring_detail(key_filename: str, source_filenames: Sequence[str], packages: Sequence[str]) -> str:
-    """Detail string for an apt key REMOVE diff whose removal would leave target source
-    files pointing at a keyring that no longer exists (C26).
-
-    A key is a dependency of every source file whose `Signed-By:`/`signed-by=` names it,
-    so deleting it makes those repositories ones apt refuses on every subsequent
-    operation — the target-side mirror of `build_dangling_keyring_detail`'s source-side
-    check. `packages` names the machine-specific packages reached through those sources
-    when the link is resolvable, and is omitted when it is not.
-    """
-    text = f"target sources still signed by {key_filename}: {', '.join(source_filenames)}"
-    if packages:
-        text += f"; machine-specific packages behind them: {', '.join(packages)}"
-    return f"{text} (removal leaves those repositories unverifiable)"
-
-
 @dataclass(frozen=True)
 class AptSourceItem:
     """One apt repository definition file under `/etc/apt/sources.list.d` (D-11).
@@ -324,36 +309,6 @@ class AptSourceItem:
         a reviewer can tell a `.list` repo from a `.sources` one at a glance.
         """
         return f"{self.filename} ({self.fmt})"
-
-
-@dataclass(frozen=True)
-class AptKeyItem:
-    """One apt signing-key file (D-12), either per-repo (`/etc/apt/keyrings`) or
-    legacy global-trust (`/etc/apt/trusted.gpg.d`).
-
-    `scope` keeps the two populations distinct even though both are "a key file":
-    a per-repo key is referenced by exactly the source item(s) whose `keyring_refs`
-    name its path, while a global-trust key is referenced by none (RESEARCH: apt-key
-    deprecated Ubuntu 20.10+, but existing `trusted.gpg.d` entries still work and are
-    copied verbatim, never migrated). Keys always travel byte-for-byte — this item
-    never re-fetches or re-derives key content, only compares/transfers the bytes the
-    source machine already has.
-    """
-
-    filename: str
-    digest: str
-    scope: Literal["per-repo", "global-trust"]
-
-    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_KEY
-
-    @property
-    def item_id(self) -> str:
-        """Stable identity string: `apt:key:<scope>:<filename>`."""
-        return f"apt:key:{self.scope}:{self.filename}"
-
-    def label(self) -> str:
-        """Human-readable text for the review UI and logs."""
-        return f"{self.filename} ({self.scope} key)"
 
 
 @dataclass(frozen=True)
@@ -527,9 +482,9 @@ class FlatpakRemoteItem:
     trust comes from a machine-level anchor under `/usr/share/ostree/trusted.gpg.d`
     rather than from a per-remote key.
 
-    The DIGEST lives on the item, not the key bytes — the same split `AptKeyItem` makes.
-    An item is carried through the diff, the review and the decision file, all of which
-    want an identity and a comparison, never a payload; the bytes themselves travel
+    The DIGEST lives on the item, not the key bytes. An item is carried through the diff,
+    the review and the decision file, all of which want an identity and a comparison,
+    never a payload; the bytes themselves travel
     separately and byte-for-byte (`flatpak_sync` stages the source's keyring file and
     passes it to `flatpak remote-add --gpg-import`), which is ADR-020 D-12's rule that
     key material is copied from the source machine and never re-fetched from a vendor.

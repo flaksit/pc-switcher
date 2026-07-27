@@ -9,6 +9,7 @@ validate(). All executor interactions are mocked; no real apt/dpkg/sudo commands
 from __future__ import annotations
 
 import dataclasses
+import shlex
 from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -21,6 +22,7 @@ from pcswitcher.jobs.apt_sync import (
     _METADATA_REFRESH_ITEM_ID,
     _TARGET_SUDO_COMMANDS,
     AptSyncJob,
+    _parse_source_file,
     simulate_apt_transaction,
 )
 from pcswitcher.jobs.packages.items import AptPackageItem, DiffAction, DiffClass, ItemClass, ItemDiff
@@ -858,12 +860,15 @@ class TestInstallBeforeHoldOrdering:
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
                 "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "a.gpg"), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-mark showhold": CommandResult(0, "", ""),
-                "test -f /etc/apt/keyrings/a.gpg": CommandResult(1, "", ""),
+                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
                 "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
                 "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
                     CommandResult(0, "", "")
@@ -876,7 +881,7 @@ class TestInstallBeforeHoldOrdering:
         _install_reviewer(
             job,
             {
-                "apt:key:per-repo:a.gpg": Decision.APPLY,
+                "apt:source:foo.sources": Decision.APPLY,
                 "apt:package:pkg-a": Decision.APPLY,
                 "apt:hold:pkg-a": Decision.APPLY,
             },
@@ -885,7 +890,7 @@ class TestInstallBeforeHoldOrdering:
         await job.execute()
 
         commands = all_calls(target)
-        key_idx = _index_of(commands, lambda c: "sudo install" in c and "keyrings/a.gpg" in c)
+        key_idx = _index_of(commands, lambda c: "sudo install" in c and "keyrings/foo.gpg" in c)
         update_idx = _index_of(commands, lambda c: c == "sudo apt-get update")
         install_idx = _index_of(commands, lambda c: "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c)
         hold_idx = _index_of(commands, lambda c: c == "sudo apt-mark hold pkg-a")
@@ -1661,42 +1666,6 @@ class TestRepoStateCapture:
         assert "bar.gpg" in diff.detail
 
     @pytest.mark.asyncio
-    async def test_per_repo_and_global_trust_keys_are_distinct_item_ids(self) -> None:
-        context, _source, _target = make_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "shared.gpg"), ""),
-                "find /etc/apt/trusted.gpg.d": CommandResult(0, sha256_line("k1", "shared.gpg"), ""),
-            },
-            target_responses={**_NO_PACKAGES},
-        )
-        job = AptSyncJob(context)
-
-        plan = await job.plan()
-
-        item_ids = {d.item_id for d in plan.diffs}
-        assert "apt:key:per-repo:shared.gpg" in item_ids
-        assert "apt:key:global-trust:shared.gpg" in item_ids
-
-    @pytest.mark.asyncio
-    async def test_key_matching_digest_on_both_sides_produces_no_diff(self) -> None:
-        context, _source, _target = make_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "x.gpg"), ""),
-            },
-            target_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "x.gpg"), ""),
-            },
-        )
-        job = AptSyncJob(context)
-
-        plan = await job.plan()
-
-        assert not any(d.item_id.startswith("apt:key:") for d in plan.diffs)
-
-    @pytest.mark.asyncio
     async def test_pin_and_config_diff_missing_extra_and_changed(self) -> None:
         context, _source, _target = make_context(
             source_responses={
@@ -1872,28 +1841,40 @@ class TestRepoGroupOrdering:
 
     @pytest.mark.asyncio
     async def test_no_key_command_contains_a_url(self) -> None:
+        """D-12: `foo.gpg` really is provisioned (the repository that needs it is
+        installed), and not one command reaches for a vendor to get it.
+        """
         context, _source, target = _repo_context(
             source_responses={
                 **_NO_PACKAGES,
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "a.gpg"), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
             },
             target_responses={
                 **_NO_PACKAGES,
-                "test -f /etc/apt/keyrings/a.gpg": CommandResult(1, "", ""),
+                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
                 "sudo apt-get update": CommandResult(0, "", ""),
             },
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:key:per-repo:a.gpg": Decision.APPLY})
+        _install_reviewer(job, {"apt:source:foo.sources": Decision.APPLY})
 
         await job.execute()
 
-        for cmd in all_calls(target):
+        commands = all_calls(target)
+        assert any("sudo install" in cmd and "keyrings/foo.gpg" in cmd for cmd in commands)
+        for cmd in commands:
             assert "http://" not in cmd
             assert "https://" not in cmd
 
     @pytest.mark.asyncio
     async def test_failed_key_write_leaves_dependent_source_unwritten(self) -> None:
+        """A keyring that could not be promoted is not a failed ITEM — there is no key
+        item — but the repository that references it must not be written anyway (D-12):
+        a repo apt cannot verify is worse than no repo, so the SOURCE is what fails.
+        """
         context, _source, target = _repo_context(
             source_responses={
                 **_NO_PACKAGES,
@@ -1918,9 +1899,10 @@ class TestRepoGroupOrdering:
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
 
-        failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
-        assert "apt:key:per-repo:foo.gpg" in failed_ids
-        assert "apt:source:foo.sources" in failed_ids
+        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
+        assert "apt:source:foo.sources" in failures
+        assert "foo.gpg" in failures["apt:source:foo.sources"]
+        assert not any(item_id.startswith("apt:key:") for item_id in failures)
         commands = all_calls(target)
         assert not any("sudo install" in c and "sources.list.d/foo.sources" in c for c in commands)
 
@@ -2066,45 +2048,48 @@ class TestRepoGroupRemovalAndKeyChange:
         assert update_idx > max(commands.index(c) for c in removals)
 
     @pytest.mark.asyncio
-    async def test_changed_per_repo_key_is_staged_then_promoted_with_the_source_bytes(self) -> None:
-        """A key whose digest differs on both machines is a VERSION_MISMATCH/CHANGE that
-        actually converges (D-12): the SOURCE's file is staged under the target's home and
-        promoted with `sudo install -o root -g root -m 0644` — never re-fetched, never
-        parsed, never written from the target's own copy.
+    async def test_rotated_keyring_is_refreshed_although_its_source_file_is_identical(self) -> None:
+        """C8: `foo.sources` is byte-identical on both machines and produces NO diff at
+        all, but the keyring it names has different bytes — the vendor rotated it. The
+        SOURCE's key file is staged under the target's home and promoted with `sudo
+        install -o root -g root -m 0644`; never re-fetched, never parsed, never written
+        from the target's own copy.
         """
+        both_sides = sha256_line("d1", "foo.sources")
         context, _source, target = _repo_context(
             source_responses={
                 **_NO_PACKAGES,
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k-new", "x.gpg"), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, both_sides, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k-new", "foo.gpg"), ""),
             },
             target_responses={
                 **_NO_PACKAGES,
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k-old", "x.gpg"), ""),
-                "test -f /etc/apt/keyrings/x.gpg": CommandResult(0, "", ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("foo.sources", _DEB822_FOO), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, both_sides, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k-old", "foo.gpg"), ""),
+                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(0, "", ""),
                 "sudo apt-get update": CommandResult(0, "", ""),
             },
         )
         job = AptSyncJob(context)
         plan = await job.plan()
-        key_diff = next(d for d in plan.diffs if d.item_id == "apt:key:per-repo:x.gpg")
-        assert key_diff.diff_class == DiffClass.VERSION_MISMATCH
-        assert key_diff.action == DiffAction.CHANGE
-        assert "k-new" in (key_diff.detail or "") and "k-old" in (key_diff.detail or "")
+        assert not plan.diffs, "a rotated key must not manufacture a diff of any kind"
+        assert not plan.groups
 
-        _install_reviewer(job, {"apt:key:per-repo:x.gpg": Decision.APPLY})
+        _install_reviewer(job, {})
         await job.execute()
 
         transfers = [(call.args[0], call.args[1]) for call in target.send_file.call_args_list]
         assert len(transfers) == 1
         local_path, staged_dest = transfers[0]
-        assert local_path == Path("/etc/apt/keyrings/x.gpg")
+        assert local_path == Path("/etc/apt/keyrings/foo.gpg")
         assert staged_dest.startswith("/home/target-user")
 
         promotions = [
-            c for c in all_calls(target) if c.startswith("sudo install -o root -g root -m 0644") and "x.gpg" in c
+            c for c in all_calls(target) if c.startswith("sudo install -o root -g root -m 0644") and "foo.gpg" in c
         ]
         assert len(promotions) == 1
-        assert promotions[0] == f"sudo install -o root -g root -m 0644 {staged_dest} /etc/apt/keyrings/x.gpg"
+        assert promotions[0] == f"sudo install -o root -g root -m 0644 {staged_dest} /etc/apt/keyrings/foo.gpg"
 
 
 class TestRepoGroupTransaction:
@@ -2113,7 +2098,7 @@ class TestRepoGroupTransaction:
         context, _source, target = _repo_context(
             source_responses={
                 **_NO_PACKAGES,
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99conf"), ""),
                 "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "curl-pin"), ""),
                 "cat /etc/apt/preferences.d/curl-pin": CommandResult(0, "Package: curl\n", ""),
             },
@@ -2121,7 +2106,7 @@ class TestRepoGroupTransaction:
                 mapping={
                     "echo $HOME": CommandResult(0, "/home/target-user", ""),
                     **_NO_PACKAGES,
-                    "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                    "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
                     "test -f /etc/apt/preferences.d/curl-pin": CommandResult(0, "", ""),
                     "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p2", "curl-pin"), ""),
                 },
@@ -2129,20 +2114,20 @@ class TestRepoGroupTransaction:
             ),
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:pin:curl-pin": Decision.APPLY})
+        _install_reviewer(job, {"apt:config:99conf": Decision.APPLY, "apt:pin:curl-pin": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
 
         failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
-        assert "apt:key:per-repo:foo.gpg" in failed_ids
+        assert "apt:config:99conf" in failed_ids
         assert "apt:pin:curl-pin" in failed_ids
 
         commands = all_calls(target)
         # Restore: the pre-existing pin file is put back from its backup.
         assert any("sudo install" in c and "backup-" in c and "preferences.d/curl-pin" in c for c in commands)
-        # Delete: the brand-new key file this run created is removed.
-        assert any("sudo rm -f" in c and "keyrings/foo.gpg" in c for c in commands)
+        # Delete: the brand-new config file this run created is removed.
+        assert any("sudo rm -f" in c and "apt.conf.d/99conf" in c for c in commands)
         # A clean rollback discards the backup.
         assert any(c.startswith("rm -rf") and "backup-" in c for c in commands)
         # Two `apt-get update` calls: the failing one and the post-rollback reprobe.
@@ -2194,16 +2179,16 @@ class TestRepoGroupTransaction:
         context, _source, target = _repo_context(
             source_responses={
                 **_NO_PACKAGES,
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99conf"), ""),
             },
             target_responses={
                 **_NO_PACKAGES,
-                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
                 "sudo apt-get update": CommandResult(0, "", ""),
             },
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
+        _install_reviewer(job, {"apt:config:99conf": Decision.APPLY})
 
         await job.execute()
 
@@ -2216,13 +2201,13 @@ class TestRepoGroupTransaction:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99conf"), ""),
             },
             target_side_effect=respond_with_update_sequence(
                 mapping={
                     "echo $HOME": CommandResult(0, "/home/target-user", ""),
                     "apt-mark showmanual": CommandResult(0, "", ""),
-                    "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                    "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
                     "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
                     "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
                         CommandResult(0, "", "")
@@ -2232,13 +2217,13 @@ class TestRepoGroupTransaction:
             ),
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
+        _install_reviewer(job, {"apt:config:99conf": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
 
         failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
-        assert "apt:key:per-repo:foo.gpg" in failed_ids
+        assert "apt:config:99conf" in failed_ids
         assert "apt:package:pkg-a" not in failed_ids
 
         commands = all_calls(target)
@@ -2255,13 +2240,13 @@ class TestRepoGroupTransaction:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99conf"), ""),
             },
             target_side_effect=respond_with_update_sequence(
                 mapping={
                     "echo $HOME": CommandResult(0, "/home/target-user", ""),
                     "apt-mark showmanual": CommandResult(0, "", ""),
-                    "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                    "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
                     "apt-get -s install -y --no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
                     "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-a": (
                         CommandResult(0, "", "")
@@ -2271,7 +2256,7 @@ class TestRepoGroupTransaction:
             ),
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
+        _install_reviewer(job, {"apt:config:99conf": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures):
             await job.execute()
@@ -2337,21 +2322,31 @@ class TestKeyringsDirectoryEnsured:
     the "sync a fresh machine" scenario this subsystem exists for.
     """
 
-    @pytest.mark.asyncio
-    async def test_promotion_ensures_keyrings_directory_before_install(self) -> None:
-        context, _source, target = _repo_context(
+    @staticmethod
+    def _fresh_target(**extra: CommandResult) -> tuple[JobContext, MagicMock, MagicMock]:
+        """`foo.sources` and the `foo.gpg` it names, both missing on a target that has no
+        `/etc/apt/keyrings` directory at all."""
+        return _repo_context(
             source_responses={
                 **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
                 "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
             },
             target_responses={
                 **_NO_PACKAGES,
                 "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
                 "sudo apt-get update": CommandResult(0, "", ""),
+                **extra,
             },
         )
+
+    @pytest.mark.asyncio
+    async def test_promotion_ensures_keyrings_directory_before_install(self) -> None:
+        context, _source, target = self._fresh_target()
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
+        _install_reviewer(job, {"apt:source:foo.sources": Decision.APPLY})
 
         await job.execute()
 
@@ -2364,26 +2359,20 @@ class TestKeyringsDirectoryEnsured:
 
     @pytest.mark.asyncio
     async def test_directory_preparation_failure_fails_the_item_not_the_run(self) -> None:
-        context, _source, target = _repo_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
-            },
-            target_responses={
-                **_NO_PACKAGES,
-                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
-                "sudo mkdir -p -m 0755 /etc/apt/keyrings": CommandResult(1, "", "permission denied"),
-                "sudo apt-get update": CommandResult(0, "", ""),
-            },
+        """The failure surfaces on the REPOSITORY, the thing the user reviewed: its key
+        never landed, so the repo is not written either (D-12)."""
+        context, _source, target = self._fresh_target(
+            **{"sudo mkdir -p -m 0755 /etc/apt/keyrings": CommandResult(1, "", "permission denied")}
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:key:per-repo:foo.gpg": Decision.APPLY})
+        _install_reviewer(job, {"apt:source:foo.sources": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
 
-        failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
-        assert "apt:key:per-repo:foo.gpg" in failed_ids
+        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
+        assert "apt:source:foo.sources" in failures
+        assert "foo.gpg" in failures["apt:source:foo.sources"]
         commands = all_calls(target)
         assert not any("sudo install -o root -g root -m 0644" in c and "keyrings/foo.gpg" in c for c in commands)
 
@@ -2625,9 +2614,11 @@ class TestSourceOnlyCollateral:
 
 # -- C26/N7: a repo/key removal names the target-side machine-specific packages ---------
 
-# Distinguishes the C26 source-reference scan from `collect_hold_pin_facts`'s own
-# `-exec awk` over `preferences.d`, which any looser substring would also match.
-_SOURCE_SCAN_CMD = "sources.list.d -maxdepth 1 -type f -exec awk"
+# Distinguishes the source-reference scan (C26's removal impact, and the reference count
+# keyring provisioning/collection run on) from `collect_hold_pin_facts`'s own `-exec awk`
+# over `preferences.d`, which any looser substring would also match. `/etc/apt/sources.list`
+# is part of the scan because a keyring named only there is still in use.
+_SOURCE_SCAN_CMD = "/etc/apt/sources.list.d /etc/apt/sources.list -maxdepth 1 -type f -exec awk"
 
 _VENDOR_LIST = "deb [signed-by=/etc/apt/keyrings/vendor.gpg] https://vendor.example.com/apt stable main\n"
 _VENDOR_SOURCES = (
@@ -2661,15 +2652,15 @@ def _policy_block(name: str, origin: str | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _scan_line(filename: str, content: str) -> str:
+def _scan_line(filename: str, content: str, *, path: str | None = None) -> str:
     """The `find ... -exec awk` scan's `<path>\\t<line>` output for one source file,
-    filtered the way the shipped awk program filters it.
+    filtered the way the shipped awk program filters it. `path` overrides the assumed
+    `sources.list.d` location, for the `/etc/apt/sources.list` case.
     """
     keep = ("uris:", "signed-by", "deb ", "deb-src ")
+    where = path or f"/etc/apt/sources.list.d/{filename}"
     return "".join(
-        f"/etc/apt/sources.list.d/{filename}\t{line}\n"
-        for line in content.splitlines()
-        if any(token in line.lower() for token in keep)
+        f"{where}\t{line}\n" for line in content.splitlines() if any(token in line.lower() for token in keep)
     )
 
 
@@ -2824,58 +2815,6 @@ class TestRepoRemovalNamesMachineSpecificPackages:
         assert entry.detail is not None and "vendor-tool" in entry.detail
 
     @pytest.mark.asyncio
-    async def test_key_removal_names_a_target_source_still_signed_by_it(self) -> None:
-        """A key is a dependency of every source file naming it. `keeper.list` stays on
-        the target (it exists on both machines, so it has no diff of its own), which is
-        exactly why the key's own removal item is the only place this can be said.
-        """
-        both_sides = sha256_line("d-keep", "keeper.list")
-        context, _source, _target = make_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, both_sides, ""),
-                "cat /etc/apt/sources.list.d/keeper.list": CommandResult(0, _VENDOR_LIST, ""),
-            },
-            target_responses=self._target_responses(
-                source_files={"keeper.list": _VENDOR_LIST},
-                source_digests=both_sides,
-                key_digests=sha256_line("k1", "vendor.gpg"),
-                decisions=_decision_file("apt:package:vendor-tool"),
-                policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
-            ),
-        )
-        job = AptSyncJob(context)
-
-        plan = await job.plan()
-
-        assert not any(d.item_class == ItemClass.APT_SOURCE for d in plan.diffs)
-        diff = next(d for d in plan.diffs if d.item_id == "apt:key:per-repo:vendor.gpg")
-        assert diff.action == DiffAction.REMOVE
-        assert diff.detail is not None
-        assert "keeper.list" in diff.detail
-        assert "vendor-tool" in diff.detail
-
-    @pytest.mark.asyncio
-    async def test_key_removal_no_target_source_references_it_keeps_detail_none(self) -> None:
-        context, _source, _target = make_context(
-            source_responses=_NO_PACKAGES,
-            target_responses=self._target_responses(
-                source_files={},
-                source_digests="",
-                key_digests=sha256_line("k1", "unused.gpg"),
-                decisions=_decision_file("apt:package:vendor-tool"),
-                policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
-            ),
-        )
-        job = AptSyncJob(context)
-
-        plan = await job.plan()
-
-        diff = next(d for d in plan.diffs if d.item_id == "apt:key:per-repo:unused.gpg")
-        assert diff.action == DiffAction.REMOVE
-        assert diff.detail is None
-
-    @pytest.mark.asyncio
     async def test_one_apt_cache_policy_call_regardless_of_package_count(self) -> None:
         """The phase-wide batching rule: origins for every recorded package come from ONE
         `apt-cache policy` run, never one per package.
@@ -2901,9 +2840,14 @@ class TestRepoRemovalNamesMachineSpecificPackages:
         assert diff.detail is not None and all(name in diff.detail for name in names)
 
     @pytest.mark.asyncio
-    async def test_no_impact_commands_when_nothing_is_offered_for_removal(self) -> None:
-        """Both extra classes empty: the run costs neither the policy call nor the scan.
-        Machine-specific packages exist, so only the removal gate can be what stops it.
+    async def test_no_policy_call_when_nothing_is_offered_for_removal(self) -> None:
+        """Nothing extra on the target: the run does not pay for the `apt-cache policy`
+        origin lookup. Machine-specific packages exist, so only the removal gate can be
+        what stops it.
+
+        The source-file SCAN is not gated the same way and is expected here: which keyrings
+        the target's repositories point at is what keeps keys correct on every run, not
+        only on a run that offers a removal.
         """
         context, _source, target = make_context(
             source_responses=_NO_PACKAGES,
@@ -2918,4 +2862,525 @@ class TestRepoRemovalNamesMachineSpecificPackages:
 
         commands = all_calls(target)
         assert not any("apt-cache policy" in cmd for cmd in commands)
-        assert not any(_SOURCE_SCAN_CMD in cmd for cmd in commands)
+        assert sum(1 for cmd in commands if _SOURCE_SCAN_CMD in cmd) == 1
+
+
+# -- Signing keys are handled transparently (ADR-020 amendment 2026-07-27) --------------
+#
+# A key is not an item: no `ItemClass`, no `item_id`, no diff, no review entry, no decision
+# file. Provisioning runs before any source write and keeps the target's copy matching the
+# source machine's; collection runs after every source write and deletion, only when a
+# source was actually removed, against the target's REAL post-write state.
+
+_ROTATED_SOURCES = sha256_line("d1", "foo.sources")
+_KEEPER_LIST = "deb [signed-by=/etc/apt/keyrings/shared.gpg] https://keeper.example.com stable main\n"
+_GOING_LIST = "deb [signed-by=/etc/apt/keyrings/shared.gpg] https://going.example.com stable main\n"
+_INLINE_SOURCES = (
+    "Types: deb\nURIs: https://inline.example.com\nSuites: stable\nComponents: main\n"
+    "Signed-By:\n -----BEGIN PGP PUBLIC KEY BLOCK-----\n .\n mDMEY2FrZQ==\n -----END PGP PUBLIC KEY BLOCK-----\n"
+)
+
+
+def _scanning_target(
+    target_sources: dict[str, str],
+    *,
+    responses: dict[str, CommandResult],
+    sources_list: str = "",
+) -> Callable[..., CommandResult]:
+    """A target whose source-file SCAN reflects the deletions the run has actually issued.
+
+    A `sudo rm -f /etc/apt/sources.list.d/<f>` drops `<f>` from every later scan, which is
+    what lets a test prove the keyring reference count is taken against the target's real
+    post-write state rather than the state `plan()` saw. `sources_list` is the content of
+    `/etc/apt/sources.list`, a file pc-switcher never syncs and never deletes.
+    """
+    live = dict(target_sources)
+
+    def _side_effect(cmd: str, **_: object) -> CommandResult:
+        if cmd.startswith("sudo rm -f "):
+            live.pop(Path(shlex.split(cmd)[-1]).name, None)
+        if _SOURCE_SCAN_CMD in cmd:
+            scan = "".join(_scan_line(name, content) for name, content in live.items())
+            if sources_list:
+                scan += _scan_line("sources.list", sources_list, path="/etc/apt/sources.list")
+            return CommandResult(0, scan, "")
+        for pattern, result in responses.items():
+            if pattern in cmd:
+                return result
+        return CommandResult(0, "", "")
+
+    return _side_effect
+
+
+def _key_writes(target: MagicMock) -> list[str]:
+    """Every `/etc/apt` key promotion this run issued, by destination path."""
+    return [
+        c.rsplit(" ", 1)[1]
+        for c in all_calls(target)
+        if c.startswith("sudo install -o root -g root -m 0644")
+        and ("/etc/apt/keyrings/" in c.rsplit(" ", 1)[1] or "/etc/apt/trusted.gpg.d/" in c.rsplit(" ", 1)[1])
+    ]
+
+
+def _key_deletions(target: MagicMock) -> list[str]:
+    return [c for c in all_calls(target) if c.startswith("sudo rm -f") and "/etc/apt/keyrings/" in c]
+
+
+class TestKeysAreNotItems:
+    """No `apt:key:` identity may reach a diff, a review group or a decision — in any
+    direction. The user decides about repositories; keys follow.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_key_reaches_a_diff_or_a_review_group_in_any_direction(self) -> None:
+        """All three directions at once: `new.gpg` missing on the target, `rot.gpg` present
+        with different bytes, `old.gpg` present on the target alone — under the old model
+        an INSTALL, a CHANGE and a REMOVE entry.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "find /etc/apt/keyrings": CommandResult(
+                    0, sha256_line("k1", "new.gpg") + sha256_line("k-new", "rot.gpg"), ""
+                ),
+                "find /etc/apt/trusted.gpg.d": CommandResult(0, sha256_line("g1", "legacy.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(
+                    0, sha256_line("k-old", "rot.gpg") + sha256_line("k9", "old.gpg"), ""
+                ),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(diff.item_id.startswith("apt:key:") for diff in plan.diffs)
+        assert not any(diff.item_class.value == "apt_key" for diff in plan.diffs)
+        entries = {entry.item_id for group in plan.groups for entry in group.entries}
+        assert not any(item_id.startswith("apt:key:") for item_id in entries)
+        assert "apt:source:foo.sources" in entries, "the repository itself must still be reviewed"
+
+    @pytest.mark.asyncio
+    async def test_key_of_an_installed_repo_is_provisioned_with_no_decision_of_its_own(self) -> None:
+        """The reviewer is told about the SOURCE only. `foo.gpg` still lands, and lands
+        before the repository that references it.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:foo.sources": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        key_idx = _index_of(commands, lambda c: "sudo install" in c and "keyrings/foo.gpg" in c)
+        source_idx = _index_of(commands, lambda c: "sudo install" in c and "sources.list.d/foo.sources" in c)
+        assert key_idx < source_idx
+
+    @pytest.mark.asyncio
+    async def test_key_of_a_changed_repo_is_provisioned_too(self) -> None:
+        """A CHANGED repository may point at a keyring the target has never seen — the
+        `Signed-By:` line is part of what changed.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-new", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-old", "foo.sources"), ""),
+                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:foo.sources": Decision.APPLY})
+
+        await job.execute()
+
+        assert _key_writes(target) == ["/etc/apt/keyrings/foo.gpg"]
+
+    @pytest.mark.asyncio
+    async def test_a_matching_keyring_is_never_written(self) -> None:
+        """Same bytes on both machines: no transfer, no promotion, nothing for
+        `--confirm-each-command` to prompt about.
+        """
+        both_sides = sha256_line("d1", "foo.sources")
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, both_sides, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("foo.sources", _DEB822_FOO), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, both_sides, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {})
+
+        await job.execute()
+
+        assert not _key_writes(target)
+        assert not target.send_file.call_args_list
+        assert not any(c == "sudo apt-get update" for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_one_rotated_key_serving_three_repos_is_written_once(self) -> None:
+        """1-n: `shared.gpg` is named by three source files, all byte-identical on both
+        machines. One rotation, one write.
+        """
+        names = ["a.list", "b.list", "c.list"]
+        both_sides = "".join(sha256_line(f"d-{name}", name) for name in names)
+        scan = "".join(_scan_line(name, _KEEPER_LIST) for name in names)
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, both_sides, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k-new", "shared.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                _SOURCE_SCAN_CMD: CommandResult(0, scan, ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, both_sides, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k-old", "shared.gpg"), ""),
+                "test -f /etc/apt/keyrings/shared.gpg": CommandResult(0, "", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {})
+
+        await job.execute()
+
+        assert _key_writes(target) == ["/etc/apt/keyrings/shared.gpg"]
+
+    @pytest.mark.asyncio
+    async def test_global_trust_keys_are_replicated_whether_missing_or_differing(self) -> None:
+        """Nothing references a `trusted.gpg.d` key, so its own content is the only signal
+        there is: copy the ones the target lacks, refresh the ones whose bytes differ.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/trusted.gpg.d": CommandResult(
+                    0, sha256_line("g1", "fresh.gpg") + sha256_line("g-new", "rot.gpg"), ""
+                ),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/trusted.gpg.d": CommandResult(0, sha256_line("g-old", "rot.gpg"), ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {})
+
+        await job.execute()
+
+        assert _key_writes(target) == ["/etc/apt/trusted.gpg.d/fresh.gpg", "/etc/apt/trusted.gpg.d/rot.gpg"]
+
+    @pytest.mark.asyncio
+    async def test_an_unreferenced_source_keyring_is_not_copied_to_the_target(self) -> None:
+        """`/etc/apt/keyrings` is not mirrored wholesale: a key no repository on the target
+        points at would be litter, not configuration.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "nobody-wants-me.gpg"), ""),
+            },
+            target_responses={**_NO_PACKAGES},
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {})
+
+        await job.execute()
+
+        assert not _key_writes(target)
+
+    @pytest.mark.asyncio
+    async def test_inline_armored_signed_by_names_no_keyring(self) -> None:
+        """A deb822 `Signed-By:` carrying an inline armored block has an empty field value
+        and continuation lines. It must yield no reference at all: not a bogus dependency
+        on some file, and not a match that makes a real keyring look referenced.
+        """
+        _fmt, refs, _uris = _parse_source_file("inline.sources", _INLINE_SOURCES)
+
+        assert refs == ()
+
+
+class TestUnusedKeyringCollection:
+    """The removal half: after every repository operation, drop the `/etc/apt/keyrings`
+    files no surviving source references — and nothing else.
+    """
+
+    @staticmethod
+    def _context(
+        *,
+        target_sources: dict[str, str],
+        target_source_digests: str,
+        target_keyrings: str,
+        source_sources: str = "",
+        source_keyrings: str = "",
+        sources_list: str = "",
+        source_extra: dict[str, CommandResult] | None = None,
+        target_extra: dict[str, CommandResult] | None = None,
+    ) -> tuple[JobContext, MagicMock, MagicMock]:
+        return _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, source_sources, ""),
+                "find /etc/apt/keyrings": CommandResult(0, source_keyrings, ""),
+                **(source_extra or {}),
+            },
+            target_side_effect=_scanning_target(
+                target_sources,
+                sources_list=sources_list,
+                responses={
+                    "echo $HOME": CommandResult(0, "/home/target-user", ""),
+                    **_NO_PACKAGES,
+                    "find /etc/apt/sources.list.d": CommandResult(0, target_source_digests, ""),
+                    "find /etc/apt/keyrings": CommandResult(0, target_keyrings, ""),
+                    "test -f": CommandResult(0, "", ""),
+                    "sudo apt-get update": CommandResult(0, "", ""),
+                    **{
+                        f"cat /etc/apt/sources.list.d/{name}": CommandResult(0, content, "")
+                        for name, content in target_sources.items()
+                    },
+                    **(target_extra or {}),
+                },
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_key_left_unreferenced_by_an_approved_removal_is_deleted(self) -> None:
+        """The reference count is taken AFTER the repository is gone: the scan the
+        collection pass runs no longer lists `going.list`, so `shared.gpg` is unused.
+        """
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST},
+            target_source_digests=sha256_line("d9", "going.list"),
+            target_keyrings=sha256_line("k9", "shared.gpg"),
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert _key_deletions(target) == ["sudo rm -f /etc/apt/keyrings/shared.gpg"]
+        source_idx = _index_of(commands, lambda c: "sudo rm -f" in c and "sources.list.d/going.list" in c)
+        key_idx = _index_of(commands, lambda c: "sudo rm -f" in c and "keyrings/shared.gpg" in c)
+        update_idx = _index_of(commands, lambda c: c == "sudo apt-get update")
+        assert source_idx < key_idx < update_idx
+
+    @pytest.mark.asyncio
+    async def test_key_still_referenced_by_a_surviving_repo_is_kept(self) -> None:
+        """`keeper.list` exists on both machines, so it has no diff of its own and nothing
+        in the review mentions it — and it is exactly what keeps `shared.gpg` alive.
+        """
+        keeper_digest = sha256_line("d-keep", "keeper.list")
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST, "keeper.list": _KEEPER_LIST},
+            target_source_digests=sha256_line("d9", "going.list") + keeper_digest,
+            target_keyrings=sha256_line("k9", "shared.gpg"),
+            source_sources=keeper_digest,
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        await job.execute()
+
+        assert any("sources.list.d/going.list" in c for c in _all_removals(target))
+        assert not _key_deletions(target)
+
+    @pytest.mark.asyncio
+    async def test_key_referenced_only_by_a_file_pc_switcher_never_syncs_is_kept(self) -> None:
+        """`/etc/apt/sources.list` is not an item, is never captured and is never deleted —
+        and a keyring named only there is still very much in use.
+        """
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST},
+            target_source_digests=sha256_line("d9", "going.list"),
+            target_keyrings=sha256_line("k9", "shared.gpg"),
+            sources_list=_KEEPER_LIST,
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        await job.execute()
+
+        assert not _key_deletions(target)
+
+    @pytest.mark.asyncio
+    async def test_key_referenced_by_a_repo_whose_removal_was_declined_is_kept(self) -> None:
+        """Unticking the removal keeps the repository, and the repository keeps its key."""
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST, "extra.list": "deb https://other.example.com stable main\n"},
+            target_source_digests=sha256_line("d9", "going.list") + sha256_line("d8", "extra.list"),
+            target_keyrings=sha256_line("k9", "shared.gpg"),
+        )
+        job = AptSyncJob(context)
+        # Only the unrelated repo is approved, so a removal happens and the collection pass
+        # runs — but `going.list`, which names the key, stays.
+        _install_reviewer(job, {"apt:source:extra.list": Decision.APPLY})
+
+        await job.execute()
+
+        assert not _key_deletions(target)
+
+    @pytest.mark.asyncio
+    async def test_key_referenced_by_a_machine_specific_repo_is_kept(self) -> None:
+        """A source recorded skip-always produces no diff in any run, so nothing else could
+        speak for it — and it still counts as a reference.
+        """
+        decisions_file = (
+            'machine_specific:\n  "apt:source:keeper.list":\n    item_class: apt_source\n'
+            "    label: \"keeper.list\"\n    reason: null\n    recorded_at: '2026-07-26T00:00:00Z'\n"
+        )
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST, "keeper.list": _KEEPER_LIST},
+            target_source_digests=sha256_line("d9", "going.list") + sha256_line("d-keep", "keeper.list"),
+            target_keyrings=sha256_line("k9", "shared.gpg"),
+            target_extra={"apt.decisions.yaml": CommandResult(0, decisions_file, "")},
+        )
+        job = AptSyncJob(context)
+        plan = await job.plan()
+        assert "apt:source:keeper.list" not in {diff.item_id for diff in plan.diffs}
+
+        job.accept_review(
+            plan,
+            ReviewOutcome(decisions={"apt:source:going.list": Decision.APPLY}, was_interactive=True),
+        )
+        await job.apply()
+
+        assert not _key_deletions(target)
+
+    @pytest.mark.asyncio
+    async def test_a_key_the_source_machine_still_has_is_never_collected(self) -> None:
+        """Collection mirrors: a key both machines carry is configuration this sync is
+        replicating, not litter, even when nothing on the target references it yet.
+        """
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST},
+            target_source_digests=sha256_line("d9", "going.list"),
+            target_keyrings=sha256_line("k9", "shared.gpg"),
+            source_keyrings=sha256_line("k9", "shared.gpg"),
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        await job.execute()
+
+        assert not _key_deletions(target)
+
+    @pytest.mark.asyncio
+    async def test_a_global_trust_key_is_never_collected(self) -> None:
+        """`trusted.gpg.d` is ambient trust nothing references by construction, so "unused"
+        is not computable for it. It accumulates rather than being deleted on a guess.
+        """
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST},
+            target_source_digests=sha256_line("d9", "going.list"),
+            target_keyrings="",
+            target_extra={"find /etc/apt/trusted.gpg.d": CommandResult(0, sha256_line("g9", "ambient.gpg"), "")},
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        await job.execute()
+
+        assert not any("ambient.gpg" in c for c in _all_removals(target))
+
+    @pytest.mark.asyncio
+    async def test_no_source_removed_means_no_collection_pass_at_all(self) -> None:
+        """ "Runs after removing sources" is literal: with no source deletion the pass does
+        not run, so it does not even pay for the post-write re-scan.
+        """
+        context, _source, target = self._context(
+            target_sources={},
+            target_source_digests="",
+            target_keyrings=sha256_line("k9", "orphan.gpg"),
+            source_sources=sha256_line("c1", "new.sources"),
+            source_extra={"cat /etc/apt/sources.list.d/new.sources": CommandResult(0, _DEB822_FOO, "")},
+            source_keyrings=sha256_line("k1", "foo.gpg"),
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:new.sources": Decision.APPLY})
+
+        await job.execute()
+
+        assert not _key_deletions(target)
+        # One scan only: the plan-time one. A second would be the collection pass running.
+        assert sum(1 for c in all_calls(target) if _SOURCE_SCAN_CMD in c) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_key_only_the_departing_repo_needs_is_not_refreshed_first(self) -> None:
+        """The keyring differs on the two machines, but its only referent is on its way
+        out: refreshing it and then collecting it in the same run would be absurd.
+        """
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST},
+            target_source_digests=sha256_line("d9", "going.list"),
+            target_keyrings=sha256_line("k-old", "shared.gpg"),
+            source_keyrings=sha256_line("k-new", "shared.gpg"),
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        await job.execute()
+
+        assert not _key_writes(target)
+
+    @pytest.mark.asyncio
+    async def test_a_collected_key_is_backed_up_and_gated_as_a_modification(self) -> None:
+        """It is backed up before deletion (so a failing `apt-get update` rolls it back)
+        and its deletion carries `mutates=`, so `--confirm-each-command` shows it.
+        """
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST},
+            target_source_digests=sha256_line("d9", "going.list"),
+            target_keyrings=sha256_line("k9", "shared.gpg"),
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        backup_idx = _index_of(commands, lambda c: c.startswith("sudo cp -a /etc/apt/keyrings/shared.gpg"))
+        delete_idx = _index_of(commands, lambda c: c == "sudo rm -f /etc/apt/keyrings/shared.gpg")
+        assert backup_idx < delete_idx
+        delete_call = next(
+            call
+            for call in target.run_command.call_args_list
+            if call.args[0] == "sudo rm -f /etc/apt/keyrings/shared.gpg"
+        )
+        assert delete_call.kwargs.get("mutates")
+
+
+def _all_removals(target: MagicMock) -> list[str]:
+    return [c for c in all_calls(target) if c.startswith("sudo rm -f")]

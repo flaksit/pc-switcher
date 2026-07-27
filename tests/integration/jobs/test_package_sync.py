@@ -1003,7 +1003,7 @@ class TestAptSyncEndToEnd:
         finally:
             await _restore_package(pc2_executor, candidate)
 
-    async def test_apt_repository_state_dry_run_reviews_source_and_key_separately(
+    async def test_apt_repository_state_dry_run_reviews_the_repo_and_carries_its_key(
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -1012,9 +1012,15 @@ class TestAptSyncEndToEnd:
         reset_pcswitcher_state: None,
     ) -> None:
         """Broken-window ledger entry #2, exercised at VM level: a target missing one
-        vendor repo receives, in the review, the source's repository file and its signing
-        key as TWO separate `INSTALL` entries, and the intended `apt-get update` (the
-        metadata-refresh marker) is reported.
+        vendor repo receives the source's repository file as a reviewed `INSTALL`, its
+        signing key travels WITHOUT a decision of its own, and the intended `apt-get
+        update` (the metadata-refresh marker) is reported.
+
+        The key half is what makes this non-vacuous: the automation decisions below name
+        the repository ONLY. Under a model where a key is a reviewable item, an item with
+        no recorded decision defaults to skip-once and would produce no `Would install`
+        line at all; the key appearing anyway is exactly the transparent provisioning
+        (ADR-020's 2026-07-27 amendment).
 
         This is the one test whose subject is legitimately the run's own output
         (`--dry-run` makes no filesystem change to assert against, so ADR-014's read-only
@@ -1051,9 +1057,8 @@ class TestAptSyncEndToEnd:
 
             await _write_apt_sync_config(pc1_executor)
 
-            source_item_id = f"apt:source:{source_filename}"
-            key_item_id = f"apt:key:per-repo:{key_filename}"
-            decisions = {source_item_id: Decision.APPLY, key_item_id: Decision.APPLY}
+            # The REPOSITORY only. The key is deliberately absent from the decisions.
+            decisions = {f"apt:source:{source_filename}": Decision.APPLY}
             sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --dry-run"
             sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
             assert sync_result.success, (
@@ -1062,14 +1067,15 @@ class TestAptSyncEndToEnd:
             )
 
             combined_output = sync_result.stdout + sync_result.stderr
-            # The source file and its key are two SEPARATE review entries (ledger #2):
-            # each appears in its own `Would install <label>` dry-run line, the source's
-            # label being `<file> (<fmt>)` and the key's `<file> (per-repo key)`.
+            # The repository is the reviewed item, shown by its own `Would install <label>`
+            # dry-run line with the label `<file> (<fmt>)`.
             assert f"install {source_filename}" in combined_output, (
                 f"missing source file {source_filename!r} not shown as its own review entry.\n{combined_output}"
             )
-            assert f"install {key_filename}" in combined_output, (
-                f"signing key {key_filename!r} not shown as a separate review entry.\n{combined_output}"
+            # The key travels with it although nothing decided about it.
+            assert key_filename in combined_output, (
+                f"signing key {key_filename!r} did not travel with the repository that references it.\n"
+                f"{combined_output}"
             )
             # The intended metadata refresh (the apt-get update the repo change requires)
             # is reported as its own marker item.
@@ -2232,9 +2238,14 @@ class TestCrossDirectionRoundTrips:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """C24: a vendor repository file and its signing key that exist only on the
-        TARGET are both removed in one run, leaving pc2 with an `apt-get update` that
-        works and no longer reaches for the removed repository at all.
+        """C24: a vendor repository file that exists only on the TARGET is removed, and
+        its signing key goes with it although the user decided only about the repository —
+        leaving pc2 with an `apt-get update` that works and no longer reaches for the
+        removed repository at all.
+
+        The key is collected because, once the repository file is gone, nothing on pc2
+        references it any more. That count is taken after the deletion actually happened,
+        which is why this run is the VM-level witness for it.
 
         The witness is apt's own account of which repositories it tried, not its exit
         code: `apt-get update` exits 0 when an index fails to fetch (it downgrades the
@@ -2274,10 +2285,8 @@ class TestCrossDirectionRoundTrips:
 
             await _write_apt_sync_config(pc1_executor)
 
-            decisions = {
-                f"apt:source:{source_filename}": Decision.APPLY,
-                f"apt:key:per-repo:{key_filename}": Decision.APPLY,
-            }
+            # The REPOSITORY only: the key has no reviewable identity to decide about.
+            decisions = {f"apt:source:{source_filename}": Decision.APPLY}
             sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
             sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
             assert sync_result.success, (
@@ -2291,8 +2300,9 @@ class TestCrossDirectionRoundTrips:
                 timeout=10.0,
             )
             assert gone.success, (
-                f"{source_filename} and/or {key_filename} still present under /etc/apt on pc2 after both removals "
-                f"were approved.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+                f"{source_filename} and/or {key_filename} still present under /etc/apt on pc2 after the repository "
+                f"removal was approved -- the key it left unreferenced was not collected.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
 
             working_update = await _apt_get_update(pc2_executor)
