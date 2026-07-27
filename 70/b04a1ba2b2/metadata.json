@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "70b04a1ba2b2",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-SCENARIO-COVERAGE.md",
+    "src/pcswitcher/jobs/apt_sync.py",
+    "tests/unit/jobs/test_apt_sync.py",
+    "tests/unit/test_mutates_audit.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/70/b04a1ba2b2/0/metadata.json",
+      "transcript": "/70/b04a1ba2b2/0/full.jsonl",
+      "compact_transcript": "/70/b04a1ba2b2/0/transcript.jsonl",
+      "content_hash": "/70/b04a1ba2b2/0/content_hash.txt",
+      "prompt": "/70/b04a1ba2b2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 461,
+    "cache_creation_tokens": 3857273,
+    "cache_read_tokens": 115036476,
+    "output_tokens": 253093,
+    "api_call_count": 248
+  }
+}
