@@ -1,7 +1,7 @@
 """Unit tests for the item model every package job shares (`packages/items.py`).
 
 Scope is exactly what lives there. A shape or detail string only one manager builds is
-tested beside that manager -- `SnapItem` in `test_snap_sync.py`, `HoldPinFact` and
+tested beside that manager -- `SnapItem` in `test_snap_sync.py`, `AptPinItem` and
 `compare_deb_versions` in `test_apt_sync.py` -- so a job's own tests move with the job.
 """
 

@@ -105,14 +105,20 @@ allowed to accumulate rather than be deleted on a guess.
 
 Keys travel byte-for-byte and are never re-fetched from a vendor (D-12).
 
-A run that changes `/etc/apt` invalidates the facts its own `plan()` collected from
-`/etc/apt` — most visibly a `preferences.d` pin the user is deleting, which at plan time
-still suppressed its packages into `HELD_OR_PINNED`/`REPORT_ONLY`. `apply()` therefore
-converges the repository group FIRST, re-derives the package facts against the target the
-run just produced, and puts whatever genuinely changed through a SECOND review
-(`_rereview_repo_invalidated_packages`). ADR-020 D-24's one-review-per-manager is a
-preference, not a constraint: a decision the user could not have made correctly the first
-time is asked again rather than deferred to the next run.
+This job reviews EXACTLY ONCE per run, before its first mutating command (ADR-021, D-24
+retired for apt). Nothing this run writes can invalidate a decision it already took: a
+package is classified from the SOURCE's origins, which no run mutates, and the one fact
+that genuinely depends on the target's post-write state — which origin actually wins — is
+not guessed at plan time at all, it is read back by `_origin_refusal` and turned into a
+per-item refusal rather than a question.
+
+That is also why a pin says nothing about the packages it names (D-25). A per-package
+"pinned" report would fire for every package a target-side `preferences.d` stanza names,
+turning a no-op into review noise and — worse — making a package present only on the target
+and named by any pin impossible to REMOVE (a `REPORT_ONLY` echo outranks its own
+`EXTRA_ON_TARGET` diff) and impossible to silence (a `REPORT_ONLY` item cannot be recorded
+skip-always). Pins themselves DO replicate, as FILES under `/etc/apt/preferences.d`, and
+that is the whole mechanism: a report about them was never part of it.
 
 Apt sources/keys/pins/config, and the other two managers (snap, flatpak), are later
 Phase 2 plans.
@@ -123,7 +129,7 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar, Literal, override
@@ -291,38 +297,6 @@ class AptPackageItem:
     def label(self) -> str:
         """Human-readable text for the review UI and logs."""
         return f"{self.name} ({self.version})" if self.version else self.name
-
-
-@dataclass(frozen=True)
-class HoldPinFact:
-    """One fact about a package's upgrade being blocked, from one of two distinct
-    mechanisms (RESEARCH Pitfall 2):
-
-    - A HOLD is dpkg *selection state* stored under `/var/lib/dpkg`, read via
-      `apt-mark showhold`. It blocks ALL upgrades of that package outright.
-    - A PIN is an apt priority *preference* stored under `/etc/apt/preferences.d`. It
-      can still allow an upgrade within whatever the pin's priority permits — it is
-      not an absolute block.
-
-    Both surface under the same `DiffClass.HELD_OR_PINNED` review category (D-25), but
-    they are read from two different sources and mean different things. A diff
-    implementation that reads only one silently misses every package blocked by the
-    other mechanism, which is why `mechanism` and `source_ref` stay on this fact
-    rather than being collapsed into a single boolean.
-    """
-
-    mechanism: Literal["hold", "pin"]
-    package: str
-    source_ref: str
-
-
-def build_held_or_pinned_detail(fact: HoldPinFact) -> str:
-    """Detail string for a `HELD_OR_PINNED` diff: names the mechanism and its origin
-    so a hold and a pin never read as the same fact in the review, even though both
-    surface under one category (RESEARCH Pitfall 2).
-    """
-    verb = "held" if fact.mechanism == "hold" else "pinned"
-    return f"{verb} ({fact.mechanism}, via {fact.source_ref})"
 
 
 def _display_origin(uri: str) -> str:
@@ -567,7 +541,6 @@ def _is_origin_mismatch(plan: _OriginPlan) -> bool:
 def _diff_apt_packages(
     source_items: Sequence[AptPackageItem],
     target_items: Sequence[AptPackageItem],
-    hold_pin_facts: Sequence[HoldPinFact],
     origin_plan: Mapping[str, _OriginPlan],
     source_hold_names: frozenset[str] = frozenset(),
     target_hold_names: frozenset[str] = frozenset(),
@@ -576,12 +549,12 @@ def _diff_apt_packages(
     followed by the `apt:hold:` membership diffs (#208, D5/D8 — holds emitted AFTER
     package diffs so install lands before its hold once the diffs converge).
 
-    Precedence per package id: a PINNED package (present on the target and named by a
-    pin fact) yields `HELD_OR_PINNED`/`REPORT_ONLY` — the pin echo D-25 requires,
-    informational only. A HELD package (target hold set) has its install/upgrade
-    action SUPPRESSED (a held package is never proposed for install/version change)
-    but produces NO package-level report — the hold travels as its own `apt:hold:`
-    item, so a held package is never double-reported. Otherwise:
+    A HELD package (target hold set) has its install/upgrade action SUPPRESSED (a held
+    package is never proposed for install/version change) but produces NO package-level
+    report — the hold travels as its own `apt:hold:` item, so a held package is never
+    double-reported. A PINNED package gets no echo of any kind: a pin's only job is
+    deciding which origin wins, which D-35 checks against the target's real post-refresh
+    state instead of guessing at it here. Otherwise:
 
     - missing-on-target -> `MISSING_ON_TARGET`/`INSTALL` when the source's origin either
       already serves the target or can be made to (`_OriginPlan.outcome`), else
@@ -603,13 +576,6 @@ def _diff_apt_packages(
     source_by_id = {item.item_id: item for item in source_items}
     target_by_id = {item.item_id: item for item in target_items}
 
-    # PINS only (#208, D5): holds no longer key this guard — they travel as their own
-    # `apt:hold:` items below, so this branch keys purely on the pin mechanism.
-    pinned: dict[str, HoldPinFact] = {}
-    for fact in hold_pin_facts:
-        if fact.mechanism == "pin":
-            pinned.setdefault(fact.package, fact)
-
     seen: dict[str, None] = {}
     for item in (*source_items, *target_items):
         seen.setdefault(item.item_id, None)
@@ -619,18 +585,7 @@ def _diff_apt_packages(
         source_item = source_by_id.get(item_id)
         target_item = target_by_id.get(item_id)
 
-        if target_item is not None and target_item.name in pinned:
-            diffs.append(
-                ItemDiff(
-                    item_class=ItemClass.APT_PACKAGE,
-                    diff_class=DiffClass.HELD_OR_PINNED,
-                    action=DiffAction.REPORT_ONLY,
-                    item_id=item_id,
-                    label=target_item.label(),
-                    detail=build_held_or_pinned_detail(pinned[target_item.name]),
-                )
-            )
-        elif target_item is not None and target_item.name in target_hold_names:
+        if target_item is not None and target_item.name in target_hold_names:
             # Held on the target: suppress its install/version action entirely (a held
             # package must never be proposed for install/upgrade). No package-level
             # report — the `apt:hold:` item below carries the hold fact.
@@ -695,7 +650,7 @@ def _diff_apt_packages(
                     detail=build_version_mismatch_detail(source_item.version, target_item.version),
                 )
             )
-        # else: present on both, one vendor, equal versions, not held/pinned -> no diff.
+        # else: present on both, one vendor, equal versions, not held -> no diff.
 
     # Hold membership diffs (#208, D2/D8): emitted AFTER every package diff so a
     # package install lands before its hold when both are approved.
@@ -769,16 +724,14 @@ class AptSourceItem:
 class AptPinItem:
     """One apt pin-preference file under `/etc/apt/preferences.d` (D-13).
 
-    Diffed by whole-file digest, not by parsed stanza (RESEARCH's alternatives table
-    recommends whole-file for v1; CONTEXT.md leaves the choice to discretion) —
-    `pinned_packages` is populated by whichever caller parses the file's content (this
-    module's diff-time capture, or `AptSyncJob.collect_hold_pin_facts`'s own read) and
-    stays empty when only the digest was needed to decide there was no diff at all.
+    Diffed by whole-file digest, never by parsed stanza. The package names a pin file
+    mentions are deliberately not carried: under ADR-021 D-36 a pin is mechanism, and its
+    only effect — which origin wins — is read back from the target's real candidate
+    origins after the refresh (D-35), not predicted from the stanzas here.
     """
 
     filename: str
     digest: str
-    pinned_packages: tuple[str, ...] = ()
 
     ITEM_CLASS: ClassVar[ItemClass] = ItemClass.APT_PIN
 
@@ -895,7 +848,6 @@ def _lines(output: str) -> list[str]:
 
 _SIGNED_BY_RE = re.compile(r"^Signed-By:\s*(?P<path>\S+)", re.IGNORECASE)
 _LEGACY_SIGNED_BY_RE = re.compile(r"signed-by=(?P<path>[^\]\s,]+)")
-_PIN_PACKAGE_RE = re.compile(r"^Package:\s*(?P<packages>.+)$", re.IGNORECASE)
 
 
 def _keyring_reference(value: str) -> str | None:
@@ -910,20 +862,6 @@ def _keyring_reference(value: str) -> str | None:
     which resolves nowhere and downgrades the repository to `REPORT_ONLY`.
     """
     return value if value.startswith("/") else None
-
-
-def _pin_packages(line: str) -> list[str]:
-    """The package names one `preferences.d` `Package:` stanza line pins.
-
-    A stanza may name several packages space-separated. `Package: *` (and any other glob)
-    is dropped: apt matches it against every package, but pc-switcher's consumers key facts
-    by exact installed-package name, so a fact for the literal string `*` matches nothing
-    and is only noise in the review.
-    """
-    match = _PIN_PACKAGE_RE.match(line.strip())
-    if match is None:
-        return []
-    return [name for name in match.group("packages").split() if "*" not in name]
 
 
 # A deb822 stanza's repository URIs (one field, possibly several space-separated values,
@@ -992,17 +930,6 @@ def _parse_source_file(
             if ref is not None:
                 refs.append(ref)
     return fmt, tuple(refs), tuple(uris)
-
-
-def _parse_pin_file(content: str) -> tuple[str, ...]:
-    """Every package name named by a `Package:` stanza line in a `preferences.d` file.
-
-    Shares `_pin_packages` with `collect_hold_pin_facts`, which reads the same lines off
-    the target: two parsers of one file format is two chances to disagree about what is
-    pinned, and they did — the awk one-liner used to keep `$2` alone and so lost every name
-    after the first in `Package: foo bar`.
-    """
-    return tuple(name for line in content.splitlines() for name in _pin_packages(line))
 
 
 def _dangling_keyring_ref(keyring_refs: Sequence[str], source_key_filenames: frozenset[str]) -> str | None:
@@ -1100,8 +1027,8 @@ async def _scan_source_file_references(
     capture: a keyring named only by a file apt ignores is still a key nothing else
     references, and keeping it is cheaper than deleting one that turns out to be in use.
 
-    `find ... -exec awk {} +` passes every file to one awk process (the `collect_hold_pin_facts`
-    shape), and awk emits only the `URIs:`/`Signed-By:`/`deb` lines rather than whole
+    `find ... -exec awk {} +` passes every file to one awk process, never one command per
+    file, and awk emits only the `URIs:`/`Signed-By:`/`deb` lines rather than whole
     files — so this stays compatible with the module docstring's rule that full content is
     fetched only for a file a diff implicates. `sudo`-qualified to match
     `_capture_dir_digests`'s privilege (WR-04): an unprivileged read of a locked-down
@@ -1191,6 +1118,33 @@ def _file_diff(
         label=item.label(),
         detail=detail,
     )
+
+
+def _diff_apt_pins(source_digests: Mapping[str, str], target_digests: Mapping[str, str]) -> list[ItemDiff]:
+    """Pin-file diffs, from the digest manifests alone.
+
+    No file content is read: the only thing that was ever parsed out of a pin file was the
+    package names for a per-package "pinned" report, which D-25 retires. A pin's real effect
+    is which origin wins, and D-35 reads that back off the target after the refresh rather
+    than predicting it from stanzas.
+    """
+    names = _diff_filenames(source_digests, target_digests)
+    diffs: list[ItemDiff] = []
+
+    for filename in sorted(names.missing):
+        item = AptPinItem(filename=filename, digest=source_digests[filename])
+        diffs.append(_file_diff(item, DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL))
+
+    for filename in sorted(names.extra):
+        item = AptPinItem(filename=filename, digest=target_digests[filename])
+        diffs.append(_file_diff(item, DiffClass.EXTRA_ON_TARGET, DiffAction.REMOVE))
+
+    for filename in sorted(names.changed):
+        item = AptPinItem(filename=filename, digest=source_digests[filename])
+        detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename])
+        diffs.append(_file_diff(item, DiffClass.VERSION_MISMATCH, DiffAction.CHANGE, detail=detail))
+
+    return diffs
 
 
 def _diff_apt_configs(source_digests: Mapping[str, str], target_digests: Mapping[str, str]) -> list[ItemDiff]:
@@ -1401,10 +1355,6 @@ class AptSyncJob(PackageSyncJob):
         # silently) if it is not. Consulted at plan time by `_classify_collateral` and
         # at apply time by the converge guards, which must agree.
         self._target_manual_set: frozenset[str] = frozenset()
-        # The source manifest the last `_plan_packages()` diffed, after decision-file
-        # filtering. Kept so the post-repository re-review can re-diff against a CHANGED
-        # target without re-capturing the source, which this run never mutates.
-        self._plan_source_items: tuple[AptPackageItem, ...] = ()
         # Metadata-refresh bookkeeping (decision 1). At most ONE `apt-get update` runs per
         # run across both refresh paths: `_metadata_refreshed` is set True by the first
         # successful refresh — whether the repository-group convergence's own `apt-get
@@ -1509,45 +1459,6 @@ class AptSyncJob(PackageSyncJob):
             versions[pkg_name] = version
 
         return [AptPackageItem(name=name, version=versions.get(name, "")) for name in names]
-
-    async def collect_hold_pin_facts(self) -> Sequence[HoldPinFact]:
-        """PIN facts from the target's `/etc/apt/preferences.d/*` `Package:` stanzas —
-        the target-only `HELD_OR_PINNED`/`REPORT_ONLY` echo on the package item.
-
-        As of #208 this reads PINS only. HOLDS moved out of this hook: a hold is dpkg
-        selection state (`apt-mark showhold`) replicated as its own `apt:hold:` membership
-        item via `collect_hold_sets`, not surfaced as a package-level report — so a held
-        package is never double-reported (once here and once as a hold item). A pin
-        remains an apt priority preference that can still permit an upgrade, so it stays a
-        report on the package rather than a converge action (RESEARCH Pitfall 2).
-        """
-        return self._pin_facts_from_scan(await self._scan_target_pin_lines())
-
-    async def _scan_target_pin_lines(self) -> str:
-        """The target's raw `<file>\\t<Package: ...>` lines from one batched command.
-
-        `find ... -exec ... {} +` passes every matching file to one awk invocation (not a
-        per-file command); if the directory has no files, -exec never runs, so an empty
-        `preferences.d` produces empty output rather than a shell error. awk prints the
-        WHOLE line, not `$2`: `_pin_packages` — the same parser `_parse_pin_file` uses — is
-        what splits it, so a `Package: foo bar` stanza yields both names and `Package: *`
-        yields none.
-        """
-        result = await self.target.run_command(
-            "find /etc/apt/preferences.d -maxdepth 1 -type f -exec awk '/^Package:/{print FILENAME \"\\t\" $0}' {} +",
-            login_shell=False,
-        )
-        return result.stdout
-
-    @staticmethod
-    def _pin_facts_from_scan(scan_output: str) -> list[HoldPinFact]:
-        facts: list[HoldPinFact] = []
-        for line in _lines(scan_output):
-            filename, _, stanza = line.partition("\t")
-            facts.extend(
-                HoldPinFact(mechanism="pin", package=package, source_ref=filename) for package in _pin_packages(stanza)
-            )
-        return facts
 
     async def collect_hold_sets(self) -> tuple[frozenset[str], frozenset[str]]:
         """Source and target package-hold NAME sets from `apt-mark showhold` on BOTH
@@ -1663,9 +1574,7 @@ class AptSyncJob(PackageSyncJob):
         self._plan_decisions = (source_decisions, target_decisions)
 
         source_items = await filter_inert(await self.capture_source_items(), source_decisions)
-        self._plan_source_items = tuple(source_items)
         target_items = await filter_inert(await self.query_target_items(), target_decisions)
-        hold_pin_facts = await self.collect_hold_pin_facts()
         source_hold_names, target_hold_names = await self.collect_hold_sets()
         policy = await self.collect_target_policy([item.name for item in source_items])
         self._origin_plan = self._build_origin_plan(source_items, target_items, policy)
@@ -1673,7 +1582,6 @@ class AptSyncJob(PackageSyncJob):
             _diff_apt_packages(
                 source_items,
                 target_items,
-                hold_pin_facts,
                 self._origin_plan,
                 source_hold_names,
                 target_hold_names,
@@ -1849,7 +1757,7 @@ class AptSyncJob(PackageSyncJob):
                 removal_details,
             )
         )
-        diffs.extend(await self._diff_apt_pins(source_run, target_run, source_pins, target_pins))
+        diffs.extend(_diff_apt_pins(source_pins, target_pins))
         diffs.extend(_diff_apt_configs(source_configs, target_configs))
         return diffs
 
@@ -2035,43 +1943,6 @@ class AptSyncJob(PackageSyncJob):
             return None
         plural = "s" if len(names) > 1 else ""
         return f"signing key{plural} copied with it: {', '.join(names)}"
-
-    async def _diff_apt_pins(
-        self,
-        source_run: Callable[[str], Awaitable[CommandResult]],
-        target_run: Callable[[str], Awaitable[CommandResult]],
-        source_digests: Mapping[str, str],
-        target_digests: Mapping[str, str],
-    ) -> list[ItemDiff]:
-        """Pin-file diffs; `pinned_packages` is hydrated the same way `AptSourceItem`'s
-        format/keyring_refs are — only for a file a diff actually implicates.
-        """
-        names = _diff_filenames(source_digests, target_digests)
-        diffs: list[ItemDiff] = []
-
-        for filename in sorted(names.missing):
-            content = await _read_file_content(source_run, f"{_APT_PREFERENCES_DIR}/{filename}")
-            item = AptPinItem(
-                filename=filename, digest=source_digests[filename], pinned_packages=_parse_pin_file(content)
-            )
-            diffs.append(_file_diff(item, DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL))
-
-        for filename in sorted(names.extra):
-            content = await _read_file_content(target_run, f"{_APT_PREFERENCES_DIR}/{filename}")
-            item = AptPinItem(
-                filename=filename, digest=target_digests[filename], pinned_packages=_parse_pin_file(content)
-            )
-            diffs.append(_file_diff(item, DiffClass.EXTRA_ON_TARGET, DiffAction.REMOVE))
-
-        for filename in sorted(names.changed):
-            content = await _read_file_content(source_run, f"{_APT_PREFERENCES_DIR}/{filename}")
-            item = AptPinItem(
-                filename=filename, digest=source_digests[filename], pinned_packages=_parse_pin_file(content)
-            )
-            detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename])
-            diffs.append(_file_diff(item, DiffClass.VERSION_MISMATCH, DiffAction.CHANGE, detail=detail))
-
-        return diffs
 
     def _protected_manual_set(self) -> frozenset[str]:
         """Packages a collateral removal/downgrade must not silently touch: the TARGET's
@@ -2289,194 +2160,6 @@ class AptSyncJob(PackageSyncJob):
                 unresolved=outcome.unresolved,
             )
         super().accept_review(plan, outcome)
-
-    # -- Post-repository re-plan and second review -------------------------------------
-
-    @override
-    async def apply(self) -> None:
-        """Converge the repository group FIRST, re-derive the package facts it invalidated,
-        and re-review whatever actually changed — then run the base apply loop.
-
-        `plan()` reads `/etc/apt/preferences.d` and asks the target's apt what it can
-        install. This same run then REWRITES `/etc/apt`. Every such fact is therefore stale
-        by the time packages converge, and the visible case is a pin file the user is
-        deleting: at plan time it still forced its packages to `HELD_OR_PINNED`/
-        `REPORT_ONLY`, so their real install/change/remove diff was suppressed and would
-        only reappear on the next run.
-
-        The repository group is converged eagerly here rather than lazily on the first
-        repository diff `converge()` sees; `_ensure_repo_group_converged` is idempotent, so
-        the base loop's own calls become cache lookups and every item still reports through
-        it exactly as before. The only reordering is that skip-always decision files are now
-        written after `/etc/apt` lands rather than before — neither depends on the other.
-
-        A second review is ADR-020 D-24's one-review-per-manager giving way to correctness:
-        a decision the user could not have made correctly the first time is asked again,
-        not deferred. Aborting at that review therefore stops the run with `/etc/apt`
-        already converged, which is a reviewed, coherent state.
-
-        Skipped entirely under dry-run: nothing is written, so nothing is invalidated — but
-        a dry-run preview does show the pre-repository package classification, and that is
-        the one place the staleness remains visible.
-        """
-        if not self.context.dry_run and self._repository_work_approved():
-            await self._ensure_repo_group_converged()
-            await self._rereview_repo_invalidated_packages()
-        await super().apply()
-
-    def _repository_work_approved(self) -> bool:
-        """Whether this run has any `/etc/apt` work at all, by the presence of the synthetic
-        metadata-refresh marker: `accept_review` inserts it exactly when a repository-group
-        item was approved or a keyring may need writing, so no marker means nothing can
-        invalidate `plan()`'s facts.
-        """
-        assert self._accepted_outcome is not None
-        return self._accepted_outcome.decisions.get(_METADATA_REFRESH_ITEM_ID) == Decision.APPLY
-
-    async def _rereview_repo_invalidated_packages(self) -> None:
-        """Re-diff packages against the target this run just produced, then withdraw the
-        approvals the new state contradicts and review the actions it revealed.
-
-        The source manifest is reused verbatim (`self._plan_source_items`): pc-switcher
-        never mutates the source, so re-capturing it would cost two commands to learn
-        nothing. Everything read from the TARGET is re-read, because that is what changed.
-
-        Two directions, only one of which needs the user:
-
-        - An item whose action APPEARED or CHANGED (a package the deleted pin was
-          suppressing, or one the newly-installed repository can now provide) has never been
-          reviewed in its current form, so it goes to a second review together with any
-          manual collateral its transaction implies.
-        - An item the user approved that the new state no longer supports (a package a pin
-          this run INSTALLED now governs) has its approval withdrawn silently. Dropping work
-          needs no decision — and asking would be asking the user to re-confirm a "no".
-        """
-        assert self._accepted_plan is not None
-        assert self._accepted_outcome is not None
-
-        fresh = await self._replanned_package_diffs()
-        fresh_by_id = {diff.item_id: diff for diff in fresh}
-        reviewed_by_id = {diff.item_id: diff for diff in self._accepted_plan.diffs}
-
-        revealed: list[ItemDiff] = []
-        for diff in fresh:
-            if diff.action == DiffAction.REPORT_ONLY:
-                continue
-            previous = reviewed_by_id.get(diff.item_id)
-            if previous is None or previous.action != diff.action:
-                revealed.append(diff)
-
-        withdrawn: set[str] = set()
-        for diff in self._accepted_plan.diffs:
-            # Only package-level items are re-diffed here; the repository group has already
-            # converged and its collateral report items carry no converge verb to withdraw.
-            if diff.item_class not in (ItemClass.APT_PACKAGE, ItemClass.APT_HOLD):
-                continue
-            if diff.action == DiffAction.REPORT_ONLY:
-                continue
-            if self._accepted_outcome.decisions.get(diff.item_id) != Decision.APPLY:
-                continue
-            current = fresh_by_id.get(diff.item_id)
-            if current is None or current.action != diff.action:
-                withdrawn.add(diff.item_id)
-
-        if not revealed and not withdrawn:
-            return
-
-        for item_id in sorted(withdrawn):
-            self._log(
-                Host.TARGET,
-                LogLevel.FULL,
-                f"withdrawing {reviewed_by_id[item_id].label}: this run's /etc/apt changes make it "
-                f"{fresh_by_id[item_id].action.value if item_id in fresh_by_id else 'inapplicable'}",
-            )
-
-        collateral = await self._collect_plan_time_collateral(revealed) if revealed else []
-        decisions: dict[str, Decision] = {
-            **self._accepted_outcome.decisions,
-            **dict.fromkeys(withdrawn, Decision.SKIP_ONCE),
-        }
-        second_groups: tuple[ReviewGroup, ...] = ()
-
-        if revealed or collateral:
-            second_groups = self._rereview_groups([*revealed, *collateral])
-            assert self.context.reviewer is not None
-            second = await self.context.reviewer.review(second_groups)
-            decisions.update(second.decisions)
-            outcome = ReviewOutcome(
-                decisions=decisions,
-                was_interactive=self._accepted_outcome.was_interactive and second.was_interactive,
-                snippets={**self._accepted_outcome.snippets, **second.snippets},
-                unresolved=(*self._accepted_outcome.unresolved, *second.unresolved),
-            )
-        else:
-            outcome = ReviewOutcome(
-                decisions=decisions,
-                was_interactive=self._accepted_outcome.was_interactive,
-                snippets=self._accepted_outcome.snippets,
-                unresolved=self._accepted_outcome.unresolved,
-            )
-
-        merged_plan = self._merge_replanned_diffs([*revealed, *collateral], second_groups)
-
-        # Re-run over the MERGED plan so the first review's collateral resolutions survive:
-        # `_resolve_collateral` recomputes `self._approved_collateral` from scratch, and
-        # handing it only the second review's items would silently drop the first's.
-        outcome = self._resolve_collateral(merged_plan, outcome)
-        super().accept_review(merged_plan, outcome)
-
-    async def _replanned_package_diffs(self) -> tuple[ItemDiff, ...]:
-        """The package/hold diff as it stands NOW — every target-side input re-read, the
-        source manifest reused, and the same decision-file inertness filter applied.
-        """
-        _source_decisions, target_decisions = self._plan_decisions
-        target_items = await filter_inert(await self.query_target_items(), target_decisions)
-        hold_pin_facts = await self.collect_hold_pin_facts()
-        source_hold_names, target_hold_names = await self.collect_hold_sets()
-        policy = await self.collect_target_policy([item.name for item in self._plan_source_items])
-        self._origin_plan = self._build_origin_plan(self._plan_source_items, target_items, policy)
-        return self._drop_inert_diffs(
-            _diff_apt_packages(
-                self._plan_source_items,
-                target_items,
-                hold_pin_facts,
-                self._origin_plan,
-                source_hold_names,
-                target_hold_names,
-            ),
-            *self._plan_decisions,
-        )
-
-    def _merge_replanned_diffs(self, extra: Sequence[ItemDiff], extra_groups: Sequence[ReviewGroup]) -> PackagePlan:
-        """The accepted plan with `extra` folded in — replacing same-id diffs in place and
-        appending genuinely new ones into the package band, holds still last (D8).
-        `extra_groups` is appended so the plan's groups still describe everything the user
-        was actually shown.
-
-        The repository group and the metadata-refresh marker keep their positions and are
-        never re-diffed: they have already converged by the time this runs.
-        """
-        assert self._accepted_plan is not None
-        by_id = {diff.item_id: diff for diff in extra}
-        merged = [by_id.get(diff.item_id, diff) for diff in self._accepted_plan.diffs]
-        known = {diff.item_id for diff in self._accepted_plan.diffs}
-        merged.extend(diff for diff in extra if diff.item_id not in known)
-        holds = [diff for diff in merged if diff.item_class == ItemClass.APT_HOLD]
-        rest = [diff for diff in merged if diff.item_class != ItemClass.APT_HOLD]
-        return PackagePlan(
-            manager=self._accepted_plan.manager,
-            diffs=(*rest, *holds),
-            groups=(*self._accepted_plan.groups, *extra_groups),
-        )
-
-    def _rereview_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
-        """`_build_review_groups` over the re-diffed items, with every title marked as a
-        second pass so the user can tell this screen from the one they already answered.
-        """
-        return tuple(
-            replace(group, title=f"{group.title} (revealed by this run's /etc/apt changes)")
-            for group in self._build_review_groups(diffs)
-        )
 
     @override
     async def converge(self, diff: ItemDiff) -> CommandResult:

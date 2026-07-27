@@ -53,21 +53,15 @@ Every item that would actually change something — an install, a removal, or a 
 
 You give those answers with two lists per group, not with a question per item. The first list is the apply list: ticked means apply. Whatever you leave unticked is then offered once more — "never offer again on this machine?" — and ticking it there is skip-always. Ticking nothing on that second list (just pressing Enter) is skip-this-run, so the items come back next sync. If you ticked everything for apply, the second list is not shown at all. Ctrl-C at either list aborts the whole sync.
 
-Items that only **report** a condition are not offered skip-always: a version difference between source and target, an apt package whose repository cannot be reproduced on the target, an apt package the two machines installed from different vendors, and the pin echo on a held or pinned package. These change nothing on the target, and neither machine "holds" the item in the way a machine-specific mark requires — marking a version difference would silently stop the package syncing altogether rather than stop reporting the drift. Resolve them by fixing the underlying condition (align the versions, restore the repository on the source, pick one vendor, remove the pin).
+Items that only **report** a condition are not offered skip-always: a version difference between source and target, an apt package whose repository cannot be reproduced on the target, and an apt package the two machines installed from different vendors. These change nothing on the target, and neither machine "holds" the item in the way a machine-specific mark requires — marking a version difference would silently stop the package syncing altogether rather than stop reporting the drift. Resolve them by fixing the underlying condition (align the versions, restore the repository on the source, pick one vendor).
 
-### A second apt review, when this run changed `/etc/apt`
+### One review per job, always before the first change
 
-`apt_sync` reads the target's pins and asks its apt what it can install while it builds the review — and then, in the same run, rewrites `/etc/apt`. Both of those facts can be false by the time packages are converged: a pin you just deleted was still suppressing its packages when the list was drawn, and a repository you just installed can supply a package apt had no candidate for.
+`apt_sync` asks you everything it is going to ask before it writes anything. There is no second screen part-way through a run.
 
-So `apt_sync` converges the repository configuration first, re-reads the target it has just produced, and — if that genuinely changed anything — shows you one more screen with what it revealed. Its groups are marked "(revealed by this run's /etc/apt changes)". Everything you already answered stands; only the newly-actionable items are asked about. Approvals the new state contradicts go the other way and are simply dropped: if a pin file you installed now governs a package you had approved for removal, that removal is abandoned without another question.
+That holds because of what the review decides. A package is judged by where your **source** installed it from, and a sync never changes the source — so nothing the run does to the target can make an answer you already gave wrong. The one fact that does depend on what the run wrote, namely which repository actually ends up supplying a package, is not guessed during the review at all: it is measured afterwards, and a package that comes out wrong is refused and reported rather than turned into another question.
 
-A run that changes nothing under `/etc/apt` never shows a second screen, and neither does a dry run — nothing is written, so nothing is invalidated. A dry-run preview therefore shows the pre-repository classification of packages, which is the one place this staleness is still visible.
-
-### Where an apt package comes from
-
-A package is replicated as *name and origin*, never name alone. One name is often offered by two vendors — `firefox` is Mozilla's build on your source and Ubuntu's snap-transition package in the archive — and Ubuntu's copy carries epoch 1, which outranks every unpinned vendor version, so matching on the name would replicate the name and invert the provenance.
-
-So just before installing, once the run has refreshed the target's package lists, `apt_sync` asks the target's apt where each approved install would actually come from. If none of those places is a place the source has the package from, the install is refused and reported with both origins named — never installed from the other vendor. Only that package fails; the rest of the run continues. Packages your source gets from the Ubuntu archive itself are exempt, so two machines on different Ubuntu mirrors do not read as two vendors.
+A pin file says nothing about the packages it names, either. Pins travel — they are files under `/etc/apt/preferences.d`, and they are what make a vendor's build outrank the Ubuntu archive's — but they get no line of their own on a package. A package named by a pin is reviewed like any other: if it is on the target and not on the source, it is offered for removal, and you can mark it machine-specific.
 
 ### Confirming every individual command
 

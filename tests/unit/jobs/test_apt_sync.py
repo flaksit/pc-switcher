@@ -9,6 +9,7 @@ validate(). All executor interactions are mocked; no real apt/dpkg/sudo commands
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import shlex
 import shutil
 from collections.abc import Callable, Sequence
@@ -25,15 +26,12 @@ from pcswitcher.jobs.apt_sync import (
     _TARGET_SUDO_COMMANDS,
     AptPackageItem,
     AptSyncJob,
-    HoldPinFact,
     _diff_apt_packages,
     _distribution_origins,
     _OriginOutcome,
     _OriginPlan,
-    _parse_pin_file,
     _parse_source_file,
     _source_files_serving,
-    build_held_or_pinned_detail,
     build_origin_detail,
     build_origin_mismatch_detail,
     build_origin_refusal_detail,
@@ -181,7 +179,7 @@ class TestDiff:
 
         source_items = await job.capture_source_items()
         target_items = await job.query_target_items()
-        diffs = _diff_apt_packages(source_items, target_items, (), {})
+        diffs = _diff_apt_packages(source_items, target_items, {})
 
         assert len(diffs) == 2
         assert {d.item_id for d in diffs} == {"apt:package:pkg-a", "apt:package:pkg-c"}
@@ -195,7 +193,7 @@ class TestDiff:
             AptPackageItem(name="pkg-a", version="1.0"),
             AptPackageItem(name="pkg-extra", version="9.9"),
         ]
-        diffs = _diff_apt_packages(source_items, target_items, (), {})
+        diffs = _diff_apt_packages(source_items, target_items, {})
 
         assert len(diffs) == 1
         assert diffs[0].item_id == "apt:package:pkg-extra"
@@ -573,8 +571,8 @@ class TestTransactionGuard:
 
 
 class TestHoldPinCapture:
-    """collect_hold_sets: apt-mark showhold on BOTH machines; collect_hold_pin_facts:
-    preferences.d pins only (#208 — holds moved to their own membership item)."""
+    """collect_hold_sets: apt-mark showhold on BOTH machines. Pins are read no more: they
+    are files, not facts about packages (ADR-021 D-25/D-36)."""
 
     @pytest.mark.asyncio
     async def test_hold_sets_from_both_machines_surface(self) -> None:
@@ -589,48 +587,10 @@ class TestHoldPinCapture:
         assert source_holds == frozenset({"pkg-src-held"})
         assert target_holds == frozenset({"pkg-tgt-held"})
 
-    @pytest.mark.asyncio
-    async def test_collect_hold_pin_facts_returns_pins_only_no_holds(self) -> None:
-        """#208: `collect_hold_pin_facts` no longer reads `apt-mark showhold` — holds
-        travel as `apt:hold:` items, so only pin facts surface here."""
-        context, _source, _target = make_context(
-            source_responses={"apt-mark showhold": CommandResult(0, "src-held\n", "")},
-            target_responses={
-                "apt-mark showhold": CommandResult(0, "tgt-held\n", ""),
-                "find /etc/apt/preferences.d": CommandResult(
-                    0, "/etc/apt/preferences.d/curl-pin\tPackage: curl\n", ""
-                ),
-            },
-        )
-        job = AptSyncJob(context)
-
-        facts = await job.collect_hold_pin_facts()
-
-        assert all(fact.mechanism == "pin" for fact in facts)
-        assert {fact.package for fact in facts} == {"curl"}
-
-    @pytest.mark.asyncio
-    async def test_preferences_d_pin_surfaces_with_pin_mechanism_and_filename(self) -> None:
-        context, _source, _target = make_context(
-            target_responses={
-                "find /etc/apt/preferences.d": CommandResult(
-                    0, "/etc/apt/preferences.d/curl-pin\tPackage: curl\n", ""
-                ),
-            },
-        )
-        job = AptSyncJob(context)
-
-        facts = await job.collect_hold_pin_facts()
-
-        pins = [fact for fact in facts if fact.mechanism == "pin"]
-        assert len(pins) == 1
-        assert pins[0].package == "curl"
-        assert pins[0].source_ref == "/etc/apt/preferences.d/curl-pin"
-
 
 class TestAptHold:
-    """#208: hold replication — `apt:hold:` membership items, converge via `apt-mark`,
-    the HELD_OR_PINNED reshape (pins echo, holds don't double-report), and sudo scope."""
+    """#208: hold replication — `apt:hold:` membership items, converge via `apt-mark`, a
+    held package never double-reported, and sudo scope."""
 
     @pytest.mark.asyncio
     async def test_source_held_yields_install_hold_item_and_converge_runs_apt_mark_hold(self) -> None:
@@ -704,9 +664,9 @@ class TestAptHold:
         assert not any(diff.item_class == ItemClass.APT_HOLD for diff in plan.diffs)
 
     @pytest.mark.asyncio
-    async def test_held_package_yields_hold_item_not_duplicate_held_or_pinned_report(self) -> None:
+    async def test_held_package_yields_hold_item_not_a_duplicate_package_report(self) -> None:
         """A target-held package produces the `apt:hold:` item and NOT a package-level
-        HELD_OR_PINNED report for the same name (#208 dedup)."""
+        report for the same name (#208 dedup)."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
@@ -728,38 +688,6 @@ class TestAptHold:
         by_id = {diff.item_id: diff for diff in plan.diffs}
         assert "apt:hold:pkg-a" in by_id
         assert "apt:package:pkg-a" not in by_id
-        assert not any(diff.diff_class == DiffClass.HELD_OR_PINNED for diff in plan.diffs)
-
-    @pytest.mark.asyncio
-    async def test_pin_still_yields_report_only_echo_alongside_a_hold_item(self) -> None:
-        """A pin keeps its REPORT_ONLY HELD_OR_PINNED echo on the package; a separate
-        held package produces its own `apt:hold:` item — both coexist (#208)."""
-        context, _source, _target = make_context(
-            source_responses={
-                "apt-mark showmanual": CommandResult(0, "curl\nheld-pkg\n", ""),
-                "dpkg-query": CommandResult(0, "curl\t1.0\nheld-pkg\t1.0\n", ""),
-                "apt-mark showhold": CommandResult(0, "", ""),
-            },
-            target_responses={
-                "apt-mark showmanual": CommandResult(0, "curl\nheld-pkg\n", ""),
-                "dpkg-query": CommandResult(0, "curl\t1.0\nheld-pkg\t1.0\n", ""),
-                "apt-mark showhold": CommandResult(0, "held-pkg\n", ""),
-                "find /etc/apt/preferences.d": CommandResult(
-                    0, "/etc/apt/preferences.d/curl-pin\tPackage: curl\n", ""
-                ),
-            },
-        )
-        job = AptSyncJob(context)
-
-        plan = await job.plan()
-
-        by_id = {diff.item_id: diff for diff in plan.diffs}
-        curl_diff = by_id["apt:package:curl"]
-        assert curl_diff.diff_class == DiffClass.HELD_OR_PINNED
-        assert curl_diff.action == DiffAction.REPORT_ONLY
-        hold_diff = by_id["apt:hold:held-pkg"]
-        assert hold_diff.item_class == ItemClass.APT_HOLD
-        assert hold_diff.action == DiffAction.REMOVE
 
     @pytest.mark.asyncio
     async def test_skip_always_on_a_hold_writes_the_decision_file(self) -> None:
@@ -4508,54 +4436,6 @@ def _all_removals(target: MagicMock) -> list[str]:
     return [c for c in all_calls(target) if c.startswith("sudo rm --force")]
 
 
-_PIN_SCAN_CMD = "-exec awk '/^Package:/"
-
-
-class TestPinStanzaParsing:
-    """One parser for `preferences.d` `Package:` lines, on both the digest-diff path and
-    the target-fact path — the awk one-liner used to keep `$2` alone.
-    """
-
-    @staticmethod
-    def _facts_context(scan: str) -> JobContext:
-        context, _source, _target = make_context(
-            target_responses={**_NO_PACKAGES, _PIN_SCAN_CMD: CommandResult(0, scan, "")}
-        )
-        return context
-
-    @pytest.mark.asyncio
-    async def test_a_multi_name_stanza_yields_a_fact_for_every_package(self) -> None:
-        context = self._facts_context("/etc/apt/preferences.d/multi\tPackage: foo bar baz\n")
-
-        facts = await AptSyncJob(context).collect_hold_pin_facts()
-
-        assert {fact.package for fact in facts} == {"foo", "bar", "baz"}
-        assert {fact.source_ref for fact in facts} == {"/etc/apt/preferences.d/multi"}
-
-    @pytest.mark.asyncio
-    async def test_a_wildcard_stanza_yields_no_fact(self) -> None:
-        """`Package: *` matches every package to apt and none at all to a name-keyed fact."""
-        context = self._facts_context("/etc/apt/preferences.d/all\tPackage: *\n")
-
-        assert await AptSyncJob(context).collect_hold_pin_facts() == []
-
-    @pytest.mark.asyncio
-    async def test_the_pin_item_records_the_same_names_the_facts_do(self) -> None:
-        context, _source, _target = make_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "multi"), ""),
-                "cat /etc/apt/preferences.d/multi": CommandResult(0, "Package: foo bar\nPackage: *\n", ""),
-            },
-            target_responses={**_NO_PACKAGES},
-        )
-
-        plan = await AptSyncJob(context).plan()
-
-        assert any(d.item_id == "apt:pin:multi" for d in plan.diffs)
-        assert _parse_pin_file("Package: foo bar\nPackage: *\n") == ("foo", "bar")
-
-
 # -- The third key directory, ownership-aware provisioning, inline-armored keys ---------
 #
 # `/usr/share/keyrings` is where `add-apt-repository`, Ubuntu's own sources and most
@@ -4767,17 +4647,29 @@ class TestInlineArmoredSignedBy:
         )
 
 
-# -- The second review: facts this run's own /etc/apt changes invalidated ---------------
+# -- One review per run, before the first write (ADR-021, D-24 retired for apt) ---------
 #
-# `plan()` reads `preferences.d` and asks apt what it can install; the SAME run rewrites
-# `/etc/apt`. A pin the user is deleting still suppressed its packages at plan time, so
-# their real diff was withheld and only reappeared on the NEXT run.
+# A package is classified from the SOURCE's origins, which no run mutates, so nothing this
+# run writes can invalidate a decision it already took. The one fact that genuinely depends
+# on the target's post-write state — which origin actually wins — is read back by the D-35
+# verification and becomes a per-item refusal, never a second question.
+#
+# Deleting the pin echo is what makes the other half true. It fired for every package a
+# target-side `preferences.d` stanza named, which suppressed a target-only package's own
+# removal diff and, being `REPORT_ONLY`, could not be silenced with skip-always either.
 
-_CURL_PIN_SCAN = "/etc/apt/preferences.d/curl-pin\tPackage: curl\n"
 _CURL_PIN_FILE = "Package: curl\nPin: version 8.0\nPin-Priority: 1001\n"
+# The two `preferences.d` reads a run can make, distinguished because a bare
+# `find /etc/apt/preferences.d` substring matches both. The digest listing is what makes a
+# pin travel as a FILE and must keep happening; the stanza scan is the retired echo's input
+# and must not.
+_PIN_DIGEST_CMD = "find /etc/apt/preferences.d -maxdepth 1 -type f -exec sha256sum"
+_PIN_STANZA_SCAN_CMD = "-exec awk '/^Package:/"
+_CURL_PIN_STANZAS = "/etc/apt/preferences.d/curl-pin\tPackage: curl\n"
+_MOZILLA_PIN_FILE = "Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n"
 
 
-class _RecordingReviewer(FakeReviewer):
+class _CountingReviewer(FakeReviewer):
     """`FakeReviewer` that keeps EVERY call's groups, not just the last one."""
 
     def __init__(self, decisions: dict[str, Decision]) -> None:
@@ -4789,185 +4681,154 @@ class _RecordingReviewer(FakeReviewer):
         return await super().review(groups)
 
 
-def _pin_lifecycle_target(
-    responses: dict[str, CommandResult],
-    *,
-    before: str,
-    after: str,
-    trigger: str,
-) -> Callable[..., CommandResult]:
-    """A target whose `preferences.d` pin SCAN changes once this run issues `trigger` —
-    the whole point being that the second scan reads the state the run produced, not the
-    one `plan()` saw.
-    """
-    state = {"converged": False}
-
-    def _side_effect(cmd: str, **_: object) -> CommandResult:
-        if trigger in cmd:
-            state["converged"] = True
-        if _PIN_SCAN_CMD in cmd:
-            return CommandResult(0, after if state["converged"] else before, "")
-        for pattern, result in responses.items():
-            if pattern in cmd:
-                return result
-        return CommandResult(0, "", "")
-
-    return _side_effect
-
-
 def _actionable_entry_ids(groups: Sequence[ReviewGroup]) -> set[str]:
     """Item ids the user was actually offered a converge action for. A `REPORT_ONLY` entry
-    is shown but implies no verb, so it is exactly what the suppressed cases look like.
+    is shown but implies no verb, so it is exactly what a suppressed case looks like.
     """
     return {
         entry.item_id for group in groups if group.action != DiffAction.REPORT_ONLY.value for entry in group.entries
     }
 
 
-class TestSecondReviewAfterRepositoryChanges:
-    """A decision the user could not have made correctly the first time is asked again,
-    not deferred to the next run (ADR-020 D-24: batching is a preference, not a hard rule).
+def _pinned_target_only_package_context(
+    **extra_decisions: Decision,
+) -> tuple[AptSyncJob, MagicMock, _CountingReviewer]:
+    """`curl` exists only on the TARGET, and the target's `preferences.d/curl-pin` names it.
+    This is the exact shape the retired echo made unremovable and unsilenceable.
+
+    The target answers BOTH `preferences.d` reads — the digest listing this code issues and
+    the `Package:` stanza scan it no longer does — and the stanza scan empties once the pin
+    file is actually deleted. Answering only the read the current code makes would let an
+    implementation that still consults the stanzas pass these tests by accident.
+    """
+    responses = {
+        "echo $HOME": CommandResult(0, "/home/target-user", ""),
+        "apt-mark showmanual": CommandResult(0, "curl\n", ""),
+        "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
+        _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p1", "curl-pin"), ""),
+        "cat /etc/apt/preferences.d/curl-pin": CommandResult(0, _CURL_PIN_FILE, ""),
+        "apt-get --dry-run remove --assume-yes curl": CommandResult(0, "Remv curl [8.0]\n", ""),
+    }
+    state = {"pin_deleted": False}
+
+    def _target(cmd: str, **_: object) -> CommandResult:
+        if cmd.startswith("sudo rm --force") and "curl-pin" in cmd:
+            state["pin_deleted"] = True
+        if _PIN_STANZA_SCAN_CMD in cmd:
+            return CommandResult(0, "" if state["pin_deleted"] else _CURL_PIN_STANZAS, "")
+        for pattern, result in responses.items():
+            if pattern in cmd:
+                return result
+        return CommandResult(0, "", "")
+
+    context, _source, target = _repo_context(target_side_effect=_target)
+    job = AptSyncJob(context)
+    reviewer = _CountingReviewer({"apt:package:curl": Decision.APPLY, **extra_decisions})
+    job.context = dataclasses.replace(job.context, reviewer=reviewer)
+    return job, target, reviewer
+
+
+class TestAPinNeverSpeaksForAPackage:
+    """The defect ADR-021 D-25 closes: a package present only on the target and named by
+    any pin stanza produced a `REPORT_ONLY` echo instead of its own removal diff — so it
+    could neither be removed nor marked machine-specific, and came back every run.
     """
 
-    @staticmethod
-    def _deleting_pin_context(pin_decision: Decision) -> tuple[AptSyncJob, MagicMock, _RecordingReviewer]:
-        """`curl` is extra on the target and governed by `curl-pin`, which the source
-        machine does not have — so the pin is offered for deletion and `curl`'s own removal
-        diff is suppressed into `HELD_OR_PINNED` at plan time.
-        """
-        context, _source, target = _repo_context(
-            target_side_effect=_pin_lifecycle_target(
-                {
-                    "echo $HOME": CommandResult(0, "/home/target-user", ""),
-                    "apt-mark showmanual": CommandResult(0, "curl\n", ""),
-                    "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
-                    "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "curl-pin"), ""),
-                    "cat /etc/apt/preferences.d/curl-pin": CommandResult(0, _CURL_PIN_FILE, ""),
-                    "apt-get --dry-run remove --assume-yes curl": CommandResult(0, "Remv curl [8.0]\n", ""),
-                },
-                before=_CURL_PIN_SCAN,
-                after="",
-                trigger="sudo rm --force /etc/apt/preferences.d/curl-pin",
-            ),
-        )
-        job = AptSyncJob(context)
-        reviewer = _RecordingReviewer({"apt:pin:curl-pin": pin_decision, "apt:package:curl": Decision.APPLY})
-        job.context = dataclasses.replace(job.context, reviewer=reviewer)
-        return job, target, reviewer
-
     @pytest.mark.asyncio
-    async def test_the_pin_hides_the_package_in_the_first_review(self) -> None:
-        job, _target, reviewer = self._deleting_pin_context(Decision.APPLY)
+    async def test_a_target_only_package_named_by_a_pin_is_offered_for_removal(self) -> None:
+        job, _target, _reviewer = _pinned_target_only_package_context()
 
         plan = await job.plan()
 
         curl = next(d for d in plan.diffs if d.item_id == "apt:package:curl")
-        assert (curl.diff_class, curl.action) == (DiffClass.HELD_OR_PINNED, DiffAction.REPORT_ONLY)
-        assert reviewer.call_count == 0
+        assert (curl.diff_class, curl.action) == (DiffClass.EXTRA_ON_TARGET, DiffAction.REMOVE)
 
     @pytest.mark.asyncio
-    async def test_deleting_the_pin_reveals_the_package_in_a_second_review_this_same_run(self) -> None:
-        job, target, reviewer = self._deleting_pin_context(Decision.APPLY)
-
-        await job.execute()
-
-        assert reviewer.call_count == 2
-        assert "apt:package:curl" not in _actionable_entry_ids(reviewer.calls[0])
-        assert "apt:package:curl" in _actionable_entry_ids(reviewer.calls[1])
-        assert all("revealed by this run's /etc/apt changes" in group.title for group in reviewer.calls[1])
-
-        commands = all_calls(target)
-        pin_idx = _index_of(commands, lambda c: c == "sudo rm --force /etc/apt/preferences.d/curl-pin")
-        remove_idx = _index_of(
-            commands, lambda c: "apt-get remove --assume-yes curl" in c and c.startswith("sudo DEBIAN")
-        )
-        assert pin_idx < remove_idx
-
-    @pytest.mark.asyncio
-    async def test_keeping_the_pin_keeps_the_package_hidden_and_asks_nothing_twice(self) -> None:
-        """The user unticks the pin deletion: nothing about `/etc/apt` changes, so there is
-        no invalidated fact and no second screen.
+    async def test_the_removal_reaches_the_user_as_an_actionable_review_entry(self) -> None:
+        """`REPORT_ONLY` was the whole problem: it is shown but carries no verb, so it can
+        be neither applied nor recorded skip-always.
         """
-        job, target, reviewer = self._deleting_pin_context(Decision.SKIP_ONCE)
+        job, _target, reviewer = _pinned_target_only_package_context()
 
         await job.execute()
 
-        assert reviewer.call_count == 1
-        assert not any("apt-get remove --assume-yes curl" in c for c in all_calls(target))
+        assert "apt:package:curl" in _actionable_entry_ids(reviewer.calls[0])
 
     @pytest.mark.asyncio
-    async def test_a_pin_this_run_installs_withdraws_the_approval_it_contradicts(self) -> None:
-        """The other direction. The user approved removing `curl` AND installing a pin file
-        that governs it. Once the pin lands, the removal is no longer supported — the
-        approval is dropped silently, because withdrawing work needs no decision.
+    async def test_approving_it_actually_removes_the_package(self) -> None:
+        job, target, _reviewer = _pinned_target_only_package_context()
+
+        await job.execute()
+
+        assert any(c.startswith("sudo DEBIAN") and "apt-get remove" in c and "curl" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_no_command_asks_the_target_which_packages_its_pins_name(self) -> None:
+        """The stanza scan is gone with the echo. A pin file still travels as a FILE — its
+        digest is captured — but nothing parses package names out of it any more.
         """
-        context, _source, target = _repo_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "curl-pin"), ""),
-                "cat /etc/apt/preferences.d/curl-pin": CommandResult(0, _CURL_PIN_FILE, ""),
-            },
-            target_side_effect=_pin_lifecycle_target(
-                {
-                    "echo $HOME": CommandResult(0, "/home/target-user", ""),
-                    "apt-mark showmanual": CommandResult(0, "curl\n", ""),
-                    "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
-                    "apt-get --dry-run remove --assume-yes curl": CommandResult(0, "Remv curl [8.0]\n", ""),
-                },
-                before="",
-                after=_CURL_PIN_SCAN,
-                trigger="sudo install --owner=root --group=root --mode=0644",
-            ),
-        )
-        job = AptSyncJob(context)
-        reviewer = _RecordingReviewer({"apt:pin:curl-pin": Decision.APPLY, "apt:package:curl": Decision.APPLY})
-        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+        job, target, _reviewer = _pinned_target_only_package_context()
 
         await job.execute()
 
-        assert reviewer.call_count == 1, "withdrawing work asks the user nothing"
-        assert not any(c.startswith("sudo DEBIAN") and "remove --assume-yes curl" in c for c in all_calls(target))
-
-    @pytest.mark.asyncio
-    async def test_a_run_with_no_etc_apt_work_re_reads_nothing_and_reviews_once(self) -> None:
-        context, _source, target = _repo_context(
-            source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-            },
-            target_responses={
-                **_NO_PACKAGES,
-                "apt-cache policy": CommandResult(0, _POLICY_AVAILABLE, ""),
-                "apt-get --dry-run install": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-            },
-        )
-        job = AptSyncJob(context)
-        reviewer = _RecordingReviewer({"apt:package:pkg-a": Decision.APPLY})
-        job.context = dataclasses.replace(job.context, reviewer=reviewer)
-
-        await job.execute()
-
-        assert reviewer.call_count == 1
-        assert len([c for c in all_calls(target) if _PIN_SCAN_CMD in c]) == 1, "nothing is re-read"
-
-    @pytest.mark.asyncio
-    async def test_a_dry_run_converges_nothing_so_it_reviews_once(self) -> None:
-        job, target, reviewer = self._deleting_pin_context(Decision.APPLY)
-        job.context = dataclasses.replace(job.context, dry_run=True)
-
-        await job.execute()
-
-        assert reviewer.call_count == 1
-        assert not any(c.startswith("sudo rm --force") for c in all_calls(target))
+        assert not any("/^Package:/" in cmd for cmd in all_calls(target))
+        assert any(_PIN_DIGEST_CMD in cmd for cmd in all_calls(target))
 
 
-class TestNewRepositoryMakesAPackageAvailable:
-    """The general class the second review closes, not just the pin symptom: at plan time
-    the target's apt reports no candidate; the repository this run installs supplies one.
+class TestPinsStillTravelAsFiles:
+    """The echo was a REPORT about pins, never the mechanism. A `preferences.d` file is
+    what makes a vendor's origin outrank the archive's epoch-1 copy (D-36), so it has to
+    keep reaching the target — deleting the echo must not touch that.
     """
 
     @pytest.mark.asyncio
-    async def test_a_package_apt_could_not_offer_at_plan_time_is_reviewed_once_the_repo_lands(self) -> None:
+    async def test_a_pin_file_the_target_lacks_is_still_diffed_and_written(self) -> None:
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p1", "mozilla"), ""),
+                "cat /etc/apt/preferences.d/mozilla": CommandResult(0, _MOZILLA_PIN_FILE, ""),
+            },
+            target_responses={**_NO_PACKAGES},
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:pin:mozilla": Decision.APPLY})
+
+        await job.execute()
+
+        assert any(
+            "sudo install" in cmd and cmd.endswith("/etc/apt/preferences.d/mozilla") for cmd in all_calls(target)
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_pin_file_diff_needs_no_read_of_its_contents(self) -> None:
+        """Its whole-file digest decides the diff. Nothing parses the stanzas any more, so
+        the plan-time content read that only hydrated the retired echo is gone too.
+        """
+        context, source, _target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p1", "mozilla"), ""),
+            },
+            target_responses={**_NO_PACKAGES},
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert any(d.item_id == "apt:pin:mozilla" for d in plan.diffs)
+        assert not any("cat /etc/apt/preferences.d" in cmd for cmd in all_calls(source))
+
+
+class TestOneReviewPerRun:
+    """Every apt prompt precedes the job's first mutating command, unconditionally."""
+
+    @pytest.mark.asyncio
+    async def test_a_package_the_target_had_no_candidate_for_is_installed_in_one_review(self) -> None:
+        """At plan time the target's apt reports no candidate at all; the repository this
+        run installs supplies one. The package is classified from the SOURCE's origin and
+        the file declaring it, so its actionability never depended on a repository this run
+        had not written yet — and one screen is enough.
+        """
         policy_results = [CommandResult(0, _POLICY_NO_CANDIDATE, ""), CommandResult(0, _POLICY_AVAILABLE, "")]
         state = {"calls": 0}
 
@@ -4990,6 +4851,8 @@ class TestNewRepositoryMakesAPackageAvailable:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://example.com"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("foo.sources", _DEB822_FOO), ""),
                 "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
                 "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
                 "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
@@ -4997,14 +4860,29 @@ class TestNewRepositoryMakesAPackageAvailable:
             target_side_effect=_target,
         )
         job = AptSyncJob(context)
-        reviewer = _RecordingReviewer({"apt:source:foo.sources": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
+        reviewer = _CountingReviewer({"apt:source:foo.sources": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY})
         job.context = dataclasses.replace(job.context, reviewer=reviewer)
 
         await job.execute()
 
-        assert "apt:package:pkg-a" not in _actionable_entry_ids(reviewer.calls[0])
-        assert "apt:package:pkg-a" in _actionable_entry_ids(reviewer.calls[1])
+        assert len(reviewer.calls) == 1
+        assert "apt:package:pkg-a" in _actionable_entry_ids(reviewer.calls[0])
         assert any(c.startswith("sudo DEBIAN") and "install" in c and "pkg-a" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_rewrites_etc_apt_still_reviews_exactly_once(self) -> None:
+        """The general property, asserted against the run shape that used to trigger the
+        second screen: the pin the user is deleting really is deleted, `/etc/apt` really is
+        refreshed, and the user is still asked exactly once.
+        """
+        job, target, reviewer = _pinned_target_only_package_context(**{"apt:pin:curl-pin": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert any(c.startswith("sudo rm --force") and "curl-pin" in c for c in commands)
+        assert any(c.startswith("sudo apt-get update") for c in commands)
+        assert len(reviewer.calls) == 1
 
 
 def _stub_executor(responses: dict[str, CommandResult]) -> MagicMock:
@@ -5086,45 +4964,8 @@ class TestCompareDebVersions:
         assert await compare_deb_versions(executor, "1.0-1", "1.0-1") == 0
 
 
-class TestHoldPinFactAndDetails:
-    """Hold and pin stay distinguishable facts even under one review category."""
-
-    def test_hold_and_pin_details_are_distinguishable(self) -> None:
-        hold = HoldPinFact(mechanism="hold", package="curl", source_ref="apt-mark showhold")
-        pin = HoldPinFact(mechanism="pin", package="curl", source_ref="/etc/apt/preferences.d/curl-pin")
-
-        hold_detail = build_held_or_pinned_detail(hold)
-        pin_detail = build_held_or_pinned_detail(pin)
-
-        assert hold_detail != pin_detail
-        assert "hold" in hold_detail
-        assert "pin" in pin_detail
-
-    def test_hold_and_pin_diffs_carry_different_mechanism_values(self) -> None:
-        hold = HoldPinFact(mechanism="hold", package="curl", source_ref="apt-mark showhold")
-        pin = HoldPinFact(mechanism="pin", package="curl", source_ref="/etc/apt/preferences.d/curl-pin")
-
-        hold_diff = ItemDiff(
-            item_class=ItemClass.APT_PACKAGE,
-            diff_class=DiffClass.HELD_OR_PINNED,
-            action=DiffAction.REPORT_ONLY,
-            item_id="apt:package:curl",
-            label="curl",
-            detail=build_held_or_pinned_detail(hold),
-        )
-        pin_diff = ItemDiff(
-            item_class=ItemClass.APT_PACKAGE,
-            diff_class=DiffClass.HELD_OR_PINNED,
-            action=DiffAction.REPORT_ONLY,
-            item_id="apt:package:curl",
-            label="curl",
-            detail=build_held_or_pinned_detail(pin),
-        )
-
-        assert hold_diff.diff_class == DiffClass.HELD_OR_PINNED
-        assert pin_diff.diff_class == DiffClass.HELD_OR_PINNED
-        assert hold_diff.detail != pin_diff.detail
-        assert hold.mechanism != pin.mechanism
+class TestRepoUnavailableWording:
+    """`REPO_UNAVAILABLE`'s detail, whose meaning ADR-021 redefined."""
 
     def test_build_repo_unavailable_detail_names_the_package_its_origin_and_the_cause(self) -> None:
         detail = build_repo_unavailable_detail(
@@ -5142,7 +4983,7 @@ class TestDiffEngine:
     def test_missing_on_target_yields_install(self) -> None:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, [], (), {})
+        diffs = _diff_apt_packages(source_items, [], {})
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.MISSING_ON_TARGET
@@ -5151,7 +4992,7 @@ class TestDiffEngine:
     def test_extra_on_target_yields_remove(self) -> None:
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages([], target_items, (), {})
+        diffs = _diff_apt_packages([], target_items, {})
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.EXTRA_ON_TARGET
@@ -5161,7 +5002,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="2.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, (), {})
+        diffs = _diff_apt_packages(source_items, target_items, {})
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.VERSION_MISMATCH
@@ -5174,64 +5015,54 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, (), {})
+        diffs = _diff_apt_packages(source_items, target_items, {})
 
         assert diffs == []
 
     def test_source_hold_only_yields_apt_hold_install(self) -> None:
         """#208: a name held on the source but not the target is an `apt:hold:` INSTALL
-        (hold), a distinct APT_HOLD item — never a package-level HELD_OR_PINNED report.
+        (hold), a distinct APT_HOLD item — never a package-level report.
         """
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, (), {}, frozenset({"pkg-a"}), frozenset())
+        diffs = _diff_apt_packages(source_items, target_items, {}, frozenset({"pkg-a"}), frozenset())
 
         assert len(diffs) == 1
         assert diffs[0].item_class == ItemClass.APT_HOLD
         assert diffs[0].item_id == "apt:hold:pkg-a"
         assert diffs[0].action == DiffAction.INSTALL
-        assert diffs[0].diff_class != DiffClass.HELD_OR_PINNED
 
     def test_target_hold_only_yields_apt_hold_remove_and_suppresses_package_action(self) -> None:
         """#208: a name held on the target but not the source is an `apt:hold:` REMOVE
         (unhold); the version-mismatch package action it would otherwise carry is
-        suppressed (a held package is never proposed for upgrade) and no HELD_OR_PINNED
+        suppressed (a held package is never proposed for upgrade) and no package-level
         report is emitted for the hold mechanism.
         """
         source_items = [AptPackageItem(name="pkg-a", version="2.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, (), {}, frozenset(), frozenset({"pkg-a"}))
+        diffs = _diff_apt_packages(source_items, target_items, {}, frozenset(), frozenset({"pkg-a"}))
 
         assert len(diffs) == 1
         assert diffs[0].item_class == ItemClass.APT_HOLD
         assert diffs[0].action == DiffAction.REMOVE
-        assert not any(d.diff_class == DiffClass.HELD_OR_PINNED for d in diffs)
 
     def test_held_on_both_yields_no_diff(self) -> None:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, (), {}, frozenset({"pkg-a"}), frozenset({"pkg-a"}))
+        diffs = _diff_apt_packages(source_items, target_items, {}, frozenset({"pkg-a"}), frozenset({"pkg-a"}))
 
         assert diffs == []
 
-    def test_pin_fact_yields_held_or_pinned_distinguishable_from_a_hold_item(self) -> None:
-        """A pin keeps its REPORT_ONLY HELD_OR_PINNED echo on the package; a hold is a
-        separate APT_HOLD membership item — the two stay distinguishable (#208).
+    def test_the_diff_takes_no_pin_input_at_all(self) -> None:
+        """The signature is the deletion, made structural: with no pin argument there is no
+        way to reintroduce the echo without changing every caller (ADR-021 D-25).
         """
-        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
-        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
-        pin = HoldPinFact(mechanism="pin", package="pkg-a", source_ref="/etc/apt/preferences.d/pkg-a-pin")
+        parameters = inspect.signature(_diff_apt_packages).parameters
 
-        pin_diffs = _diff_apt_packages(source_items, target_items, [pin], {})
-        hold_diffs = _diff_apt_packages(source_items, target_items, (), {}, frozenset({"pkg-a"}), frozenset())
-
-        assert pin_diffs[0].diff_class == DiffClass.HELD_OR_PINNED
-        assert pin_diffs[0].item_class == ItemClass.APT_PACKAGE
-        assert hold_diffs[0].item_class == ItemClass.APT_HOLD
-        assert hold_diffs[0].diff_class != DiffClass.HELD_OR_PINNED
+        assert not any("pin" in name for name in parameters)
 
     def test_an_origin_no_source_file_declares_yields_repo_unavailable_not_install(self) -> None:
         """ADR-021 §2.3 class 4, the only remaining meaning of `REPO_UNAVAILABLE`: the
@@ -5241,7 +5072,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="brscan3", version="")]
         plan = {"apt:package:brscan3": _OriginPlan(source_origins=frozenset({"https://gone.example.com/apt"}))}
 
-        diffs = _diff_apt_packages(source_items, [], (), plan)
+        diffs = _diff_apt_packages(source_items, [], plan)
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.REPO_UNAVAILABLE

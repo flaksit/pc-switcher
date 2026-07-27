@@ -102,7 +102,7 @@ _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable"})
 # `ReviewGroup.action` values whose items carry a converge verb AND may be recorded
 # machine-specific, and are therefore the only ones offered the "never offer again"
 # promotion below (D-07). A `REPORT_ONLY` group is excluded on purpose: a version mismatch,
-# a missing repo candidate or a pin echo has no machine that HOLDS the item for D-08a to
+# an unreplicable origin or a cross-vendor mismatch has no machine that HOLDS the item for D-08a to
 # record against, and recording one would stop the package syncing altogether rather than
 # stop reporting the condition. Those are resolved by fixing the underlying condition, not
 # by a machine-specific mark.

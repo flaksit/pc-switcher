@@ -69,12 +69,18 @@ class DiffClass(StrEnum):
       provenance and read as unavailable for packages the target could have installed.
     - `ORIGIN_MISMATCH` — present on both machines, from two different vendors. A real
       divergence a presence-and-version diff cannot see.
+
+    ADR-020's `HELD_OR_PINNED` is retired. A hold replicates as its own `apt:hold:`/
+    `snap:hold:` membership item, and a pin's only effect — which origin wins — is read
+    back off the target after the refresh (ADR-021 D-35) rather than echoed onto every
+    package a pin file happens to name. The echo also made a target-only package named by
+    any pin impossible to remove: `REPORT_ONLY` outranked its own `EXTRA_ON_TARGET`/
+    `REMOVE` diff, and a report-only item cannot be skipped-always either.
     """
 
     MISSING_ON_TARGET = "missing_on_target"
     EXTRA_ON_TARGET = "extra_on_target"
     VERSION_MISMATCH = "version_mismatch"
-    HELD_OR_PINNED = "held_or_pinned"
     REPO_UNAVAILABLE = "repo_unavailable"
     ORIGIN_MISMATCH = "origin_mismatch"
     UNREPRODUCIBLE = "unreproducible"

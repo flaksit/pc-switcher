@@ -188,8 +188,7 @@ All item classes flow through one shared diff result shape:
 class ItemDiff:
     item_class: ItemClass
     diff_class: DiffClass     # MISSING_ON_TARGET, EXTRA_ON_TARGET, VERSION_MISMATCH,
-                               # HELD_OR_PINNED, REPO_UNAVAILABLE, ORIGIN_MISMATCH,
-                               # UNREPRODUCIBLE
+                               # REPO_UNAVAILABLE, ORIGIN_MISMATCH, UNREPRODUCIBLE
     action: DiffAction        # INSTALL, REMOVE, CHANGE, REPORT_ONLY
     item_id: str
     label: str

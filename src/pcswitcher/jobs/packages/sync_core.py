@@ -321,7 +321,7 @@ class PackageSyncJob(SyncJob):
         prefix, carrying the diff's own detail, and no converge command is ever issued.
 
         `REPORT_ONLY` diffs are excluded here regardless of decision: they imply no
-        converge verb (D-25's held/pinned, version-mismatch, repo-unavailable,
+        converge verb (D-25's version-mismatch, repo-unavailable, origin-mismatch and
         unreproducible classes are informational), so `converge()` is never called
         for one even if something recorded `APPLY` against it.
 
@@ -421,8 +421,8 @@ class PackageSyncJob(SyncJob):
         — through the remote executor, never a local write (ADR-002).
 
         `REPORT_ONLY` diffs are skipped: they carry no converge verb (version-mismatch,
-        held/pinned, repo-unavailable, unreproducible are informational only), so there
-        is no "holder" for D-08a to record against.
+        repo-unavailable, origin-mismatch and unreproducible are informational only), so
+        there is no "holder" for D-08a to record against.
 
         Two guards, both required before anything is ever written: never for a
         non-interactive outcome (D-26 — nothing is recorded permanently when nothing
