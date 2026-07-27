@@ -287,7 +287,7 @@ Every integration test MUST carry exactly one CI-selection marker (`smoke` or an
 
 On ordinary PR pushes, CI runs only the integration tests for the areas the PR touches, plus the `smoke` set, via a pytest `-m` expression (e.g. `integration and not benchmark and (smoke or area_package)`). `tests/integration/scripts/select-ci-tests.sh` builds the expression: product source files map to areas through its case patterns, and a changed test file contributes the area named by its own `pytestmark`. Any changed file outside the mapped areas selects the full suite — the mapping errs toward running too much, never too little.
 
-The full suite runs on: `ready_for_review` (the pre-merge gate — branch protection requires this workflow's status check), the nightly schedule, and manual `workflow_dispatch`. When adding a new source module, map it in `select-ci-tests.sh`; new test files only need their marker.
+Every PR run — including `ready_for_review` — is topic-scoped; the full suite runs on: the `ci: full` PR label (while present, every run is full; adding it triggers a run immediately), the nightly schedule on main, and manual `workflow_dispatch` (`gh workflow run "Integration Tests" --ref <branch>`). Pre-merge gating is opt-in: add `ci: full` as the last step before merging and let the run go green — a red run blocks the merge like any failing required check. When adding a new source module, map it in `select-ci-tests.sh`; new test files only need their marker.
 
 ## Common Pitfalls
 

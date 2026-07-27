@@ -9,6 +9,7 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+      - labeled
   workflow_dispatch:
   schedule:
     # Nightly full-suite run on main: the backstop for topic-scoped PR runs
@@ -43,9 +44,12 @@ jobs:
   wait-for-ci:
     name: Wait for lint and unit tests
     needs: check-changes
+    # The 'labeled' guard: only the 'ci: full' label starts a run — adding any
+    # other label to a PR must not burn a CI cycle (or the VM lock).
     if: >-
       needs.check-changes.outputs.should-run == 'true' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci: full')
     runs-on: ubuntu-latest
     steps:
       # No native cross-workflow `needs:`. CI (lint + unit) runs in ci.yml on the
@@ -69,7 +73,8 @@ jobs:
     needs: [check-changes, wait-for-ci]
     if: >-
       needs.check-changes.outputs.should-run == 'true' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci: full')
     runs-on: ubuntu-latest
     concurrency:
       group: pc-switcher-integration
@@ -146,13 +151,16 @@ jobs:
 
       - name: Select tests for this run
         id: select
-        # Ordinary PR pushes run only the tests for the areas the PR touches, as
-        # a pytest -m expression over the smoke/area_* markers (see
-        # select-ci-tests.sh for the mapping and its err-toward-full rule).
-        # Full suite on: ready_for_review (the pre-merge gate — branch protection
-        # requires this workflow's status), nightly schedule, and manual dispatch.
+        # PR runs — including ready_for_review — run only the tests for the
+        # areas the PR touches, as a pytest -m expression over the smoke/area_*
+        # markers (see select-ci-tests.sh for the mapping and its
+        # err-toward-full rule). Full suite on: the 'ci: full' PR label (the
+        # opt-in pre-merge gate — add it, let the run go green, then merge; a
+        # red run blocks the merge like any failing required check), nightly
+        # schedule, and manual dispatch.
         run: |
-          if [[ "${{ github.event_name }}" != "pull_request" || "${{ github.event.action }}" == "ready_for_review" ]]; then
+          if [[ "${{ github.event_name }}" != "pull_request" \
+                || "${{ contains(github.event.pull_request.labels.*.name, 'ci: full') }}" == "true" ]]; then
             echo "Full suite: event=${{ github.event_name }} action=${{ github.event.action }}"
             echo "markers=" >> $GITHUB_OUTPUT
           else
@@ -206,6 +214,9 @@ jobs:
         run: |
           if [[ "${{ github.event.pull_request.draft }}" == "true" ]]; then
             echo "✓ Integration tests skipped (draft PR)"
+            exit 0
+          elif [[ "${{ github.event.action }}" == "labeled" && "${{ github.event.label.name }}" != "ci: full" ]]; then
+            echo "✓ Integration tests skipped (unrelated label)"
             exit 0
           elif [[ "${{ needs.check-changes.outputs.should-run }}" != "true" ]]; then
             echo "✓ Integration tests skipped (no relevant changes)"
