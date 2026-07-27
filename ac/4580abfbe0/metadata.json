@@ -3,7 +3,7 @@
   "checkpoint_id": "ac4580abfbe0",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 1,
+  "checkpoints_count": 4,
   "files_touched": [
     "src/pcswitcher/jobs/packages/apt_policy.py",
     "tests/unit/jobs/test_manual_installs_sync.py"
@@ -15,13 +15,20 @@
       "compact_transcript": "/ac/4580abfbe0/0/transcript.jsonl",
       "content_hash": "/ac/4580abfbe0/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/ac/4580abfbe0/1/metadata.json",
+      "transcript": "/ac/4580abfbe0/1/full.jsonl",
+      "compact_transcript": "/ac/4580abfbe0/1/transcript.jsonl",
+      "content_hash": "/ac/4580abfbe0/1/content_hash.txt",
+      "prompt": "/ac/4580abfbe0/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 10,
-    "cache_creation_tokens": 37796,
-    "cache_read_tokens": 610641,
-    "output_tokens": 7236,
-    "api_call_count": 5
+    "input_tokens": 516,
+    "cache_creation_tokens": 3919671,
+    "cache_read_tokens": 132652728,
+    "output_tokens": 279765,
+    "api_call_count": 277
   }
 }
