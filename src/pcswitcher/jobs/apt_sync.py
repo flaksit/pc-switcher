@@ -19,6 +19,15 @@ derived from the package's own approval; no writable declaring file -> `REPO_UNA
 reported rather than installed from somewhere else. A package installed on both machines
 from two different vendors is `ORIGIN_MISMATCH`, report-only.
 
+That classification is not the guarantee — it is only what decides which repository work to
+derive. The guarantee is `_origin_refusal` (D-35): after this run's single `apt-get update`
+and before its first install, ONE batched `apt-cache policy` re-reads the target's candidate
+origins, and an approved install apt would now satisfy from none of the source's origins
+fails as its own item (D-27), naming both. It sees the state the derivation actually
+produced, so a repository whose write failed or a pin that never landed is caught there
+rather than shipping the wrong vendor's package. Packages the source has only from its own
+distribution files are exempt: two machines on different Ubuntu mirrors are one vendor.
+
 Bare-`.deb` packages are NOT in scope and are dropped at capture
 (`capture_source_items`). A package whose installed version comes from no configured
 repository was put there with `dpkg --install`; apt cannot install it on the target, and
@@ -366,6 +375,26 @@ def build_origin_mismatch_detail(source_origins: Sequence[str], target_origins: 
     source = ", ".join(_display_origin(uri) for uri in source_origins)
     target = ", ".join(_display_origin(uri) for uri in target_origins)
     return f"source installed it from {source}, target from {target}"
+
+
+def build_origin_refusal_detail(name: str, source_origins: Sequence[str], target_origins: Sequence[str]) -> str:
+    """Why an approved install was refused at the last moment (ADR-021 D-35): the origin the
+    source uses, and the origin the target's apt would have installed from instead.
+
+    Both are named because either half alone is unactionable. "The wrong vendor" does not
+    say which repository failed to land; "no candidate from packages.mozilla.org" does not
+    say what the target would have shipped in its place. Together they are the whole finding,
+    on the item the user actually decided about.
+    """
+    wanted = ", ".join(_display_origin(uri) for uri in source_origins)
+    if target_origins:
+        instead = f"would install it from {', '.join(_display_origin(uri) for uri in target_origins)}"
+    else:
+        instead = "offers it from no repository at all"
+    return (
+        f"install of {name} refused: the source has it from {wanted}, but after this run's "
+        f"apt-get update the target {instead} (ADR-021 D-35)"
+    )
 
 
 @dataclass(frozen=True)
@@ -1386,6 +1415,12 @@ class AptSyncJob(PackageSyncJob):
         # failure path).
         self._metadata_refreshed: bool = False
         self._metadata_refresh_error: str | None = None
+        # `{package name: refusal message}` for every approved install whose candidate on
+        # the REAL post-`apt-get update` target comes from none of the source's origins
+        # (D-35). `None` until the one batched verification runs; `{}` once it has run and
+        # found nothing to refuse, which is what distinguishes "not yet checked" from
+        # "checked, all clear" and keeps the call to exactly one per run.
+        self._origin_refusals: dict[str, str] | None = None
         # Package names of every manual-collateral item the user resolved install-anyway,
         # computed in `accept_review` from the collateral group's decisions. The apply-time
         # guard lets a removal/downgrade of one of these through; every other manual
@@ -2508,6 +2543,68 @@ class AptSyncJob(PackageSyncJob):
             raise ConvergeItemFailed(self._metadata_refresh_error)
         self._metadata_refreshed = True
 
+    async def _origin_refusal(self, name: str) -> str | None:
+        """Why this approved install may not run, or `None` when its origin checks out
+        (ADR-021 D-35) — the hard guarantee behind origin replication.
+
+        Plan-time classification decides what `/etc/apt` work to derive; only this decides
+        what may be installed, because only it sees the state that derivation actually
+        produced: a repository whose write failed, a pin that never landed, a vendor version
+        the archive's epoch still outranks. It is therefore the check that makes "the target
+        silently installs a different vendor's package" unreachable even when everything
+        upstream of it is wrong.
+
+        ONE batched `apt-cache policy` for the whole approved set, computed on first use and
+        cached — the answer cannot change between two installs of one run, and a per-package
+        call would cost a full policy query per install. Reached from `_converge_install`
+        rather than from `apply()` so it is by construction after this run's single
+        `apt-get update` (whichever of the two refresh paths issued it) and before the first
+        install, which is the window in which the answer is about the converged target.
+
+        Packages whose source origins are all distribution origins never enter the set
+        (D-35's exemption): two machines on different Ubuntu mirrors are not two vendors.
+
+        A name apt answers nothing for is refused like any other mismatch. That is
+        deliberately stricter than the plan-time rule, where apt's silence condemns nothing
+        (`df48cd07`): there, silence leaves the install to report its own failure; here the
+        install IS the thing being guarded, and a guarantee that could not be evaluated has
+        not been met.
+        """
+        if self._origin_refusals is None:
+            self._origin_refusals = await self._verify_approved_origins()
+        return self._origin_refusals.get(name)
+
+    async def _verify_approved_origins(self) -> dict[str, str]:
+        assert self._accepted_plan is not None
+        assert self._accepted_outcome is not None
+
+        held_to: dict[str, frozenset[str]] = {}
+        for diff in self._accepted_plan.diffs:
+            if diff.item_class is not ItemClass.APT_PACKAGE or diff.action is not DiffAction.INSTALL:
+                continue
+            if self._accepted_outcome.decisions.get(diff.item_id) != Decision.APPLY:
+                continue
+            origin_plan = self._origin_plan.get(diff.item_id)
+            # `vendor_source_origins` is `source_origins` minus the SOURCE's own distribution
+            # files, so an empty tuple is exactly D-35's exemption. The intersection below is
+            # against the FULL set: a package the source has from both a vendor and the
+            # archive is faithfully replicated by either.
+            if origin_plan is None or not origin_plan.vendor_source_origins:
+                continue
+            held_to[_package_name(diff.item_id)] = origin_plan.source_origins
+
+        if not held_to:
+            return {}
+
+        quoted = " ".join(shlex.quote(name) for name in sorted(held_to))
+        result = await self.target.run_command(f"apt-cache policy {quoted}", login_shell=False)
+        candidates = candidate_origins_by_package(result.stdout)
+        return {
+            name: build_origin_refusal_detail(name, sorted(origins), sorted(candidates.get(name, frozenset())))
+            for name, origins in sorted(held_to.items())
+            if not (candidates.get(name, frozenset()) & origins)
+        }
+
     async def _converge_install(self, diff: ItemDiff) -> CommandResult:
         """Simulate, then apply, one apt install — the last line of defence behind the
         plan-time collateral classification (D-30). Auto-installed collateral (a package
@@ -2520,10 +2617,17 @@ class AptSyncJob(PackageSyncJob):
 
         A single `apt-get update` runs before the first install of the run
         (`_ensure_metadata_refreshed`, decision 1) unless the repository-group convergence
-        already refreshed metadata this run.
+        already refreshed metadata this run. The origin check (`_origin_refusal`, D-35) runs
+        immediately after it and before the collateral simulation: refusing an install whose
+        provenance is wrong costs one cached lookup, while simulating it costs a command.
         """
         name = _package_name(diff.item_id)
         await self._ensure_metadata_refreshed()
+
+        refusal = await self._origin_refusal(name)
+        if refusal is not None:
+            raise ConvergeItemFailed(refusal)
+
         quoted = shlex.quote(name)
         install_args = f"install --assume-yes --no-install-recommends {quoted}"
 

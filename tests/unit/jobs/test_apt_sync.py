@@ -36,6 +36,7 @@ from pcswitcher.jobs.apt_sync import (
     build_held_or_pinned_detail,
     build_origin_detail,
     build_origin_mismatch_detail,
+    build_origin_refusal_detail,
     build_repo_unavailable_detail,
     compare_deb_versions,
     simulate_apt_transaction,
@@ -2493,6 +2494,241 @@ class TestOriginOutcome:
     def test_a_plan_with_no_origin_fact_at_all_still_installs(self) -> None:
         """The degenerate case: nothing captured, nothing to hold the install to."""
         assert _OriginPlan().outcome() is _OriginOutcome.SAME_ORIGIN
+
+
+def respond_with_policy_sequence(
+    mapping: dict[str, CommandResult], policy_results: list[CommandResult]
+) -> Callable[..., CommandResult]:
+    """Like `respond_to`, but successive `apt-cache policy` calls return successive results
+    (the last one repeats).
+
+    The shape the target genuinely has across one run: the plan-time policy read and the
+    post-`apt-get update` verification ask the same question of two different `/etc/apt`
+    states, and a fixture that answers both identically cannot distinguish a verification
+    that re-read the target from one that reused the plan's answer.
+    """
+    fallback = CommandResult(exit_code=0, stdout="", stderr="")
+    state = {"policy_calls": 0}
+
+    def _side_effect(cmd: str, **_: object) -> CommandResult:
+        if "apt-cache policy" in cmd:
+            index = min(state["policy_calls"], len(policy_results) - 1)
+            state["policy_calls"] += 1
+            return policy_results[index]
+        for pattern, result in mapping.items():
+            if pattern in cmd:
+                return result
+        return fallback
+
+    return _side_effect
+
+
+def _real_installs(target: MagicMock) -> list[str]:
+    """Every REAL `apt-get install` the target was asked to run — the `--dry-run`
+    simulations share the verb and are deliberately excluded."""
+    return [cmd for cmd in all_calls(target) if "sudo" in cmd and "apt-get install" in cmd]
+
+
+def _policy_calls_after_the_update(target: MagicMock) -> list[str]:
+    commands = all_calls(target)
+    update = _index_of(commands, lambda cmd: "sudo apt-get update" in cmd)
+    return [cmd for cmd in commands[update:] if "apt-cache policy" in cmd]
+
+
+def _mozilla_source_responses() -> dict[str, CommandResult]:
+    """A source machine running Mozilla's own `firefox`, with the repository file that
+    declares it and the key that file names."""
+    return {
+        "apt-mark showmanual": CommandResult(0, "firefox\n", ""),
+        "dpkg-query": CommandResult(0, "firefox\t145.0\n", ""),
+        "apt-cache policy": CommandResult(0, POLICY_MOZILLA_FIREFOX_INSTALLED, ""),
+        _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("mozilla.sources", _MOZILLA_SOURCES), ""),
+        "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "packages.mozilla.org.asc"), ""),
+    }
+
+
+class TestOriginEnforcement:
+    """ADR-021 D-35 at converge time: whatever plan-time classification concluded and
+    whatever `/etc/apt` work this run derived, the target may not install a package from a
+    vendor the source does not use. Checked against the real post-`apt-get update` state.
+    """
+
+    @pytest.mark.asyncio
+    async def test_install_is_refused_when_the_post_update_candidate_is_from_the_wrong_origin(self) -> None:
+        """The Firefox defect at its last possible catch point: the source runs Mozilla's
+        build, the repository did not land (or did not win), and Ubuntu's epoch-1
+        transitional package is still what apt would install. It fails as its own item.
+        """
+        context, _source, target = make_context(
+            source_responses=_mozilla_source_responses(),
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, POLICY_ARCHIVE_CANDIDATE_UNINSTALLED, ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:firefox": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as excinfo:
+            await job.execute()
+
+        reasons = [reason for _diff, reason in excinfo.value.failures]
+        assert len(reasons) == 1
+        assert "packages.mozilla.org/apt" in reasons[0]
+        assert "ftp.belnet.be/ubuntu" in reasons[0]
+        assert not any("firefox" in cmd for cmd in _real_installs(target))
+
+    @pytest.mark.asyncio
+    async def test_an_origin_the_converged_target_now_offers_lets_the_install_through(self) -> None:
+        """The same run once the repository and its pin have landed: the verification re-reads
+        the target and finds Mozilla's copy, so the install proceeds. This is why the check
+        re-reads instead of reusing the plan's answer, which still said Ubuntu's archive.
+        """
+        context, _source, target = make_context(source_responses=_mozilla_source_responses())
+        target.run_command = AsyncMock(
+            side_effect=respond_with_policy_sequence(
+                {"apt-mark showmanual": CommandResult(0, "", "")},
+                [
+                    CommandResult(0, POLICY_ARCHIVE_CANDIDATE_UNINSTALLED, ""),
+                    CommandResult(0, POLICY_MOZILLA_FIREFOX_INSTALLED, ""),
+                ],
+            )
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:firefox": Decision.APPLY})
+
+        await job.execute()
+
+        assert [cmd for cmd in _real_installs(target) if "firefox" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_the_origin_verification_costs_one_batched_policy_call(self) -> None:
+        """Three approved vendor installs, one policy read — never one per package. The
+        answer cannot change between two installs of the same run.
+        """
+        names = ("pkg-a", "pkg-b", "pkg-c")
+        vendor_policy = "".join(_policy_block(name, "https://vendor.example.com/apt") for name in names)
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, SHOWMANUAL_3, ""),
+                "dpkg-query": CommandResult(0, DPKG_QUERY_3, ""),
+                "apt-cache policy": CommandResult(0, vendor_policy, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, vendor_policy, ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {f"apt:package:{name}": Decision.APPLY for name in names})
+
+        await job.execute()
+
+        assert len(_real_installs(target)) == 3
+        assert len(_policy_calls_after_the_update(target)) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_distribution_origin_package_is_not_origin_verified(self) -> None:
+        """D-35's exemption. The source has this package from its own Ubuntu mirror, so
+        whatever mirror the target answers with is the same vendor — and asking the question
+        at all would refuse every package on a pair of machines with different mirrors.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "http://ftp.belnet.be/ubuntu"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("ubuntu.sources", _UBUNTU_SOURCES_BELNET), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "http://archive.ubuntu.com/ubuntu"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
+
+        await job.execute()
+
+        assert [cmd for cmd in _real_installs(target) if "pkg-a" in cmd]
+        assert _policy_calls_after_the_update(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_verification_apt_answers_nothing_for_refuses_the_install(self) -> None:
+        """Stricter than the plan-time rule on purpose: there, apt's silence leaves the
+        install to report its own failure; here the install is the thing being guarded, and a
+        guarantee that could not be evaluated has not been met.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://vendor.example.com/apt"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as excinfo:
+            await job.execute()
+
+        assert "no repository at all" in excinfo.value.failures[0][1]
+        assert not any("pkg-a" in cmd for cmd in _real_installs(target))
+
+    @pytest.mark.asyncio
+    async def test_a_skipped_install_is_never_named_in_the_verification(self) -> None:
+        """The batch is the APPROVED set, not the planned one: a package the user left
+        unticked cannot be refused, and must not widen the command either.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t2.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0,
+                    _policy_block("pkg-a", "https://vendor.example.com/apt")
+                    + _policy_block("pkg-b", "https://vendor.example.com/apt"),
+                    "",
+                ),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://vendor.example.com/apt"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:package:pkg-b": Decision.SKIP_ONCE})
+
+        await job.execute()
+
+        verification = _policy_calls_after_the_update(target)
+        assert len(verification) == 1
+        assert "pkg-b" not in verification[0]
+
+
+class TestOriginRefusalWording:
+    """The refusal names both origins, because either half alone is unactionable."""
+
+    def test_both_the_wanted_and_the_offered_origin_are_named(self) -> None:
+        detail = build_origin_refusal_detail(
+            "firefox", ["https://packages.mozilla.org/apt"], ["http://ftp.belnet.be/ubuntu"]
+        )
+
+        assert "packages.mozilla.org/apt" in detail
+        assert "ftp.belnet.be/ubuntu" in detail
+
+    def test_a_target_with_no_candidate_origin_says_so_rather_than_naming_nothing(self) -> None:
+        detail = build_origin_refusal_detail("pkg-a", ["https://vendor.example.com/apt"], [])
+
+        assert "no repository at all" in detail
+        assert "vendor.example.com/apt" in detail
 
 
 # -- Task 2: ordered, transactional repository-group convergence -----------------------

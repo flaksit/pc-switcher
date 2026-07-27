@@ -63,6 +63,12 @@ So `apt_sync` converges the repository configuration first, re-reads the target 
 
 A run that changes nothing under `/etc/apt` never shows a second screen, and neither does a dry run — nothing is written, so nothing is invalidated. A dry-run preview therefore shows the pre-repository classification of packages, which is the one place this staleness is still visible.
 
+### Where an apt package comes from
+
+A package is replicated as *name and origin*, never name alone. One name is often offered by two vendors — `firefox` is Mozilla's build on your source and Ubuntu's snap-transition package in the archive — and Ubuntu's copy carries epoch 1, which outranks every unpinned vendor version, so matching on the name would replicate the name and invert the provenance.
+
+So just before installing, once the run has refreshed the target's package lists, `apt_sync` asks the target's apt where each approved install would actually come from. If none of those places is a place the source has the package from, the install is refused and reported with both origins named — never installed from the other vendor. Only that package fails; the rest of the run continues. Packages your source gets from the Ubuntu archive itself are exempt, so two machines on different Ubuntu mirrors do not read as two vendors.
+
 ### Confirming every individual command
 
 The batched review approves *items*, not commands. One ticked line can expand into several: an apt package is an `apt-get --dry-run` simulation then an `apt-get install`; an apt repository file is a backup, an upload, a `sudo install` promotion and an `apt-get update`.
