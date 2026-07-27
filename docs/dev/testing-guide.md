@@ -275,7 +275,13 @@ tests/integration/
 @pytest.mark.ci_skip      # Integration test excluded from CI (still runs locally); see below
 ```
 
-`ci_skip` is applied inline where the test lives: a module-level `pytestmark = pytest.mark.ci_skip` excludes a whole file, and a `@pytest.mark.ci_skip` decorator on a class or test excludes just that class or test. CI deselects the marker by setting `PC_SWITCHER_TEST_MARKERS="integration and not benchmark and not ci_skip"` (in `.github/workflows/integration-tests.yml`); local and manual runs use the default expression in `run-integration-tests.sh` and therefore still execute these tests. To exclude more from CI, add the marker at the file, class, or test level.
+`ci_skip` is applied inline where the test lives: a module-level `pytestmark = pytest.mark.ci_skip` excludes a whole file, and a `@pytest.mark.ci_skip` decorator on a class or test excludes just that class or test. The marker is currently inert in CI (no run deselects it) — it was a stopgap for suite runtime, superseded by topic-based selection below, and its applications are slated for removal.
+
+## CI test selection (topic-based)
+
+On ordinary PR pushes, CI runs only the integration tests for the areas the PR touches, plus a smoke set (connectivity, version resolution, config sync). The mapping lives in `tests/integration/scripts/select-ci-tests.sh`: package-manager sources map to `jobs/test_package_sync.py`, install/self-update sources to the install tests, btrfs sources to the snapshot tests, folder-sync sources to `test_end_to_end_sync.py`. Any changed file outside the mapped areas selects the full suite — the mapping errs toward running too much, never too little.
+
+The full suite runs on: `ready_for_review` (the pre-merge gate — branch protection requires this workflow's status check), the nightly schedule, and manual `workflow_dispatch`. When adding a new source module or integration test file, add it to the mapping; until then it falls in the "unmapped → full suite" bucket.
 
 ## Common Pitfalls
 
@@ -324,11 +330,11 @@ print(mock_executor.run_command.call_args_list)
 # Unit tests only (fast, no VMs)
 uv run pytest tests/unit tests/contract -v
 
-# Integration tests (requires VMs and env vars) — runs everything, including ci_skip files
+# Integration tests (requires VMs and env vars) — runs everything
 uv run pytest tests/integration -v -m "integration and not benchmark"
 
-# Reproduce the CI selection (drops the ci_skip-marked files)
-uv run pytest tests/integration -v -m "integration and not benchmark and not ci_skip"
+# Reproduce a topic-scoped CI selection (paths as printed by the selection script)
+tests/integration/scripts/select-ci-tests.sh origin/main
 
 # Specific test
 uv run pytest tests/unit/test_config.py::TestConfig::test_load_default -v
