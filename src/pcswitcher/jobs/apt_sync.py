@@ -62,28 +62,46 @@ review shows a bare file deletion and nothing else. Disclosure, not refusal: rem
 repository whose packages are going too is legitimate, so the removal stays offered (and,
 like every removal group, unticked).
 
-A signing key is NOT an item. It has no `ItemClass`, no `item_id`, no diff, no review
-entry and no decision-file identity: the user thinks in repositories and packages, and a
-key is only how a repository is made to work. Keys are therefore two plain file operations
-bracketing the repository group, both driven by the decisions the user already made about
-SOURCES:
+Neither is `/etc/apt` itself, in most directions. Only what the user has a basis to judge
+is an item (ADR-021 D-37): a repository REMOVAL, a pin REMOVAL, and apt config in all
+three directions. Everything else under `/etc/apt` is derived and written without a
+question, in three buckets `_build_derived_writes` assembles from the accepted decisions:
+
+- the repository files serving the packages the user approved (ruling 4 — a repository
+  that feeds no package this run syncs does not travel at all);
+- every `/etc/apt/preferences.d` file the source has, always. A pin decides which origin
+  wins, which is precisely what origin replication turns on, and one naming an origin the
+  target does not have is inert — so always-sync costs nothing and cannot derive wrongly;
+- the distribution's own source files — `ubuntu.sources`, the two `ubuntu-esm-*` files and
+  `/etc/apt/sources.list` — written when missing and overwritten when different, never
+  removed and never offered for removal (D-38).
+
+A derived write has no item, so it cannot fail as one. It is recorded against its
+destination and charged to every approved package whose origin depended on it (D-39):
+the refusal lands on the thing the user actually decided about, naming the file. A rollback
+marks every derived write failed, exactly as it already does every reviewed group item.
+
+A signing key is NOT an item either. It has no `ItemClass`, no `item_id`, no diff, no
+review entry and no decision-file identity: the user thinks in repositories and packages,
+and a key is only how a repository is made to work. Keys are two plain file operations
+bracketing the repository group:
 
 - `_provision_keyrings` runs BEFORE any source file is written. It copies every source
   `/etc/apt/trusted.gpg.d` key the target lacks or differs on, and the keyrings named by
-  the source files this run actually writes (INSTALL and CHANGE alike — a changed source
-  may point at a keyring the target has never seen). `_require_keyrings_ready` still
-  refuses to write a source whose keyring did not arrive, so a repository is never written
-  ahead of its key. Provisioning is ownership-aware in ONE direction: a keyring the target
-  LACKS is copied whatever owns it on the source, but a keyring the target already has
-  with different bytes is left alone when the target's own dpkg owns that path — the
-  target's package manages that file and clobbering a distro keyring is not this job's
-  business. Ownership must not gate the COPY, because a vendor `.deb` (`code`,
-  `tailscale-archive-keyring`) ships both its `sources.list.d` entry and its keyring, so
-  the repository the package comes from cannot be trusted until the key that package owns
-  is already there; skipping package-owned keys would make that bootstrap unsatisfiable.
-  A key gets no decision of its own, but it is not invisible either: the source item's
-  review detail names the keys approving it would copy, so the review and the `--dry-run`
-  preview both report the write (ADR-014) without turning it back into a question.
+  the source files this run actually writes (a repository this run overwrites may point at
+  a keyring the target has never seen). `_keyring_gap` still refuses to write a source
+  whose keyring did not arrive, so a repository is never written ahead of its key — and
+  that refusal, like every other derived-write failure, is charged to the package.
+  Provisioning is ownership-aware in ONE direction: a keyring the target LACKS is copied
+  whatever owns it on the source, but a keyring the target already has with different bytes
+  is left alone when the target's own dpkg owns that path — the target's package manages
+  that file and clobbering a distro keyring is not this job's business. Ownership must not
+  gate the COPY, because a vendor `.deb` (`code`, `tailscale-archive-keyring`) ships both
+  its `sources.list.d` entry and its keyring, so the repository the package comes from
+  cannot be trusted until the key that package owns is already there; skipping
+  package-owned keys would make that bootstrap unsatisfiable. Every derived write is
+  logged at FULL as it lands, and previewed under `--dry-run` (ADR-014), which is how a
+  file with no review entry stays visible without becoming a question.
 
 Three key directories are captured, not two: `/etc/apt/keyrings`, `/etc/apt/trusted.gpg.d`
 and `/usr/share/keyrings`. The last is where `add-apt-repository`, several vendor `.deb`s
@@ -240,6 +258,15 @@ _ITEM_CLASS_ORDER: dict[ItemClass, int] = {
     # behind the module-level package default (3). A hold is dpkg selection state only:
     # holding a package that this same run is installing must happen once it is present.
     ItemClass.APT_HOLD: 4,
+}
+
+# Deletion order inside the repository group (ADR-021 §3.3 step 5), deliberately the
+# reverse of the write order: the repository goes before the pin that prefers it, so the
+# target never sits with a pin naming an origin apt no longer has.
+_REMOVAL_CLASS_ORDER: dict[ItemClass, int] = {
+    ItemClass.APT_SOURCE: 1,
+    ItemClass.APT_PIN: 2,
+    ItemClass.APT_CONFIG: 3,
 }
 
 # `AptHoldItem.item_id` is always this prefix + the package name (packages/items.py).
@@ -1121,30 +1148,32 @@ def _file_diff(
 
 
 def _diff_apt_pins(source_digests: Mapping[str, str], target_digests: Mapping[str, str]) -> list[ItemDiff]:
-    """Pin-file diffs, from the digest manifests alone.
+    """Pin-file diffs, from the digest manifests alone — the REMOVAL direction only.
 
-    No file content is read: the only thing that was ever parsed out of a pin file was the
-    package names for a per-package "pinned" report, which D-25 retires. A pin's real effect
-    is which origin wins, and D-35 reads that back off the target after the refresh rather
-    than predicting it from stanzas.
+    A pin the source has is written to the target when missing and overwritten when
+    different, with no review line at all (ADR-021 D-36): a pin is what makes an origin win,
+    in the same sense a signing key is what makes a repository trusted, and neither is
+    something an approved package leaves the user a basis to judge. A pin naming an origin
+    the target does not have is inert, so the always-sync rule cannot get the derivation
+    wrong and costs nothing.
+
+    Deleting one is different, and that is why this direction survives: a pin the target has
+    and the source does not is holding some origin above another on a machine the source
+    knows nothing about, so removing it can flip which vendor supplies a package at the
+    target's next upgrade — a consequence no approved package implies.
+
+    No file content is read in either direction: the only thing ever parsed out of a pin
+    file was the package names for a per-package "pinned" report, which D-25 retires.
     """
     names = _diff_filenames(source_digests, target_digests)
-    diffs: list[ItemDiff] = []
-
-    for filename in sorted(names.missing):
-        item = AptPinItem(filename=filename, digest=source_digests[filename])
-        diffs.append(_file_diff(item, DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL))
-
-    for filename in sorted(names.extra):
-        item = AptPinItem(filename=filename, digest=target_digests[filename])
-        diffs.append(_file_diff(item, DiffClass.EXTRA_ON_TARGET, DiffAction.REMOVE))
-
-    for filename in sorted(names.changed):
-        item = AptPinItem(filename=filename, digest=source_digests[filename])
-        detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename])
-        diffs.append(_file_diff(item, DiffClass.VERSION_MISMATCH, DiffAction.CHANGE, detail=detail))
-
-    return diffs
+    return [
+        _file_diff(
+            AptPinItem(filename=filename, digest=target_digests[filename]),
+            DiffClass.EXTRA_ON_TARGET,
+            DiffAction.REMOVE,
+        )
+        for filename in sorted(names.extra)
+    ]
 
 
 def _diff_apt_configs(source_digests: Mapping[str, str], target_digests: Mapping[str, str]) -> list[ItemDiff]:
@@ -1196,6 +1225,18 @@ def _repo_item_destination(diff: ItemDiff) -> str:
     if diff.item_class == ItemClass.APT_CONFIG:
         return f"{_APT_CONF_DIR}/{diff.item_id.removeprefix('apt:config:')}"
     raise AssertionError(f"not a repository-group item class: {diff.item_class!r}")
+
+
+def _source_file_destination(filename: str) -> str:
+    """The absolute path a source-file scan entry names.
+
+    The scan (`_scan_source_file_references`) keys by BASENAME across `sources.list.d` and
+    `/etc/apt/sources.list`, so the one entry that is not a `sources.list.d` member has to
+    be mapped back by name. A file a user genuinely put at `sources.list.d/sources.list`
+    would collide with it; apt reads both, and disambiguating a case nobody has is not worth
+    a second scan shape.
+    """
+    return _APT_SOURCES_LIST if filename == Path(_APT_SOURCES_LIST).name else f"{_APT_SOURCES_DIR}/{filename}"
 
 
 def _backup_path_for(backup_dir: str, dest: str) -> str:
@@ -1333,10 +1374,30 @@ class AptSyncJob(PackageSyncJob):
         # written and updated but never removed (ADR-021 D-38).
         self._source_sources_list_digest: str | None = None
         self._target_sources_list_digest: str | None = None
-        # `{filename: keyring_refs}` parsed from the SOURCE machine's copy of every source
-        # file a diff implicates — the refs that will apply once this run writes that file,
-        # which are not necessarily the refs the target's current copy names.
-        self._source_keyring_refs: dict[str, tuple[str, ...]] = {}
+        # `{filename: digest}` for the three reviewable `/etc/apt` directories on each
+        # machine, captured once by `_plan_repo_diffs`. Kept on the job because the derived
+        # write set is computed AFTER the review, from the same digests the diff used:
+        # recapturing them there would ask both machines the same question twice and could
+        # answer it differently.
+        self._source_source_digests: dict[str, str] = {}
+        self._target_source_digests: dict[str, str] = {}
+        self._source_pin_digests: dict[str, str] = {}
+        self._target_pin_digests: dict[str, str] = {}
+        # The `/etc/apt` files this run writes with no review line of their own (ADR-021
+        # D-37/D-38), in the three buckets §3.3's command order distinguishes. Populated by
+        # `_build_derived_writes` from the accepted decisions, so a run that approves
+        # nothing writes nothing.
+        self._derived_pin_writes: tuple[str, ...] = ()
+        self._derived_distro_writes: tuple[str, ...] = ()
+        self._derived_repo_writes: tuple[str, ...] = ()
+        # `{absolute destination: why it failed}`. A derived write fails no item of its own —
+        # there is no item — so it is recorded here and charged to every approved package
+        # that needed the file (D-39). A rollback puts EVERY derived write in here, matching
+        # what it already does to the reviewed half of the group.
+        self._failed_derived_writes: dict[str, str] = {}
+        # `{package item_id: the derived destinations that package needs}`, the inverse
+        # lookup D-39's attribution runs at install time.
+        self._package_derived_dests: dict[str, frozenset[str]] = {}
         # Lazily computed the first time `converge()` sees a repository-group item
         # (pin/config/source, or the synthetic metadata-refresh marker): maps each
         # such diff's item_id to (succeeded, message). Populated all at once so the
@@ -1711,15 +1772,19 @@ class AptSyncJob(PackageSyncJob):
         self._source_source_refs = await _scan_source_file_references(source_run)
 
     async def _plan_repo_diffs(self) -> list[ItemDiff]:
-        """Capture the three reviewable `/etc/apt/*` directories and diff their item
-        classes (D-11/D-12/D-13), by whole-file digest (module docstring): one batched
-        `sha256sum` listing per directory per machine, full content fetched only for a
-        file a diff implicates.
+        """Capture the three `/etc/apt/*` directories and diff the item classes that still
+        HAVE a review direction (D-11/D-13, ADR-021 D-37), by whole-file digest (module
+        docstring): one batched `sha256sum` listing per directory per machine, full content
+        fetched only for a file a diff implicates.
+
+        Two of the three are now removal-only. A repository or pin the source has travels
+        because a package needs it or because pins always travel, neither of which is a
+        question; apt config keeps all three directions, because no package implies whether
+        a proxy or a `no-install-recommends` policy should be replicated (D-37).
 
         The key directories and the reference scans are NOT captured here — they are
         `_capture_origin_state`'s, because the package diff needs them first — but their
-        cached results are read here for the dangling-reference check and the removal
-        impact.
+        cached results are read here for the removal impact.
 
         A source offered for REMOVAL is additionally classified against what the TARGET
         still needs (C26) before the diff is built, so the review names the consequence
@@ -1741,22 +1806,17 @@ class AptSyncJob(PackageSyncJob):
         source_configs = await _capture_dir_digests(source_run, _APT_CONF_DIR)
         target_configs = await _capture_dir_digests(target_run, _APT_CONF_DIR)
 
+        self._source_source_digests, self._target_source_digests = source_sources, target_sources
+        self._source_pin_digests, self._target_pin_digests = source_pins, target_pins
+
         self._target_package_owned_keys = await self._capture_package_owned_keys(target_run)
         removal_details = await self._source_removal_details(
-            target_run, extra_sources=frozenset(target_sources) - frozenset(source_sources)
+            target_run,
+            extra_sources=frozenset(target_sources) - frozenset(source_sources) - _DISTRO_SOURCE_FILENAMES,
         )
 
         diffs: list[ItemDiff] = []
-        diffs.extend(
-            await self._diff_apt_sources(
-                source_run,
-                target_run,
-                source_sources,
-                target_sources,
-                self._source_key_filenames,
-                removal_details,
-            )
-        )
+        diffs.extend(await self._diff_apt_sources(target_run, source_sources, target_sources, removal_details))
         diffs.extend(_diff_apt_pins(source_pins, target_pins))
         diffs.extend(_diff_apt_configs(source_configs, target_configs))
         return diffs
@@ -1823,65 +1883,35 @@ class AptSyncJob(PackageSyncJob):
 
     async def _diff_apt_sources(
         self,
-        source_run: Callable[[str], Awaitable[CommandResult]],
         target_run: Callable[[str], Awaitable[CommandResult]],
         source_digests: Mapping[str, str],
         target_digests: Mapping[str, str],
-        source_key_filenames: frozenset[str],
         removal_details: Mapping[str, str] | None = None,
     ) -> list[ItemDiff]:
-        """Source-file diffs, hydrated with format + keyring refs only for files a diff
-        implicates (missing-on-target, extra-on-target, or digest-mismatched).
+        """Source-file diffs — the REMOVAL direction only (ADR-021 D-37).
 
-        A source item whose OWN keyring reference resolves to no key file on the source
-        itself carries the dangling-reference detail and is downgraded to
-        `REPORT_ONLY` instead of `INSTALL` — it is not proposed for install on its own
-        (D-12): a repo written without its key is a repo apt refuses.
+        Adding a repository is not a question. A source file lands on the target because a
+        package approved on the review comes from it, so "package ticked, its repository
+        unticked" is unrepresentable: the repository has no tick. Overwriting one that
+        differs on the two machines is derived for the same reason. Both directions are
+        built in `_build_derived_writes` instead, from the packages that need them.
 
-        `removal_details` carries the C26 impact text for an extra-on-target file whose
-        deletion would strand machine-specific packages, keyed by filename. Disclosure
-        only: the REMOVE action is unchanged, since removing a repo whose packages are
-        also going is legitimate.
+        Removal survives because nothing derives it: a repository the source no longer has
+        is not implied by any approved package, and deleting it strands whatever the target
+        still installs from it. `removal_details` carries the C26 impact text for a file
+        whose deletion would strand machine-specific packages, keyed by filename —
+        disclosure, not refusal, since removing a repository whose packages are also going
+        is legitimate.
 
-        The SOURCE machine's `keyring_refs` are cached in `self._source_keyring_refs` for
-        every file parsed here, since those are the references that will apply once this
-        run writes the file — the keyring provisioning and the converge-time readiness
-        check both read them from there rather than re-reading the file.
+        The distribution's own files are excluded outright (D-38): they are written and
+        updated but never removed, so a target that has `ubuntu.sources` and a source that
+        somehow does not must not turn into an offer to delete the target's archive.
         """
         details = removal_details or {}
         names = _diff_filenames(source_digests, target_digests)
         diffs: list[ItemDiff] = []
 
-        for filename in sorted(names.missing):
-            content = await _read_file_content(source_run, f"{_APT_SOURCES_DIR}/{filename}")
-            fmt, refs, _uris = _parse_source_file(filename, content)
-            self._source_keyring_refs[filename] = refs
-            item = AptSourceItem(filename=filename, digest=source_digests[filename], fmt=fmt, keyring_refs=refs)
-            dangling = _dangling_keyring_ref(refs, source_key_filenames)
-            if dangling is not None:
-                diffs.append(
-                    ItemDiff(
-                        item_class=ItemClass.APT_SOURCE,
-                        diff_class=DiffClass.MISSING_ON_TARGET,
-                        action=DiffAction.REPORT_ONLY,
-                        item_id=item.item_id,
-                        label=item.label(),
-                        detail=build_dangling_keyring_detail(filename, dangling),
-                    )
-                )
-            else:
-                diffs.append(
-                    ItemDiff(
-                        item_class=ItemClass.APT_SOURCE,
-                        diff_class=DiffClass.MISSING_ON_TARGET,
-                        action=DiffAction.INSTALL,
-                        item_id=item.item_id,
-                        label=item.label(),
-                        detail=self._travelling_keyrings_detail(refs),
-                    )
-                )
-
-        for filename in sorted(names.extra):
+        for filename in sorted(names.extra - _DISTRO_SOURCE_FILENAMES):
             content = await _read_file_content(target_run, f"{_APT_SOURCES_DIR}/{filename}")
             fmt, _refs, _uris = _parse_source_file(filename, content)
             item = AptSourceItem(filename=filename, digest=target_digests[filename], fmt=fmt)
@@ -1896,53 +1926,7 @@ class AptSyncJob(PackageSyncJob):
                 )
             )
 
-        for filename in sorted(names.changed):
-            content = await _read_file_content(source_run, f"{_APT_SOURCES_DIR}/{filename}")
-            fmt, refs, _uris = _parse_source_file(filename, content)
-            self._source_keyring_refs[filename] = refs
-            item = AptSourceItem(filename=filename, digest=source_digests[filename], fmt=fmt, keyring_refs=refs)
-            dangling = _dangling_keyring_ref(refs, source_key_filenames)
-            detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename])
-            keys = self._travelling_keyrings_detail(refs)
-            if keys is not None:
-                detail = f"{detail}; {keys}"
-            # Mirrors the "missing" branch above (D-12): a dangling keyring reference
-            # makes this file converge-time-refused by `_require_keyrings_ready`
-            # regardless, so the review must present it as the same informational fact
-            # up front rather than as an ordinary change a user can tick and have fail.
-            diffs.append(
-                ItemDiff(
-                    item_class=ItemClass.APT_SOURCE,
-                    diff_class=DiffClass.VERSION_MISMATCH,
-                    action=DiffAction.REPORT_ONLY if dangling is not None else DiffAction.CHANGE,
-                    item_id=item.item_id,
-                    label=item.label(),
-                    detail=build_dangling_keyring_detail(filename, dangling) if dangling is not None else detail,
-                )
-            )
-
         return diffs
-
-    def _travelling_keyrings_detail(self, refs: Sequence[str]) -> str | None:
-        """The review/dry-run detail naming the signing keys writing this source file would
-        also copy onto the target, or `None` when it would copy none (the target already
-        holds every key it names, byte-identical or under its own dpkg's ownership).
-
-        A key is not an item and gets no decision of its own (D-12), but writing one into
-        `/etc/apt` is still a change to the target, and ADR-014 requires a run to report
-        exactly what it would do. Naming the keys on the repository the user IS deciding
-        about is what keeps "no decision of its own" from meaning "invisible".
-
-        Judged from plan-time state, which is the same state `_keyring_writes` recomputes
-        at converge time from the real decisions. The two can differ for one file only in
-        the direction that copies FEWER keys — another approved source file writing the
-        same rotated key first — so the detail never promises a write that does not happen.
-        """
-        names = sorted({Path(dest).name for dest in self._referenced_keyring_writes(refs)})
-        if not names:
-            return None
-        plural = "s" if len(names) > 1 else ""
-        return f"signing key{plural} copied with it: {', '.join(names)}"
 
     def _protected_manual_set(self) -> frozenset[str]:
         """Packages a collateral removal/downgrade must not silently touch: the TARGET's
@@ -2105,6 +2089,80 @@ class AptSyncJob(PackageSyncJob):
             unresolved=outcome.unresolved,
         )
 
+    def _build_derived_writes(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
+        """Turn the accepted decisions into the `/etc/apt` files this run writes WITHOUT a
+        review line (ADR-021 D-37/D-38) — the counterpart to `_approved_repo_group_diffs`,
+        which carries the reviewed half.
+
+        Three buckets, in the order §3.3 writes them, and each is a different answer to
+        "why does this file travel":
+
+        - Every `/etc/apt/preferences.d` file the source has. A pin decides which origin
+          wins, which is exactly what origin replication turns on; one naming an origin the
+          target lacks is inert, so always-sync costs nothing and cannot get a derivation
+          wrong.
+        - The distribution's own source files. The user wants both machines pointed at the
+          same archive, and these are the files that say where it is.
+        - The repository files serving the approved installs, from each package's own
+          `_OriginPlan` (ruling 4). Nothing else makes a repository travel: one that feeds
+          no package this run syncs stays where it is.
+
+        Only files the target lacks or holds different bytes for are listed — an identical
+        file needs no write and can therefore fail nothing. `_package_derived_dests` records
+        which packages each write serves, because a derived write has no item of its own to
+        fail (D-39) and must charge its failure to the packages that needed it.
+        """
+        self._failed_derived_writes = {}
+        self._package_derived_dests = {}
+
+        def differs(source_digests: Mapping[str, str], target_digests: Mapping[str, str], filename: str) -> bool:
+            return target_digests.get(filename) != source_digests[filename]
+
+        self._derived_pin_writes = tuple(
+            f"{_APT_PREFERENCES_DIR}/{filename}"
+            for filename in sorted(self._source_pin_digests)
+            if differs(self._source_pin_digests, self._target_pin_digests, filename)
+        )
+
+        distro: list[str] = [
+            f"{_APT_SOURCES_DIR}/{filename}"
+            for filename in sorted(_DISTRO_SOURCE_FILENAMES & frozenset(self._source_source_digests))
+            if differs(self._source_source_digests, self._target_source_digests, filename)
+        ]
+        if (
+            self._source_sources_list_digest is not None
+            and self._source_sources_list_digest != self._target_sources_list_digest
+        ):
+            distro.append(_APT_SOURCES_LIST)
+        self._derived_distro_writes = tuple(distro)
+
+        already = frozenset(self._derived_distro_writes)
+        repo: set[str] = set()
+        for diff in plan.diffs:
+            if diff.item_class is not ItemClass.APT_PACKAGE or diff.action is not DiffAction.INSTALL:
+                continue
+            if outcome.decisions.get(diff.item_id) != Decision.APPLY:
+                continue
+            origin_plan = self._origin_plan.get(diff.item_id)
+            if origin_plan is None:
+                continue
+            needed = {
+                dest
+                for filename in origin_plan.derived_files
+                if (dest := _source_file_destination(filename)) not in already
+                and self._target_source_digests.get(filename) != self._source_source_digests.get(filename)
+            }
+            if needed:
+                repo.update(needed)
+                self._package_derived_dests[diff.item_id] = frozenset(needed)
+        self._derived_repo_writes = tuple(sorted(repo))
+
+    def _derived_writes(self) -> tuple[str, ...]:
+        """Every derived destination, in the order `_ensure_repo_group_converged` writes
+        them: pins before sources (so a pin is in place the moment its origin becomes
+        fetchable), the distribution's files before the vendors'."""
+        return (*self._derived_pin_writes, *self._derived_distro_writes, *self._derived_repo_writes)
+
     @override
     def accept_review(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
         """Insert the synthetic metadata-refresh diff (Task 2) once the coordinator's
@@ -2120,11 +2178,13 @@ class AptSyncJob(PackageSyncJob):
         apt's own dependency order: metadata must be current before anything installs
         from it.
 
-        The marker is ALSO what carries a run whose only repository work is a keyring:
-        a rotated key changes no source file, so it produces no diff and nothing else
-        would ever route into `_converge_repo_group_item`. `_pending_keyring_work` is a
-        superset test — the group recomputes the exact set from the real decisions and
-        returns early if it is empty — so the cost of a false positive is one no-op call.
+        The marker is ALSO what carries the work no diff represents: the derived writes
+        (ADR-021 D-37/D-38 — a repository, a pin or a distribution file travels without a
+        review line, so nothing else would ever route into `_converge_repo_group_item`),
+        and a rotated keyring, which changes no source file at all.
+        `_pending_keyring_work` is a superset test — the group recomputes the exact set
+        from the real decisions and returns early if it is empty — so the cost of a false
+        positive is one no-op call.
 
         Manual-collateral decisions (D-30) are resolved first: an install-anyway on a
         collateral item marks its package approved so the apply-time guard lets the
@@ -2133,13 +2193,14 @@ class AptSyncJob(PackageSyncJob):
         unapproved rather than failing them at the guard.
         """
         outcome = self._resolve_collateral(plan, outcome)
+        self._build_derived_writes(plan, outcome)
         approved_group = any(
             diff.item_class in _REPO_GROUP_CLASSES
             and diff.item_id != _METADATA_REFRESH_ITEM_ID
             and outcome.decisions.get(diff.item_id) == Decision.APPLY
             for diff in plan.diffs
         )
-        if approved_group or self._pending_keyring_work():
+        if approved_group or self._derived_writes() or self._pending_keyring_work():
             marker = _metadata_refresh_diff()
             # Repo-group items sort before the metadata refresh, packages after it, and
             # holds LAST (#208, D8: install-before-hold). Holds are neither package nor
@@ -2160,6 +2221,21 @@ class AptSyncJob(PackageSyncJob):
                 unresolved=outcome.unresolved,
             )
         super().accept_review(plan, outcome)
+
+    @override
+    async def apply(self) -> None:
+        """The base converge loop, preceded under dry-run by the derived `/etc/apt` writes.
+
+        A derived write is not a diff, so the base loop has nothing to say about it, and
+        ADR-014 makes the preview the whole report of a rehearsal: without this, a run whose
+        entire `/etc/apt` work is derived would preview an `apt-get update` and no reason
+        for it. On a real run the same facts are logged by `_write_derived_file` as each
+        file lands, which is the honest place for them — the write may still fail.
+        """
+        if self.context.dry_run:
+            for dest in self._derived_writes():
+                self._log(Host.TARGET, LogLevel.FULL, f"[dry-run] Would write {dest} from the source")
+        await super().apply()
 
     @override
     async def converge(self, diff: ItemDiff) -> CommandResult:
@@ -2303,8 +2379,16 @@ class AptSyncJob(PackageSyncJob):
         already refreshed metadata this run. The origin check (`_origin_refusal`, D-35) runs
         immediately after it and before the collateral simulation: refusing an install whose
         provenance is wrong costs one cached lookup, while simulating it costs a command.
+
+        A derived `/etc/apt` write this package needed and that failed refuses it first
+        (D-39), before any command at all: the file is named, which the origin check could
+        only say the consequence of.
         """
         name = _package_name(diff.item_id)
+        blocked = self._derived_write_failure(diff.item_id, name)
+        if blocked is not None:
+            raise ConvergeItemFailed(blocked)
+
         await self._ensure_metadata_refreshed()
 
         refusal = await self._origin_refusal(name)
@@ -2433,6 +2517,16 @@ class AptSyncJob(PackageSyncJob):
         (T-02-34) — never partially, since a failed metadata refresh with some files
         written and others not would leave `/etc/apt` in a configuration nobody reviewed.
 
+        The group is a MIX (ADR-021 D-39): reviewed items — repository and pin removals,
+        apt config in all three directions — and derived writes, which have no item and so
+        no `self._repo_group_outcome` entry. A derived write that fails is recorded in
+        `self._failed_derived_writes` and charged to the packages that needed it; a rollback
+        marks every derived write failed, exactly as it already marks every reviewed one.
+
+        Write order is apt's own (§3.3): keys, then pins and apt config, then the
+        distribution's sources, then the derived vendor repositories, then the approved
+        removals, then unused-key collection, then the single refresh.
+
         Idempotent: a no-op on every call after the first (`self._repo_group_outcome`
         is `None` only until this method's first successful completion). Never called
         under dry-run — the base `apply()` loop never calls `converge()` at all when
@@ -2444,10 +2538,11 @@ class AptSyncJob(PackageSyncJob):
 
         assert self._accepted_outcome is not None
         group_diffs = self._approved_repo_group_diffs()
+        derived_writes = self._derived_writes()
         marker_present = self._accepted_outcome.decisions.get(_METADATA_REFRESH_ITEM_ID) == Decision.APPLY
 
-        # Every keyring write this run owes, decided from the SOURCE decisions the user
-        # already made — never from a decision about a key, which does not exist.
+        # Every keyring write this run owes, decided from the decisions and derivations the
+        # run already made — never from a decision about a key, which does not exist.
         keyring_writes = self._keyring_writes(self._surviving_keyring_refs())
         # "Remove keys after removing sources" is literal: with no source deletion in this
         # run nothing can have become unused, so the collection pass does not run at all.
@@ -2455,7 +2550,7 @@ class AptSyncJob(PackageSyncJob):
             diff.item_class == ItemClass.APT_SOURCE and diff.action == DiffAction.REMOVE for diff in group_diffs
         )
 
-        if not group_diffs and not keyring_writes:
+        if not group_diffs and not keyring_writes and not derived_writes:
             self._repo_group_outcome = (
                 {_METADATA_REFRESH_ITEM_ID: (True, "no repository changes to refresh for")} if marker_present else {}
             )
@@ -2479,6 +2574,8 @@ class AptSyncJob(PackageSyncJob):
         try:
             for _local, dest in keyring_writes:
                 existed_before[dest] = await self._backup_destination(dest, backup_dir)
+            for dest in derived_writes:
+                existed_before[dest] = await self._backup_destination(dest, backup_dir)
             for diff in group_diffs:
                 dest = _repo_item_destination(diff)
                 existed_before[dest] = await self._backup_destination(dest, backup_dir)
@@ -2495,16 +2592,11 @@ class AptSyncJob(PackageSyncJob):
             return
 
         # Keys FIRST, before any source file is written: a repository whose keyring has
-        # not landed is a repository apt refuses on every subsequent operation, and
-        # `_require_keyrings_ready` turns that into a refusal to write the source at all.
+        # not landed is a repository apt refuses on every subsequent operation, which
+        # `_keyring_gap` turns into a refusal to write that source at all.
         await self._provision_keyrings(keyring_writes, staging_dir)
 
-        for diff in group_diffs:
-            try:
-                await self._write_or_remove_repo_item(diff, staging_dir)
-                self._repo_group_outcome[diff.item_id] = (True, "converged")
-            except ConvergeItemFailed as exc:
-                self._repo_group_outcome[diff.item_id] = (False, str(exc))
+        await self._write_group_files(group_diffs, staging_dir)
 
         # Keys LAST, after every source write and deletion: what a keyring is worth is a
         # reference count over the target's REAL source files, and only now is that count
@@ -2638,14 +2730,22 @@ class AptSyncJob(PackageSyncJob):
 
     def _record_group_failure(self, group_diffs: list[ItemDiff], marker_present: bool, message: str) -> None:
         """Mark every `group_diffs` item (and the metadata-refresh marker, if present)
-        as failed with `message`. Shared by the backup-failure short-circuit and the
-        post-rollback failure path so `self._repo_group_outcome` always ends up fully
-        populated (D-27) — a partially-populated map makes a later `converge()` call
-        for an un-recorded item raise `KeyError` instead of `ConvergeItemFailed`.
+        as failed with `message`, and every DERIVED write with it (D-39).
+
+        Shared by the backup-failure short-circuit and the post-rollback failure path so
+        `self._repo_group_outcome` always ends up fully populated (D-27) — a
+        partially-populated map makes a later `converge()` call for an un-recorded item
+        raise `KeyError` instead of `ConvergeItemFailed`. The derived half needs the same
+        treatment for the same reason a rollback fails items whose own write succeeded:
+        what landed on the target is the pre-run state, so every package whose origin
+        depended on one of those files must fail rather than install from wherever apt
+        would now serve it.
         """
         assert self._repo_group_outcome is not None
         for diff in group_diffs:
             self._repo_group_outcome[diff.item_id] = (False, message)
+        for dest in self._derived_writes():
+            self._failed_derived_writes[dest] = message
         if marker_present:
             self._repo_group_outcome[_METADATA_REFRESH_ITEM_ID] = (False, message)
 
@@ -2675,10 +2775,110 @@ class AptSyncJob(PackageSyncJob):
             )
         return True
 
+    async def _write_group_files(self, group_diffs: Sequence[ItemDiff], staging_dir: str) -> None:
+        """Every file operation the group owes, in apt's own order (§3.3 steps 2-5): pins
+        and apt config first, so a pin is in place the moment its origin becomes fetchable
+        and an apt-config setting governs the refresh that follows; then the distribution's
+        sources; then the derived vendor repositories; then the approved deletions.
+        """
+        for dest in self._derived_pin_writes:
+            await self._write_derived_file(dest, staging_dir)
+        for diff in group_diffs:
+            if diff.action != DiffAction.REMOVE:
+                await self._converge_group_write(diff, staging_dir)
+        for dest in (*self._derived_distro_writes, *self._derived_repo_writes):
+            await self._write_derived_file(dest, staging_dir)
+        # Repository files before pin files before apt config, which is the reverse of the
+        # write order and not the order `plan()` sorted the diffs into: a repository still
+        # present while its pin is already gone is a fetchable origin nothing prefers,
+        # whereas the reverse is a pin naming an origin apt no longer has.
+        removals = sorted(
+            (diff for diff in group_diffs if diff.action == DiffAction.REMOVE),
+            key=lambda diff: _REMOVAL_CLASS_ORDER.get(diff.item_class, 0),
+        )
+        for diff in removals:
+            await self._converge_group_write(diff, staging_dir)
+
+    async def _converge_group_write(self, diff: ItemDiff, staging_dir: str) -> None:
+        """Run one REVIEWED group item's file operation and record its per-item outcome
+        (D-27), so a single failing file never stops the rest of the group."""
+        assert self._repo_group_outcome is not None
+        try:
+            await self._write_or_remove_repo_item(diff, staging_dir)
+        except ConvergeItemFailed as exc:
+            self._repo_group_outcome[diff.item_id] = (False, str(exc))
+        else:
+            self._repo_group_outcome[diff.item_id] = (True, "converged")
+
+    async def _write_derived_file(self, dest: str, staging_dir: str) -> None:
+        """Copy one DERIVED `/etc/apt` file from the source, logging what travelled and
+        recording a failure against the destination rather than against an item (D-39).
+
+        There is no item to fail: the user decided about a package, and `_derived_write_
+        failure` is what turns this destination's failure into that package's refusal. The
+        FULL line is how a derived write stays visible at all — it has no review entry to
+        appear on (ADR-014).
+        """
+        gap = self._keyring_gap(dest)
+        if gap is not None:
+            self._failed_derived_writes[dest] = gap
+            self._log(Host.TARGET, LogLevel.ERROR, f"not writing {dest}: {gap}", stderr=gap)
+            return
+        try:
+            await self._stage_and_promote(dest, dest, staging_dir, dest.lstrip("/").replace("/", "_"))
+        except ConvergeItemFailed as exc:
+            self._failed_derived_writes[dest] = str(exc)
+            self._log(Host.TARGET, LogLevel.ERROR, f"failed to write {dest}: {exc}", stderr=str(exc))
+            return
+        self._log(Host.TARGET, LogLevel.FULL, f"wrote {dest} from the source")
+
+    def _keyring_gap(self, dest: str) -> str | None:
+        """Why writing this derived source file would leave apt with a repository it cannot
+        verify, or `None` when every keyring it names is in place (D-12).
+
+        A repository written without its key is a repository apt refuses on every
+        subsequent operation, so writing it anyway is strictly worse than leaving the target
+        alone. The refusal lands on the destination and, through `_derived_write_failure`,
+        on the packages that needed it — the things the user actually decided about (D-39).
+
+        A key the target has and its own dpkg owns counts as ready even though this run
+        deliberately did not overwrite it: the target's package manages that file, so the
+        repository is trusted there. Pin and apt-config destinations name no keys and always
+        return `None`.
+        """
+        refs, _uris = self._source_source_refs.get(Path(dest).name, ((), ()))
+        for ref in refs:
+            if ref in self._provisioned_keyrings:
+                continue
+            source_digest, target_digest = self._keyring_digests(ref)
+            if source_digest is not None and source_digest == target_digest:
+                continue
+            if self._target_manages_keyring(ref):
+                continue
+            return (
+                f"it references keyring {ref!r}, which is neither already present on the target with "
+                "the source's own bytes nor among the keys this run provisioned (D-12/T-02-16)"
+            )
+        return None
+
+    def _derived_write_failure(self, item_id: str, name: str) -> str | None:
+        """Why this approved install may not run because a file it needed never landed
+        (D-39), or `None` when every derived file it depends on is in place.
+
+        The attribution a derived write cannot make for itself: it has no item, so its
+        failure has to be charged to the packages whose origin depended on it. Naming the
+        file and the reason is what keeps "the install failed" from reading as an apt
+        problem when it is a `/etc/apt` write problem.
+        """
+        for dest in sorted(self._package_derived_dests.get(item_id, frozenset())):
+            reason = self._failed_derived_writes.get(dest)
+            if reason is not None:
+                return f"install of {name} refused: {dest} was not written ({reason})"
+        return None
+
     async def _write_or_remove_repo_item(self, diff: ItemDiff, staging_dir: str) -> None:
-        """Converge one repository-group diff: `sudo rm --force` for a REMOVE, or
-        `_stage_and_promote` for an INSTALL/CHANGE (T-02-35). A source file is gated on
-        its keyrings having landed first (D-12).
+        """Converge one REVIEWED repository-group diff: `sudo rm --force` for a REMOVE, or
+        `_stage_and_promote` for an apt-config INSTALL/CHANGE (T-02-35).
         """
         dest = _repo_item_destination(diff)
 
@@ -2691,9 +2891,6 @@ class AptSyncJob(PackageSyncJob):
             if not result.success:
                 raise ConvergeItemFailed(f"failed to remove {dest}: {result.stderr.strip()}")
             return
-
-        if diff.item_class == ItemClass.APT_SOURCE:
-            self._require_keyrings_ready(diff)
 
         staged_name = diff.item_id.replace(":", "_").replace("/", "_")
         await self._stage_and_promote(dest, dest, staging_dir, staged_name)
@@ -2887,53 +3084,54 @@ class AptSyncJob(PackageSyncJob):
         return writes
 
     def _surviving_keyring_refs(self) -> frozenset[str]:
-        """Every keyring reference that will be live on the target once this run's approved
-        source decisions have been applied.
+        """Every keyring reference that will be live on the target once this run's derived
+        writes and approved removals have been applied.
 
         Three populations, and getting any of them wrong provisions or deletes the wrong
-        key: source files this run WRITES contribute the SOURCE machine's references (a
-        changed repository may point somewhere new); source files this run REMOVES
-        contribute nothing (their keyring is about to be collected, not refreshed); every
-        other source file on the target — untouched, unticked, recorded machine-specific,
-        or never synced at all like `/etc/apt/sources.list` — contributes the references it
-        currently carries.
+        key: source files this run WRITES — the derived set, since ADR-021 D-37 leaves no
+        other way for one to travel — contribute the SOURCE machine's references (a
+        repository this run overwrites may point somewhere new); source files this run
+        REMOVES contribute nothing (their keyring is about to be collected, not refreshed);
+        every other source file on the target — untouched, recorded machine-specific, or
+        never synced at all — contributes the references it currently carries.
         """
         assert self._accepted_plan is not None
         assert self._accepted_outcome is not None
         decisions = self._accepted_outcome.decisions
-        written: set[str] = set()
-        removed: set[str] = set()
-        for diff in self._accepted_plan.diffs:
-            if diff.item_class != ItemClass.APT_SOURCE or diff.item_id == _METADATA_REFRESH_ITEM_ID:
-                continue
-            if decisions.get(diff.item_id) != Decision.APPLY:
-                continue
-            filename = diff.item_id.removeprefix("apt:source:")
-            if diff.action == DiffAction.REMOVE:
-                removed.add(filename)
-            elif diff.action in (DiffAction.INSTALL, DiffAction.CHANGE):
-                written.add(filename)
+        removed = {
+            diff.item_id.removeprefix("apt:source:")
+            for diff in self._accepted_plan.diffs
+            if diff.item_class == ItemClass.APT_SOURCE
+            and diff.item_id != _METADATA_REFRESH_ITEM_ID
+            and diff.action == DiffAction.REMOVE
+            and decisions.get(diff.item_id) == Decision.APPLY
+        }
+        written = {Path(dest).name for dest in (*self._derived_distro_writes, *self._derived_repo_writes)}
 
         refs: set[str] = set()
         for filename, (target_refs, _uris) in self._target_source_refs.items():
             if filename not in removed and filename not in written:
                 refs.update(target_refs)
         for filename in written:
-            refs.update(self._source_keyring_refs.get(filename, ()))
+            source_refs, _uris = self._source_source_refs.get(filename, ((), ()))
+            refs.update(source_refs)
         return frozenset(refs)
 
     def _pending_keyring_work(self) -> bool:
-        """Whether ANY keyring could need writing this run, judged before the user has
-        decided anything — the trigger that lets the repository group run for a rotated key
-        whose source file is byte-identical and therefore produces no diff at all.
+        """Whether ANY keyring could need writing this run, judged before the derived write
+        set is consulted — the trigger that lets the repository group run for a rotated key
+        whose source file is byte-identical and therefore derives no write at all.
 
-        Deliberately a superset: it counts the references of every source file on the target
-        plus those of every file a diff implicates, because which of them survive is not yet
-        known. A false positive costs nothing — `_ensure_repo_group_converged` recomputes the
-        exact set from the real decisions and returns early when it turns out to be empty.
+        Deliberately a superset: it counts the references of every source file on BOTH
+        machines, because which of them survive is decided later. A false positive costs
+        nothing — `_ensure_repo_group_converged` recomputes the exact set from
+        `_surviving_keyring_refs` and returns early when it turns out to be empty.
         """
-        refs = frozenset(ref for refs, _uris in self._target_source_refs.values() for ref in refs) | frozenset(
-            ref for refs in self._source_keyring_refs.values() for ref in refs
+        refs = frozenset(
+            ref
+            for scan in (self._target_source_refs, self._source_source_refs)
+            for refs, _uris in scan.values()
+            for ref in refs
         )
         return bool(self._keyring_writes(refs))
 
@@ -3014,35 +3212,6 @@ class AptSyncJob(PackageSyncJob):
                     f"could not delete unused signing key {dest}: {result.stderr.strip()}",
                     stderr=result.stderr,
                 )
-
-    def _require_keyrings_ready(self, diff: ItemDiff) -> None:
-        """Refuse to write a source file whose keyring is neither already byte-identical on
-        the target nor among the keys this run just provisioned (D-12) — a repository
-        written without its key is a repository apt refuses on every subsequent operation,
-        which makes writing it anyway strictly worse than leaving the target alone.
-
-        Reads the references `_diff_apt_sources` already parsed from the SOURCE machine's
-        copy of this file, which is the copy about to be written.
-
-        A key the target has and its own dpkg owns counts as ready even though this run
-        deliberately did not overwrite it: the target's package manages that file, so the
-        repository is trusted there — refusing the write would strand a repository over a
-        key difference the run chose not to touch.
-        """
-        filename = diff.item_id.removeprefix("apt:source:")
-        for ref in self._source_keyring_refs.get(filename, ()):
-            if ref in self._provisioned_keyrings:
-                continue
-            source_digest, target_digest = self._keyring_digests(ref)
-            if source_digest is not None and source_digest == target_digest:
-                continue
-            if self._target_manages_keyring(ref):
-                continue
-            raise ConvergeItemFailed(
-                f"source {filename} references keyring {ref!r}, which is neither already "
-                "present on the target with the source's own bytes nor among the keys this run "
-                "provisioned (D-12/T-02-16); skipping this repository write"
-            )
 
     async def _target_home_dir(self) -> str:
         """The target user's home directory, resolved once per run via `echo $HOME`

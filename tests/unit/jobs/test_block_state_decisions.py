@@ -208,24 +208,26 @@ class TestAptHeldPackageSuppression:
 
 
 class TestAptRepoItemDecisions:
-    """`apt:source:` — digest-derived like the block-state items, so it reaches `plan()`
+    """`apt:config:` — digest-derived like the block-state items, so it reaches `plan()`
     with no input item to filter and depends on the same post-diff pass.
 
-    There is deliberately no key counterpart: a signing key is not an item, so it can
-    never be offered, never be declined, and never reach a decision file at all.
+    Apt config is the ONE `/etc/apt` class that keeps the full three-way decision and the
+    machine-local registry, in all three directions (ADR-021 D-37): a proxy or a
+    `no-install-recommends` policy is a standing machine-local preference no approved
+    package implies. Repositories and pins are mechanism and have no registry at all, and a
+    signing key is not even an item — none of the three can ever be offered, declined, or
+    recorded.
     """
 
     @pytest.mark.asyncio
-    async def test_declined_source_install_is_recorded_on_source_and_never_re_offered(self) -> None:
+    async def test_declined_config_install_is_recorded_on_source_and_never_re_offered(self) -> None:
         source_responses = {
             "apt-mark showmanual": CommandResult(0, "", ""),
-            "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
-            "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, DEB822_FOO, ""),
-            "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99recommends"), ""),
         }
 
         context, source, target = make_context(source_responses=source_responses)
-        await record_skip_always(AptSyncJob(context), "apt:source:foo.sources")
+        await record_skip_always(AptSyncJob(context), "apt:config:99recommends")
         assert wrote_decision_file(source)
         assert not wrote_decision_file(target)
         recorded = recorded_decision_file(source)
@@ -235,8 +237,8 @@ class TestAptRepoItemDecisions:
         )
         plan = await AptSyncJob(context).plan()
 
-        assert "apt:source:foo.sources" not in {diff.item_id for diff in plan.diffs}
-        assert "apt:source:foo.sources" not in review_item_ids(plan)
+        assert "apt:config:99recommends" not in {diff.item_id for diff in plan.diffs}
+        assert "apt:config:99recommends" not in review_item_ids(plan)
 
     @pytest.mark.asyncio
     async def test_a_signing_key_is_never_offered_and_so_can_never_be_recorded(self) -> None:

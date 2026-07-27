@@ -22,7 +22,6 @@ from pcswitcher.config import Configuration
 from pcswitcher.executor import LocalExecutor
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.apt_sync import (
-    _METADATA_REFRESH_ITEM_ID,
     _TARGET_SUDO_COMMANDS,
     AptPackageItem,
     AptSyncJob,
@@ -827,43 +826,23 @@ class TestInstallBeforeHoldOrdering:
 
     @pytest.mark.asyncio
     async def test_hold_follows_install_on_the_accept_review_reorder_path(self) -> None:
-        """An approved repo-group item makes `accept_review` rebuild the plan around the
+        """A derived `/etc/apt` write makes `accept_review` rebuild the plan around the
         metadata-refresh marker (repo items, marker, packages, holds) — the hold must stay
         behind its package install through that rebuild too.
         """
         context, _source, target = _repo_context(
-            source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
-                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
-            },
-            target_responses={
-                "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-mark showhold": CommandResult(0, "", ""),
-                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
-                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\n", ""
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                    CommandResult(0, "", "")
-                ),
-                "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
-                "sudo apt-get update": CommandResult(0, "", ""),
-            },
+            source_responses=_foo_source_responses(**{"apt-mark showhold": CommandResult(0, "pkg-a\n", "")})
+        )
+        target.run_command = AsyncMock(
+            side_effect=_foo_target_side_effect(
+                {
+                    "apt-get --dry-run install": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                    "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
+                }
+            )
         )
         job = AptSyncJob(context)
-        _install_reviewer(
-            job,
-            {
-                "apt:source:foo.sources": Decision.APPLY,
-                "apt:package:pkg-a": Decision.APPLY,
-                "apt:hold:pkg-a": Decision.APPLY,
-            },
-        )
+        _install_reviewer(job, {**_APPROVE_PKG_A, "apt:hold:pkg-a": Decision.APPLY})
 
         await job.execute()
 
@@ -1722,21 +1701,26 @@ _LEGACY_BAR = "deb [signed-by=/etc/apt/keyrings/bar.gpg] https://example.com sta
 
 
 class TestRepoStateCapture:
-    """AptSyncJob.plan() extended with source/key/pin/config diffs (D-11/D-12/D-13)."""
+    """AptSyncJob.plan() extended with the `/etc/apt` directions that still have a review
+    line (D-11/D-13, ADR-021 D-37): repository and pin REMOVALS, apt config in all three.
+    """
 
     @pytest.mark.asyncio
     async def test_deb822_and_legacy_source_each_record_own_format(self) -> None:
+        """The format is still recorded, on the one direction that still shows a file to
+        the user: a legacy `.list` and a deb822 `.sources` offered for deletion read as
+        two distinguishable entries rather than two bare filenames.
+        """
         context, _source, _target = make_context(
-            source_responses={
+            source_responses=_NO_PACKAGES,
+            target_responses={
                 **_NO_PACKAGES,
                 "find /etc/apt/sources.list.d": CommandResult(
                     0, sha256_line("d1", "foo.sources") + sha256_line("d2", "bar.list"), ""
                 ),
                 "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
                 "cat /etc/apt/sources.list.d/bar.list": CommandResult(0, _LEGACY_BAR, ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
             },
-            target_responses={**_NO_PACKAGES},
         )
         job = AptSyncJob(context)
 
@@ -1747,8 +1731,8 @@ class TestRepoStateCapture:
         bar_diff = by_id["apt:source:bar.list"]
         assert "deb822" in foo_diff.label
         assert "list" in bar_diff.label
-        assert foo_diff.item_class == ItemClass.APT_SOURCE
-        assert bar_diff.item_class == ItemClass.APT_SOURCE
+        assert (foo_diff.item_class, foo_diff.action) == (ItemClass.APT_SOURCE, DiffAction.REMOVE)
+        assert (bar_diff.item_class, bar_diff.action) == (ItemClass.APT_SOURCE, DiffAction.REMOVE)
 
     @pytest.mark.asyncio
     async def test_content_hydration_reads_use_sudo_matching_the_digest_capture(self) -> None:
@@ -1756,149 +1740,74 @@ class TestRepoStateCapture:
         `sudo`-qualified privilege as the digest capture (`sudo find ... sha256sum`),
         not a plain unprivileged `cat` — otherwise a source file locked down to
         `0600`-or-similar digests correctly (root) but reads back empty (unprivileged),
-        silently hiding any keyring reference it names.
+        and the entry the user is asked to delete claims the wrong format.
         """
-        context, source, _target = make_context(
-            source_responses={
+        context, _source, target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
                 **_NO_PACKAGES,
                 "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
                 "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
             },
-            target_responses={**_NO_PACKAGES},
         )
         job = AptSyncJob(context)
 
         await job.plan()
 
-        commands = all_calls(source)
+        commands = all_calls(target)
         assert any(cmd == "sudo cat /etc/apt/sources.list.d/foo.sources" for cmd in commands)
         assert not any(cmd == "cat /etc/apt/sources.list.d/foo.sources" for cmd in commands)
 
     @pytest.mark.asyncio
-    async def test_source_with_key_present_on_source_yields_plain_install(self) -> None:
-        """The keyring `foo.sources` references (`foo.gpg`) exists among the source's
-        OWN captured keys — a real link, not a dangling one — so the source is
-        proposed for install like any other missing item.
-
-        The target has neither, so approving this one item also writes `foo.gpg`. The key
-        is no item of its own (D-12), which is exactly why the write has to be named on
-        the item the user does decide about.
+    async def test_a_repository_never_appears_as_a_review_entry_in_the_add_or_change_direction(self) -> None:
+        """Ruling 4's property, in both directions at once and across both file classes:
+        `new.sources` is missing on the target, `changed.sources` differs, `new-pin` and
+        `changed-pin` likewise. Under the old model that is four review entries; under
+        derivation the user is asked about none of them.
         """
         context, _source, _target = make_context(
             source_responses={
                 **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
-                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
-            },
-            target_responses={**_NO_PACKAGES},
-        )
-        job = AptSyncJob(context)
-
-        plan = await job.plan()
-
-        diff = next(d for d in plan.diffs if d.item_id == "apt:source:foo.sources")
-        assert diff.diff_class == DiffClass.MISSING_ON_TARGET
-        assert diff.action == DiffAction.INSTALL
-        assert diff.detail is not None
-        assert "foo.gpg" in diff.detail
-
-    @pytest.mark.asyncio
-    async def test_source_whose_key_the_target_already_has_names_no_key(self) -> None:
-        """The other half of the rule: `foo.gpg` is already on the target byte-identical,
-        so approving the repository writes no key and the item says nothing about one.
-        Naming a key that will not be written would be the same defect in the other
-        direction.
-        """
-        context, _source, _target = make_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
-                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+                "find /etc/apt/sources.list.d": CommandResult(
+                    0, sha256_line("s1", "new.sources") + sha256_line("s2-new", "changed.sources"), ""
+                ),
+                "find /etc/apt/preferences.d": CommandResult(
+                    0, sha256_line("p1", "new-pin") + sha256_line("p2-new", "changed-pin"), ""
+                ),
             },
             target_responses={
                 **_NO_PACKAGES,
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("s2-old", "changed.sources"), ""),
+                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p2-old", "changed-pin"), ""),
             },
         )
-        job = AptSyncJob(context)
 
-        plan = await job.plan()
+        plan = await AptSyncJob(context).plan()
 
-        diff = next(d for d in plan.diffs if d.item_id == "apt:source:foo.sources")
-        assert diff.action == DiffAction.INSTALL
-        assert diff.detail is None
-
-    @pytest.mark.asyncio
-    async def test_source_with_dangling_keyring_reference_is_flagged_not_installable(self) -> None:
-        """`bar.list` names `bar.gpg`, which nothing captured on the source: the diff
-        carries the dangling-reference detail and is downgraded to REPORT_ONLY —
-        not proposed for install on its own (D-12).
-        """
-        context, _source, _target = make_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d2", "bar.list"), ""),
-                "cat /etc/apt/sources.list.d/bar.list": CommandResult(0, _LEGACY_BAR, ""),
-            },
-            target_responses={**_NO_PACKAGES},
-        )
-        job = AptSyncJob(context)
-
-        plan = await job.plan()
-
-        diff = next(d for d in plan.diffs if d.item_id == "apt:source:bar.list")
-        assert diff.action == DiffAction.REPORT_ONLY
-        assert diff.detail is not None
-        assert "bar.gpg" in diff.detail
-
-    @pytest.mark.asyncio
-    async def test_changed_source_with_dangling_keyring_reference_is_downgraded_to_report_only(self) -> None:
-        """WR-03 regression: mirrors the missing-file case above — a changed source
-        file whose keyring reference is dangling on the source must also be
-        downgraded to REPORT_ONLY, not left as an ordinary CHANGE a user can tick and
-        have fail at converge time (`_require_keyrings_ready` refuses it anyway).
-        """
-        context, _source, _target = make_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d2-new", "bar.list"), ""),
-                "cat /etc/apt/sources.list.d/bar.list": CommandResult(0, _LEGACY_BAR, ""),
-            },
-            target_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d2-old", "bar.list"), ""),
-            },
-        )
-        job = AptSyncJob(context)
-
-        plan = await job.plan()
-
-        diff = next(d for d in plan.diffs if d.item_id == "apt:source:bar.list")
-        assert diff.diff_class == DiffClass.VERSION_MISMATCH
-        assert diff.action == DiffAction.REPORT_ONLY
-        assert diff.detail is not None
-        assert "bar.gpg" in diff.detail
+        assert plan.diffs == ()
+        assert plan.groups == ()
 
     @pytest.mark.asyncio
     async def test_pin_and_config_diff_missing_extra_and_changed(self) -> None:
+        """The split ruling 11 makes: a pin keeps only the removal direction, apt config
+        keeps all three, and the two live side by side in one plan.
+        """
         context, _source, _target = make_context(
             source_responses={
                 **_NO_PACKAGES,
                 "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "curl-pin"), ""),
-                "cat /etc/apt/preferences.d/curl-pin": CommandResult(
-                    0, "Package: curl libcurl4\nPin: origin example.com\nPin-Priority: 900\n", ""
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0, sha256_line("c1", "99update") + sha256_line("c2-new", "80retain"), ""
                 ),
-                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99update"), ""),
             },
             target_responses={
                 **_NO_PACKAGES,
                 "find /etc/apt/preferences.d": CommandResult(
                     0, sha256_line("p2", "curl-pin") + sha256_line("p3", "extra-pin"), ""
                 ),
-                "cat /etc/apt/preferences.d/extra-pin": CommandResult(0, "Package: extra\n", ""),
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0, sha256_line("c2-old", "80retain") + sha256_line("c3", "99extra"), ""
+                ),
             },
         )
         job = AptSyncJob(context)
@@ -1906,14 +1815,12 @@ class TestRepoStateCapture:
         plan = await job.plan()
 
         by_id = {d.item_id: d for d in plan.diffs}
-        assert by_id["apt:pin:curl-pin"].diff_class == DiffClass.VERSION_MISMATCH
-        assert by_id["apt:pin:curl-pin"].action == DiffAction.CHANGE
-        assert "p1" in (by_id["apt:pin:curl-pin"].detail or "")
-        assert "p2" in (by_id["apt:pin:curl-pin"].detail or "")
+        assert "apt:pin:curl-pin" not in by_id, "a differing pin is overwritten, never reviewed"
         assert by_id["apt:pin:extra-pin"].diff_class == DiffClass.EXTRA_ON_TARGET
         assert by_id["apt:pin:extra-pin"].action == DiffAction.REMOVE
-        assert by_id["apt:config:99update"].diff_class == DiffClass.MISSING_ON_TARGET
         assert by_id["apt:config:99update"].action == DiffAction.INSTALL
+        assert by_id["apt:config:80retain"].action == DiffAction.CHANGE
+        assert by_id["apt:config:99extra"].action == DiffAction.REMOVE
 
 
 # -- ADR-021 seams: what apt actually reads, on BOTH machines --------------------------
@@ -2021,6 +1928,84 @@ class TestWhatAptItselfReads:
         await job.plan()
 
         assert job._source_sources_list_digest is None  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_ubuntu_sources_is_never_offered_for_removal(self) -> None:
+        """D-38: the distribution's own files are written and updated but never removed.
+        A target holding `ubuntu.sources` and `ubuntu-esm-apps.sources` that the source does
+        not have would otherwise be offered a deletion of its own archive, while a
+        `.sources` file with a lookalike name is an ordinary repository and still is.
+        """
+        target_listing = (
+            sha256_line("d1", "ubuntu.sources")
+            + sha256_line("d2", "ubuntu-esm-apps.sources")
+            + sha256_line("d3", "ubuntu-esm-mine.sources")
+        )
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, target_listing, ""),
+                "cat /etc/apt/sources.list.d/": CommandResult(0, "Types: deb\nURIs: http://x.example.com\n", ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert {d.item_id for d in plan.diffs} == {"apt:source:ubuntu-esm-mine.sources"}
+
+    @pytest.mark.asyncio
+    async def test_the_distribution_files_are_written_when_they_differ(self) -> None:
+        """The other half of D-38's always-sync bucket, `/etc/apt/sources.list` included —
+        it is a file rather than a directory entry and so travels on its own digest. An
+        ordinary vendor repository that feeds no approved package stays put, which is
+        ruling 4 working as intended.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(
+                    0, sha256_line("d1", "ubuntu.sources") + sha256_line("d9", "vendor.list"), ""
+                ),
+                _SOURCES_LIST_DIGEST_CMD: CommandResult(0, sha256_line("s1", "/etc/apt/sources.list"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                _SOURCES_LIST_DIGEST_CMD: CommandResult(0, sha256_line("s2", "/etc/apt/sources.list"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {})
+
+        await job.execute()
+
+        promoted = [c.rsplit(" ", 1)[1] for c in all_calls(target) if c.startswith("sudo install --owner=root")]
+        assert promoted == ["/etc/apt/sources.list.d/ubuntu.sources", "/etc/apt/sources.list"]
+
+    @pytest.mark.asyncio
+    async def test_a_dry_run_previews_the_derived_writes_and_issues_none(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A derived write has no review entry, so without a preview line ADR-014's
+        rehearsal would report an `apt-get update` and no reason for it.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "mozilla"), ""),
+            },
+            target_responses={**_NO_PACKAGES},
+            dry_run=True,
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {})
+
+        with caplog.at_level(1):
+            await job.execute()
+
+        assert "[dry-run] Would write /etc/apt/preferences.d/mozilla from the source" in caplog.text
+        assert not any(c.startswith("sudo install") for c in all_calls(target))
+        target.send_file.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_the_source_file_scan_runs_against_both_machines(self) -> None:
@@ -2723,46 +2708,77 @@ def _repo_context(
     return context, source, target
 
 
-_POLICY_AVAILABLE = (
-    "pkg-a:\n  Installed: (none)\n  Candidate: 1.0\n  Version table:\n"
-    "     1.0 500\n        500 https://example.com stable/main amd64 Packages\n"
-)
+def _policy_candidate(origin: str) -> str:
+    """`apt-cache policy pkg-a` on a target that does not have the package but can now
+    fetch it from `origin` — the shape the post-`apt-get update` verification reads."""
+    return (
+        "pkg-a:\n  Installed: (none)\n  Candidate: 1.0\n  Version table:\n"
+        f"     1.0 500\n        500 {origin} stable/main amd64 Packages\n"
+    )
+
+
+_POLICY_AVAILABLE = _policy_candidate("https://example.com")
 _POLICY_NO_CANDIDATE = "pkg-a:\n  Installed: (none)\n  Candidate: (none)\n  Version table:\n"
+
+
+def _foo_source_responses(**overrides: CommandResult) -> dict[str, CommandResult]:
+    """A source machine whose `pkg-a` comes from the repository `foo.sources` declares.
+
+    The only shape that makes a repository travel now (ADR-021 D-37): a source file is
+    derived from the packages approved from it, so a test that wants `foo.sources` written
+    must give the source a package whose origin `foo.sources` serves. `foo.gpg` is the key
+    that file names, present on the source, so the repository is writable.
+    """
+    return {
+        "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+        "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+        "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://example.com"), ""),
+        _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("foo.sources", _DEB822_FOO), ""),
+        "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+        "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+        **overrides,
+    }
+
+
+def _foo_target_side_effect(
+    overrides: dict[str, CommandResult] | None = None, *, origin: str = "https://example.com"
+) -> Callable[..., CommandResult]:
+    """A target that offers `pkg-a` from nowhere at plan time and from `origin` afterwards.
+
+    Two different answers to one command, which is the run's real shape: the plan-time
+    policy read is what derives the repository (no candidate -> the source's origin has to
+    be replicated), and the post-`apt-get update` read is what D-35 verifies the install
+    against. A fixture answering both the same way could not tell the two apart.
+    """
+    return respond_with_policy_sequence(
+        {
+            "echo $HOME": CommandResult(0, "/home/target-user", ""),
+            "apt-mark showmanual": CommandResult(0, "", ""),
+            "test -f": CommandResult(1, "", ""),
+            **(overrides or {}),
+        },
+        [CommandResult(0, _POLICY_NO_CANDIDATE, ""), CommandResult(0, _policy_candidate(origin), "")],
+    )
+
+
+_APPROVE_PKG_A = {"apt:package:pkg-a": Decision.APPLY}
 
 
 class TestRepoGroupOrdering:
     @pytest.mark.asyncio
     async def test_key_then_source_then_update_then_package_install(self) -> None:
-        """N5 end to end: the package is one apt reports a real candidate for, so the
-        availability classification says INSTALL, and the four commands land in apt's own
-        dependency order.
+        """N5 end to end, against the derived path: approving `pkg-a` is what makes
+        `foo.sources` travel, and the four commands still land in apt's own dependency
+        order.
         """
-        context, _source, target = _repo_context(
-            source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
-                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
-            },
-            target_responses={
-                "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_AVAILABLE, ""),
-                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
-                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\n", ""
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes"
-                " --no-install-recommends pkg-a": CommandResult(0, "", ""),
-                "sudo apt-get update": CommandResult(0, "", ""),
-            },
+        context, _source, target = _repo_context(source_responses=_foo_source_responses())
+        target.run_command = AsyncMock(
+            side_effect=_foo_target_side_effect(
+                {"apt-get --dry-run install": CommandResult(0, "Inst pkg-a (1.0)\n", "")}
+            )
         )
         job = AptSyncJob(context)
-        _install_reviewer(
-            job,
-            {"apt:source:foo.sources": Decision.APPLY, "apt:package:pkg-a": Decision.APPLY},
-        )
+        _install_reviewer(job, _APPROVE_PKG_A)
 
         await job.execute()
 
@@ -2774,6 +2790,32 @@ class TestRepoGroupOrdering:
             commands, lambda c: "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-a" in c
         )
         assert key_idx < source_idx < update_idx < package_idx
+
+    @pytest.mark.asyncio
+    async def test_pins_travel_without_a_review_line_and_land_before_the_sources(self) -> None:
+        """D-36's ordering requirement: the pin is what makes the derived repository's
+        origin outrank the archive's, so it has to be in place before the sources it
+        governs and before the refresh that reads them — and it reaches the target with no
+        review entry of its own.
+        """
+        context, _source, target = _repo_context(
+            source_responses=_foo_source_responses(
+                **{"find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "mozilla"), "")}
+            )
+        )
+        target.run_command = AsyncMock(side_effect=_foo_target_side_effect())
+        job = AptSyncJob(context)
+        reviewer = _CountingReviewer(_APPROVE_PKG_A)
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+
+        await job.execute()
+
+        commands = all_calls(target)
+        pin_idx = _index_of(commands, lambda c: "sudo install" in c and c.endswith("/etc/apt/preferences.d/mozilla"))
+        source_idx = _index_of(commands, lambda c: "sudo install" in c and "sources.list.d/foo.sources" in c)
+        update_idx = _index_of(commands, lambda c: c == "sudo apt-get update")
+        assert pin_idx < source_idx < update_idx
+        assert _actionable_entry_ids(reviewer.calls[0]) == {"apt:package:pkg-a"}
 
     @pytest.mark.asyncio
     async def test_a_package_apt_reports_no_candidate_for_is_withheld_from_the_first_pass(self) -> None:
@@ -2853,24 +2895,12 @@ class TestRepoGroupOrdering:
     @pytest.mark.asyncio
     async def test_no_key_command_contains_a_url(self) -> None:
         """D-12: `foo.gpg` really is provisioned (the repository that needs it is
-        installed), and not one command reaches for a vendor to get it.
+        derived), and not one command reaches for a vendor to get it.
         """
-        context, _source, target = _repo_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
-                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
-            },
-            target_responses={
-                **_NO_PACKAGES,
-                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
-                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
-                "sudo apt-get update": CommandResult(0, "", ""),
-            },
-        )
+        context, _source, target = _repo_context(source_responses=_foo_source_responses())
+        target.run_command = AsyncMock(side_effect=_foo_target_side_effect())
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:source:foo.sources": Decision.APPLY})
+        _install_reviewer(job, _APPROVE_PKG_A)
 
         await job.execute()
 
@@ -2881,41 +2911,62 @@ class TestRepoGroupOrdering:
             assert "https://" not in cmd
 
     @pytest.mark.asyncio
-    async def test_failed_key_write_leaves_dependent_source_unwritten(self) -> None:
-        """A keyring that could not be promoted is not a failed ITEM — there is no key
-        item — but the repository that references it must not be written anyway (D-12):
-        a repo apt cannot verify is worse than no repo, so the SOURCE is what fails.
+    async def test_a_failed_derived_repository_write_fails_the_package_that_needed_it(self) -> None:
+        """D-39's attribution. A keyring that could not be promoted is not a failed item —
+        there is no key item, and there is no repository item either — so the repository is
+        not written (a repo apt cannot verify is worse than no repo) and the failure lands
+        on the PACKAGE, which is the thing the user decided about. The message names the
+        file, and the install command is never issued.
         """
-        context, _source, target = _repo_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
-                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
-            },
-            target_responses={
-                **_NO_PACKAGES,
-                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
-                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
-                "sudo install --owner=root --group=root --mode=0644": CommandResult(1, "", "disk full"),
-                "sudo apt-get update": CommandResult(0, "", ""),
-            },
+        context, _source, target = _repo_context(source_responses=_foo_source_responses())
+        target.run_command = AsyncMock(
+            side_effect=_foo_target_side_effect(
+                {"sudo install --owner=root --group=root --mode=0644": CommandResult(1, "", "disk full")}
+            )
         )
         job = AptSyncJob(context)
-        _install_reviewer(
-            job,
-            {"apt:key:per-repo:foo.gpg": Decision.APPLY, "apt:source:foo.sources": Decision.APPLY},
-        )
+        _install_reviewer(job, _APPROVE_PKG_A)
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
 
         failures = {diff.item_id: message for diff, message in exc_info.value.failures}
-        assert "apt:source:foo.sources" in failures
-        assert "foo.gpg" in failures["apt:source:foo.sources"]
-        assert not any(item_id.startswith("apt:key:") for item_id in failures)
+        assert set(failures) == {"apt:package:pkg-a"}
+        assert "/etc/apt/sources.list.d/foo.sources" in failures["apt:package:pkg-a"]
+        assert "foo.gpg" in failures["apt:package:pkg-a"]
         commands = all_calls(target)
         assert not any("sudo install" in c and "sources.list.d/foo.sources" in c for c in commands)
+        assert not _real_installs(target)
+
+    @pytest.mark.asyncio
+    async def test_a_repository_whose_own_promotion_fails_also_fails_its_package(self) -> None:
+        """The other way a derived write can fail: the key lands, the repository's own
+        `sudo install` does not. The refusal must still reach the package (D-39) — there is
+        no repository item left for it to land on.
+        """
+        context, _source, target = _repo_context(source_responses=_foo_source_responses())
+        target.run_command = AsyncMock(
+            side_effect=_foo_target_side_effect(
+                {
+                    "sudo install --owner=root --group=root --mode=0644 "
+                    "/home/target-user/.cache/pc-switcher/apt-staging/etc_apt_sources.list.d_foo.sources": (
+                        CommandResult(1, "", "Read-only file system")
+                    )
+                }
+            )
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, _APPROVE_PKG_A)
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
+        assert set(failures) == {"apt:package:pkg-a"}
+        assert "/etc/apt/sources.list.d/foo.sources" in failures["apt:package:pkg-a"]
+        assert "Read-only file system" in failures["apt:package:pkg-a"]
+        assert _key_writes(target) == ["/etc/apt/keyrings/foo.gpg"]
+        assert not _real_installs(target)
 
     @pytest.mark.asyncio
     async def test_remove_source_issues_single_rm_naming_that_file(self) -> None:
@@ -3130,14 +3181,17 @@ class TestRepoGroupTransaction:
             ),
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:config:99conf": Decision.APPLY, "apt:pin:curl-pin": Decision.APPLY})
+        _install_reviewer(job, {"apt:config:99conf": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
 
         failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
         assert "apt:config:99conf" in failed_ids
-        assert "apt:pin:curl-pin" in failed_ids
+        # The reviewed half fails as an item; the derived pin has no item to fail, so the
+        # rollback records it against its destination instead (D-39) — without which a
+        # package depending on it would install against the pre-run `/etc/apt`.
+        assert "/etc/apt/preferences.d/curl-pin" in job._failed_derived_writes  # pyright: ignore[reportPrivateUsage]
 
         commands = all_calls(target)
         # Restore: the pre-existing pin file is put back from its backup.
@@ -3300,24 +3354,24 @@ class TestRepoGroupBackupFailure:
         context, _source, target = _repo_context(
             source_responses={
                 **_NO_PACKAGES,
-                "find /etc/apt/preferences.d": CommandResult(
-                    0, sha256_line("p1-new", "pin-a") + sha256_line("p2-new", "pin-b"), ""
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0, sha256_line("c1-new", "conf-a") + sha256_line("c2-new", "conf-b"), ""
                 ),
-                "cat /etc/apt/preferences.d/pin-a": CommandResult(0, "Package: pin-a\n", ""),
-                "cat /etc/apt/preferences.d/pin-b": CommandResult(0, "Package: pin-b\n", ""),
+                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1-new", "pin-a"), ""),
             },
             target_responses={
                 **_NO_PACKAGES,
-                "find /etc/apt/preferences.d": CommandResult(
-                    0, sha256_line("p1-old", "pin-a") + sha256_line("p2-old", "pin-b"), ""
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0, sha256_line("c1-old", "conf-a") + sha256_line("c2-old", "conf-b"), ""
                 ),
+                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1-old", "pin-a"), ""),
+                "test -f /etc/apt/apt.conf.d/conf-": CommandResult(0, "", ""),
                 "test -f /etc/apt/preferences.d/pin-a": CommandResult(0, "", ""),
-                "test -f /etc/apt/preferences.d/pin-b": CommandResult(0, "", ""),
                 "sudo cp --archive": CommandResult(1, "", "disk full"),
             },
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:pin:pin-a": Decision.APPLY, "apt:pin:pin-b": Decision.APPLY})
+        _install_reviewer(job, {"apt:config:conf-a": Decision.APPLY, "apt:config:conf-b": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
@@ -3326,13 +3380,14 @@ class TestRepoGroupBackupFailure:
         # reported as failures — not just the one whose backup was actually
         # attempted before the loop aborted — and no KeyError escapes.
         failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
-        assert {"apt:pin:pin-a", "apt:pin:pin-b"} <= failed_ids
+        assert {"apt:config:conf-a", "apt:config:conf-b"} <= failed_ids
+        assert "/etc/apt/preferences.d/pin-a" in job._failed_derived_writes  # pyright: ignore[reportPrivateUsage]
 
         commands = all_calls(target)
-        # Neither pin file was ever written: the group aborts before any write once
-        # backing up fails.
+        # Nothing was written at all: the group aborts before any write once backing up
+        # fails, derived files included.
         assert not any(
-            "sudo install --owner=root --group=root --mode=0644" in c and "preferences.d/pin-" in c for c in commands
+            "sudo install --owner=root --group=root --mode=0644" in c and "/etc/apt/" in c for c in commands
         )
 
 
@@ -3347,28 +3402,17 @@ class TestKeyringsDirectoryEnsured:
     @staticmethod
     def _fresh_target(**extra: CommandResult) -> tuple[JobContext, MagicMock, MagicMock]:
         """`foo.sources` and the `foo.gpg` it names, both missing on a target that has no
-        `/etc/apt/keyrings` directory at all."""
-        return _repo_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
-                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
-            },
-            target_responses={
-                **_NO_PACKAGES,
-                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
-                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
-                "sudo apt-get update": CommandResult(0, "", ""),
-                **extra,
-            },
-        )
+        `/etc/apt/keyrings` directory at all, derived by the `pkg-a` that repository serves.
+        """
+        context, source, target = _repo_context(source_responses=_foo_source_responses())
+        target.run_command = AsyncMock(side_effect=_foo_target_side_effect(extra))
+        return context, source, target
 
     @pytest.mark.asyncio
     async def test_promotion_ensures_keyrings_directory_before_install(self) -> None:
         context, _source, target = self._fresh_target()
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:source:foo.sources": Decision.APPLY})
+        _install_reviewer(job, _APPROVE_PKG_A)
 
         await job.execute()
 
@@ -3381,20 +3425,20 @@ class TestKeyringsDirectoryEnsured:
 
     @pytest.mark.asyncio
     async def test_directory_preparation_failure_fails_the_item_not_the_run(self) -> None:
-        """The failure surfaces on the REPOSITORY, the thing the user reviewed: its key
-        never landed, so the repo is not written either (D-12)."""
+        """The failure surfaces on the PACKAGE, the thing the user reviewed: its key never
+        landed, so the repository is not written either (D-12/D-39)."""
         context, _source, target = self._fresh_target(
             **{"sudo mkdir --parents --mode=0755 /etc/apt/keyrings": CommandResult(1, "", "permission denied")}
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:source:foo.sources": Decision.APPLY})
+        _install_reviewer(job, _APPROVE_PKG_A)
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
 
         failures = {diff.item_id: message for diff, message in exc_info.value.failures}
-        assert "apt:source:foo.sources" in failures
-        assert "foo.gpg" in failures["apt:source:foo.sources"]
+        assert set(failures) == {"apt:package:pkg-a"}
+        assert "foo.gpg" in failures["apt:package:pkg-a"]
         commands = all_calls(target)
         assert not any(
             "sudo install --owner=root --group=root --mode=0644" in c and "keyrings/foo.gpg" in c for c in commands
@@ -3516,48 +3560,6 @@ class TestMetadataRefreshBeforeInstall:
             lambda c: "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-a" in c,
         )
         assert update_idx < install_idx
-
-
-class TestReportOnlyRepoItemDecidedApply:
-    """D-19: the untested edge of `accept_review`'s `approved_group` test — the only
-    approved repository item is one the diff already downgraded to REPORT_ONLY (a source
-    file whose keyring reference dangles on the source, D-12).
-
-    End to end that means: the marker IS inserted (the `approved_group` test keys on the
-    decision, not the action), the REPORT_ONLY diff itself never reaches `converge()`
-    (`apply()` excludes REPORT_ONLY regardless of decision), and the repository group
-    therefore has no actionable item — so nothing is written under `/etc/apt` and no
-    `apt-get update` runs. Ticking an item the review already flagged as informational is
-    a no-op, not a half-applied repository.
-    """
-
-    @pytest.mark.asyncio
-    async def test_apply_on_a_report_only_source_writes_nothing_and_refreshes_nothing(self) -> None:
-        context, _source, target = make_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d2", "bar.list"), ""),
-                "cat /etc/apt/sources.list.d/bar.list": CommandResult(0, _LEGACY_BAR, ""),
-            },
-            target_responses={**_NO_PACKAGES},
-        )
-        job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:source:bar.list": Decision.APPLY})
-
-        await job.execute()
-
-        assert job._accepted_plan is not None
-        assert job._accepted_outcome is not None
-        by_id = {d.item_id: d for d in job._accepted_plan.diffs}
-        assert by_id["apt:source:bar.list"].action == DiffAction.REPORT_ONLY
-        # The marker is inserted and decided APPLY, then converges as a no-op.
-        assert _METADATA_REFRESH_ITEM_ID in by_id
-        assert job._accepted_outcome.decisions[_METADATA_REFRESH_ITEM_ID] == Decision.APPLY
-
-        commands = all_calls(target)
-        assert not any("sudo apt-get update" in c for c in commands)
-        assert not any(c.startswith("sudo install") or c.startswith("sudo rm --force") for c in commands)
-        target.send_file.assert_not_called()
 
 
 # -- ADR-021 D-40: collateral protects the TARGET's manual set alone -------------------
@@ -3990,8 +3992,6 @@ class TestKeysAreNotItems:
         context, _source, _target = make_context(
             source_responses={
                 **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
-                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
                 "find /etc/apt/keyrings": CommandResult(
                     0, sha256_line("k1", "new.gpg") + sha256_line("k-new", "rot.gpg"), ""
                 ),
@@ -3999,6 +3999,8 @@ class TestKeysAreNotItems:
             },
             target_responses={
                 **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
                 "find /etc/apt/keyrings": CommandResult(
                     0, sha256_line("k-old", "rot.gpg") + sha256_line("k9", "old.gpg"), ""
                 ),
@@ -4012,58 +4014,39 @@ class TestKeysAreNotItems:
         assert not any(diff.item_class.value == "apt_key" for diff in plan.diffs)
         entries = {entry.item_id for group in plan.groups for entry in group.entries}
         assert not any(item_id.startswith("apt:key:") for item_id in entries)
-        assert "apt:source:foo.sources" in entries, "the repository itself must still be reviewed"
+        assert "apt:source:foo.sources" in entries, "the repository DELETION must still be reviewed"
 
     @pytest.mark.asyncio
-    async def test_key_of_an_installed_repo_is_provisioned_with_no_decision_of_its_own(self) -> None:
-        """The reviewer is told about the SOURCE only. `foo.gpg` still lands, and lands
-        before the repository that references it.
+    async def test_key_of_a_derived_repo_is_provisioned_with_no_decision_of_its_own(self) -> None:
+        """The reviewer is told about the PACKAGE only. `foo.gpg` still lands, and lands
+        before the repository that references it, which lands before the install.
         """
-        context, _source, target = _repo_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
-                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
-            },
-            target_responses={
-                **_NO_PACKAGES,
-                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
-                "test -f /etc/apt/sources.list.d/foo.sources": CommandResult(1, "", ""),
-                "sudo apt-get update": CommandResult(0, "", ""),
-            },
-        )
+        context, _source, target = _repo_context(source_responses=_foo_source_responses())
+        target.run_command = AsyncMock(side_effect=_foo_target_side_effect())
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:source:foo.sources": Decision.APPLY})
+        _install_reviewer(job, _APPROVE_PKG_A)
 
         await job.execute()
 
         commands = all_calls(target)
         key_idx = _index_of(commands, lambda c: "sudo install" in c and "keyrings/foo.gpg" in c)
         source_idx = _index_of(commands, lambda c: "sudo install" in c and "sources.list.d/foo.sources" in c)
-        assert key_idx < source_idx
+        install_idx = _index_of(commands, lambda c: c.startswith("sudo DEBIAN") and "pkg-a" in c)
+        assert key_idx < source_idx < install_idx
 
     @pytest.mark.asyncio
-    async def test_key_of_a_changed_repo_is_provisioned_too(self) -> None:
-        """A CHANGED repository may point at a keyring the target has never seen — the
-        `Signed-By:` line is part of what changed.
+    async def test_key_of_an_overwritten_repo_is_provisioned_too(self) -> None:
+        """A repository the target already has with different bytes may point at a keyring
+        it has never seen — the `Signed-By:` line is part of what differs.
         """
-        context, _source, target = _repo_context(
-            source_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-new", "foo.sources"), ""),
-                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
-                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
-            },
-            target_responses={
-                **_NO_PACKAGES,
-                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-old", "foo.sources"), ""),
-                "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
-                "sudo apt-get update": CommandResult(0, "", ""),
-            },
+        context, _source, target = _repo_context(source_responses=_foo_source_responses())
+        target.run_command = AsyncMock(
+            side_effect=_foo_target_side_effect(
+                {"find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-old", "foo.sources"), "")}
+            )
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:source:foo.sources": Decision.APPLY})
+        _install_reviewer(job, _APPROVE_PKG_A)
 
         await job.execute()
 
@@ -4464,31 +4447,37 @@ def _shared_key_context(
     *,
     filename: str = "vendor.sources",
     content: str = _SHARED_SOURCES,
+    origin: str = "https://vendor.example.com",
     source_shared: str = sha256_line("k1", "vendor.gpg"),
     target_shared: str = "",
     dpkg_output: str = "",
 ) -> tuple[JobContext, MagicMock, MagicMock]:
-    """One repository whose `Signed-By:` points into `/usr/share/keyrings`, with the
-    target's copy of that directory and its `dpkg --search` answer under the test's control.
+    """One repository whose `Signed-By:` points into `/usr/share/keyrings`, derived by the
+    package `pkg-a` it serves, with the target's copy of that directory and its
+    `dpkg --search` answer under the test's control.
     """
-    return _repo_context(
+    context, source, target = _repo_context(
         source_responses={
-            **_NO_PACKAGES,
+            "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+            "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            "apt-cache policy": CommandResult(0, _policy_block("pkg-a", origin), ""),
+            _SOURCE_SCAN_CMD: CommandResult(0, _scan_line(filename, content), ""),
             "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", filename), ""),
-            f"cat /etc/apt/sources.list.d/{filename}": CommandResult(0, content, ""),
             "find /usr/share/keyrings": CommandResult(0, source_shared, ""),
         },
-        target_responses={
-            **_NO_PACKAGES,
-            "find /usr/share/keyrings": CommandResult(0, target_shared, ""),
-            # dpkg --search exits non-zero as soon as ANY argument is unowned, which is the norm:
-            # the exit code must not be what decides ownership.
-            "dpkg --search": CommandResult(1, dpkg_output, "dpkg-query: no path found matching pattern\n"),
-            "test -f /usr/share/keyrings/vendor.gpg": CommandResult(1, "", ""),
-            f"test -f /etc/apt/sources.list.d/{filename}": CommandResult(1, "", ""),
-            "sudo apt-get update": CommandResult(0, "", ""),
-        },
     )
+    target.run_command = AsyncMock(
+        side_effect=_foo_target_side_effect(
+            {
+                "find /usr/share/keyrings": CommandResult(0, target_shared, ""),
+                # dpkg --search exits non-zero as soon as ANY argument is unowned, which is
+                # the norm: the exit code must not be what decides ownership.
+                "dpkg --search": CommandResult(1, dpkg_output, "dpkg-query: no path found matching pattern\n"),
+            },
+            origin=origin,
+        )
+    )
+    return context, source, target
 
 
 class TestSharedKeyringsDirectory:
@@ -4497,16 +4486,18 @@ class TestSharedKeyringsDirectory:
     """
 
     @pytest.mark.asyncio
-    async def test_a_usr_share_keyrings_reference_resolves_and_the_repo_is_installable(self) -> None:
+    async def test_a_usr_share_keyrings_reference_resolves_and_the_repo_is_replicable(self) -> None:
         context, _source, _target = _shared_key_context()
+        job = AptSyncJob(context)
 
-        plan = await AptSyncJob(context).plan()
+        plan = await job.plan()
 
-        source_diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.sources")
-        assert source_diff.action == DiffAction.INSTALL
-        # The reference resolved, so the detail is the key that travels — never the
-        # dangling-reference text that would mean `/usr/share/keyrings` went unseen.
-        assert source_diff.detail == "signing key copied with it: vendor.gpg"
+        # The reference resolved, so the package is replicable and drags the repository with
+        # it. A `/usr/share/keyrings` reference that went unseen would read as dangling and
+        # make the package REPO_UNAVAILABLE instead.
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:pkg-a")
+        assert diff.action == DiffAction.INSTALL
+        assert job._origin_plan["apt:package:pkg-a"].derived_files == frozenset({"vendor.sources"})  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_a_hand_placed_key_the_target_lacks_is_provisioned(self) -> None:
@@ -4515,7 +4506,7 @@ class TestSharedKeyringsDirectory:
         """
         context, _source, target = _shared_key_context()
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:source:vendor.sources": Decision.APPLY})
+        _install_reviewer(job, _APPROVE_PKG_A)
 
         await job.execute()
 
@@ -4531,7 +4522,7 @@ class TestSharedKeyringsDirectory:
             dpkg_output="vendor-keyring: /usr/share/keyrings/vendor.gpg\n",
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:source:vendor.sources": Decision.APPLY})
+        _install_reviewer(job, _APPROVE_PKG_A)
 
         await job.execute()
 
@@ -4557,7 +4548,7 @@ class TestSharedKeyringsDirectory:
             ),
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:source:vendor.sources": Decision.APPLY})
+        _install_reviewer(job, _APPROVE_PKG_A)
 
         await job.execute()
 
@@ -4605,17 +4596,27 @@ class TestSharedKeyringsDirectory:
 
     @pytest.mark.asyncio
     async def test_a_genuinely_missing_key_is_still_reported_dangling(self) -> None:
-        """The check must still bite: `ghost.gpg` exists in no key directory on the source."""
+        """The check must still bite, and it bites on the PACKAGE now (D-39): `ghost.gpg`
+        exists in no key directory on the source, so the only file that could deliver
+        `pkg-a`'s origin cannot be written and the package is reported, not installed.
+
+        Exactly one line says so. Under the old model the repository ALSO reported the same
+        dangling reference, which told the user the same thing twice about two objects.
+        """
         context, _source, _target = _shared_key_context(
-            filename="ghost.sources", content=_GHOST_SOURCES, source_shared=""
+            filename="ghost.sources",
+            content=_GHOST_SOURCES,
+            origin="https://ghost.example.com",
+            source_shared="",
         )
 
         plan = await AptSyncJob(context).plan()
 
-        source_diff = next(d for d in plan.diffs if d.item_id == "apt:source:ghost.sources")
-        assert source_diff.action == DiffAction.REPORT_ONLY
-        assert source_diff.detail is not None
-        assert "/etc/apt/keyrings/ghost.gpg" in source_diff.detail
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:pkg-a")
+        assert (diff.diff_class, diff.action) == (DiffClass.REPO_UNAVAILABLE, DiffAction.REPORT_ONLY)
+        assert diff.detail is not None
+        assert "/etc/apt/keyrings/ghost.gpg" in diff.detail
+        assert not any(d.item_id.startswith("apt:source:") for d in plan.diffs)
 
 
 class TestInlineArmoredSignedBy:
@@ -4631,13 +4632,13 @@ class TestInlineArmoredSignedBy:
     @pytest.mark.asyncio
     async def test_a_ppa_with_an_inline_key_installs_normally_and_needs_no_keyring(self) -> None:
         context, _source, target = _shared_key_context(
-            filename="ppa.sources", content=_INLINE_ON_FIELD_LINE, source_shared=""
+            filename="ppa.sources",
+            content=_INLINE_ON_FIELD_LINE,
+            origin="https://ppa.example.com",
+            source_shared="",
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:source:ppa.sources": Decision.APPLY})
-
-        plan = await job.plan()
-        assert next(d for d in plan.diffs if d.item_id == "apt:source:ppa.sources").action == DiffAction.INSTALL
+        _install_reviewer(job, _APPROVE_PKG_A)
 
         await job.execute()
 
@@ -4782,28 +4783,60 @@ class TestPinsStillTravelAsFiles:
     """
 
     @pytest.mark.asyncio
-    async def test_a_pin_file_the_target_lacks_is_still_diffed_and_written(self) -> None:
+    async def test_a_pin_file_the_target_lacks_is_written_with_no_review_line(self) -> None:
+        """The always-sync bucket (D-36): the reviewer is handed nothing at all, and the pin
+        still lands. A pin naming an origin the target does not have is inert, so this cannot
+        get a derivation wrong — and it is what makes Mozilla's build outrank the archive's
+        epoch-1 copy when the origin DOES arrive.
+        """
         context, _source, target = _repo_context(
             source_responses={
                 **_NO_PACKAGES,
                 _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p1", "mozilla"), ""),
-                "cat /etc/apt/preferences.d/mozilla": CommandResult(0, _MOZILLA_PIN_FILE, ""),
             },
             target_responses={**_NO_PACKAGES},
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:pin:mozilla": Decision.APPLY})
+        reviewer = _CountingReviewer({})
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
 
         await job.execute()
 
         assert any(
             "sudo install" in cmd and cmd.endswith("/etc/apt/preferences.d/mozilla") for cmd in all_calls(target)
         )
+        assert reviewer.calls == [()]
 
     @pytest.mark.asyncio
-    async def test_the_pin_file_diff_needs_no_read_of_its_contents(self) -> None:
-        """Its whole-file digest decides the diff. Nothing parses the stanzas any more, so
-        the plan-time content read that only hydrated the retired echo is gone too.
+    async def test_a_differing_pin_is_overwritten_rather_than_reviewed(self) -> None:
+        """The change direction of the same rule. Under the old model this was a CHANGE line
+        the user could untick; the file now simply travels.
+        """
+        context, _source, target = _repo_context(
+            source_responses={**_NO_PACKAGES, _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p-new", "mozilla"), "")},
+            target_responses={
+                **_NO_PACKAGES,
+                _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p-old", "mozilla"), ""),
+                "test -f /etc/apt/preferences.d/mozilla": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {})
+
+        plan = await job.plan()
+        job.accept_review(plan, ReviewOutcome(decisions={}, was_interactive=True))
+        await job.apply()
+
+        assert not any(d.item_id == "apt:pin:mozilla" for d in plan.diffs)
+        assert any(
+            "sudo install" in cmd and cmd.endswith("/etc/apt/preferences.d/mozilla") for cmd in all_calls(target)
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_pin_file_needs_no_read_of_its_contents(self) -> None:
+        """Its whole-file digest decides everything. Nothing parses the stanzas any more, so
+        the plan-time content read that only hydrated the retired echo is gone too — the
+        bytes reach the target through `send_file`, never through a parse.
         """
         context, source, _target = _repo_context(
             source_responses={
@@ -4812,10 +4845,11 @@ class TestPinsStillTravelAsFiles:
             },
             target_responses={**_NO_PACKAGES},
         )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {})
 
-        plan = await AptSyncJob(context).plan()
+        await job.execute()
 
-        assert any(d.item_id == "apt:pin:mozilla" for d in plan.diffs)
         assert not any("cat /etc/apt/preferences.d" in cmd for cmd in all_calls(source))
 
 
