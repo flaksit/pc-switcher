@@ -1019,24 +1019,24 @@ class TestAptSyncEndToEnd:
         update` (the metadata-refresh marker) is reported.
 
         The key half is what makes this non-vacuous: the automation decisions below name
-        the repository ONLY. Under a model where a key is a reviewable item, an item with
-        no recorded decision defaults to skip-once and would produce no `Would install`
-        line at all; the key appearing anyway is exactly the transparent provisioning.
+        the repository ONLY. The key is no item, so it can carry no decision and gets no
+        line of its own — it is named ON the repository's line, which is the only way a
+        run can report a write into `/etc/apt` that nobody was asked about (ADR-014).
 
         This is the one test whose subject is legitimately the run's own output
         (`--dry-run` makes no filesystem change to assert against, so ADR-014's read-only
         preview IS the review): apply()'s dry-run branch logs `[dry-run] Would install
-        <label>` per approved item and `[dry-run] Would change Refresh apt package
-        metadata (apt-get update)` for the marker (`accept_review` inserts it once any
-        repository-group item is approved).
+        <label> — <detail>` per approved item and `[dry-run] Would change Refresh apt
+        package metadata (apt-get update)` for the marker (`accept_review` inserts it once
+        any repository-group item is approved).
 
         A fresh runner VM has no vendor repo whose signing key lives in
         `/etc/apt/keyrings` on both machines, so this test SETS UP its own divergence
         instead of skipping: a synthetic deb822 `.sources` + keyring pair is written on
         the SOURCE (pc1) that the target lacks, giving the diff exactly one missing repo
-        whose source and key are two separate INSTALL entries (ledger entry #2). Because
-        it is `--dry-run` nothing on pc2 changes; the synthetic files are removed from pc1
-        in a `finally` regardless of outcome.
+        that pulls its key along (ledger entry #2). Because it is `--dry-run` nothing on
+        pc2 changes; the synthetic files are removed from pc1 in a `finally` regardless of
+        outcome.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
@@ -1073,7 +1073,7 @@ class TestAptSyncEndToEnd:
             assert f"install {source_filename}" in combined_output, (
                 f"missing source file {source_filename!r} not shown as its own review entry.\n{combined_output}"
             )
-            # The key travels with it although nothing decided about it.
+            # The key travels with it although nothing decided about it, and the run says so.
             assert key_filename in combined_output, (
                 f"signing key {key_filename!r} did not travel with the repository that references it.\n"
                 f"{combined_output}"

@@ -1608,6 +1608,10 @@ class TestRepoStateCapture:
         """The keyring `foo.sources` references (`foo.gpg`) exists among the source's
         OWN captured keys — a real link, not a dangling one — so the source is
         proposed for install like any other missing item.
+
+        The target has neither, so approving this one item also writes `foo.gpg`. The key
+        is no item of its own (D-12), which is exactly why the write has to be named on
+        the item the user does decide about.
         """
         context, _source, _target = make_context(
             source_responses={
@@ -1624,6 +1628,34 @@ class TestRepoStateCapture:
 
         diff = next(d for d in plan.diffs if d.item_id == "apt:source:foo.sources")
         assert diff.diff_class == DiffClass.MISSING_ON_TARGET
+        assert diff.action == DiffAction.INSTALL
+        assert diff.detail is not None
+        assert "foo.gpg" in diff.detail
+
+    @pytest.mark.asyncio
+    async def test_source_whose_key_the_target_already_has_names_no_key(self) -> None:
+        """The other half of the rule: `foo.gpg` is already on the target byte-identical,
+        so approving the repository writes no key and the item says nothing about one.
+        Naming a key that will not be written would be the same defect in the other
+        direction.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "foo.sources"), ""),
+                "cat /etc/apt/sources.list.d/foo.sources": CommandResult(0, _DEB822_FOO, ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "foo.gpg"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:source:foo.sources")
         assert diff.action == DiffAction.INSTALL
         assert diff.detail is None
 
@@ -3568,7 +3600,9 @@ class TestSharedKeyringsDirectory:
 
         source_diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.sources")
         assert source_diff.action == DiffAction.INSTALL
-        assert source_diff.detail is None
+        # The reference resolved, so the detail is the key that travels — never the
+        # dangling-reference text that would mean `/usr/share/keyrings` went unseen.
+        assert source_diff.detail == "signing key copied with it: vendor.gpg"
 
     @pytest.mark.asyncio
     async def test_a_hand_placed_key_the_target_lacks_is_provisioned(self) -> None:

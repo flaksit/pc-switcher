@@ -47,6 +47,9 @@ SOURCES:
   `tailscale-archive-keyring`) ships both its `sources.list.d` entry and its keyring, so
   the repository the package comes from cannot be trusted until the key that package owns
   is already there; skipping package-owned keys would make that bootstrap unsatisfiable.
+  A key gets no decision of its own, but it is not invisible either: the source item's
+  review detail names the keys approving it would copy, so the review and the `--dry-run`
+  preview both report the write (ADR-014) without turning it back into a question.
 
 Three key directories are captured, not two: `/etc/apt/keyrings`, `/etc/apt/trusted.gpg.d`
 and `/usr/share/keyrings`. The last is where `add-apt-repository`, several vendor `.deb`s
@@ -85,7 +88,7 @@ from __future__ import annotations
 
 import re
 import shlex
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Literal, override
@@ -1117,7 +1120,7 @@ class AptSyncJob(PackageSyncJob):
                         action=DiffAction.INSTALL,
                         item_id=item.item_id,
                         label=item.label(),
-                        detail=None,
+                        detail=self._travelling_keyrings_detail(refs),
                     )
                 )
 
@@ -1143,6 +1146,9 @@ class AptSyncJob(PackageSyncJob):
             item = AptSourceItem(filename=filename, digest=source_digests[filename], fmt=fmt, keyring_refs=refs)
             dangling = _dangling_keyring_ref(refs, source_key_filenames)
             detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename])
+            keys = self._travelling_keyrings_detail(refs)
+            if keys is not None:
+                detail = f"{detail}; {keys}"
             # Mirrors the "missing" branch above (D-12): a dangling keyring reference
             # makes this file converge-time-refused by `_require_keyrings_ready`
             # regardless, so the review must present it as the same informational fact
@@ -1159,6 +1165,27 @@ class AptSyncJob(PackageSyncJob):
             )
 
         return diffs
+
+    def _travelling_keyrings_detail(self, refs: Sequence[str]) -> str | None:
+        """The review/dry-run detail naming the signing keys writing this source file would
+        also copy onto the target, or `None` when it would copy none (the target already
+        holds every key it names, byte-identical or under its own dpkg's ownership).
+
+        A key is not an item and gets no decision of its own (D-12), but writing one into
+        `/etc/apt` is still a change to the target, and ADR-014 requires a run to report
+        exactly what it would do. Naming the keys on the repository the user IS deciding
+        about is what keeps "no decision of its own" from meaning "invisible".
+
+        Judged from plan-time state, which is the same state `_keyring_writes` recomputes
+        at converge time from the real decisions. The two can differ for one file only in
+        the direction that copies FEWER keys — another approved source file writing the
+        same rotated key first — so the detail never promises a write that does not happen.
+        """
+        names = sorted({Path(dest).name for dest in self._referenced_keyring_writes(refs)})
+        if not names:
+            return None
+        plural = "s" if len(names) > 1 else ""
+        return f"signing key{plural} copied with it: {', '.join(names)}"
 
     async def _diff_apt_pins(
         self,
@@ -2225,6 +2252,20 @@ class AptSyncJob(PackageSyncJob):
             if self._target_global_keys.get(name) == digest or self._target_manages_keyring(dest):
                 continue
             writes[dest] = dest
+        writes.update(self._referenced_keyring_writes(refs))
+        return [(writes[dest], dest) for dest in sorted(writes)]
+
+    def _referenced_keyring_writes(self, refs: Iterable[str]) -> dict[str, str]:
+        """`{destination: local path}` for the subset of `refs` whose key this run must
+        copy — the reference-driven half of `_keyring_writes`, without the ambient
+        `/etc/apt/trusted.gpg.d` population.
+
+        Split out because it is also what a single source file's review detail may name
+        (`build_travelling_keyrings_detail`): the keys that travel BECAUSE of that file.
+        The global keys travel regardless of any source file, so attributing them to one
+        would name the same key on every repository in the review.
+        """
+        writes: dict[str, str] = {}
         for ref in refs:
             local = self._keyring_local_path(ref)
             if local is None:
@@ -2236,7 +2277,7 @@ class AptSyncJob(PackageSyncJob):
             if source_digest == target_digest or self._target_manages_keyring(ref):
                 continue
             writes[ref] = local
-        return [(writes[dest], dest) for dest in sorted(writes)]
+        return writes
 
     def _surviving_keyring_refs(self) -> frozenset[str]:
         """Every keyring reference that will be live on the target once this run's approved

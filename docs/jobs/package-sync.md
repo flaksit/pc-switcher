@@ -69,7 +69,9 @@ When you approve an apt change, apt sometimes has to remove or downgrade *other*
 
 ## Signing keys
 
-You think in repositories and packages. A signing key is just how a repository is made to work, so pc-switcher never asks you about one: no key appears in a review, and no key can be marked machine-specific. It keeps them correct on its own.
+You think in repositories and packages. A signing key is just how a repository is made to work, so pc-switcher never asks you about one: no key gets a review line of its own, and no key can be marked machine-specific. It keeps them correct on its own.
+
+Not asked about is not the same as hidden. A repository offered for install or change names, in its own review line, the keys approving it would copy — so you see the files that would land in `/etc/apt` before you tick it, and `--dry-run` reports them too. A repository whose key the target already has, byte-identical, names nothing: there is no write to report.
 
 When a repository is installed or changed on the target, the keyring it names arrives first — copied byte-for-byte from the source machine, never downloaded from a vendor. The same check runs for every repository that is *already* on the target: if the key on the source machine has different bytes, the target's copy is refreshed. That is what makes a **rotated** key follow you. A vendor replacing its signing key changes no `.sources` file, so nothing in the review would ever mention it, and the target's apt would start failing that repository's signature check until you noticed by hand. A key that already matches is left alone entirely — no transfer, no command.
 
