@@ -423,15 +423,19 @@ async def ensure_pcswitcher_at_branch_head(
     """Install pc-switcher from `branch` unless the installed build already is `head_commit`.
 
     Dev builds stamp the short commit into the version's local part (e.g.
-    0.5.1.post167.dev0+43a52fa3), so a matching stamp proves the VM already runs the
+    0.5.1+post.186.dev.0.0ed6a25), so a matching stamp proves the VM already runs the
     branch tip and the ~10s clone+build install can be skipped in favour of a ~1s
     version probe. Any mismatch — nothing installed, an older push, a self-update or
     install-script test having changed the installed version — falls through to a real
     install. A branch tip that is exactly a release tag carries no commit stamp and
     therefore always reinstalls (safe, just slower).
+
+    The stamp's length is git's abbreviation length in the build clone — 7 on the
+    fresh clone uv makes, longer in bigger repos — so compare on a 7-char prefix:
+    it also matches inside any longer stamp.
     """
     installed = await executor.run_command("pc-switcher --version", timeout=10.0)
-    if installed.success and head_commit[:8] in installed.stdout:
+    if installed.success and head_commit[:7] in installed.stdout:
         return
 
     await install_pcswitcher_with_script(executor, branch)
