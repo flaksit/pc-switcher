@@ -96,6 +96,11 @@ from uuid import uuid4
 
 from pcswitcher.executor import Executor, RemoteExecutor
 from pcswitcher.jobs.context import JobContext
+from pcswitcher.jobs.packages.apt_policy import (
+    installed_origins_by_package,
+    normalise_repo_uri,
+    packages_with_no_candidate,
+)
 from pcswitcher.jobs.packages.items import (
     DiffAction,
     DiffClass,
@@ -594,27 +599,6 @@ def _lines(output: str) -> list[str]:
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
-def _packages_with_no_candidate(policy_output: str) -> set[str]:
-    """Parse a multi-package `apt-cache policy <name...>` run: names whose `Candidate:`
-    line reads `(none)`. Each package's block starts with an unindented `<name>:`
-    header line, per `apt-cache policy`'s documented output shape.
-    """
-    no_candidate: set[str] = set()
-    current: str | None = None
-    for line in policy_output.splitlines():
-        if line and not line[0].isspace() and line.endswith(":"):
-            current = line[:-1]
-            continue
-        if current is None:
-            continue
-        stripped = line.strip()
-        if stripped.startswith("Candidate:"):
-            if stripped.removeprefix("Candidate:").strip() == "(none)":
-                no_candidate.add(current)
-            current = None
-    return no_candidate
-
-
 # -- Repository/key/pin/config capture and diff (D-11, D-12, D-13) ---------------------
 #
 # Unlike apt packages, these five directories are diffed by whole-FILE digest (module
@@ -681,20 +665,11 @@ def _parse_sha256sum(output: str) -> dict[str, str]:
     return digests
 
 
-def _normalise_repo_uri(uri: str) -> str:
-    """A repository URI reduced to the shape `apt-cache policy` prints in its version
-    table: apt strips the trailing slash a source file may carry
-    (`https://packages.microsoft.com/repos/azure-cli/` -> `.../azure-cli`), so comparing
-    the two forms verbatim would miss every repo written with one.
-    """
-    return uri.rstrip("/")
-
-
 def _parse_source_file(
     filename: str, content: str
 ) -> tuple[Literal["deb822", "list"], tuple[str, ...], tuple[str, ...]]:
     """A source file's format (by extension), every keyring path it names, and every
-    repository URI it points at (normalised by `_normalise_repo_uri`).
+    repository URI it points at (normalised by `normalise_repo_uri`).
 
     deb822 `.sources` files name a key via a `Signed-By:` field and their repositories via
     `URIs:`; legacy `.list` files put both on the `deb` line, the key inside the options
@@ -721,58 +696,17 @@ def _parse_source_file(
             signed_by = _SIGNED_BY_RE.match(line)
             uri_field = _URIS_RE.match(line)
             if uri_field:
-                uris.extend(_normalise_repo_uri(uri) for uri in uri_field.group("uris").split())
+                uris.extend(normalise_repo_uri(uri) for uri in uri_field.group("uris").split())
         else:
             signed_by = _LEGACY_SIGNED_BY_RE.search(raw_line)
             deb_line = _LEGACY_DEB_LINE_RE.match(line)
             if deb_line:
-                uris.append(_normalise_repo_uri(deb_line.group("uri")))
+                uris.append(normalise_repo_uri(deb_line.group("uri")))
         if signed_by:
             ref = _keyring_reference(signed_by.group("path"))
             if ref is not None:
                 refs.append(ref)
     return fmt, tuple(refs), tuple(uris)
-
-
-def _installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]]:
-    """Parse a batched `apt-cache policy <name...>` run into `{package: origin URIs of
-    its INSTALLED version}` (C26).
-
-    `apt-cache policy`'s version table marks the installed version with a leading `***`
-    and indents each of that version's origins by eight spaces as
-    `<priority> <uri> <suite>/<component> <arch> Packages`. Only the installed version's
-    origins count: another version row may list a repository that merely *offers* the
-    package (Ubuntu's archive offers `gh` too), which is not the repository the target is
-    actually tracking. `/var/lib/dpkg/status` is dpkg's own record of the installed
-    package, not a repository, and is skipped.
-
-    Defensive by construction: a name apt does not know produces no block at all, and a
-    package installed from a local `.deb` has `/var/lib/dpkg/status` as its only origin.
-    Both degrade to "no origin" -> no link found, never to a guess.
-    """
-    origins: dict[str, set[str]] = {}
-    current: str | None = None
-    in_installed_block = False
-    for line in policy_output.splitlines():
-        if line and not line[0].isspace() and line.endswith(":"):
-            current, in_installed_block = line[:-1], False
-            continue
-        if current is None:
-            continue
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("***"):
-            in_installed_block = True
-            continue
-        if line.startswith("        "):
-            parts = stripped.split()
-            if in_installed_block and len(parts) >= 2 and parts[1] != "/var/lib/dpkg/status":
-                origins.setdefault(current, set()).add(_normalise_repo_uri(parts[1]))
-            continue
-        # Any other row at version-table depth is the next (non-installed) version.
-        in_installed_block = False
-    return {name: frozenset(uris) for name, uris in origins.items()}
 
 
 def _parse_pin_file(content: str) -> tuple[str, ...]:
@@ -1231,7 +1165,7 @@ class AptSyncJob(PackageSyncJob):
         names = sorted(_package_name(item_id) for item_id in missing_item_ids)
         quoted = " ".join(shlex.quote(name) for name in names)
         result = await self.target.run_command(f"apt-cache policy {quoted}", login_shell=False)
-        no_candidate = _packages_with_no_candidate(result.stdout)
+        no_candidate = packages_with_no_candidate(result.stdout)
         return frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in names if name in no_candidate)
 
     async def _plan_packages(self) -> PackagePlan:
@@ -1467,7 +1401,7 @@ class AptSyncJob(PackageSyncJob):
 
         quoted = " ".join(shlex.quote(name) for name in names)
         policy = await target_run(f"apt-cache policy {quoted}")
-        origins_by_package = _installed_origins_by_package(policy.stdout)
+        origins_by_package = installed_origins_by_package(policy.stdout)
         packages_by_origin: dict[str, list[str]] = {}
         for name in names:
             for origin in origins_by_package.get(name, frozenset()):
