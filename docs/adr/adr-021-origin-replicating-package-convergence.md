@@ -18,7 +18,7 @@ An apt package replicates as (name, origin), not name: the review decides packag
 - `apt_sync` MUST NOT prompt after its first mutating command. Every apt decision is taken in one review, before the `/etc/apt` group converges.
 - `/etc/apt/apt.conf.d` MUST stay a reviewed item in all three directions (add, change, remove) with the full three-way decision and the machine-local registry.
 - Removing an apt source file or a `preferences.d` pin file MUST offer exactly two answers — remove, or skip once — and MUST NOT be recordable in a decision file.
-- `ubuntu.sources`, `/etc/apt/sources.list` and the `ubuntu-esm-*` source files MUST be written when missing and overwritten when different, and MUST NEVER be offered for removal or removed. The `ubuntu-esm-*` files MUST be withheld, with a warning naming the attachment commands, when the target has no Ubuntu Pro attachment.
+- `ubuntu.sources`, `/etc/apt/sources.list` and the `ubuntu-esm-*` source files MUST be written when missing and overwritten when different, and MUST NEVER be offered for removal or removed. When an `ubuntu-esm-*` file would be written and the target reports no Ubuntu Pro attachment, `apt_sync` MUST ask the user before its first mutating command, with exactly two answers: attach now (pc-switcher re-probes the target and continues) or skip `apt_sync` for this run while every other job runs.
 - A derived `/etc/apt` write that fails MUST fail every package that depended on it, naming the file — not an item of its own.
 - The `/etc/apt` convergence group MUST stay transactional: a group whose metadata refresh fails leaves the target's `/etc/apt` as it found it (unchanged from ADR-020).
 - A package manager's own transaction MUST be constrained to what the review approved, determined at plan time and classified there, never prompted mid-apply. Collateral protection keys on the TARGET's `apt-mark showmanual` set.
@@ -33,6 +33,7 @@ An apt package replicates as (name, origin), not name: the review decides packag
 - No decision-file entry for an apt source or an apt pin, in any direction.
 - No re-fetching signing keys from vendors; a repo's key travels with its repo, byte-for-byte.
 - No standing block on a package manager's own auto-update left behind by a run.
+- No writing an `ubuntu-esm-*` source to a target that reports no Pro attachment without asking, and no attempt to attach the target on the user's behalf.
 
 ## Context
 
@@ -88,7 +89,17 @@ Repository removals additionally disclose, on the line being decided, which mach
 
 `ubuntu.sources`, `/etc/apt/sources.list`, `ubuntu-esm-apps.sources` and `ubuntu-esm-infra.sources` are written when missing and overwritten when different, and are never removed and never offered for removal. They define the distribution origins D-35 exempts, so they are the one repository bucket that does not wait for a package to derive it.
 
-The two ESM files are **withheld** from a target with no Ubuntu Pro attachment, with a warning that names them, says why, and gives the attachment commands to copy. This deliberately contradicts the literal instruction that those files always travel. The reason is transactional: the `/etc/apt` group commits or rolls back on its single `apt-get update`, so writing an index the target cannot fetch would roll back every other repository change the run made — the derived vendor repository, its pin, its keys — for two files that could not have worked. The premise that an unattached ESM source makes `apt-get update` exit non-zero is a **hypothesis, not measured**; it is recorded as such in the phase spec together with the VM test that settles it. Withholding is wrong only in the cheap direction (the files arrive one sync late); writing is wrong in the expensive one.
+The two ESM files are gated on the target's Ubuntu Pro attachment. When they would be written and the target reports unattached, `apt_sync` asks — before its first mutating command — with exactly two answers: attach now, meaning the user attaches on the target by hand and pc-switcher re-probes and continues; or skip `apt_sync` for this run, while every other job runs. Writing them to an unattached target silently is not an option, because it leaves an apt that fails on a subset of installs for a reason the user will not connect to the sync.
+
+The question precedes the review rather than joining it: one of its answers means there is no review to hold, and it asks about the target's environment, not about an item. It is still raised before the job's first mutating command, so the one-review-then-write rule is intact. A run with nobody to ask keeps the two files back, warns, and lets the rest of `apt_sync` proceed — an unwritten file leaves the target exactly as it already is.
+
+The hazard, **measured** in a stock `ubuntu:24.04` container carrying both real ESM source files copied from a Pro-attached host: `esm.ubuntu.com` serves its repository *index* publicly (HTTP 200 on `.../dists/noble-apps-security/InRelease`), so the suites are fetched, marked `Trusted: yes`, and enter candidate selection at priority 500 — above `noble/universe`. Only the *pool* is 401. The failure therefore lands at install time, not refresh time: `apt-get install 7zip` exits 100 with `401 Unauthorized` on the `.deb`. That container had 0 of 13 upgradable packages with an ESM candidate; that a desktop with a large `universe` set has many more is **inferred from the priority ordering, not measured**.
+
+The hypothesis this replaces, recorded so no future reader re-derives it: D-38 previously withheld the two files on the reasoning that an unattached target's `apt-get update` fails and rolls the transactional `/etc/apt` group back. Every part of it is **false, measured** in the same container. `apt-get update` exits 0 with the ESM sources present and no credentials. A source that genuinely fails does not abort the others: with the ESM keyrings removed the run exits 100 with `E: The repository ... is not signed.` and still fetches and writes all 19 other lists, and against a synthetic index-level 401 it exits 100 and writes all 27 others — a non-zero exit is an aggregate signal, never an abort, and triggers no rollback. The missing-keyring case cannot arise here anyway: `/usr/share/keyrings` is one of the three key directories (`src/pcswitcher/jobs/apt_sync.py:200,203`), so `ubuntu-pro-esm-apps.gpg` travels with the source file.
+
+The question cannot be answered by the tool. `pro attach` needs a subscription token from the user's Pro dashboard or an interactive browser short-code flow; the source machine's own credentials are root-only (`/var/lib/ubuntu-advantage/private/` is unreadable to the ordinary user) and a machine's token is not reusable to attach another machine; and holding a subscription token would put a secret on a command line. pc-switcher therefore asks, waits for the user to attach, and re-checks.
+
+Detection is `pro status --format json` on the target — exit 0 for an unprivileged user, top-level `attached: true|false`, measured this session. Its payload also carries the subscriber's account; only the parsed boolean may be logged or shown.
 
 ### Derived-work failure attribution (D-39)
 
@@ -113,7 +124,7 @@ What changes is the protected set: the TARGET's `apt-mark showmanual`, no longer
 - A repository on the source that feeds no package this run syncs does not travel at all. The two machines' `/etc/apt` are converged for what packages need, not made identical.
 - Pins always-sync, so a `preferences.d` file the user wanted only on one machine comes back on every run, and the only way to keep it machine-local is to delete it on the source.
 - The source-intent collateral case (D-40) is given up outright: a package hand-installed on the source but auto-resolved on the target can now be removed as collateral without a prompt.
-- ESM sources are withheld on an unattached target on the strength of an unmeasured premise (D-38). If the premise is false, the user gets two files a sync later than they asked for, for no gain.
+- ESM makes `apt_sync` interruptible by a question no other job can raise (D-38): an unattached target turns a sync the user expected to be unattended into a prompt, and the "skip" answer costs the whole apt job for that run rather than only the two files. Accepted because the alternative leaves the target's apt failing installs of ESM-covered packages with a 401 the user has no way to trace back to the sync.
 - `REPO_UNAVAILABLE` changed meaning rather than being replaced. Anything written against ADR-020's reading of it — matrix rows, tests, docs — is wrong rather than merely stale, and reads plausibly either way.
 - Origin capture adds work to every run: source-side installed origins, source-side and target-side repository URI scans, target-side candidate origins, and one more batched policy call before installing. All batched, none measured.
 
@@ -121,7 +132,8 @@ What changes is the protected set: the TARGET's `apt-mark showmanual`, no longer
 
 - **Keeping repositories as reviewed items and adding an origin check on top** — rejected: it keeps the unrepresentable pairing and asks the user a question whose answer is already implied by the package decision, while the origin check does the actual work.
 - **Deriving pins per package rather than always-syncing `preferences.d`** — rejected: a pin naming an absent origin is inert, so the precision buys nothing and the derivation has a wrong-answer mode that always-syncing does not.
-- **Writing the ESM sources and warning, per the literal instruction** — rejected per D-38: a failing `apt-get update` rolls back the whole transactional group.
+- **Writing the ESM sources to an unattached target and only warning** — rejected per D-38: measured, the refresh succeeds and the ESM suites then win candidate selection, so the target's next install of an ESM-covered package fails with a 401 long after the sync that caused it.
+- **Withholding the two files silently, as D-38 first ruled** — rejected: the transactional-rollback premise behind it is refuted by measurement, and what remains is a choice between an apt without ESM and an attachment only the user can perform, which is the user's to make.
 - **Refusing the whole run when an approved package's origin cannot be replicated** — rejected: it contradicts D-27's continue-and-report model; the package fails, the run continues.
 - **Keeping the union manual set for collateral (ADR-020 D-30)** — rejected per D-40; the union protects a package on the strength of the wrong machine's bookkeeping.
 - **File-level replication of the package databases**, **a single combined `package_sync` job**, **a `--delete` mirror of `/etc/apt`**, **source-cache reuse** — all rejected for the reasons ADR-020 recorded, unchanged.

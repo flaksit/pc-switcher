@@ -29,7 +29,7 @@ Referenced throughout as "ruling N".
 11. `/etc/apt/apt.conf.d` is reviewed in all three directions — add, change and remove.
 12. Pin adds and pin updates always sync silently; pin removal is reviewed with ruling 5's two answers.
 13. D-30's collateral protection triggers on the TARGET's manual set only.
-14. ESM sources are withheld from a target with no Ubuntu Pro attachment, and warned about.
+14. When ESM sources would be written to a target with no Ubuntu Pro attachment, the user is asked, with two answers: attach the target now (pc-switcher re-checks and continues) or skip `apt_sync` for this run while the other jobs continue.
 15. The second mid-`execute()` review and the `HELD_OR_PINNED` pin echo are both deleted.
 
 ## 1. The model in one page
@@ -54,7 +54,7 @@ What is derived, never ticked:
 - The signing key that repository names. Already true (`d27337da`, `apt_sync.py:2735`); unchanged.
 - The pin that makes that origin win. New, and load-bearing — see §2. Pin adds and pin updates always sync, silently; only pin removal is reviewed (ruling 12).
 - Overwriting a repository file that differs on the two machines, when no machine-specific package is involved (ruling 6, normal case).
-- `ubuntu.sources`, `/etc/apt/sources.list`, `ubuntu-esm-apps.sources`, `ubuntu-esm-infra.sources`: written when missing, overwritten when different, never removed and never offered for removal (ruling 7, §5 below — with the ESM withholding rule at §5.3).
+- `ubuntu.sources`, `/etc/apt/sources.list`, `ubuntu-esm-apps.sources`, `ubuntu-esm-infra.sources`: written when missing, overwritten when different, never removed and never offered for removal (ruling 7, §5 below — with the ESM attachment gate at §5.3).
 - Every `/etc/apt/preferences.d` file the source has: written when missing, overwritten when different.
 - Deleting a keyring nothing references any more. Already true (`apt_sync.py:2754`); unchanged.
 
@@ -310,21 +310,88 @@ This **revises** the handover's line "`/etc/apt/sources.list` and `ubuntu.source
 
 `_capture_dir_digests` uses `find <dir> -maxdepth 1 -type f` (`apt_sync.py:760`), which captures every file in `sources.list.d`. Observed on the development machine this session: that directory also holds `ubuntu.sources.save`, `ubuntu.sources.curtin.orig`, `ubuntu-esm-apps.sources.save` and `ubuntu-esm-infra.sources.save`. **apt does not read those** — it only reads `*.list` and `*.sources` — so today pc-switcher would offer four files apt ignores as review items. Restrict the `sources.list.d` capture to `-name '*.list' -o -name '*.sources'`. `preferences.d` and `apt.conf.d` keep the current unfiltered capture: apt reads extensionless files there, and the development machine's `preferences.d` holds six of them (`gh-github`, `nodejs`, `no-esm-docker`, `nsolid`, `ubuntu-pro-esm-apps`, `ubuntu-pro-esm-infra`).
 
-### 5.3 The ESM / Pro warning
+### 5.3 The ESM / Pro attachment gate
 
-Trigger: this run's write set contains `ubuntu-esm-apps.sources` or `ubuntu-esm-infra.sources`, **and** the target is not attached to Ubuntu Pro.
+#### 5.3.1 What the gate is for, measured
 
-Attachment probe, on the target, read-only, at plan time: `pro api u.pro.status.is_attached.v1` (machine-readable; `pro status` itself prints "this output is intended to be human readable, and subject to change", observed this session). A non-zero exit, a missing `pro` binary, or unparseable output is treated as **not attached** — the safe direction, since the whole point is to avoid writing an index the target cannot fetch.
+Writing the two ESM sources to an unattached target does **not** break `apt-get update`, and does not roll the transactional `/etc/apt` group back. Measured in a stock `ubuntu:24.04` container carrying both real ESM source files copied from a Pro-attached host: `apt-get update` **exits 0** with the ESM sources present, no credentials and `/etc/apt/auth.conf.d/` empty, because `esm.ubuntu.com` serves its repository *index* publicly (HTTP 200 on `.../dists/noble-apps-security/InRelease`); the suites are fetched and marked `Trusted: yes`. Only the *pool* is 401. Measured in the same container, a source that genuinely fails also does not abort the others: with the ESM keyrings removed the refresh exits 100 with `E: The repository ... is not signed.` and still writes all 19 other lists, and against a synthetic index-level 401 it exits 100 and writes all 27 others. A non-zero `apt-get update` is an aggregate signal, never an abort.
 
-Behaviour when not attached: **the two ESM files are withheld from the write set**, and one `WARNING` is logged naming them and the remediation. Warnings survive to the end-of-run summary (`ui.py:319` `add_warning`, `ui.py:345` `collected_warnings`), so the user sees it after the sync as well as during.
+The real hazard comes later, at install time. The ESM versions enter candidate selection at priority 500 — above `noble/universe` (`apt-cache policy 7zip`) — so the target's next install of an ESM-covered package fails when it fetches the `.deb`: installing `7zip` exits 100 with `401 Unauthorized`. The container had 0 of 13 upgradable packages with an ESM candidate; that a desktop with a large `universe` set has many more is **inferred from the priority ordering, not measured**.
 
-Wording constraints for the warning: name both files; state that the target is not attached to Ubuntu Pro; state that they were **not** written and why in one clause (the target cannot fetch `esm.ubuntu.com` without Pro credentials); give the two copy-paste commands (`sudo pro attach <your-token>`, then `sudo pro enable esm-apps esm-infra`); state that the next sync will carry them once attached. No apology, no history, no reference to this document.
+pc-switcher cannot resolve this itself. `pro attach` requires a subscription token from the user's Pro dashboard or an interactive browser short-code flow; the source's own credentials are root-only (`/var/lib/ubuntu-advantage/private/` is unreadable to the ordinary user), a machine's token is not reusable for another machine, and holding the user's token would put a secret on a command line. So the tool asks (ruling 14).
 
-Why the check is **not** in `validate()`, despite the standing rule that environment assumptions are validated early with copy-paste remediation: every `ValidationError` is fatal. `orchestrator.py:1019-1025` collects them across all jobs and raises `RuntimeError`, aborting the whole run; `ValidationError` (`models.py:103`) has no severity field, so there is no non-fatal form. An unattached target is not a reason to refuse a sync — the sync is entirely valid without ESM, it just carries two fewer files. The rule's purpose is that the user never discovers an environment problem halfway through a mutation; that purpose is served here because the probe runs in `plan()`, which is read-only and finishes before the review, so the warning is on screen before the user approves anything and before the first write.
+#### 5.3.2 Trigger and placement
 
-Ruling 14 chooses withholding over the write-and-warn that ruling 7 literally implies, and the contradiction is deliberate. The `/etc/apt` group is transactional (ADR-020's D-27 boundary, `apt_sync.py:2224`), and its single `apt-get update` is what decides whether the whole group commits or rolls back. Writing an index the target cannot fetch would therefore cost the user everything else the group carried — the derived vendor repository, its pin, its keys — for two files that could not work anyway. Withholding delivers the same information with none of that blast radius, and the next sync carries the files once the target is attached.
+Trigger, computable at plan time: the source has `ubuntu-esm-apps.sources` or `ubuntu-esm-infra.sources` and the target's digest for that file is absent or different — i.e. the always-sync bucket would write it. These files are not derived from approved packages (§1), so the trigger needs no review outcome; the digests `_capture_origin_state` already captures (`apt_sync.py:1737`) are enough. No ESM write pending means no probe and no prompt.
 
-The premise is a **hypothesis, not verified**: that an unattached machine carrying `esm.ubuntu.com` sources gets HTTP 401 on those indexes and `apt-get update` therefore exits non-zero. What settles it is one VM test — write both ESM files onto an unattached target, run `apt-get update`, record the exit code. A non-zero exit confirms ruling 14's reasoning. A zero exit with only a warning means the rollback risk does not exist, the literal reading of ruling 7 is safe, and this section should go back to write-and-warn; the ruling stands until then, since withholding is wrong only in the cheap direction (two files arrive one sync late) while writing is wrong in the expensive one (the whole group rolls back).
+Placement: in `plan()`, immediately after `await self._capture_origin_state()` (`apt_sync.py:1677`), before `_plan_packages()` and before any review group is built. Three reasons, each load-bearing: one answer ends the job, so it must precede the expensive planning and the review the user would otherwise answer for nothing; the probe is a read, and `plan()` is the last read-only phase; and it puts the question and its copy-paste remediation on screen before anything is approved or written, which is as much of the standing "validate environment assumptions early" rule as this question can satisfy.
+
+Not `validate()`: every `ValidationError` is fatal. `orchestrator.py:1019-1025` collects them across all jobs and raises `RuntimeError`; `ValidationError` (`models.py:103`) has no severity field, so there is no non-fatal form and no way to express "the user answered, carry on".
+
+#### 5.3.3 The probe
+
+```python
+async def _target_pro_attached(self) -> bool
+```
+
+Runs `pro status --format json` on the target via `self.target.run_command(..., login_shell=False)` — a read, so no `mutates=` — and returns the top-level `attached` boolean. Measured this session on a Pro-attached host: exit 0 for an ordinary unprivileged user, `attached` present in the top-level object. A non-zero exit, a missing `pro` binary, or unparseable output returns False: False asks a question, True writes files, and the question is the recoverable error.
+
+The payload also carries an `account` object naming the subscriber. Only the parsed boolean may be logged, shown in the prompt, or put in a `JobSkipped` reason; the raw stdout must never reach the log or the console.
+
+#### 5.3.4 The gate
+
+```python
+async def _gate_esm_writes(self, esm_files: Sequence[str]) -> bool
+```
+
+Three outcomes: **True** — attached, or attached after a re-check; the ESM files travel with the rest of the always-sync bucket. **False** — nobody could be asked; the two ESM filenames are dropped from this run's write set and one `WARNING` is logged, and everything else in `apt_sync` proceeds. **Raises `JobSkipped`** — the user chose to skip the job.
+
+Rules:
+
+1. Attached on the first probe: return True with no prompt.
+2. Dry run (`self.context.dry_run`): never prompt. Log one WARNING naming both files and the unattached state, and return False. A rehearsal must not make the user perform a real attachment, and ADR-014 wants the preview to say what the run would carry.
+3. Non-interactive (`ask_gate` returns None): return False. **This is the one point ruling 14 does not cover, and the fallback is derived, not ruled**: D-26 makes an unanswerable question skip its item rather than the run, and withholding two files from an unattached target leaves that target exactly as it already is — nothing is written and nothing fails.
+4. Interactive and unattached: ask. "Attach now" re-probes; attached ends the loop with True, still-unattached says so and re-asks. At most **3** affirmative answers; the fourth unattached probe raises `JobSkipped` naming the probe command, so a stuck or scripted answer cannot loop forever.
+5. "Skip apt_sync": raise `JobSkipped` immediately.
+
+Prompt wording constraints. Exactly two answers, labelled "I have attached the target — re-check and continue" and "Skip apt_sync this run (other jobs continue)". The body must name both files; state that the target reports no Ubuntu Pro attachment; state in one clause what writing them would do (the ESM indexes are public and win candidate selection, so the target's next install of an ESM-covered package fails with `401 Unauthorized` when it fetches the `.deb`); give the two copy-paste commands to run **on the target** — `sudo pro attach <token from https://ubuntu.com/pro/dashboard>`, then `sudo pro enable esm-apps esm-infra`; and state that skipping leaves every other job running. No apology, no history, no reference to this document, nothing from the probe payload beyond the boolean. Untrusted content stays out of Rich markup (T-02-02) as everywhere else.
+
+#### 5.3.5 The prompt seam
+
+The question is not a review item: it precedes the review, and one of its answers means there is no review. It therefore does not go through `ReviewGroup`. It also does not go through `Confirmer`, whose non-interactive contract is an `--allow-*` flag this question has none of. `packages/review.py` already owns pause-the-live-UI-ask-resume, interactivity detection (`review.py:476`) and the Ctrl-C-aborts rule (`review.py:522`), so the gate reuses that module:
+
+```python
+# packages/review.py, sibling of review_items
+async def ask_gate(
+    *,
+    title: str,
+    message: str,
+    proceed_label: str,
+    stop_label: str,
+    console: Console,
+    ui: PausableUI,
+    logger: logging.Logger | None = None,
+) -> bool | None
+
+# Reviewer protocol, and TerminalUIReviewer forwarding to the above
+async def ask_gate(self, *, title: str, message: str, proceed_label: str, stop_label: str) -> bool | None
+```
+
+True is the proceed answer, False the stop answer, None means non-interactive — nobody was asked, and the caller owns the fallback. Ctrl-C raises `SyncAbortedByUser`, matching the checkbox screens. Every `Reviewer` double in the tests gains the method; the two interactive branches are unit-tested through a fake `Reviewer`, and a TTY-less run exercises the None branch without any automation hook.
+
+#### 5.3.6 What skipping the job means
+
+```python
+# models.py, beside SyncAbortedByUser (models.py:131)
+class JobSkipped(Exception):
+    def __init__(self, job_name: str, reason: str) -> None: ...
+```
+
+The orchestrator gains an `except JobSkipped` arm in the job loop, beside the `PackageItemFailures` one (`orchestrator.py:1252`): record `JobResult(status=JobStatus.SKIPPED, ..., error_message=reason)`, log once at WARNING, and **do not re-raise**, so the loop moves to the next job exactly as the item-failure arm does. `JobStatus.SKIPPED` already exists (`models.py:263`) and is constructed nowhere today (grepped this session), and `_summarize_job_outcomes` (`orchestrator.py:202-216`) already treats it as a non-failure — so a skipped `apt_sync` leaves the session `COMPLETED` and the exit code unchanged. Without the arm the job would have to return normally and be recorded `SUCCESS` (`orchestrator.py:1230-1237`), telling the end-of-run summary that apt synced when it carried nothing.
+
+`JobSkipped` may only be raised **before** the job's first mutating command; raised later it would leave the `/etc/apt` group's state unreported.
+
+Skipping `apt_sync` does not touch `snap_sync`, `flatpak_sync`, `manual_installs_sync` or `folder_sync`; it writes no decision-file entry; and it leaves the target's `/etc/apt` exactly as it was, ESM files included. The WARNING survives to the end-of-run summary (`ui.py:319` `add_warning`, `ui.py:345` `collected_warnings`), so the user sees the reason after the sync as well as during.
 
 ## 6. What gets deleted
 
@@ -465,7 +532,7 @@ No `pytest.skip` may appear in this module (`02-HANDOVER-package-review.md:77`).
 - **H19** — keep, but the enumerated `REPORT_ONLY` classes change (pin echo out, `ORIGIN_MISMATCH` in).
 - **N5** — the key→source→update→install narrative survives but is now derived, not reviewed. Restate.
 - **N12, N13, N14** — the whole second-review family. Delete; N13's outcome is now a single-review property (§10.4).
-- **New rows** needed: origin capture and mapping, same-origin install, different-origin install (Firefox), unreplicable origin, post-update origin verification, `ORIGIN_MISMATCH`, always-sync bucket, `/etc/apt/sources.list` write, `.save`-file exclusion, ESM withhold + warning, the two-answer repository removal, the two-answer pin removal, apt config keeping all three directions and its registry, and the conflict prompt.
+- **New rows** needed: origin capture and mapping, same-origin install, different-origin install (Firefox), unreplicable origin, post-update origin verification, `ORIGIN_MISMATCH`, always-sync bucket, `/etc/apt/sources.list` write, `.save`-file exclusion, the ESM attachment gate and its two answers, the two-answer repository removal, the two-answer pin removal, apt config keeping all three directions and its registry, and the conflict prompt.
 
 ### 7.4 Docs
 
@@ -473,7 +540,7 @@ No `pytest.skip` may appear in this module (`02-HANDOVER-package-review.md:77`).
 - `docs/jobs/package-sync.md:58-64` — the entire "A second apt review" section is deleted.
 - `docs/jobs/package-sync.md:78-98` — "Signing keys" gains the pin as a second thing that travels invisibly, and loses the "a repository offered for install or change names the keys it would copy" paragraph (82).
 - `docs/jobs/package-sync.md:167-177` — "Deletions" gains the two-answer rule for repository and pin removals and the never-removed set.
-- New section in `docs/jobs/package-sync.md` — origins: what "from the same place" means, why the pin travels, what the post-update check refuses, and the ESM/Pro warning with its remediation.
+- New section in `docs/jobs/package-sync.md` — origins: what "from the same place" means, why the pin travels, what the post-update check refuses, and the ESM/Pro gate: why an unattached target is asked, what each of the two answers does, and the attachment commands.
 - `docs/jobs/package-sync.md:76` — "apt collateral" loses the union: the protected set is the target's `apt-mark showmanual` alone, and the paragraph must say what that gives up (ruling 13).
 - `docs/system/package-sync.md:63-68` — the `apt_sync` bullet list: item classes, what converges, and the new precondition-free Pro probe. Line 64's closing clause ("They stay in `_source_manual_set` regardless…") goes with the field.
 - A short paragraph, wherever the review is described, stating the apt-config exception: `/etc/apt/apt.conf.d` is reviewed in all three directions with the full three-way decision, and why (ruling 11, §1).
@@ -503,7 +570,7 @@ New decisions ADR-021 must state:
 - **Origin replication.** The unit of replication for an apt package is (name, origin), not name. The target must install from an origin the source installed from, and a package that cannot be given one is reported, never installed from somewhere else. Name the failure mode this closes: a package name offered by two vendors.
 - **Origin enforcement point.** The guarantee is checked against the target's real post-`apt-get update` candidate origins, immediately before the first install, not inferred at plan time. Distribution origins are exempt so that two machines on different Ubuntu mirrors do not diverge.
 - **Pins are mechanism.** A pin travels because it is what makes an origin win, in the same sense and for the same reason a signing key travels because it is what makes a repository trusted. Neither is reviewed. Record the epoch fact that forces this: Ubuntu's `firefox` carries epoch 1 and outranks every unpinned vendor version.
-- **The distribution's own source files.** Enumerate them, state that they are written and updated but never removed, and state the ESM/Pro consequence and its warning.
+- **The distribution's own source files.** Enumerate them, state that they are written and updated but never removed, and state the ESM/Pro consequence: the two-answer gate on an unattached target, and why the tool cannot attach it.
 - **Derived-work failure attribution.** A derived `/etc/apt` write that fails does not fail an item of its own — it fails every package that depended on it, because that is the thing the user decided about.
 
 Carried forward unchanged, and worth saying so explicitly: D-01, D-03, D-04/D-05, D-06, D-08/D-08a/D-09/D-10 (the machine-local registry for packages, holds and apt config), D-12 (keys travel byte-for-byte, never re-fetched), D-15/D-16/D-17, D-19 through D-23 (`manual_installs_sync` and snippets), D-26, D-27 and its transactional `/etc/apt` boundary, D-28, D-29, D-33.
@@ -530,7 +597,7 @@ Every stage ends with `uv run ruff check . && uv run ruff format .`, `uv run bas
 
 **S7 — delete the pin echo and the second review.** The whole §6 deletion list for `HoldPinFact`, the pinned branch, and `_rereview_*`. Depends on S2 (the classification must already be origin-driven before the echo goes) and S3.
 
-**S8 — ESM and Pro.** The attachment probe, the withhold rule, the warning. Depends on S4. The implementer must first verify on a VM whether an unattached target's `apt-get update` actually fails on `esm.ubuntu.com`.
+**S8 — ESM and Pro.** The attachment probe (`_target_pro_attached`), the two-answer gate in `plan()` (`_gate_esm_writes`) with its bounded re-check, `review.ask_gate` and its `Reviewer` method, `JobSkipped` and the orchestrator's `except JobSkipped` arm. Depends on S4 — the always-sync write set is what the gate withholds from. Its blocking VM check is **DONE**: measured in a stock `ubuntu:24.04` container, `apt-get update` exits 0 with the ESM sources and no credentials, one failing source never aborts the others, and the real failure is `apt-get install` exiting 100 on a 401 for the `.deb` (§5.3.1).
 
 **S9 — docs and scenario matrix.** ADR-021 and `docs/adr/_index.md` are already written; what is left is §7.4's documentation list and §7.3's matrix rows. Depends on everything; can be drafted alongside S4-S8 and finished last.
 
@@ -626,11 +693,25 @@ A companion, cheaper case in the same class: `test_a_package_only_the_sources_re
 
 ### 10.7 ESM and Pro
 
-`test_esm_sources_are_withheld_and_warned_about_on_an_unattached_target` (unit, mocked `pro api` output) — assert both filenames are absent from the write set, that exactly one WARNING is logged, and that it contains `pro attach`. Mutation: write them anyway; the write-set assertion fails.
+`test_an_unattached_target_is_asked_about_before_anything_is_written` (unit, mocked `pro status --format json` output, fake `Reviewer`) — assert `ask_gate` is called exactly once, with a message naming both filenames and `pro attach`, and that no mutating command was issued before it. Mutation: write the files without asking; the call-count assertion fails.
 
-`test_esm_sources_are_written_to_an_attached_target` — the other branch, no warning. Mutation: invert the probe; the warning-count assertion fails.
+`test_choosing_skip_raises_job_skipped_and_writes_nothing` — the stop answer. Assert `JobSkipped` names `apt_sync`, that zero commands with a `mutates=` marker were issued, and that no review group was ever presented. Mutation: return instead of raising; the orchestrator records SUCCESS and the exception assertion fails.
 
-`test_an_unreadable_pro_probe_is_treated_as_unattached` — a missing binary, a non-zero exit and unparseable output, parametrised. Mutation: default to attached; the withhold assertion fails.
+`test_the_orchestrator_records_a_skipped_job_and_runs_the_next_one` (in the orchestrator's own suite) — assert `JobResult.status is JobStatus.SKIPPED`, the session is `COMPLETED`, and the following job still executed. Mutation: re-raise `JobSkipped`; the next-job assertion fails.
+
+`test_attach_now_re_probes_and_continues_when_the_target_became_attached` — the proceed answer with a probe that flips to attached; assert exactly two probes and that both ESM files are in the write set. Mutation: trust the answer without re-probing; the probe-count assertion fails.
+
+`test_repeated_attach_now_on_a_target_that_stays_unattached_stops_at_the_bound` — a fake `Reviewer` that always answers "attach now" against a probe that always reports unattached; assert exactly 3 answers consumed, exactly 4 probes, and `JobSkipped` naming the probe command. Mutation: drop the bound; the answer-count assertion fails (the fake raises once its scripted answers run out).
+
+`test_esm_sources_are_written_to_an_attached_target` — attached on the first probe; assert no prompt and no warning. Mutation: invert the probe; the prompt-count assertion fails.
+
+`test_an_unreadable_pro_probe_is_treated_as_unattached` — a missing binary, a non-zero exit and unparseable output, parametrised. Mutation: default to attached; the prompt assertion fails.
+
+`test_a_non_interactive_run_withholds_the_esm_files_and_continues` — `ask_gate` returns None; assert both filenames are absent from the write set, exactly one WARNING is logged, and the rest of `apt_sync` still applies. Mutation: raise `JobSkipped` instead; the rest-of-job assertion fails.
+
+`test_the_probe_payload_is_never_logged` — a probe payload carrying an `account` block; assert no log record and no prompt message contains any of its values. Mutation: log the raw stdout; the assertion fails.
+
+`test_a_dry_run_never_prompts_about_attachment` — assert zero `ask_gate` calls and one WARNING. Mutation: prompt in dry-run; the call-count assertion fails.
 
 `test_ubuntu_sources_is_never_offered_for_removal` and `test_a_save_file_in_sources_list_d_is_never_captured` (§5.2) — both assert on the diff set. Mutations: drop the never-removed guard; drop the extension filter.
 
@@ -644,7 +725,9 @@ A companion, cheaper case in the same class: `test_a_package_only_the_sources_re
 
 Nothing here is an open question — every decision is made. What follows is what this design rests on that has not been measured, and what would settle each one.
 
-1. **ESM on an unattached target (§5.3).** Ruling 14 withholds the two ESM files, on the premise that an unattached target's `apt-get update` exits non-zero on `esm.ubuntu.com` and so rolls the whole transactional `/etc/apt` group back. That premise is a **hypothesis, not verified**. Settled by one VM test: write both files onto an unattached target, run `apt-get update`, record the exit code. A zero exit would make write-and-warn safe and this the wrong call — costing two files a one-sync delay, which is why the ruling stands unverified.
+1. **ESM on an unattached target (§5.3) — settled by measurement, no longer a hypothesis.** The old premise (an unattached target's `apt-get update` exits non-zero on `esm.ubuntu.com` and rolls the transactional `/etc/apt` group back) is **refuted**: the refresh exits 0, and a refresh that does fail still writes every other list. What is left unmeasured is the blast radius: the test container had 0 of 13 upgradable packages with an ESM candidate, and that a real desktop with a large `universe` set has many more ESM candidates — and so more installs that would 401 — is **inferred from the priority ordering, not measured**. It would be settled by running `apt-cache policy` over a real desktop's manual set with the ESM sources present and unattached, and counting the candidates at priority 500 from `esm.ubuntu.com`. The gate does not depend on the count: one failing install is already a failure the user cannot trace back to the sync.
+
+   Also derived rather than ruled: the non-interactive fallback (§5.3.4 rule 3) withholds the two files and continues, extrapolated from D-26. The user's ruling covers the interactive case only.
 
 2. **The apt-config decision arity is derived, not stated (§1, screen 4).** Ruling 11 says apt config is reviewed in all three directions; it does not say with how many answers. This spec gives it the ordinary three-way decision and the registry, on the reasoning that the two no-registry rulings were both justified by consequences an apt-config file does not have (changing where packages come from, remediable by consolidating files), and that D-07's three-way is the default a departure needs a reason for. If that is wrong, apt config joins screen 2's shape and `_PROMOTABLE_ACTIONS` loses nothing — the change is small, but it is a change.
 
