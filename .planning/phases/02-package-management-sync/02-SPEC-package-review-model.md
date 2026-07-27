@@ -344,14 +344,14 @@ The payload also carries an `account` object naming the subscriber. Only the par
 async def _gate_esm_writes(self, esm_files: Sequence[str]) -> bool
 ```
 
-Three outcomes: **True** — attached, or attached after a re-check; the ESM files travel with the rest of the always-sync bucket. **False** — nobody could be asked; the two ESM filenames are dropped from this run's write set and one `WARNING` is logged, and everything else in `apt_sync` proceeds. **Raises `JobSkipped`** — the user chose to skip the job.
+Two real outcomes: **True** — attached, or attached after a re-check; the ESM files travel with the rest of the always-sync bucket. **Raises `JobSkipped`** — the user chose to skip, or nobody could be asked. **False** survives only for the dry-run branch (rule 2), where nothing is written on either path.
 
 Rules:
 
 1. Attached on the first probe: return True with no prompt.
-2. Dry run (`self.context.dry_run`): never prompt. Log one WARNING naming both files and the unattached state, and return False. A rehearsal must not make the user perform a real attachment, and ADR-014 wants the preview to say what the run would carry.
-3. Non-interactive (`ask_gate` returns None): return False. **This is the one point ruling 14 does not cover, and the fallback is derived, not ruled**: D-26 makes an unanswerable question skip its item rather than the run, and withholding two files from an unattached target leaves that target exactly as it already is — nothing is written and nothing fails.
-4. Interactive and unattached: ask. "Attach now" re-probes; attached ends the loop with True, still-unattached says so and re-asks. At most **3** affirmative answers; the fourth unattached probe raises `JobSkipped` naming the probe command, so a stuck or scripted answer cannot loop forever.
+2. Dry run (`self.context.dry_run`): never prompt. Log one WARNING naming both files and the unattached state, and return False. A rehearsal must not make the user perform a real attachment, and ADR-014 wants the preview to say what the run would carry. The WARNING must also state that a real run would skip `apt_sync` entirely (rule 3/5), or the preview describes an outcome no real run produces. *(That last clause is derived from rule 3, not separately ruled.)*
+3. Non-interactive (`ask_gate` returns None): raise `JobSkipped`. **Ruled by the user**, replacing the earlier derived fallback that withheld the two files and let the rest of `apt_sync` proceed. Withholding is not a coherent partial outcome: `/etc/apt/preferences.d` is in the always-sync bucket with no derivation predicate (§2.4), so the source's ESM pins — `ubuntu-pro-esm-apps` and `ubuntu-pro-esm-infra` were both read on the development machine (§5.2) — are written to the target whether or not the sources they name arrive. The target ends up with the source's pin state over a different repository set, so its candidate selection matches neither machine. Skipping the whole job leaves `/etc/apt` untouched instead, which is a state the user can reason about.
+4. Interactive and unattached: ask. "Attach now" re-probes; attached ends the loop with True, still-unattached says so and re-asks. The loop is **unbounded** — **ruled by the user**: re-check as many times as wanted, and the exit is choosing to skip. No answer count is kept and no bound is enforced.
 5. "Skip apt_sync": raise `JobSkipped` immediately.
 
 Prompt wording constraints. Exactly two answers, labelled "I have attached the target — re-check and continue" and "Skip apt_sync this run (other jobs continue)". The body must name both files; state that the target reports no Ubuntu Pro attachment; state in one clause what writing them would do (the ESM indexes are public and win candidate selection, so the target's next install of an ESM-covered package fails with `401 Unauthorized` when it fetches the `.deb`); give the two copy-paste commands to run **on the target** — `sudo pro attach <token from https://ubuntu.com/pro/dashboard>`, then `sudo pro enable esm-apps esm-infra`; and state that skipping leaves every other job running. No apology, no history, no reference to this document, nothing from the probe payload beyond the boolean. Untrusted content stays out of Rich markup (T-02-02) as everywhere else.
@@ -381,17 +381,11 @@ True is the proceed answer, False the stop answer, None means non-interactive �
 
 #### 5.3.6 What skipping the job means
 
-```python
-# models.py, beside SyncAbortedByUser (models.py:131)
-class JobSkipped(Exception):
-    def __init__(self, job_name: str, reason: str) -> None: ...
-```
+The `JobSkipped` exception and the orchestrator arm that records it are **not** ESM-specific and are specified in **S8a** (§9), which this gate depends on. That stage also converts the existing call sites that report `SUCCESS` for work they did not do.
 
-The orchestrator gains an `except JobSkipped` arm in the job loop, beside the `PackageItemFailures` one (`orchestrator.py:1252`): record `JobResult(status=JobStatus.SKIPPED, ..., error_message=reason)`, log once at WARNING, and **do not re-raise**, so the loop moves to the next job exactly as the item-failure arm does. `JobStatus.SKIPPED` already exists (`models.py:263`) and is constructed nowhere today (grepped this session), and `_summarize_job_outcomes` (`orchestrator.py:202-216`) already treats it as a non-failure — so a skipped `apt_sync` leaves the session `COMPLETED` and the exit code unchanged. Without the arm the job would have to return normally and be recorded `SUCCESS` (`orchestrator.py:1230-1237`), telling the end-of-run summary that apt synced when it carried nothing.
+What is specific to this gate: skipping `apt_sync` does not touch `snap_sync`, `flatpak_sync`, `manual_installs_sync` or `folder_sync`; it writes no decision-file entry; and it leaves the target's `/etc/apt` exactly as it was, ESM files included. The gate sits in `plan()` (§5.3.2), before any mutating command, so S8a's before-first-mutation rule holds by construction.
 
-`JobSkipped` may only be raised **before** the job's first mutating command; raised later it would leave the `/etc/apt` group's state unreported.
-
-Skipping `apt_sync` does not touch `snap_sync`, `flatpak_sync`, `manual_installs_sync` or `folder_sync`; it writes no decision-file entry; and it leaves the target's `/etc/apt` exactly as it was, ESM files included. The WARNING survives to the end-of-run summary (`ui.py:319` `add_warning`, `ui.py:345` `collected_warnings`), so the user sees the reason after the sync as well as during.
+Because rule 3 makes the non-interactive path a skip, `JobSkipped` can now be raised with nobody watching. The reason string must therefore stand alone in a log file: name both ESM filenames, the unattached target, and that no TTY was available to ask. Nothing from the probe payload beyond the boolean (§5.3.3). The WARNING survives to the end-of-run summary (`ui.py:319` `add_warning`, `ui.py:345` `collected_warnings`), so an interactive user sees the reason after the sync as well as during.
 
 ## 6. What gets deleted
 
@@ -597,7 +591,31 @@ Every stage ends with `uv run ruff check . && uv run ruff format .`, `uv run bas
 
 **S7 — delete the pin echo and the second review.** The whole §6 deletion list for `HoldPinFact`, the pinned branch, and `_rereview_*`. Depends on S2 (the classification must already be origin-driven before the echo goes) and S3.
 
-**S8 — ESM and Pro.** The attachment probe (`_target_pro_attached`), the two-answer gate in `plan()` (`_gate_esm_writes`) with its bounded re-check, `review.ask_gate` and its `Reviewer` method, `JobSkipped` and the orchestrator's `except JobSkipped` arm. Depends on S4 — the always-sync write set is what the gate withholds from. Its blocking VM check is **DONE**: measured in a stock `ubuntu:24.04` container, `apt-get update` exits 0 with the ESM sources and no credentials, one failing source never aborts the others, and the real failure is `apt-get install` exiting 100 on a 401 for the `.deb` (§5.3.1).
+**S8a — honest job outcomes.** Depends on nothing; touches no apt logic; may land first. Audited this session: `JobStatus.SKIPPED` (`models.py:263`) is constructed nowhere, and several jobs already stop early or do nothing while the run records `SUCCESS` (`orchestrator.py:1230-1237`). This stage builds the mechanism the ESM gate needs and corrects those call sites in the same change, so `SKIPPED` means one thing everywhere.
+
+The exception, beside `SyncAbortedByUser` (`models.py:131`):
+
+```python
+class JobSkipped(Exception):
+    def __init__(self, job_name: str, reason: str) -> None: ...
+```
+
+The orchestrator gains an `except JobSkipped` arm in the job loop, beside the `PackageItemFailures` one (`orchestrator.py:1252`): record `JobResult(status=JobStatus.SKIPPED, ..., error_message=reason)`, log once at WARNING, and **do not re-raise**, so the loop moves to the next job exactly as the item-failure arm does. `_summarize_job_outcomes` (`orchestrator.py:202-216`) already treats `SKIPPED` as a non-failure, so a skipped job leaves the session `COMPLETED` and the exit code unchanged — no change needed there. `JobSkipped` may only be raised **before** the job's first mutating command; raised later, the partial state it left behind goes unreported.
+
+Call sites that adopt it, each currently `SUCCESS`:
+
+| Site | Condition | What it does today |
+| --- | --- | --- |
+| `PackageSyncJob.execute` (`packages/sync_core.py:493-497`) | the review came back non-interactive (`ReviewOutcome.was_interactive` False, `review.py:476-487`) **and** `plan.groups` is non-empty | every item is forced `SKIP_ONCE`, `apply()` logs "No … changes to apply" (`sync_core.py:357-359`) and returns; all four package jobs report SUCCESS having converged nothing. Raise `JobSkipped` after the review returns, before `after_review()` — so `manual_installs_sync` does not push its registry either. An **empty** plan on the same path stays SUCCESS: the target already matches. |
+| `VSCodeStateSyncJob.execute` (`vscode_state_sync.py:298-302`) | no handled state DB exists on the source | logs "nothing to sync" and returns SUCCESS. Not applicable ≠ synced. |
+| `FolderSyncJob.execute` (`folder_sync.py:874`) | `_active_folders()` (`folder_sync.py:256-266`) is empty — the schema requires `minItems: 1` (`folder_sync.py:201`) but every entry may be `enabled: false` | the loop body never runs and the job reports SUCCESS. |
+| `Orchestrator._discover_and_validate_jobs` (`orchestrator.py:996-998`) | an enabled job name resolves to no `SyncJob` class (`_resolve_sync_job_class` returns None, `orchestrator.py:698-703`, `715-721`) | a WARNING is logged and the job produces **no `JobResult` at all** — worse than a wrong status. No exception is involved here: the orchestrator constructs the `SKIPPED` result directly, at discovery time, and appends it to the run's results. |
+
+Deliberately **not** converted, so the boundary stays legible: a package job whose plan is empty (the target already matches — that is the goal, met); a `folder_sync` pass that transfers nothing because filters excluded everything (the mirror is correct); dry-run (`tests/unit/test_dry_run.py:6` states SUCCESS/FAILED-not-SKIPPED as an existing decision, and a rehearsal that completes did succeed); per-item exclusions inside an otherwise-working job (sideloaded snaps, `snap_sync.py:492-507`; `REPORT_ONLY` diffs, `sync_core.py:348-352`) — a job-level status cannot express those, and the review and the warnings already do; a job that raised `SyncAbortedByUser` (`orchestrator.py:1244-1251`, no result recorded) — the run stops there, so a per-job record is moot.
+
+Note for scope: `JobResult` is currently read only by `_summarize_job_outcomes` and the CLI's exit code (`cli.py:387`) — nothing renders per-job outcomes, so `CORE-FR-SUMMARY` (`docs/system/core.md:540`, which names SUCCESS/SKIPPED/FAILED explicitly) is unimplemented. S8a makes the status honest; rendering it is a separate piece of work and is **not** in this stage.
+
+**S8 — ESM and Pro.** The attachment probe (`_target_pro_attached`), the two-answer gate in `plan()` (`_gate_esm_writes`) with its unbounded re-check, `review.ask_gate` and its `Reviewer` method. Depends on S4 — the always-sync write set is what the gate guards — and on S8a for `JobSkipped`. Its blocking VM check is **DONE**: measured in a stock `ubuntu:24.04` container, `apt-get update` exits 0 with the ESM sources and no credentials, one failing source never aborts the others, and the real failure is `apt-get install` exiting 100 on a 401 for the `.deb` (§5.3.1).
 
 **S9 — docs and scenario matrix.** ADR-021 and `docs/adr/_index.md` are already written; what is left is §7.4's documentation list and §7.3's matrix rows. Depends on everything; can be drafted alongside S4-S8 and finished last.
 
@@ -606,7 +624,7 @@ Parallelism. After S0 lands, two lanes touch disjoint regions of `apt_sync.py`:
 - **Package lane** — S1, S2, S3, S7 — works in the diff region (`apt_sync.py:235-457`), the capture/query region (`1074-1267`) and the converge-install region (`2093-2166`).
 - **Repository lane** — S4, S5, S6, S8 — works in the `/etc/apt` shapes (`460-546`), the repo capture and diff region (`616-930`, `1347-1626`) and the group convergence region (`2183-2550`).
 
-They collide in exactly two functions, `plan()` (`1269-1314`) and `accept_review()` (`1782-1836`). Give those two one owner for the duration, or run the lanes sequentially. S9 runs alongside either lane.
+They collide in exactly two functions, `plan()` (`1269-1314`) and `accept_review()` (`1782-1836`). Give those two one owner for the duration, or run the lanes sequentially. S9 runs alongside either lane, and so does S8a — it touches `models.py`, `orchestrator.py`, `packages/sync_core.py`, `folder_sync.py` and `vscode_state_sync.py`, none of which either lane edits.
 
 ## 10. Test plan
 
@@ -697,17 +715,19 @@ A companion, cheaper case in the same class: `test_a_package_only_the_sources_re
 
 `test_choosing_skip_raises_job_skipped_and_writes_nothing` — the stop answer. Assert `JobSkipped` names `apt_sync`, that zero commands with a `mutates=` marker were issued, and that no review group was ever presented. Mutation: return instead of raising; the orchestrator records SUCCESS and the exception assertion fails.
 
-`test_the_orchestrator_records_a_skipped_job_and_runs_the_next_one` (in the orchestrator's own suite) — assert `JobResult.status is JobStatus.SKIPPED`, the session is `COMPLETED`, and the following job still executed. Mutation: re-raise `JobSkipped`; the next-job assertion fails.
+`test_the_orchestrator_records_a_skipped_job_and_runs_the_next_one` (in the orchestrator's own suite) — assert `JobResult.status is JobStatus.SKIPPED`, the session is `COMPLETED`, and the following job still executed. Mutation: re-raise `JobSkipped`; the next-job assertion fails. Belongs to **S8a**, not S8 — it exercises the arm, not the gate.
+
+Three more S8a tests, one per converted call site beyond the gate. `test_a_non_interactive_package_review_skips_the_job_instead_of_applying_nothing` — a plan with groups, a reviewer that returns `was_interactive=False`; assert `JobSkipped` and that `after_review()` never ran. Mutation: keep today's behaviour; the exception assertion fails. Paired with `test_an_empty_plan_is_still_a_success` on the same path, whose mutation (raise for the empty plan too) makes it fail. `test_a_job_with_no_active_folders_is_skipped` and `test_a_source_with_no_editor_state_dbs_is_skipped` — same shape against `folder_sync` and `vscode_state_sync`. `test_an_unresolvable_enabled_job_is_recorded_skipped` — an enabled `sync_jobs` name with no matching class; assert a `SKIPPED` `JobResult` exists for it (today there is none at all) and the run still completes.
 
 `test_attach_now_re_probes_and_continues_when_the_target_became_attached` — the proceed answer with a probe that flips to attached; assert exactly two probes and that both ESM files are in the write set. Mutation: trust the answer without re-probing; the probe-count assertion fails.
 
-`test_repeated_attach_now_on_a_target_that_stays_unattached_stops_at_the_bound` — a fake `Reviewer` that always answers "attach now" against a probe that always reports unattached; assert exactly 3 answers consumed, exactly 4 probes, and `JobSkipped` naming the probe command. Mutation: drop the bound; the answer-count assertion fails (the fake raises once its scripted answers run out).
+`test_attach_now_can_be_answered_any_number_of_times` — a fake `Reviewer` scripted with N "attach now" answers (N well above any plausible bound, say 10) then the skip answer, against a probe that always reports unattached; assert all N answers were consumed, N+1 probes ran, and only the final skip answer produced `JobSkipped`. Mutation: reintroduce a bound; the answer-count assertion fails.
 
 `test_esm_sources_are_written_to_an_attached_target` — attached on the first probe; assert no prompt and no warning. Mutation: invert the probe; the prompt-count assertion fails.
 
 `test_an_unreadable_pro_probe_is_treated_as_unattached` — a missing binary, a non-zero exit and unparseable output, parametrised. Mutation: default to attached; the prompt assertion fails.
 
-`test_a_non_interactive_run_withholds_the_esm_files_and_continues` — `ask_gate` returns None; assert both filenames are absent from the write set, exactly one WARNING is logged, and the rest of `apt_sync` still applies. Mutation: raise `JobSkipped` instead; the rest-of-job assertion fails.
+`test_a_non_interactive_run_skips_the_whole_job` — `ask_gate` returns None; assert `JobSkipped` names `apt_sync`, that its reason names both filenames and the absent TTY, that zero commands with a `mutates=` marker were issued, and that no review group was presented. Mutation: withhold the two files and continue instead of raising; the exception assertion fails.
 
 `test_the_probe_payload_is_never_logged` — a probe payload carrying an `account` block; assert no log record and no prompt message contains any of its values. Mutation: log the raw stdout; the assertion fails.
 
@@ -727,7 +747,7 @@ Nothing here is an open question — every decision is made. What follows is wha
 
 1. **ESM on an unattached target (§5.3) — settled by measurement, no longer a hypothesis.** The old premise (an unattached target's `apt-get update` exits non-zero on `esm.ubuntu.com` and rolls the transactional `/etc/apt` group back) is **refuted**: the refresh exits 0, and a refresh that does fail still writes every other list. What is left unmeasured is the blast radius: the test container had 0 of 13 upgradable packages with an ESM candidate, and that a real desktop with a large `universe` set has many more ESM candidates — and so more installs that would 401 — is **inferred from the priority ordering, not measured**. It would be settled by running `apt-cache policy` over a real desktop's manual set with the ESM sources present and unattached, and counting the candidates at priority 500 from `esm.ubuntu.com`. The gate does not depend on the count: one failing install is already a failure the user cannot trace back to the sync.
 
-   Also derived rather than ruled: the non-interactive fallback (§5.3.4 rule 3) withholds the two files and continues, extrapolated from D-26. The user's ruling covers the interactive case only.
+   The non-interactive path is no longer derived: the user has ruled that it skips the whole job (§5.3.4 rule 3), and that the interactive re-check loop is unbounded (rule 4). What remains derived there is one clause of the dry-run WARNING (rule 2), which is a wording consequence of rule 3, not a behaviour choice.
 
 2. **The apt-config decision arity is derived, not stated (§1, screen 4).** Ruling 11 says apt config is reviewed in all three directions; it does not say with how many answers. This spec gives it the ordinary three-way decision and the registry, on the reasoning that the two no-registry rulings were both justified by consequences an apt-config file does not have (changing where packages come from, remediable by consolidating files), and that D-07's three-way is the default a departure needs a reason for. If that is wrong, apt config joins screen 2's shape and `_PROMOTABLE_ACTIONS` loses nothing — the change is small, but it is a change.
 
