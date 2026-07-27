@@ -104,7 +104,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # btrfs_snapshots: subvolume and directory listings.
     "btrfs_snapshots.py::validate_snapshots_directory::run_command": 1,
     "btrfs_snapshots.py::validate_subvolume_exists::run_command": 1,
-    "btrfs_snapshots.py::list_snapshots::run_command": 2,
+    "btrfs_snapshots.py::list_snapshots::run_command": 1,
     # config_sync: reads the target's config and resolves its $HOME.
     "config_sync.py::_get_target_config::run_command": 1,
     "config_sync.py::_copy_config_to_target::run_command": 1,

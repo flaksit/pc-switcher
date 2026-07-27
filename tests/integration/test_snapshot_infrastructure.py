@@ -21,6 +21,7 @@ import pytest
 from pcswitcher.btrfs_snapshots import (
     cleanup_snapshots,
     create_snapshot,
+    delete_all_snapshots,
     list_snapshots,
     snapshot_name,
     validate_snapshots_directory,
@@ -217,19 +218,10 @@ async def test_core_us_btrfs_as7_cleanup_snapshots_with_retention(
         success, error_msg = await validate_snapshots_directory(pc1_executor, Host.SOURCE)
         assert success, f"Failed to validate snapshots directory: {error_msg}"
 
-        # Clean up ALL existing pc-switcher snapshots to ensure test isolation.
-        # Other tests (like test_end_to_end_sync) may leave behind snapshots that
-        # would interfere with keep_recent counting.
-        pre_existing_snapshots = await list_snapshots(pc1_executor, Host.SOURCE)
-        for snap in pre_existing_snapshots:
-            await pc1_executor.run_command(
-                f"sudo btrfs subvolume delete {snap.path} 2>/dev/null || true",
-                timeout=10.0,
-            )
-        # Clean up empty session folders
-        session_folders = {"/".join(s.path.split("/")[:-1]) for s in pre_existing_snapshots}
-        for folder in session_folders:
-            await pc1_executor.run_command(f"sudo rmdir {folder} 2>/dev/null || true")
+        # Clean up ALL existing pc-switcher snapshots (and their session folders) to
+        # ensure test isolation. Other tests (like test_end_to_end_sync) may leave
+        # behind snapshots that would interfere with keep_recent counting.
+        await delete_all_snapshots(pc1_executor)
 
         # Create 5 test sessions (we'll keep 3 most recent)
         # Use hex session IDs to match the expected pattern (8 hex chars)
