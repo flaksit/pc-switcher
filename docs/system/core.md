@@ -597,6 +597,8 @@ Lineage: 001-core Key Entities, 003-core-tests Key Entities
 
 - **SyncSession**: Represents a single sync operation including session ID, timestamp, source/target machines, enabled jobs, and execution state
 
+- **JobResult**: One job's outcome within a session — job name, start/end timestamps, a status of SUCCESS, SKIPPED or FAILED, and an error or skip reason (see [Job outcomes](#job-outcomes))
+
 - **Snapshot**: Represents a btrfs snapshot including subvolume name, timestamp, session ID, type (pre/post), and location (source/target)
 
 - **LogEntry**: Represents a logged event with timestamp, level, job name, message, and structured context data
@@ -699,6 +701,23 @@ One consequence of "no skip" shapes the code beyond the gate itself:
 The mechanism lives in `executor.py`, the one funnel every command, transfer and background process already passes through, so it is caller-agnostic rather than job-specific: any call that passes `mutates="<phrase>"` declares itself a modification and is gated, on either machine. Reads pass no `mutates` and are never gated — that is what keeps the prompts worth reading. The trade-off is that the marker is opt-in, so a forgotten `mutates=` is an unannounced write; `tests/unit/test_mutates_audit.py` enumerates every ungated call site so an omission fails a test instead of shipping.
 
 The same seam carries the verbatim `DEBUG` trace of every executor operation — reads included, since a trace that omits them cannot answer "what did the tool actually do". The job a line belongs to comes from the `active_job` context variable the orchestrator sets around each job, which `asyncio` copies per task so a concurrently running background job cannot clobber the label.
+
+## Job outcomes
+
+Every job that ran contributes one `JobResult` with a status of SUCCESS, SKIPPED or FAILED (`CORE-FR-SUMMARY`).
+
+The dividing line between the first two is what the job's inaction means. "Nothing to do because the target already matches the source" is the goal met, so it is SUCCESS — an empty package plan, a mirror that finds nothing to transfer. "Nothing done because nobody could decide, or nothing was applicable" is SKIPPED. Per-item exclusions inside an otherwise-working job are neither: a job-level status cannot express them, and the review and the run's warnings already do.
+
+Four situations produce SKIPPED:
+
+- A package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) whose review had items to offer on a run with no TTY. Nobody was present to tick anything, so every item is marked skip-once and the job converges nothing.
+- `vscode_state_sync` when the source has none of the state DBs it handles.
+- `folder_sync` when every configured folder is `enabled: false`.
+- An enabled `sync_jobs` name whose module or class does not resolve. There is no job instance in this case, so the orchestrator records the result at discovery time; the job the user enabled leaves a record rather than only a warning.
+
+A skipped job does not fail the run: the remaining jobs still execute, the session still completes, and the exit code is unchanged. A job signals it by raising `JobSkipped`, which it may only do **before** its first mutating command — raised later, the partial state it already wrote would go unreported.
+
+Dry-run is not a reason to report SKIPPED on its own: a rehearsal that completes did succeed. A rehearsal that hits one of the four situations above is skipped like any other run.
 
 ## Assumptions
 

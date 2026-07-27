@@ -6,6 +6,8 @@ Configuration for this job — the `folders` list and each folder's `filter_file
 
 Each folder is mirrored to the target, minus the paths its filter rules exclude. Set `enabled: false` to skip a folder. A filtered-out file is left untouched on the target if it already exists there, so machine-specific files (SSH keys, Tailscale config) can stay independent on each machine.
 
+Disabling *every* configured folder leaves the job with nothing to mirror; it then reports **SKIPPED** rather than a successful mirror of nothing, and the run continues with the remaining jobs. A pass that transfers no files because the filters excluded everything is a different case — the mirror is correct, so that is SUCCESS.
+
 ## Filter rules
 
 Filter rules decide what is and isn't synced. They live in two kinds of file:

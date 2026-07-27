@@ -134,6 +134,12 @@ Every unreproducible item is resolved before the run continues: it gets a snippe
 - Choosing "add an install snippet" and then submitting an **empty** body is not accepted: the review re-prompts the three-way choice rather than falling through. You must enter a real snippet or pick skip-once / skip-always.
 - A **non-interactive** run (no TTY) cannot ask, so it marks every undecided item skip-once and reports them; it never records a snippet or a machine-specific mark. Re-run interactively to actually resolve anything.
 
+## Non-interactive runs
+
+A run without a TTY prompts for nothing, so every review item comes back skip-once and the job converges nothing. When the review had anything to offer, the job therefore reports **SKIPPED**, not SUCCESS, and the run continues with the remaining jobs. A run whose review was empty — the target already matches the source for that package manager — still reports SUCCESS: there was nothing to decide because there was nothing to do.
+
+A skipped package job applies nothing, records no decision, and pushes no install-snippet registry. The session still completes and the exit code is unchanged, so a headless run says plainly that it converged nothing rather than reporting four successful package syncs.
+
 ## Versions
 
 apt and flatpak let versions **float**. pc-switcher installs by name and takes whatever each machine's own repositories currently offer; a version difference between source and target is detected and reported in the review, never silently forced. (Deliberate pinning still replicates, because `/etc/apt/preferences.d` pin files sync as items like any other apt configuration.)
