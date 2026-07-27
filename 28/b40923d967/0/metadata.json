@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "28b40923d967",
+  "session_id": "b0a03faf-51bf-47b9-b60a-83a2131f5934",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-27T13:15:27.804843907Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-SCENARIO-COVERAGE.md",
+    "docs/jobs/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync.py",
+    "tests/unit/jobs/test_apt_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "20e0fa1414ea",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 466,
+    "cache_creation_tokens": 3862967,
+    "cache_read_tokens": 117119583,
+    "output_tokens": 255219,
+    "api_call_count": 251
+  },
+  "session_metrics": {
+    "turn_count": 22
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-27T13:15:27.572647293Z",
+    "agent_lines": 376,
+    "agent_removed": 43,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 376,
+    "total_lines_changed": 419,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
