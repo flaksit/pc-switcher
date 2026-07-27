@@ -3,7 +3,7 @@
   "checkpoint_id": "d3ceca21c451",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 1,
+  "checkpoints_count": 4,
   "files_touched": [
     "src/pcswitcher/jobs/apt_sync.py",
     "tests/unit/jobs/test_apt_sync.py",
@@ -16,13 +16,20 @@
       "compact_transcript": "/d3/ceca21c451/0/transcript.jsonl",
       "content_hash": "/d3/ceca21c451/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/d3/ceca21c451/1/metadata.json",
+      "transcript": "/d3/ceca21c451/1/full.jsonl",
+      "compact_transcript": "/d3/ceca21c451/1/transcript.jsonl",
+      "content_hash": "/d3/ceca21c451/1/content_hash.txt",
+      "prompt": "/d3/ceca21c451/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 506,
+    "cache_creation_tokens": 3881875,
+    "cache_read_tokens": 132042087,
+    "output_tokens": 272529,
+    "api_call_count": 272
   }
 }
