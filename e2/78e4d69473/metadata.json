@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e278e4d69473",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/packages/sync_core.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e2/78e4d69473/0/metadata.json",
+      "transcript": "/e2/78e4d69473/0/full.jsonl",
+      "compact_transcript": "/e2/78e4d69473/0/transcript.jsonl",
+      "content_hash": "/e2/78e4d69473/0/content_hash.txt",
+      "prompt": "/e2/78e4d69473/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 466,
+    "cache_creation_tokens": 3862967,
+    "cache_read_tokens": 117119583,
+    "output_tokens": 255219,
+    "api_call_count": 251
+  }
+}
