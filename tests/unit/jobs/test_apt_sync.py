@@ -27,8 +27,10 @@ from pcswitcher.jobs.apt_sync import (
     AptSyncJob,
     HoldPinFact,
     _diff_apt_packages,
+    _distribution_origins,
     _parse_pin_file,
     _parse_source_file,
+    _source_files_serving,
     build_held_or_pinned_detail,
     build_repo_unavailable_detail,
     compare_deb_versions,
@@ -49,6 +51,7 @@ from pcswitcher.orchestrator import Orchestrator
 # The real `apt-cache policy` blocks manual_installs_sync is tested against, imported
 # rather than copied: the A11 ruling is that both jobs decide bare-`.deb` ownership from
 # the SAME evidence, which two independently-drifting fixtures would stop demonstrating.
+from tests.unit.jobs.test_apt_policy import POLICY_INSTALLED_AND_CANDIDATE_DIFFER
 from tests.unit.jobs.test_manual_installs_sync import (
     _POLICY_AUTO_DEP,
     _POLICY_HAND_DEB,
@@ -1188,7 +1191,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
     async def test_excluded_package_reaches_neither_the_simulation_nor_the_availability_probe(self) -> None:
         """Both downstream target reads are built from the diffs, so a package excluded at
         capture cannot appear in the transaction `_collect_plan_time_collateral` asks apt to
-        rehearse, nor in `collect_unavailable_item_ids`' missing-on-target probe."""
+        rehearse, nor in the target's origin probe."""
         context, _source, target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
@@ -1210,7 +1213,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
     @pytest.mark.asyncio
     async def test_repo_installed_package_the_target_has_never_heard_of_is_still_offered(self) -> None:
-        """The target half is untouched (`collect_unavailable_item_ids`): the target's apt
+        """The target half is untouched (`collect_target_policy`): the target's apt
         printing no block is still "no evidence against", because a repository this same run
         adds may be about to supply the package."""
         context, _source, _target = make_context(
@@ -2083,6 +2086,111 @@ class TestWhatAptItselfReads:
         refs, uris = job._source_source_refs["vendor.list"]  # pyright: ignore[reportPrivateUsage]
         assert uris == ("https://vendor.example.com/apt",)
         assert refs == ("/etc/apt/keyrings/vendor.gpg",)
+
+
+class TestOriginCapture:
+    """ADR-021 D-34's origin facts: where the source installed each package from, which
+    repository file on the source declares that place, and which places are the
+    distribution's own.
+    """
+
+    def test_source_files_serving_is_the_union_of_every_file_declaring_an_origin(self) -> None:
+        """A package's installed version can list several origins and each may be declared
+        by a different file — every one of them served it, so none may be dropped.
+        """
+        refs = {
+            "vendor.list": ((), ("https://vendor.example.com/apt",)),
+            "mirror.sources": ((), ("https://mirror.example.com/apt",)),
+            "unrelated.list": ((), ("https://elsewhere.example.com/apt",)),
+        }
+
+        serving = _source_files_serving(
+            refs, frozenset({"https://vendor.example.com/apt", "https://mirror.example.com/apt"})
+        )
+
+        assert serving == frozenset({"vendor.list", "mirror.sources"})
+
+    def test_an_origin_no_file_declares_serves_from_nowhere(self) -> None:
+        """The class-4 input: a repository deleted from the source while its packages stay
+        installed leaves an origin with no file behind it.
+        """
+        refs = {"vendor.list": ((), ("https://vendor.example.com/apt",))}
+
+        assert _source_files_serving(refs, frozenset({"https://gone.example.com/apt"})) == frozenset()
+
+    def test_distribution_origins_come_from_the_machines_own_distribution_files(self) -> None:
+        """Per machine, from that machine's `ubuntu.sources`/`sources.list`/ESM files — not
+        from a list of known Ubuntu hostnames, which is what would make two machines on
+        different mirrors disagree about every package.
+        """
+        refs = {
+            "ubuntu.sources": ((), ("http://ftp.belnet.be/ubuntu", "http://security.ubuntu.com/ubuntu")),
+            "ubuntu-esm-apps.sources": ((), ("https://esm.ubuntu.com/apps/ubuntu",)),
+            "sources.list": ((), ("http://old.example.com/ubuntu",)),
+            "vendor.list": ((), ("https://vendor.example.com/apt",)),
+        }
+
+        assert _distribution_origins(refs) == frozenset(
+            {
+                "http://ftp.belnet.be/ubuntu",
+                "http://security.ubuntu.com/ubuntu",
+                "https://esm.ubuntu.com/apps/ubuntu",
+                "http://old.example.com/ubuntu",
+            }
+        )
+
+    def test_a_user_named_esm_lookalike_is_not_a_distribution_file(self) -> None:
+        """Exact filenames, not a `ubuntu-esm-*` glob: a file the user named that way is
+        theirs, and treating its URIs as the distribution's would suppress the origin from
+        every review line it feeds.
+        """
+        refs = {"ubuntu-esm-mine.sources": ((), ("https://mine.example.com/apt",))}
+
+        assert _distribution_origins(refs) == frozenset()
+
+    @pytest.mark.asyncio
+    async def test_the_source_policy_call_answers_both_questions_asked_of_it(self) -> None:
+        """One batched `apt-cache policy` on the source, parsed twice: the bare-`.deb`
+        exclusion and the installed-origin map. A second call would re-run a full policy
+        query to learn something already on screen.
+        """
+        context, source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\ncode\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\ncode\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0, _policy_block("pkg-a", "https://vendor.example.com/apt") + _policy_block("code", None), ""
+                ),
+            },
+            target_responses=_NO_PACKAGES,
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert sum(1 for cmd in all_calls(source) if "apt-cache policy" in cmd) == 1
+        assert job._source_origins["pkg-a"] == frozenset({"https://vendor.example.com/apt"})  # pyright: ignore[reportPrivateUsage]
+        # `code` came from no repository, so it is dropped at capture and never diffed.
+        assert [diff.item_id for diff in plan.diffs] == ["apt:package:pkg-a"]
+
+    @pytest.mark.asyncio
+    async def test_the_source_origin_map_holds_the_installed_row_not_the_candidate_one(self) -> None:
+        """The distinction the whole classification rests on: what the source HAS, not what
+        the source would install next.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
+                "apt-cache policy": CommandResult(0, POLICY_INSTALLED_AND_CANDIDATE_DIFFER, ""),
+            },
+            target_responses=_NO_PACKAGES,
+        )
+        job = AptSyncJob(context)
+
+        await job.plan()
+
+        assert job._source_origins["gh"] == frozenset({"https://cli.github.com/packages"})  # pyright: ignore[reportPrivateUsage]
 
 
 # -- Task 2: ordered, transactional repository-group convergence -----------------------

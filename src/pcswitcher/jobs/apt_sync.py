@@ -8,7 +8,7 @@ contract), diffs it against the same query on the target into every D-25 class
 items via `apt-get install`/`apt-get remove`.
 
 Bare-`.deb` packages are NOT in scope and are dropped at capture
-(`_source_bare_deb_packages`). A package whose installed version comes from no configured
+(`capture_source_items`). A package whose installed version comes from no configured
 repository was put there with `dpkg --install`; apt cannot install it on the target, and
 `manual_installs_sync` offers it as an install snippet in the same run (D-18). Both jobs
 compute the predicate from the shared `packages/apt_policy.py` parser — the same test, never
@@ -110,6 +110,7 @@ from uuid import uuid4
 from pcswitcher.executor import Executor, RemoteExecutor
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.apt_policy import (
+    candidate_origins_by_package,
     installed_origins_by_package,
     normalise_repo_uri,
     packages_installed_from_no_repository,
@@ -170,6 +171,15 @@ _APT_SOURCE_EXTENSIONS = (".list", ".sources")
 # captured on both machines, which is what ADR-021 D-38's write-when-missing/overwrite-when-
 # different rule compares. It is never a removal candidate in any direction.
 _APT_SOURCES_LIST = "/etc/apt/sources.list"
+# The distribution's own source files in `sources.list.d` (ADR-021 D-38). Exact names, not
+# a `ubuntu-esm-*` glob: a glob would also swallow a file a user happened to name
+# `ubuntu-esm-mine.sources`, and the set is short enough to enumerate.
+_DISTRO_SOURCE_FILENAMES = frozenset({"ubuntu.sources", "ubuntu-esm-apps.sources", "ubuntu-esm-infra.sources"})
+# The filenames whose URIs count as DISTRIBUTION ORIGINS, computed per machine (D-35): a
+# package apt serves from one of these is served by the distribution, not by a vendor, so
+# two machines pointed at different Ubuntu mirrors must not read as two different vendors.
+# `/etc/apt/sources.list` joins the set by basename, which is how the reference scan keys it.
+_DISTRIBUTION_ORIGIN_FILENAMES = _DISTRO_SOURCE_FILENAMES | {Path(_APT_SOURCES_LIST).name}
 _APT_KEYRINGS_DIR = "/etc/apt/keyrings"
 _APT_TRUSTED_GPG_DIR = "/etc/apt/trusted.gpg.d"
 # The third key directory (module docstring). Not an `/etc/apt` path at all, which is why
@@ -323,6 +333,57 @@ class AptHoldItem:
     def label(self) -> str:
         """Human-readable text for the review UI and logs."""
         return f"{self.name} (hold)"
+
+
+@dataclass(frozen=True)
+class _OriginPlan:
+    """Every origin fact one source package's classification turns on (ADR-021 D-34).
+
+    Assembled per package in `plan()` from facts about BOTH machines, because the question
+    "can the target end up with this package from the same place the source has it?" is not
+    answerable from either machine alone.
+    """
+
+    source_origins: frozenset[str] = frozenset()
+    """Origin URIs of the package's INSTALLED version on the source. Empty means apt named
+    none for it, or printed no block at all — never evidence of anything (`df48cd07`)."""
+
+    source_files: frozenset[str] = frozenset()
+    """The source's repository files declaring any of `source_origins`. Computed only for a
+    package missing on the target, which is the only case that could make one travel."""
+
+    target_candidate_origins: frozenset[str] = frozenset()
+    """Origin URIs of the version the TARGET would install. Empty means no repository on
+    the target offers the name — `Candidate: (none)`, or no block at all."""
+
+    vendor_source_origins: tuple[str, ...] = ()
+    """`source_origins` minus the SOURCE's distribution origins, sorted. What the review
+    names (ruling 9), and the left-hand side of the provenance comparison (§2.6)."""
+
+    vendor_target_origins: tuple[str, ...] = ()
+    """The package's INSTALLED origins on the target minus the TARGET's distribution
+    origins, sorted. Filtered against the target's own distribution files so two machines
+    on different Ubuntu mirrors do not read as two vendors."""
+
+    unwritable: str | None = None
+    """Why no file serving `source_origins` can be written on the target, or `None` when at
+    least one can. A file whose `Signed-By:` resolves to no key on the source is a
+    repository apt would refuse on the target, so it cannot deliver the origin."""
+
+
+@dataclass(frozen=True)
+class _TargetPolicy:
+    """One batched `apt-cache policy` on the target, parsed for every question this run asks
+    of it — never one call per question, and never one call per package.
+
+    The installed and the candidate rows are different rows and answer different questions
+    (`apt_policy` module docstring): the candidate says what the target WOULD install, the
+    installed says where what it already has came from.
+    """
+
+    candidate_origins: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    installed_origins: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    no_candidate: frozenset[str] = frozenset()
 
 
 def _diff_apt_packages(
@@ -809,6 +870,10 @@ async def _read_file_content(run: Callable[[str], Awaitable[CommandResult]], pat
     return result.stdout
 
 
+# One machine's source-file scan: `{filename: (keyring refs, repository URIs)}`.
+type _SourceFileRefs = Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]]
+
+
 async def _scan_source_file_references(
     run: Callable[[str], Awaitable[CommandResult]],
 ) -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]]:
@@ -859,6 +924,34 @@ async def _scan_source_file_references(
         _fmt, refs, uris = _parse_source_file(filename, "\n".join(lines))
         parsed[filename] = (refs, uris)
     return parsed
+
+
+def _source_files_serving(source_refs: _SourceFileRefs, origins: frozenset[str]) -> frozenset[str]:
+    """Every file in one machine's source-file scan whose repository URIs intersect
+    `origins` — the files that would have to travel for a package from those origins to be
+    installable from the same place on the other machine (ADR-021 D-34).
+
+    The UNION, not a pick: a package's installed version can genuinely list several origins
+    (a vendor repository and a security pocket both carrying it), and every one of them
+    served it, so narrowing to one would drop a file the package really depends on.
+    """
+    return frozenset(filename for filename, (_refs, uris) in source_refs.items() if origins & frozenset(uris))
+
+
+def _distribution_origins(source_refs: _SourceFileRefs) -> frozenset[str]:
+    """The URIs one machine's own distribution source files declare (ADR-021 D-35).
+
+    Computed per machine rather than matched against a list of known Ubuntu hostnames:
+    the whole reason the exemption exists is that two machines legitimately point at
+    different mirrors, so the only honest definition of "the distribution's archive" is
+    "whatever this machine's `ubuntu.sources`/`sources.list`/ESM files say it is".
+    """
+    return frozenset(
+        uri
+        for filename, (_refs, uris) in source_refs.items()
+        if filename in _DISTRIBUTION_ORIGIN_FILENAMES
+        for uri in uris
+    )
 
 
 @dataclass(frozen=True)
@@ -1064,6 +1157,19 @@ class AptSyncJob(PackageSyncJob):
         # is the file that has to travel for that package to be installable from the same
         # place on the target (ADR-021 D-34).
         self._source_source_refs: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+        # `{package: origin URIs of its INSTALLED version}` on the SOURCE, from the one
+        # batched policy call `capture_source_items` already issues. This is the provenance
+        # ADR-021 D-34 replicates: the target must end up installing from one of these.
+        self._source_origins: Mapping[str, frozenset[str]] = {}
+        # Every filename across the three key directories on the SOURCE. A `Signed-By:`
+        # reference resolves against this set, so it is what decides whether a repository
+        # file can be written on the target at all — and therefore whether a package that
+        # needs that repository is replicable (D-34 class 4).
+        self._source_key_filenames: frozenset[str] = frozenset()
+        # One `_OriginPlan` per source package item id, rebuilt whenever the package diff
+        # is. It is what the diff classifies from and what the derived `/etc/apt` write set
+        # is read out of, so it must describe the same run the accepted plan describes.
+        self._origin_plan: Mapping[str, _OriginPlan] = {}
         # `/etc/apt/sources.list`'s digest on each machine, or None where the file is
         # absent. Captured separately from the five directories because it is a single
         # file: it has no `find` listing to appear in, and it is one of the files that is
@@ -1125,37 +1231,40 @@ class AptSyncJob(PackageSyncJob):
 
         The exclusion happens HERE and nowhere else: an item that never enters the manifest
         cannot become an `ItemDiff`, reach a review group, reach `_collect_plan_time_collateral`'s
-        `apt-get --dry-run` simulation, or reach `collect_unavailable_item_ids`.
+        `apt-get --dry-run` simulation, or reach the origin classification.
+
+        The one batched `apt-cache policy` this needs answers two questions, so it is issued
+        once and parsed twice: which names came from no repository at all (the exclusion),
+        and where each of the rest came from (`self._source_origins`, the left-hand side of
+        every ADR-021 D-34 comparison). A second call over the same names would cost a
+        second full policy run to learn something already on screen.
         """
         manual = await self.source.run_command("apt-mark showmanual")
         names = _lines(manual.stdout)
-        bare_debs = await self._source_bare_deb_packages(names)
+        policy = await self._source_policy(names)
+        self._source_origins = installed_origins_by_package(policy)
+        bare_debs = packages_installed_from_no_repository(policy, names)
         items = await self._resolve_versions(manual.stdout, self.source.run_command)
         return [item for item in items if item.name not in bare_debs]
 
-    async def _source_bare_deb_packages(self, manual_names: Sequence[str]) -> frozenset[str]:
-        """The source's manual packages installed from no configured repository — put there
-        by `dpkg --install` of a bare `.deb`, and therefore `manual_installs_sync`'s territory
-        alone (D-18).
+    async def _source_policy(self, manual_names: Sequence[str]) -> str:
+        """One batched `apt-cache policy` over the source's whole manual set (never one call
+        per package), as raw stdout for `capture_source_items` to parse for both facts.
 
-        Apt cannot install these anywhere: the target's repositories have never heard the
-        name, so `apt-cache policy` on the target prints no block at all and the package
-        would fall through to a proposed `INSTALL` that fails with "Unable to locate
-        package". `manual_installs_sync` offers the same package as an install snippet in
-        the same run, so leaving it in this manifest surfaces one package twice with only
-        one workable answer.
-
-        Same predicate as `manual_installs_sync`, from the same shared parser rather than a
-        shared result: D-15/D-16 keep the four jobs independent, so both jobs pay one
-        batched `apt-cache policy` (never one per package) instead of one importing the
-        other.
+        The bare-`.deb` half uses the same predicate `manual_installs_sync` uses, from the
+        same shared parser rather than a shared result: D-15/D-16 keep the four jobs
+        independent, so both jobs pay their own batched call instead of one importing the
+        other. Apt cannot install a bare-`.deb` package anywhere — the target's repositories
+        have never heard the name, so it would fall through to a proposed `INSTALL` that
+        fails with "Unable to locate package" while `manual_installs_sync` offers the same
+        package as an install snippet in the same run.
         """
         if not manual_names:
-            return frozenset()
+            return ""
 
         quoted = " ".join(shlex.quote(name) for name in manual_names)
         result = await self.source.run_command(f"apt-cache policy {quoted}")
-        return packages_installed_from_no_repository(result.stdout, manual_names)
+        return result.stdout
 
     async def query_target_items(self) -> Sequence[AptPackageItem]:
         """The target's own manually-installed apt packages, with versions."""
@@ -1242,19 +1351,88 @@ class AptSyncJob(PackageSyncJob):
         target_hold = await self.target.run_command("apt-mark showhold", login_shell=False)
         return frozenset(_lines(source_hold.stdout)), frozenset(_lines(target_hold.stdout))
 
-    async def collect_unavailable_item_ids(self, missing_item_ids: frozenset[str]) -> frozenset[str]:
-        """Batched `apt-cache policy` over every missing-on-target name (one call, not
-        one per package): a `Candidate: (none)` means the target's repositories have
-        nothing to install from (D-25's REPO_UNAVAILABLE, not a proposable INSTALL).
-        """
-        if not missing_item_ids:
-            return frozenset()
+    async def collect_target_policy(self, names: Sequence[str]) -> _TargetPolicy:
+        """ONE batched `apt-cache policy` on the target over the source's whole package set
+        (never one call per package, and never one call per question it answers).
 
-        names = sorted(_package_name(item_id) for item_id in missing_item_ids)
-        quoted = " ".join(shlex.quote(name) for name in names)
+        The set is the source's names rather than only the missing ones because two
+        questions are asked of the same output: what the target would install for a name it
+        lacks, and where the copy it already has came from — the second is what makes a
+        package installed on both machines from two different vendors visible at all
+        (ADR-021 D-34).
+        """
+        if not names:
+            return _TargetPolicy()
+
+        quoted = " ".join(shlex.quote(name) for name in sorted(names))
         result = await self.target.run_command(f"apt-cache policy {quoted}", login_shell=False)
-        no_candidate = packages_with_no_candidate(result.stdout)
-        return frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in names if name in no_candidate)
+        return _TargetPolicy(
+            candidate_origins=candidate_origins_by_package(result.stdout),
+            installed_origins=installed_origins_by_package(result.stdout),
+            no_candidate=frozenset(packages_with_no_candidate(result.stdout)),
+        )
+
+    def _build_origin_plan(
+        self,
+        source_items: Sequence[AptPackageItem],
+        target_items: Sequence[AptPackageItem],
+        policy: _TargetPolicy,
+    ) -> dict[str, _OriginPlan]:
+        """One `_OriginPlan` per source package, from facts already captured this run.
+
+        Distribution origins are resolved per machine (D-35) from that machine's own
+        distribution source files, so a source on one Ubuntu mirror and a target on another
+        agree that both are the distribution rather than two vendors.
+        """
+        source_distribution = _distribution_origins(self._source_source_refs)
+        target_distribution = _distribution_origins(self._target_source_refs)
+        on_target = {item.item_id for item in target_items}
+
+        plans: dict[str, _OriginPlan] = {}
+        for item in source_items:
+            origins = self._source_origins.get(item.name, frozenset())
+            # Only a package the target lacks can make a repository file travel, so the
+            # file lookup is skipped for one present on both.
+            files = (
+                _source_files_serving(self._source_source_refs, origins)
+                if item.item_id not in on_target
+                else frozenset()
+            )
+            target_installed = policy.installed_origins.get(item.name, frozenset())
+            plans[item.item_id] = _OriginPlan(
+                source_origins=origins,
+                source_files=files,
+                target_candidate_origins=policy.candidate_origins.get(item.name, frozenset()),
+                vendor_source_origins=tuple(sorted(origins - source_distribution)),
+                vendor_target_origins=tuple(sorted(target_installed - target_distribution)),
+                unwritable=self._unwritable_origin_reason(files),
+            )
+        return plans
+
+    def _unwritable_origin_reason(self, source_files: frozenset[str]) -> str | None:
+        """Why none of `source_files` can be written on the target, or `None` when at least
+        one can.
+
+        ONE writable file is enough: the origin only has to be declared once for the target
+        to install from it, so a package served by both a sound repository file and a broken
+        one is still replicable. The reported reason is the first broken file's, sorted, so
+        the review text does not depend on dict order.
+        """
+        reasons: list[str] = []
+        for filename in sorted(source_files):
+            refs, _uris = self._source_source_refs.get(filename, ((), ()))
+            dangling = _dangling_keyring_ref(refs, self._source_key_filenames)
+            if dangling is None:
+                return None
+            reasons.append(build_dangling_keyring_detail(filename, dangling))
+        return reasons[0] if reasons else None
+
+    @staticmethod
+    def _unavailable_item_ids(missing_item_ids: frozenset[str], no_candidate: frozenset[str]) -> frozenset[str]:
+        """The missing-on-target ids whose name apt answered `Candidate: (none)` for —
+        D-25's REPO_UNAVAILABLE, not a proposable INSTALL.
+        """
+        return frozenset(item_id for item_id in missing_item_ids if _package_name(item_id) in no_candidate)
 
     async def _plan_packages(self) -> PackagePlan:
         """The package half of `plan()`: load decision files -> capture -> query -> diff
@@ -1290,13 +1468,14 @@ class AptSyncJob(PackageSyncJob):
         missing_item_ids = frozenset(item.item_id for item in source_items) - frozenset(
             item.item_id for item in target_items
         )
-        unavailable_item_ids = await self.collect_unavailable_item_ids(missing_item_ids)
+        policy = await self.collect_target_policy([item.name for item in source_items])
+        self._origin_plan = self._build_origin_plan(source_items, target_items, policy)
         diffs = self._drop_inert_diffs(
             _diff_apt_packages(
                 source_items,
                 target_items,
                 hold_pin_facts,
-                unavailable_item_ids,
+                self._unavailable_item_ids(missing_item_ids, policy.no_candidate),
                 source_hold_names,
                 target_hold_names,
             ),
@@ -1315,7 +1494,13 @@ class AptSyncJob(PackageSyncJob):
         `manual_installs_sync` with its own enable flag, so this job never emits an
         `UNREPRODUCIBLE` diff.
 
-        Runs AFTER the base diff and BEFORE review groups are (re)built. The batched
+        `_capture_origin_state` runs FIRST, ahead of the package diff: a package's diff
+        class depends on which repository file on the source declares its origin (D-34), so
+        the `/etc/apt` reference scans are an input to the package diff rather than a
+        by-product of the repository one.
+
+        Collateral classification runs AFTER the base diff and BEFORE review groups are
+        (re)built. The batched
         apt-get --dry-run simulations reveal what the pending transaction would also remove or
         downgrade; each such package is split by provenance against the target's
         `apt-mark showmanual` set (captured here, once). An auto-installed collateral
@@ -1325,6 +1510,7 @@ class AptSyncJob(PackageSyncJob):
         decided at plan time, in the SAME review the user approves from — never a prompt
         during apply.
         """
+        await self._capture_origin_state()
         base_plan = await self._plan_packages()
         self._target_manual_set = await self._capture_target_manual_set()
         collateral_diffs = await self._collect_plan_time_collateral(base_plan.diffs)
@@ -1384,15 +1570,49 @@ class AptSyncJob(PackageSyncJob):
         )
         return tuple(groups)
 
+    async def _capture_origin_state(self) -> None:
+        """The `/etc/apt` facts the PACKAGE diff needs, captured before it runs.
+
+        Both machines' source-file reference scans and the three key directories on each.
+        They belong here rather than in `_plan_repo_diffs` because the origin
+        classification (ADR-021 D-34) consumes them: which repository file declares a
+        package's origin, which of those files are the distribution's own, and whether the
+        file's `Signed-By:` resolves to a key the source actually has are all inputs to the
+        package's diff class, and the package diff runs first.
+
+        Unconditional, one batched command per machine for the scan: which keyrings the
+        target's sources point at is what makes a key correct, and that is a property of
+        EVERY source file on the target, not just the ones a diff implicates.
+        """
+
+        async def source_run(cmd: str) -> CommandResult:
+            return await self.source.run_command(cmd)
+
+        async def target_run(cmd: str) -> CommandResult:
+            return await self.target.run_command(cmd, login_shell=False)
+
+        # One `sha256sum` listing per key directory per machine, driven by `_KEY_DIRS` so
+        # capture, reference resolution and provisioning can never disagree about which
+        # directories exist.
+        source_keys = [await _capture_dir_digests(source_run, directory) for directory in _KEY_DIRS]
+        target_keys = [await _capture_dir_digests(target_run, directory) for directory in _KEY_DIRS]
+        self._source_keyrings, self._source_global_keys, self._source_shared_keys = source_keys
+        self._target_keyrings, self._target_global_keys, self._target_shared_keys = target_keys
+        self._source_key_filenames = frozenset(name for digests in source_keys for name in digests)
+
+        self._target_source_refs = await _scan_source_file_references(target_run)
+        self._source_source_refs = await _scan_source_file_references(source_run)
+
     async def _plan_repo_diffs(self) -> list[ItemDiff]:
-        """Capture the five `/etc/apt/*` directories and diff the three reviewable item
+        """Capture the three reviewable `/etc/apt/*` directories and diff their item
         classes (D-11/D-12/D-13), by whole-file digest (module docstring): one batched
         `sha256sum` listing per directory per machine, full content fetched only for a
         file a diff implicates.
 
-        The two KEY directories are captured here but produce no diff: keys are not items
-        (module docstring), so their digests are simply cached for the provisioning and
-        collection steps the repository group brackets its own writes with.
+        The key directories and the reference scans are NOT captured here — they are
+        `_capture_origin_state`'s, because the package diff needs them first — but their
+        cached results are read here for the dangling-reference check and the removal
+        impact.
 
         A source offered for REMOVAL is additionally classified against what the TARGET
         still needs (C26) before the diff is built, so the review names the consequence
@@ -1409,28 +1629,12 @@ class AptSyncJob(PackageSyncJob):
         target_sources = await _capture_dir_digests(target_run, _APT_SOURCES_DIR, extensions=_APT_SOURCE_EXTENSIONS)
         self._source_sources_list_digest = await _capture_file_digest(source_run, _APT_SOURCES_LIST)
         self._target_sources_list_digest = await _capture_file_digest(target_run, _APT_SOURCES_LIST)
-        # One `sha256sum` listing per key directory per machine, driven by `_KEY_DIRS` so
-        # capture, reference resolution and provisioning can never disagree about which
-        # directories exist.
-        source_keys = [await _capture_dir_digests(source_run, directory) for directory in _KEY_DIRS]
-        target_keys = [await _capture_dir_digests(target_run, directory) for directory in _KEY_DIRS]
         source_pins = await _capture_dir_digests(source_run, _APT_PREFERENCES_DIR)
         target_pins = await _capture_dir_digests(target_run, _APT_PREFERENCES_DIR)
         source_configs = await _capture_dir_digests(source_run, _APT_CONF_DIR)
         target_configs = await _capture_dir_digests(target_run, _APT_CONF_DIR)
 
-        self._source_keyrings, self._source_global_keys, self._source_shared_keys = source_keys
-        self._target_keyrings, self._target_global_keys, self._target_shared_keys = target_keys
-        source_key_filenames = frozenset(name for digests in source_keys for name in digests)
         self._target_package_owned_keys = await self._capture_package_owned_keys(target_run)
-
-        # Unconditional, one batched command per machine: which keyrings the target's
-        # sources point at is what makes a key correct, and that is a property of EVERY
-        # source file on the target, not just the ones a diff implicates.
-        # `_source_removal_details` reuses the target's scan; the source's answer is the
-        # origin-to-file map ADR-021 D-34 derives repository writes from.
-        self._target_source_refs = await _scan_source_file_references(target_run)
-        self._source_source_refs = await _scan_source_file_references(source_run)
         removal_details = await self._source_removal_details(
             target_run, extra_sources=frozenset(target_sources) - frozenset(source_sources)
         )
@@ -1442,7 +1646,7 @@ class AptSyncJob(PackageSyncJob):
                 target_run,
                 source_sources,
                 target_sources,
-                source_key_filenames,
+                self._source_key_filenames,
                 removal_details,
             )
         )
@@ -1475,7 +1679,7 @@ class AptSyncJob(PackageSyncJob):
         keyring that leaves unused is collected afterwards without a decision of its own.
 
         Costs one batched `apt-cache policy` over the recorded package names (never one
-        per package, the `collect_unavailable_item_ids` shape), gated on a removal actually
+        per package, the `collect_target_policy` shape), gated on a removal actually
         being offered; the source-file scan it also needs was already captured for keyring
         correctness, so this adds no second scan.
         """
@@ -2033,13 +2237,14 @@ class AptSyncJob(PackageSyncJob):
         missing_item_ids = frozenset(item.item_id for item in self._plan_source_items) - frozenset(
             item.item_id for item in target_items
         )
-        unavailable_item_ids = await self.collect_unavailable_item_ids(missing_item_ids)
+        policy = await self.collect_target_policy([item.name for item in self._plan_source_items])
+        self._origin_plan = self._build_origin_plan(self._plan_source_items, target_items, policy)
         return self._drop_inert_diffs(
             _diff_apt_packages(
                 self._plan_source_items,
                 target_items,
                 hold_pin_facts,
-                unavailable_item_ids,
+                self._unavailable_item_ids(missing_item_ids, policy.no_candidate),
                 source_hold_names,
                 target_hold_names,
             ),

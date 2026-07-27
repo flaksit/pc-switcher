@@ -114,14 +114,18 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/apt_sync.py::simulate_apt_transaction::run_command": 1,
     "jobs/apt_sync.py::compare_deb_versions::run_command": 2,
     "jobs/apt_sync.py::AptSyncJob.capture_source_items::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob._source_bare_deb_packages::run_command": 1,
+    "jobs/apt_sync.py::AptSyncJob._source_policy::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob.query_target_items::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob.query_target_items.run::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._scan_target_pin_lines::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob.collect_hold_sets::run_command": 2,
-    "jobs/apt_sync.py::AptSyncJob.collect_unavailable_item_ids::run_command": 1,
+    "jobs/apt_sync.py::AptSyncJob.collect_target_policy::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._plan_repo_diffs.source_run::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._plan_repo_diffs.target_run::run_command": 1,
+    # The key-directory digests and the two source-file reference scans, captured ahead of
+    # the package diff because the origin classification consumes them (ADR-021 D-34).
+    "jobs/apt_sync.py::AptSyncJob._capture_origin_state.source_run::run_command": 1,
+    "jobs/apt_sync.py::AptSyncJob._capture_origin_state.target_run::run_command": 1,
     # The post-write re-scan of the target's source files that keyring collection counts
     # references against — a `find ... -exec awk` read, no different from the plan-time one.
     "jobs/apt_sync.py::AptSyncJob._remove_unused_keyrings.target_run::run_command": 1,
