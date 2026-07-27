@@ -225,6 +225,22 @@ def _packages_with_no_candidate(policy_output: str) -> set[str]:
 _SIGNED_BY_RE = re.compile(r"^Signed-By:\s*(?P<path>\S+)", re.IGNORECASE)
 _LEGACY_SIGNED_BY_RE = re.compile(r"signed-by=(?P<path>[^\]\s,]+)")
 _PIN_PACKAGE_RE = re.compile(r"^Package:\s*(?P<packages>.+)$", re.IGNORECASE)
+
+
+def _pin_packages(line: str) -> list[str]:
+    """The package names one `preferences.d` `Package:` stanza line pins.
+
+    A stanza may name several packages space-separated. `Package: *` (and any other glob)
+    is dropped: apt matches it against every package, but pc-switcher's consumers key facts
+    by exact installed-package name, so a fact for the literal string `*` matches nothing
+    and is only noise in the review.
+    """
+    match = _PIN_PACKAGE_RE.match(line.strip())
+    if match is None:
+        return []
+    return [name for name in match.group("packages").split() if "*" not in name]
+
+
 # A deb822 stanza's repository URIs (one field, possibly several space-separated values,
 # and one file may hold several stanzas), and a legacy `.list` line's single URI — which
 # sits after the optional `[opt=val ...]` bracket, so the bracket must be consumed rather
@@ -344,16 +360,12 @@ def _installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str
 def _parse_pin_file(content: str) -> tuple[str, ...]:
     """Every package name named by a `Package:` stanza line in a `preferences.d` file.
 
-    A stanza's `Package:` line may name several packages space-separated; all of them
-    are pinned packages, not just the first (unlike the existing `collect_hold_pin_facts`
-    awk one-liner, which only needs one representative name per fact).
+    Shares `_pin_packages` with `collect_hold_pin_facts`, which reads the same lines off
+    the target: two parsers of one file format is two chances to disagree about what is
+    pinned, and they did — the awk one-liner used to keep `$2` alone and so lost every name
+    after the first in `Package: foo bar`.
     """
-    packages: list[str] = []
-    for line in content.splitlines():
-        match = _PIN_PACKAGE_RE.match(line.strip())
-        if match:
-            packages.extend(match.group("packages").split())
-    return tuple(packages)
+    return tuple(name for line in content.splitlines() for name in _pin_packages(line))
 
 
 def _dangling_keyring_ref(keyring_refs: Sequence[str], source_key_filenames: frozenset[str]) -> str | None:
@@ -739,20 +751,32 @@ class AptSyncJob(PackageSyncJob):
         remains an apt priority preference that can still permit an upgrade, so it stays a
         report on the package rather than a converge action (RESEARCH Pitfall 2).
         """
-        facts: list[HoldPinFact] = []
+        return self._pin_facts_from_scan(await self._scan_target_pin_lines())
 
-        # `find ... -exec ... {} +` passes every matching file to one awk invocation
-        # (not a per-file command); if the directory has no files, -exec never runs,
-        # so an empty preferences.d produces empty output rather than a shell error.
-        pins = await self.target.run_command(
-            "find /etc/apt/preferences.d -maxdepth 1 -type f -exec awk '/^Package:/{print FILENAME \"\\t\" $2}' {} +",
+    async def _scan_target_pin_lines(self) -> str:
+        """The target's raw `<file>\\t<Package: ...>` lines from one batched command.
+
+        `find ... -exec ... {} +` passes every matching file to one awk invocation (not a
+        per-file command); if the directory has no files, -exec never runs, so an empty
+        `preferences.d` produces empty output rather than a shell error. awk prints the
+        WHOLE line, not `$2`: `_pin_packages` — the same parser `_parse_pin_file` uses — is
+        what splits it, so a `Package: foo bar` stanza yields both names and `Package: *`
+        yields none.
+        """
+        result = await self.target.run_command(
+            "find /etc/apt/preferences.d -maxdepth 1 -type f -exec awk '/^Package:/{print FILENAME \"\\t\" $0}' {} +",
             login_shell=False,
         )
-        for line in _lines(pins.stdout):
-            filename, _, package = line.partition("\t")
-            if package:
-                facts.append(HoldPinFact(mechanism="pin", package=package, source_ref=filename))
+        return result.stdout
 
+    @staticmethod
+    def _pin_facts_from_scan(scan_output: str) -> list[HoldPinFact]:
+        facts: list[HoldPinFact] = []
+        for line in _lines(scan_output):
+            filename, _, stanza = line.partition("\t")
+            facts.extend(
+                HoldPinFact(mechanism="pin", package=package, source_ref=filename) for package in _pin_packages(stanza)
+            )
         return facts
 
     @override

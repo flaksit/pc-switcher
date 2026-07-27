@@ -115,7 +115,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/apt_sync.py::AptSyncJob.capture_source_items::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob.query_target_items::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob.query_target_items.run::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob.collect_hold_pin_facts::run_command": 1,
+    "jobs/apt_sync.py::AptSyncJob._scan_target_pin_lines::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob.collect_hold_sets::run_command": 2,
     "jobs/apt_sync.py::AptSyncJob.collect_unavailable_item_ids::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._plan_repo_diffs.source_run::run_command": 1,

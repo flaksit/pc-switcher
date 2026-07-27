@@ -22,6 +22,7 @@ from pcswitcher.jobs.apt_sync import (
     _METADATA_REFRESH_ITEM_ID,
     _TARGET_SUDO_COMMANDS,
     AptSyncJob,
+    _parse_pin_file,
     _parse_source_file,
     simulate_apt_transaction,
 )
@@ -557,7 +558,9 @@ class TestHoldPinCapture:
             source_responses={"apt-mark showhold": CommandResult(0, "src-held\n", "")},
             target_responses={
                 "apt-mark showhold": CommandResult(0, "tgt-held\n", ""),
-                "find /etc/apt/preferences.d": CommandResult(0, "/etc/apt/preferences.d/curl-pin\tcurl\n", ""),
+                "find /etc/apt/preferences.d": CommandResult(
+                    0, "/etc/apt/preferences.d/curl-pin\tPackage: curl\n", ""
+                ),
             },
         )
         job = AptSyncJob(context)
@@ -571,7 +574,9 @@ class TestHoldPinCapture:
     async def test_preferences_d_pin_surfaces_with_pin_mechanism_and_filename(self) -> None:
         context, _source, _target = make_context(
             target_responses={
-                "find /etc/apt/preferences.d": CommandResult(0, "/etc/apt/preferences.d/curl-pin\tcurl\n", ""),
+                "find /etc/apt/preferences.d": CommandResult(
+                    0, "/etc/apt/preferences.d/curl-pin\tPackage: curl\n", ""
+                ),
             },
         )
         job = AptSyncJob(context)
@@ -700,7 +705,9 @@ class TestAptHold:
                 "apt-mark showmanual": CommandResult(0, "curl\nheld-pkg\n", ""),
                 "dpkg-query": CommandResult(0, "curl\t1.0\nheld-pkg\t1.0\n", ""),
                 "apt-mark showhold": CommandResult(0, "held-pkg\n", ""),
-                "find /etc/apt/preferences.d": CommandResult(0, "/etc/apt/preferences.d/curl-pin\tcurl\n", ""),
+                "find /etc/apt/preferences.d": CommandResult(
+                    0, "/etc/apt/preferences.d/curl-pin\tPackage: curl\n", ""
+                ),
             },
         )
         job = AptSyncJob(context)
@@ -3384,3 +3391,51 @@ class TestUnusedKeyringCollection:
 
 def _all_removals(target: MagicMock) -> list[str]:
     return [c for c in all_calls(target) if c.startswith("sudo rm -f")]
+
+
+_PIN_SCAN_CMD = "-exec awk '/^Package:/"
+
+
+class TestPinStanzaParsing:
+    """One parser for `preferences.d` `Package:` lines, on both the digest-diff path and
+    the target-fact path — the awk one-liner used to keep `$2` alone.
+    """
+
+    @staticmethod
+    def _facts_context(scan: str) -> JobContext:
+        context, _source, _target = make_context(
+            target_responses={**_NO_PACKAGES, _PIN_SCAN_CMD: CommandResult(0, scan, "")}
+        )
+        return context
+
+    @pytest.mark.asyncio
+    async def test_a_multi_name_stanza_yields_a_fact_for_every_package(self) -> None:
+        context = self._facts_context("/etc/apt/preferences.d/multi\tPackage: foo bar baz\n")
+
+        facts = await AptSyncJob(context).collect_hold_pin_facts()
+
+        assert {fact.package for fact in facts} == {"foo", "bar", "baz"}
+        assert {fact.source_ref for fact in facts} == {"/etc/apt/preferences.d/multi"}
+
+    @pytest.mark.asyncio
+    async def test_a_wildcard_stanza_yields_no_fact(self) -> None:
+        """`Package: *` matches every package to apt and none at all to a name-keyed fact."""
+        context = self._facts_context("/etc/apt/preferences.d/all\tPackage: *\n")
+
+        assert await AptSyncJob(context).collect_hold_pin_facts() == []
+
+    @pytest.mark.asyncio
+    async def test_the_pin_item_records_the_same_names_the_facts_do(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/preferences.d": CommandResult(0, sha256_line("p1", "multi"), ""),
+                "cat /etc/apt/preferences.d/multi": CommandResult(0, "Package: foo bar\nPackage: *\n", ""),
+            },
+            target_responses={**_NO_PACKAGES},
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert any(d.item_id == "apt:pin:multi" for d in plan.diffs)
+        assert _parse_pin_file("Package: foo bar\nPackage: *\n") == ("foo", "bar")
