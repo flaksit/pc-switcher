@@ -3,7 +3,7 @@
   "checkpoint_id": "fc23ad084839",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 1,
+  "checkpoints_count": 4,
   "files_touched": [
     "src/pcswitcher/jobs/manual_installs_sync.py",
     "tests/unit/jobs/test_manual_installs_sync.py"
@@ -15,6 +15,13 @@
       "compact_transcript": "/fc/23ad084839/0/transcript.jsonl",
       "content_hash": "/fc/23ad084839/0/content_hash.txt",
       "prompt": "/fc/23ad084839/0/prompt.txt"
+    },
+    {
+      "metadata": "/fc/23ad084839/1/metadata.json",
+      "transcript": "/fc/23ad084839/1/full.jsonl",
+      "compact_transcript": "/fc/23ad084839/1/transcript.jsonl",
+      "content_hash": "/fc/23ad084839/1/content_hash.txt",
+      "prompt": "/fc/23ad084839/1/prompt.txt"
     }
   ],
   "token_usage": {
