@@ -1,0 +1,172 @@
+- packages-keep-their-registry: yes
+- For ask UX: Ctrl-C -> abort. Ctrl-D or empty answer -> re-ask. I don't see why we need special Ctrl-D treatment.
+
+Fix that, then give me clear instructions for the 'runbook to drive the questionary widgets'.
+
+---
+
+EOFError is ok as well, if that would be the default behavior. No need for extra code. User should not press Ctrl-D. Not documented. Normal user wouldn't do that.
+
+---
+
+<task-notification>
+<task-id>a3468943505becea5</task-id>
+<tool-use-id>toolu_015NWSQgvHP4yD3RT15JDQ5G</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a3468943505becea5.output</output-file>
+<status>completed</status>
+<summary>Agent "Write revised package review spec" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Spec written to `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/02-SPEC-package-review-model.md` (593 lines). No source file touched, nothing committed.
+
+## The model, in short
+
+The apt review becomes three screens: **packages** (each line naming its origin when that origin is not the distribution archive, in ruling-9 full-path form), **repository removals** (two answers — remove or skip once, no registry entry), and **repository conflicts** (only when a file differing on both machines feeds a target skip-always package; shows both file contents, overwrite or skip once). Everything else under `/etc/apt` is derived: repository adds from approved packages, keys as today, pins as an always-sync bucket, plus `ubuntu.sources` / `/etc/apt/sources.list` / `ubuntu-esm-*` written-and-updated but never removed.
+
+Origin replication is established by mapping `installed_origins_by_package` on the source (reusing the policy output `capture_source_items` already fetches at `apt_sync.py:1117`) through `_parse_source_file`'s URIs to source files, and is enforced by a batched `apt-cache policy` on the target **after** `apt-get update` and **before** the first install: candidate origins must intersect the source's, or the item fails. That check, not the derivation, is the hard guarantee.
+
+## Findings worth flagging
+
+- **The pin is load-bearing, verified.** Ubuntu's `firefox` is `1:1snap1-0ubuntu5` at priority 500 (read on the dev machine). Epoch 1 outranks every unpinned vendor version, so adding the Mozilla repo alone still installs Ubuntu's package. Pins must travel. That drove pins into an always-sync bucket rather than a per-package derivation — simpler, and it avoids inventing a `Pin: origin` parser.
+- **The second review can be deleted entirely.** Its repo-availability case dissolves because classification now reads the *source's* origins, which no run mutates. Its pin case dissolves only if the `HELD_OR_PINNED` echo goes — which I recommend, because that branch (`apt_sync.py:352-355, 366-376`) is also the cause of the open defect at `02-HANDOVER-package-review.md:62` (a pinned target package can never be removed or silenced). Deleting both removes ~200 lines, eight tests, and the untested mid-`execute()` prompt hazard the handover ranks first.
+- **`collect_unavailable_item_ids` (`apt_sync.py:1205`) is the live bug** and `packages_with_no_candidate` becomes dead code once it goes.
+- **Unrelated correctness find:** `_capture_dir_digests` uses `find -type f` with no extension filter, so `ubuntu.sources.save`, `ubuntu.sources.curtin.orig` and two `ubuntu-esm-*.sources.save` files (all present on the dev machine, none read by apt) are currently captured as items. Specified a `*.list`/`*.sources` filter for `sources.list.d` only — `preferences.d` legitimately holds extensionless files.
+
+## Conflicts I could not fully reconcile
+
+**ESM on an unattached target.** Ruling 7 says add them and warn. `ValidationError` has no severity (`models.py:103`) and every one aborts the run (`orchestrator.py:1019-1025`), so the Pro check cannot live in `validate()` — I put it in read-only `plan()`, which still satisfies the "never mid-execute" rule. But writing ESM sources to an unattached target likely makes `apt-get update` fail, and the `/etc/apt` group is transactional, so it would roll back every other repository change in the run. I specified **withhold-and-warn** against the literal ruling, and labelled the 401/exit-code premise as an unverified hypothesis. This is open question 5.
+
+**Ruling 3's "exactly one situation" versus D-30.** D-30's collateral prompt triggers on the union of both machines' manual sets (`apt_sync.py:1628`), which is far wider than the skip-always set ruling 3 names. I left D-30 untouched and specified three mechanisms (removal disclosure, conflict prompt, collateral prompt) sharing one machine-specific-by-origin helper. Open question 4.
+
+## Open questions (§11)
+
+1. Packages keep their three-way decision and machine-local registry (stated as an assumption at the top of the doc; ruling 3 presupposes it).
+2. `/etc/apt/apt.conf.d` — no package derives it; I put it in the always-sync bucket. Alternative readings: review both directions, or drop from scope.
+3. Removal of pins and apt config — I gave them the repo-removal two-answer shape by analogy; ruling 5 names repositories only.
+4. D-30's collateral trigger versus ruling 3.
+5. ESM withhold versus write.
+
+Note: `.planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md` is also untracked in the working tree. I did not create it — flagging so it is not mistaken for my output.</result>
+<usage><subagent_tokens>266055</subagent_tokens><tool_uses>33</tool_uses><duration_ms>844386</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab23c02429bef1063</task-id>
+<tool-use-id>toolu_012W3mgbFuDu5Dh2FuEHntwn</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/ab23c02429bef1063.output</output-file>
+<status>completed</status>
+<summary>Agent "Finalize spec and write ADR" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Nothing committed, no source file touched.
+
+## Spec: `.planning/phases/02-package-management-sync/02-SPEC-package-review-model.md`
+
+Rulings folded in place, no changelog section.
+
+- §0 replaced "Assumption carried, not decided" with **Settled premises** — the package/hold registry is stated as confirmed, plus the no-backwards-compatibility and long-options rules. Added §0.1, an explicit numbered ruling list, because the document cited "ruling N" against a list that existed nowhere; the new rulings are 11 (apt.conf.d), 12 (pins), 13 (collateral), 14 (ESM), 15 (second review + pin echo).
+- §1 now has **four** screens, not three: apt config joins as screen 4, in all three directions, and pin removal joins screen 2. Added the "only packages are reviewed is a near-rule" paragraph with the derivability argument. apt.conf.d left the always-sync bucket; pins stayed in it.
+- §3.3 command order rewritten (apt-config writes ride with pins before sources; step 5 covers repository, pin and apt-config removals). §3.4 retitled to ruling 15 and reframed: the handover defect at `02-HANDOVER-package-review.md:62` is closed, not open, and the section now says explicitly that pins still replicate as files — only the echo item goes.
+- §4.4 rewritten for the D-30 narrowing: `_protected_manual_set` (`apt_sync.py:1628`) returns the target's set alone, `self._source_manual_set` (`apt_sync.py:1050`, assigned `1091`) is deleted with it (verified: that is its only consumer), and the source-intent case is recorded as a knowingly accepted loss with the "if the target auto-installed it, the target's apt owns it" rationale.
+- §4.5 says the removal sentinel carries pin removals too (two groups, one sentinel, via `sync_core.py:236`), and that apt config uses none of the new plumbing.
+- §5.3 ESM is now a decision, not a deviation pending confirmation; the 401/exit-code premise stays labelled hypothesis with the VM test that settles it and the asymmetry argument for standing by it meanwhile.
+- §6 `_diff_apt_configs` flipped from "delete two branches" to "keep, unchanged"; added rows for the collateral narrowing; vocabulary grows to four new entries; the ruling-8 paragraph now exempts `apt:config:`.
+- §7.1/7.2/7.3/7.4 re-checked: added rows for `test_excluded_package_still_counts_as_source_manual_for_collateral_protection` (`:1250`) and `TestSourceOnlyCollateral` (`:2868`), split the pin/config test at `:1923`, corrected the block-state test at `test_block_state_decisions.py:242` so `apt:config:` is *not* added to the never-recorded assertion, restated matrix rows C9, C27, D3, D9, N9, and added the docs items.
+- §9 gained **S0b** (collateral narrowing — independent, lands any time after S0); S4 no longer touches `_diff_apt_configs`; S5 covers pins; S9 is docs-only now that the ADR is written. Every stage still ends green.
+- §10 gained apt-config three-way, pin-removal two-way and §10.8 collateral tests, each with its mutation.
+- §11 "Open questions" replaced by **Residual risks and unverified reasoning** — five entries, ESM first.
+
+## ADR
+
+**ADR-021: Origin-replicating package convergence — the review decides packages, `/etc/apt` follows**, at `docs/adr/adr-021-origin-replicating-package-convergence.md`. Full replacement, new decisions numbered D-34 through D-40 continuing the phase's D-series.
+
+Overturned: D-02's *enumeration* (sources and pins stop being items in add/change; apt config stays one), D-07's universality (two-answer exceptions), D-11/D-13's inventory-item model in the add/change direction, D-24's "MAY review again" clause, D-25's taxonomy (`HELD_OR_PINNED` retired, `REPO_UNAVAILABLE` redefined, `ORIGIN_MISMATCH` added), D-30's trigger, and D-18's phase-context calibration.
+
+Carried forward, enumerated: D-01, D-03, D-04, D-05, D-06, D-08/D-08a/D-09/D-10, D-12, D-15/D-16/D-17, D-18–D-23, D-26, D-27, D-28, D-29, D-33, plus D-02's *principle* and D-11's `--delete` rejection. The Firefox/epoch measurement (`1:1snap1-0ubuntu5`, priority 500) is the recorded evidence under D-36; ESM withholding and its contradiction of the literal instruction are under D-38; the collateral loss under D-40. Consequences carries six negatives including the lost line-by-line `/etc/apt` control, the returning pin file, the given-up collateral case, and `REPO_UNAVAILABLE` changing meaning rather than name.
+
+## Supersession
+
+There was a precedent, so I did not invent one. ADR-016 uses `Status: Superseded by ADR-017` plus a separate `Superseded by: [link] — one-clause reason`; the index lists it under `## Superseded` with `→ Superseded by [link]`. ADR-020 got exactly that header shape and nothing else; its body is untouched. Index: ADR-021 replaces ADR-020's row in Active, ADR-020 moves to Superseded, date bumped.
+
+## Corrections and things I could not verify
+
+- **Your brief's premise on carried-forward decisions was partly at odds with the spec.** You listed D-02 and D-18 as carried forward unchanged; the spec's §8 listed D-02 as overturned and D-18's calibration as void. Both are right about different things, and I said so in the ADR rather than picking: D-02's principle ("mechanism the user has no basis to judge is not an item") is the very clause that licenses this change, so it carries forward — only its enumeration narrows. D-18 carries forward; only a phase-context calibration number is void.
+- **The spec's stated baseline commit was wrong.** It claimed `702aa993`, but cited `30a9eb6f` and `df48cd07`, which only exist after it. HEAD is `9c25d101`; I corrected the header. I spot-checked the load-bearing citations at HEAD and they are exact (`apt_sync.py:352`, `:366`, `:857`, `:1628`; `review.py:100/108/127/139`; `sync_core.py:129/236/277`).
+- **One arity I derived rather than read off a ruling.** Ruling 11 says apt.conf.d is reviewed in all three directions; it does not say with how many answers. I gave it the ordinary three-way decision and the registry, because the two no-registry rulings were both justified by consequences an apt-config file does not have, and because that outcome needs zero special-casing — `_build_review_groups` keeps the raw `DiffAction` as the group action, so ordinary behaviour falls out. It is flagged as residual risk #2 in §11 and is a small change if you disagree.
+- **Not verified this session**, deliberately: the ESM `apt-get update` premise (needs a VM, which you excluded), and the Firefox/epoch version string — I carried it forward as reported in your brief and the spec, I did not re-measure it. If it matters, `apt-cache policy firefox` on the dev machine settles it.
+- **Docs under `docs/` still reference ADR-020** in `docs/system/package-sync.md` and elsewhere. Out of this brief's scope and already scheduled in spec §7.4 / stage S9; flagging so it does not surprise you.</result>
+<usage><subagent_tokens>157585</subagent_tokens><tool_uses>68</tool_uses><duration_ms>811724</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6f1ba19a438ed304</task-id>
+<tool-use-id>toolu_01NG93REySnXopFbpSSPWrRC</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a6f1ba19a438ed304.output</output-file>
+<status>completed</status>
+<summary>Agent "Stage S0 seams and S0b collateral" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>S0 and S0b are done, committed locally, not pushed.
+
+## Commits
+
+- `d8f4d9df` — `refactor(apt): capture what apt reads, on both machines` (S0)
+- `585da360` — `feat(apt)!: protect collateral against the target's manual set alone` (S0b)
+
+## Mutation table — real results
+
+Each mutation applied to the shipped source, named test run, source restored.
+
+| # | Mutation | Test | Result |
+|---|---|---|---|
+| M1 | drop `extensions=` from the target `sources.list.d` capture (`apt_sync.py:1421`) | `test_a_save_file_in_sources_list_d_is_never_captured` | **RED** |
+| M2 | add the extension filter to `preferences.d` (source side) | `test_preferences_d_and_apt_conf_d_keep_no_extension_filter` | **RED** |
+| M2b | add the extension filter to `apt.conf.d` (target side) | same | **RED** |
+| M3 | delete both `_capture_file_digest` calls | `test_sources_list_is_digested_on_both_machines_and_is_still_not_an_item` | **RED** |
+| M4 | `_capture_file_digest` returns `""` instead of `None` on absence | `test_an_absent_sources_list_yields_no_digest_rather_than_an_error` | **RED** |
+| M5 | delete the source-side `_scan_source_file_references` call | `test_the_source_file_scan_runs_against_both_machines` | **RED** |
+| M6 | drop `remove/delete/disable` from `_PROMOTABLE_ACTIONS` | `test_every_direction_that_arrives_unticked_is_still_offered_permanence` | **RED** |
+| M7 | re-derive `_PROMOTABLE_ACTIONS = _REMOVAL_ACTIONS \| {...}` | whole `test_package_review.py` | **GREEN, intentionally** — the split is behaviour-preserving; this is the equivalence check, not a test |
+| M8 | restore the union in `_protected_manual_set` | 3 inverted collateral tests | **RED (3/3)** |
+| M9 | narrow `_protected_manual_set` to `frozenset()` | 5 target-manual protection tests | **RED 3, GREEN 2** — the two greens are `test_auto_reverse_dep_removal_proceeds` and `test_both_removals_approved_the_first_proceeds`, which assert the *auto* path proceeds and are correctly indifferent to the protected set. The three that must move did: `TestPlanTimeCollateral::test_manual_collateral_removal_becomes_a_collateral_review_item`, `::test_manual_downgrade_becomes_item_auto_downgrade_does_not`, `TestRemovalGuard::test_drifted_manual_reverse_dep_removal_refused` |
+
+**Not mutation-checked, and I am flagging it rather than shipping a vacuous test**: `ReviewEntry.versions` (`review.py:160`). It is a defaulted field with no producer and no consumer until S6. Any test I could write today asserts only that a dataclass default is `None`, which is a test of Python. S6 owns its RED.
+
+## `_source_manual_set` — verified, one consumer
+
+Grepped `src/`, `tests/`, `docs/` before deleting. Exactly one read: `_protected_manual_set` (was `apt_sync.py:1637`). One write: `capture_source_items` (was `:1091`). One doc mention: `docs/system/package-sync.md:64`'s trailing clause. Your premise was correct.
+
+## What the extension filter changed in the captured set
+
+Measured on this machine, not inferred. `/etc/apt/sources.list.d` holds 20 files unfiltered, 16 with `\( -name '*.list' -o -name '*.sources' \)`. The four dropped are exactly the four in your brief: `ubuntu.sources.curtin.orig`, `ubuntu.sources.save`, `ubuntu-esm-apps.sources.save`, `ubuntu-esm-infra.sources.save`. Also verified rather than assumed: `sha256sum` on a missing path exits 1 and writes nothing to stdout — spec §11 residual risk 4 is now settled in the direction the spec assumed.
+
+**Scope call worth your review**: I filtered only the digest capture, not `_scan_source_file_references`' awk scan (`apt_sync.py:812`), which still walks every file in the directory. Spec §5.2 says "restrict the `sources.list.d` capture" and the scan's job is keyring *reference counting* — over-counting there keeps a key alive, under-counting deletes one apt still needs. I chose the conservative direction and documented it in the docstring. If you want the scan filtered too, say so; note that `tests/unit/jobs/test_apt_sync.py:2994`'s `_SOURCE_SCAN_CMD` substring pins the current command shape.
+
+## Gates
+
+`ruff check` clean, `ruff format` clean, `codespell` clean, `basedpyright` 0 errors / 0 warnings / 0 notes, `pytest` 1295 passed / 79 deselected. No test died in S0 — the count went 1289 → 1295 (six added, none removed). Integration suite not run, as instructed.
+
+## Things I changed that the brief did not name
+
+- **`_SOURCE_SUDO_COMMANDS` and `_TARGET_SUDO_COMMANDS` gained `/usr/bin/sha256sum`** (`apt_sync.py:147-153`). `_capture_dir_digests` runs `sha256sum` as a child of `sudo find`, so only `find` needed permitting; `_capture_file_digest` invokes `sudo sha256sum` directly. Without this the validate() remediation hint understates what the user has to allow, and a source-side capture would silently degrade — the exact failure mode the comment at `:2926` exists to prevent.
+- **`_is_actionable_group` → `_is_promotable_group`** (`review.py:216`). Private, single call site; the old name no longer says which of the two questions it answers.
+- **Field naming**: `self._source_source_refs` (`apt_sync.py:1066`) is the mechanical counterpart to the existing `_target_source_refs`. It stutters. I kept it for greppability rather than renaming both; say the word if you want a pair rename before other agents build on it.
+
+## Noticed, out of scope, needs attention
+
+1. **`docs/system/package-sync.md:63-68` is stale beyond line 64.** The "Preconditions" bullet still says source-side sudo is needed for `/etc/apt` reads only, which is right, but the "Covers" bullet still describes sources and pins as reviewed repository state — false the moment S4 lands. Spec §7.4 already schedules this for S9; flagging that S4 leaves it wrong in the interim.
+2. **`_APT_SOURCES_LIST`'s "never syncs at all" phrasing survives in three docstrings** (`apt_sync.py:78`, `:830`, `:2751`). True today, false after S4. Whoever does S4 must sweep those three, not just the constant comment.
+3. **`_capture_dir_digests`' shared docstring line "The five `/etc/apt/*` directories … each captured with one batched `sha256sum` listing"** (`apt_sync.py:158`) now undercounts by one — `sources.list` is a sixth capture that is not a directory. Cosmetic; left alone to keep the S0 diff to the seams.
+4. **`_pin_packages` / `_parse_pin_file` / `_PIN_PACKAGE_RE`** are on spec §6's delete list for S7, but `_parse_pin_file` is still called from `_diff_apt_pins` at `apt_sync.py:1665` to hydrate `AptPinItem.pinned_packages`, which nothing reads once the pin echo goes. S7 and S4 both touch that line — the spec's lane split puts `_diff_apt_pins` in the repository lane and the echo deletion in the package lane. That is a third collision beyond the two (`plan()`, `accept_review()`) §9 warns about.</result>
+<usage><subagent_tokens>199092</subagent_tokens><tool_uses>99</tool_uses><duration_ms>767464</duration_ms></usage>
+</task-notification>
+
+---
+
+1. Wait; another session is working on the VMs
+2. what is your question? I meant: When you CALL programms like apt-get, call them with long options instead of short ones. So this only touches internal code. This doesn't touch our cli or the way the user needs to call the install script.
+
+---
+
+VMs are free. you can verify there (or why not in docket if that's easier)
