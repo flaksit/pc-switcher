@@ -45,18 +45,20 @@ The reason is the "defaults, then your data" layering. Installing software usual
 
 Because an enabled package job can install or remove software on the target, each one shows you a review and waits for your approval before it changes anything.
 
-The review lists every difference the job found between source and target, grouped by action, and installs are always kept separate from removals: a group that would install software is never mixed with one that would remove it, and a removal group names the removal explicitly (for example "Remove packages") rather than saying "apply". Removal rows start at **skip this run**, so a bulk approval can never silently delete something.
+Every screen names the two machines by their **hostnames** — `p17`, `fleksi` — never as "the source" and "the target". Those are the tool's names for the two ends of a run, and the question a review asks is always about one of your computers: which machine loses the package, which machine's version of a file wins, which machine an install snippet runs on.
+
+The review lists every difference the job found between the two machines, grouped by action, and installs are always kept separate from removals: a group that would install software is never mixed with one that would remove it, and a removal group names the removal explicitly (for example "Remove packages") rather than saying "apply". Removal rows start at **skip this run**, so a bulk approval can never silently delete something.
 
 Most items that would actually change something — packages, holds, masks and `apt.conf.d` files — offer the same three-way choice:
 
 - **Apply** it — make this change on the target.
-- **Skip this run** — leave it alone for now; it comes back next sync.
+- **Skip this run** — leave it alone for now; it comes back next sync. On a screen whose act answer would change something the target already has, this reads as what it does — `keep it on <target>`, or `keep <target>'s version` on the repository-conflict screen — rather than as `skip once`.
 - **Skip always** — mark it as belonging to this machine only, so no future sync touches it (see [Machine-specific packages](#machine-specific-packages)).
 
 You give those answers on **one screen per group**, not with a question per item and not in two passes. Every item is a row; the decision it currently carries is shown in a column to the right of the longest item; the arrow keys move between rows and one key sets the focused row:
 
 - `<y>` — apply, shown in the column as the group's own verb (`install`, `remove`, `overwrite`, …)
-- `<s>` — `skip once`
+- `<s>` — skip this run (`skip once`, or `keep it on <target>` where there is something to keep)
 - `<n>` — `always skip`
 - `<space>` steps the focused row through the answers, and the shift of any key sets **every** row at once
 - `<enter>` confirms the whole screen; `<ctrl-c>` aborts the whole sync
@@ -65,7 +67,7 @@ A screen that takes only two answers simply does not offer `<n>`. The answered l
 
 Four things take **two** answers instead — act, or leave it for now, with nothing recorded either way: deleting an apt repository file, deleting an apt pin file, overwriting a repository file the two machines disagree about, and deleting or repointing a flatpak remote. See [Deletions](#deletions) and [Flatpak remotes](#flatpak-remotes).
 
-Items that only **report** a condition are not offered skip-always: a version difference between source and target, an apt package whose repository cannot be reproduced on the target, and an apt package the two machines installed from different vendors. These change nothing on the target, and neither machine "holds" the item in the way a machine-specific mark requires — marking a version difference would silently stop the package syncing altogether rather than stop reporting the drift. Resolve them by fixing the underlying condition (align the versions, restore the repository on the source, pick one vendor).
+Items that only **report** a condition are not offered skip-always: a version difference between the two machines (named as `p17 has 1.0-1, fleksi has 2.0-1`), an apt package whose repository cannot be reproduced on the target, and an apt package the two machines installed from different vendors. These change nothing on the target, and neither machine "holds" the item in the way a machine-specific mark requires — marking a version difference would silently stop the package syncing altogether rather than stop reporting the drift. Resolve them by fixing the underlying condition (align the versions, restore the repository on the source, pick one vendor).
 
 ### One review per job, and nothing applied you did not approve
 
@@ -85,9 +87,15 @@ It covers every write the four jobs make, plus the machine-local decision files 
 
 ### apt collateral
 
-When you approve an apt change, apt sometimes has to remove or downgrade *other* packages to satisfy it — so the package you approved is not always the whole transaction. `apt_sync` simulates every approved change with `apt-get --dry-run` before applying anything and inspects that collateral. Dependencies apt pulls in or drops on its own are apt doing its job and are not shown to you. But if the collateral would remove or downgrade a package you installed by hand on the target — one in the target's own `apt-mark showmanual` set — that becomes its own review item with an install-anyway / skip / abort choice. The source's manual set is not consulted, which gives up one case on purpose: a package you installed by hand on the source, which arrived on the target as an automatic dependency, can be removed as collateral without asking you. If the target's apt installed it automatically, the target's apt owns it, and that is also the set apt itself consults when deciding what it may remove. The classification happens during the review because apt's simulation already says what the real transaction will do, so you decide about the collateral while you are deciding about the change that causes it.
+When you approve an apt change, apt sometimes has to remove or downgrade *other* packages to satisfy it — so the package you approved is not always the whole transaction. `apt_sync` simulates every approved change with `apt-get --dry-run` before applying anything and inspects that collateral. Dependencies apt pulls in or drops on its own are apt doing its job and are not shown to you. But if the collateral would remove or downgrade a package you installed by hand on the target — one in the target's own `apt-mark showmanual` set — that becomes its own review item, asked one package at a time. The prompt says which package it is and why it is protected (apt on that machine has it marked manually installed, so you asked for it there), then what the approved change would do to it — `Installing sl on fleksi would remove fortunes` — and offers three answers, each stating its own effect:
 
-Skipping cancels only the changes that actually cause the collateral. The question names them, and everything else you approved in the same review is applied as you decided. Where no single change causes it on its own — apt keeps a package as long as either of two others is there, and drops it once both go — the question says "the selected packages" and skipping cancels all of them, because that combination really is the cause. Skipping never rewrites an answer you gave: a package you marked never-offer-again keeps that mark even when the skip cancels it for this run.
+- **Go ahead** — the package changes on that machine as described, and the changes causing it are applied.
+- **Keep it as it is** — the changes that would touch it are dropped from this sync; everything else you approved is applied as you decided.
+- **Stop the whole pc-switcher sync now** — not just `apt_sync`. No further job runs, nothing more is changed on the target, and what jobs that already finished did stays done. `apt_sync` itself has changed nothing at this point: the review runs before its first mutating command.
+
+This is **not** the machine-specific mark. Nobody recorded a preference about this package; the target's own apt simply says a person asked for it, which is a different fact. The source's manual set is not consulted, which gives up one case on purpose: a package you installed by hand on the source, which arrived on the target as an automatic dependency, can be removed as collateral without asking you. If the target's apt installed it automatically, the target's apt owns it, and that is also the set apt itself consults when deciding what it may remove. The classification happens during the review because apt's simulation already says what the real transaction will do, so you decide about the collateral while you are deciding about the change that causes it.
+
+Skipping cancels only the changes that actually cause the collateral. The question names them, and everything else you approved in the same review is applied as you decided. Where no single change causes it on its own — apt keeps a package as long as either of two others is there, and drops it once both go — the question says "the packages listed earlier" and keeping the package cancels all of them, because that combination really is the cause. Skipping never rewrites an answer you gave: a package you marked never-offer-again keeps that mark even when the skip cancels it for this run.
 
 One class of install cannot be classified that way and is deliberately left out of the plan-time simulation: a package whose repository this run is about to add on the target's behalf. Until that repository lands the target's apt has never heard the name, and apt refuses the whole simulated batch on one such name — which would strip the protection from every other package in the run rather than weaken it for one. Those packages are covered instead by the same simulation re-run per item after `/etc/apt` has converged, where apt can resolve them: unapproved manual collateral fails that one item. The cost is real — for those packages you are told afterwards rather than asked beforehand — and is accepted because the facts the question needs do not exist while the review is being built.
 
@@ -113,8 +121,8 @@ pc-switcher cannot fix that itself: attaching needs a subscription token from yo
 
 So before `apt_sync` writes anything, it probes the target and — if the target reports no attachment — asks, with exactly two answers:
 
-- **I have attached the target — re-check and continue.** pc-switcher probes again rather than trusting the answer. You can answer this as many times as you like; re-probing is free.
-- **Skip `apt_sync` this run (other jobs continue).** The target's `/etc/apt` is left exactly as it was and every other job runs normally.
+- **I have attached `<target>` — check again and continue.** pc-switcher probes again rather than trusting the answer. You can answer this as many times as you like; re-probing is free.
+- **Skip `apt_sync` this run (every other job still runs).** The target's `/etc/apt` is left exactly as it was and every other job runs normally.
 
 The commands the prompt gives you, to run on the target, are `sudo pro attach <token>` followed by `sudo pro enable esm-apps esm-infra`.
 
@@ -160,7 +168,7 @@ A machine-specific apt package never appears in a review again, so an apt reposi
 
 ## Install snippets
 
-Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, or software dropped under `/usr/local` or `/opt` by an install script. `manual_installs_sync` detects these and surfaces them in its review as items needing a resolution. For each one the review offers three choices: add an install snippet, mark it machine-specific (skip always), or skip for now.
+Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, or software dropped under `/usr/local` or `/opt` by an install script. `manual_installs_sync` detects these and surfaces them in its review as items needing a resolution. For each one the review offers three choices, each naming the machine it affects: write the commands that install it (the target runs them, now and on every future sync), declare it specific to the source machine and always skip it (the target never gets it and you are not asked again), or skip for now (the target does not get it this sync and you are asked again next sync).
 
 An install snippet is a shell command that reproduces the item — the tool never parses, interprets, or reasons about it. It is **stored and replayed verbatim**, and it runs **non-interactively**: no stdin is supplied during replay, so a command that prompts (for example a debconf question) fails rather than hanging the sync. A typical shape:
 
@@ -179,7 +187,7 @@ The snippet registry lives at `~/.config/pc-switcher/package-snippets.yaml`. Unl
 
 ## Resolving unreproducible items
 
-Every unreproducible item is resolved before the run continues: it gets a snippet, it is marked machine-specific (skip always), or you skip it once. There is no fourth "unresolved" outcome on an interactive run.
+Every unreproducible item is resolved before the run continues: it gets a snippet, it is declared specific to the source machine and always skipped, or you skip it once. There is no fourth "unresolved" outcome on an interactive run.
 
 - **Ctrl-C** at the review means you want to stop, so it aborts the whole sync — never a silent per-item skip.
 - Choosing "add an install snippet" and then submitting an **empty** body is not accepted: the review re-prompts the three-way choice rather than falling through. You must enter a real snippet or pick skip-once / skip-always.
@@ -257,13 +265,17 @@ The review verbs match the mechanism: apt and snap holds read *hold* / *unhold*,
 
 Removals propagate for the three package managers. A package removed from the source's `apt-mark showmanual` set, a snap uninstalled on the source, or a flatpak ref or remote removed on the source becomes a removal review item on the target — starting at skip-this-run, so you approve deletions deliberately.
 
-Removal is the one direction in which an apt repository file, an apt pin file and a flatpak remote are still review lines, and all three take **two** answers rather than three: delete it, or leave it for now. There is no "always skip" — a permanent machine-local mark on a file or a remote whose whole purpose is to feed packages would silently and permanently change where those packages come from, and the remedy for two machines whose configurations have drifted is consolidating them. Nothing about the answer is recorded either way. `/etc/apt/apt.conf.d` is the counter-case: it keeps the full three-way decision and the permanent mark, because a proxy or a recommends policy is a standing preference someone genuinely holds per machine.
+Removal is the one direction in which an apt repository file, an apt pin file and a flatpak remote are still review lines, and all three take **two** answers rather than three: delete it, or leave it on the target.
+
+A repository file is named by its filename *and* by the repository URLs it declares — `fleksi would stop getting software from https://cli.github.com/packages` — because the filename is whatever whoever created the file happened to call it, while the URL is what the deletion actually takes away. A file declaring no URL says so rather than trailing off.
+
+A pin file is shown **whole**: its content is printed in a block above the screen, one block per file, the way the repository-conflict screen prints two. `99-vendor.pref` says nothing about which vendor it favours or by how much, and the filename is all a decision row can show. Reading it costs one `sudo cat` per pin file offered for deletion, and only on a run that offers one. There is no "always skip" — a permanent machine-local mark on a file or a remote whose whole purpose is to feed packages would silently and permanently change where those packages come from, and the remedy for two machines whose configurations have drifted is consolidating them. Nothing about the answer is recorded either way. `/etc/apt/apt.conf.d` is the counter-case: it keeps the full three-way decision and the permanent mark, because a proxy or a recommends policy is a standing preference someone genuinely holds per machine.
 
 The distribution's own source files are never offered for removal at all.
 
 A flatpak remote offered for removal names, in the review item's detail, the refs installed on the target that still have it as their origin in that same scope. The removal is still offered — deleting a remote whose refs are going in the same run is normal cleanup — but you see what it would orphan before approving it. Deleting a remote also drops its signing key, since flatpak stores that key with the remote.
 
-An apt repository file offered for removal does the same for **machine-specific** packages: its detail names the packages you marked skip-always on this machine that are installed from that repository. The removal is still offered and still starts at skip-this-run — you decide. This matters because a machine-specific package is invisible in the review by design: it is filtered out before any diff is computed, so nothing else in the run would tell you the repository feeding it is about to go.
+An apt repository file offered for removal does the same for **machine-specific** packages: after the URLs, its detail names the packages you marked skip-always on this machine that are installed from that repository, and says they would stay installed but never get another update. The removal is still offered and still starts at skip-this-run — you decide. This matters because a machine-specific package is invisible in the review by design: it is filtered out before any diff is computed, so nothing else in the run would tell you the repository feeding it is about to go.
 
 The link comes from `apt-cache policy`: pc-switcher matches the origin of each machine-specific package's installed version against the URIs in the repository files. A package installed from a bare `.deb`, or one whose repository was already gone, has no resolvable origin and is not named. Ordinary (non-machine-specific) packages are out of scope — they can still surface as removal items of their own, and naming every installed package from, say, the Ubuntu archive would list hundreds.
 
