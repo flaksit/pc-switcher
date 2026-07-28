@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "bbebec8e8a8e",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/jobs/package-sync.md",
+    "docs/planning/Package sync requirements.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bb/ebec8e8a8e/0/metadata.json",
+      "transcript": "/bb/ebec8e8a8e/0/full.jsonl",
+      "compact_transcript": "/bb/ebec8e8a8e/0/transcript.jsonl",
+      "content_hash": "/bb/ebec8e8a8e/0/content_hash.txt",
+      "prompt": "/bb/ebec8e8a8e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1638,
+    "cache_creation_tokens": 1319902,
+    "cache_read_tokens": 63470154,
+    "output_tokens": 230842,
+    "api_call_count": 196
+  }
+}

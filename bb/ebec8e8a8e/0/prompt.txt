@@ -1,0 +1,264 @@
+<task-notification>
+<task-id>afa96dde845e6a4e2</task-id>
+<tool-use-id>toolu_01MN8zMhTtDdYco11nLHyzob</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/afa96dde845e6a4e2.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement flatpak origin mismatch" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both gaps implemented, gated and committed.
+
+## Mutation table — REAL results
+
+Each mutation applied to a copy-restored `flatpak_sync.py` (or `sync_core.py` for M18), named test run, file restored from the copy.
+
+| # | Mutation | Test | Result |
+|---|---|---|---|
+| M1 | delete the origin branch | `test_two_differently_named_remotes_yield_one_report_only_diff` | **RED** |
+| M2 | version branch first | `test_origin_mismatch_outranks_a_version_mismatch` | **RED** |
+| M3 | `_same_vendor` compares names not URLs | `test_one_name_pointing_at_two_vendors_is_a_mismatch` | **RED** |
+| M4 | drop the name fallback | `test_an_unresolvable_origin_with_a_different_name_is_still_reported` | **GREEN — ineffective mutation** |
+| M4′ | same, re-aimed | `test_an_origin_naming_no_configured_remote_falls_back_to_the_name` | **RED** |
+| M17 | render an unknown URL as `None` | `test_an_unresolvable_origin_with_a_different_name_is_still_reported` | **RED** |
+| M5 | compare name *and* URL | `test_a_remote_the_two_machines_merely_named_differently_is_not_a_mismatch` | **RED** |
+| M6 | use the `filter_inert`-filtered target remotes | `test_a_skip_always_on_the_targets_own_remote_does_not_hide_the_mismatch` | **RED** |
+| M7 | mismatch carries a converge verb | `test_the_mismatch_is_reported_and_never_converged` | **RED** |
+| M8 | detail drops the URL | `test_two_differently_named_remotes_yield_one_report_only_diff` | **RED** |
+| M9 | `_same_vendor` always false | `test_one_vendor_and_one_version_still_produces_no_diff` (negative control) | **RED** |
+| M10 | scope leaves ref identity | `test_a_scope_split_is_two_items_not_an_origin_mismatch` | **RED** |
+| M18 | `REPORT_ONLY` never reaches a review group | `test_two_differently_named_remotes_yield_one_report_only_diff` | **RED** |
+| M11 | delete `_warn_if_filtered` call | `test_a_derived_remote_whose_source_is_filtered_warns_once` | **RED** |
+| M12 | warn after the dry-run `continue` | `test_the_warning_fires_in_a_dry_run_too` | **RED** |
+| M13 | `filtered` token never parsed | `test_the_filtered_token_is_parsed_next_to_verification` | **RED** |
+| M14 | `is_filtered` joins `__eq__` | `test_a_filter_difference_never_makes_two_remotes_compare_unequal` | **RED** |
+| M15 | warn over every source remote | `test_a_filtered_remote_no_approved_ref_needs_never_warns` (negative control) | **RED** |
+| M16 | warn unconditionally | `test_an_unfiltered_derived_remote_produces_no_warning` (negative control) | **RED** |
+
+M4 was an **ineffective mutation**, not a vacuous test: dropping the name fallback only changes behaviour when the names *agree* and a URL is missing, which is a different test. Re-aimed (M4′) it goes red, and the test M4 failed to probe was given its own mutation (M17), which also goes red. No test came back green under a correctly-aimed mutation.
+
+## Ranking: origin outranks version, and why
+
+Origin is checked **before** version, following `apt_sync.py:729-740`. apt's stated reason carries over unchanged and flatpak's facts do not differ: two vendors' builds of one ref are numbered independently (Flathub and Flathub-beta both ship `org.mozilla.firefox` on their own scales), so "source has 128.0, target has 129.0beta" states a difference of *degree* where the real difference is of *provenance*, and hides a wrong-vendor finding behind a line the user reads as ordinary float. `REPORT_ONLY` is forced rather than chosen: origin stays out of `item_id` (untouched, per your note), so there is no install/removal pair to offer, and `flatpak install &lt;other remote&gt; &lt;installed ref&gt;` refuses anyway.
+
+**One deliberate deviation from the phase spec.** `02-SPEC-snap-flatpak-derivation.md` §2.3 specifies "a plain inequality of two remote names". I compared **URLs** instead, per ADR-020 D-41's "Origin is compared by the remote's URL, never by its name" — the name comparison misses precisely the same-name-different-URL case `5fc3ac01` shipped the install guard for, and invents a mismatch for a remote the two machines merely renamed. Fallback to names only when a URL cannot be resolved (a ref whose origin remote was deleted). Both URL maps are the **unfiltered** captures (`flatpak_sync.py` `plan()`), so a skip-always on a machine's own remote cannot switch the finding off. ADR-020 needs no change — the implementation follows its text, not the spec's weaker restatement.
+
+## Filtered remotes — measured, premise held
+
+Docker `ubuntu:24.04`, Flatpak 1.14.6, two probes:
+- `flatpak remote-modify --filter=&lt;path&gt; &lt;name&gt;` exits 0, adds `filtered` to `options` as its own comma-separated token (so the `no-gpg-verify` membership test is unaffected — verified with `no-gpg-verify,filtered`), and reports the path in a separate `filter` column.
+- The path is stored **verbatim** as `xa.filter` in `&lt;installation&gt;/repo/config` and is not validated: a nonexistent path and a relative path are both accepted at exit 0. `--no-filter` clears it.
+- Column widths: with `--columns=name,url,options` an unfiltered no-options remote prints **2** fields; with `filter` appended it prints **4** (empty options, `-` filter).
+
+The ADR's premise held. **I did not name the filter path in the warning**, deviating from spec §2.8. Naming it requires widening `_FLATPAK_REMOTES_CMD_TEMPLATE` to a fourth column, after which a real line is *always* 4 fields — so every remote fixture in the 2400-line test file (including `FakeFlatpakTarget`) would have to be reshaped or it would model output the command cannot produce. ADR-020's Consequences require the warning, not the path. Recorded in the spec at §2.8.
+
+## Integration test — owed, not written
+
+I wrote none, and cannot run the suite. F23 needs the same ref installed on both VMs from two different remotes; F24 needs a filtered remote on pc1. Both need a `FIXTURES_VERSION` 4→5 bump (plus `PCSWITCHER_TEST_FIXTURES_VERSION`) and a network dependency on `dl.flathub.org/beta-repo/` — the same bump spec §5.2 already lists as pre-existing debt for the derivation rows. What a VM would add over the unit coverage is that `flatpak list --columns=origin` and the `filtered` token really behave as assumed, and both are already measured (5fc3ac01; the container probes above). Writing a VM test I cannot execute, that also bumps the shared fixture baseline, risked shipping a red suite invisibly. **F23/F24 are marked `U` in the matrix, not `V`.**
+
+## Gates
+
+`ruff check` / `ruff format --check` / `codespell` clean; `basedpyright` 0 errors; `pytest` **1462 passed** (baseline 1446 + 16 new). Run clean before each commit.
+
+## Commits (local only, not pushed)
+
+- `d0209ae6` `feat(flatpak): report the two divergences flatpak cannot converge`
+- `62ffd1de` `docs(tests): the dry-run module docstring claimed the opposite of the rule`
+
+Docs updated: `docs/system/package-sync.md`, `docs/jobs/package-sync.md`, `docs/planning/Package sync requirements.md` (the two "does not yet meet these requirements" entries removed, behaviour moved into the flatpak section), `02-SCENARIO-COVERAGE.md` F23/F24 + the Findings entries, `02-SPEC-snap-flatpak-derivation.md` §2.8. No ADR change.
+
+## Corrections to the brief
+
+- The brief called both gaps unimplemented with no design behind them. `.planning/phases/02-package-management-sync/02-SPEC-snap-flatpak-derivation.md` §2.3/§2.8 and stages **S2** and **S8** already specify both in detail — they were planned and skipped, not undesigned. §2.3 cites stale line numbers and an `item_id` shape (`flatpak:ref:&lt;scope&gt;:&lt;application&gt;`) that no longer matches the code.
+- The brief said the fix should "mirror apt's treatment". apt's `_is_origin_mismatch` runs on an `_OriginPlan` of apt-source URIs with a distribution-origin exemption; flatpak has no such exemption (D-41/§2.6) and no `_OriginPlan`, so only the *ordering* and the detail *shape* transferred. The comparison itself had to be built.
+
+## Unverified
+
+- Everything about real VM behaviour: no integration run.
+- The container measurements are Flatpak 1.14.6 only. A future flatpak that inlined filter content, or dropped the `-` placeholder, would invalidate the `filtered` reasoning — noted as a residual risk in spec §10 already.
+- `_same_vendor`'s name fallback is reasoned, not measured: I did not construct a real machine holding a ref whose origin remote has been deleted.</result>
+<usage><subagent_tokens>232973</subagent_tokens><tool_uses>79</tool_uses><duration_ms>1104280</duration_ms></usage>
+</task-notification>
+
+---
+
+"plus two more (F23/F24) that aren't written": write them
+
+---
+
+<task-notification>
+<task-id>a32334dc6d18c91ef</task-id>
+<tool-use-id>toolu_015NkfZrKe5PhExh5WHM5XQ1</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/a32334dc6d18c91ef.output</output-file>
+<status>completed</status>
+<summary>Agent "Write F23 F24 integration tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Committed as `718a4042`. Here's the report.
+
+## What I wrote
+
+Both tests live in `TestPackageSyncWholeRunContracts`, next to the existing flatpak tests.
+
+**F23 — `test_one_ref_from_two_vendors_is_reported_with_both_urls`** (`tests/integration/jobs/test_package_sync.py:1820`)
+
+Divergence, no second download: install the fixture app on pc2 from the *real* Flathub (runtime already present, ~1 s), then `flatpak remote-modify --user --url=&lt;flathub-beta URL&gt; flathub` on pc2. The beta URL is read off pc1's own `flathub-beta` (fixture remote, FIXTURES_VERSION 4) rather than hardcoded. Both machines then print `flathub` in the origin column, so a name comparison is provably blind and only D-41's URL comparison can fire.
+
+Run **without** the automation hook: the hook answers a review without ever printing it (`review.py:580`), and a `REPORT_ONLY` diff makes no filesystem change, so the group panel is the only witness. D-26 then skips the job (`sync_core.py:524`), so the unchanged-app-list check is a guard, not the claim — I said so in the docstring rather than letting it read as proof.
+
+Preconditions asserted: pc1's two fixture remotes report *different* URLs; pc2's install landed the same `ref`; pc2's origin column reads `flathub` exactly as pc1's does; the repoint actually changed pc2's URL. Assertions: `Report flatpak packages` group title, the ref, and **both** URLs (a `VERSION_MISMATCH` — what this pair would produce if the vendor check missed — names two versions and no URL, so the URL pair is the discriminator).
+
+**F24 — `test_a_filtered_source_remote_warns_once_and_travels_unfiltered`** (`test_package_sync.py:1941`)
+
+Filters pc1's `flathub` with a uuid-named filter file, then **asserts the `filtered` token appears in `flatpak remotes --columns=options` before the sync** — the measurement the brief flagged. pc2's `flathub` is deleted so the derived write genuinely provisions it. One warning is a real claim: the approved ref and its runtime both come from `flathub` and dedupe to one derived remote. Asserts `count(...) == 1`, the re-apply command, pc2's `options` lacking `filtered`, the app actually installed, and pc1's filter untouched (a source is read, never converged).
+
+**Fixture version: not bumped.** Both tests build their own divergence from what FIXTURES_VERSION 4 already provides. `vm-test-fixtures.sh:32` and `common.sh:156` are untouched.
+
+**Cleanup**: F23 deletes pc2's repointed remote before `_restore_flatpak_target_baseline` (its `remote-add --if-not-exists` cannot repair a URL — a latent trap for anyone reusing that helper). F24 restores pc1 via a new `_restore_flatpak_source_baseline` that delete-and-re-adds from Flathub's `.flatpakrepo`; I did **not** use `--no-filter`, whose availability on this flatpak nobody has measured.
+
+**New shared helper**: `_collapse_run_output` (ANSI-strip + whitespace-collapse) for the multi-word log phrases, since `RichFormatter` folds at width 200 and panels wrap at 80. It deliberately keeps panel border characters, so a phrase spanning a panel wrap still fails rather than matching a rendering nobody has seen. Single tokens (ref, URLs, package names) are matched raw — Rich never breaks a word that fits.
+
+## Review of the five unexecuted tests
+
+I verified every log substring against the shipped source. All five match verbatim:
+
+- `"apt_sync skipped"` ⊂ `"Job %s skipped: %s"` (`orchestrator.py:1286`); the two ESM filenames land inside the first 200 columns, so the wrap does not split them.
+- `f"Would write {pin_dest}"` matches `apt_sync.py:2783` exactly; the metadata-refresh marker is inserted whenever `_derived_writes()` is non-empty (`apt_sync.py:2726`) and the always-sync pin guarantees that, so `"apt-get update"` will be present.
+- `f"provision {scope} flatpak remote {name}"` matches `flatpak_sync.py:1696`; `f"install {ref} ("` matches `sync_core.py:488` + `FlatpakItem.label()`. Both are stderr log lines, so the ordering assertion is sound.
+- The `file:` repo path in `_install_from_a_repo_the_target_lacks` parses correctly end to end: `_LEGACY_DEB_LINE_RE` (`apt_sync.py:1004`) skips `[trusted=yes]` and yields `file:/opt/...`, which is byte-identical to what `_origins_by_package` takes from `apt-cache policy`'s `parts[1]`. So the package classifies `INSTALL`, not `REPO_UNAVAILABLE`.
+- `key_filename not in combined_output` holds: `_derived_writes()` is pins + distro + repo files only, never keyring paths, and the Executor's DEBUG trace logs command *text*, not output — the keyring commands use an unexpanded glob.
+
+Three things I believe are wrong but will not turn CI red:
+
+1. **`test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key`'s docstring is stale.** It says the review "deliberately answers the remote's own id `SKIP_ONCE`". Since `2512f32c` a remote is not a review entry, and `_decisions_from_automation` (`review.py:310`) only builds decisions for ids present in the groups — so that key never enters the map. The test still passes; the sentence describes a model that no longer exists.
+2. **`test_a_flatpak_remote_no_synced_ref_needs_does_not_travel`'s guard is weaker than its comment.** `assert remote_name in remotes_after` is claimed to rule out "a run that provisioned nothing at all", but the test never removes pc2's `flathub`, so it is true before the sync too.
+3. **`test_a_package_the_targets_apt_cannot_locate_still_reaches_the_review` does not witness what it says.** With the automation hook set, no review panel is printed at all; `name in combined_output` is satisfied by `apply()`'s dry-run preview line, i.e. it proves the item survived to the apply list, not that it "reached a review line".
+
+I did not touch any of them, per the brief.
+
+## One correction to the brief
+
+There is no bare-`.deb` unreproducible integration test. The five tests added in `c253355a`/`2512f32c`/`8a329c69` and never executed are: the derived-repo dry-run preview, the apt repo-supplied-package test, the two flatpak remote tests, and the ESM skip-arm test. The bare-`.deb` case (A11) is unit-only — `TestBareDebPackagesAreNotAptSyncsBusiness`. I reviewed the two flatpak ones in its place.
+
+## Gates and commit
+
+`ruff check` clean, `ruff format --check` clean (126 files), `codespell` clean, `basedpyright` 0/0/0, `pytest` **1462 passed** (unchanged — these are integration tests). Integration suite not run, as instructed. Both new tests collect (`-m ""` → 22 items). No `pytest.skip` anywhere in the module.
+
+Commit `718a4042 test(flatpak): cover the two divergences flatpak cannot converge on VMs`, two files staged by path: the test module and `02-SCENARIO-COVERAGE.md` (F23/F24 moved `U` → `U V` with the `INT:` names, plus a paragraph in "Unverified pending CI" recording what each asserts live and that the fixture version stays at 4). Not pushed.</result>
+<usage><subagent_tokens>236514</subagent_tokens><tool_uses>90</tool_uses><duration_ms>1139275</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4dfad15c604d12fe</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/a4dfad15c604d12fe.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix three non-witnessing tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three diagnoses confirmed. One local commit: `45d31697`.
+
+## 1. `test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key` (`/home/janfr/dev/pc-switcher/tests/integration/jobs/test_package_sync.py:1651`)
+
+Diagnosis **confirmed**, docstring only. `_diff_flatpak_remotes` (`/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/flatpak_sync.py:1033`) emits REMOVE diffs exclusively — a remote is never an add-direction entry, so `flatpak:remote:user:flathub` never enters a review group.
+
+Changed: replaced the stale paragraph; also **dropped the dead `SKIP_ONCE` key and the now-unused `FlatpakRemoteItem` import** (a test-only change beyond "docstring only" — correcting your brief on that one point). Run behaviour is identical, **observed**: I called the real `_decisions_from_automation` with an id outside the groups and it returned only the group's own entry, so the key was never read.
+
+## 2. `test_a_flatpak_remote_no_synced_ref_needs_does_not_travel` (`:1765`)
+
+Diagnosis **confirmed** — the test only uninstalled the ref; pc2's `flathub` came from the fixture baseline and was never touched, so `assert remote_name in remotes_after` was true before the sync.
+
+Chose **removal over a different guard**: pc2 now loses `flathub` as well (mirroring `:1690`'s deletion in test 1), with its absence asserted before the sync. Reason: a log-line guard would only prove the tool *said* it provisioned; deleting the remote makes the post-sync presence a fact about pc2 that only this run can have produced, and the sibling test already proves the deletion path (key replication included) works on the VMs.
+
+Can it fail — **reasoned, not executed**: with `flathub` provably absent at sync start, a build that stopped deriving remotes leaves pc2 without it and the assertion fails; the ref install would also fail first, tripping `assert sync_result.success`. Before the change neither could happen — the remote was there either way.
+
+## 3. `test_a_package_the_targets_apt_cannot_locate_still_reaches_the_review` (`:1321`)
+
+Diagnosis **confirmed and observed**. I ran the real `review_items` in-process both ways: with `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` set it printed the empty string and returned APPLY; without it, it printed the group panel. The old `name in combined_output` could therefore only have matched `apply()`'s `[dry-run] Would install …` line (`sync_core.py:392`).
+
+Kept the name, **dropped the automation hook** (the F23 carve-out): the name is what the test claims reaches a review, and only the printed group can show that. Now asserts, on `_collapse_run_output`:
+- `"Install apt packages"` — a review group was drawn (exact title confirmed by existing unit test `tests/unit/jobs/test_apt_sync.py:821`);
+- `"No apt changes to apply"` — D-26 left everything `SKIP_ONCE`, so the apply list is empty and no preview line exists;
+- `f"install {name}"` — the panel's own `action_label + label`.
+
+Can it fail — **partly observed**: I rendered the real `_render_group_panel` at width 80 and confirmed all three phrases survive the collapse, including when a `detail` wraps the line. **Reasoned** for the VM half: a regression that propagates apt's exit 100 out of `plan()` again kills the run before any group prints, failing the first two assertions; an item dropped from the diff leaves `install &lt;name&gt;` absent. The class-3 property is untouched by the hook removal — the rehearsal exclusion lives entirely in `plan()`/`_target_resolvable` (`apt_sync.py:2425`), before any decision exists. Exit code 0 for a non-interactive apt run is established by the baseline-passing `test_non_interactive_skip_all` (`:1402`).
+
+## Gates and scope
+
+`ruff check` clean, `ruff format` no changes, `codespell` clean, `basedpyright` 0 errors, `pytest` **1462 passed** (baseline). Integration suite not run; nothing touched on pc1/pc2/Hetzner; `FIXTURES_VERSION` not bumped and not needed.
+
+`02-SCENARIO-COVERAGE.md` **not modified** — no row's claim changed. F1/F5/F5a/F5e still say what they said. Note for you: row D19 (`:145`), the apt class-3 row, cites **no** integration test at all; I deliberately did not add one, because its Expected text also covers "never on the simulation's exit code" and "resolvable candidates still rehearsed", which this test does not assert — marking it `V` would overclaim. Worth a row of its own if you want the VM claim recorded.</result>
+<usage><subagent_tokens>119618</subagent_tokens><tool_uses>60</tool_uses><duration_ms>523362</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>byz930sea</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/byz930sea.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for integration CI" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+In the requirements spec .md, you wrote "There is no second question part-way through". Not true. I have been pretty clear about the real user requirements about that.
+
+---
+
+This document is meant as REQUIREMENTS specification. Not description of every nitty gritty detail of the implementation. So remove that bunch of text that you just added. This has no place here. And review the entire document. It doesn't read as a requirement spec, but as a description of a product.
+
+---
+
+<task-notification>
+<task-id>a0f6ed3faf81aff0d</task-id>
+<tool-use-id>toolu_01629PKgKB4uxmZrmtKjq9fc</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/a0f6ed3faf81aff0d.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix ESM test environment setup" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Commit `877e53e0` on `gsd/phase-02-package-management-sync`.
+
+## What the VMs actually carry (measured, read-only over ssh; lock was **not held**, I did not take or clear it)
+
+Reached pc1 (91.99.178.190) and pc2 (138.199.146.229) as `testuser` after reading the IPs with `hcloud server ip` — no lock involved.
+
+- `pro status --format json` → `"attached": false` on **both**.
+- `/etc/apt/sources.list.d/` on both: only `ubuntu.sources` and `hetzner-mirror.sources`. **Neither `ubuntu-esm-apps.sources` nor `ubuntu-esm-infra.sources`** — those are written by `pro enable` only.
+- `/etc/apt/preferences.d/` on both: `ubuntu-pro-esm-infra` **only**, dated 2025-08-05, `dpkg -S` → owned by `ubuntu-pro-client`.
+- Decisive: `dpkg -L ubuntu-pro-client` lists **both** `/etc/apt/preferences.d/ubuntu-pro-esm-apps` **and** `/etc/apt/preferences.d/ubuntu-pro-esm-infra`. The package ships both pins on every Ubuntu 24.04, attached or not. The `-apps` one is missing from the VMs *right now* because the failing test's `finally` deleted it — that is the residue, and the precondition failure is its cause, not its effect.
+- The baseline btrfs snapshots (`/.snapshots/baseline/@/etc/apt/preferences.d/`) on both hosts still hold `ubuntu-pro-esm-apps` (437 bytes). `reset-vm.sh` replaces the active `@` subvolume from that snapshot, and CI calls `run-integration-tests.sh` with no `--skip-reset` (`.github/workflows/integration-tests.yml:207`), so the deletion heals on the next run. I changed nothing on the VMs.
+
+## Corrections to the brief
+
+1. It was not "those files are part of pc2's baseline" in general — only the **pin** was. The two `.sources` were genuinely absent, as the test assumed. The false half of the assumption was `_ESM_PIN_FILENAME = "ubuntu-pro-esm-apps"` being something `pro enable` writes; it is a dpkg conffile from `ubuntu-pro-client`.
+2. **The two flatpak tests have run.** In the same failing run 30357316758 both `test_one_ref_from_two_vendors_is_reported_with_both_urls` and `test_a_filtered_source_remote_warns_once_and_travels_unfiltered` are logged **PASSED**.
+3. It failed once in that run, not twice (one FAILED line in `--log-failed`; the CI job and the "Integration Tests Status" gate both show red, which may be what read as two).
+
+## The fix (`tests/integration/jobs/test_package_sync.py`)
+
+The pin subject changed. A package-shipped pin is byte-identical on source and target, so it is never a pending always-sync write and could never witness anything. The test now uses `_create_synthetic_pin()` (`:1021`) — uuid-suffixed, pc2 provably lacks it, inert wherever it lands, and already proven to be previewed as an always-sync derived write by the passing dry-run test at `:1288`. **The claim survives unchanged**: if the gate withheld only the two sources, that pin still lands on pc2; the whole-job skip is what keeps it off. `_ESM_PIN_FILENAME`/`_ESM_PIN_BODY` are gone, so nothing named `ubuntu-pro-esm-*` is written or removed on either VM any more.
+
+New helpers `_take_apt_paths_aside` / `_put_apt_paths_back` (`:1043`, `:1067`) move the two `ubuntu-esm-*.sources` aside on **both** hosts into `/var/tmp/pcswitcher-it-apt-aside-&lt;uuid&gt;` and move them back in the `finally`. Why restoration is safe: it is `mv`, not capture-and-rewrite, so content, mode, ownership and mtime are the original file's inode — nothing is reproduced. The backup lives outside `/etc/apt` so apt cannot parse it while set aside. The restore steps are `;`-joined (unconditional), so a half-built setup is still fully undone. Setting pc2 aside is load-bearing, not hygiene: a target copy with the source's digest is not a pending write and `_pending_esm_writes` (`apt_sync.py:2086`) would return empty, so the gate would never fire.
+
+I verified the composed shell round-trip locally in a fake root (`bash -n` plus an execution with `sudo` shimmed): one-present/one-absent → present file moved, absent skipped; after writing test bodies at both paths, restore removed both, moved the original back byte-identical, left the absent one absent, and removed the backup dir.
+
+Docstring updated: it now states the measured truth (`ubuntu-pro-client` ships both pins regardless of attachment) instead of "a fresh unattached VM has none of them". `.planning/phases/02-package-management-sync/02-SPEC-package-review-model.md:615` described the test's claim in terms of the `ubuntu-pro-esm-apps` pin and was corrected to match.
+
+## Sibling precondition audit
+
+- `test_package_sync.py:1275` ("synthetic /etc/apt files unexpectedly already present") — uuid-suffixed paths; absence is guaranteed by construction, documented as defensive. Fine.
+- `:1808` (`_FIXTURE_UNUSED_FLATPAK_REMOTE` on pc1 / not on pc2) — a fixture invariant created by `vm-test-fixtures.sh`, asserted with a message naming that script. That is the project's fixture contract, not a baseline guess. Passing.
+- The two new flatpak tests — both establish-then-verify: they install/repoint on pc2, or delete the remote and app on pc2, and only then assert. The one thing they assert without creating (`beta_url != source_url`) is a fixture invariant they cannot create. No defect; both passed.
+- `:2582`, `:2647`, `:2711` — "X is already held on pc2 before the run" for apt/snap holds. These *are* assert-rather-than-establish, but the assumption is true against the baseline (all three passed in the failing run) and each test's own `finally` is what keeps it true. I did **not** change them: converting them would mean adding `apt-mark unhold` / `snap refresh --unhold` on pc2, whose exit status on a non-held package I cannot verify without running the integration suite. Flagging for a decision rather than guessing.
+
+## Gates
+
+`ruff check` all passed; `ruff format --check` 126 files already formatted; `codespell` clean; `basedpyright` 0 errors, 0 warnings, 0 notes; `pytest` **1462 passed**, 84 deselected. `FIXTURES_VERSION` untouched — no fixture change was needed.
+
+## Unverified / needs your attention
+
+- The test body past the precondition has still never executed on a VM. I read the path through `apt_sync.plan()` (`:1933`, gate before review; `ask_gate` with no TTY → `JobSkipped`) and it is consistent with the assertions, but only CI can confirm.
+- **Something outside this session modified `docs/planning/Package sync requirements.md` in the working tree at 14:43:21** (rewording of "### 5. Every change is reviewed…", and it deletes the blank line before `### 6.`). I did not touch that file and did not stage it — it is still uncommitted. Another session is likely writing to this repo concurrently.
+- ADR-020 (`:192`, `:266`) and `docs/jobs/package-sync.md:111` justify the whole-job skip by saying "the source's `ubuntu-pro-esm-apps` and `ubuntu-pro-esm-infra` pins reach the target whether or not the sources they name do". Given the measurement, those two specific pins are package-shipped and identical on both machines, so they would not travel. The *ruling* and the general principle (`preferences.d` always-syncs with no derivation predicate, so any source-only pin travels) are unaffected, but the named example is wrong. I left the ADR alone — correcting a ruling's stated rationale is your call, not a bug fix.</result>
+<usage><subagent_tokens>136494</subagent_tokens><tool_uses>65</tool_uses><duration_ms>676014</duration_ms></usage>
+</task-notification>
