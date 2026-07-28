@@ -112,13 +112,26 @@ def _derive_remotes(
 | Mask add / remove | `FLATPAK_MASK` | three-way | yes |
 | Remote add / URL or trust change | — | **not reviewed at all** (derived) | no |
 | Remote removal | `FLATPAK_REMOTE` | **two** (delete / skip once) | **no** |
-| Remote change that re-points target-only refs | `flatpak:conflict:` | **NOT SHIPPED** — the change is derived and silent; see §9 Q3 | n/a |
+| Remote change that re-points **machine-specific** refs | `flatpak:conflict:<scope>:<name>` | **two** (overwrite / skip once) | **no** |
 
 Masks keep the three-way decision. A mask is the flatpak analogue of an apt hold — a standing user preference about updating, not mechanism serving a ref — so ADR-021's `apt.conf.d` reasoning applies: nothing about an approved ref implies whether a mask should travel, so the only honest source of the answer is the user.
 
 Remote removal drops from three answers to two, reusing the existing `REPO_REMOVAL_REVIEW_ACTION` sentinel (`packages/review.py:120`) and the `_REMOVAL_ACTIONS`/`_PROMOTABLE_ACTIONS` split already in place (`review.py:126,140`). Rationale carries verbatim from ADR-021's D-07 exception: a permanent machine-local mark on a remote whose whole purpose is to feed refs would silently and permanently change where those refs come from, and the user's remedy is consolidating the two configurations, not recording a preference. `build_orphaned_refs_detail` (`flatpak_sync.py:264`) and the dependent-naming behaviour (#214) are unchanged — they are what makes the two-way answer informed.
 
-The change direction becomes the apt conflict prompt (`c253355a`'s shape). A remote present on both sides with a differing URL, `gpg_verify` or `key_digest` is overwritten **silently** as derived mechanism, *unless* the target's own version of that remote is the origin of target refs that are not being removed this run — in which case re-pointing it changes where those refs update from. Then, and only then, it becomes a two-answer `flatpak:conflict:<scope>:<name>` entry showing both URLs / both key digests, answered overwrite or skip once, recorded nowhere. `_remote_change_detail` (`flatpak_sync.py:556`) is reused verbatim as the conflict body; `_target_refs_by_origin_remote` (`flatpak_sync.py:642`) already computes the dependent set.
+The change direction becomes the apt conflict prompt (`c253355a`'s shape), shipped. A remote present on both sides whose URL or `gpg_verify` differs is repointed **silently** as derived mechanism, *unless* a **machine-specific** ref on the target takes it as its origin in that same scope — in which case repointing it changes where software the user told this tool never to touch updates from.
+
+Machine-specific means recorded skip-always in the TARGET's `flatpak.decisions.yaml`, exactly what `AptSyncJob._machine_specific_packages_by_source_file` reads for apt. It is **not** "refs the target has and the source does not" — this paragraph takes precedence over any "target-only" wording elsewhere in this document. The narrower reading is the whole point of the trigger: a skip-always ref is dropped by `filter_inert` before the diff and so produces no `ItemDiff` in any run, which is exactly why nothing else in the review would ever mention it — an ordinary target-only ref already has a REMOVE line of its own. Keying off every ref from the remote would also make the question a property of the machine: one Flathub repoint would name every app on it and inform nobody.
+
+Two further conditions, both narrowing:
+
+- The remote must be one this run would actually write, i.e. in the set `_derive_remotes` produces from the *proposed* ref installs. This is where flatpak deliberately diverges from apt, whose screen covers every differing file and whose approval force-writes it: here a remote travels only because a ref needs it, so a question about a remote nothing will touch would describe a change that was never going to happen, and answering "overwrite" must not by itself make one travel.
+- The target must already have the remote. A remote it lacks is an ADD, replacing nothing.
+
+`key_digest` is deliberately **not** a trigger, unlike the earlier draft: `--gpg-import` merges into the remote's ostree keyring rather than replacing it (the same measured fact `_origin_refusal` cites for not comparing digests), so importing the source's key can neither move a ref's origin nor withdraw trust. A key-only difference stays silent.
+
+The entry shows the two configurations, target first, one differing facet per line — never `_remote_change_detail`'s `A vs B` rendering, which is a computed difference and is what the user rejected for apt as unreadable. apt shows two whole file bodies because a repository file *is* a body; a remote is a handful of named values, so the readable answer to "which of these two configurations should this machine have" is the fields that disagree, printed twice. `_remote_facets` is the single definition of "differs" behind both renderings. Unlike apt's screen this costs no command: the whole remote record is already on `FlatpakRemoteItem`.
+
+Skip once keeps the remote out of the write set but **not** out of the D-39 attribution map, so every approved ref that named it fails quoting the decision. `_origin_refusal` would refuse those installs anyway — it re-reads the target and compares URL and verification, which is precisely what a declined conflict leaves diverging (**verified** by mutation: dropping the seeded failure leaves the ref uninstalled and only changes the message) — so the seeding is not what makes the outcome safe, it is what makes the failure name the user's own choice instead of the symptom.
 
 Everything above is one review, before the job's first mutating command. ADR-021 retired D-24's "may review again" clause for apt; the same holds here for the same reason — nothing this run does changes the *source's* origins, and the classification depends only on those.
 
@@ -271,7 +284,7 @@ No `pytest.skip` may appear in this module. Fixtures live in `tests/integration/
 - **F5** — delete as written ("Remote missing on target → INSTALL … before any ref"). Replace with a derived-write row.
 - **F5a, F5b, F5c, F5d** — keep the claims, restate the trigger: the key travels with a *derived* remote, not with an approved remote item. F5b (capture) is untouched.
 - **F6** — restate: two derived remotes, one per scope, not two review items.
-- **F7, F7a** — split. Silent derived overwrite when the target remote feeds no target-only refs; two-answer conflict when it does.
+- **F7, F7a** — split. Silent derived repoint when the target remote is no machine-specific ref's origin; two-answer conflict when it is.
 - **F8** — keep.
 - **F9** — keep, new message; the guard survives.
 - **F10** — keep; add that a *derived* system-scope remote write is likewise `sudo`-prefixed.
@@ -384,11 +397,11 @@ Every test below must be mutation-checked: break the named line, confirm the nam
 
 `test_no_flatpak_remote_id_can_reach_a_decision_file` (in `test_block_state_decisions.py`) — hand-assemble a `ReviewOutcome` marking a `flatpak:remote:` and a `flatpak:conflict:` id `SKIP_ALWAYS`; assert nothing is written. Mutation: drop the `_record_permanent_skips` override; an entry appears. The mask sibling must still pass, proving masks keep the registry.
 
-`test_change_with_no_dependent_target_refs_is_silent` — differing URL, no target refs naming the remote; assert `remote-modify` runs and no review entry exists. Mutation: always raise the conflict; a group appears.
+`test_a_target_only_ref_is_not_machine_specific_and_the_repoint_stays_silent` — differing URL, a target ref naming the remote but no entry for it in the target's decision file; assert `remote-modify` runs and no conflict entry exists. Mutation: treat every target ref as machine-specific; a group appears. **Shipped and mutation-checked.**
 
-`test_change_that_repoints_target_only_refs_asks_two_answers` — same, with a target-only ref naming it; assert one `flatpak:conflict:` entry showing both URLs. Mutation: ignore the dependents; the entry is absent.
+`test_a_machine_specific_ref_turns_the_repoint_into_a_two_answer_entry` — the same target ref, now recorded skip-always; assert one `flatpak:conflict:<scope>:<name>` entry carrying both configurations. Mutation: capture no conflict; the entry is absent. **Shipped and mutation-checked.**
 
-`test_conflict_answered_skip_once_fails_the_refs_that_needed_the_new_url` — mirrors apt's ruling-6 behaviour. Mutation: drop the seeded failure; the refs install against the old URL.
+`test_skip_once_fails_the_ref_that_needed_the_source_url_naming_the_decision` — mirrors apt's ruling-6 behaviour. Mutation: drop the seeded failure; the ref still fails (via `_origin_refusal`) but the message stops naming the user's choice. **Shipped and mutation-checked.**
 
 ### 8.5 snap (`tests/unit/jobs/test_snap_sync.py`)
 
@@ -416,7 +429,7 @@ No `pytest.skip`. A missing fixture subject is an assertion failure naming `vm-t
 
 **Q2 — derived-remote precision vs. always-sync.** This spec derives remotes from approved refs (the apt *repository* rule). The alternative is to always-sync every source remote (the apt *pin* rule, ADR-021 D-36), justified there by "a pin naming an absent origin is inert, so the precision buys nothing and the derivation has a wrong-answer mode that always-syncing does not". A flatpak remote is *nearly* inert — it costs one summary fetch per `flatpak update` and one line in `flatpak remotes` — and the derivation does have a wrong-answer mode (the runtime hole, §2.1, which S3 closes with two extra reads). If the answer is always-sync, §2.1's runtime completion, S3's derivation function and four of §8.3's tests all disappear and the stage shrinks by more than half. **My recommendation is derive**, because "the two machines' remote lists are converged for what refs need, not made identical" is the property ADR-021 chose for apt and a user should not have to learn two rules. But this is a real fork.
 
-**Q3 — the flatpak conflict prompt's trigger.** apt's conflict trigger (`c253355a`) is "the file feeds *machine-specific* packages on the target", deliberately narrower than "any target package", for the reasons at `02-SCENARIO-COVERAGE.md`'s "Accepted scope limits". §2.2 proposes the flatpak trigger as "the target's remote is the origin of target refs not being removed this run" — which is broader, because a flatpak machine has a handful of refs per remote rather than hundreds of packages, so the narrow version would almost never fire. If the reviewer wants exact parity with apt, the trigger becomes "target refs recorded skip-always in `flatpak.decisions.yaml`" and the prompt becomes rare. Different code in `_derive_remotes`'s conflict branch and in two §8.4 tests.
+**Q3 — the flatpak conflict prompt's trigger. RESOLVED: exact parity with apt.** The trigger is refs recorded skip-always in the TARGET's `flatpak.decisions.yaml`, not target-only refs. Everything this document said about "target-only" is superseded by §2.2; the prompt is correspondingly rare, which is the intent — a target-only ref already has a REMOVE line of its own, so it needs no second screen.
 
 **Q4 — S6's scope.** Moving sideloaded snaps to `manual_installs_sync` is right by symmetry (§1.3) and converts a permanent warning into a resolvable item, but it is not about repos or keys and was not what was asked for. Should it ride along in this work, become its own GitHub issue, or be dropped? If it rides along it needs its own scenario rows and moves E17's six tests between modules.
 

@@ -30,8 +30,10 @@ from pcswitcher.jobs.flatpak_sync import (
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import (
+    REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
     Decision,
+    ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
     _is_promotable_group,  # pyright: ignore[reportPrivateUsage]
@@ -695,6 +697,316 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
         assert self._remote_writes(target) == []
         assert not any("flatpak install" in cmd for cmd in all_calls(target))
+
+
+_KEPT_REF = "org.example.Kept/x86_64/stable"
+_KEPT_ID = f"flatpak:ref:user:{_KEPT_REF}"
+_FLATHUB_USER_ID = "flatpak:remote:user:flathub"
+_FLATHUB_CONFLICT_ID = "flatpak:conflict:user:flathub"
+
+
+def target_decision_file(*item_ids: str) -> str:
+    """The TARGET's own decision file recording `item_ids` skip-always — the one and only
+    definition of "machine-specific" (ADR-021 ruling 6), read straight off the file rather
+    than inferred from the ref being target-only.
+    """
+    body = "".join(
+        f'  "{item_id}":\n'
+        "    item_class: flatpak_ref\n"
+        f'    label: "{item_id}"\n'
+        "    reason: null\n"
+        "    recorded_at: '2026-07-25T00:00:00Z'\n"
+        for item_id in item_ids
+    )
+    return f"machine_specific:\n{body}"
+
+
+def conflict_target(
+    *,
+    kept_refs: tuple[str, ...] = (_KEPT_REF,),
+    recorded: tuple[str, ...] = (_KEPT_ID,),
+    remotes: dict[str, dict[str, str]] | None = None,
+    unverified: set[tuple[str, str]] | None = None,
+) -> FakeFlatpakTarget:
+    """A target holding `kept_refs` from `flathub`, with `recorded` marked skip-always in its
+    own decision file, and a `flathub` the source disagrees with.
+    """
+    return FakeFlatpakTarget(
+        remotes=remotes if remotes is not None else {"user": {"flathub": _TGT_URL}},
+        refs={("user", ref): "flathub" for ref in kept_refs},
+        unverified=unverified,
+        responses={"flatpak.decisions.yaml": CommandResult(0, target_decision_file(*recorded), "")},
+    )
+
+
+async def run_with_conflict_answer(
+    job: FlatpakSyncJob, answer: Decision | None, *, expect_failures: bool = False
+) -> PackagePlan:
+    """Drive plan -> accept_review -> apply, approving every diff and answering every
+    conflict entry with `answer` (`None` leaves it undecided, which is what a non-interactive
+    run produces for a screen nobody saw).
+    """
+    plan = await job.plan()
+    decisions = {diff.item_id: Decision.APPLY for diff in plan.diffs}
+    if answer is not None:
+        for group in plan.groups:
+            for entry in group.entries:
+                if entry.item_id.startswith("flatpak:conflict:"):
+                    decisions[entry.item_id] = answer
+    job.accept_review(plan, ReviewOutcome(decisions=decisions, was_interactive=True))
+    if expect_failures:
+        with pytest.raises(PackageItemFailures):
+            await job.apply()
+    else:
+        await job.apply()
+    return plan
+
+
+def conflict_entries(plan: PackagePlan) -> list[ReviewEntry]:
+    return [entry for group in plan.groups if group.action == REPO_CONFLICT_REVIEW_ACTION for entry in group.entries]
+
+
+class TestARepointThatMovesAMachineSpecificRefIsAsked:
+    """ADR-021 ruling 6, applied to a flatpak remote: repointing is silent mechanism EXCEPT
+    when a ref the target recorded skip-always takes that remote as its origin.
+
+    Machine-specific is the trigger, exactly as apt reads it from the target's decision file
+    — deliberately NOT "a ref the target has and the source does not". A skip-always ref
+    produces no diff in any run, so nothing else in the review would ever mention that
+    repointing its remote changes where it updates from.
+    """
+
+    @staticmethod
+    def _remote_writes(target: Any) -> list[str]:
+        return [cmd for cmd in all_calls(target) if "remote-add" in cmd or "remote-modify" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_a_machine_specific_ref_turns_the_repoint_into_a_two_answer_entry(self) -> None:
+        context, _source, _target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        entries = conflict_entries(plan)
+        assert [entry.item_id for entry in entries] == [_FLATHUB_CONFLICT_ID]
+        assert entries[0].label == "flathub remote (user)"
+        assert entries[0].action_label == "overwrite"
+
+    @pytest.mark.asyncio
+    async def test_a_target_only_ref_is_not_machine_specific_and_the_repoint_stays_silent(self) -> None:
+        """The wording that matters. A ref the target has and the source does not is an
+        ordinary REMOVE candidate with a review line of its own; only an entry in the
+        target's decision file makes a ref invisible enough to need this screen.
+        """
+        context, _source, target = make_context(
+            source_responses=derivation_source(), fake_target=conflict_target(recorded=())
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await run_with_conflict_answer(job, None)
+
+        assert conflict_entries(plan) == []
+        assert any("remote-modify" in cmd for cmd in self._remote_writes(target))
+        assert target.remotes["user"]["flathub"] == _SRC_URL
+
+    @pytest.mark.asyncio
+    async def test_the_entry_shows_both_configurations_target_first_and_never_a_diff(self) -> None:
+        context, _source, _target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert conflict_entries(plan)[0].versions == (f"url: {_TGT_URL}", f"url: {_SRC_URL}")
+
+    @pytest.mark.asyncio
+    async def test_only_the_differing_facets_are_shown_and_a_trust_divergence_is_one_of_them(self) -> None:
+        context, _source, _target = make_context(
+            source_responses=derivation_source(),
+            fake_target=conflict_target(unverified={("user", "flathub")}),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        target_version, source_version = conflict_entries(plan)[0].versions or ("", "")
+        assert target_version.splitlines() == [f"url: {_TGT_URL}", "gpg verification: disabled"]
+        assert source_version.splitlines() == [f"url: {_SRC_URL}", "gpg verification: enabled"]
+        assert " vs " not in target_version + source_version
+
+    @pytest.mark.asyncio
+    async def test_the_detail_names_the_machine_specific_refs_that_are_the_reason(self) -> None:
+        second = "org.example.AlsoKept/x86_64/stable"
+        context, _source, _target = make_context(
+            source_responses=derivation_source(),
+            fake_target=conflict_target(
+                kept_refs=(_KEPT_REF, second), recorded=(_KEPT_ID, f"flatpak:ref:user:{second}")
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        detail = conflict_entries(plan)[0].detail or ""
+        assert _KEPT_REF in detail
+        assert second in detail
+
+    @pytest.mark.asyncio
+    async def test_finding_the_conflict_costs_no_command_of_its_own(self) -> None:
+        """Unlike apt's file-level screen, which pays two `cat`s per entry: a remote's whole
+        record is already on the item the diff was built from.
+        """
+        context, source, target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
+        quiet_context, quiet_source, quiet_target = make_context(
+            source_responses=derivation_source(), fake_target=conflict_target(recorded=())
+        )
+
+        _ = await FlatpakSyncJob(context).plan()
+        _ = await FlatpakSyncJob(quiet_context).plan()
+
+        assert all_calls(source) == all_calls(quiet_source)
+        assert all_calls(target) == all_calls(quiet_target)
+
+    @pytest.mark.asyncio
+    async def test_a_remote_the_target_lacks_is_an_add_and_never_a_conflict(self) -> None:
+        """Nothing of the target's is being replaced, so there is nothing to put to the user
+        — even though the machine-specific ref names a remote the target cannot resolve.
+        """
+        context, _source, target = make_context(
+            source_responses=derivation_source(), fake_target=conflict_target(remotes={"user": {}})
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await run_with_conflict_answer(job, None)
+
+        assert conflict_entries(plan) == []
+        assert any("remote-add" in cmd for cmd in self._remote_writes(target))
+
+    @pytest.mark.asyncio
+    async def test_a_remote_no_approved_ref_could_need_is_never_a_conflict(self) -> None:
+        """A remote nothing derives is never written, so asking about it would describe a
+        change this run was not going to make. The source's app comes from `other`, and only
+        the machine-specific ref uses `flathub`.
+        """
+        other = "org.example.App\t1.0\tother\tuser\torg.example.App/x86_64/stable\n"
+        context, _source, target = make_context(
+            source_responses=derivation_source(
+                apps=other, remotes=f"flathub\t{_SRC_URL}\nother\thttps://other.example.org/repo/\n"
+            ),
+            fake_target=conflict_target(),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await run_with_conflict_answer(job, None)
+
+        assert conflict_entries(plan) == []
+        assert target.remotes["user"]["flathub"] == _TGT_URL
+
+    @pytest.mark.asyncio
+    async def test_a_signing_key_difference_alone_stays_silent(self) -> None:
+        """`--gpg-import` merges into the remote's ostree keyring rather than replacing it,
+        so importing the source's key can neither move the ref's origin nor withdraw trust —
+        there is no harm behind it to put to the user.
+        """
+        source_responses = {
+            **derivation_source(),
+            "sha256sum $HOME": CommandResult(0, keyring_line(_SOURCE_KEY_DIGEST, _USER_KEYRING_DIR, "flathub"), ""),
+        }
+        context, _source, _target = make_context(
+            source_responses=source_responses,
+            fake_target=conflict_target(remotes={"user": {"flathub": _SRC_URL}}),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert conflict_entries(plan) == []
+
+    @pytest.mark.asyncio
+    async def test_overwrite_repoints_the_remote_and_installs_the_ref(self) -> None:
+        context, _source, target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
+        job = FlatpakSyncJob(context)
+
+        await run_with_conflict_answer(job, Decision.APPLY)
+
+        assert target.remotes["user"]["flathub"] == _SRC_URL
+        assert ("user", "org.example.App/x86_64/stable") in target.refs
+
+    @pytest.mark.asyncio
+    async def test_skip_once_leaves_the_targets_remote_exactly_as_it_was(self) -> None:
+        context, _source, target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
+        job = FlatpakSyncJob(context)
+
+        await run_with_conflict_answer(job, Decision.SKIP_ONCE, expect_failures=True)
+
+        assert self._remote_writes(target) == []
+        assert target.remotes["user"]["flathub"] == _TGT_URL
+
+    @pytest.mark.asyncio
+    async def test_skip_once_fails_the_ref_that_needed_the_source_url_naming_the_decision(self) -> None:
+        """D-39, and the reason a skipped conflict is not the same as no conflict: the ref
+        the user approved cannot be delivered from the origin they were shown, and installing
+        it from the URL the target still has is the wrong-vendor outcome the whole origin
+        guarantee exists to prevent.
+        """
+        context, _source, target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
+        job = FlatpakSyncJob(context)
+
+        plan = await run_with_conflict_answer(job, Decision.SKIP_ONCE, expect_failures=True)
+
+        assert ("user", "org.example.App/x86_64/stable") not in target.refs
+        with pytest.raises(ConvergeItemFailed) as excinfo:
+            await job.converge(next(d for d in plan.diffs if d.item_id == _APP_ID))
+        assert "chose to keep the target's own version" in str(excinfo.value)
+        assert "flathub" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_an_undecided_conflict_is_a_skip_not_a_silent_overwrite(self) -> None:
+        """What a non-interactive run produces: `review_items` never presented the screen, so
+        no decision exists for it. Anything other than an explicit overwrite must leave the
+        target's remote alone.
+        """
+        context, _source, target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
+
+        await run_with_conflict_answer(FlatpakSyncJob(context), None, expect_failures=True)
+
+        assert target.remotes["user"]["flathub"] == _TGT_URL
+
+    @pytest.mark.asyncio
+    async def test_the_conflict_screen_is_neither_a_removal_direction_nor_promotable(self) -> None:
+        """Two answers, recorded nowhere: the never-offer-again promotion must not follow it,
+        and it must not arrive unticked as if it were a deletion.
+        """
+        assert not _is_promotable_group(REPO_CONFLICT_REVIEW_ACTION)
+        assert not _is_removal_direction(REPO_CONFLICT_REVIEW_ACTION)
+
+    @pytest.mark.asyncio
+    async def test_a_conflict_id_marked_skip_always_reaches_no_decision_file(self) -> None:
+        """Deliberate negative control — it must stay green. A conflict id labels no diff, so
+        `_record_permanent_skips` cannot reach one however the decision arrived, including
+        from a hand-assembled outcome; there is no prefix filter to break and this test
+        exists to keep it that way. The ref decided the same way in the same run IS recorded,
+        so the assertion is about the id and not about a recording pass that did nothing.
+        """
+        context, source, _target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={
+                    **{diff.item_id: Decision.SKIP_ALWAYS for diff in plan.diffs},
+                    _FLATHUB_CONFLICT_ID: Decision.SKIP_ALWAYS,
+                },
+                was_interactive=True,
+            ),
+        )
+        await job.apply()
+
+        recorded = [cmd for cmd in all_calls(source) if "decisions.yaml.pcswitcher-tmp" in cmd]
+        assert len(recorded) == 1
+        assert _APP_ID in recorded[0]
+        assert _FLATHUB_CONFLICT_ID not in recorded[0]
 
 
 _USER_KEYRING_DIR = "$HOME/.local/share/flatpak/repo"

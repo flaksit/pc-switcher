@@ -37,6 +37,19 @@ than three (`REPO_REMOVAL_REVIEW_ACTION`): a permanent machine-local mark on a r
 whole purpose is to feed refs would silently and permanently change where those refs come
 from, and the remedy is consolidating the two configurations, not recording a preference.
 
+Repointing a remote is silent too, with ADR-021 ruling 6's single exception, which this job
+applies to remotes exactly as `apt_sync` applies it to repository files: a remote whose URL
+or verification setting differs is overwritten without a word UNLESS a ref the TARGET
+recorded skip-always takes it as its origin, in which case both configurations are shown and
+the answer is overwrite or skip-once (`_capture_remote_conflicts`,
+`REPO_CONFLICT_REVIEW_ACTION`). Machine-specific is the trigger, not target-only: a
+skip-always ref is structurally invisible — `filter_inert` keeps it out of the manifest, so
+it produces no diff in any run — and repointing the remote it updates from moves software
+the user explicitly told this tool to leave alone. Two answers, nothing recorded. A skipped
+conflict keeps the remote out of the write set but NOT out of the D-39 attribution map, so
+every approved ref that needed the source's URL fails naming the decision rather than
+installing from the URL the target still has.
+
 Before converging a ref, its origin remote is re-read off the TARGET and required to carry
 the source
 remote's URL and verification setting — not merely to exist under the same name
@@ -117,13 +130,14 @@ from pcswitcher.jobs.packages.items import (
 )
 from pcswitcher.jobs.packages.probes import require_answer
 from pcswitcher.jobs.packages.review import (
+    REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
     Decision,
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
+from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, filter_inert
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
@@ -204,6 +218,26 @@ _SCOPES: tuple[Literal["user", "system"], ...] = ("user", "system")
 # from the review's automation hook or a hand-built `ReviewOutcome`, not only for the one
 # screen that no longer offers the promotion.
 _REMOTE_ITEM_ID_PREFIX = "flatpak:remote:"
+
+# Identity of a remote-CONFLICT review entry (ADR-021 ruling 6). Deliberately not a
+# `flatpak:remote:` id, because it is not the same question: that one asks whether to DELETE
+# a remote the source no longer has, this one asks which of two configurations of a remote
+# BOTH machines have should win. It names no diff and reaches no decision file — a conflict
+# exists only between `_build_review_groups` and `accept_review`, so `_record_permanent_skips`
+# needs no filter for it (unlike `flatpak:remote:`, which does label real diffs).
+_CONFLICT_ID_PREFIX = "flatpak:conflict:"
+
+# The two facets of a remote whose divergence a machine-specific ref can be HARMED by, and so
+# the only ones that turn a silent repoint into ruling 6's question. The URL decides which
+# vendor's builds that ref updates from; the verification setting decides whether it is
+# checked at all, in either direction. The third facet a remote carries, its per-remote
+# signing key, deliberately does not: `--gpg-import` merges into the remote's ostree keyring
+# rather than replacing it (the same measured fact `_origin_refusal` cites for not comparing
+# digests), so importing the source's key can neither move a ref's origin nor withdraw trust
+# — there is no harm behind it to put to the user, and a key-only difference stays silent.
+_URL_FACET = "url"
+_VERIFICATION_FACET = "gpg verification"
+_PROVENANCE_FACETS = frozenset({_URL_FACET, _VERIFICATION_FACET})
 
 # Why a derived remote is being provisioned, for the dry-run preview: the app's own origin
 # is obvious from the ref, its runtime's is not.
@@ -627,6 +661,32 @@ class _DerivedRemote:
     reason: Literal["ref_origin", "runtime_origin"]
 
 
+@dataclass(frozen=True)
+class _RemoteConflict:
+    """One remote this run would repoint that a machine-specific target ref takes as its
+    origin (ADR-021 ruling 6) — the only remote CHANGE that is still a question.
+
+    Both configurations are carried, never a rendering of the difference between them, for
+    the reason `_remote_conflict_versions` documents. Unlike apt's file-level counterpart
+    this costs no extra read: a remote's whole record is already on `FlatpakRemoteItem`,
+    captured for the diff.
+    """
+
+    scope: Literal["user", "system"]
+    name: str
+    refs: tuple[str, ...]
+    target_version: str
+    source_version: str
+
+
+def _conflict_id(remote_id: str) -> str:
+    """The conflict entry id for a remote id — derived from it rather than formatted a
+    second time, so the review's question and the write it gates cannot name different
+    remotes.
+    """
+    return f"{_CONFLICT_ID_PREFIX}{remote_id.removeprefix(_REMOTE_ITEM_ID_PREFIX)}"
+
+
 def _derive_remotes(
     approved_ref_ids: frozenset[str],
     source_refs_by_id: Mapping[str, FlatpakItem],
@@ -710,25 +770,70 @@ def _remove_remote_diff(item: FlatpakRemoteItem, dependent_refs: Sequence[str]) 
     )
 
 
-def _remote_change_detail(source_item: FlatpakRemoteItem, target_item: FlatpakRemoteItem) -> str:
-    """Name every facet in which the two sides' same-identity remotes differ.
+def _remote_facets(source_item: FlatpakRemoteItem, target_item: FlatpakRemoteItem) -> tuple[tuple[str, str, str], ...]:
+    """`(facet, the source's value, the target's value)` for every facet in which the two
+    sides' same-identity remotes differ.
 
-    Only the differing facets appear, so a plain URL edit still reads exactly as it did
-    before trust joined the item (#215) and a trust-only divergence never mentions a URL
-    both machines agree on.
+    One definition serving both readers of that question — the log line a silent repoint
+    leaves (`_remote_change_detail`) and the two configurations a conflict screen shows
+    (`_remote_conflict_versions`) — so the two can never disagree about what "differs" means.
+    Only differing facets are returned, so a plain URL edit still reads exactly as it did
+    before trust joined the item (#215) and a trust-only divergence never mentions a URL both
+    machines agree on.
     """
-    facets: list[str] = []
+    facets: list[tuple[str, str, str]] = []
     if source_item.url != target_item.url:
-        facets.append(f"url: {source_item.url} vs {target_item.url}")
+        facets.append((_URL_FACET, source_item.url, target_item.url))
     if source_item.gpg_verify != target_item.gpg_verify:
-        facets.append(f"gpg verification: {_verification_word(source_item)} vs {_verification_word(target_item)}")
+        facets.append((_VERIFICATION_FACET, _verification_word(source_item), _verification_word(target_item)))
     if source_item.key_digest != target_item.key_digest:
-        facets.append(f"signing key: {source_item.key_digest or 'none'} vs {target_item.key_digest or 'none'}")
-    return f"remote {source_item.name} " + "; ".join(facets)
+        facets.append(("signing key", source_item.key_digest or "none", target_item.key_digest or "none"))
+    return tuple(facets)
+
+
+def _remote_change_detail(source_item: FlatpakRemoteItem, target_item: FlatpakRemoteItem) -> str:
+    """Name every facet in which the two sides' same-identity remotes differ, source first."""
+    return f"remote {source_item.name} " + "; ".join(
+        f"{facet}: {source_value} vs {target_value}"
+        for facet, source_value, target_value in _remote_facets(source_item, target_item)
+    )
+
+
+def _remote_conflict_versions(source_item: FlatpakRemoteItem, target_item: FlatpakRemoteItem) -> tuple[str, str]:
+    """`(the target's configuration, the source's)` for a conflict screen, one differing
+    facet per line.
+
+    Two versions, never a computed diff, and never the whole record: apt shows two file
+    bodies because a repository file IS a body, while a remote is a handful of named values,
+    so the readable answer to "which of these two configurations should this machine have" is
+    the fields that actually disagree, printed twice. The user's own verdict on apt's version
+    — that a diff of two repository definitions is not readable — is what rules out rendering
+    the difference instead of the two sides.
+    """
+    facets = _remote_facets(source_item, target_item)
+    return (
+        "\n".join(f"{facet}: {target_value}" for facet, _source_value, target_value in facets),
+        "\n".join(f"{facet}: {source_value}" for facet, source_value, _target_value in facets),
+    )
 
 
 def _verification_word(item: FlatpakRemoteItem) -> str:
     return "enabled" if item.gpg_verify else "disabled"
+
+
+def build_remote_conflict_detail(name: str, scope: str, refs: Sequence[str]) -> str:
+    """Detail for a remote-conflict entry: why THIS differing remote is being put to the user
+    when every other one is repointed silently (ADR-021 ruling 6).
+
+    The named refs are the whole reason. They are recorded skip-always, so `filter_inert`
+    keeps them out of the target manifest and they produce no diff of their own in any run —
+    without this line the user sees a remote they are asked to overwrite and no indication
+    that doing so changes where software they told this tool to leave alone comes from.
+    """
+    return (
+        f"the {scope}-scope remote {name} differs on the two machines and is the origin of "
+        f"machine-specific refs on the target: {', '.join(refs)}"
+    )
 
 
 def _remote_trust_flags(item: FlatpakRemoteItem, staged_key: str | None, *, restore_verification: bool) -> str:
@@ -924,6 +1029,10 @@ class FlatpakSyncJob(PackageSyncJob):
         self._derived_remotes: tuple[_DerivedRemote, ...] = ()
         self._ref_derived_remote_ids: dict[str, frozenset[str]] = {}
         self._failed_derived_remotes: dict[str, str] = {}
+        # `{remote_id: _RemoteConflict}` for the repoints that would move a machine-specific
+        # target ref's origin (ruling 6). Populated in `plan()`, consumed by the conflict
+        # review group and then by `accept_review()`'s write set.
+        self._remote_conflicts: dict[str, _RemoteConflict] = {}
         # The target's remotes as they ACTUALLY are once this run's remote writes have run:
         # re-read lazily at the first ref install, discarded whenever a remote write lands.
         # Neither the plan-time query nor "this run added it" is admissible evidence —
@@ -1080,6 +1189,10 @@ class FlatpakSyncJob(PackageSyncJob):
         they are derived and written by `apply()` ahead of the whole loop — and a remote
         REMOVAL is order-independent, since the refs it could orphan are named in its own
         review detail rather than converged around it.
+
+        Ruling 6's conflicts are computed here too and cost no command at all: every fact
+        they need — both machines' remote records, the target's own ref listing and its
+        decision file — was already read for the diff.
         """
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
@@ -1121,24 +1234,117 @@ class FlatpakSyncJob(PackageSyncJob):
         # the read path can never drift from `_record_permanent_skips`'s write path.
         diffs = self._drop_inert_diffs((*ref_diffs, *mask_diffs, *remote_diffs), source_decisions, target_decisions)
 
+        self._capture_remote_conflicts(diffs, installed_target_refs, target_decisions)
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
+
+    def _capture_remote_conflicts(
+        self,
+        diffs: Sequence[ItemDiff],
+        installed_target_refs: Sequence[FlatpakItem],
+        target_decisions: Mapping[str, DecisionEntry],
+    ) -> None:
+        """Find the repoints ADR-021 ruling 6 turns into a question instead of a silent
+        write: a remote this run may repoint, whose URL or verification setting differs, and
+        which a MACHINE-SPECIFIC target ref takes as its origin in that same scope.
+
+        Machine-specific means recorded skip-always in the TARGET's decision file, exactly as
+        `AptSyncJob._machine_specific_packages_by_source_file` reads it — not "a ref the
+        target has and the source does not". The narrower set is the point: a skip-always ref
+        is structurally invisible (`filter_inert` drops it before the diff, so it can never
+        produce an `ItemDiff` of its own in any run) and the user's explicit "this machine
+        keeps this, syncs never touch it" is exactly the promise a silent repoint breaks. An
+        ordinary target ref is at least eligible for its own diff, and keying off every ref
+        from the remote would make the question a property of the machine — one Flathub
+        repoint would name every app on it and inform nobody.
+
+        The candidate set is what `_derive_remotes` would provision if the review approved
+        every proposed install — a superset of what `accept_review()` actually derives, since
+        the review has not happened yet. Gating on it is what keeps this job's rule intact:
+        a remote travels because a ref needs it, so a remote nothing will touch this run is
+        not a question, and answering "overwrite" cannot by itself make one travel. That is
+        the one place this deliberately diverges from apt, whose conflict screen covers every
+        differing file and whose approval does force the write.
+
+        A remote the target lacks entirely is an ADD, not a repoint: nothing of the target's
+        is being replaced, so there is nothing to ask about.
+        """
+        machine_specific = [ref for ref in installed_target_refs if ref.item_id in target_decisions]
+        self._remote_conflicts = {}
+        if not machine_specific:
+            return
+
+        dependents = _target_refs_by_origin_remote(machine_specific)
+        candidates, _attribution = _derive_remotes(
+            frozenset(
+                diff.item_id
+                for diff in diffs
+                if diff.item_class is ItemClass.FLATPAK_REF and diff.action is DiffAction.INSTALL
+            ),
+            self._source_refs_by_id,
+            self._source_ref_origins,
+            self._source_runtime_by_ref_id,
+        )
+        for derived in candidates:
+            refs = dependents.get(derived.remote_id)
+            source_item = self._source_remotes_by_id.get(derived.remote_id)
+            # The target's map, not a fresh read, so the trigger and `_write_derived_remote`'s
+            # own add-or-repoint test read the same fact.
+            target_item = self._target_remotes_by_id.get(derived.remote_id)
+            if not refs or source_item is None or target_item is None:
+                continue
+            facets = _remote_facets(source_item, target_item)
+            if not any(facet in _PROVENANCE_FACETS for facet, _source, _target in facets):
+                continue
+            target_version, source_version = _remote_conflict_versions(source_item, target_item)
+            self._remote_conflicts[derived.remote_id] = _RemoteConflict(
+                scope=derived.scope,
+                name=derived.name,
+                refs=tuple(sorted(refs)),
+                target_version=target_version,
+                source_version=source_version,
+            )
 
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
         """Carve remote DELETIONS out into their own two-answer screen (ADR-021 D-37's
-        exception, `REPO_REMOVAL_REVIEW_ACTION`), mirroring `AptSyncJob`'s.
+        exception, `REPO_REMOVAL_REVIEW_ACTION`), mirroring `AptSyncJob`'s, and append
+        ruling 6's conflict screen when `_capture_remote_conflicts` found one.
 
-        Still an unticked checkbox list; the whole difference is that the never-offer-again
-        screen never follows it, because a permanent machine-local mark on a remote whose
-        purpose is to feed refs would silently and permanently change where those refs come
-        from. It trails the base groups so the user sees the bulk of the diff first.
+        The removal screen is still an unticked checkbox list; the whole difference is that
+        the never-offer-again screen never follows it, because a permanent machine-local mark
+        on a remote whose purpose is to feed refs would silently and permanently change where
+        those refs come from. The conflict screen is not a checkbox list at all — it resolves
+        one entry at a time with two answers (`REPO_CONFLICT_REVIEW_ACTION`) and records
+        nothing either way. Both trail the base groups so the user sees the bulk of the diff
+        first, conflicts before removals: one decides what the target's remotes become, the
+        other what it loses.
         """
         removals = [diff for diff in diffs if diff.item_class is ItemClass.FLATPAK_REMOTE]
-        if not removals:
+        if not removals and not self._remote_conflicts:
             return super()._build_review_groups(diffs)
         removal_ids = {diff.item_id for diff in removals}
         groups = list(super()._build_review_groups([diff for diff in diffs if diff.item_id not in removal_ids]))
+        if self._remote_conflicts:
+            groups.append(
+                ReviewGroup(
+                    manager=self.manager_id,
+                    action=REPO_CONFLICT_REVIEW_ACTION,
+                    title=f"Resolve {self.manager_id} remote conflicts",
+                    entries=tuple(
+                        ReviewEntry(
+                            item_id=_conflict_id(remote_id),
+                            label=f"{conflict.name} remote ({conflict.scope})",
+                            action_label="overwrite",
+                            detail=build_remote_conflict_detail(conflict.name, conflict.scope, conflict.refs),
+                            versions=(conflict.target_version, conflict.source_version),
+                        )
+                        for remote_id, conflict in sorted(self._remote_conflicts.items())
+                    ),
+                )
+            )
+        if not removals:
+            return tuple(groups)
         groups.append(
             ReviewGroup(
                 manager=self.manager_id,
@@ -1160,8 +1366,17 @@ class FlatpakSyncJob(PackageSyncJob):
         Here rather than in `plan()` for the same reason `AptSyncJob._build_derived_writes`
         is: the input is the set of APPROVED items, which does not exist until the review
         returns. Every fact it reads was captured in `plan()`, so this stays synchronous.
+
+        A conflict the user declined (ruling 6) leaves the derived set but stays in the D-39
+        attribution map, and that asymmetry IS the rule: the remote is not repointed, and
+        every approved ref that named it fails saying so instead of being installed from the
+        URL the target still has. `_origin_refusal` would refuse those installs anyway — it
+        re-reads the target and compares URL and verification, which is exactly what a
+        declined conflict leaves diverging — so this seeding is not what makes the outcome
+        safe; it is what makes the failure name the user's own decision (checked first in
+        `_converge_ref`) rather than report the symptom.
         """
-        self._derived_remotes, self._ref_derived_remote_ids = _derive_remotes(
+        derived, self._ref_derived_remote_ids = _derive_remotes(
             frozenset(
                 diff.item_id
                 for diff in plan.diffs
@@ -1173,7 +1388,13 @@ class FlatpakSyncJob(PackageSyncJob):
             self._source_ref_origins,
             self._source_runtime_by_ref_id,
         )
-        self._failed_derived_remotes = {}
+        skipped = {
+            remote_id: "the user chose to keep the target's own version of it for now (ADR-021 ruling 6)"
+            for remote_id in self._remote_conflicts
+            if outcome.decisions.get(_conflict_id(remote_id)) != Decision.APPLY
+        }
+        self._derived_remotes = tuple(item for item in derived if item.remote_id not in skipped)
+        self._failed_derived_remotes = dict(skipped)
         super().accept_review(plan, outcome)
 
     @override
@@ -1659,7 +1880,9 @@ class FlatpakSyncJob(PackageSyncJob):
                 "flatpak mask patterns (per scope)",
                 # Named as a consequence rather than as something reviewed: remotes are
                 # derived from the approved refs, so they are never ticked, but a first
-                # sync does add and repoint them on the target.
+                # sync does add and repoint them on the target. Ruling 6's conflict screen is
+                # the one exception and is not named here — it asks about a remote feeding
+                # refs this machine already keeps, which a first sync has none of.
                 "the flatpak remotes those refs come from (per scope, added or repointed without a review line)",
             ],
             mechanism="flatpak install/uninstall/mask per item after review, with each ref's remote provisioned first",

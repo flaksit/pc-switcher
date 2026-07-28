@@ -53,9 +53,10 @@ it is ever recorded. That is why `_REMOVAL_ACTIONS` and `_PROMOTABLE_ACTIONS` ar
 independent sets rather than one derived from the other.
 
 A `ReviewGroup` whose `action` is `REPO_CONFLICT_REVIEW_ACTION` gets a per-entry two-way
-flow instead (ADR-021 ruling 6): a repository file that differs on the two machines and
-feeds a package the target recorded machine-specific is shown as both whole files — never a
-unified diff — and answered overwrite or skip-once. Nothing is recorded either way.
+flow instead (ADR-021 ruling 6): something that differs on the two machines and feeds an
+item the target recorded machine-specific — a repository file for `apt_sync`, a remote for
+`flatpak_sync` — is shown as both versions, never a unified diff, and answered overwrite or
+skip-once. Nothing is recorded either way.
 
 A `ReviewGroup` whose `action` is `COLLATERAL_REVIEW_ACTION` likewise gets its own
 interaction shape (D-30): each entry is a manually-installed package the pending apt
@@ -500,12 +501,17 @@ async def _review_repo_conflict_group(
     decisions: dict[str, Decision],
 ) -> None:
     """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group's entries, one at a time, with the
-    two-way choice ADR-021 ruling 6 requires: overwrite the target's file with the source's,
-    or skip for now.
+    two-way choice ADR-021 ruling 6 requires: overwrite the target's version with the
+    source's, or skip for now.
 
-    Both whole files are printed, the target's first, never a unified diff — the user's own
+    Both versions are printed, the target's first, never a unified diff — the user's own
     position is that a diff of two repository definitions is not readable, and the question
     is which of two configurations the machine should have, not what changed between them.
+
+    Ecosystem-neutral wording throughout, because two managers raise this screen about two
+    different subjects: `apt_sync` about a repository file, whose versions are the two whole
+    file bodies, and `flatpak_sync` about a remote, whose versions are its differing fields.
+    The entry's own `detail` is where the subject is named.
 
     Two answers, not three. Skip-always is deliberately absent: a permanent mark on a
     repository file would permanently change where the packages it feeds come from, and the
@@ -532,18 +538,16 @@ async def _review_repo_conflict_group(
             console.print(Panel(Text(source_version), title=Text("on the source"), border_style="cyan"))
 
         choice_prompt = questionary.select(
-            f"{entry.label} differs on the two machines and feeds machine-specific packages. Proceed?",
+            f"{entry.label} differs on the two machines. Proceed?",
             choices=[
-                questionary.Choice(title="Overwrite the target's file with the source's", value="overwrite"),
+                questionary.Choice(title="Overwrite the target's version with the source's", value="overwrite"),
                 questionary.Choice(title="Skip for now", value="skip_once"),
             ],
         )
         selected = await asyncio.to_thread(choice_prompt.ask)
 
         if selected is None:
-            raise SyncAbortedByUser(
-                f"package review aborted while resolving the repository conflict on {entry.label!r} (Ctrl-C)"
-            )
+            raise SyncAbortedByUser(f"package review aborted while resolving the conflict on {entry.label!r} (Ctrl-C)")
         decisions[entry.item_id] = Decision.APPLY if selected == "overwrite" else Decision.SKIP_ONCE
 
 
