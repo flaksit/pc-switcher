@@ -1409,18 +1409,19 @@ async def simulate_apt_transaction(
     let both call sites proceed with a real command whose simulation was never actually
     trustworthy (WR-01) — refuse rather than silently degrade.
 
-    `ConvergeItemFailed` and not `ProbeFailed`, which is the deliberate boundary of ADR-022:
-    apt gives this command ONE failure code for both categories. Measured in a stock
+    `ConvergeItemFailed` and not `ProbeFailed`, which is the deliberate boundary of ADR-022
+    D-01: apt gives this command ONE failure code for both categories. Measured in a stock
     `ubuntu:24.04`, a name apt cannot locate exits 100 with `E: Unable to locate package`,
-    which is byte-for-byte the exit code a held dpkg lock produces — and D-03's remedy,
-    reshaping the command until its exit code is unambiguous, does not exist here, because
-    apt offers no second code and no second mode. So the classification is decided by which
-    cause dominates, and at both call sites that is the request: apply time simulates one
-    approved install or removal, where apt's refusal is a fact about that request (ADR-021
-    D-27); plan time simulates the whole candidate set, which routinely names a package
-    whose repository this run has not written yet, so a non-zero exit there is the ORDINARY
-    answer and failing the job on it would break every run that carries a new vendor's
-    package.
+    which is byte-for-byte the exit code a held dpkg lock produces, and no rewrite of the
+    command's SYNTAX separates them — apt offers no second code and no second mode.
+
+    Apply time simulates one approved install or removal, where apt's refusal is a fact
+    about that request (ADR-021 D-27). Plan time removes the ambiguity from its ARGUMENTS
+    instead: it rehearses only names the target's `apt-cache policy` gave a candidate for
+    (`AptSyncJob._target_resolvable`), so "unable to locate" is not among the failures it
+    can meet. What remains there — a lock, a broken apt, an unresolvable candidate set — has
+    no per-item loop to be reported against, so it aborts the plan, which is correct: a
+    rehearsal that did not happen must not read as a clean one.
     """
     result = await executor.run_command(f"apt-get --dry-run {apt_args}", login_shell=login_shell)
     if not result.success:
@@ -2256,6 +2257,34 @@ class AptSyncJob(PackageSyncJob):
         require_answer(command, result, Host.TARGET)
         return frozenset(_lines(result.stdout))
 
+    def _target_resolvable(self, item_id: str) -> bool:
+        """Whether the target's apt named a version it would install for this package, from
+        the batched `apt-cache policy` this run already ran (`collect_target_policy`).
+
+        The plan-time rehearsal's admission test, and a D-30 ruling rather than a detail. An
+        ADR-021 §2.3 class-3 install — the repository that supplies it is derived from the
+        package's own approval and written during converge — is a name the target's apt
+        cannot locate yet, and `apt-get --dry-run` refuses the WHOLE batch on it with the
+        exit code a held dpkg lock also produces. Including such a name therefore does not
+        weaken that one package's protection, it removes the protection from every other
+        package in the run and aborts `plan()` before the user sees anything. The evidence
+        used is the policy read, never the simulation's exit code, which cannot separate the
+        two causes (ADR-022 D-01).
+
+        What is given up, deliberately: an excluded package gets NO plan-time collateral
+        classification, because apt cannot say what it would remove for a package it cannot
+        resolve — the facts the three-way install-anyway/skip/abort question needs do not
+        exist yet. What still covers it is `_converge_install`'s per-item rehearsal, which
+        runs after the `/etc/apt` group has landed and `apt-get update` has run, so apt CAN
+        resolve it there: unapproved manual collateral fails that one item (D-27) instead of
+        being installed over. The residual cost is that the user is told afterwards rather
+        than asked beforehand, and only for packages whose repository this run adds.
+
+        A package whose origin can never be replicated needs no rule here: it is
+        `REPO_UNAVAILABLE`/`REPORT_ONLY`, so it is never an install candidate at all.
+        """
+        return bool(self._origin_plan.get(item_id, _OriginPlan()).target_candidate_origins)
+
     async def _collect_plan_time_collateral(self, diffs: Sequence[ItemDiff]) -> list[ItemDiff]:
         """Two BATCHED simulations — the whole install candidate set, the whole
         removal candidate set — not one per package: a per-package simulation over a
@@ -2268,28 +2297,31 @@ class AptSyncJob(PackageSyncJob):
         `item_id` (`apt:collateral:<name>`) is mapped back to the triggering candidate set
         in `self._collateral_trigger_ids`, so a `skip` decision can later be translated
         into `SKIP_ONCE` on the installs it gates.
+
+        The install rehearsal covers only the candidates the target's apt can resolve TODAY
+        (`_target_resolvable`); see there for what that costs and what still covers it.
         """
         # APT_PACKAGE only: a hold item (`apt:hold:`) shares the INSTALL/REMOVE actions
         # but is dpkg selection state, not an apt-get transaction, so it drives no
         # collateral simulation and its id is not a package id (#208).
         pkg = [d for d in diffs if d.item_class == ItemClass.APT_PACKAGE]
-        install_names = [_package_name(d.item_id) for d in pkg if d.action == DiffAction.INSTALL]
+        install_diffs = [d for d in pkg if d.action == DiffAction.INSTALL]
+        install_names = [_package_name(d.item_id) for d in install_diffs]
         remove_names = [_package_name(d.item_id) for d in pkg if d.action == DiffAction.REMOVE]
+        # Every package this run already asks about, resolvable or not: one of them turning up
+        # in another's transaction is a decision the user is taking anyway, not collateral.
         reviewed_names = frozenset(install_names) | frozenset(remove_names)
+        rehearsed = [_package_name(d.item_id) for d in install_diffs if self._target_resolvable(d.item_id)]
 
-        # Known limitation, not a classification question: `install_names` can name a package
-        # whose repository only lands during converge, which apt cannot locate yet, so this
-        # simulation exits 100 and its `ConvergeItemFailed` — correct for the command, see
-        # `simulate_apt_transaction` — escapes `plan()` because no per-item loop is running
-        # yet. What plan-time collateral protection should mean for a package apt cannot see
-        # is a D-30 question, not one this guard can answer.
+        # A removal candidate is by definition installed on the target, so apt can always
+        # resolve it and that set is never narrowed.
         collateral: list[ItemDiff] = []
-        if install_names:
-            quoted = " ".join(shlex.quote(name) for name in install_names)
+        if rehearsed:
+            quoted = " ".join(shlex.quote(name) for name in rehearsed)
             preview = await simulate_apt_transaction(
                 self.target, f"install --assume-yes --no-install-recommends {quoted}", login_shell=False
             )
-            trigger_ids = frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in install_names)
+            trigger_ids = frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in rehearsed)
             collateral.extend(await self._classify_collateral(preview, reviewed_names, trigger_ids, verb="installing"))
         if remove_names:
             quoted = " ".join(shlex.quote(name) for name in remove_names)

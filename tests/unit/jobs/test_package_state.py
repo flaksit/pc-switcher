@@ -622,6 +622,14 @@ _SOURCE_POLICY_PKG_A = (
     "        100 /var/lib/dpkg/status\n"
 )
 
+# The TARGET's answer for the same name: not installed, but offered. A target that answers
+# nothing has never heard of `pkg-a`, and a real `apt-get --dry-run install pkg-a` on it
+# exits 100 rather than rehearsing the transaction these tests are about.
+_TARGET_POLICY_PKG_A = (
+    "pkg-a:\n  Installed: (none)\n  Candidate: 1.0\n  Version table:\n     1.0 500\n"
+    "        500 http://ftp.belnet.be/ubuntu noble/main amd64 Packages\n"
+)
+
 
 class TestDecisionScopeIsDiffFilteringOnly:
     """D20 / decision 8: a machine-local decision makes an item inert in the DIFF, and
@@ -650,6 +658,7 @@ class TestDecisionScopeIsDiffFilteringOnly:
                 # ghost-tool is recorded machine-specific below but is manual on NEITHER
                 # machine — apt considers it an auto-installed package.
                 "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _TARGET_POLICY_PKG_A, ""),
                 "apt.decisions.yaml": CommandResult(0, self._DECISIONS, ""),
                 "apt-get --dry-run install": CommandResult(0, "Inst pkg-a (1.0)\nRemv ghost-tool [1.0]\n", ""),
             },
@@ -679,6 +688,7 @@ class TestDecisionScopeIsDiffFilteringOnly:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "ghost-tool\n", ""),
                 "dpkg-query": CommandResult(0, "ghost-tool\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _TARGET_POLICY_PKG_A, ""),
                 "apt.decisions.yaml": CommandResult(0, self._DECISIONS, ""),
                 "apt-get --dry-run install": CommandResult(0, "Inst pkg-a (1.0)\nRemv ghost-tool [1.0]\n", ""),
             },

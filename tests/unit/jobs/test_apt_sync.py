@@ -132,16 +132,42 @@ def respond_to_source(mapping: dict[str, CommandResult]) -> Callable[..., Comman
     return _side_effect
 
 
+def respond_to_target_apt(
+    mapping: dict[str, CommandResult], *, cannot_locate: Sequence[str] = ()
+) -> Callable[..., CommandResult]:
+    """`respond_to`, plus the one target behaviour the substring fixtures cannot express: a
+    real `apt-get --dry-run` exits 100 with `E: Unable to locate package` for a name the
+    target's repositories do not carry, and takes the WHOLE batch down with it.
+
+    Name-sensitive on purpose. A blanket `"apt-get --dry-run": CommandResult(100, ...)` entry
+    would also fail a rehearsal of packages the target can resolve, so a test could pass
+    because the simulation stopped happening rather than because it stopped naming the
+    unlocatable package.
+    """
+    inner = respond_to(mapping)
+    unknown = frozenset(cannot_locate)
+
+    def _side_effect(cmd: str, **kwargs: object) -> CommandResult:
+        if cmd.startswith("apt-get --dry-run"):
+            asked = sorted(unknown & frozenset(shlex.split(cmd)))
+            if asked:
+                return CommandResult(100, "", f"E: Unable to locate package {asked[0]}\n")
+        return inner(cmd, **kwargs)
+
+    return _side_effect
+
+
 def make_context(
     *,
     source_responses: dict[str, CommandResult] | None = None,
     target_responses: dict[str, CommandResult] | None = None,
+    target_side_effect: Callable[..., CommandResult] | None = None,
     dry_run: bool = False,
 ) -> tuple[JobContext, MagicMock, MagicMock]:
     source = MagicMock()
     source.run_command = AsyncMock(side_effect=respond_to_source(source_responses or {}))
     target = MagicMock()
-    target.run_command = AsyncMock(side_effect=respond_to(target_responses or {}))
+    target.run_command = AsyncMock(side_effect=target_side_effect or respond_to(target_responses or {}))
     target.send_file = AsyncMock(return_value=None)
     context = JobContext(
         config={},
@@ -412,6 +438,7 @@ class TestContinueOnFailure:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "dpkg-query": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _target_offers("pkg-a", "pkg-b", "pkg-c"), ""),
                 "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": clean_preview,
                 "apt-get --dry-run install --assume-yes --no-install-recommends pkg-b": clean_preview,
                 "apt-get --dry-run install --assume-yes --no-install-recommends pkg-c": clean_preview,
@@ -469,6 +496,8 @@ class TestTransactionGuard:
                 return CommandResult(0, "ghost-pkg\n", "")
             if "dpkg-query" in cmd:
                 return CommandResult(0, "ghost-pkg\t1.0\n", "")
+            if cmd.startswith("apt-cache policy"):
+                return CommandResult(0, _target_offers("pkg-a"), "")
             if cmd == sim_cmd:
                 state["sim"] += 1
                 if state["sim"] == 1:
@@ -509,6 +538,7 @@ class TestTransactionGuard:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _target_offers("pkg-a"), ""),
                 "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""
                 ),
@@ -583,6 +613,8 @@ class TestTransactionGuard:
                 if state["calls"] == 1:
                     return CommandResult(0, "Inst pkg-a (1.0)\n", "")
                 return CommandResult(100, "", "E: dpkg was interrupted, you must manually run 'dpkg --configure -a'")
+            if cmd.startswith("apt-cache policy"):
+                return CommandResult(0, _target_offers("pkg-a"), "")
             return CommandResult(0, "", "")
 
         context, _source, target = make_context(
@@ -1173,7 +1205,12 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
                 "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED, ""),
                 _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
-            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                # Both names offered by the target, so nothing but the capture-time exclusion
+                # can keep `code` out of either downstream read.
+                "apt-cache policy": CommandResult(0, _target_offers("code", "gh"), ""),
+            },
         )
 
         await AptSyncJob(context).plan()
@@ -1426,19 +1463,22 @@ class TestDowngradeGuard:
         sim_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
         state = {"sim": 0}
 
+        static = {
+            "apt-mark showmanual": CommandResult(0, "manual-dg\n", ""),
+            "dpkg --compare-versions 1.0 lt 2.0": CommandResult(0, "", ""),
+        }
+
         def target_side_effect(cmd: str, **_: object) -> CommandResult:
-            if cmd == "apt-mark showmanual":
-                return CommandResult(0, "manual-dg\n", "")
-            if "dpkg-query" in cmd:
-                return CommandResult(0, "manual-dg\t2.0\n", "")
-            if cmd == "dpkg --compare-versions 1.0 lt 2.0":
-                return CommandResult(0, "", "")
             if cmd == sim_cmd:
                 state["sim"] += 1
                 if state["sim"] == 1:
                     return CommandResult(0, "Inst pkg-a (1.0)\n", "")
                 return CommandResult(0, "Inst pkg-a (1.0)\nInst manual-dg [2.0] (1.0)\n", "")
-            return CommandResult(0, "", "")
+            if "dpkg-query" in cmd:
+                return CommandResult(0, "manual-dg\t2.0\n", "")
+            if cmd.startswith("apt-cache policy"):
+                return CommandResult(0, _target_offers("pkg-a"), "")
+            return static.get(cmd, CommandResult(0, "", ""))
 
         context, _source, target = make_context(
             source_responses={
@@ -1474,6 +1514,7 @@ class TestDowngradeGuard:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _target_offers("pkg-a"), ""),
                 "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nInst auto-dg [2.0] (1.0)\n", ""
                 ),
@@ -1512,6 +1553,7 @@ class TestPlanTimeCollateral:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
                 "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _target_offers("pkg-a"), ""),
                 "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""
                 ),
@@ -1547,6 +1589,7 @@ class TestPlanTimeCollateral:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _target_offers("pkg-a"), ""),
                 "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""
                 ),
@@ -1574,6 +1617,7 @@ class TestPlanTimeCollateral:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "manual-dg\n", ""),
                 "dpkg-query": CommandResult(0, "manual-dg\t2.0\n", ""),
+                "apt-cache policy": CommandResult(0, _target_offers("pkg-a"), ""),
                 "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nInst manual-dg [2.0] (1.0)\nInst auto-dg [2.0] (1.0)\n", ""
                 ),
@@ -1599,6 +1643,7 @@ class TestPlanTimeCollateral:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _target_offers("pkg-a"), ""),
                 "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\n", ""
                 ),
@@ -1621,7 +1666,10 @@ class TestPlanTimeCollateral:
                 "apt-mark showmanual": CommandResult(0, showmanual, ""),
                 "dpkg-query": CommandResult(0, dpkg_query, ""),
             },
-            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _target_offers(*names), ""),
+            },
         )
         job = AptSyncJob(context)
 
@@ -1629,7 +1677,127 @@ class TestPlanTimeCollateral:
 
         assert len(plan.diffs) == 10
         simulations = [cmd for cmd in all_calls(target) if "apt-get --dry-run" in cmd]
-        assert len(simulations) <= 2
+        # One, not zero: ten resolvable candidates rehearse in a single batch.
+        assert len(simulations) == 1
+        assert all(name in simulations[0] for name in names)
+
+
+_TARGET_GH_NO_CANDIDATE = "gh:\n  Installed: (none)\n  Candidate: (none)\n  Version table:\n"
+
+
+class TestAPackageTheTargetCannotResolveYet:
+    """ADR-021 §2.3 class 3 at plan time: the repository that supplies the package is derived
+    from the package's own approval and written during converge, so the target's apt has no
+    candidate for the name while `plan()` runs and refuses to rehearse a transaction naming
+    it — with the same exit 100 a held dpkg lock produces (ADR-022 D-01).
+    """
+
+    @pytest.mark.asyncio
+    async def test_plan_survives_a_candidate_the_targets_apt_cannot_locate(self) -> None:
+        """The phase's flagship scenario: `gh` comes from `cli.github.com` on the source, the
+        target has never heard the name, and the batched rehearsal must not abort the run
+        before the user is shown anything.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
+            },
+            target_side_effect=respond_to_target_apt(
+                {"apt-mark showmanual": CommandResult(0, "", ""), "apt-cache policy": CommandResult(0, "", "")},
+                cannot_locate=["gh"],
+            ),
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert [(d.diff_class, d.action) for d in plan.diffs] == [(DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL)]
+        assert not [cmd for cmd in all_calls(target) if "apt-get --dry-run" in cmd]
+        # The premise, asserted rather than assumed: this target really does refuse `gh`, so
+        # a fixture that quietly lost its exit 100 cannot carry the test on its own.
+        assert not (await target.run_command("apt-get --dry-run install gh")).success
+
+    @pytest.mark.asyncio
+    async def test_an_explicit_no_candidate_is_excluded_on_the_same_evidence(self) -> None:
+        """apt saying `Candidate: (none)` and apt printing no block at all are different
+        answers everywhere else in this job, and the same one here: neither names a version
+        the target could install, so neither can enter the rehearsal.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
+            },
+            target_side_effect=respond_to_target_apt(
+                {
+                    "apt-mark showmanual": CommandResult(0, "", ""),
+                    "apt-cache policy": CommandResult(0, _TARGET_GH_NO_CANDIDATE, ""),
+                },
+                cannot_locate=["gh"],
+            ),
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert [(d.diff_class, d.action) for d in plan.diffs] == [(DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL)]
+        assert not [cmd for cmd in all_calls(target) if "apt-get --dry-run" in cmd]
+        # The premise, asserted rather than assumed: this target really does refuse `gh`, so
+        # a fixture that quietly lost its exit 100 cannot carry the test on its own.
+        assert not (await target.run_command("apt-get --dry-run install gh")).success
+
+    @pytest.mark.asyncio
+    async def test_the_resolvable_candidates_are_still_rehearsed_and_still_protected(self) -> None:
+        """A narrowing, not a shutdown. `pkg-b` is resolvable, stays in the one batched
+        rehearsal alongside nothing else, and its manual collateral still reaches the review
+        — which is what the run loses entirely if the whole simulation is skipped instead.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\npkg-b\nother-manual\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.96.0\npkg-b\t1.0\nother-manual\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0,
+                    _POLICY_REPO_INSTALLED
+                    + _policy_block("pkg-b", _BASELINE_ARCHIVE)
+                    + _policy_block("other-manual", _BASELINE_ARCHIVE),
+                    "",
+                ),
+                _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
+            },
+            target_side_effect=respond_to_target_apt(
+                {
+                    "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
+                    "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+                    "apt-cache policy": CommandResult(
+                        0,
+                        _policy_block("pkg-b", _BASELINE_ARCHIVE) + _policy_block("other-manual", _BASELINE_ARCHIVE),
+                        "",
+                    ),
+                    "apt-get --dry-run install --assume-yes --no-install-recommends pkg-b": CommandResult(
+                        0, "Inst pkg-b (1.0)\nRemv other-manual [1.0]\n", ""
+                    ),
+                },
+                cannot_locate=["gh"],
+            ),
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        simulations = [cmd for cmd in all_calls(target) if "apt-get --dry-run" in cmd]
+        assert simulations == ["apt-get --dry-run install --assume-yes --no-install-recommends pkg-b"]
+        assert "apt:collateral:other-manual" in {d.item_id for d in plan.diffs}
+        assert {d.item_id for d in plan.diffs if d.action == DiffAction.INSTALL} == {
+            "apt:package:gh",
+            "apt:package:pkg-b",
+        }
+        # The premise, asserted rather than assumed: adding `gh` to that one command is what
+        # a real target refuses, and it is the only reason the command may not name it.
+        assert not (await target.run_command("apt-get --dry-run install gh pkg-b")).success
+        assert (await target.run_command("apt-get --dry-run install --assume-yes pkg-b")).success
 
 
 def _manual_collateral_context() -> tuple[JobContext, MagicMock, MagicMock]:
@@ -1647,6 +1815,7 @@ def _manual_collateral_context() -> tuple[JobContext, MagicMock, MagicMock]:
         target_responses={
             "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
             "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+            "apt-cache policy": CommandResult(0, _target_offers("pkg-a"), ""),
             "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
                 0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""
             ),
@@ -3853,6 +4022,21 @@ def _policy_block(name: str, origin: str | None) -> str:
         lines.append(f"        500 {origin} stable/main amd64 Packages")
     lines.append("        100 /var/lib/dpkg/status")
     return "\n".join(lines) + "\n"
+
+
+def _target_offers(*names: str, origin: str = _BASELINE_ARCHIVE) -> str:
+    """`apt-cache policy` blocks for names the TARGET does not have installed but CAN
+    install — a candidate, no `***` row.
+
+    What a target must answer for a package before that package can enter the plan-time
+    rehearsal (`_target_resolvable`). A fixture that omits it is describing a target whose
+    apt has never heard the name, on which a real `apt-get --dry-run install` exits 100.
+    """
+    return "".join(
+        f"{name}:\n  Installed: (none)\n  Candidate: 1.0\n  Version table:\n"
+        f"     1.0 500\n        500 {origin} stable/main amd64 Packages\n"
+        for name in names
+    )
 
 
 def _scan_line(filename: str, content: str, *, path: str | None = None) -> str:
