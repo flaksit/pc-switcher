@@ -26,6 +26,11 @@ from pcswitcher.jobs.packages.review import (
 from pcswitcher.models import SyncAbortedByUser
 from pcswitcher.ui import TerminalUI
 
+# Stand-ins for the two machines, so the rehearsal reads the way a real run does — every
+# screen names a machine rather than its role in the run.
+SOURCE_HOST = "p17"
+TARGET_HOST = "fleksi"
+
 # One group per interaction shape the review supports. The action strings are load-bearing:
 # "install" rows start applied and "remove" rows at skip-once (_REMOVAL_ACTIONS);
 # "install"/"remove" are promotable so their screens offer the third answer, while
@@ -53,7 +58,14 @@ GROUPS = [
         "apt",
         "report_only",
         "Report apt packages",
-        [ReviewEntry("apt:package:tree", "tree (2.1.1-2ubuntu3)", "report", "source has 2.1.1-2ubuntu3.24.04.2")],
+        [
+            ReviewEntry(
+                "apt:package:tree",
+                "tree (2.1.1-2ubuntu3)",
+                "report",
+                f"{SOURCE_HOST} has 2.1.1-2ubuntu3.24.04.2, {TARGET_HOST} has 2.1.1-2ubuntu3",
+            )
+        ],
     ),
     ReviewGroup(
         "apt",
@@ -64,7 +76,8 @@ GROUPS = [
                 "apt:conflict:ubuntu.sources",
                 "ubuntu.sources",
                 "overwrite",
-                "ubuntu.sources differs on the two machines and feeds machine-specific packages on the target: cowsay",
+                f"ubuntu.sources is different on the two machines, and {TARGET_HOST} installs cowsay from it — "
+                "packages you set to always skip, so a sync normally leaves them alone",
                 versions=(
                     "# pcsw-uat marker\nTypes: deb\nURIs: http://example/ubuntu\n",
                     "Types: deb\nURIs: http://example/ubuntu\n",
@@ -75,41 +88,55 @@ GROUPS = [
     ReviewGroup(
         "apt",
         REPO_REMOVAL_REVIEW_ACTION,
-        "Delete repositories the source no longer has (apt)",
-        [ReviewEntry("apt:source:99-pcsw-uat.list", "99-pcsw-uat.list (list)", "delete repository")],
+        f"Delete repositories {SOURCE_HOST} no longer has (apt)",
+        [
+            ReviewEntry(
+                "apt:source:99-pcsw-uat.list",
+                "99-pcsw-uat.list (list)",
+                "delete repository",
+                f"{TARGET_HOST} would stop getting software from https://vendor.example.com/apt",
+            )
+        ],
     ),
     ReviewGroup(
         "apt",
         REPO_REMOVAL_REVIEW_ACTION,
-        "Delete pin files the source no longer has (apt)",
-        [ReviewEntry("apt:pin:99-pcsw-uat.pref", "99-pcsw-uat.pref", "delete pin file")],
+        f"Delete pin files {SOURCE_HOST} no longer has (apt)",
+        [
+            ReviewEntry(
+                "apt:pin:99-pcsw-uat.pref",
+                "99-pcsw-uat.pref",
+                "delete pin file",
+                content="Package: *\nPin: origin vendor.example.com\nPin-Priority: 900\n",
+            )
+        ],
     ),
     ReviewGroup(
         "apt",
         COLLATERAL_REVIEW_ACTION,
-        "Resolve apt manual-collateral removals",
+        f"Packages you installed yourself on {TARGET_HOST} that this sync would remove or downgrade (apt)",
         [
             ReviewEntry(
                 "apt:collateral:fortunes",
                 "fortunes",
                 "resolve",
-                "manually-installed package that apt's own simulation says would be removed by "
-                "removing the selected packages",
+                f"Removing fortunes-min on {TARGET_HOST} would remove fortunes",
             )
         ],
     ),
     ReviewGroup(
         "manual",
         UNREPRODUCIBLE_REVIEW_ACTION,
-        "Resolve manual items with no reproducible install",
+        f"{SOURCE_HOST} has these and no package manager can install them on {TARGET_HOST} (manual)",
         [ReviewEntry("unreproducible:unowned-path:/opt/pcsw-uat-app", "/opt/pcsw-uat-app", "resolve")],
     ),
 ]
 
 GATE_MESSAGE = (
-    "The source carries ubuntu-esm-apps.sources, which this sync would write to the target, "
-    "but the target reports no Ubuntu Pro attachment.\n\n"
-    "Skipping runs no part of apt_sync this sync and leaves the target's /etc/apt untouched."
+    f"{SOURCE_HOST} carries ubuntu-esm-apps.sources, which this sync would copy to {TARGET_HOST} — but "
+    f"{TARGET_HOST} is not attached to Ubuntu Pro.\n\n"
+    f"Skipping means apt_sync does nothing at all this run and {TARGET_HOST}'s /etc/apt is left exactly as it is. "
+    "Every other job still runs."
 )
 
 # `ask_gate` answers with a bare bool (or None), which says nothing on its own in a
@@ -127,14 +154,16 @@ async def main() -> None:
     ui.start()
     try:
         gate = await ask_gate(
-            title="Ubuntu Pro attachment required on the target",
+            title=f"{TARGET_HOST} needs an Ubuntu Pro attachment",
             message=GATE_MESSAGE,
-            proceed_label="I have attached the target — re-check and continue",
-            stop_label="Skip apt_sync this run (other jobs continue)",
+            proceed_label=f"I have attached {TARGET_HOST} — check again and continue",
+            stop_label="Skip apt_sync this run (every other job still runs)",
             console=console,
             ui=ui,
         )
-        outcome = await review_items(GROUPS, console=console, ui=ui)
+        outcome = await review_items(
+            GROUPS, console=console, ui=ui, source_hostname=SOURCE_HOST, target_hostname=TARGET_HOST
+        )
     finally:
         ui.stop()
 

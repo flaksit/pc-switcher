@@ -134,6 +134,7 @@ from pcswitcher.jobs.packages.items import (
     DiffClass,
     ItemClass,
     ItemDiff,
+    Machines,
     build_version_mismatch_detail,
 )
 from pcswitcher.jobs.packages.probes import require_answer
@@ -423,7 +424,7 @@ def _origin_display(name: str, url: str | None) -> str:
 
 
 def build_flatpak_origin_mismatch_detail(
-    source_origin: str, source_url: str | None, target_origin: str, target_url: str | None
+    source_origin: str, source_url: str | None, target_origin: str, target_url: str | None, machines: Machines
 ) -> str:
     """Detail for a ref's `ORIGIN_MISMATCH` diff: the same ref, two vendors (ADR-020 D-41).
 
@@ -436,10 +437,10 @@ def build_flatpak_origin_mismatch_detail(
     """
     source = _origin_display(source_origin, source_url)
     target = _origin_display(target_origin, target_url)
-    return f"source installed it from {source}, target from {target}"
+    return f"{machines.source} installed it from {source}, {machines.target} from {target}"
 
 
-def build_orphaned_refs_detail(remote: str, refs: Sequence[str]) -> str:
+def build_orphaned_refs_detail(remote: str, refs: Sequence[str], machines: Machines) -> str:
     """Detail string for a flatpak remote REMOVE diff whose removal would leave
     target-side refs without their origin (#214).
 
@@ -448,7 +449,10 @@ def build_orphaned_refs_detail(remote: str, refs: Sequence[str]) -> str:
     legitimate cleanup removes the refs too, but it is never offered as a bare presence
     difference with nothing said about what depends on it.
     """
-    return f"target refs still using {remote}: {', '.join(refs)} (removal orphans them)"
+    return (
+        f"{machines.target} still installs {', '.join(refs)} from {remote} — they would stay installed but "
+        f"never get another update"
+    )
 
 
 def _lines(output: str) -> list[str]:
@@ -660,7 +664,9 @@ def _remove_ref_diff(item: FlatpakItem) -> ItemDiff:
     )
 
 
-def _version_mismatch_ref_diff(item_id: str, source_item: FlatpakItem, target_item: FlatpakItem) -> ItemDiff:
+def _version_mismatch_ref_diff(
+    item_id: str, source_item: FlatpakItem, target_item: FlatpakItem, machines: Machines
+) -> ItemDiff:
     """D-04: a flatpak ref's version floats like an apt package's does — reported,
     never force-installed/removed to converge it. Only reachable for two items sharing the
     same `item_id`, i.e. the same ref (application, arch AND branch) in the same scope: a
@@ -673,12 +679,17 @@ def _version_mismatch_ref_diff(item_id: str, source_item: FlatpakItem, target_it
         action=DiffAction.REPORT_ONLY,
         item_id=item_id,
         label=target_item.label(),
-        detail=build_version_mismatch_detail(source_item.version, target_item.version),
+        detail=build_version_mismatch_detail(source_item.version, target_item.version, machines),
     )
 
 
 def _origin_mismatch_ref_diff(
-    item_id: str, source_item: FlatpakItem, target_item: FlatpakItem, source_url: str | None, target_url: str | None
+    item_id: str,
+    source_item: FlatpakItem,
+    target_item: FlatpakItem,
+    source_url: str | None,
+    target_url: str | None,
+    machines: Machines,
 ) -> ItemDiff:
     """ADR-020 D-41: a ref present on both machines from different remotes is reported and
     never converged.
@@ -696,7 +707,9 @@ def _origin_mismatch_ref_diff(
         action=DiffAction.REPORT_ONLY,
         item_id=item_id,
         label=target_item.label(),
-        detail=build_flatpak_origin_mismatch_detail(source_item.origin, source_url, target_item.origin, target_url),
+        detail=build_flatpak_origin_mismatch_detail(
+            source_item.origin, source_url, target_item.origin, target_url, machines
+        ),
     )
 
 
@@ -744,6 +757,7 @@ def _diff_flatpak_refs(
     target_items: Sequence[FlatpakItem],
     source_remote_urls: Mapping[tuple[str, str], str],
     target_remote_urls: Mapping[tuple[str, str], str],
+    machines: Machines,
 ) -> list[ItemDiff]:
     """One diff per ref `item_id` present on either side, source-then-target order —
     same shape as `PackageSyncJob._diff_apt_packages`/`snap_sync._diff_snap_items`.
@@ -783,10 +797,11 @@ def _diff_flatpak_refs(
                         target_item,
                         source_remote_urls.get((source_item.scope, source_item.origin)),
                         target_remote_urls.get((target_item.scope, target_item.origin)),
+                        machines,
                     )
                 )
             elif source_item.version != target_item.version:
-                diffs.append(_version_mismatch_ref_diff(item_id, source_item, target_item))
+                diffs.append(_version_mismatch_ref_diff(item_id, source_item, target_item, machines))
             # else: present on both, one vendor, equal version -> no diff.
 
     return diffs
@@ -897,7 +912,7 @@ def _derive_remotes(
     )
 
 
-def _remove_remote_diff(item: FlatpakRemoteItem, dependent_refs: Sequence[str]) -> ItemDiff:
+def _remove_remote_diff(item: FlatpakRemoteItem, dependent_refs: Sequence[str], machines: Machines) -> ItemDiff:
     """Deleting a remote the target's own refs still name as their origin orphans them
     (#214), so the dependents are named in `detail` — the review states the consequence
     before the user approves it, D-30's placement for apt's transaction collateral.
@@ -914,7 +929,7 @@ def _remove_remote_diff(item: FlatpakRemoteItem, dependent_refs: Sequence[str]) 
         action=DiffAction.REMOVE,
         item_id=item.item_id,
         label=item.label(),
-        detail=build_orphaned_refs_detail(item.name, dependent_refs) if dependent_refs else None,
+        detail=build_orphaned_refs_detail(item.name, dependent_refs, machines) if dependent_refs else None,
     )
 
 
@@ -969,7 +984,7 @@ def _verification_word(item: FlatpakRemoteItem) -> str:
     return "enabled" if item.gpg_verify else "disabled"
 
 
-def build_remote_conflict_detail(name: str, scope: str, refs: Sequence[str]) -> str:
+def build_remote_conflict_detail(name: str, scope: str, refs: Sequence[str], machines: Machines) -> str:
     """Detail for a remote-conflict entry: why THIS differing remote is being put to the user
     when every other one is repointed silently (ADR-020 D-41).
 
@@ -979,8 +994,8 @@ def build_remote_conflict_detail(name: str, scope: str, refs: Sequence[str]) -> 
     that doing so changes where software they told this tool to leave alone comes from.
     """
     return (
-        f"the {scope}-scope remote {name} differs on the two machines and is the origin of "
-        f"machine-specific refs on the target: {', '.join(refs)}"
+        f"the {scope}-scope remote {name} is different on the two machines, and {machines.target} installs "
+        f"{', '.join(refs)} from it — apps you set to always skip, so a sync normally leaves them alone"
     )
 
 
@@ -1037,6 +1052,7 @@ def _diff_flatpak_remotes(
     source_items: Sequence[FlatpakRemoteItem],
     target_items: Sequence[FlatpakRemoteItem],
     target_refs: Sequence[FlatpakItem],
+    machines: Machines,
 ) -> list[ItemDiff]:
     """One REMOVE diff per remote the target has and the source does not — the only
     direction a remote is still a review line (ADR-020 D-41).
@@ -1058,7 +1074,7 @@ def _diff_flatpak_remotes(
     source_ids = {item.item_id for item in source_items}
     dependents_by_remote_id = _target_refs_by_origin_remote(target_refs)
     return [
-        _remove_remote_diff(item, dependents_by_remote_id.get(item.item_id, []))
+        _remove_remote_diff(item, dependents_by_remote_id.get(item.item_id, []), machines)
         for item in target_items
         if item.item_id not in source_ids
     ]
@@ -1370,7 +1386,7 @@ class FlatpakSyncJob(PackageSyncJob):
         # proposal is not an approval, and the user may untick the ref removal while
         # ticking the remote's; the detail states the target's current state, which holds
         # either way.
-        remote_diffs = _diff_flatpak_remotes(source_remotes, target_remotes, installed_target_refs)
+        remote_diffs = _diff_flatpak_remotes(source_remotes, target_remotes, installed_target_refs, self.machines)
         # Both URL maps are the UNFILTERED remote captures. A skip-always recorded on a
         # machine's own remote makes that remote inert as an ITEM (it is never proposed for
         # deletion), but it must not withdraw the URL the origin comparison runs on — that
@@ -1381,6 +1397,7 @@ class FlatpakSyncJob(PackageSyncJob):
             target_refs,
             _remote_urls_by_scope_and_name(source_remotes),
             _remote_urls_by_scope_and_name(installed_target_remotes),
+            self.machines,
         )
         mask_diffs = _diff_flatpak_masks(source_masks, target_masks)
         # Ordering (D-08): refs -> masks, with the remote removals trailing (their own
@@ -1495,7 +1512,9 @@ class FlatpakSyncJob(PackageSyncJob):
                             item_id=_conflict_id(remote_id),
                             label=f"{conflict.name} remote ({conflict.scope})",
                             action_label="overwrite",
-                            detail=build_remote_conflict_detail(conflict.name, conflict.scope, conflict.refs),
+                            detail=build_remote_conflict_detail(
+                                conflict.name, conflict.scope, conflict.refs, self.machines
+                            ),
                             versions=(conflict.target_version, conflict.source_version),
                         )
                         for remote_id, conflict in sorted(self._remote_conflicts.items())
@@ -1508,7 +1527,7 @@ class FlatpakSyncJob(PackageSyncJob):
             ReviewGroup(
                 manager=self.manager_id,
                 action=REPO_REMOVAL_REVIEW_ACTION,
-                title=f"Delete {self.manager_id} remotes the source no longer has",
+                title=f"Delete {self.manager_id} remotes {self.machines.source} no longer has",
                 entries=tuple(
                     ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="delete", detail=diff.detail)
                     for diff in removals

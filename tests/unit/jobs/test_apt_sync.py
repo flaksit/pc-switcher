@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import inspect
+import re
 import shlex
 import shutil
 from collections.abc import Callable, Sequence
@@ -38,11 +39,12 @@ from pcswitcher.jobs.apt_sync import (
     build_origin_detail,
     build_origin_mismatch_detail,
     build_origin_refusal_detail,
+    build_repo_removal_detail,
     build_repo_unavailable_detail,
     compare_deb_versions,
     simulate_apt_transaction,
 )
-from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import (
     _REMOVAL_ACTIONS,
@@ -185,6 +187,11 @@ def make_context(
     return context, source, target
 
 
+# The names `make_context` gives the two machines — every review string this job builds
+# says one of them, so the assertions below check the machine, not a role word.
+MACHINES = Machines(source="source-host", target="target-host")
+
+
 def all_calls(mock: MagicMock) -> list[str]:
     return [call.args[0] for call in mock.run_command.call_args_list]
 
@@ -244,7 +251,7 @@ class TestDiff:
 
         source_items = await job.capture_source_items()
         target_items = await job.query_target_items()
-        diffs = _diff_apt_packages(source_items, target_items, {})
+        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES)
 
         assert len(diffs) == 2
         assert {d.item_id for d in diffs} == {"apt:package:pkg-a", "apt:package:pkg-c"}
@@ -258,7 +265,7 @@ class TestDiff:
             AptPackageItem(name="pkg-a", version="1.0"),
             AptPackageItem(name="pkg-extra", version="9.9"),
         ]
-        diffs = _diff_apt_packages(source_items, target_items, {})
+        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES)
 
         assert len(diffs) == 1
         assert diffs[0].item_id == "apt:package:pkg-extra"
@@ -1570,7 +1577,7 @@ class TestPlanTimeCollateral:
         assert len(collateral) == 1
         assert collateral[0].action == DiffAction.REPORT_ONLY
         assert collateral[0].label == "other-manual"
-        assert collateral[0].detail is not None and "removed" in collateral[0].detail
+        assert collateral[0].detail == "Installing pkg-a on target-host would remove other-manual"
 
         collateral_group = next(g for g in plan.groups if g.action == COLLATERAL_REVIEW_ACTION)
         assert "apt:collateral:other-manual" in {entry.item_id for entry in collateral_group.entries}
@@ -1805,7 +1812,7 @@ class TestAPackageTheTargetCannotResolveYet:
 
 def _manual_collateral_context() -> tuple[JobContext, MagicMock, MagicMock]:
     """A job whose only install candidate (`pkg-a`) would, per the simulation, remove the
-    manually-installed `other-manual` — the shared fixture for the install-anyway / skip
+    manually-installed `other-manual` — the shared fixture for the go-ahead / keep-the-package
     flow tests. `other-manual` is manual and identical on both machines, so it is not a
     diff, only collateral. Its name is deliberately distinct from `pkg-a` so a bug that
     conflated the collateral package with its triggering install would be caught.
@@ -1992,13 +1999,37 @@ class TestCollateralAttribution:
         plan = await AptSyncJob(context).plan()
 
         collateral = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:other-manual")
-        assert collateral.detail is not None
-        assert "pkg-x" in collateral.detail
-        assert "pkg-y" not in collateral.detail
+        assert collateral.detail == "Removing pkg-x on target-host would remove other-manual"
         # The cost, pinned: one batched rehearsal plus one per candidate, and only because
         # the batch found manual collateral.
         rehearsals = [cmd for cmd in all_calls(target) if cmd.startswith("apt-get --dry-run remove")]
         assert len(rehearsals) == 3
+
+    @pytest.mark.asyncio
+    async def test_joint_causation_names_the_whole_batch_rather_than_one_package(self) -> None:
+        """Neither removal alone drops `other-manual`; only both together do. Declining then
+        cancels both, so the sentence the user reads must not name just one of them.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
+                "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-x\npkg-y\nother-manual\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-x\t1.0\npkg-y\t1.0\nother-manual\t1.0\n", ""),
+                "apt-get --dry-run remove --assume-yes pkg-x pkg-y": CommandResult(
+                    0, "Remv pkg-x [1.0]\nRemv pkg-y [1.0]\nRemv other-manual [1.0]\n", ""
+                ),
+                "remove --assume-yes pkg-x": CommandResult(0, "Remv pkg-x [1.0]\n", ""),
+                "remove --assume-yes pkg-y": CommandResult(0, "Remv pkg-y [1.0]\n", ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        collateral = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:other-manual")
+        assert collateral.detail == "Removing the packages listed earlier on target-host would remove other-manual"
 
     @pytest.mark.asyncio
     async def test_a_clean_batch_costs_no_extra_rehearsal(self) -> None:
@@ -2840,9 +2871,13 @@ class TestOriginDetailWording:
         )
 
     def test_the_mismatch_detail_names_both_sides(self) -> None:
-        detail = build_origin_mismatch_detail(["https://vendor.example.com/apt"], ["https://rival.example.com/apt"])
+        detail = build_origin_mismatch_detail(
+            ["https://vendor.example.com/apt"], ["https://rival.example.com/apt"], MACHINES
+        )
 
-        assert detail == "source installed it from vendor.example.com/apt, target from rival.example.com/apt"
+        assert detail == (
+            "source-host installed it from vendor.example.com/apt, target-host from rival.example.com/apt"
+        )
 
 
 class TestOriginOutcome:
@@ -3168,16 +3203,18 @@ class TestOriginRefusalWording:
 
     def test_both_the_wanted_and_the_offered_origin_are_named(self) -> None:
         detail = build_origin_refusal_detail(
-            "firefox", ["https://packages.mozilla.org/apt"], ["http://ftp.belnet.be/ubuntu"]
+            "firefox", ["https://packages.mozilla.org/apt"], ["http://ftp.belnet.be/ubuntu"], MACHINES
         )
 
-        assert "packages.mozilla.org/apt" in detail
-        assert "ftp.belnet.be/ubuntu" in detail
+        assert detail == (
+            "firefox was not installed: source-host has it from packages.mozilla.org/apt, but after this run's "
+            "apt-get update target-host would install it from ftp.belnet.be/ubuntu (ADR-020 D-35)"
+        )
 
     def test_a_target_with_no_candidate_origin_says_so_rather_than_naming_nothing(self) -> None:
-        detail = build_origin_refusal_detail("pkg-a", ["https://vendor.example.com/apt"], [])
+        detail = build_origin_refusal_detail("pkg-a", ["https://vendor.example.com/apt"], [], MACHINES)
 
-        assert "no repository at all" in detail
+        assert "offers it from no repository at all" in detail
         assert "vendor.example.com/apt" in detail
 
 
@@ -4324,9 +4361,13 @@ class TestRepoRemovalNamesMachineSpecificPackages:
 
         diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.list")
         assert diff.action == DiffAction.REMOVE
-        assert diff.detail is not None
-        assert "vendor-tool" in diff.detail
-        assert "vendor.list" in diff.detail
+        # Both halves, in the order the decision needs them: what the machine stops getting,
+        # then what that costs. The user's ruling — the URL is what the choice is about.
+        assert diff.detail == (
+            "target-host would stop getting software from https://vendor.example.com/apt; "
+            "target-host installs vendor-tool from vendor.list — packages you set to always skip, so they "
+            "would stay installed but never get another update"
+        )
 
     @pytest.mark.asyncio
     async def test_the_machine_specific_package_itself_still_produces_no_diff(self) -> None:
@@ -4394,7 +4435,9 @@ class TestRepoRemovalNamesMachineSpecificPackages:
 
         diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.list")
         assert diff.action == DiffAction.REMOVE
-        assert diff.detail is None
+        # The URL half is unconditional (it is what the deletion is about); only the
+        # stranded-packages half is omitted when nothing would be stranded.
+        assert diff.detail == "target-host would stop getting software from https://vendor.example.com/apt"
 
     @pytest.mark.asyncio
     async def test_detail_reaches_the_user_through_the_review_entry(self) -> None:
@@ -5221,6 +5264,10 @@ _CURL_PIN_FILE = "Package: curl\nPin: version 8.0\nPin-Priority: 1001\n"
 # pin travel as a FILE and must keep happening; the stanza scan is the retired echo's input
 # and must not.
 _PIN_DIGEST_CMD = "find /etc/apt/preferences.d -maxdepth 1 -type f -exec sha256sum"
+
+# A real pin body: which origin it favours and by how much — none of which the filename
+# `vendor-pin` conveys, which is why the deletion screen prints the file.
+_VENDOR_PIN = "Package: *\nPin: origin vendor.example.com\nPin-Priority: 900\n"
 _PIN_STANZA_SCAN_CMD = "-exec awk '/^Package:/"
 _CURL_PIN_STANZAS = "/etc/apt/preferences.d/curl-pin\tPackage: curl\n"
 _MOZILLA_PIN_FILE = "Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n"
@@ -5349,6 +5396,7 @@ class TestTwoAnswerRemovals:
                 "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d9", "vendor.list"), ""),
                 "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, _VENDOR_LIST, ""),
                 _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p9", "vendor-pin"), ""),
+                "cat /etc/apt/preferences.d/vendor-pin": CommandResult(0, _VENDOR_PIN, ""),
                 "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c9", "99extra"), ""),
             },
         )
@@ -5382,9 +5430,63 @@ class TestTwoAnswerRemovals:
 
         titles = {group.title for group in plan.groups if group.action == REPO_REMOVAL_REVIEW_ACTION}
         assert titles == {
-            "Delete repositories the source no longer has (apt)",
-            "Delete pin files the source no longer has (apt)",
+            "Delete repositories source-host no longer has (apt)",
+            "Delete pin files source-host no longer has (apt)",
         }
+
+    @pytest.mark.asyncio
+    async def test_a_pin_offered_for_deletion_carries_its_whole_content(self) -> None:
+        """A pin filename says nothing about which vendor it favours or by how much, and the
+        filename is all a decision row can show. The file itself is what the answer needs.
+        """
+        context, _source, target = self._target_only_repo_state()
+
+        plan = await AptSyncJob(context).plan()
+
+        pins = next(
+            group
+            for group in plan.groups
+            if group.action == REPO_REMOVAL_REVIEW_ACTION and group.entries[0].item_id.startswith("apt:pin:")
+        )
+        assert pins.entries[0].content == _VENDOR_PIN
+        assert "sudo cat /etc/apt/preferences.d/vendor-pin" in all_calls(target)
+
+    @pytest.mark.asyncio
+    async def test_a_pin_read_that_did_not_answer_fails_the_job(self) -> None:
+        """ADR-022: silence from `cat` is not an empty pin file. An empty block on a deletion
+        screen is an approval given off nothing at all."""
+        context, _source, target = self._target_only_repo_state()
+        target.run_command.side_effect = respond_to(
+            {
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d9", "vendor.list"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, _VENDOR_LIST, ""),
+                _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p9", "vendor-pin"), ""),
+                "cat /etc/apt/preferences.d/vendor-pin": CommandResult(1, "", "cat: Permission denied"),
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c9", "99extra"), ""),
+            }
+        )
+
+        with pytest.raises(ProbeFailed, match=re.escape("cat /etc/apt/preferences.d/vendor-pin")):
+            await AptSyncJob(context).plan()
+
+    @pytest.mark.asyncio
+    async def test_a_repository_offered_for_deletion_carries_no_content_block(self) -> None:
+        """Its URLs are in the detail line; a second whole-file block would be the same fact
+        twice, and a `.sources` body is mostly fields the user is not deciding on."""
+        context, _source, _target = self._target_only_repo_state()
+
+        plan = await AptSyncJob(context).plan()
+
+        repos = next(
+            group
+            for group in plan.groups
+            if group.action == REPO_REMOVAL_REVIEW_ACTION and group.entries[0].item_id.startswith("apt:source:")
+        )
+        assert repos.entries[0].content is None
+        assert repos.entries[0].detail == (
+            "target-host would stop getting software from https://vendor.example.com/apt"
+        )
 
     @pytest.mark.asyncio
     async def test_a_two_answer_group_is_unticked_and_never_offered_permanence(self) -> None:
@@ -5869,12 +5971,42 @@ class TestRepoUnavailableWording:
 
     def test_build_repo_unavailable_detail_names_the_package_its_origin_and_the_cause(self) -> None:
         detail = build_repo_unavailable_detail(
-            "brscan3", ["https://gone.example.com/apt"], "no repository file on the source declares it"
+            "brscan3", ["https://gone.example.com/apt"], "no repository file on p17 declares it", MACHINES
         )
 
-        assert "brscan3" in detail
-        assert "gone.example.com/apt" in detail
-        assert "no repository file on the source declares it" in detail
+        assert detail == (
+            "target-host cannot install brscan3 from gone.example.com/apt: no repository file on p17 declares it"
+        )
+
+
+class TestRepoRemovalWording:
+    """A repository deletion is decided from the URLs it serves, not from its filename —
+    which is whatever whoever created the file happened to call it."""
+
+    def test_the_urls_come_first_and_the_stranded_packages_second(self) -> None:
+        detail = build_repo_removal_detail(
+            ["https://cli.github.com/packages"],
+            "target-host installs gh from 99-github.list",
+            MACHINES,
+        )
+
+        assert detail == (
+            "target-host would stop getting software from https://cli.github.com/packages; "
+            "target-host installs gh from 99-github.list"
+        )
+
+    def test_every_url_the_file_declares_is_named(self) -> None:
+        detail = build_repo_removal_detail(["https://a.example.com/apt", "https://b.example.com/deb"], None, MACHINES)
+
+        assert detail == (
+            "target-host would stop getting software from https://a.example.com/apt, https://b.example.com/deb"
+        )
+
+    def test_a_file_declaring_no_url_says_so_rather_than_trailing_off(self) -> None:
+        """A commented-out leftover parses to no URI. Half a sentence would read as a bug."""
+        detail = build_repo_removal_detail([], None, MACHINES)
+
+        assert detail == "target-host would stop getting software from nowhere — it declares no repository URL"
 
 
 class TestDiffEngine:
@@ -5883,7 +6015,7 @@ class TestDiffEngine:
     def test_missing_on_target_yields_install(self) -> None:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, [], {})
+        diffs = _diff_apt_packages(source_items, [], {}, MACHINES)
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.MISSING_ON_TARGET
@@ -5892,7 +6024,7 @@ class TestDiffEngine:
     def test_extra_on_target_yields_remove(self) -> None:
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages([], target_items, {})
+        diffs = _diff_apt_packages([], target_items, {}, MACHINES)
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.EXTRA_ON_TARGET
@@ -5902,7 +6034,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="2.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, {})
+        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES)
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.VERSION_MISMATCH
@@ -5915,7 +6047,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, {})
+        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES)
 
         assert diffs == []
 
@@ -5926,7 +6058,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, {}, frozenset({"pkg-a"}), frozenset())
+        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES, frozenset({"pkg-a"}), frozenset())
 
         assert len(diffs) == 1
         assert diffs[0].item_class == ItemClass.APT_HOLD
@@ -5942,7 +6074,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="2.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, {}, frozenset(), frozenset({"pkg-a"}))
+        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES, frozenset(), frozenset({"pkg-a"}))
 
         assert len(diffs) == 1
         assert diffs[0].item_class == ItemClass.APT_HOLD
@@ -5952,7 +6084,9 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, {}, frozenset({"pkg-a"}), frozenset({"pkg-a"}))
+        diffs = _diff_apt_packages(
+            source_items, target_items, {}, MACHINES, frozenset({"pkg-a"}), frozenset({"pkg-a"})
+        )
 
         assert diffs == []
 
@@ -5972,14 +6106,15 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="brscan3", version="")]
         plan = {"apt:package:brscan3": _OriginPlan(source_origins=frozenset({"https://gone.example.com/apt"}))}
 
-        diffs = _diff_apt_packages(source_items, [], plan)
+        diffs = _diff_apt_packages(source_items, [], plan, MACHINES)
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.REPO_UNAVAILABLE
         assert diffs[0].action == DiffAction.REPORT_ONLY
-        assert diffs[0].detail is not None
-        assert "gone.example.com/apt" in diffs[0].detail
-        assert "no repository file on the source declares it" in diffs[0].detail
+        assert diffs[0].detail == (
+            "target-host cannot install brscan3 from gone.example.com/apt: "
+            "no repository file on source-host declares it"
+        )
 
 
 class TestAReadThatDidNotAnswer:
@@ -6478,8 +6613,9 @@ class TestTheESMAttachmentGate:
         await job.execute()
 
         call = reviewer.gate_calls[0]
-        assert call["proceed_label"] == "I have attached the target — re-check and continue"
-        assert call["stop_label"] == "Skip apt_sync this run (other jobs continue)"
+        assert call["proceed_label"] == "I have attached target-host — check again and continue"
+        assert call["stop_label"] == "Skip apt_sync this run (every other job still runs)"
+        assert call["title"] == "target-host needs an Ubuntu Pro attachment"
 
     @pytest.mark.asyncio
     async def test_choosing_skip_raises_job_skipped_and_writes_nothing(self) -> None:

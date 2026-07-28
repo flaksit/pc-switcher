@@ -68,6 +68,7 @@ from pcswitcher.jobs.packages.items import (
     DiffClass,
     ItemClass,
     ItemDiff,
+    Machines,
     build_version_mismatch_detail,
 )
 from pcswitcher.jobs.packages.probes import require_answer
@@ -282,16 +283,16 @@ def _remove_diff(item: SnapItem) -> ItemDiff:
     )
 
 
-def _change_diff(item_id: str, source_item: SnapItem, target_item: SnapItem) -> ItemDiff:
+def _change_diff(item_id: str, source_item: SnapItem, target_item: SnapItem, machines: Machines) -> ItemDiff:
     """Present on both with a different revision and/or channel (D-06: unlike apt
     package versions, D-04, both actively converge — never `REPORT_ONLY`). `detail`
     names revisions when the revision differs (the more consequential fact); otherwise
     it is a same-revision retrack and names channels instead.
     """
     if source_item.revision != target_item.revision:
-        detail = build_version_mismatch_detail(source_item.revision, target_item.revision)
+        detail = build_version_mismatch_detail(source_item.revision, target_item.revision, machines)
     else:
-        detail = build_version_mismatch_detail(source_item.channel, target_item.channel)
+        detail = build_version_mismatch_detail(source_item.channel, target_item.channel, machines)
     return ItemDiff(
         item_class=ItemClass.SNAP,
         diff_class=DiffClass.VERSION_MISMATCH,
@@ -342,7 +343,9 @@ def _diff_snap_holds(source_items: Sequence[SnapItem], target_items: Sequence[Sn
     return diffs
 
 
-def _diff_snap_items(source_items: Sequence[SnapItem], target_items: Sequence[SnapItem]) -> list[ItemDiff]:
+def _diff_snap_items(
+    source_items: Sequence[SnapItem], target_items: Sequence[SnapItem], machines: Machines
+) -> list[ItemDiff]:
     """One diff per snap name present on either side, source-then-target order — same
     shape as `PackageSyncJob._diff_apt_packages`, but with D-06's own convergence rule.
     Per-snap hold membership diffs follow the presence diffs (D8: install-before-hold).
@@ -368,7 +371,7 @@ def _diff_snap_items(source_items: Sequence[SnapItem], target_items: Sequence[Sn
             and target_item is not None
             and (source_item.revision != target_item.revision or source_item.channel != target_item.channel)
         ):
-            diffs.append(_change_diff(item_id, source_item, target_item))
+            diffs.append(_change_diff(item_id, source_item, target_item, machines))
         # else: present on both, identical revision and channel -> no diff.
 
     # Hold diffs AFTER presence diffs (D8) so a hold on a same-run install lands once the
@@ -539,7 +542,7 @@ class SnapSyncJob(PackageSyncJob):
         # identity is `snap:hold:<name>`, which no `SnapItem` carries (its own id is
         # `snap:<name>`), so a recorded hold decision can only be matched on the ItemDiff.
         diffs = self._drop_inert_diffs(
-            _diff_snap_items(source_items, target_items), source_decisions, target_decisions
+            _diff_snap_items(source_items, target_items, self.machines), source_decisions, target_decisions
         )
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)

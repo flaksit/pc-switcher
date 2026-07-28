@@ -29,8 +29,25 @@ __all__ = [
     "DiffClass",
     "ItemClass",
     "ItemDiff",
+    "Machines",
     "build_version_mismatch_detail",
 ]
+
+
+@dataclass(frozen=True)
+class Machines:
+    """The two machines' own names, for every string a user reads.
+
+    Source and target are ROLES this run assigns; they are not what the user calls the two
+    computers in front of them, and a review line that says "the target" makes the reader
+    translate before they can decide. Carried as one value rather than two parameters because
+    every detail builder that needs one usually needs both, and because a builder that takes
+    it is built once per job from `JobContext`, so no call site can pair the two names up
+    itself and get them the wrong way round.
+    """
+
+    source: str
+    target: str
 
 
 class ItemClass(StrEnum):
@@ -120,11 +137,11 @@ class ItemDiff:
     detail: str | None = None
 
 
-def build_version_mismatch_detail(source_version: str, target_version: str) -> str:
+def build_version_mismatch_detail(source_version: str, target_version: str, machines: Machines) -> str:
     """Detail string for a `VERSION_MISMATCH` diff: both versions, machine-labelled.
 
     Showing both versions in the review text is what makes D-04's "detected and
     reported, never force-downgraded" promise visible to the user — nothing here
     proposes a resolution, it names the two facts and leaves the decision alone.
     """
-    return f"source has {source_version}, target has {target_version}"
+    return f"{machines.source} has {source_version}, {machines.target} has {target_version}"

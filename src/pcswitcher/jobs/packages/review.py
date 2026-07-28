@@ -48,9 +48,10 @@ is deliberately absent from `--help`, the config schema and user docs (D-26).
 
 A `ReviewGroup` whose `action` is `UNREPRODUCIBLE_REVIEW_ACTION` gets a different
 interaction shape from every other group (D-21): instead of a row on a decision screen, each
-entry is resolved one at a time with a three-way choice — add an install snippet, always skip
-it as specific to this machine, or skip for now — because "should this apply" is not the
-question for an item no package manager can reproduce; "how does this get resolved" is.
+entry is resolved one at a time with a three-way choice — write the commands that install
+it, mark it as belonging to the source machine alone, or skip for now — because "should this
+apply" is not the question for an item no package manager can reproduce; "how does the other
+machine get this" is.
 `ReviewOutcome.snippets` carries that group's authored snippets back to the caller
 (`PackageSyncJob.apply()`), which persists them. An interactive review always resolves
 every entry (decision 10): an empty snippet capture re-prompts rather than falling through
@@ -63,7 +64,9 @@ A `ReviewGroup` whose `action` is `REPO_REMOVAL_REVIEW_ACTION` uses the same scr
 fewer answer (ADR-020 D-07): delete, or leave it for now. It starts at skip-once like every
 other removal direction and is never offered permanence, so `Decision.SKIP_ALWAYS` is
 unreachable for it and nothing about it is ever recorded. That is why `_REMOVAL_ACTIONS` and
-`_PROMOTABLE_ACTIONS` are two independent sets rather than one derived from the other.
+`_PROMOTABLE_ACTIONS` are two independent sets rather than one derived from the other. An
+entry carrying `ReviewEntry.content` prints that whole file first: a pin file's name says
+nothing about what it does, and its name is all a decision row can show.
 
 A `ReviewGroup` whose `action` is `REPO_CONFLICT_REVIEW_ACTION` is the same two-answer screen
 (ADR-020 D-37) preceded by its own content: something that differs on the two machines and
@@ -74,13 +77,20 @@ and it starts at skip-once: an overwrite moves software the target explicitly ma
 machine-specific, so it is chosen, never defaulted.
 
 A `ReviewGroup` whose `action` is `COLLATERAL_REVIEW_ACTION` likewise gets its own
-interaction shape (D-30): each entry is a manually-installed package the pending apt
-transaction would remove or downgrade, resolved one at a time with a three-way choice —
-install anyway, skip, or abort. The decision is recorded against the entry's `item_id`
-(the triggering install, set by the caller), so install-anyway proceeds with that install,
-skip leaves it unapproved, and abort raises `SyncAbortedByUser` naming the collateral
-package. A non-interactive run leaves every collateral entry `SKIP_ONCE` like every other
-item, so the install it gates is simply not approved (D-26).
+interaction shape (D-30): each entry is a package the TARGET's own apt has marked manually
+installed and the pending transaction would remove or downgrade, resolved one at a time
+with a three-way choice — go ahead, keep the package, or stop the whole sync. The decision
+is recorded against the entry's `item_id` (the triggering change, set by the caller), so
+"go ahead" proceeds with it, "keep" leaves it unapproved, and "stop" raises
+`SyncAbortedByUser` naming the collateral package. A non-interactive run leaves every
+collateral entry `SKIP_ONCE` like every other item, so the change it gates is simply not
+approved (D-26).
+
+Every screen here names the two machines by hostname. `review_items` takes both and they
+are required: what an answer costs is "fleksi loses this package", never "the target loses
+this package", and no wording in this module may fall back to the tool's own vocabulary for
+the user's computers. Source and target survive as the names of the ROLES in code,
+docstrings and logs, which is where they belong.
 """
 
 from __future__ import annotations
@@ -169,14 +179,15 @@ UNREPRODUCIBLE_REVIEW_ACTION = "unreproducible"
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of manual-collateral items (D-30) as needing the three-way per-entry resolution flow
-# below — install-anyway / skip / abort — rather than an ordinary decision screen. A
-# manual-collateral item is a manually-installed package the pending apt transaction would
-# remove or downgrade; whether to lose it is not a question the decision screen expresses, so
-# it gets its own prompt (sibling to `UNREPRODUCIBLE_REVIEW_ACTION`). Install-anyway records
-# `Decision.APPLY` against `ReviewEntry.item_id`, skip records `Decision.SKIP_ONCE`, and
-# abort raises `SyncAbortedByUser` naming the collateral package. The caller maps that
-# recorded decision onto the triggering install (`AptSyncJob.accept_review`): APPLY lets the
-# install proceed and allows the collateral removal, SKIP_ONCE leaves the install unapproved.
+# below — go ahead / keep the package / stop the sync — rather than an ordinary decision
+# screen. A manual-collateral item is a package the TARGET's apt has marked manually
+# installed that the pending transaction would remove or downgrade; whether to lose it is not
+# a question the decision screen expresses, so it gets its own prompt (sibling to
+# `UNREPRODUCIBLE_REVIEW_ACTION`). Go-ahead records `Decision.APPLY` against
+# `ReviewEntry.item_id`, keep records `Decision.SKIP_ONCE`, and stop raises
+# `SyncAbortedByUser` naming the collateral package. The caller maps that recorded decision
+# onto the changes that cause it (`AptSyncJob.accept_review`): APPLY lets them proceed and
+# allows the collateral removal, SKIP_ONCE leaves exactly those unapproved.
 COLLATERAL_REVIEW_ACTION = "collateral"
 
 # Sentinel `ReviewGroup.action` for the one `/etc/apt` CHANGE that is still a question
@@ -211,6 +222,10 @@ class ReviewEntry:
     screen that shows two whole files side by side instead of a detail line (ADR-020 D-37's
     repository conflict). Optional and defaulted so every other construction site — and
     every other screen — is unaffected; a unified diff is deliberately not the shape.
+
+    `content` is the one-block counterpart, for a screen that offers to DELETE a file the
+    only machine holding it still has: there is no second version to compare it against, and
+    a filename alone is not something anyone can decide a deletion from.
     """
 
     item_id: str
@@ -218,6 +233,7 @@ class ReviewEntry:
     action_label: str
     detail: str | None = None
     versions: tuple[str, str] | None = None
+    content: str | None = None
 
 
 @dataclass(frozen=True)
@@ -283,6 +299,10 @@ def _is_repo_conflict_group(action: str) -> bool:
     return action == REPO_CONFLICT_REVIEW_ACTION
 
 
+def _is_repo_removal_group(action: str) -> bool:
+    return action == REPO_REMOVAL_REVIEW_ACTION
+
+
 def _is_promotable_group(action: str) -> bool:
     return action in _PROMOTABLE_ACTIONS
 
@@ -295,6 +315,22 @@ _SKIP_ONCE_KEY = "s"
 _SKIP_ALWAYS_KEY = "n"
 SKIP_ONCE_WORD = "skip once"
 SKIP_ALWAYS_WORD = "always skip"
+
+
+def _skip_once_word(group: ReviewGroup, target_hostname: str) -> str:
+    """What "skip once" DOES on this screen, said as the effect rather than the mechanism.
+
+    On the two screens whose act option changes a file the target already has, "skip once"
+    is not "do nothing" but "the machine keeps what it has", and that is the half of the
+    answer the user is actually weighing. Everywhere else the item is not yet on the target
+    at all, so there is no state to keep and the plain word is the honest one.
+    """
+    if _is_repo_conflict_group(group.action):
+        return f"keep {target_hostname}'s version"
+    if _is_removal_direction(group.action):
+        return f"keep it on {target_hostname}"
+    return SKIP_ONCE_WORD
+
 
 # Filled / hollow / crossed. The glyph is what carries the row's state, so the screen stays
 # readable in a terminal whose background colours the user cannot distinguish.
@@ -326,7 +362,7 @@ def _default_decision(action: str) -> Decision:
     return Decision.APPLY
 
 
-def _options_for(group: ReviewGroup) -> tuple[DecisionOption, ...]:
+def _options_for(group: ReviewGroup, *, target_hostname: str) -> tuple[DecisionOption, ...]:
     """The answers one group's screen offers — three, or two where D-07 records nothing.
 
     The same widget either way: the user sees a missing option in the legend rather than a
@@ -336,7 +372,12 @@ def _options_for(group: ReviewGroup) -> tuple[DecisionOption, ...]:
         DecisionOption(
             value=Decision.APPLY, key=_APPLY_KEY, word=_group_act_word(group), glyph=_APPLY_GLYPH, is_act=True
         ),
-        DecisionOption(value=Decision.SKIP_ONCE, key=_SKIP_ONCE_KEY, word=SKIP_ONCE_WORD, glyph=_SKIP_ONCE_GLYPH),
+        DecisionOption(
+            value=Decision.SKIP_ONCE,
+            key=_SKIP_ONCE_KEY,
+            word=_skip_once_word(group, target_hostname),
+            glyph=_SKIP_ONCE_GLYPH,
+        ),
     ]
     if _is_promotable_group(group.action):
         options.append(
@@ -370,17 +411,21 @@ def _rows_for(group: ReviewGroup) -> tuple[DecisionRow, ...]:
     )
 
 
-# Printed once before the multi-line capture, so a user does not author a snippet that
-# hangs the sync (T-02-18): the executor supplies no stdin, and a worked shape showing
-# the DEBIAN_FRONTEND=noninteractive + dependency-fix pattern is cheaper to read here
-# than to discover as a stuck sync.
-_SNIPPET_AUTHORING_NOTE = (
-    "This snippet replays non-interactively on the target — no stdin is available, so a\n"
-    "command that prompts (e.g. a debconf question) will hang the sync rather than fail.\n"
-    "A typical shape:\n\n"
-    "  sudo DEBIAN_FRONTEND=noninteractive dpkg --install /path/to/package.deb || \\\n"
-    "  sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken\n"
-)
+def _snippet_authoring_note(target_hostname: str) -> str:
+    """Printed once before the multi-line capture, so a user does not author a snippet that
+    hangs the sync (T-02-18): the executor supplies no stdin, and a worked shape showing the
+    DEBIAN_FRONTEND=noninteractive + dependency-fix pattern is cheaper to read here than to
+    discover as a stuck sync. Said as what happens on the machine that will run it, rather
+    than as a fact about the executor.
+    """
+    return (
+        f"These commands run on {target_hostname} with nobody watching — there is no keyboard\n"
+        "attached to them, so a command that asks a question (e.g. a debconf prompt) hangs the\n"
+        "sync instead of failing. A typical shape:\n\n"
+        "  sudo DEBIAN_FRONTEND=noninteractive dpkg --install /path/to/package.deb || \\\n"
+        "  sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken\n"
+    )
+
 
 # Shown in place of questionary's own multiline instruction, which offers "Alt+Enter or Esc
 # then Enter" — two chords for one gesture, neither of which a user guesses.
@@ -446,6 +491,8 @@ async def _review_unreproducible_group(
     group: ReviewGroup,
     *,
     console: Console,
+    source_hostname: str,
+    target_hostname: str,
     decisions: dict[str, Decision],
     snippets: dict[str, str],
 ) -> None:
@@ -483,17 +530,23 @@ async def _review_unreproducible_group(
         # item (decision 10); a cancelled choice breaks out by aborting the whole sync.
         while True:
             choice_prompt = questionary.select(
-                f"How should {entry.label} be resolved?",
+                f"How should {target_hostname} get {entry.label}?",
                 choices=[
                     questionary.Choice(
-                        title="Add an install snippet — the machine that lacks it replays your commands",
+                        title=f"Write the commands that install it — {target_hostname} runs them, now and on "
+                        "every future sync",
                         value="add_snippet",
                     ),
                     questionary.Choice(
-                        title="Always skip — it belongs to this machine, so neither machine ever syncs it",
+                        title=f"This one is specific to {source_hostname}. Always skip it — {target_hostname} "
+                        "never gets it, and you are not asked again",
                         value="skip_always",
                     ),
-                    questionary.Choice(title="Skip for now — you will be asked again next sync", value="skip_once"),
+                    questionary.Choice(
+                        title=f"Skip for now — {target_hostname} does not get it this sync, and you are asked "
+                        "again next sync",
+                        value="skip_once",
+                    ),
                 ],
             )
             selected = await asyncio.to_thread(choice_prompt.ask)
@@ -517,7 +570,7 @@ async def _review_unreproducible_group(
                 break
 
             # selected == "add_snippet"
-            console.print(Text(_SNIPPET_AUTHORING_NOTE, style="dim"))
+            console.print(Text(_snippet_authoring_note(target_hostname), style="dim"))
             body_prompt = questionary.text(
                 f"Install snippet for {entry.label}:",
                 multiline=True,
@@ -536,7 +589,7 @@ async def _review_unreproducible_group(
             )
 
 
-async def _review_decision_group(group: ReviewGroup, *, decisions: dict[str, Decision]) -> None:
+async def _review_decision_group(group: ReviewGroup, *, target_hostname: str, decisions: dict[str, Decision]) -> None:
     """Present one actionable group as a single screen and record every row's answer.
 
     The whole of D-07 in one pass: each row starts at `_default_decision` and ends wherever
@@ -547,7 +600,9 @@ async def _review_decision_group(group: ReviewGroup, *, decisions: dict[str, Dec
     Ctrl-C (`ask` returns `None`) aborts the WHOLE sync like every other review screen —
     never a silent fallthrough that leaves this and every later group undecided.
     """
-    prompt = decision_list(group.title, rows=_rows_for(group), options=_options_for(group))
+    prompt = decision_list(
+        group.title, rows=_rows_for(group), options=_options_for(group, target_hostname=target_hostname)
+    )
     answered: Mapping[str, str] | None = await asyncio.to_thread(prompt.ask)
 
     if answered is None:
@@ -561,22 +616,31 @@ async def _review_collateral_group(
     group: ReviewGroup,
     *,
     console: Console,
+    target_hostname: str,
     decisions: dict[str, Decision],
 ) -> None:
     """Resolve one `COLLATERAL_REVIEW_ACTION` group's entries, one at a time, with the
-    three-way choice D-30 requires for a manually-installed package the pending apt
-    transaction would remove or downgrade: install anyway, skip, or abort. Never a
-    row on a decision screen — losing a package the user chose to have is not the same
-    question as approving an install off a list.
+    three-way choice D-30 requires for a package the target's own apt has marked manually
+    installed and the pending transaction would remove or downgrade: let it happen, protect
+    the package, or stop. Never a row on a decision screen — losing a package the user chose
+    to have is not the same question as approving an install off a list.
 
-    The decision is recorded against `entry.item_id`: install-anyway records
-    `Decision.APPLY`, skip records `Decision.SKIP_ONCE`. The caller (`AptSyncJob`) maps
-    that onto the triggering install — APPLY lets the install proceed and allows the
-    collateral removal, SKIP_ONCE leaves the install unapproved so the collateral is not
-    removed. Abort raises `SyncAbortedByUser` — the existing user-decline control-flow
-    exception, caught once at WARNING by both the orchestrator and the CLI — naming the
-    collateral package, so the whole run stops cleanly rather than applying a transaction
-    the user did not accept.
+    What is protected here is a fact about the TARGET (`AptSyncJob._protected_manual_set` —
+    the target's own `apt-mark showmanual`), not a machine-specific mark: nobody recorded a
+    preference about this package, apt simply says the user asked for it on the machine being
+    changed. The prompt says that, because "manually installed" is apt's vocabulary and
+    "you asked for it here" is the user's.
+
+    The decision is recorded against `entry.item_id`: proceed records `Decision.APPLY`,
+    protect records `Decision.SKIP_ONCE`. The caller (`AptSyncJob`) maps that onto the
+    changes that CAUSE the collateral (`_collateral_trigger_ids`) — APPLY lets them proceed
+    and allows the collateral removal, SKIP_ONCE leaves exactly those unapproved. Stopping
+    raises `SyncAbortedByUser` — the existing user-decline control-flow exception, caught
+    once at WARNING by both the orchestrator and the CLI — naming the collateral package.
+    That ends the WHOLE pc-switcher sync, not just this job: the orchestrator's per-job
+    handler re-raises it untouched (`_run_jobs_in_task_group`), so no later job runs and
+    `run()` records the session ABORTED. The choice says so, because "abort" alone reads
+    like "abort this question".
 
     Every untrusted label/detail is wrapped in `Text` before it reaches the console, so a
     package name containing bracket characters cannot trigger the Rich markup crash the
@@ -585,35 +649,90 @@ async def _review_collateral_group(
     for entry in group.entries:
         console.print()
         console.print(Text(entry.label, style="bold"))
+        console.print(
+            Text(
+                f"You asked for {entry.label} on {target_hostname} yourself — apt there has it marked as "
+                f"manually installed, so pc-switcher never takes it away without asking.",
+                style="dim",
+            )
+        )
         if entry.detail:
             console.print(Text(entry.detail, style="dim"))
 
         choice_prompt = questionary.select(
-            f"{entry.label} is manually installed and would be removed or downgraded. Proceed?",
+            f"What should happen to {entry.label} on {target_hostname}?",
             choices=[
-                questionary.Choice(title="Install anyway (allow the collateral removal)", value="install_anyway"),
-                questionary.Choice(title="Skip (leave the triggering install unapproved)", value="skip"),
-                questionary.Choice(title="Abort the sync", value="abort"),
+                questionary.Choice(
+                    title=f"Go ahead — {entry.label} changes on {target_hostname} as described above",
+                    value="proceed",
+                ),
+                questionary.Choice(
+                    title=(
+                        f"Keep {entry.label} as it is — the changes that would touch it are dropped from this sync"
+                    ),
+                    value="protect",
+                ),
+                questionary.Choice(
+                    title=(
+                        f"Stop the whole pc-switcher sync now — nothing more is changed on {target_hostname}, "
+                        "and what earlier jobs already did stays done"
+                    ),
+                    value="abort",
+                ),
             ],
         )
         selected = await asyncio.to_thread(choice_prompt.ask)
 
-        if selected == "install_anyway":
+        if selected == "proceed":
             decisions[entry.item_id] = Decision.APPLY
         elif selected == "abort":
             raise SyncAbortedByUser(
-                f"collateral removal of manually-installed {entry.label} declined (abort chosen in review)"
+                f"{entry.label} on {target_hostname} would have been removed or downgraded; the whole sync was "
+                "stopped in the package review"
             )
         else:
-            # "skip", None (the select was cancelled): leave the triggering install
+            # "protect", None (the select was cancelled): leave the causing changes
             # unapproved for this run, so the collateral is not removed.
             decisions[entry.item_id] = Decision.SKIP_ONCE
+
+
+async def _review_removal_group(
+    group: ReviewGroup,
+    *,
+    console: Console,
+    target_hostname: str,
+    decisions: dict[str, Decision],
+) -> None:
+    """The two-answer deletion screen (`REPO_REMOVAL_REVIEW_ACTION`), preceded by the whole
+    content of every entry that carries one.
+
+    A pin file's name says nothing about what it does, and its name is all a decision screen
+    row can show, so the file that is being offered for deletion is printed first — one block
+    per file, the same shape the repository conflict uses for two. An entry with no `content`
+    (a repository file, whose URLs are in its detail line) prints nothing extra and the screen
+    is exactly what it was.
+
+    The body's own trailing newline is dropped: inside a panel border it renders as an empty
+    last line. Wrapped in `Text` like every other untrusted string (T-02-02).
+    """
+    for entry in group.entries:
+        if entry.content is None:
+            continue
+        console.print()
+        console.print(Text(entry.label, style="bold"))
+        console.print(
+            Panel(Text(entry.content.rstrip("\n")), title=Text(f"On {target_hostname}"), border_style="yellow")
+        )
+
+    await _review_decision_group(group, target_hostname=target_hostname, decisions=decisions)
 
 
 async def _review_repo_conflict_group(
     group: ReviewGroup,
     *,
     console: Console,
+    source_hostname: str,
+    target_hostname: str,
     decisions: dict[str, Decision],
 ) -> None:
     """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group with the two-way choice ADR-020 D-37
@@ -654,12 +773,18 @@ async def _review_repo_conflict_group(
         if entry.versions is not None:
             target_version, source_version = entry.versions
             console.print(
-                Panel(Text(target_version.rstrip("\n")), title=Text("on the target now"), border_style="yellow")
+                Panel(
+                    Text(target_version.rstrip("\n")),
+                    title=Text(f"On {target_hostname} now"),
+                    border_style="yellow",
+                )
             )
-            console.print(Panel(Text(source_version.rstrip("\n")), title=Text("on the source"), border_style="cyan"))
+            console.print(
+                Panel(Text(source_version.rstrip("\n")), title=Text(f"On {source_hostname}"), border_style="cyan")
+            )
 
     console.print()
-    await _review_decision_group(group, decisions=decisions)
+    await _review_decision_group(group, target_hostname=target_hostname, decisions=decisions)
 
 
 async def review_items(
@@ -667,9 +792,16 @@ async def review_items(
     *,
     console: Console,
     ui: PausableUI,
+    source_hostname: str,
+    target_hostname: str,
     logger: logging.Logger | None = None,
 ) -> ReviewOutcome:
     """Present every group as one decision screen and return the user's decisions.
+
+    Both machine names are required, not defaulted: every screen here names the machine an
+    answer acts on, and "the target" is a word for the tool's own plumbing rather than for
+    either of the user's computers. A caller that cannot name them has no business asking
+    these questions.
 
     Non-interactive runs (`is_interactive(console)` is False) prompt for nothing: every
     item comes back `SKIP_ONCE`, nothing is recorded permanently, a warning names how many
@@ -706,18 +838,39 @@ async def review_items(
             console.print()
 
             if _is_unreproducible_group(group.action):
-                await _review_unreproducible_group(group, console=console, decisions=decisions, snippets=snippets)
+                await _review_unreproducible_group(
+                    group,
+                    console=console,
+                    source_hostname=source_hostname,
+                    target_hostname=target_hostname,
+                    decisions=decisions,
+                    snippets=snippets,
+                )
                 continue
 
             if _is_collateral_group(group.action):
-                await _review_collateral_group(group, console=console, decisions=decisions)
+                await _review_collateral_group(
+                    group, console=console, target_hostname=target_hostname, decisions=decisions
+                )
                 continue
 
             if _is_repo_conflict_group(group.action):
-                await _review_repo_conflict_group(group, console=console, decisions=decisions)
+                await _review_repo_conflict_group(
+                    group,
+                    console=console,
+                    source_hostname=source_hostname,
+                    target_hostname=target_hostname,
+                    decisions=decisions,
+                )
                 continue
 
-            await _review_decision_group(group, decisions=decisions)
+            if _is_repo_removal_group(group.action):
+                await _review_removal_group(
+                    group, console=console, target_hostname=target_hostname, decisions=decisions
+                )
+                continue
+
+            await _review_decision_group(group, target_hostname=target_hostname, decisions=decisions)
     finally:
         ui.resume()
 
@@ -812,14 +965,25 @@ class TerminalUIReviewer:
         console: Console,
         ui: PausableUI,
         *,
+        source_hostname: str,
+        target_hostname: str,
         logger: logging.Logger | None = None,
     ) -> None:
         self._console = console
         self._ui = ui
+        self._source_hostname = source_hostname
+        self._target_hostname = target_hostname
         self._logger = logger
 
     async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
-        return await review_items(groups, console=self._console, ui=self._ui, logger=self._logger)
+        return await review_items(
+            groups,
+            console=self._console,
+            ui=self._ui,
+            source_hostname=self._source_hostname,
+            target_hostname=self._target_hostname,
+            logger=self._logger,
+        )
 
     async def ask_gate(self, *, title: str, message: str, proceed_label: str, stop_label: str) -> bool | None:
         return await ask_gate(

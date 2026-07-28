@@ -56,7 +56,7 @@ something the user chose to have and is refused unless the user approved losing 
 runs two BATCHED simulations (the whole install candidate set, the whole removal candidate
 set — not one per-package, which would cost more than the sync itself for 150 packages) and
 classifies their collateral against the target manual set, emitting a three-way
-install-anyway / skip / abort review item for each manual-collateral package so the decision
+go-ahead / keep-the-package / stop-the-sync review item for each manual-collateral package so the decision
 is made in the batched review, never as a prompt during apply. A batch that turns up manual
 collateral then rehearses each candidate alone, so `skip` cancels the packages that actually
 cause the collateral rather than everything the user was reviewing (`_collateral_for`).
@@ -201,6 +201,7 @@ from pcswitcher.jobs.packages.items import (
     DiffClass,
     ItemClass,
     ItemDiff,
+    Machines,
     build_version_mismatch_detail,
 )
 from pcswitcher.jobs.packages.probes import require_answer
@@ -224,6 +225,7 @@ __all__ = ["AptSyncJob", "AptTransactionPreview", "simulate_apt_transaction"]
 # Parsing the name back out of the id is a legitimate use of a stable identity string,
 # not string-matching on manager-specific content.
 _APT_PACKAGE_ID_PREFIX = "apt:package:"
+_APT_PIN_ID_PREFIX = "apt:pin:"
 
 # Binaries this job runs under sudo, quoted back to the user when the passwordless-sudo
 # check fails. A lower bound on what must be permitted, not an exact scope (ADR-013).
@@ -445,7 +447,7 @@ def build_origin_detail(origins: Sequence[str]) -> str | None:
     return f"from {', '.join(_display_origin(uri) for uri in origins)}"
 
 
-def build_repo_unavailable_detail(name: str, origins: Sequence[str], cause: str) -> str:
+def build_repo_unavailable_detail(name: str, origins: Sequence[str], cause: str, machines: Machines) -> str:
     """Detail for a `REPO_UNAVAILABLE` diff: where the source has this package from, and why
     the target cannot be given the same place (ADR-020 D-34).
 
@@ -454,10 +456,12 @@ def build_repo_unavailable_detail(name: str, origins: Sequence[str], cause: str)
     (a repository file that no longer exists, a missing signing key) or nobody's.
     """
     where = f" from {', '.join(_display_origin(uri) for uri in origins)}" if origins else ""
-    return f"{name} cannot be installed{where} on the target: {cause}"
+    return f"{machines.target} cannot install {name}{where}: {cause}"
 
 
-def build_origin_mismatch_detail(source_origins: Sequence[str], target_origins: Sequence[str]) -> str:
+def build_origin_mismatch_detail(
+    source_origins: Sequence[str], target_origins: Sequence[str], machines: Machines
+) -> str:
     """Detail for an `ORIGIN_MISMATCH` diff: the same package, two vendors.
 
     Report only, and both sides are named because neither is wrong — converging it would
@@ -466,10 +470,12 @@ def build_origin_mismatch_detail(source_origins: Sequence[str], target_origins: 
     """
     source = ", ".join(_display_origin(uri) for uri in source_origins)
     target = ", ".join(_display_origin(uri) for uri in target_origins)
-    return f"source installed it from {source}, target from {target}"
+    return f"{machines.source} installed it from {source}, {machines.target} from {target}"
 
 
-def build_origin_refusal_detail(name: str, source_origins: Sequence[str], target_origins: Sequence[str]) -> str:
+def build_origin_refusal_detail(
+    name: str, source_origins: Sequence[str], target_origins: Sequence[str], machines: Machines
+) -> str:
     """Why an approved install was refused at the last moment (ADR-020 D-35): the origin the
     source uses, and the origin the target's apt would have installed from instead.
 
@@ -484,8 +490,8 @@ def build_origin_refusal_detail(name: str, source_origins: Sequence[str], target
     else:
         instead = "offers it from no repository at all"
     return (
-        f"install of {name} refused: the source has it from {wanted}, but after this run's "
-        f"apt-get update the target {instead} (ADR-020 D-35)"
+        f"{name} was not installed: {machines.source} has it from {wanted}, but after this run's "
+        f"apt-get update {machines.target} {instead} (ADR-020 D-35)"
     )
 
 
@@ -615,16 +621,15 @@ class _OriginPlan:
         """
         return self.source_files if self.outcome() is _OriginOutcome.REPLICABLE else frozenset()
 
-    @property
-    def unavailable_cause(self) -> str:
+    def unavailable_cause(self, machines: Machines) -> str:
         """Why the source's origin cannot be provided on the target — the second half of a
         `REPO_UNAVAILABLE` detail, after the origin itself.
         """
         if self.unwritable is not None:
             return self.unwritable
         if not self.source_origins:
-            return "the source's apt names no repository origin for it"
-        return "no repository file on the source declares it"
+            return f"apt on {machines.source} names no repository origin for it"
+        return f"no repository file on {machines.source} declares it"
 
 
 @dataclass(frozen=True)
@@ -660,6 +665,7 @@ def _diff_apt_packages(
     source_items: Sequence[AptPackageItem],
     target_items: Sequence[AptPackageItem],
     origin_plan: Mapping[str, _OriginPlan],
+    machines: Machines,
     source_hold_names: frozenset[str] = frozenset(),
     target_hold_names: frozenset[str] = frozenset(),
 ) -> list[ItemDiff]:
@@ -719,7 +725,10 @@ def _diff_apt_packages(
                         item_id=item_id,
                         label=source_item.label(),
                         detail=build_repo_unavailable_detail(
-                            source_item.name, sorted(origins.source_origins), origins.unavailable_cause
+                            source_item.name,
+                            sorted(origins.source_origins),
+                            origins.unavailable_cause(machines),
+                            machines,
                         ),
                     )
                 )
@@ -754,7 +763,9 @@ def _diff_apt_packages(
                     action=DiffAction.REPORT_ONLY,
                     item_id=item_id,
                     label=target_item.label() if target_item is not None else item_id,
-                    detail=build_origin_mismatch_detail(origins.vendor_source_origins, origins.vendor_target_origins),
+                    detail=build_origin_mismatch_detail(
+                        origins.vendor_source_origins, origins.vendor_target_origins, machines
+                    ),
                 )
             )
         elif source_item is not None and target_item is not None and source_item.version != target_item.version:
@@ -765,7 +776,7 @@ def _diff_apt_packages(
                     action=DiffAction.REPORT_ONLY,
                     item_id=item_id,
                     label=target_item.label(),
-                    detail=build_version_mismatch_detail(source_item.version, target_item.version),
+                    detail=build_version_mismatch_detail(source_item.version, target_item.version, machines),
                 )
             )
         # else: present on both, one vendor, equal versions, not held -> no diff.
@@ -916,7 +927,7 @@ async def compare_deb_versions(executor: Executor, left: str, right: str) -> int
     return 0
 
 
-def build_dangling_keyring_detail(filename: str, missing_ref: str) -> str:
+def build_dangling_keyring_detail(filename: str, missing_ref: str, machines: Machines) -> str:
     """Detail string when a source file's `Signed-By:`/`signed-by=` reference resolves
     to no keyring file on the SOURCE itself (a source referencing a key nobody
     captured). Flags the source item rather than letting it be proposed for install on
@@ -924,7 +935,7 @@ def build_dangling_keyring_detail(filename: str, missing_ref: str) -> str:
     every subsequent operation, so surfacing the gap here is cheaper than discovering it
     as an opaque apt-get failure on the target.
     """
-    return f"{filename} references keyring {missing_ref!r}, which does not exist on the source"
+    return f"{filename} references keyring {missing_ref!r}, which does not exist on {machines.source}"
 
 
 @dataclass(frozen=True)
@@ -942,7 +953,7 @@ class _RepoConflict:
     source_version: str
 
 
-def build_repo_conflict_detail(filename: str, packages: Sequence[str]) -> str:
+def build_repo_conflict_detail(filename: str, packages: Sequence[str], machines: Machines) -> str:
     """Detail for a repository-conflict entry: why THIS differing file is being put to the
     user when every other one is overwritten silently (ruling 6).
 
@@ -952,12 +963,27 @@ def build_repo_conflict_detail(filename: str, packages: Sequence[str]) -> str:
     doing so moves software they explicitly told this tool to leave alone.
     """
     return (
-        f"{filename} differs on the two machines and feeds machine-specific packages on the target: "
-        f"{', '.join(packages)}"
+        f"{filename} is different on the two machines, and {machines.target} installs "
+        f"{', '.join(packages)} from it — packages you set to always skip, so a sync normally leaves them alone"
     )
 
 
-def build_orphaned_packages_detail(source_filename: str, packages: Sequence[str]) -> str:
+def build_repo_removal_detail(uris: Sequence[str], orphaned: str | None, machines: Machines) -> str:
+    """Detail for a repository-file DELETION: what the machine stops getting software from,
+    then what that costs (`build_orphaned_packages_detail`) when it costs anything.
+
+    The URLs, not just the filename. A filename is whatever whoever created the file decided
+    to call it, and two machines' `/etc/apt/sources.list.d` routinely name the same vendor
+    differently; the URL is the thing the user recognises and the thing the deletion actually
+    removes. A file declaring none (a commented-out leftover, an unparsable stanza) says so
+    rather than silently dropping the first half of the sentence.
+    """
+    where = ", ".join(uris) if uris else "nowhere — it declares no repository URL"
+    stops = f"{machines.target} would stop getting software from {where}"
+    return f"{stops}; {orphaned}" if orphaned else stops
+
+
+def build_orphaned_packages_detail(source_filename: str, packages: Sequence[str], machines: Machines) -> str:
     """Detail string for an apt source-file REMOVE diff whose removal would leave
     machine-specific packages on the target without the repository that feeds them (C26).
 
@@ -968,8 +994,8 @@ def build_orphaned_packages_detail(source_filename: str, packages: Sequence[str]
     Disclosure, not refusal — D-30's placement, the same as flatpak's orphaned refs.
     """
     return (
-        f"machine-specific packages on the target installed from {source_filename}: "
-        f"{', '.join(packages)} (removal leaves them without updates)"
+        f"{machines.target} installs {', '.join(packages)} from {source_filename} — packages you set to always "
+        f"skip, so they would stay installed but never get another update"
     )
 
 
@@ -977,6 +1003,11 @@ def _package_name(item_id: str) -> str:
     if not item_id.startswith(_APT_PACKAGE_ID_PREFIX):
         raise ValueError(f"Not an apt package item id: {item_id!r}")
     return item_id.removeprefix(_APT_PACKAGE_ID_PREFIX)
+
+
+def _pin_filename(item_id: str) -> str:
+    """`apt:pin:<filename>` -> `<filename>`, for looking a pin's captured content back up."""
+    return item_id.removeprefix(_APT_PIN_ID_PREFIX)
 
 
 def _lines(output: str) -> list[str]:
@@ -1313,8 +1344,12 @@ def _file_diff(
     )
 
 
-def _diff_apt_pins(source_digests: Mapping[str, str], target_digests: Mapping[str, str]) -> list[ItemDiff]:
-    """Pin-file diffs, from the digest manifests alone — the REMOVAL direction only.
+async def _diff_apt_pins(
+    target_run: Callable[[str], Awaitable[CommandResult]],
+    source_digests: Mapping[str, str],
+    target_digests: Mapping[str, str],
+) -> tuple[list[ItemDiff], dict[str, str]]:
+    """Pin-file diffs — the REMOVAL direction only — plus each offered file's content.
 
     A pin the source has is written to the target when missing and overwritten when
     different, with no review line at all (ADR-020 D-36): a pin is what makes an origin win,
@@ -1328,21 +1363,35 @@ def _diff_apt_pins(source_digests: Mapping[str, str], target_digests: Mapping[st
     knows nothing about, so removing it can flip which vendor supplies a package at the
     target's next upgrade — a consequence no approved package implies.
 
-    No file content is read in either direction: the only thing ever parsed out of a pin
-    file was the package names for a per-package "pinned" report, which D-25 retires.
+    Which is exactly why the file's CONTENT is read here and returned alongside the diffs,
+    keyed by filename: `99-vendor.pref` names no origin, no priority and no package, so a
+    review row carrying only that filename asks the user to approve a change to which vendor
+    supplies their software while showing them nothing about it. One `sudo cat` per file
+    OFFERED for deletion — never per pin file that exists — and only on a run that found
+    one. It is a read (`_read_file_content`, ADR-022-guarded): silence there fails the job
+    rather than showing an empty pin the user would approve deleting.
+
+    The content is deliberately not parsed. Pin syntax is small enough to read, and a
+    rendered summary of it would be this module claiming to know which stanza wins.
     """
     names = _diff_filenames(source_digests, target_digests)
-    return [
-        _file_diff(
-            AptPinItem(filename=filename, digest=target_digests[filename]),
-            DiffClass.EXTRA_ON_TARGET,
-            DiffAction.REMOVE,
+    diffs: list[ItemDiff] = []
+    contents: dict[str, str] = {}
+    for filename in sorted(names.extra):
+        contents[filename] = await _read_file_content(target_run, f"{_APT_PREFERENCES_DIR}/{filename}", Host.TARGET)
+        diffs.append(
+            _file_diff(
+                AptPinItem(filename=filename, digest=target_digests[filename]),
+                DiffClass.EXTRA_ON_TARGET,
+                DiffAction.REMOVE,
+            )
         )
-        for filename in sorted(names.extra)
-    ]
+    return diffs, contents
 
 
-def _diff_apt_configs(source_digests: Mapping[str, str], target_digests: Mapping[str, str]) -> list[ItemDiff]:
+def _diff_apt_configs(
+    source_digests: Mapping[str, str], target_digests: Mapping[str, str], machines: Machines
+) -> list[ItemDiff]:
     """Config-file diffs — opaque, digest-only, filename identity."""
     names = _diff_filenames(source_digests, target_digests)
     diffs: list[ItemDiff] = []
@@ -1355,7 +1404,7 @@ def _diff_apt_configs(source_digests: Mapping[str, str], target_digests: Mapping
         diffs.append(_file_diff(item, DiffClass.EXTRA_ON_TARGET, DiffAction.REMOVE))
     for filename in sorted(names.changed):
         item = AptConfigItem(filename=filename, digest=source_digests[filename])
-        detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename])
+        detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename], machines)
         diffs.append(_file_diff(item, DiffClass.VERSION_MISMATCH, DiffAction.CHANGE, detail=detail))
     return diffs
 
@@ -1466,11 +1515,15 @@ def _remove_args(names: Sequence[str]) -> str:
 
 
 def _trigger_phrase(triggers: frozenset[str], candidates: Sequence[str]) -> str:
-    """How a collateral item names what causes it: the attributed candidates, or "the
-    selected packages" when the answer really is all of them and listing them would only
-    reprint the batch."""
+    """How a collateral item names what causes it: the attributed candidates, or a reference
+    back to the earlier screens when the answer really is all of them and listing them would
+    only reprint the batch.
+
+    Both cases have to read as true in the prompt, because declining cancels exactly what is
+    named here — one package when one package is to blame, the whole batch when apt only
+    drops the collateral once every candidate goes (joint causation, `_collateral_for`)."""
     if len(candidates) > 1 and len(triggers) == len(candidates):
-        return "the selected packages"
+        return "the packages listed earlier"
     return ", ".join(sorted(triggers))
 
 
@@ -1605,6 +1658,10 @@ class AptSyncJob(PackageSyncJob):
         self._target_source_digests: dict[str, str] = {}
         self._source_pin_digests: dict[str, str] = {}
         self._target_pin_digests: dict[str, str] = {}
+        # `{filename: content}` for the pin files this run OFFERS to delete, read by
+        # `_diff_apt_pins` and shown whole on that screen — a pin filename alone gives the
+        # user nothing to decide from.
+        self._pin_contents: dict[str, str] = {}
         # The `/etc/apt` files this run writes with no review line of their own (ADR-020
         # D-37/D-38), in the three buckets the command order distinguishes. Populated by
         # `_build_derived_writes` from the accepted decisions, so a run that approves
@@ -1658,7 +1715,7 @@ class AptSyncJob(PackageSyncJob):
         # found nothing to refuse, which is what distinguishes "not yet checked" from
         # "checked, all clear" and keeps the call to exactly one per run.
         self._origin_refusals: dict[str, str] | None = None
-        # Package names of every manual-collateral item the user resolved install-anyway,
+        # Package names of every manual-collateral item the user let go ahead,
         # computed in `accept_review` from the collateral group's decisions. The apply-time
         # guard lets a removal/downgrade of one of these through; every other manual
         # collateral stays refused (D-30 — the last line of defence behind plan-time
@@ -1885,7 +1942,7 @@ class AptSyncJob(PackageSyncJob):
             dangling = _dangling_keyring_ref(refs, self._source_key_filenames)
             if dangling is None:
                 return None
-            reasons.append(build_dangling_keyring_detail(filename, dangling))
+            reasons.append(build_dangling_keyring_detail(filename, dangling, self.machines))
         return reasons[0] if reasons else None
 
     async def _plan_packages(self) -> PackagePlan:
@@ -1924,6 +1981,7 @@ class AptSyncJob(PackageSyncJob):
                 source_items,
                 target_items,
                 self._origin_plan,
+                self.machines,
                 source_hold_names,
                 target_hold_names,
             ),
@@ -1962,7 +2020,7 @@ class AptSyncJob(PackageSyncJob):
         `apt-mark showmanual` set (captured here, once). An auto-installed collateral
         package is apt resolving its own dependencies — it proceeds silently, producing no
         review item. A manually-installed collateral package is something the user chose to
-        have, so it becomes its own three-way review item (install-anyway / skip / abort)
+        have, so it becomes its own three-way review item (go ahead / keep the package / stop the sync)
         decided at plan time, in the SAME review the user approves from — never a prompt
         during apply.
         """
@@ -2009,7 +2067,7 @@ class AptSyncJob(PackageSyncJob):
         offered only two answers because a permanent machine-local mark on a file whose
         purpose is to feed packages would silently change where those packages come from
         forever. Manual-collateral diffs (D-30) become a `COLLATERAL_REVIEW_ACTION` group
-        whose entries take the three-way install-anyway / skip / abort resolution.
+        whose entries take the three-way go-ahead / keep-the-package / stop-the-sync resolution.
 
         Both trail the base groups — packages and apt config — so the user sees the bulk of
         the diff before being asked to resolve anything, and collateral comes last because
@@ -2037,7 +2095,7 @@ class AptSyncJob(PackageSyncJob):
                             item_id=f"{_CONFLICT_ID_PREFIX}{filename}",
                             label=filename,
                             action_label="overwrite",
-                            detail=build_repo_conflict_detail(filename, conflict.packages),
+                            detail=build_repo_conflict_detail(filename, conflict.packages, self.machines),
                             versions=(conflict.target_version, conflict.source_version),
                         )
                         for filename, conflict in sorted(self._repo_conflicts.items())
@@ -2052,13 +2110,16 @@ class AptSyncJob(PackageSyncJob):
                 ReviewGroup(
                     manager=self.manager_id,
                     action=REPO_REMOVAL_REVIEW_ACTION,
-                    title=f"Delete {words.plural} the source no longer has ({self.manager_id})",
+                    title=f"Delete {words.plural} {self.machines.source} no longer has ({self.manager_id})",
                     entries=tuple(
                         ReviewEntry(
                             item_id=diff.item_id,
                             label=diff.label,
                             action_label=words.action_label,
                             detail=diff.detail,
+                            content=self._pin_contents.get(_pin_filename(diff.item_id))
+                            if diff.item_class is ItemClass.APT_PIN
+                            else None,
                         )
                         for diff in entries
                     ),
@@ -2069,7 +2130,10 @@ class AptSyncJob(PackageSyncJob):
                 ReviewGroup(
                     manager=self.manager_id,
                     action=COLLATERAL_REVIEW_ACTION,
-                    title=f"Resolve {self.manager_id} manual-collateral removals",
+                    title=(
+                        f"Packages you installed yourself on {self.machines.target} that this sync would "
+                        f"remove or downgrade ({self.manager_id})"
+                    ),
                     entries=tuple(
                         ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="resolve", detail=diff.detail)
                         for diff in collateral
@@ -2183,8 +2247,8 @@ class AptSyncJob(PackageSyncJob):
             self._log(
                 Host.TARGET,
                 LogLevel.WARNING,
-                f"[dry-run] The target reports no Ubuntu Pro attachment, so {named} would not be written: "
-                f"a real run would skip {self.name} entirely and leave every other job running.",
+                f"[dry-run] {self.machines.target} reports no Ubuntu Pro attachment, so {named} would not be "
+                f"written: a real run would skip {self.name} entirely and leave every other job running.",
             )
             return False
 
@@ -2192,24 +2256,25 @@ class AptSyncJob(PackageSyncJob):
             f"{self.manager_id} sync has no reviewer; the orchestrator must inject one "
             "through JobContext.reviewer before plan()."
         )
+        source, target = self.machines.source, self.machines.target
         message = (
-            f"The source carries {named}, which this sync would write to the target, but the target reports no "
-            "Ubuntu Pro attachment.\n\n"
-            "The ESM repository indexes are public, so apt would still refresh cleanly and the ESM versions would "
-            "win candidate selection. The target's next install of an ESM-covered package would then fail with "
-            "401 Unauthorized when apt fetches the .deb.\n\n"
-            "To attach, run on the target:\n"
+            f"{source} carries {named}, which this sync would copy to {target} — but {target} is not attached "
+            "to Ubuntu Pro.\n\n"
+            f"The ESM package lists are public, so apt on {target} would refresh cleanly and start preferring the "
+            f"ESM versions. The next thing you install there that ESM covers would then fail to download with "
+            "401 Unauthorized.\n\n"
+            f"To attach {target}, run there:\n"
             "    sudo pro attach <token from https://ubuntu.com/pro/dashboard>\n"
             "    sudo pro enable esm-apps esm-infra\n\n"
-            f"Skipping runs no part of {self.name} this sync and leaves the target's /etc/apt untouched. "
-            "Every other job still runs."
+            f"Skipping means {self.name} does nothing at all this run and {target}'s /etc/apt is left exactly as "
+            "it is. Every other job still runs."
         )
         while True:
             answer = await self.context.reviewer.ask_gate(
-                title="Ubuntu Pro attachment required on the target",
+                title=f"{target} needs an Ubuntu Pro attachment",
                 message=message,
-                proceed_label="I have attached the target — re-check and continue",
-                stop_label=f"Skip {self.name} this run (other jobs continue)",
+                proceed_label=f"I have attached {target} — check again and continue",
+                stop_label=f"Skip {self.name} this run (every other job still runs)",
             )
             if answer is None:
                 raise JobSkipped(
@@ -2225,7 +2290,7 @@ class AptSyncJob(PackageSyncJob):
                 )
             if await self._target_pro_attached():
                 return True
-            self._log(Host.TARGET, LogLevel.WARNING, "The target still reports no Ubuntu Pro attachment.")
+            self._log(Host.TARGET, LogLevel.WARNING, f"{target} still reports no Ubuntu Pro attachment.")
 
     async def _plan_repo_diffs(self) -> list[ItemDiff]:
         """Capture the three `/etc/apt/*` directories and diff the item classes that still
@@ -2276,7 +2341,7 @@ class AptSyncJob(PackageSyncJob):
         # different filename sets.
         machine_specific = await self._machine_specific_packages_by_source_file(target_run, extra | changed)
         removal_details = {
-            filename: build_orphaned_packages_detail(filename, packages)
+            filename: build_orphaned_packages_detail(filename, packages, self.machines)
             for filename, packages in machine_specific.items()
             if filename in extra
         }
@@ -2286,8 +2351,9 @@ class AptSyncJob(PackageSyncJob):
 
         diffs: list[ItemDiff] = []
         diffs.extend(await self._diff_apt_sources(target_run, source_sources, target_sources, removal_details))
-        diffs.extend(_diff_apt_pins(source_pins, target_pins))
-        diffs.extend(_diff_apt_configs(source_configs, target_configs))
+        pin_diffs, self._pin_contents = await _diff_apt_pins(target_run, source_pins, target_pins)
+        diffs.extend(pin_diffs)
+        diffs.extend(_diff_apt_configs(source_configs, target_configs, self.machines))
         return diffs
 
     async def _machine_specific_packages_by_source_file(
@@ -2406,6 +2472,12 @@ class AptSyncJob(PackageSyncJob):
         disclosure, not refusal, since removing a repository whose packages are also going
         is legitimate.
 
+        The URLs the file declares are named ahead of that impact text, because they are what
+        the decision is actually about: a filename is somebody's naming convention, while
+        `https://cli.github.com/packages` is the thing the machine would stop getting software
+        from. They cost nothing — the file is already read here for its format, and
+        `_parse_source_file` returns the URIs from the same parse.
+
         The distribution's own files are excluded outright (D-38): they are written and
         updated but never removed, so a target that has `ubuntu.sources` and a source that
         somehow does not must not turn into an offer to delete the target's archive.
@@ -2416,7 +2488,7 @@ class AptSyncJob(PackageSyncJob):
 
         for filename in sorted(names.extra - _DISTRO_SOURCE_FILENAMES):
             content = await _read_file_content(target_run, f"{_APT_SOURCES_DIR}/{filename}", Host.TARGET)
-            fmt, _refs, _uris = _parse_source_file(filename, content)
+            fmt, _refs, uris = _parse_source_file(filename, content)
             item = AptSourceItem(filename=filename, digest=target_digests[filename], fmt=fmt)
             diffs.append(
                 ItemDiff(
@@ -2425,7 +2497,7 @@ class AptSyncJob(PackageSyncJob):
                     action=DiffAction.REMOVE,
                     item_id=item.item_id,
                     label=item.label(),
-                    detail=details.get(filename),
+                    detail=build_repo_removal_detail(uris, details.get(filename), self.machines),
                 )
             )
 
@@ -2480,7 +2552,7 @@ class AptSyncJob(PackageSyncJob):
 
         What is given up, deliberately: an excluded package gets NO plan-time collateral
         classification, because apt cannot say what it would remove for a package it cannot
-        resolve — the facts the three-way install-anyway/skip/abort question needs do not
+        resolve — the facts the three-way go-ahead/keep/stop question needs do not
         exist yet. What still covers it is `_converge_install`'s per-item rehearsal, which
         runs after the `/etc/apt` group has landed and `apt-get update` has run, so apt CAN
         resolve it there: unapproved manual collateral fails that one item (D-27) instead of
@@ -2520,9 +2592,9 @@ class AptSyncJob(PackageSyncJob):
         # resolve it and that set is never narrowed.
         collateral: list[ItemDiff] = []
         if rehearsed:
-            collateral.extend(await self._collateral_for(rehearsed, reviewed_names, _install_args, verb="installing"))
+            collateral.extend(await self._collateral_for(rehearsed, reviewed_names, _install_args, verb="Installing"))
         if remove_names:
-            collateral.extend(await self._collateral_for(remove_names, reviewed_names, _remove_args, verb="removing"))
+            collateral.extend(await self._collateral_for(remove_names, reviewed_names, _remove_args, verb="Removing"))
         return collateral
 
     async def _collateral_for(
@@ -2569,7 +2641,7 @@ class AptSyncJob(PackageSyncJob):
         return [
             self._collateral_item(
                 name,
-                f"{effect} by {verb} {_trigger_phrase(triggers[name], candidates)}",
+                f"{verb} {_trigger_phrase(triggers[name], candidates)} on {self.machines.target} would {effect}",
                 frozenset(f"{_APT_PACKAGE_ID_PREFIX}{trigger}" for trigger in triggers[name]),
             )
             for name, effect in found
@@ -2587,8 +2659,9 @@ class AptSyncJob(PackageSyncJob):
         non-`None` old version and `compare_deb_versions(target, new, old) < 0`.
 
         Returns `(package, effect)` pairs rather than `ItemDiff`s because the caller must
-        attribute them before the effect can be phrased — the sentence names the candidates
-        that cause it.
+        attribute them before the effect can be phrased: `effect` is the verb phrase the
+        change would perform ("remove fortunes", "downgrade x from 1 to 0"), and only the
+        caller knows which candidates to put in front of it.
         """
         protected = self._protected_manual_set()
         collateral: list[tuple[str, str]] = []
@@ -2596,19 +2669,19 @@ class AptSyncJob(PackageSyncJob):
         for pkg in preview.removals:
             if pkg in reviewed_names or pkg not in protected:
                 continue
-            collateral.append((pkg, "would be removed"))
+            collateral.append((pkg, f"remove {pkg}"))
 
         for pkg, (old_version, new_version) in preview.install_versions.items():
             if pkg in reviewed_names or old_version is None or pkg not in protected:
                 continue
             if await compare_deb_versions(self.target, new_version, old_version) < 0:
-                collateral.append((pkg, f"would be downgraded from {old_version} to {new_version}"))
+                collateral.append((pkg, f"downgrade {pkg} from {old_version} to {new_version}"))
 
         return collateral
 
-    def _collateral_item(self, name: str, effect: str, trigger_ids: frozenset[str]) -> ItemDiff:
+    def _collateral_item(self, name: str, detail: str, trigger_ids: frozenset[str]) -> ItemDiff:
         """Build one manual-collateral `ItemDiff` and record the candidates it gates."""
-        diff = _collateral_diff(name, effect)
+        diff = _collateral_diff(name, detail)
         self._collateral_trigger_ids[diff.item_id] = trigger_ids
         return diff
 
@@ -2635,7 +2708,7 @@ class AptSyncJob(PackageSyncJob):
         """Translate the manual-collateral group's decisions (D-30) into the guard's
         approved set and the triggering installs' decisions.
 
-        For each collateral item (`apt:collateral:<pkg>`): an `APPLY` (install-anyway)
+        For each collateral item (`apt:collateral:<pkg>`): an `APPLY` (go ahead)
         marks `<pkg>` approved, so `_converge_install`/`_converge_remove` let its removal
         or downgrade through; a `SKIP_ONCE` (skip) is propagated to the packages whose own
         transaction causes that collateral (`self._collateral_trigger_ids`, attributed in
@@ -2791,7 +2864,7 @@ class AptSyncJob(PackageSyncJob):
         from the real decisions and returns early if it is empty — so the cost of a false
         positive is one no-op call.
 
-        Manual-collateral decisions (D-30) are resolved first: an install-anyway on a
+        Manual-collateral decisions (D-30) are resolved first: a go-ahead on a
         collateral item marks its package approved so the apply-time guard lets the
         removal through, while a skip is translated into `SKIP_ONCE` on the approved
         packages that cause that collateral, so a declined collateral cleanly leaves them
@@ -2994,7 +3067,9 @@ class AptSyncJob(PackageSyncJob):
         # repository this run has since written (class 3) — apt owes a block for each.
         _require_apt_answer(command, result, Host.TARGET, blocks=len(candidates))
         return {
-            name: build_origin_refusal_detail(name, sorted(origins), sorted(candidates.get(name, frozenset())))
+            name: build_origin_refusal_detail(
+                name, sorted(origins), sorted(candidates.get(name, frozenset())), self.machines
+            )
             for name, origins in sorted(held_to.items())
             if not (candidates.get(name, frozenset()) & origins)
         }
@@ -3005,7 +3080,7 @@ class AptSyncJob(PackageSyncJob):
         apt pulls in that is outside the target's `apt-mark showmanual` set) proceeds
         silently — apt resolving its own dependencies. A manually-installed collateral
         removal or downgrade (manual on the TARGET, ADR-020 D-40) is
-        refused unless the user approved it install-anyway in the review; the decision was
+        refused unless the user let it go ahead in the review; the decision was
         made at plan time, and this guard only verifies the real transaction has not
         drifted to touch a manual package nobody saw.
 
@@ -3062,7 +3137,7 @@ class AptSyncJob(PackageSyncJob):
         removes the now-orphaned dependencies apt pulled in for it. A collateral removal of a
         manually-installed package (manual on the TARGET, ADR-020 D-40) is
         refused unless it was itself an approved removal this run or approved
-        install-anyway as collateral; that decision was made at plan time, and this guard
+        let go ahead as collateral; that decision was made at plan time, and this guard
         only catches a real transaction that drifted to touch a manual package nobody
         reviewed.
         """
@@ -3940,10 +4015,16 @@ def _is_repo_removal_diff(diff: ItemDiff) -> bool:
     return diff.item_class in _REPO_REMOVAL_VERBS and diff.action is DiffAction.REMOVE
 
 
-def _collateral_diff(name: str, effect: str) -> ItemDiff:
-    """One manual-collateral item (D-30): a manually-installed package the pending apt
-    transaction would remove or downgrade. Stays `REPORT_ONLY` so `apply()` never
-    converges it directly — its decision governs the triggering install, not itself.
+def _collateral_diff(name: str, detail: str) -> ItemDiff:
+    """One manual-collateral item (D-30): a package the TARGET's apt has marked manually
+    installed that the pending transaction would remove or downgrade. Stays `REPORT_ONLY` so
+    `apply()` never converges it directly — its decision governs the changes that cause it,
+    not itself.
+
+    `detail` is the whole finding as one sentence — which change, on which machine, and what
+    it does to this package — because that sentence is the entire basis for the answer. It is
+    apt's own simulation talking; the review screen says so once, rather than every item
+    repeating it.
     """
     return ItemDiff(
         item_class=ItemClass.APT_PACKAGE,
@@ -3951,5 +4032,5 @@ def _collateral_diff(name: str, effect: str) -> ItemDiff:
         action=DiffAction.REPORT_ONLY,
         item_id=f"{_COLLATERAL_ID_PREFIX}{name}",
         label=name,
-        detail=f"manually-installed package that apt's own simulation says {effect}",
+        detail=detail,
     )

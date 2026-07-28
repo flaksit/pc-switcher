@@ -7,14 +7,22 @@ tested beside that manager -- `SnapItem` in `test_snap_sync.py`, `AptPinItem` an
 
 from __future__ import annotations
 
-from pcswitcher.jobs.packages.items import build_version_mismatch_detail
+from pcswitcher.jobs.packages.items import Machines, build_version_mismatch_detail
 
 
 def test_version_mismatch_detail_contains_both_versions() -> None:
     """D-04 made visible: the review names both versions and proposes nothing, which is
     what "reported, never force-downgraded" looks like in the text the user reads.
     """
-    detail = build_version_mismatch_detail("1.0-1", "2.0-1")
+    detail = build_version_mismatch_detail("1.0-1", "2.0-1", Machines(source="p17", target="fleksi"))
 
-    assert "1.0-1" in detail
-    assert "2.0-1" in detail
+    assert detail == "p17 has 1.0-1, fleksi has 2.0-1"
+
+
+def test_version_mismatch_detail_names_the_machines_not_their_roles() -> None:
+    """The user's ruling: a review line says which of THEIR computers has what. "source"
+    and "target" are the tool's words for the two ends of a run, not names of machines."""
+    detail = build_version_mismatch_detail("1.0-1", "2.0-1", Machines(source="p17", target="fleksi"))
+
+    assert "source" not in detail
+    assert "target" not in detail

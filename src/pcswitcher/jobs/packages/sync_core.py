@@ -40,7 +40,7 @@ from typing import ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff
+from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
 from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel, ProgressUpdate
@@ -209,6 +209,11 @@ class PackageSyncJob(SyncJob):
         `CHANGE` — `REPORT_ONLY` diffs never reach this hook (see `apply()`).
         """
         ...
+
+    @property
+    def machines(self) -> Machines:
+        """The two machines' own names, for every string this job puts in front of the user."""
+        return Machines(source=self.context.source_hostname, target=self.context.target_hostname)
 
     @staticmethod
     def _decision_holder_is_source(action: DiffAction) -> bool:

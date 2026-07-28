@@ -28,7 +28,7 @@ from pcswitcher.jobs.flatpak_sync import (
     build_orphaned_refs_detail,
     flatpak_sync_exclude_paths,
 )
-from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import (
     REPO_CONFLICT_REVIEW_ACTION,
@@ -656,7 +656,7 @@ class TestRefOriginMismatch:
         # No URL is known for the target's side, so the detail names what there is and
         # invents nothing.
         assert plan.diffs[0].detail is not None
-        assert plan.diffs[0].detail.endswith("target from flathub-beta")
+        assert plan.diffs[0].detail.endswith("target-host from flathub-beta")
 
     @pytest.mark.asyncio
     async def test_the_mismatch_is_reported_and_never_converged(self) -> None:
@@ -2714,11 +2714,14 @@ class TestFlatpakRemoteItem:
 
 class TestOrphanedRefsDetail:
     def test_names_the_remote_and_every_dependent(self) -> None:
-        detail = build_orphaned_refs_detail("customremote", ["org.example.One", "org.example.Two"])
+        detail = build_orphaned_refs_detail(
+            "customremote", ["org.example.One", "org.example.Two"], Machines(source="p17", target="fleksi")
+        )
 
-        assert "customremote" in detail
-        assert "org.example.One" in detail
-        assert "org.example.Two" in detail
+        assert detail == (
+            "fleksi still installs org.example.One, org.example.Two from customremote — they would stay "
+            "installed but never get another update"
+        )
 
 
 class TestAProbeThatDidNotAnswer:

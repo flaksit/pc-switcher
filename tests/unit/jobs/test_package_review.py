@@ -15,13 +15,14 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from prompt_toolkit.keys import Keys
 from rich.console import Console
 
+from pcswitcher.config import Configuration
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
@@ -41,6 +42,20 @@ from pcswitcher.jobs.packages.review import (
 )
 from pcswitcher.jobs.packages.sync_core import PackagePlan
 from pcswitcher.models import CommandResult, SyncAbortedByUser
+from pcswitcher.orchestrator import Orchestrator
+
+
+class _Hosts(TypedDict):
+    """`**HOSTS` as a typed unpack, so a mistyped keyword is a type error rather than a
+    silent match against another parameter."""
+
+    source_hostname: str
+    target_hostname: str
+
+
+# The two machine names every screen says out loud. Deliberately concrete and distinct, so
+# an assertion that a message names the right one cannot pass on the other's text.
+HOSTS: _Hosts = {"source_hostname": "p17", "target_hostname": "fleksi"}
 
 
 def _mock_isatty(interactive: bool) -> MagicMock:
@@ -115,7 +130,7 @@ class TestNonInteractive:
             patch.object(sys, "stdin", _mock_isatty(False)),
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
-            outcome = await review_items(groups, console=console, ui=ui)
+            outcome = await review_items(groups, console=console, ui=ui, **HOSTS)
 
         decision_list.assert_not_called()
         assert outcome.was_interactive is False
@@ -133,7 +148,7 @@ class TestNonInteractive:
         logger = MagicMock()
 
         with patch.object(sys, "stdin", _mock_isatty(False)):
-            await review_items(groups, console=console, ui=ui, logger=logger)
+            await review_items(groups, console=console, ui=ui, logger=logger, **HOSTS)
 
         logger.warning.assert_called_once()
         assert logger.warning.call_args.args[1] == 2
@@ -149,7 +164,7 @@ class TestNonInteractive:
         ]
 
         with patch.object(sys, "stdin", _mock_isatty(False)):
-            await review_items(groups, console=console, ui=MagicMock())
+            await review_items(groups, console=console, ui=MagicMock(), **HOSTS)
 
         lines = [line.rstrip() for line in buffer.getvalue().splitlines()]
         last_item = max(index for index, line in enumerate(lines) if "pkg" in line)
@@ -177,7 +192,7 @@ class TestInteractive:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
-            outcome = await review_items(groups, console=console, ui=ui)
+            outcome = await review_items(groups, console=console, ui=ui, **HOSTS)
 
         decision_list.assert_called_once()
         assert outcome.was_interactive is True
@@ -201,7 +216,7 @@ class TestInteractive:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
-            outcome = await review_items(groups, console=console, ui=ui)
+            outcome = await review_items(groups, console=console, ui=ui, **HOSTS)
 
         assert decision_list.call_count == 1
         assert outcome.decisions == {"a": Decision.SKIP_ONCE}
@@ -225,7 +240,7 @@ class TestInteractive:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
-            await review_items(groups, console=console, ui=ui)
+            await review_items(groups, console=console, ui=ui, **HOSTS)
 
         printed = buffer.getvalue()
         assert "cmatrix (2.0-6)" not in printed
@@ -242,7 +257,7 @@ class TestInteractive:
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt),
             pytest.raises(KeyboardInterrupt),
         ):
-            await review_items(groups, console=console, ui=ui)
+            await review_items(groups, console=console, ui=ui, **HOSTS)
 
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
@@ -267,7 +282,7 @@ class TestInteractive:
             ) as decision_list,
             pytest.raises(SyncAbortedByUser),
         ):
-            await review_items(groups, console=console, ui=ui)
+            await review_items(groups, console=console, ui=ui, **HOSTS)
 
         # Only the first group's screen is ever constructed; the second is never reached.
         decision_list.assert_called_once()
@@ -287,7 +302,7 @@ class TestInteractive:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
-            await review_items([install_group, removal_group], console=console, ui=ui)
+            await review_items([install_group, removal_group], console=console, ui=ui, **HOSTS)
 
         assert _screen_defaults(decision_list.call_args_list[0]) == {"a": Decision.APPLY}
         assert _screen_defaults(decision_list.call_args_list[1]) == {"b": Decision.SKIP_ONCE}
@@ -317,7 +332,7 @@ class TestInteractive:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
-            outcome = await review_items([install_group, removal_group, change_group], console=console, ui=ui)
+            outcome = await review_items([install_group, removal_group, change_group], console=console, ui=ui, **HOSTS)
 
         assert decision_list.call_count == 3
         for call in decision_list.call_args_list:
@@ -337,7 +352,7 @@ class TestInteractive:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
-            await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui, **HOSTS)
 
         message = decision_list.call_args.args[0]
         assert message == "Remove packages"
@@ -358,7 +373,7 @@ class TestInteractive:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
-            await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui, **HOSTS)
 
         row = decision_list.call_args.kwargs["rows"][0]
         assert row.label == "fortunes-min"
@@ -383,7 +398,7 @@ class TestInteractive:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
-            outcome = await review_items(groups, console=console, ui=ui)
+            outcome = await review_items(groups, console=console, ui=ui, **HOSTS)
 
         for call in decision_list.call_args_list:
             assert "always skip" in _screen_words(call)
@@ -410,10 +425,10 @@ class TestInteractive:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert _screen_defaults(decision_list.call_args) == {"apt:source:vendor.list": Decision.SKIP_ONCE}
-        assert _screen_words(decision_list.call_args) == ["delete repository", "skip once"]
+        assert _screen_words(decision_list.call_args) == ["delete repository", "keep it on fleksi"]
         assert outcome.decisions == {"apt:source:vendor.list": Decision.SKIP_ONCE}
 
     async def test_a_report_only_group_offers_two_answers_and_starts_applied(self) -> None:
@@ -434,7 +449,7 @@ class TestInteractive:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert _screen_words(decision_list.call_args) == ["report", "skip once"]
         assert _screen_defaults(decision_list.call_args) == {"apt:package:tree": Decision.APPLY}
@@ -451,7 +466,7 @@ class TestTerminalUIReviewer:
         console = _interactive_console()
         ui = MagicMock()
         logger = MagicMock()
-        reviewer = TerminalUIReviewer(console, ui, logger=logger)
+        reviewer = TerminalUIReviewer(console, ui, logger=logger, **HOSTS)
         groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
         sentinel_outcome = ReviewOutcome(decisions={"a": Decision.APPLY}, was_interactive=True)
 
@@ -462,7 +477,7 @@ class TestTerminalUIReviewer:
             result = await reviewer.review(groups)
 
         assert result is sentinel_outcome
-        review_mock.assert_awaited_once_with(groups, console=console, ui=ui, logger=logger)
+        review_mock.assert_awaited_once_with(groups, console=console, ui=ui, logger=logger, **HOSTS)
 
     async def test_pause_and_resume_both_run_when_the_underlying_prompt_raises(self) -> None:
         """The adapter keeps `review_items`'s pause/resume `finally`: even when the
@@ -470,7 +485,7 @@ class TestTerminalUIReviewer:
         """
         console = _interactive_console()
         ui = MagicMock()
-        reviewer = TerminalUIReviewer(console, ui)
+        reviewer = TerminalUIReviewer(console, ui, **HOSTS)
         groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
         prompt = _fake_prompt(ask_side_effect=KeyboardInterrupt)
 
@@ -593,7 +608,7 @@ class TestAskGate:
         console = _interactive_console()
         ui = MagicMock()
         logger = MagicMock()
-        reviewer = TerminalUIReviewer(console, ui, logger=logger)
+        reviewer = TerminalUIReviewer(console, ui, logger=logger, **HOSTS)
 
         with patch("pcswitcher.jobs.packages.review.ask_gate", AsyncMock(return_value=True)) as gate:
             assert await reviewer.ask_gate(title="t", message="m", proceed_label="p", stop_label="s") is True
@@ -632,7 +647,7 @@ class TestBlockingPromptOffLoop:
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt),
         ):
             ticker_task = asyncio.create_task(_ticker())
-            await review_items(groups, console=console, ui=ui)
+            await review_items(groups, console=console, ui=ui, **HOSTS)
             await ticker_task
 
         # If .ask() had run on the event loop, the ticker could not have advanced at all
@@ -656,7 +671,7 @@ class TestAutomationEnv:
             patch.dict("os.environ", env),
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
-            outcome = await review_items(groups, console=console, ui=ui)
+            outcome = await review_items(groups, console=console, ui=ui, **HOSTS)
 
         decision_list.assert_not_called()
         ui.pause.assert_not_called()
@@ -683,7 +698,7 @@ class TestAutomationEnv:
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
             pytest.raises(json.JSONDecodeError),
         ):
-            await review_items(groups, console=console, ui=ui)
+            await review_items(groups, console=console, ui=ui, **HOSTS)
 
         # Nothing was prompted, and the live display was never touched: the automation
         # branch fails before `ui.pause()`, so there is no paused UI left behind.
@@ -705,7 +720,7 @@ class TestAutomationEnv:
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
             pytest.raises(ValueError, match="apply_everything"),
         ):
-            await review_items(groups, console=console, ui=ui)
+            await review_items(groups, console=console, ui=ui, **HOSTS)
 
         decision_list.assert_not_called()
 
@@ -740,7 +755,7 @@ class TestUnreproducibleGroupResolution:
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert outcome.snippets == {"u1": body}
         assert "u1" not in outcome.unresolved
@@ -755,7 +770,7 @@ class TestUnreproducibleGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions["u1"] == Decision.SKIP_ALWAYS
         assert outcome.snippets == {}
@@ -773,7 +788,7 @@ class TestUnreproducibleGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions["u1"] == Decision.SKIP_ONCE
         assert "u1" not in outcome.unresolved
@@ -791,7 +806,7 @@ class TestUnreproducibleGroupResolution:
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             pytest.raises(SyncAbortedByUser, match="brscan3"),
         ):
-            await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui, **HOSTS)
 
         ui.resume.assert_called_once()
 
@@ -812,7 +827,7 @@ class TestUnreproducibleGroupResolution:
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         # The empty body was rejected; the re-prompted skip-once is the real resolution.
         assert outcome.snippets == {}
@@ -834,7 +849,7 @@ class TestUnreproducibleGroupResolution:
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert outcome.snippets == {"u1": body}
         assert outcome.unresolved == ()
@@ -853,7 +868,7 @@ class TestUnreproducibleGroupResolution:
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert outcome.snippets == {}
         assert outcome.decisions["u1"] == Decision.SKIP_ONCE
@@ -873,7 +888,7 @@ class TestUnreproducibleGroupResolution:
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt) as text,
         ):
-            await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert "Ctrl-D" in text.call_args.kwargs["instruction"]
         assert "Esc" not in text.call_args.kwargs["instruction"]
@@ -893,13 +908,19 @@ class TestUnreproducibleGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt) as select,
         ):
-            await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui, **HOSTS)
 
         titles = {choice.value: choice.title for choice in select.call_args.kwargs["choices"]}
-        assert titles["skip_always"].startswith("Always skip")
-        assert "this machine" in titles["skip_always"]
-        assert "never offer again" not in titles["skip_always"]
-        assert "next sync" in titles["skip_once"]
+        assert titles["skip_always"] == (
+            "This one is specific to p17. Always skip it — fleksi never gets it, and you are not asked again"
+        )
+        assert titles["skip_once"] == (
+            "Skip for now — fleksi does not get it this sync, and you are asked again next sync"
+        )
+        assert titles["add_snippet"] == (
+            "Write the commands that install it — fleksi runs them, now and on every future sync"
+        )
+        assert select.call_args.args[0] == "How should fleksi get brscan3?"
 
     async def test_ui_resumed_when_snippet_capture_raises(self) -> None:
         console = _interactive_console()
@@ -914,7 +935,7 @@ class TestUnreproducibleGroupResolution:
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
             pytest.raises(KeyboardInterrupt),
         ):
-            await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui, **HOSTS)
 
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
@@ -929,7 +950,7 @@ class TestUnreproducibleGroupResolution:
             patch("pcswitcher.jobs.packages.review.questionary.select") as select_mock,
             patch("pcswitcher.jobs.packages.review.questionary.text") as text_mock,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         select_mock.assert_not_called()
         text_mock.assert_not_called()
@@ -952,7 +973,7 @@ class TestUnreproducibleGroupResolution:
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
-            await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui, **HOSTS)
 
         decision_list.assert_not_called()
 
@@ -960,21 +981,21 @@ class TestUnreproducibleGroupResolution:
 @pytest.mark.asyncio
 class TestCollateralGroupResolution:
     """D-30: a `COLLATERAL_REVIEW_ACTION` group gets the three-way per-entry flow
-    (install-anyway / skip / abort), recorded against `entry.item_id` (which the caller,
+    (go ahead / keep the package / stop the sync), recorded against `entry.item_id` (which the caller,
     `AptSyncJob`, maps onto the triggering install), never a checkbox tick.
     """
 
-    async def test_install_anyway_records_apply(self) -> None:
+    async def test_go_ahead_records_apply(self) -> None:
         console = _interactive_console()
         ui = MagicMock()
         group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
-        select_prompt = _fake_prompt(ask_return="install_anyway")
+        select_prompt = _fake_prompt(ask_return="proceed")
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions["apt:package:pkg-a"] == Decision.APPLY
 
@@ -988,7 +1009,7 @@ class TestCollateralGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
 
@@ -1003,7 +1024,7 @@ class TestCollateralGroupResolution:
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             pytest.raises(SyncAbortedByUser, match="other-manual"),
         ):
-            await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui, **HOSTS)
 
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
@@ -1021,7 +1042,7 @@ class TestCollateralGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
 
@@ -1036,7 +1057,7 @@ class TestCollateralGroupResolution:
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
-            await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui, **HOSTS)
 
         decision_list.assert_not_called()
 
@@ -1053,7 +1074,7 @@ class TestCollateralGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(False)),
             patch("pcswitcher.jobs.packages.review.questionary.select") as select_mock,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         select_mock.assert_not_called()
         assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
@@ -1076,7 +1097,10 @@ def _conflict_entry(
         item_id="apt:conflict:vendor.list",
         label="vendor.list",
         action_label="overwrite",
-        detail="vendor.list differs on the two machines and feeds machine-specific packages on the target: curl",
+        detail=(
+            "vendor.list is different on the two machines, and fleksi installs curl from it — packages you set "
+            "to always skip, so a sync normally leaves them alone"
+        ),
         versions=(target_version, source_version),
     )
 
@@ -1097,7 +1121,7 @@ class TestRepoConflictGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
-            outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
+            outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions == {"apt:conflict:vendor.list": Decision.APPLY}
 
@@ -1113,10 +1137,10 @@ class TestRepoConflictGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
-            outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
+            outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
-        assert _screen_words(decision_list.call_args) == ["overwrite", "skip once"]
+        assert _screen_words(decision_list.call_args) == ["overwrite", "keep fleksi's version"]
         assert _screen_defaults(decision_list.call_args) == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
 
     async def test_one_screen_answers_every_conflicting_file(self) -> None:
@@ -1136,7 +1160,7 @@ class TestRepoConflictGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
-            outcome = await review_items([_conflict_group([first, second])], console=console, ui=ui)
+            outcome = await review_items([_conflict_group([first, second])], console=console, ui=ui, **HOSTS)
 
         decision_list.assert_called_once()
         assert outcome.decisions == {
@@ -1161,13 +1185,35 @@ class TestRepoConflictGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
-            await review_items([_conflict_group([entry])], console=console, ui=ui)
+            await review_items([_conflict_group([entry])], console=console, ui=ui, **HOSTS)
 
         printed = out.getvalue()
         assert "old.example.com" in printed
         assert "new.example.com" in printed
         assert printed.index("old.example.com") < printed.index("new.example.com")
         assert "@@" not in printed and "\n-deb" not in printed
+
+    async def test_each_version_panel_is_titled_with_the_machine_that_holds_it(self) -> None:
+        """The user's ruling: no screen says "the target". The two panels are titled with the
+        two machines' own names, and the target's says "now" because it is the one an
+        overwrite would replace.
+        """
+        out = io.StringIO()
+        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+        ui = MagicMock()
+        screen = _fake_prompt(ask_return={"apt:conflict:vendor.list": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+        ):
+            await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui, **HOSTS)
+
+        printed = out.getvalue()
+        assert "On fleksi now" in printed
+        assert "On p17" in printed
+        assert "the target" not in printed
+        assert "the source" not in printed
 
     async def test_a_version_panel_ends_on_its_last_line_of_content(self) -> None:
         """A file body's own trailing newline renders as an empty last line inside the
@@ -1183,7 +1229,7 @@ class TestRepoConflictGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
-            await review_items([_conflict_group([entry])], console=console, ui=ui)
+            await review_items([_conflict_group([entry])], console=console, ui=ui, **HOSTS)
 
         lines = [line.rstrip() for line in out.getvalue().splitlines()]
         content = next(index for index, line in enumerate(lines) if "old.example.com" in line)
@@ -1214,7 +1260,7 @@ class TestRepoConflictGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
-            outcome = await review_items([_conflict_group([entry])], console=console, ui=ui)
+            outcome = await review_items([_conflict_group([entry])], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions == {"apt:conflict:vendor[1].list": Decision.SKIP_ONCE}
 
@@ -1228,7 +1274,7 @@ class TestRepoConflictGroupResolution:
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             pytest.raises(SyncAbortedByUser, match="Resolve apt repository conflicts"),
         ):
-            await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
+            await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui, **HOSTS)
 
         ui.resume.assert_called_once()
 
@@ -1240,7 +1286,7 @@ class TestRepoConflictGroupResolution:
             patch.object(sys, "stdin", _mock_isatty(False)),
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
-            outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
+            outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui, **HOSTS)
 
         decision_list.assert_not_called()
         assert outcome.decisions == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
@@ -1329,3 +1375,167 @@ class TestUnresolvedNeverFailsTheJob:
         job.accept_review(plan, ReviewOutcome(decisions={}, was_interactive=True, unresolved=(diff.item_id,)))
 
         await job.apply()  # must not raise
+
+
+def _pin_removal_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
+    return ReviewGroup(
+        manager="apt",
+        action=REPO_REMOVAL_REVIEW_ACTION,
+        title="Delete pin files p17 no longer has (apt)",
+        entries=tuple(entries),
+    )
+
+
+@pytest.mark.asyncio
+class TestRemovalGroupContent:
+    """A deletion screen shows the file it offers to delete, not only its name."""
+
+    @staticmethod
+    def _run(group: ReviewGroup, out: io.StringIO) -> Any:
+        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+        screen = _fake_prompt(ask_return={entry.item_id: "skip_once" for entry in group.entries})
+        return (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+            console,
+        )
+
+    async def test_a_pin_file_is_printed_whole_under_the_machine_that_holds_it(self) -> None:
+        out = io.StringIO()
+        entry = ReviewEntry(
+            item_id="apt:pin:99-vendor.pref",
+            label="99-vendor.pref",
+            action_label="delete pin file",
+            content="Package: *\nPin: origin vendor.example.com\nPin-Priority: 900\n",
+        )
+        isatty, screen, console = self._run(_pin_removal_group([entry]), out)
+
+        with isatty, screen:
+            await review_items([_pin_removal_group([entry])], console=console, ui=MagicMock(), **HOSTS)
+
+        printed = out.getvalue()
+        assert "Pin-Priority: 900" in printed
+        assert "origin vendor.example.com" in printed
+        assert "On fleksi" in printed
+        assert "the target" not in printed
+
+    async def test_an_entry_with_no_content_prints_no_panel(self) -> None:
+        """A repository deletion carries its URLs in the detail line, so the screen it shares
+        with the pin files must not grow an empty block for it."""
+        out = io.StringIO()
+        entry = ReviewEntry(item_id="apt:source:vendor.list", label="vendor.list (list)", action_label="delete")
+        group = _pin_removal_group([entry])
+        isatty, screen, console = self._run(group, out)
+
+        with isatty, screen:
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        assert out.getvalue().strip() == ""
+
+    async def test_a_bracketed_pin_body_renders_without_markup_error(self) -> None:
+        out = io.StringIO()
+        entry = ReviewEntry(
+            item_id="apt:pin:99-vendor.pref",
+            label="99-vendor.pref",
+            action_label="delete pin file",
+            content="Package: [bold red]not-markup[/]\n",
+        )
+        group = _pin_removal_group([entry])
+        isatty, screen, console = self._run(group, out)
+
+        with isatty, screen:
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        assert "[bold red]not-markup[/]" in out.getvalue()
+
+
+@pytest.mark.asyncio
+class TestCollateralPromptWording:
+    """D-30's prompt, in the user's language: what is protected, what the change does to it,
+    what each of the three answers costs — and how far "stop" reaches."""
+
+    @staticmethod
+    async def _titles(selected: str = "protect") -> tuple[MagicMock, str]:
+        out = io.StringIO()
+        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+        group = _collateral_group(
+            [
+                ReviewEntry(
+                    item_id="apt:package:pkg-a",
+                    label="fortunes",
+                    action_label="resolve",
+                    detail="Installing sl on fleksi would remove fortunes",
+                )
+            ]
+        )
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch(
+                "pcswitcher.jobs.packages.review.questionary.select",
+                return_value=_fake_prompt(ask_return=selected),
+            ) as select,
+        ):
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+        return select, out.getvalue()
+
+    async def test_the_question_and_every_answer_name_the_machine_and_its_own_effect(self) -> None:
+        select, _printed = await self._titles()
+
+        assert select.call_args.args[0] == "What should happen to fortunes on fleksi?"
+        titles = {choice.value: choice.title for choice in select.call_args.kwargs["choices"]}
+        assert titles["proceed"] == "Go ahead — fortunes changes on fleksi as described above"
+        assert titles["protect"] == (
+            "Keep fortunes as it is — the changes that would touch it are dropped from this sync"
+        )
+        assert titles["abort"] == (
+            "Stop the whole pc-switcher sync now — nothing more is changed on fleksi, and what earlier jobs "
+            "already did stays done"
+        )
+        assert "the target" not in " ".join(titles.values())
+
+    async def test_the_prompt_says_why_this_package_is_protected(self) -> None:
+        """Not "machine-specific" — nobody recorded anything. The target's own apt says the
+        user asked for this package, which is a different fact and the true one."""
+        _select, printed = await self._titles()
+
+        assert "You asked for fortunes on fleksi yourself" in printed
+        assert "manually installed" in printed
+        assert "Installing sl on fleksi would remove fortunes" in printed
+
+    async def test_stopping_names_the_package_and_the_machine_in_the_abort(self) -> None:
+        with pytest.raises(SyncAbortedByUser) as excinfo:
+            await self._titles("abort")
+
+        assert str(excinfo.value) == (
+            "fortunes on fleksi would have been removed or downgraded; the whole sync was stopped in the "
+            "package review"
+        )
+
+
+@pytest.mark.asyncio
+class TestTheOrchestratorNamesBothMachines:
+    """The reviewer is where the two hostnames enter the review, so it is the one place a
+    missing name would turn every screen back into "the target"."""
+
+    async def test_the_reviewer_is_built_with_both_machine_names(self) -> None:
+        config = MagicMock(spec=Configuration)
+        config.logging = MagicMock(file=10, tui=20, external=30)
+        config.sync_jobs = {}
+        config.job_configs = {}
+        config.btrfs_snapshots = MagicMock(subvolumes=["@"])
+        config.disk = MagicMock(preflight_minimum="10%")
+
+        with patch("pcswitcher.orchestrator.get_local_hostname", return_value="p17"):
+            orchestrator = Orchestrator(target="fleksi", config=config)
+        # `run()` builds it, along with the console and the live UI it wraps; everything
+        # after the construction reaches a machine, so only that first slice is exercised.
+        with (
+            patch("pcswitcher.orchestrator.setup_logging", side_effect=RuntimeError("stop after construction")),
+            pytest.raises(RuntimeError, match="stop after construction"),
+        ):
+            await orchestrator.run()
+
+        reviewer = orchestrator._reviewer  # pyright: ignore[reportPrivateUsage]
+        assert isinstance(reviewer, TerminalUIReviewer)
+        assert reviewer._source_hostname == "p17"  # pyright: ignore[reportPrivateUsage]
+        assert reviewer._target_hostname == "fleksi"  # pyright: ignore[reportPrivateUsage]

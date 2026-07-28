@@ -531,7 +531,10 @@ class ManualInstallsSyncJob(PackageSyncJob):
             ReviewGroup(
                 manager=self.manager_id,
                 action=UNREPRODUCIBLE_REVIEW_ACTION,
-                title=f"Resolve {self.manager_id} items with no reproducible install",
+                title=(
+                    f"{self.machines.source} has these and no package manager can install them on "
+                    f"{self.machines.target} ({self.manager_id})"
+                ),
                 entries=tuple(
                     ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="resolve", detail=diff.detail)
                     for diff in needs_resolution

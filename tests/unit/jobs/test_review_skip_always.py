@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import sys
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, TypedDict
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,6 +29,18 @@ from pcswitcher.jobs.packages.review import (
     review_items,
 )
 from pcswitcher.models import SyncAbortedByUser
+
+
+class _Hosts(TypedDict):
+    """Typed so `**HOSTS` cannot silently land on another keyword parameter."""
+
+    source_hostname: str
+    target_hostname: str
+
+
+# Concrete and distinct, so an assertion that a screen names the right machine cannot pass
+# on the other one's text.
+HOSTS: _Hosts = {"source_hostname": "p17", "target_hostname": "fleksi"}
 
 
 def _mock_isatty(interactive: bool) -> MagicMock:
@@ -78,7 +90,7 @@ class TestThePermanentAnswer:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions == {
             "a": Decision.APPLY,
@@ -101,7 +113,7 @@ class TestThePermanentAnswer:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
-            await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert SKIP_ALWAYS_WORD == "always skip"
         assert SKIP_ALWAYS_WORD in _words(decision_list.call_args)
@@ -118,7 +130,7 @@ class TestThePermanentAnswer:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
-            outcome = await review_items(groups, console=console, ui=ui)
+            outcome = await review_items(groups, console=console, ui=ui, **HOSTS)
 
         assert decision_list.call_count == len(groups)
         assert outcome.decisions == {"a": Decision.SKIP_ONCE, "b": Decision.SKIP_ALWAYS}
@@ -134,7 +146,7 @@ class TestThePermanentAnswer:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert _values(decision_list.call_args) == [Decision.APPLY, Decision.SKIP_ONCE, Decision.SKIP_ALWAYS]
         assert outcome.decisions == {"a": Decision.SKIP_ALWAYS}
@@ -161,7 +173,7 @@ class TestBlockStateItemsArePromotable:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert SKIP_ALWAYS_WORD in _words(decision_list.call_args)
         assert outcome.decisions == {"apt:hold:firefox": Decision.SKIP_ALWAYS}
@@ -181,7 +193,7 @@ class TestBlockStateItemsArePromotable:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert _words(decision_list.call_args)[0] == "unmask"
         assert outcome.decisions == {"flatpak:mask:user:org.gimp.GIMP": Decision.SKIP_ALWAYS}
@@ -213,7 +225,7 @@ class TestGroupsNeverOfferedPermanence:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert _values(decision_list.call_args) == [Decision.APPLY, Decision.SKIP_ONCE]
         assert SKIP_ALWAYS_WORD not in _words(decision_list.call_args)
@@ -234,7 +246,7 @@ class TestGroupsNeverOfferedPermanence:
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         decision_list.assert_not_called()
         assert outcome.decisions == {"u1": Decision.SKIP_ONCE}
@@ -254,7 +266,7 @@ class TestGroupsNeverOfferedPermanence:
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         decision_list.assert_not_called()
         assert outcome.decisions == {"apt:package:pkg-a": Decision.SKIP_ONCE}
@@ -269,7 +281,7 @@ class TestGroupsNeverOfferedPermanence:
             patch.object(sys, "stdin", _mock_isatty(False)),
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         decision_list.assert_not_called()
         assert outcome.decisions == {"a": Decision.SKIP_ONCE, "b": Decision.SKIP_ONCE}
@@ -290,7 +302,7 @@ class TestAbortAndTeardown:
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
             pytest.raises(SyncAbortedByUser, match="Install packages"),
         ):
-            await review_items([first_group, later_group], console=console, ui=ui)
+            await review_items([first_group, later_group], console=console, ui=ui, **HOSTS)
 
         # The later group is never reached: the abort stops the whole review.
         assert decision_list.call_count == 1
@@ -307,7 +319,7 @@ class TestAbortAndTeardown:
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             pytest.raises(KeyboardInterrupt),
         ):
-            await review_items([group], console=console, ui=ui)
+            await review_items([group], console=console, ui=ui, **HOSTS)
 
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
@@ -325,7 +337,7 @@ class TestAbortAndTeardown:
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
-            outcome = await review_items([group], console=console, ui=ui)
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert decision_list.call_args.kwargs["rows"][0].label == "pkg[weird]name"
         assert outcome.decisions == {"a": Decision.SKIP_ALWAYS}
