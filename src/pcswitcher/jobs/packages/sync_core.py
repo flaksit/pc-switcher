@@ -94,21 +94,30 @@ class PackagePlan:
 
 # The concrete converge verb for one (item_class, action) pair (D-07, D-24): "apply" is
 # never shown to the user, because it is the destructive branch as often as the
-# additive one. An apt package REMOVE reads as "remove"; a future apt source REMOVE
-# reads as "delete repository"; a future snap channel CHANGE reads as "retrack". Data,
-# not per-job string formatting, is what makes "the review names the concrete action"
-# checkable rather than left to each job's own wording. Entries beyond APT_PACKAGE are
-# illustrative for item classes this plan defines but does not yet diff (SNAP_CHANNEL,
-# APT_SOURCE) — `_build_review_groups` falls back to the bare `DiffAction` value for any
-# (item_class, action) pair not listed here, so a missing vocabulary entry degrades to a
-# plain verb instead of silently dropping the group (the backstop this plan requires:
-# every diff class the engine produces gets SOME review presentation).
+# additive one. An apt package REMOVE reads as "remove"; a snap channel CHANGE reads as
+# "retrack". Data, not per-job string formatting, is what makes "the review names the
+# concrete action" checkable rather than left to each job's own wording.
+# `_build_review_groups` falls back to the bare `DiffAction` value for any (item_class,
+# action) pair not listed here, so a missing vocabulary entry degrades to a plain verb
+# instead of silently dropping the group (the backstop this plan requires: every diff
+# class the engine produces gets SOME review presentation).
+#
+# `APT_SOURCE`/`APT_PIN` are deliberately absent: their only surviving direction is
+# removal, and ADR-021 rulings 5 and 12 route that through `AptSyncJob`'s own
+# `REPO_REMOVAL_REVIEW_ACTION` groups, which supply their own title and verb before this
+# table is ever consulted.
 _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
     (ItemClass.APT_PACKAGE, DiffAction.INSTALL): "install",
     (ItemClass.APT_PACKAGE, DiffAction.CHANGE): "change",
     (ItemClass.APT_PACKAGE, DiffAction.REMOVE): "remove",
     (ItemClass.APT_PACKAGE, DiffAction.REPORT_ONLY): "report",
-    (ItemClass.APT_SOURCE, DiffAction.REMOVE): "delete repository",
+    # `/etc/apt/apt.conf.d` is the one non-package class reviewed in all three directions
+    # (ADR-021 D-37), so all three need a verb — without them a config file reads
+    # "Install/Change/Remove apt packages", which is wrong about both the verb and the
+    # thing. Paired with `_ITEM_CLASS_NOUN` below, which fixes the second half.
+    (ItemClass.APT_CONFIG, DiffAction.INSTALL): "add",
+    (ItemClass.APT_CONFIG, DiffAction.CHANGE): "update",
+    (ItemClass.APT_CONFIG, DiffAction.REMOVE): "delete",
     (ItemClass.SNAP_CHANNEL, DiffAction.CHANGE): "retrack",
     # Block-state membership items (#208): the add direction reads "hold"/"mask" and the
     # remove direction "unhold"/"unmask", never "install"/"remove". `_build_review_groups`
@@ -121,6 +130,14 @@ _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
     (ItemClass.SNAP_HOLD, DiffAction.REMOVE): "unhold",
     (ItemClass.FLATPAK_MASK, DiffAction.INSTALL): "mask",
     (ItemClass.FLATPAK_MASK, DiffAction.REMOVE): "unmask",
+}
+
+# What a group's title calls the things it lists, when they are not packages. A verb alone
+# cannot make an apt-config title true: the title reads "<verb> <manager> packages", so
+# every `/etc/apt/apt.conf.d` group would still end in "apt packages". Hold and mask items
+# are absent on purpose — they ARE about packages, so the default noun is already right.
+_ITEM_CLASS_NOUN: dict[ItemClass, str] = {
+    ItemClass.APT_CONFIG: "apt configuration files",
 }
 
 # Fixed emission order for review groups: install before change before remove keeps
@@ -241,7 +258,9 @@ class PackageSyncJob(SyncJob):
         class — so a block-state membership item (`apt:hold:`, `snap:hold:`,
         `flatpak:mask:`) whose add direction shares the `INSTALL` action with a package
         still reads "Hold/Mask ..." rather than displaying under "Install packages"
-        (#208). Grouping by item class as well as action is what keeps that verb correct
+        (#208). `_ITEM_CLASS_NOUN` does the same for the title's OBJECT, so the one
+        reviewed class that is not a package — `/etc/apt/apt.conf.d` — is not announced as
+        one. Grouping by item class as well as action is what keeps that verb correct
         when one action mixes item classes (e.g. apt package INSTALL alongside apt hold
         INSTALL); the group's `action` value stays the raw `DiffAction` so add-direction
         stays default-checked and remove-direction lands in its own unticked group.
@@ -271,11 +290,12 @@ class PackageSyncJob(SyncJob):
                 # `action.value`, unchanged.
                 default_verb = "report" if action == DiffAction.REPORT_ONLY else action.value
                 verb = _ACTION_VOCABULARY.get((item_class, action), default_verb)
+                noun = _ITEM_CLASS_NOUN.get(item_class, f"{self.manager_id} packages")
                 groups.append(
                     ReviewGroup(
                         manager=self.manager_id,
                         action=action.value,
-                        title=f"{verb.capitalize()} {self.manager_id} packages",
+                        title=f"{verb.capitalize()} {noun}",
                         entries=tuple(
                             ReviewEntry(item_id=diff.item_id, label=diff.label, action_label=verb, detail=diff.detail)
                             for diff in entries

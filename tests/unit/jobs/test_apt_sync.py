@@ -4878,6 +4878,57 @@ class TestTwoAnswerRemovals:
         ]
 
 
+class TestAptConfigVocabulary:
+    """Ruling 11's other half: `/etc/apt/apt.conf.d` is the one reviewed class that is not
+    a package, so every one of its three directions needs its own verb AND its own noun.
+    Without both, a config file is announced as "Install/Change/Remove apt packages".
+    """
+
+    @staticmethod
+    def _all_three_directions() -> JobContext:
+        """One apt-config file per direction: `10add` only on the source, `20update` on
+        both with different bytes, `30delete` only on the target."""
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0, sha256_line("a1", "10add") + sha256_line("u-new", "20update"), ""
+                ),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0, sha256_line("u-old", "20update") + sha256_line("d1", "30delete"), ""
+                ),
+            },
+        )
+        return context
+
+    @pytest.mark.asyncio
+    async def test_each_direction_names_the_config_file_not_a_package(self) -> None:
+        context = self._all_three_directions()
+
+        plan = await AptSyncJob(context).plan()
+
+        by_action = {group.action: group for group in plan.groups if group.entries[0].item_id.startswith("apt:config")}
+        assert [(group.title, group.entries[0].action_label) for _action, group in sorted(by_action.items())] == [
+            ("Update apt configuration files", "update"),
+            ("Add apt configuration files", "add"),
+            ("Delete apt configuration files", "delete"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_no_apt_config_group_claims_to_be_about_packages(self) -> None:
+        """The measured defect, pinned so it cannot come back through the fallback verb."""
+        context = self._all_three_directions()
+
+        plan = await AptSyncJob(context).plan()
+
+        config_groups = [group for group in plan.groups if group.entries[0].item_id.startswith("apt:config")]
+        assert len(config_groups) == 3
+        assert not any("packages" in group.title for group in config_groups)
+
+
 class TestRepositoryConflicts:
     """Ruling 6: a repository file present on both machines with different content is
     overwritten silently — EXCEPT when it feeds a package the target recorded
