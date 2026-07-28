@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "41da5f9e9832",
+  "session_id": "6f351f45-55a4-4eda-a695-eb874d952f76",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-28T08:11:41.607334985Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d0269a53e125",
+  "checkpoint_transcript_start": 650,
+  "transcript_lines_at_start": 650,
+  "compact_transcript_start": 138,
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 9656,
+    "cache_read_tokens": 2136976,
+    "output_tokens": 7794,
+    "api_call_count": 6
+  },
+  "session_metrics": {
+    "turn_count": 9
+  }
+}
