@@ -1,6 +1,6 @@
 # ADR-022: A tool that did not answer fails fast; a tool that answered is data we handle
 
-Status: Accepted
+Status: Draft
 
 Date: 2026-07-28
 
@@ -17,7 +17,7 @@ Every command pc-switcher runs falls into exactly one of two classes — the too
 - The discriminator MUST be the command's own measured behaviour. The default discriminator is a non-zero exit code; a command for which that is wrong MUST say so in a comment at the call site and use something else or nothing.
 - Where the exit code is ambiguous because a legitimate state and a real failure share it, the COMMAND MUST be reshaped so the exit code becomes unambiguous, in preference to guessing from output or from stderr text. Reshaping includes narrowing the command's ARGUMENTS to the cases the run has already established the tool can answer, which is available even where its syntax offers nothing.
 - An empty result MUST be treated as data unless emptiness is provably not a state the machine can be in. The `answers=` guard exists for those cases and MUST be passed only where at least one answer is genuinely owed.
-- A request that is wrong — a package that cannot be installed, an origin that cannot be replicated, a snippet that exits non-zero — stays a per-item failure under ADR-021 D-27 and MUST NOT be promoted to a job failure.
+- A request that is wrong — a package that cannot be installed, an origin that cannot be replicated, a snippet that exits non-zero — stays a per-item failure under ADR-020 D-27 and MUST NOT be promoted to a job failure.
 
 **Forbidden:**
 - No blanket "non-zero exit fails the job" rule applied without checking the command. Several reads in this codebase exit non-zero in their normal case.
@@ -39,15 +39,15 @@ A command call has two failure modes, and they are not the same kind of event.
 
 **The tool or its environment did not answer.** A transient network failure, a package-manager lock held by `unattended-upgrades`, an interrupted dpkg, an unreadable `/var/lib/dpkg/status`, an unparsable `apt.conf.d`, a snapd that is not running, a flatpak installation that cannot be opened, sudo that is not available. Nothing about pc-switcher's data or logic explains any of these, nothing in the run can repair them, and every conclusion drawn from the result is unfounded. This fails fast.
 
-**The tool answered, and the answer is not what the run wanted.** A package the target's apt has never heard of. A repository the source does not declare. An install that exits non-zero because its repository was never added. A snap that is sideloaded and cannot be reproduced. A snippet the user's own script fails on. Each of these is a fact about one item, produced by a tool that was working; deciding what to do with it is the whole job. These are handled, reported per item, and the run continues (ADR-021 D-27).
+**The tool answered, and the answer is not what the run wanted.** A package the target's apt has never heard of. A repository the source does not declare. An install that exits non-zero because its repository was never added. A snap that is sideloaded and cannot be reproduced. A snippet the user's own script fails on. Each of these is a fact about one item, produced by a tool that was working; deciding what to do with it is the whole job. These are handled, reported per item, and the run continues (ADR-020 D-27).
 
 The line is not "did the command succeed". It is **did the tool answer the question it was asked**.
 
 One command sits on the line: `apt-get --dry-run`. Measured in a stock `ubuntu:24.04`, a name apt cannot locate exits **100** with `E: Unable to locate package`, which is the same exit code a held dpkg lock produces, and no rewrite of the command's syntax separates them, because apt offers no second code and no second mode.
 
-At **apply time** it stays on the per-item side. The command simulates one approved install or removal, apt's refusal is a fact about that request (ADR-021 D-27), and a lock met there cannot be undone by failing fast — the items already converged stay converged.
+At **apply time** it stays on the per-item side. The command simulates one approved install or removal, apt's refusal is a fact about that request (ADR-020 D-27), and a lock met there cannot be undone by failing fast — the items already converged stay converged.
 
-At **plan time** the ambiguity is removed instead of classified, by D-03's remedy applied to the command's ARGUMENTS rather than its syntax. The rehearsal names only the packages the target's `apt-cache policy` gave a candidate for one command earlier in the same run, so `E: Unable to locate package` cannot be the cause of a failure there (`apt_sync.AptSyncJob._target_resolvable`). An ADR-021 §2.3 class-3 install — the repository that supplies it is written during converge, so the target's apt has never heard the name — is excluded from the rehearsal rather than tolerated inside it, because apt refuses the whole batch on one such name and would take every other package's collateral protection down with it.
+At **plan time** the ambiguity is removed instead of classified, by D-03's remedy applied to the command's ARGUMENTS rather than its syntax. The rehearsal names only the packages the target's `apt-cache policy` gave a candidate for one command earlier in the same run, so `E: Unable to locate package` cannot be the cause of a failure there (`apt_sync.AptSyncJob._target_resolvable`). An ADR-020 D-34 class-3 install — the repository that supplies it is written during converge, so the target's apt has never heard the name — is excluded from the rehearsal rather than tolerated inside it, because apt refuses the whole batch on one such name and would take every other package's collateral protection down with it.
 
 What can still fail there is a lock, a broken apt, or a candidate set apt cannot resolve — unmet dependencies, or a conflict between two approved packages. The last is data about the request, so `ProbeFailed` remains the wrong type; and plan time has no per-item loop to report any of them against. The `ConvergeItemFailed` therefore aborts the plan, which is the right outcome: a rehearsal that did not happen must not be reported as a clean one.
 
@@ -93,16 +93,16 @@ Today a `ProbeFailed` escaping a job aborts the entire run: the orchestrator's d
 
 ### D-07: One shared mechanism, no shared base class
 
-The guard lives in `src/pcswitcher/jobs/packages/probes.py` as free functions, alongside `apt_policy.py`. ADR-020 D-15/D-16, carried forward by ADR-021, keeps the four package jobs independent and forbids a shared base class that only some of them supply inputs for. A guard every job needs is exactly the kind of thing that would otherwise be smuggled into a base class. `apt_sync` keeps a thin `_require_apt_answer` wrapper holding apt's own evidence and the `answers=` judgement; the other three call `require_answer` directly.
+The guard lives in `src/pcswitcher/jobs/packages/probes.py` as free functions, alongside `apt_policy.py`. ADR-020 D-15/D-16 keeps the four package jobs independent and forbids a shared base class that only some of them supply inputs for. A guard every job needs is exactly the kind of thing that would otherwise be smuggled into a base class. `apt_sync` keeps a thin `_require_apt_answer` wrapper holding apt's own evidence and the `answers=` judgement; the other three call `require_answer` directly.
 
 ## Consequences
 
 **Positive:**
 - A failed manifest capture can no longer read as "that machine has nothing". The inverted-diff class of defect — every snap, every apt package, every flatpak on the target proposed for removal because one read failed — is closed at every site that produced it.
 - The user is told what actually broke. One line naming the command and the tool's own stderr, instead of a review screen full of consequences.
-- apt's collateral protection can no longer switch itself off silently: an unanswered `apt-mark showmanual` on the target used to classify every collateral package as automatic, which is ADR-021 D-30 disabled with nothing said.
+- apt's collateral protection can no longer switch itself off silently: an unanswered `apt-mark showmanual` on the target used to classify every collateral package as automatic, which is ADR-020 D-30 disabled with nothing said.
 - The keyring garbage collector can no longer delete keys that are still in use because the source-file scan came back empty.
-- The repository-conflict review can no longer show two empty panes for a file whose content it could not read, which is an overwrite approved off a diff nobody saw (ADR-021 ruling 6).
+- The repository-conflict review can no longer show two empty panes for a file whose content it could not read, which is an overwrite approved off a diff nobody saw (ADR-020 D-37).
 - The classification is written down per call site, so the next read added to these jobs has to state which category it is in rather than defaulting to the dangerous one.
 
 **Negative:**
@@ -123,7 +123,7 @@ The guard lives in `src/pcswitcher/jobs/packages/probes.py` as free functions, a
 
 ## References
 
-- ADR-021 (D-27 continue-and-report per item, D-30 collateral protection, D-35 origin enforcement, D-15/D-16 job independence carried forward from ADR-020); ADR-014 (unified dry-run contract).
+- ADR-020 (D-15/D-16 job independence, D-27 continue-and-report per item, D-30/D-40 collateral protection, D-34 origin classification, D-35 origin enforcement); ADR-014 (unified dry-run contract).
 - `477f191e`: the first two sites and the pattern this ADR generalises, including the ambiguity it resolved and the cost it recorded.
 - GitHub issue #220: job failure independence — the accepted follow-up that decides how far a job-level failure propagates.
 - `src/pcswitcher/jobs/packages/probes.py`: the mechanism and the per-command measurements.

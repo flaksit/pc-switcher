@@ -20,8 +20,8 @@
 - [ADR-017](adr-017-mirror-pcswitcher-install.md): Mirror pc-switcher's own install; hardcode-exclude only its runtime state
 - [ADR-018](adr-018-selective-vscode-state-sync.md): SQLite-aware selective sync of VS Code editor state.vscdb
 - [ADR-019](adr-019-homogeneous-fleet.md): Homogeneous fleet — matching real users (uid/gid >= 1000) and paths across machines (no user/id/path mapping)
-- [ADR-021](adr-021-origin-replicating-package-convergence.md): Origin-replicating package convergence — an apt package replicates as (name, origin); the review decides packages and apt config, while repositories, keys and pins are derived from the packages approved from them
-- [ADR-022](adr-022-broken-tool-fails-fast-bad-data-is-handled.md): A tool that did not answer fails fast; a tool that answered is data we handle — a read whose silence would be parsed as a manifest raises `ProbeFailed` and fails the job naming the command, while an answer of "nothing" stays data
+- [ADR-020](adr-020-declarative-package-convergence.md) (Draft): Declarative package convergence — a package replicates as (name, origin); the review decides packages and apt config, while repositories, keys, pins and flatpak remotes are derived from the packages approved from them
+- [ADR-022](adr-022-broken-tool-fails-fast-bad-data-is-handled.md) (Draft): A tool that did not answer fails fast; a tool that answered is data we handle — a read whose silence would be parsed as a manifest raises `ProbeFailed` and fails the job naming the command, while an answer of "nothing" stays data
 
 ### Instructions for AI agents
 Load specific ADRs only when relevant to current task: search workspace files to find relevant ADRs
@@ -29,4 +29,3 @@ Load specific ADRs only when relevant to current task: search workspace files to
 ## Superseded
 
 - [ADR-016](adr-016-hardcoded-runtime-file-excludes.md): Hardcoded exclusion of pc-switcher's own runtime files → Superseded by [ADR-017](adr-017-mirror-pcswitcher-install.md)
-- [ADR-020](adr-020-declarative-package-convergence.md): Declarative package convergence: manifest capture, item diff, replay through each ecosystem's own tooling → Superseded by [ADR-021](adr-021-origin-replicating-package-convergence.md)
