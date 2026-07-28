@@ -3,7 +3,7 @@
   "checkpoint_id": "d3746545c612",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 1,
+  "checkpoints_count": 4,
   "files_touched": [
     "docs/jobs/package-sync.md"
   ],
@@ -14,6 +14,13 @@
       "compact_transcript": "/d3/746545c612/0/transcript.jsonl",
       "content_hash": "/d3/746545c612/0/content_hash.txt",
       "prompt": "/d3/746545c612/0/prompt.txt"
+    },
+    {
+      "metadata": "/d3/746545c612/1/metadata.json",
+      "transcript": "/d3/746545c612/1/full.jsonl",
+      "compact_transcript": "/d3/746545c612/1/transcript.jsonl",
+      "content_hash": "/d3/746545c612/1/content_hash.txt",
+      "prompt": "/d3/746545c612/1/prompt.txt"
     }
   ],
   "token_usage": {
